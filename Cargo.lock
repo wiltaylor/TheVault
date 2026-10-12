@@ -88,6 +88,7 @@ name = "api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "query",
  "serde",
  "serde_json",
  "state",
@@ -1399,6 +1400,16 @@ dependencies = [
 [[package]]
 name = "query"
 version = "0.1.0"
+dependencies = [
+ "index",
+ "rusqlite",
+ "schema",
+ "serde",
+ "serde_json",
+ "store",
+ "tempfile",
+ "thiserror",
+]
 
 [[package]]
 name = "quick-xml"
@@ -2040,6 +2051,7 @@ name = "testkit"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "state",
  "tempfile",
 ]
 

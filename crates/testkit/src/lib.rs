@@ -9,6 +9,10 @@
 //! target directory the test binary runs from. Cargo builds `vault-server`
 //! before running the `server` crate's integration tests and before running
 //! `cargo test --workspace`, so S1 tests normally live in `crates/server/tests`.
+//!
+//! Every endpoint but health and login needs credentials (D11). Before the server starts, the
+//! testkit sets the login password to [`PASSWORD`] and creates an `admin` token named
+//! [`ADMIN_TOKEN_NAME`], whose secret [`TestServer::admin_token`] returns.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -22,12 +26,19 @@ use tempfile::TempDir;
 
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// The login password of every test vault.
+pub const PASSWORD: &str = "correct horse battery staple";
+
+/// The name of the `admin` token every test vault starts with.
+pub const ADMIN_TOKEN_NAME: &str = "admin";
+
 /// A running `vault-server` on its own temporary vault. Dropping it kills the
 /// server and deletes the vault.
 pub struct TestServer {
     child: Child,
     addr: SocketAddr,
     vault: TempDir,
+    admin_token: String,
 }
 
 impl TestServer {
@@ -53,6 +64,7 @@ impl TestServer {
             .tempdir()
             .expect("create temporary vault directory");
         seed(vault.path());
+        let admin_token = seed_credentials(vault.path());
 
         let mut child = Command::new(binary)
             .arg("--vault")
@@ -74,7 +86,12 @@ impl TestServer {
             }
         };
 
-        let server = TestServer { child, addr, vault };
+        let server = TestServer {
+            child,
+            addr,
+            vault,
+            admin_token,
+        };
         server.wait_healthy();
         server
     }
@@ -92,6 +109,11 @@ impl TestServer {
     /// The address the server is listening on.
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// The secret of the vault's `admin` token, to send as `Authorization: Bearer <secret>`.
+    pub fn admin_token(&self) -> &str {
+        &self.admin_token
     }
 
     /// The temporary vault folder the server is serving.
@@ -119,6 +141,17 @@ impl Drop for TestServer {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Sets the login password and creates the admin token in the vault's `state.db`, returning the
+/// token's secret. The server opens the same file when it starts.
+fn seed_credentials(vault: &Path) -> String {
+    let state = state::State::open(&vault.join(".vault/state.db"), None).expect("open state.db");
+    state.set_password(PASSWORD).expect("set the test password");
+    let (_, secret) = state
+        .create_token(ADMIN_TOKEN_NAME, state::Scope::Admin)
+        .expect("create the admin token");
+    secret
 }
 
 /// Reads the JSON line the server prints on start, then keeps draining stdout
