@@ -11,6 +11,7 @@ import {
   MASS_TYPE,
   PAGE_TYPE,
   PROJECT_TYPE,
+  SKETCH_TYPE,
   STAGE_TAXONOMY,
   STORY_TYPE,
   TASK_TYPE,
@@ -36,6 +37,7 @@ function seedVault(): string {
   mkdirSync(join(vault, "types"));
   writeFileSync(join(vault, "types/task.wcl"), TASK_TYPE);
   writeFileSync(join(vault, "types/bulk.wcl"), BULK_TYPE);
+  writeFileSync(join(vault, "types/sketch.wcl"), SKETCH_TYPE);
   writeFileSync(join(vault, "types/project.wcl"), PROJECT_TYPE);
   writeFileSync(join(vault, "types/page.wcl"), PAGE_TYPE);
   writeFileSync(join(vault, "types/mass.wcl"), MASS_TYPE);

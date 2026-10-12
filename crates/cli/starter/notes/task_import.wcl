@@ -1,0 +1,11 @@
+title    = "Import existing notes"
+status   = "Todo"
+priority = "medium"
+due      = "{{date:+7}}"
+project  = "{{id:project}}"
+
+content body {
+  paragraph {
+    text = "Write a batch file and run `vault batch --dry-run` before the real run."
+  }
+}

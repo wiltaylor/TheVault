@@ -1,0 +1,9 @@
+title        = "Alex Example"
+email        = "alex@example.com"
+organisation = "Example Co"
+
+content body {
+  paragraph {
+    text = "An example person. Edit or delete them once you have added real people."
+  }
+}

@@ -66,6 +66,16 @@ export function applyBlocks(doc: NoteDoc, f: FieldDef, blocks: Block[]): NoteDoc
   return { fields: doc.fields, blocks: next };
 }
 
+/** `doc` with compound field `f`'s block replaced by `block`, labelled with the field name. */
+export function applyCompound(doc: NoteDoc, f: FieldDef, block: Block): NoteDoc {
+  const labelled: Block = { ...block, kind: f.kind, labels: [f.name] };
+  const at = doc.blocks.findIndex((b) => b.kind === f.kind && b.labels?.[0] === f.name);
+  const next = [...doc.blocks];
+  if (at >= 0) next[at] = labelled;
+  else next.push(labelled);
+  return { fields: doc.fields, blocks: next };
+}
+
 /** `doc` with dict field `f` holding `entries`, or without its block when `entries` is undefined. */
 export function applyDict(doc: NoteDoc, f: FieldDef, entries: Json | undefined): NoteDoc {
   const at = doc.blocks.findIndex((b) => b.kind === "dict" && b.labels?.[0] === f.name);

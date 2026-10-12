@@ -6,8 +6,10 @@ import { FieldInput, hasInput } from "../components/FieldInput";
 import { BlockView, Blocks, formatValue } from "../components/Render";
 import { ContentEditor } from "../editor/ContentEditor";
 import { knowTitle, noteTitle } from "../editor/titles";
+import { InkSurface } from "../ink/InkSurface";
 import {
   applyBlocks,
+  applyCompound,
   applyDict,
   applyEdits,
   compoundBlock,
@@ -42,6 +44,8 @@ export function NoteView() {
   const [edits, setEdits] = createSignal<Record<string, Json | undefined>>({});
   // Content fields edited in the block editor, by field name.
   let blockEdits = new Map<string, { field: FieldDef; blocks: Block[] }>();
+  // Ink fields drawn on, by field name.
+  const [inkEdits, setInkEdits] = createSignal<Record<string, { field: FieldDef; block: Block }>>({});
   const [saving, setSaving] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
   const [conflict, setConflict] = createSignal<Conflict | null>(null);
@@ -76,6 +80,7 @@ export function NoteView() {
   function startEditing() {
     setEdits({});
     blockEdits = new Map();
+    setInkEdits({});
     setSaveError(null);
     setEditing(true);
   }
@@ -127,6 +132,7 @@ export function NoteView() {
     }
     doc = applyEdits(doc, plain);
     for (const { field, blocks } of blockEdits.values()) doc = applyBlocks(doc, field, blocks);
+    for (const { field, block } of Object.values(inkEdits())) doc = applyCompound(doc, field, block);
     void save(doc, n.version);
   }
 
@@ -179,6 +185,17 @@ export function NoteView() {
                 </Show>
               </div>
               <div class="field-value">
+                <Show when={field().kind !== "ink"} fallback={
+                  <InkSurface
+                    label={label}
+                    block={(editing() && inkEdits()[field().name]?.block) || compoundBlock(n().note, field())}
+                    onChange={
+                      editing()
+                        ? (block) => setInkEdits({ ...inkEdits(), [field().name]: { field: field(), block } })
+                        : undefined
+                    }
+                  />
+                }>
                 <Show when={!(editing() && field().kind === "content")} fallback={
                   <ContentEditor
                     label={label}
@@ -204,6 +221,7 @@ export function NoteView() {
                     label={label}
                     id={`field-input-${field().name}`}
                   />
+                </Show>
                 </Show>
                 </Show>
               </div>

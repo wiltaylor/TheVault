@@ -1,0 +1,18 @@
+label       = "Status"
+description = "Where a piece of work is. The columns of the dashboard's kanban board."
+
+term "Todo" {
+  colour = "gray"
+}
+
+term "In progress" {
+  colour = "blue"
+}
+
+term "Blocked" {
+  colour = "red"
+}
+
+term "Done" {
+  colour = "green"
+}

@@ -1,0 +1,10 @@
+title  = "Set up TheVault"
+status = "In progress"
+owner  = "{{id:alex}}"
+due    = "{{date:+14}}"
+
+content body {
+  paragraph {
+    text = "An example project. Its *Tasks* tab shows the tasks that name it, as a kanban board."
+  }
+}
