@@ -12,11 +12,12 @@ use schema::{FieldDef, FieldKind, Schema};
 use serde::Serialize;
 
 use crate::ast::{BinOp, Dir, Expr, From, Lit, Path, Query, UnOp};
+use crate::plan;
 use crate::print::path as path_text;
 use crate::value::{self, Eval, Key, V};
 
 /// Fields every note has, besides those its type declares.
-const BUILTINS: [&str; 5] = ["id", "type", "title", "created", "updated"];
+pub(crate) const BUILTINS: [&str; 5] = ["id", "type", "title", "created", "updated"];
 
 /// The most rows one page may hold.
 pub const MAX_PAGE: usize = 1000;
@@ -138,7 +139,7 @@ pub struct GroupCount {
 }
 
 /// A note row from `index.db`.
-struct Note {
+pub(crate) struct Note {
     id: String,
     type_name: String,
     title: String,
@@ -149,149 +150,201 @@ struct Note {
 
 const NOTE_COLUMNS: &str = "id, type, title, created, updated, data";
 
-fn read_note(r: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
-    let data: String = r.get(5)?;
-    Ok(Note {
-        id: r.get(0)?,
-        type_name: r.get(1)?,
-        title: r.get(2)?,
-        created: r.get(3)?,
-        updated: r.get(4)?,
-        data: serde_json::from_str(&data).unwrap_or_default(),
-    })
+impl Note {
+    /// A note from the first six columns of a row, in the order of [`NOTE_COLUMNS`].
+    fn read(r: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
+        let data: String = r.get(5)?;
+        Ok(Note {
+            id: r.get(0)?,
+            type_name: r.get(1)?,
+            title: r.get(2)?,
+            created: r.get(3)?,
+            updated: r.get(4)?,
+            data: serde_json::from_str(&data).unwrap_or_default(),
+        })
+    }
+
+    /// A note with no fields, to evaluate an expression that reads none.
+    pub(crate) fn empty() -> Note {
+        Note {
+            id: String::new(),
+            type_name: String::new(),
+            title: String::new(),
+            created: None,
+            updated: None,
+            data: serde_json::Map::new(),
+        }
+    }
 }
 
-struct Runner<'a> {
-    ctx: &'a Context<'a>,
-    conn: &'a Connection,
+pub(crate) struct Runner<'a> {
+    pub(crate) ctx: &'a Context<'a>,
+    pub(crate) conn: &'a Connection,
     notes: RefCell<HashMap<String, Option<Rc<Note>>>>,
     /// Display position of every term, by taxonomy and path, so taxonomy fields sort and group
     /// in the order the taxonomy lists its terms.
     term_pos: HashMap<(String, String), i64>,
 }
 
-/// Run a query and return one page of it.
+/// Run a query and return one page of it. A query the planner can translate runs as SQL that
+/// reads only the page (D33); any other is evaluated note by note.
 pub fn run(q: &Query, ctx: &Context<'_>, page: &PageRequest) -> Result<Page> {
     let types = check(q, ctx)?;
-    let conn = ctx.index.connection();
-    let r = Runner {
-        ctx,
-        conn,
-        notes: RefCell::new(HashMap::new()),
-        term_pos: term_positions(conn)?,
-    };
-
-    let scores: Option<HashMap<String, f32>> = match &q.search {
-        Some(text) => Some(
-            ctx.index
-                .search(text, None)?
-                .into_iter()
-                .map(|h| (h.id, h.score))
-                .collect(),
-        ),
-        None => None,
-    };
-    let candidates = r.candidates(&types, scores.as_ref())?;
-
-    // Each row's full sort key: group, sort keys, score, then id, which makes the order total.
-    struct Hit {
-        note: Rc<Note>,
-        keys: Vec<Key>,
-        group: Option<serde_json::Value>,
+    let r = Runner::new(ctx)?;
+    match plan::run(q, &types, &r, page)? {
+        Some(p) => Ok(p),
+        None => r.scan(q, &types, page),
     }
-    let mut dirs: Vec<bool> = Vec::new();
-    if q.group_by.is_some() {
-        dirs.push(false);
-    }
-    dirs.extend(q.sort.iter().map(|k| k.dir == Some(Dir::Desc)));
-    let by_score = scores.is_some() && q.sort.is_empty();
-    if by_score {
-        dirs.push(true);
-    }
-    dirs.push(false);
-
-    let mut hits = Vec::new();
-    for note in candidates {
-        let keep = match &q.filter {
-            Some(e) => r.truth(e, &note, &mut Vec::new())?,
-            None => true,
-        };
-        if !keep {
-            continue;
-        }
-        let mut keys = Vec::new();
-        let mut group = None;
-        if let Some(g) = &q.group_by {
-            keys.push(r.sort_key(&note, g)?);
-            group = Some(r.raw_path(&note, g)?);
-        }
-        for k in &q.sort {
-            keys.push(r.sort_key(&note, &k.path)?);
-        }
-        if by_score {
-            let s = scores.as_ref().and_then(|s| s.get(&note.id)).copied();
-            keys.push(Key::Float(f64::from(s.unwrap_or_default())));
-        }
-        keys.push(Key::Str(note.id.clone()));
-        hits.push(Hit { note, keys, group });
-    }
-    let order = |a: &[Key], b: &[Key]| {
-        a.iter()
-            .zip(b)
-            .zip(&dirs)
-            .map(|((x, y), desc)| x.ordered(y, *desc))
-            .find(|o| *o != Ordering::Equal)
-            .unwrap_or(Ordering::Equal)
-    };
-    hits.sort_by(|a, b| order(&a.keys, &b.keys));
-    if let Some(n) = q.limit {
-        hits.truncate(usize::try_from(n).unwrap_or(usize::MAX));
-    }
-
-    let mut groups: Vec<GroupCount> = Vec::new();
-    for h in &hits {
-        if let Some(g) = &h.group {
-            match groups.last_mut() {
-                Some(last) if last.value == *g => last.count += 1,
-                _ => groups.push(GroupCount {
-                    value: g.clone(),
-                    count: 1,
-                }),
-            }
-        }
-    }
-
-    let start = match &page.cursor {
-        Some(c) => {
-            let after = decode_cursor(c, dirs.len())?;
-            hits.partition_point(|h| order(&h.keys, &after) != Ordering::Greater)
-        }
-        None => 0,
-    };
-    let size = match page.size {
-        0 => MAX_PAGE,
-        n => n.min(MAX_PAGE),
-    };
-    let end = (start + size).min(hits.len());
-    let next = (end < hits.len()).then(|| encode_cursor(&hits[end - 1].keys));
-    let mut rows = Vec::new();
-    for h in &hits[start..end] {
-        rows.push(r.row(&h.note, &q.select, h.group.clone())?);
-    }
-    Ok(Page {
-        rows,
-        next,
-        total: hits.len(),
-        groups,
-    })
 }
 
-fn encode_cursor(keys: &[Key]) -> String {
+/// Run a query note by note, never as SQL. The result is the same as [`run`]'s; tests compare
+/// the two.
+#[doc(hidden)]
+pub fn run_scan(q: &Query, ctx: &Context<'_>, page: &PageRequest) -> Result<Page> {
+    let types = check(q, ctx)?;
+    Runner::new(ctx)?.scan(q, &types, page)
+}
+
+/// Whether [`run`] runs `q` as SQL rather than note by note. Tests use it to keep the planner
+/// covering what it should.
+#[doc(hidden)]
+pub fn is_planned(q: &Query, ctx: &Context<'_>) -> Result<bool> {
+    let types = check(q, ctx)?;
+    let first = PageRequest {
+        cursor: None,
+        size: 1,
+    };
+    Ok(plan::run(q, &types, &Runner::new(ctx)?, &first)?.is_some())
+}
+
+impl<'a> Runner<'a> {
+    fn new(ctx: &'a Context<'a>) -> Result<Runner<'a>> {
+        let conn = ctx.index.connection();
+        Ok(Runner {
+            ctx,
+            conn,
+            notes: RefCell::new(HashMap::new()),
+            term_pos: term_positions(conn)?,
+        })
+    }
+
+    /// Read every note of `types`, evaluate the filter on each, sort them all and cut the page.
+    fn scan(&self, q: &Query, types: &[String], page: &PageRequest) -> Result<Page> {
+        let r = self;
+        let ctx = r.ctx;
+
+        let scores: Option<HashMap<String, f32>> = match &q.search {
+            Some(text) => Some(
+                ctx.index
+                    .search(text, None)?
+                    .into_iter()
+                    .map(|h| (h.id, h.score))
+                    .collect(),
+            ),
+            None => None,
+        };
+        let candidates = r.candidates(types, scores.as_ref())?;
+
+        // Each row's full sort key: group, sort keys, score, then id, which makes the order total.
+        struct Hit {
+            note: Rc<Note>,
+            keys: Vec<Key>,
+            group: Option<serde_json::Value>,
+        }
+        let mut dirs: Vec<bool> = Vec::new();
+        if q.group_by.is_some() {
+            dirs.push(false);
+        }
+        dirs.extend(q.sort.iter().map(|k| k.dir == Some(Dir::Desc)));
+        let by_score = scores.is_some() && q.sort.is_empty();
+        if by_score {
+            dirs.push(true);
+        }
+        dirs.push(false);
+
+        let mut hits = Vec::new();
+        for note in candidates {
+            let keep = match &q.filter {
+                Some(e) => r.truth(e, &note, &mut Vec::new())?,
+                None => true,
+            };
+            if !keep {
+                continue;
+            }
+            let mut keys = Vec::new();
+            let mut group = None;
+            if let Some(g) = &q.group_by {
+                keys.push(r.sort_key(&note, g)?);
+                group = Some(r.raw_path(&note, g)?);
+            }
+            for k in &q.sort {
+                keys.push(r.sort_key(&note, &k.path)?);
+            }
+            if by_score {
+                let s = scores.as_ref().and_then(|s| s.get(&note.id)).copied();
+                keys.push(Key::Float(f64::from(s.unwrap_or_default())));
+            }
+            keys.push(Key::Str(note.id.clone()));
+            hits.push(Hit { note, keys, group });
+        }
+        let order = |a: &[Key], b: &[Key]| {
+            a.iter()
+                .zip(b)
+                .zip(&dirs)
+                .map(|((x, y), desc)| x.ordered(y, *desc))
+                .find(|o| *o != Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
+        };
+        hits.sort_by(|a, b| order(&a.keys, &b.keys));
+        if let Some(n) = q.limit {
+            hits.truncate(usize::try_from(n).unwrap_or(usize::MAX));
+        }
+
+        let mut groups: Vec<GroupCount> = Vec::new();
+        for h in &hits {
+            if let Some(g) = &h.group {
+                match groups.last_mut() {
+                    Some(last) if last.value == *g => last.count += 1,
+                    _ => groups.push(GroupCount {
+                        value: g.clone(),
+                        count: 1,
+                    }),
+                }
+            }
+        }
+
+        let start = match &page.cursor {
+            Some(c) => {
+                let after = decode_cursor(c, dirs.len())?;
+                hits.partition_point(|h| order(&h.keys, &after) != Ordering::Greater)
+            }
+            None => 0,
+        };
+        let size = match page.size {
+            0 => MAX_PAGE,
+            n => n.min(MAX_PAGE),
+        };
+        let end = (start + size).min(hits.len());
+        let next = (end < hits.len()).then(|| encode_cursor(&hits[end - 1].keys));
+        let mut rows = Vec::new();
+        for h in &hits[start..end] {
+            rows.push(r.row(&h.note, &q.select, h.group.clone())?);
+        }
+        Ok(Page {
+            rows,
+            next,
+            total: hits.len(),
+            groups,
+        })
+    }
+}
+
+pub(crate) fn encode_cursor(keys: &[Key]) -> String {
     let json = serde_json::to_string(keys).unwrap_or_default();
     json.bytes().map(|b| format!("{b:02x}")).collect()
 }
 
-fn decode_cursor(c: &str, len: usize) -> Result<Vec<Key>> {
+pub(crate) fn decode_cursor(c: &str, len: usize) -> Result<Vec<Key>> {
     let bytes: Option<Vec<u8>> = (0..c.len())
         .step_by(2)
         .map(|i| c.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
@@ -448,7 +501,7 @@ impl Runner<'_> {
         let marks = vec!["?"; types.len()].join(", ");
         let sql = format!("SELECT {NOTE_COLUMNS} FROM notes WHERE type IN ({marks}) ORDER BY id");
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(types), read_note)?;
+        let rows = stmt.query_map(params_from_iter(types), Note::read)?;
         let mut out = Vec::new();
         for n in rows {
             let n = n?;
@@ -459,7 +512,7 @@ impl Runner<'_> {
         Ok(out)
     }
 
-    fn note(&self, id: &str) -> Result<Option<Rc<Note>>> {
+    pub(crate) fn note(&self, id: &str) -> Result<Option<Rc<Note>>> {
         if let Some(n) = self.notes.borrow().get(id) {
             return Ok(n.clone());
         }
@@ -467,7 +520,7 @@ impl Runner<'_> {
             .conn
             .prepare_cached(&format!("SELECT {NOTE_COLUMNS} FROM notes WHERE id = ?1"))?;
         let found = stmt
-            .query_map([id], read_note)?
+            .query_map([id], Note::read)?
             .next()
             .transpose()?
             .map(Rc::new);
@@ -530,7 +583,7 @@ impl Runner<'_> {
         v.truth().map_err(|m| Self::fail(note, m))
     }
 
-    fn eval(&self, e: &Expr, note: &Note, env: &mut Vec<(String, V)>) -> Result<V> {
+    pub(crate) fn eval(&self, e: &Expr, note: &Note, env: &mut Vec<(String, V)>) -> Result<V> {
         let fail = |m: String| Self::fail(note, m);
         Ok(match e {
             Expr::Lit(Lit::Bool(b)) => V::Bool(*b),
@@ -734,7 +787,7 @@ impl Runner<'_> {
     }
 
     /// The stored JSON at a path, following references.
-    fn raw_path(&self, note: &Rc<Note>, path: &Path) -> Result<serde_json::Value> {
+    pub(crate) fn raw_path(&self, note: &Rc<Note>, path: &Path) -> Result<serde_json::Value> {
         let (head, last) = path.split_at(path.len() - 1);
         let target = if head.is_empty() {
             Some(Rc::clone(note))
@@ -767,7 +820,7 @@ impl Runner<'_> {
         })
     }
 
-    fn row(
+    pub(crate) fn row(
         &self,
         note: &Rc<Note>,
         select: &[Path],
