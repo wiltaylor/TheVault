@@ -1,4 +1,5 @@
-//! Seam S1: start `vault-server` on a fresh temporary vault and a random port.
+//! Seam S1: start `vault-server` on a fresh temporary vault and a random port. Seam S7's local
+//! stand-in HTTP server is [`StandIn`].
 //!
 //! ```no_run
 //! let server = testkit::TestServer::start();
@@ -13,6 +14,10 @@
 //! Every endpoint but health and login needs credentials (D11). Before the server starts, the
 //! testkit sets the login password to [`PASSWORD`] and creates an `admin` token named
 //! [`ADMIN_TOKEN_NAME`], whose secret [`TestServer::admin_token`] returns.
+
+mod standin;
+
+pub use standin::{Reply, Request, StandIn};
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};

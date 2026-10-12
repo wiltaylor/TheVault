@@ -7,6 +7,17 @@ publish.workspace = true
 
 [dependencies]
 wscript.workspace = true
+writer.workspace = true
+query.workspace = true
+state.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+store.workspace = true
+tempfile.workspace = true
+testkit.workspace = true
 
 [lints]
 workspace = true
