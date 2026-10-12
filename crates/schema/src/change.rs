@@ -22,6 +22,8 @@ pub enum NoteEdit {
     Rename { from: String, to: String },
     /// Field `field` received the default `value`.
     Default { field: String, value: Value },
+    /// Function `function` of migration script `script` changed the note.
+    Migrated { script: String, function: String },
 }
 
 /// The field-level rules of one type change.

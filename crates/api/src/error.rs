@@ -123,6 +123,10 @@ impl From<Error> for ApiError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({ "error": "rejected" }),
             ),
+            Error::Migration { id, .. } => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({ "error": "migration_failed", "id": id }),
+            ),
             Error::InvalidType(e) => (
                 StatusCode::BAD_REQUEST,
                 json!({
@@ -139,6 +143,19 @@ impl From<Error> for ApiError {
                 StatusCode::CONFLICT,
                 json!({ "error": "type_in_use", "type": t }),
             ),
+            Error::BadRequest(_) => (StatusCode::BAD_REQUEST, json!({ "error": "bad_request" })),
+            Error::Missing(_) => (StatusCode::NOT_FOUND, json!({ "error": "not_found" })),
+            Error::KeyNotUnique {
+                type_name,
+                key,
+                ids,
+            } => (
+                StatusCode::CONFLICT,
+                json!({ "error": "key_not_unique", "type": type_name, "key": key, "ids": ids }),
+            ),
+            Error::InUse { code, by, .. } => {
+                (StatusCode::CONFLICT, json!({ "error": code, "by": by }))
+            }
             Error::State(e) => return ApiError::from_state(e),
             Error::Schema(_) | Error::Store(_) | Error::Index(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

@@ -17,9 +17,22 @@
 //! 11. Return the canonical WCL and the new version of every changed note (D21).
 //!
 //! Step 6 is built in: [`refs`] works out the reverse sides of two-way and peer references and
-//! applies `on_delete`. [`Hooks::side_effects`] can add more. Steps 5 and 10 belong to later
-//! work, and [`NoHooks`] leaves them empty.
+//! applies `on_delete`. [`Hooks::side_effects`] can add more. [`NoHooks`] leaves steps 5 and 10
+//! empty; the `script` crate's handlers fill them.
+//!
+//! Step 5 runs on every note the write changes, the side effects of step 6 included, so a note an
+//! `unlink` edits runs its update handlers and a note a `cascade` deletes runs its delete handlers
+//! (D5). Whatever the handlers change is expanded again, until nothing new needs a handler.
+//!
+//! Writes run one at a time, but the writer does not hold its data lock while handlers run, so a
+//! handler can read and query the vault. A handler's own change to another note re-enters the
+//! write path through [`Writer::stage_create`], [`Writer::stage_update`] and
+//! [`Writer::stage_delete`]: it is checked like any write, runs its own `before_*` handlers, and
+//! joins the write in progress, so it commits with it or not at all (D30).
 
+mod assets;
+mod batch;
+mod defs;
 mod note;
 mod refs;
 mod time;
@@ -34,10 +47,12 @@ use schema::{Doc, Invalid, Issue, NoteLookup, NoteReport, Schema, TypeDef};
 use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, CommitStep, Vault};
 
-pub use note::{Input, doc_to_json, value_to_json};
+pub use assets::Asset;
+pub use batch::{Item, Op, Outcome, Report};
+pub use note::{Input, block_to_json, doc_to_json, value_to_json};
 pub use refs::Referrer;
 pub use schema::NoteEdit;
-pub use types::{Flagged, PlannedNote, TypeChange, TypePlan};
+pub use types::{Flagged, Migration, PlannedNote, TypeChange, TypePlan};
 
 /// Errors from the write path.
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +109,9 @@ pub enum Error {
     /// A `before_*` handler refused the change (D9).
     #[error("{0}")]
     Rejected(String),
+    /// A schema change's migration script failed on note `id` (D6).
+    #[error("the migration failed on note {id}: {message}")]
+    Migration { id: String, message: String },
     #[error("the vault's type definitions are invalid: {0}")]
     Schema(#[from] schema::SchemaError),
     /// A submitted type definition does not validate, alone or against the rest of the schema.
@@ -103,6 +121,27 @@ pub enum Error {
     /// (D6).
     #[error("type {0:?} has notes, so changing it needs a planned schema change")]
     TypeInUse(String),
+    /// A request that is malformed in a way the other variants do not cover.
+    #[error("{0}")]
+    BadRequest(String),
+    /// Something other than a note that the request names does not exist.
+    #[error("{0}")]
+    Missing(String),
+    /// An upsert key matches more than one note.
+    #[error("{} notes of type {type_name:?} share that {key:?}: {}", .ids.len(), .ids.join(", "))]
+    KeyNotUnique {
+        type_name: String,
+        key: String,
+        ids: Vec<String>,
+    },
+    /// A definition, term or asset cannot be removed while something uses it. `code` names what
+    /// kind of thing it is for the API, and `by` lists the users.
+    #[error("{message}: used by {}", .by.join(", "))]
+    InUse {
+        code: &'static str,
+        message: String,
+        by: Vec<String>,
+    },
     #[error(transparent)]
     Store(store::Error),
     #[error(transparent)]
@@ -130,7 +169,7 @@ impl From<store::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// What a change does to a note.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Event {
     Create,
     Update,
@@ -178,9 +217,26 @@ pub trait Hooks: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Step 10: queue `after_*` handlers for the committed changes (D9).
-    fn after(&self, saved: &[Saved], author: &Author) {
-        let _ = (saved, author);
+    /// Step 10: queue `after_*` handlers for the committed changes (D9). `schema` is the schema
+    /// the write committed under.
+    fn after(&self, saved: &[Saved], author: &Author, schema: &Schema) {
+        let _ = (saved, author, schema);
+    }
+
+    /// Run `migration` over note `id` of `type_name` during a schema change (D6). `doc` is the
+    /// note after the change's simple rules. `None` leaves it as it is.
+    fn migrate(
+        &self,
+        type_name: &str,
+        migration: &Migration,
+        id: &str,
+        doc: &Doc,
+    ) -> std::result::Result<Option<Doc>, String> {
+        let _ = (type_name, id, doc);
+        Err(format!(
+            "this vault runs no scripts, so migration {:?} cannot run",
+            migration.script
+        ))
     }
 }
 
@@ -221,13 +277,21 @@ pub struct Writer {
     state: State,
     clock: Arc<dyn Clock>,
     hooks: Box<dyn Hooks>,
+    /// Held for the whole of every write, so writes run one at a time.
+    writes: Mutex<()>,
     inner: Mutex<Inner>,
+    /// The changes handlers made during step 5 of the write in progress, `None` outside step 5.
+    staging: Mutex<Option<Vec<(NoteChange, Author)>>>,
 }
+
+/// Rounds of step 5 and step 6 one write may take before it is refused. Each round runs handlers
+/// only on notes that have not yet run them, so only handlers that keep creating notes reach it.
+const MAX_ROUNDS: usize = 32;
 
 /// Called at each step of a commit; breaking stops the commit the way a crash would.
 pub type CommitHook = Box<dyn FnMut(CommitStep) -> ControlFlow<()> + Send>;
 
-/// What every write changes, behind one lock, so writes run one at a time.
+/// What every write changes and every read sees. Writes hold it except while handlers run.
 struct Inner {
     schema: Schema,
     index: Index,
@@ -245,11 +309,13 @@ impl Writer {
             state,
             clock: Arc::new(SystemClock),
             hooks: Box::new(NoHooks),
+            writes: Mutex::new(()),
             inner: Mutex::new(Inner {
                 schema,
                 index,
                 commit_hook: None,
             }),
+            staging: Mutex::new(None),
         })
     }
 
@@ -293,6 +359,7 @@ impl Writer {
 
     /// Reload the types and taxonomies from the vault and refresh the index's terms.
     pub fn reload_schema(&self) -> Result<()> {
+        let _w = self.write_lock();
         let schema = Schema::load(&self.vault)?;
         let mut inner = self.lock();
         inner.index.set_schema(&schema)?;
@@ -312,6 +379,7 @@ impl Writer {
     /// Create type `name`, or replace it while it has no notes, and reload the schema. Changing a
     /// type that has notes goes through a planned schema change instead (D6).
     pub fn put_type(&self, name: &str, source: &str) -> Result<String> {
+        let _w = self.write_lock();
         let mut inner = self.lock();
         let path = type_path(name);
         let invalid = |message: String| {
@@ -372,11 +440,12 @@ impl Writer {
 
     /// Create a note of `type_name` with a new id.
     pub fn create(&self, type_name: &str, input: &Input, author: &Author) -> Result<Saved> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         let id = ulid::Ulid::new().to_string();
         let doc = input.parse(&note_path(type_name, &id))?;
         let change = self.prepare_put(&inner, &id, type_name, doc, None, author)?;
-        self.apply(&mut inner, vec![change], &|| Ok(()), author)
+        self.apply(inner, vec![change], &|| Ok(()), author)
             .map(first)
     }
 
@@ -388,18 +457,19 @@ impl Writer {
         base: Option<&str>,
         author: &Author,
     ) -> Result<Saved> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         let doc = input.parse(&note_path(&type_name, id))?;
         let change = self.prepare_put(&inner, id, &type_name, doc, Some(&old), author)?;
         let check = || self.check_base(id, &type_name, &old, base);
-        self.apply(&mut inner, vec![change], &check, author)
-            .map(first)
+        self.apply(inner, vec![change], &check, author).map(first)
     }
 
     /// Delete note `id`, which must be at version `base`, moving it to the trash.
     pub fn delete(&self, id: &str, base: Option<&str>, author: &Author) -> Result<Saved> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         self.check_base(id, &type_name, &old, base)?;
         let change = NoteChange {
@@ -408,7 +478,7 @@ impl Writer {
             event: Event::Delete,
             doc: None,
         };
-        self.apply(&mut inner, vec![change], &|| Ok(()), author)
+        self.apply(inner, vec![change], &|| Ok(()), author)
             .map(first)
     }
 
@@ -420,19 +490,20 @@ impl Writer {
         base: Option<&str>,
         author: &Author,
     ) -> Result<Saved> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         let past = self.version(id, version)?;
         let doc = Input::Wcl(past.content).parse(&note_path(&type_name, id))?;
         let change = self.prepare_put(&inner, id, &type_name, doc, Some(&old), author)?;
         let check = || self.check_base(id, &type_name, &old, base);
-        self.apply(&mut inner, vec![change], &check, author)
-            .map(first)
+        self.apply(inner, vec![change], &check, author).map(first)
     }
 
     /// Bring note `id` back from the trash with its last content, as a new version.
     pub fn restore_from_trash(&self, id: &str, author: &Author) -> Result<Saved> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         if let Some(type_name) = self.locate(id)? {
             let current = self.vault.read_text(&note_path(&type_name, id))?;
             let current_version = self.head(id, &type_name, &current)?;
@@ -455,8 +526,88 @@ impl Writer {
             set_field(doc, "created", created);
         }
         change.event = Event::Create;
-        self.apply(&mut inner, vec![change], &|| Ok(()), author)
+        self.apply(inner, vec![change], &|| Ok(()), author)
             .map(first)
+    }
+
+    /// Create a note of `type_name` inside the write in progress, for a `before_*` handler
+    /// (D30). The change runs its own `before_*` handlers and commits with the write. Returns the
+    /// change as it will be written.
+    pub fn stage_create(
+        &self,
+        type_name: &str,
+        input: &Input,
+        author: &Author,
+    ) -> Result<NoteChange> {
+        self.check_staging()?;
+        let id = ulid::Ulid::new().to_string();
+        let doc = input.parse(&note_path(type_name, &id))?;
+        let change = self.prepare_put(&self.lock(), &id, type_name, doc, None, author)?;
+        self.stage(change, author)
+    }
+
+    /// Replace note `id`, which must be at version `base`, inside the write in progress. See
+    /// [`Writer::stage_create`].
+    pub fn stage_update(
+        &self,
+        id: &str,
+        input: &Input,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<NoteChange> {
+        self.check_staging()?;
+        let (type_name, old) = self.existing(id)?;
+        let doc = input.parse(&note_path(&type_name, id))?;
+        let change = self.prepare_put(&self.lock(), id, &type_name, doc, Some(&old), author)?;
+        self.check_base(id, &type_name, &old, base)?;
+        self.stage(change, author)
+    }
+
+    /// Delete note `id`, which must be at version `base`, inside the write in progress. See
+    /// [`Writer::stage_create`].
+    pub fn stage_delete(
+        &self,
+        id: &str,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<NoteChange> {
+        self.check_staging()?;
+        let (type_name, old) = self.existing(id)?;
+        self.check_base(id, &type_name, &old, base)?;
+        let change = NoteChange {
+            id: id.to_owned(),
+            type_name,
+            event: Event::Delete,
+            doc: None,
+        };
+        self.stage(change, author)
+    }
+
+    fn check_staging(&self) -> Result<()> {
+        if self.staging_slot().is_none() {
+            return Err(Error::Rejected(
+                "a note change can join a write only while its before_* handlers run".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Run a staged change's `before_*` handlers and add it to the write in progress.
+    fn stage(&self, mut change: NoteChange, author: &Author) -> Result<NoteChange> {
+        self.before(&mut change, author)?;
+        match self.staging_slot().as_mut() {
+            Some(staged) => staged.push((change.clone(), author.clone())),
+            None => {
+                return Err(Error::Rejected(
+                    "the write this change was to join has ended".into(),
+                ));
+            }
+        }
+        Ok(change)
+    }
+
+    fn staging_slot(&self) -> MutexGuard<'_, Option<Vec<(NoteChange, Author)>>> {
+        self.staging.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Read note `id`.
@@ -551,6 +702,10 @@ impl Writer {
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write_lock(&self) -> MutexGuard<'_, ()> {
+        self.writes.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The type folder holding note `id`, from the files on disk.
@@ -655,29 +810,99 @@ impl Writer {
         })
     }
 
-    /// Validate (step 3), run `check_base` (step 4), then steps 5 to 11 for one write.
+    /// Validate (step 3), run `check_base` (step 4), then steps 5 to 11 for one write. The caller
+    /// holds the write lock; `inner` is released while handlers run.
     fn apply(
         &self,
-        inner: &mut Inner,
-        mut changes: Vec<NoteChange>,
+        inner: MutexGuard<'_, Inner>,
+        changes: Vec<NoteChange>,
         check_base: &dyn Fn() -> Result<()>,
         author: &Author,
     ) -> Result<Vec<Saved>> {
-        // Validate what was submitted before any handler sees it.
-        self.render(inner, &changes)?;
-        check_base()?;
+        self.apply_with(inner, changes, check_base, author, Vec::new(), false)
+    }
 
-        for change in &mut changes {
-            self.hooks.before(change, author).map_err(Error::Rejected)?;
-        }
-        let mut changes = refs::expand(self, inner, changes)?;
+    /// [`Writer::apply`], committing `files` in the same commit as the notes. A `dry_run` stops
+    /// before the commit and returns what the write would save: each put with an empty version
+    /// and the text it would write, each delete with its current version and text. A dry run
+    /// runs `before_*` handlers, since they change what would be saved, and queues no `after_*`
+    /// handlers.
+    fn apply_with(
+        &self,
+        inner: MutexGuard<'_, Inner>,
+        changes: Vec<NoteChange>,
+        check_base: &dyn Fn() -> Result<()>,
+        author: &Author,
+        extra_files: Vec<Change>,
+        dry_run: bool,
+    ) -> Result<Vec<Saved>> {
+        // Validate what was submitted before any handler sees it.
+        self.render(&inner, &changes)?;
+        check_base()?;
+        drop(inner);
+
+        // Steps 5 and 6, until every note the write changes has run its `before_*` handlers.
+        let mut handled = HashSet::new();
+        let mut authors = HashMap::new();
+        let mut changes = self.run_before(changes, &mut handled, &mut authors, author)?;
+        let mut inner = self.lock();
+        let mut rounds = 0;
+        let changes = loop {
+            let expanded = refs::expand(self, &inner, changes)?;
+            if expanded
+                .iter()
+                .all(|c| handled.contains(&(c.id.clone(), c.event)))
+            {
+                break expanded;
+            }
+            rounds += 1;
+            if rounds > MAX_ROUNDS {
+                return Err(Error::Rejected(format!(
+                    "the write's handlers kept changing more notes after {MAX_ROUNDS} rounds"
+                )));
+            }
+            drop(inner);
+            changes = self.run_before(expanded, &mut handled, &mut authors, author)?;
+            inner = self.lock();
+        };
+        let mut changes = changes;
         let extra = self.hooks.side_effects(&changes)?;
         changes.extend(extra);
 
         // Handlers may have changed the notes, so what is written is rendered and checked again.
-        let rendered = self.render(inner, &changes)?;
+        let rendered = self.render(&inner, &changes)?;
 
-        let mut files = Vec::with_capacity(rendered.len());
+        if dry_run {
+            return rendered
+                .into_iter()
+                .map(|r| {
+                    let NoteChange {
+                        id,
+                        type_name,
+                        event,
+                        ..
+                    } = r.change;
+                    let (version, wcl) = match r.text {
+                        Some(text) => (String::new(), text),
+                        None => {
+                            let text = self.vault.read_text(&note_path(&type_name, &id))?;
+                            (self.head(&id, &type_name, &text)?, text)
+                        }
+                    };
+                    Ok(Saved {
+                        id,
+                        type_name,
+                        event,
+                        version,
+                        wcl,
+                        also: Vec::new(),
+                    })
+                })
+                .collect();
+        }
+
+        let mut files = extra_files;
+        files.reserve(rendered.len());
         for r in &rendered {
             let path = note_path(&r.change.type_name, &r.change.id);
             files.push(match &r.text {
@@ -699,9 +924,10 @@ impl Writer {
                 event,
                 ..
             } = r.change;
+            let by = authors.get(&id).unwrap_or(author);
             match (r.text, r.doc) {
                 (Some(text), Some((doc, report))) => {
-                    let v = self.state.record_version(&id, &type_name, author, &text)?;
+                    let v = self.state.record_version(&id, &type_name, by, &text)?;
                     updates.push(Update::Put {
                         id: id.clone(),
                         type_name: type_name.clone(),
@@ -718,7 +944,7 @@ impl Writer {
                     });
                 }
                 _ => {
-                    let entry = self.state.trash_note(&id, author)?;
+                    let entry = self.state.trash_note(&id, by)?;
                     updates.push(Update::Delete { id: id.clone() });
                     saved.push(Saved {
                         id,
@@ -731,9 +957,73 @@ impl Writer {
                 }
             }
         }
+        let inner = &mut *inner;
         inner.index.update(&inner.schema, &updates)?;
-        self.hooks.after(&saved, author);
+        self.hooks.after(&saved, author, &inner.schema);
         Ok(saved)
+    }
+
+    /// Step 5 for every change not yet in `handled`, with the changes its handlers staged
+    /// merged in. A staged change to a note the write already changes replaces that change, and
+    /// `authors` records the handler that staged it.
+    fn run_before(
+        &self,
+        mut changes: Vec<NoteChange>,
+        handled: &mut HashSet<(String, Event)>,
+        authors: &mut HashMap<String, Author>,
+        author: &Author,
+    ) -> Result<Vec<NoteChange>> {
+        *self.staging_slot() = Some(Vec::new());
+        let ran = (|| -> Result<()> {
+            for change in &mut changes {
+                if handled.insert((change.id.clone(), change.event)) {
+                    self.before(change, author)?;
+                }
+            }
+            Ok(())
+        })();
+        let staged = self.staging_slot().take().unwrap_or_default();
+        ran?;
+        for (change, by) in staged {
+            handled.insert((change.id.clone(), change.event));
+            authors.insert(change.id.clone(), by);
+            match changes.iter_mut().find(|c| c.id == change.id) {
+                Some(c) => *c = change,
+                None => changes.push(change),
+            }
+        }
+        Ok(changes)
+    }
+
+    /// Run the `before_*` handlers of one change. A note a handler changed keeps its `created`
+    /// and `updated` times and is put back in canonical order.
+    fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
+        let stamps = change.doc.as_ref().map(|d| {
+            (
+                created_of(d),
+                d.field("updated")
+                    .and_then(schema::Value::as_str)
+                    .map(str::to_owned),
+            )
+        });
+        let original = change.doc.clone();
+        self.hooks.before(change, author).map_err(Error::Rejected)?;
+        if change.doc == original {
+            return Ok(());
+        }
+        let Some((Some(created), Some(updated))) = stamps else {
+            return Ok(());
+        };
+        let Some(doc) = change.doc.take() else {
+            return Ok(());
+        };
+        let inner = self.lock();
+        let ty = inner
+            .schema
+            .type_def(&change.type_name)
+            .ok_or_else(|| Error::UnknownType(change.type_name.clone()))?;
+        change.doc = Some(note::arrange(ty, doc, &created, &updated));
+        Ok(())
     }
 
     /// The canonical text of every put and the validation of the note it holds. A delete renders
@@ -816,7 +1106,7 @@ impl NoteLookup for Lookup<'_> {
     }
 
     fn asset_exists(&self, id: &str) -> bool {
-        schema::is_ulid(id) && self.writer.vault.root().join("assets").join(id).is_dir()
+        self.writer.find_asset(id).is_some()
     }
 }
 

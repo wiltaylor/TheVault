@@ -31,6 +31,7 @@
 //! its job names, and cannot list them (D10).
 
 mod convert;
+mod handlers;
 mod http;
 mod run;
 mod vault;
@@ -48,6 +49,7 @@ use state::Author;
 use wscript::std_modules::DynValue;
 use wscript::{CompiledUnit, Context, Fault, HostError, IntoValue, Module, Vm, VmConfig};
 
+pub use handlers::{Handlers, MAX_DEPTH};
 pub use http::Response;
 pub use vault::Vault;
 
@@ -145,6 +147,9 @@ pub struct Job {
     pub secrets: Vec<String>,
     /// A wall-clock limit replacing [`Limits::timeout`], such as a task's `timeout`.
     pub timeout: Option<Duration>,
+    /// What the caller needs to know about the run from inside a host call, through
+    /// [`current_job`]. The host does not read it.
+    pub context: Json,
 }
 
 impl Job {
@@ -159,8 +164,15 @@ impl Job {
             allow_domains: Vec::new(),
             secrets: Vec::new(),
             timeout: None,
+            context: Json::Null,
         }
     }
+}
+
+/// Look at the job of the run in progress on this thread, or `None` outside a run. A [`Vault`]
+/// uses it to tell what kind of run is calling it.
+pub fn current_job<T>(f: impl FnOnce(&Job) -> T) -> Option<T> {
+    run::peek(|r| f(&r.job))
 }
 
 /// How a run ended, with what it logged either way.
