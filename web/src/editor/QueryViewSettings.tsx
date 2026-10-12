@@ -1,6 +1,8 @@
 import { Index, Show } from "solid-js";
 import type { Block } from "../api";
+import { types } from "../session";
 import {
+  CALENDAR_MODES,
   IDENT,
   VIEW_KINDS,
   addView,
@@ -15,13 +17,14 @@ import {
   viewBlocks,
   withItem,
 } from "../views/model";
+import { QueryEditor } from "./QueryEditor";
 
 /** Text for an optional string item: empty text removes it. */
 const optional = (v: string) => (v.trim() === "" ? undefined : v);
 
 /**
- * The settings of a query view block in the editor: its heading, its query, and its saved views
- * (D8). Every change hands `onChange` the whole new block, which the editor stores in the note.
+ * The settings of a query view block in the editor: its heading, its query, as text or in the
+ * visual builder, and its saved views (D8). Every change hands `onChange` the whole new block, which the editor stores in the note.
  * Lists use `Index`, so editing a view keeps its inputs, and focus, in place.
  */
 export function QueryViewSettings(props: { block: Block; onChange: (block: Block) => void; onRemove: () => void }) {
@@ -40,15 +43,11 @@ export function QueryViewSettings(props: { block: Block; onChange: (block: Block
           onInput={(e) => set(withItem(props.block, "title", optional(e.currentTarget.value)))}
         />
       </label>
-      <label>
-        Query
-        <textarea
-          rows={2}
-          spellcheck={false}
-          value={def().query}
-          onInput={(e) => set(withItem(props.block, "query", e.currentTarget.value))}
-        />
-      </label>
+      <QueryEditor
+        value={def().query}
+        onChange={(text) => set(withItem(props.block, "query", text))}
+        types={types()}
+      />
       <Index each={views()}>
         {(view, i) => (
           <div class="view-settings" data-testid="view-settings">
@@ -102,6 +101,52 @@ export function QueryViewSettings(props: { block: Block; onChange: (block: Block
                   placeholder={view().kind === "details" ? "detail" : "card"}
                   onInput={(e) => set(setViewItem(props.block, i, "template", optional(e.currentTarget.value)))}
                 />
+              </label>
+            </Show>
+            <Show when={kindUses(view().kind, "location")}>
+              <label>
+                Location field
+                <input
+                  type="text"
+                  value={view().location ?? ""}
+                  aria-invalid={!IDENT.test(view().location ?? "")}
+                  onInput={(e) => set(setViewItem(props.block, i, "location", optional(e.currentTarget.value)))}
+                />
+              </label>
+            </Show>
+            <Show when={kindUses(view().kind, "group")}>
+              <label>
+                Group by
+                <input
+                  type="text"
+                  value={view().group ?? ""}
+                  placeholder="a single-term taxonomy field"
+                  onInput={(e) => set(setViewItem(props.block, i, "group", optional(e.currentTarget.value)))}
+                />
+              </label>
+            </Show>
+            <Show when={kindUses(view().kind, "date")}>
+              <label>
+                Date field
+                <input
+                  type="text"
+                  value={view().date ?? ""}
+                  placeholder="a date, datetime or date range field"
+                  onInput={(e) => set(setViewItem(props.block, i, "date", optional(e.currentTarget.value)))}
+                />
+              </label>
+            </Show>
+            <Show when={kindUses(view().kind, "mode")}>
+              <label>
+                Mode
+                <select
+                  value={view().mode}
+                  onChange={(e) =>
+                    set(setViewItem(props.block, i, "mode", e.currentTarget.value === "month" ? undefined : e.currentTarget.value))
+                  }
+                >
+                  <Index each={CALENDAR_MODES}>{(m) => <option value={m()}>{m()}</option>}</Index>
+                </select>
               </label>
             </Show>
             <Show when={views().length > 1}>

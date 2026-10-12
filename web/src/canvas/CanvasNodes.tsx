@@ -8,7 +8,7 @@ import { Inline } from "../components/Inline";
 import { formatValue } from "../components/Render";
 import { inkOf, paintOrder, strokePath } from "../ink/ink";
 import { typeDef } from "../session";
-import { TemplateBody } from "../views/QueryView";
+import { TemplateBody } from "../views/parts";
 import { viewTemplate } from "../views/model";
 import { useThisNote } from "../views/thisNote";
 import type { CanvasNode } from "./canvas";

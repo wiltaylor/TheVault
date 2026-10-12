@@ -3,6 +3,7 @@
 
 import { noteWritten } from "./changes";
 import type { SchemaType } from "./defs/typeModel";
+import type { QueryModel } from "./editor/queryModel";
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
@@ -220,6 +221,14 @@ export const api = {
       ...(cursor ? { cursor } : {}),
       page_size: pageSize,
     }),
+  /** Check `query`, and get the builder's model of it, or why the builder cannot show it (D8). */
+  parseQuery: (query: string) =>
+    request<{ text: string; model: QueryModel | null; builder_error: string | null }>("POST", "/api/query/parse", {
+      query,
+    }),
+  /** The canonical text of a builder model. A model that is not a query yet is a 400. */
+  queryText: async (model: QueryModel) =>
+    (await request<{ text: string }>("POST", "/api/query/text", { model })).text,
   search: (q: string, cursor: string | null, pageSize: number) => {
     const params = new URLSearchParams({ q, page_size: String(pageSize) });
     if (cursor) params.set("cursor", cursor);

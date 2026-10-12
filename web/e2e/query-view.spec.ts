@@ -152,6 +152,7 @@ test("views saved in the editor persist across reload", async ({ page: p, admin 
   const settings = p.getByRole("group", { name: "Query view settings" });
   await expect(settings).toBeVisible();
   await settings.getByLabel("Heading").fill("Persisted tasks");
+  await settings.getByRole("button", { name: "Text" }).click();
   await settings.getByLabel("Query", { exact: true }).fill(`from task where project == "${project.id}" sort title asc`);
   const views = settings.getByTestId("view-settings");
   await expect(views).toHaveCount(1);
