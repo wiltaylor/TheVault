@@ -1,24 +1,30 @@
 // Whether the browser holds a live session, and the types the signed-in app lays notes out with.
 
 import { createSignal } from "solid-js";
-import { ApiError, api, type TypeDef } from "./api";
+import { ApiError, api, type Taxonomy, type TypeDef } from "./api";
 
 export type SessionState = "checking" | "in" | "out";
 
 const [state, setState] = createSignal<SessionState>("checking");
 const [types, setTypes] = createSignal<TypeDef[]>([]);
+const [taxonomies, setTaxonomies] = createSignal<Taxonomy[]>([]);
 
-export { state as sessionState, types };
+export { state as sessionState, taxonomies, types };
 
 /** The type named `name`, once the types have loaded. */
 export function typeDef(name: string): TypeDef | undefined {
   return types().find((t) => t.name === name);
 }
 
-/** Load the types, which also tells whether the session cookie is still good. */
+/** The taxonomy named `name`, once the taxonomies have loaded. */
+export function taxonomyDef(name: string): Taxonomy | undefined {
+  return taxonomies().find((t) => t.name === name);
+}
+
+/** Load the types and taxonomies, which also tells whether the session cookie is still good. */
 export async function refreshSession(): Promise<void> {
   try {
-    setTypes(await api.types());
+    await reloadDefinitions();
     setState("in");
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
@@ -27,6 +33,13 @@ export async function refreshSession(): Promise<void> {
     }
     throw e;
   }
+}
+
+/** Load the types and taxonomies again, after an editor changed them. */
+export async function reloadDefinitions(): Promise<void> {
+  const [t, x] = await Promise.all([api.types(), api.taxonomies()]);
+  setTypes(t);
+  setTaxonomies([...x].sort((a, b) => a.name.localeCompare(b.name)));
 }
 
 /** Log in. A wrong password rejects with the API's error. */
@@ -47,4 +60,5 @@ export async function logOut(): Promise<void> {
 export function signedOut() {
   setState("out");
   setTypes([]);
+  setTaxonomies([]);
 }
