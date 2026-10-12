@@ -5,10 +5,15 @@
 //! JSON form of [`writer::Input::Json`]; any other body is the note's WCL text, with the base
 //! version in `If-Match`. A response is JSON unless `Accept` asks for `text/plain` or WCL, in
 //! which case the body is the canonical WCL on disk and the version is in `ETag` (D21).
+//!
+//! Queries run at `/api/query` and full-text search at `/api/search`, a page at a time with a
+//! cursor (D33). `/api/query/parse` and `/api/query/text` convert between text and the visual
+//! builder's model (D8).
 
 mod auth;
 mod error;
 mod notes;
+mod query;
 
 use std::sync::Arc;
 
@@ -34,6 +39,10 @@ pub fn router(writer: Arc<Writer>) -> Router {
         .route("/api/notes/{id}/history", get(notes::history))
         .route("/api/notes/{id}/history/{version}", get(notes::version))
         .route("/api/notes/{id}/restore", post(notes::restore_version))
+        .route("/api/query", get(query::run_get).post(query::run_post))
+        .route("/api/query/parse", post(query::parse_query))
+        .route("/api/query/text", post(query::model_text))
+        .route("/api/search", get(query::search))
         .route("/api/trash", get(notes::trash))
         .route("/api/trash/{id}/restore", post(notes::restore_from_trash))
         .with_state(writer)

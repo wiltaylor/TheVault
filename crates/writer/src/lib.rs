@@ -234,6 +234,12 @@ impl Writer {
         self.lock().schema.clone()
     }
 
+    /// Run `f` over the index and schema, with writes held off until it returns.
+    pub fn read_index<T>(&self, f: impl FnOnce(&Index, &Schema) -> T) -> T {
+        let inner = self.lock();
+        f(&inner.index, &inner.schema)
+    }
+
     /// Reload the types and taxonomies from the vault and refresh the index's terms.
     pub fn reload_schema(&self) -> Result<()> {
         let schema = Schema::load(&self.vault)?;
