@@ -16,6 +16,7 @@ import { type Block, type NoteDoc, type Row, type Template, api } from "../api";
 import { BlockView, Blocks, formatValue } from "../components/Render";
 import { VirtualList } from "../components/VirtualList";
 import { type PagedRows, createPagedRows } from "../components/pagedRows";
+import { MapView } from "../map/MapView";
 import { compoundBlock, slotField } from "../notes";
 import { typeDef } from "../session";
 import { type ViewDef, readQueryView, viewTemplate } from "./model";
@@ -274,7 +275,7 @@ function DetailsView(props: { view: ViewDef; data: PagedRows; total: number }) {
 /**
  * A query view block: one query, shown through its saved views (D8, D33). `this` is the note
  * that holds the block. Every view keeps only what is on screen in the DOM: table, list and cards
- * virtualise, details page.
+ * virtualise, details and map page.
  */
 export function QueryView(props: { block: Block }) {
   const thisId = useThisNote();
@@ -338,6 +339,19 @@ export function QueryView(props: { block: Block }) {
                     </Match>
                     <Match when={view().kind === "details"}>
                       <DetailsView view={view()} data={data} total={total()} />
+                    </Match>
+                    <Match when={view().kind === "map"}>
+                      <MapView
+                        location={view().location}
+                        data={data}
+                        total={total()}
+                        card={(row) => (
+                          <>
+                            <NoteLink row={row} />
+                            <TemplateBody row={row} template={viewTemplate(typeDef(row.type), view().template, "card")} />
+                          </>
+                        )}
+                      />
                     </Match>
                   </Switch>
                 </div>

@@ -6,6 +6,7 @@ import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
 import { NoteView } from "./pages/NoteView";
 import { Search } from "./pages/Search";
+import { Settings } from "./pages/Settings";
 import { TaxonomyEditor, TaxonomyList } from "./pages/TaxonomyEditor";
 import { TemplateEditor } from "./pages/TemplateEditor";
 import { TypeEditor } from "./pages/TypeEditor";
@@ -39,6 +40,7 @@ export function App() {
         <Route path="/taxonomies/:name" component={TaxonomyEditor} />
         <Route path="/notes/:id" component={NoteView} />
         <Route path="/search" component={Search} />
+        <Route path="/settings" component={Settings} />
         <Route path="*" component={() => <p class="error">There is no page here.</p>} />
       </Route>
     </Router>

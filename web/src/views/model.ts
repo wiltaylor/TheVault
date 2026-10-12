@@ -30,6 +30,8 @@ export interface ViewDef {
   title: string;
   template: string | null;
   columns: string[];
+  /** `map`: the location field pins sit at. */
+  location: string | null;
 }
 
 export interface QueryViewDef {
@@ -58,6 +60,7 @@ export function readView(view: Block): ViewDef {
     title: str(view.fields, "title") ?? name,
     template: str(view.fields, "template"),
     columns: Array.isArray(columns) ? columns.filter((c): c is string => typeof c === "string") : ["title"],
+    location: str(view.fields, "location"),
   };
 }
 

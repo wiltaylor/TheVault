@@ -104,6 +104,17 @@ export function QueryViewSettings(props: { block: Block; onChange: (block: Block
                 />
               </label>
             </Show>
+            <Show when={kindUses(view().kind, "location")}>
+              <label>
+                Location field
+                <input
+                  type="text"
+                  value={view().location ?? ""}
+                  aria-invalid={!IDENT.test(view().location ?? "")}
+                  onInput={(e) => set(setViewItem(props.block, i, "location", optional(e.currentTarget.value)))}
+                />
+              </label>
+            </Show>
             <Show when={views().length > 1}>
               <button type="button" onClick={() => set(removeView(props.block, i))}>
                 Remove view
