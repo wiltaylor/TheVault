@@ -1458,6 +1458,8 @@ a.button {
 
 .settings-actions {
   display: flex;
+  gap: 0.5rem;
+}
 
 /* Kanban: one column per term, scrolling sideways when they do not fit. */
 .kanban {
