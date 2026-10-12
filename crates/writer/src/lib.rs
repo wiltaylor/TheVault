@@ -49,6 +49,7 @@ use store::{Change, CommitStep, Vault};
 
 pub use assets::Asset;
 pub use batch::{Item, Op, Outcome, Report};
+pub use defs::ScriptProblem;
 pub use note::{Input, block_to_json, doc_to_json, value_to_json};
 pub use refs::Referrer;
 pub use schema::NoteEdit;
@@ -201,6 +202,28 @@ pub struct Saved {
     pub also: Vec<Saved>,
 }
 
+/// How the vault runs a script, which decides the modules it may use (D30).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ScriptRole {
+    /// A `before_*` handler.
+    Before,
+    /// An `after_*` handler.
+    After,
+    /// A scheduled task (D10).
+    Task,
+}
+
+impl ScriptRole {
+    /// The role as the API names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScriptRole::Before => "before_handler",
+            ScriptRole::After => "after_handler",
+            ScriptRole::Task => "task",
+        }
+    }
+}
+
 /// The extension points of the write path. Every method defaults to doing nothing.
 pub trait Hooks: Send + Sync {
     /// Step 5: run `before_*` handlers on one change. An error rejects the whole write with its
@@ -237,6 +260,18 @@ pub trait Hooks: Send + Sync {
             "this vault runs no scripts, so migration {:?} cannot run",
             migration.script
         ))
+    }
+
+    /// Check that `source`, the text of script `name`, compiles when run as `role`, without
+    /// running it. An error is the compiler's message.
+    fn check_script(
+        &self,
+        role: ScriptRole,
+        name: &str,
+        source: &str,
+    ) -> std::result::Result<(), String> {
+        let _ = (role, name, source);
+        Ok(())
     }
 }
 

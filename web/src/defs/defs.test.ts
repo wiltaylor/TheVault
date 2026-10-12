@@ -162,6 +162,26 @@ handler "before_update" {
     ]);
   });
 
+  it("reports handlers without a script and before handlers that ask for HTTP or secrets", () => {
+    const m = emptyType();
+    m.label = "X";
+    m.handlers.push(
+      { event: "before_update", script: "", function: null, allow_domains: [], secrets: [] },
+      { event: "before_create", script: "gate", function: null, allow_domains: ["example.com"], secrets: [] },
+      { event: "after_create", script: "hook", function: "send", allow_domains: ["example.com"], secrets: ["key"] },
+    );
+    expect(problems(m)).toEqual([
+      "Handler 1 (before_update): choose a script.",
+      "Handler 2 (before_create): only after_* handlers may reach hosts or read secrets.",
+    ]);
+    expect(typeWcl(m)).toContain(`handler "after_create" {
+  script = "hook"
+  function = "send"
+  allow_domains = ["example.com"]
+  secrets = ["key"]
+}`);
+  });
+
   it("lists the fields a template does not place", () => {
     const m = typeFromSchema(stored);
     expect(unplaced(m.templates[0]!, m.fields)).toEqual(["place"]);

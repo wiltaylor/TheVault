@@ -8,7 +8,9 @@
 //! - `PUT /api/taxonomies/{name}`: the taxonomy file, with `renames`, a map of old term paths to
 //!   new ones, to rename or move terms. Notes holding a renamed term are rewritten in the same
 //!   commit, and `notes` in the response lists them.
-//! - `PUT /api/scripts/{name}`: the script's source, as `{ "source": "..." }` in JSON.
+//! - `PUT /api/scripts/{name}`: the script's source, as `{ "source": "..." }` in JSON. It is stored
+//!   as sent. The JSON answer to a read or a write of a script carries `problems`: why it would not
+//!   compile, once for each way the vault runs it (`before_handler`, `after_handler`, `task`).
 //! - `PUT /api/notes/{id}/canvas/{name}`: one `canvas { ... }` block, with `base_version` or
 //!   `If-Match`. `name` is a canvas field, or `<content field>.<n>` for the n-th canvas block
 //!   inside a content field.
@@ -220,9 +222,22 @@ pub async fn script(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let n = name.clone();
-    let source = blocking(w, move |w| w.read_script(&n)).await?;
-    let json = json!({ "name": name, "source": source });
+    let (source, problems) = blocking(w, move |w| {
+        let source = w.read_script(&n)?;
+        let problems = w.script_problems(&n, &source)?;
+        Ok::<_, writer::Error>((source, problems))
+    })
+    .await?;
+    let json = json!({ "name": name, "source": source, "problems": problems_json(&problems) });
     Ok(text_or_json(&headers, source, json))
+}
+
+/// Why a script would not compile, once for each way the vault runs it.
+fn problems_json(problems: &[writer::ScriptProblem]) -> Value {
+    problems
+        .iter()
+        .map(|p| json!({ "role": p.role.as_str(), "message": p.message }))
+        .collect()
 }
 
 /// `PUT /api/scripts/{name}`.
@@ -234,8 +249,13 @@ pub async fn put_script(
 ) -> Result<Response, ApiError> {
     let b: ScriptBody = body(&headers, &raw, |source| ScriptBody { source })?;
     let n = name.clone();
-    let source = blocking(w, move |w| w.put_script(&n, &b.source)).await?;
-    let json = json!({ "name": name, "source": source });
+    let (source, problems) = blocking(w, move |w| {
+        let source = w.put_script(&n, &b.source)?;
+        let problems = w.script_problems(&n, &source)?;
+        Ok::<_, writer::Error>((source, problems))
+    })
+    .await?;
+    let json = json!({ "name": name, "source": source, "problems": problems_json(&problems) });
     Ok(text_or_json(&headers, source, json))
 }
 

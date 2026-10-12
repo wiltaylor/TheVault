@@ -2,11 +2,15 @@ import { Route, Router, useNavigate } from "@solidjs/router";
 import { type ParentProps, onMount } from "solid-js";
 import { setUnauthorizedHandler } from "./api";
 import { Shell } from "./components/Shell";
+import { Secrets, Tokens } from "./pages/Access";
+import { Flagged, NoteHistory, Trash } from "./pages/History";
 import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
 import { NoteView } from "./pages/NoteView";
+import { ScriptEditor, ScriptList } from "./pages/Scripts";
 import { Search } from "./pages/Search";
 import { Settings } from "./pages/Settings";
+import { TaskEditor, TaskList } from "./pages/Tasks";
 import { TaxonomyEditor, TaxonomyList } from "./pages/TaxonomyEditor";
 import { TemplateEditor } from "./pages/TemplateEditor";
 import { TypeEditor } from "./pages/TypeEditor";
@@ -39,6 +43,16 @@ export function App() {
         <Route path="/taxonomies/new" component={TaxonomyEditor} />
         <Route path="/taxonomies/:name" component={TaxonomyEditor} />
         <Route path="/notes/:id" component={NoteView} />
+        <Route path="/notes/:id/history" component={NoteHistory} />
+        <Route path="/scripts" component={ScriptList} />
+        <Route path="/scripts/:name" component={ScriptEditor} />
+        <Route path="/tasks" component={TaskList} />
+        <Route path="/tasks/new" component={TaskEditor} />
+        <Route path="/tasks/:name" component={TaskEditor} />
+        <Route path="/secrets" component={Secrets} />
+        <Route path="/tokens" component={Tokens} />
+        <Route path="/trash" component={Trash} />
+        <Route path="/flagged" component={Flagged} />
         <Route path="/search" component={Search} />
         <Route path="/settings" component={Settings} />
         <Route path="*" component={() => <p class="error">There is no page here.</p>} />
