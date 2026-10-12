@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import type { Block, Json } from "../api";
+import { Inline } from "./Inline";
 
 /** A field value as plain text. Lists join with commas and records list their members. */
 export function formatValue(value: Json | undefined): string {
@@ -28,7 +29,7 @@ function ListItems(props: { items: Block[]; style: string }) {
           <Show when={props.style === "todo"}>
             <input type="checkbox" checked={item.fields?.checked === true} disabled />{" "}
           </Show>
-          {text(item, "text")}
+          <Inline text={text(item, "text")} />
           <Show when={(item.blocks ?? []).length > 0}>
             <Dynamic component={props.style === "numbered" ? "ol" : "ul"}>
               <ListItems items={item.blocks ?? []} style={props.style} />
@@ -40,24 +41,25 @@ function ListItems(props: { items: Block[]; style: string }) {
   );
 }
 
-/**
- * A content block, read-only. Inline markup shows as written; the block editor (a later ticket)
- * renders it.
- */
+/** A content block, read-only, with its text's inline markup rendered. */
 export function BlockView(props: { block: Block }) {
   const b = () => props.block;
   return (
     <Switch fallback={<div class="block-placeholder">{b().kind} block</div>}>
       <Match when={b().kind === "heading"}>
         <Dynamic component={`h${Math.min(3, Math.max(1, Number(b().fields?.level ?? 2))) + 1}`}>
-          {text(b(), "text")}
+          <Inline text={text(b(), "text")} />
         </Dynamic>
       </Match>
       <Match when={b().kind === "paragraph"}>
-        <p class="block-paragraph">{text(b(), "text")}</p>
+        <p class="block-paragraph">
+          <Inline text={text(b(), "text")} />
+        </p>
       </Match>
       <Match when={b().kind === "quote"}>
-        <blockquote>{text(b(), "text")}</blockquote>
+        <blockquote>
+          <Inline text={text(b(), "text")} />
+        </blockquote>
       </Match>
       <Match when={b().kind === "list"}>
         <Dynamic component={text(b(), "style") === "numbered" ? "ol" : "ul"}>

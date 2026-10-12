@@ -472,3 +472,128 @@ blockquote {
     gap: 0.25rem;
   }
 }
+
+/* Inline markup (D41) and the block editor (D29) */
+
+mark {
+  background: #fef08a;
+  color: inherit;
+}
+
+.colour-gray { color: #6b7280; }
+.colour-brown { color: #92400e; }
+.colour-orange { color: #ea580c; }
+.colour-yellow { color: #ca8a04; }
+.colour-green { color: #16a34a; }
+.colour-blue { color: #2563eb; }
+.colour-purple { color: #9333ea; }
+.colour-pink { color: #db2777; }
+.colour-red { color: #dc2626; }
+
+.mention {
+  color: var(--accent);
+  background: #eff6ff;
+  border-radius: 0.25rem;
+  padding: 0 0.2rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.content-editor {
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--panel);
+}
+
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.35rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.editor-toolbar button {
+  min-width: 2rem;
+  padding: 0.2rem 0.45rem;
+}
+
+.editor-toolbar button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.mark-bold { font-weight: 700; }
+.mark-italic { font-style: italic; }
+.mark-underline { text-decoration: underline; }
+.mark-strike { text-decoration: line-through; }
+
+.link-form {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.35rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.link-form input {
+  flex: 1;
+}
+
+.content-editor-doc {
+  min-height: 6rem;
+  padding: 0.5rem 0.75rem;
+  outline: none;
+}
+
+.content-editor-doc ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.5rem;
+}
+
+.content-editor-doc ul[data-type="taskList"] li {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.content-editor-doc .ProseMirror-selectednode .mention,
+.block-holder.selected {
+  outline: 2px solid var(--accent);
+}
+
+.block-holder {
+  border-radius: 0.3rem;
+}
+
+.mention-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.mention-picker input {
+  width: 12rem;
+  padding: 0 0.25rem;
+}
+
+.mention-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 16rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  box-shadow: 0 4px 12px rgb(15 23 42 / 0.12);
+}
+
+.mention-result {
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+}
+
+.mention-result[aria-selected="true"] {
+  background: #eff6ff;
+}
