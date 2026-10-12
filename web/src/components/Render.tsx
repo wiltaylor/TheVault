@@ -6,6 +6,7 @@ import { text } from "../blocks/fields";
 import { AssetBlock, ImageBlock } from "../blocks/MediaBlocks";
 import { MermaidBlock } from "../blocks/MermaidBlock";
 import { TerminalBlock } from "../blocks/TerminalBlock";
+import { InkSurface } from "../ink/InkSurface";
 import { Inline } from "./Inline";
 
 /** A field value as plain text. Lists join with commas and records list their members. */
@@ -42,8 +43,8 @@ function ListItems(props: { items: Block[]; style: string }) {
 }
 
 /**
- * A content block with its text's inline markup rendered. With `onChange`, the media and
- * technical blocks are edited in place and report each change as the whole new block.
+ * A content block with its text's inline markup rendered. With `onChange`, the media, technical
+ * and ink blocks are edited in place and report each change as the whole new block.
  */
 export function BlockView(props: { block: Block; onChange?: (block: Block) => void }) {
   const b = () => props.block;
@@ -83,6 +84,9 @@ export function BlockView(props: { block: Block; onChange?: (block: Block) => vo
       </Match>
       <Match when={b().kind === "asset"}>
         <AssetBlock block={b()} onChange={props.onChange} />
+      </Match>
+      <Match when={b().kind === "ink"}>
+        <InkSurface block={b()} label="Drawing" onChange={props.onChange} />
       </Match>
     </Switch>
   );

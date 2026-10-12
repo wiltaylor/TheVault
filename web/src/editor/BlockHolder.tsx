@@ -4,8 +4,8 @@ import { BlockView } from "../components/Render";
 import type { SolidNodeViewProps } from "./solidNodeView";
 
 /**
- * A content block the editor holds as one node: an image, an asset, code, a terminal or a
- * diagram is edited in place by its own component; any other kind is shown read-only.
+ * A content block the editor holds as one node: an image, an asset, code, a terminal, a
+ * diagram or a drawing is edited in place by its own component; any other kind is shown read-only.
  */
 export function BlockHolder(props: SolidNodeViewProps) {
   const block = () => props.node().attrs.block as Block | null;

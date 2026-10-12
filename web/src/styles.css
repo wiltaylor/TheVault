@@ -811,3 +811,66 @@ mark {
 .mention-result[aria-selected="true"] {
   background: #eff6ff;
 }
+
+/* Ink: a drawing surface shared by ink blocks and ink fields (D18, D29). */
+.ink {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.ink-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.ink-toolbar button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.ink-toolbar input[type="color"] {
+  width: 2.25rem;
+  padding: 0.1rem;
+}
+
+.ink-surface {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--panel);
+}
+
+.ink-surface.editing {
+  /* Touch and stylus draw instead of scrolling or zooming the page. */
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.ink-surface.editing.ink-eraser {
+  cursor: cell;
+}
+
+.ink-surface:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ink-guide {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.ink-dot {
+  fill: var(--muted);
+}
+
+.ink-highlighter {
+  opacity: 0.35;
+}

@@ -72,6 +72,16 @@ export function applyBlocks(doc: NoteDoc, f: FieldDef, blocks: Block[]): NoteDoc
   return { fields: doc.fields, blocks: next };
 }
 
+/** `doc` with compound field `f`'s block replaced by `block`, labelled with the field name. */
+export function applyCompound(doc: NoteDoc, f: FieldDef, block: Block): NoteDoc {
+  const labelled: Block = { ...block, kind: f.kind, labels: [f.name] };
+  const at = doc.blocks.findIndex((b) => b.kind === f.kind && b.labels?.[0] === f.name);
+  const next = [...doc.blocks];
+  if (at >= 0) next[at] = labelled;
+  else next.push(labelled);
+  return { fields: doc.fields, blocks: next };
+}
+
 /**
  * The fields to compare in a conflict: the title and the type's fields in type order, then any
  * other stored field. `created` and `updated` are the server's, so they are left out.

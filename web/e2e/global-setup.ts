@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { BULK_NOTES, BULK_TYPE, TASK_TYPE, bulkId, bulkTitle } from "./vault";
+import { BULK_NOTES, BULK_TYPE, SKETCH_TYPE, TASK_TYPE, bulkId, bulkTitle } from "./vault";
 
 const web = fileURLToPath(new URL("..", import.meta.url));
 const repo = join(web, "..");
@@ -23,6 +23,7 @@ function seedVault(): string {
   mkdirSync(join(vault, "types"));
   writeFileSync(join(vault, "types/task.wcl"), TASK_TYPE);
   writeFileSync(join(vault, "types/bulk.wcl"), BULK_TYPE);
+  writeFileSync(join(vault, "types/sketch.wcl"), SKETCH_TYPE);
   mkdirSync(join(vault, "notes/bulk"), { recursive: true });
   for (let i = 1; i <= BULK_NOTES; i++) {
     writeFileSync(

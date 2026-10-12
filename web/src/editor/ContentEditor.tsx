@@ -2,6 +2,7 @@ import { Editor } from "@tiptap/core";
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import type { Block } from "../api";
 import { FilePicker, upload } from "../blocks/MediaBlocks";
+import { NEW_HEIGHT, NEW_WIDTH } from "../ink/ink";
 import { blocksToDoc, docToBlocks } from "./doc";
 import { editorExtensions } from "./extensions";
 import { PALETTE } from "./markup";
@@ -37,6 +38,11 @@ const INSERTS: { label: string; text: string; block: () => Block }[] = [
     label: "Insert diagram",
     text: "Diagram",
     block: () => ({ kind: "mermaid", fields: { source: "graph LR\n  A --> B\n" } }),
+  },
+  {
+    label: "Insert drawing",
+    text: "Ink",
+    block: () => ({ kind: "ink", fields: { width: NEW_WIDTH, height: NEW_HEIGHT }, blocks: [] }),
   },
 ];
 
