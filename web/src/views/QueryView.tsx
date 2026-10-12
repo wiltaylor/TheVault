@@ -1,4 +1,3 @@
-import { A } from "@solidjs/router";
 import {
   For,
   Match,
@@ -12,14 +11,18 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
-import { type Block, type NoteDoc, type Row, type Template, api } from "../api";
-import { BlockView, Blocks, formatValue } from "../components/Render";
+import { type Block, type Row, api } from "../api";
+import { formatValue } from "../components/Render";
 import { VirtualList } from "../components/VirtualList";
 import { type PagedRows, createPagedRows } from "../components/pagedRows";
-import { compoundBlock, slotField } from "../notes";
+import { MapView } from "../map/MapView";
+import { slotField } from "../notes";
 import { typeDef } from "../session";
+import { CalendarView, TimelineView } from "./DateViews";
+import { KanbanView } from "./KanbanView";
 import { type ViewDef, readQueryView, viewTemplate } from "./model";
-import { ThisNote, useThisNote } from "./thisNote";
+import { NoteLink, TemplateBody } from "./parts";
+import { useThisNote } from "./thisNote";
 
 /** Rows per request: the API's largest page, so long results take the fewest round trips. */
 const PAGE_SIZE = 1000;
@@ -33,64 +36,6 @@ const LOOKAHEAD = PAGE_SIZE / 4;
 
 function count(n: number): string {
   return n === 1 ? "1 note" : `${n} notes`;
-}
-
-function NoteLink(props: { row: Row }) {
-  return (
-    <A class="query-title" href={`/notes/${props.row.id}`} data-testid="query-title">
-      {props.row.title || "Untitled"}
-    </A>
-  );
-}
-
-/**
- * The slots and blocks of a template for one result note, below its title. Values come from
- * `doc` when the full note is loaded, else from the row. Blocks see the result note as `this`.
- */
-function TemplateBody(props: { row: Row; template: Template | undefined; doc?: NoteDoc; tabTitles?: boolean }) {
-  const type = () => typeDef(props.row.type);
-  return (
-    <For each={props.template?.tabs ?? []}>
-      {(tab) => (
-        <section class="template-tab">
-          <Show when={props.tabTitles && (props.template?.tabs.length ?? 0) > 1}>
-            <h4>{tab.title}</h4>
-          </Show>
-          <For each={tab.items}>
-            {(item) => {
-              if (!("slot" in item)) {
-                return (
-                  <ThisNote.Provider value={props.row.id}>
-                    <div class="template-block">
-                      <BlockView block={item.block} />
-                    </div>
-                  </ThisNote.Provider>
-                );
-              }
-              if (item.slot === "title") return null;
-              const t = type();
-              const f = t ? slotField(t, item.slot) : undefined;
-              if (!f) return null;
-              const label = item.label ?? f.label;
-              return (
-                <div class="query-slot" data-field={f.name}>
-                  <span class="query-slot-label">{label}</span>
-                  <span class="query-slot-value">
-                    <Show
-                      when={f.compound}
-                      fallback={formatValue(props.doc ? props.doc.fields[f.name] : props.row.fields[f.name])}
-                    >
-                      <Show when={props.doc}>{(doc) => <Blocks blocks={compoundBlock(doc(), f)?.blocks ?? []} />}</Show>
-                    </Show>
-                  </span>
-                </div>
-              );
-            }}
-          </For>
-        </section>
-      )}
-    </For>
-  );
 }
 
 /** Load rows up to `end` once the viewport gets near the end of what is loaded. */
@@ -274,7 +219,7 @@ function DetailsView(props: { view: ViewDef; data: PagedRows; total: number }) {
 /**
  * A query view block: one query, shown through its saved views (D8, D33). `this` is the note
  * that holds the block. Every view keeps only what is on screen in the DOM: table, list and cards
- * virtualise, details page.
+ * virtualise, details, map and kanban columns page, and calendar and timeline load the dates in view.
  */
 export function QueryView(props: { block: Block }) {
   const thisId = useThisNote();
@@ -338,6 +283,28 @@ export function QueryView(props: { block: Block }) {
                     </Match>
                     <Match when={view().kind === "details"}>
                       <DetailsView view={view()} data={data} total={total()} />
+                    </Match>
+                    <Match when={view().kind === "map"}>
+                      <MapView
+                        location={view().location}
+                        data={data}
+                        total={total()}
+                        card={(row) => (
+                          <>
+                            <NoteLink row={row} />
+                            <TemplateBody row={row} template={viewTemplate(typeDef(row.type), view().template, "card")} />
+                          </>
+                        )}
+                      />
+                    </Match>
+                    <Match when={view().kind === "kanban"}>
+                      <KanbanView view={view()} query={def().query} thisId={thisId} />
+                    </Match>
+                    <Match when={view().kind === "calendar"}>
+                      <CalendarView view={view()} query={def().query} thisId={thisId} />
+                    </Match>
+                    <Match when={view().kind === "timeline"}>
+                      <TimelineView view={view()} query={def().query} thisId={thisId} />
                     </Match>
                   </Switch>
                 </div>

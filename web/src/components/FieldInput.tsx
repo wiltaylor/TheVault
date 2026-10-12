@@ -4,6 +4,8 @@
 import { For, Match, Show, Switch, createResource, createSignal, onCleanup } from "solid-js";
 import { type FieldDef, type Json, type Row, type Term, api } from "../api";
 import { knowTitle, noteTitle } from "../editor/titles";
+import { MapCanvas } from "../map/MapCanvas";
+import { geoPoint, imagePoint, mapKind } from "../map/model";
 import { taxonomyDef } from "../session";
 
 export interface FieldInputProps {
@@ -391,6 +393,72 @@ function PairInput(props: FieldInputProps & { kind: string; parts: [string, stri
   );
 }
 
+/**
+ * A location: picked by clicking a map, by dragging its pin, or typed. A geo field picks on a
+ * real-world map, an image-map field on its image (D3, D29).
+ */
+function LocationInput(props: FieldInputProps) {
+  const map = mapKind(props.field);
+  const image = map.kind === "image";
+  const parts: [string, string] = image ? ["x", "y"] : ["lat", "lng"];
+  const names: [string, string] = image ? ["X", "Y"] : ["Latitude", "Longitude"];
+  const rec = (v: Json | undefined) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
+  // A half-typed point is kept here until both parts have a value.
+  const [draft, setDraft] = createSignal<Record<string, Json | undefined>>({ ...rec(props.value) });
+  function pick(v: Json) {
+    setDraft({ ...rec(v) });
+    props.onChange(v);
+  }
+  function set(part: string, v: Json | undefined) {
+    const next = { ...draft(), [part]: v };
+    setDraft(next);
+    const [a, b] = parts;
+    props.onChange(next[a] === undefined || next[b] === undefined ? undefined : { [a]: next[a]!, [b]: next[b]! });
+  }
+  const pins = () => {
+    const d = draft() as Json;
+    const point = image ? imagePoint(d) : geoPoint(d);
+    return point ? [{ id: "value", title: props.label, point }] : [];
+  };
+  return (
+    <div class="location-input" role="group" aria-label={props.label} id={props.id}>
+      <MapCanvas
+        map={map}
+        pins={pins()}
+        label={`${props.label} map`}
+        class="location-map"
+        draggable
+        onPick={pick}
+        onMove={(_, v) => pick(v)}
+      />
+      <div class="pair-input">
+        <For each={[0, 1] as const}>
+          {(n) => (
+            <label>
+              <span>{names[n]}</span>
+              <ScalarInput
+                kind="float"
+                value={draft()[parts[n]]}
+                label={names[n]}
+                onChange={(v) => set(parts[n], v)}
+              />
+            </label>
+          )}
+        </For>
+        <button
+          type="button"
+          onClick={() => {
+            setDraft({});
+            props.onChange(undefined);
+          }}
+        >
+          Clear
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AssetInput(props: FieldInputProps) {
   const [assets] = createResource(() => api.assets());
   const options = () => {
@@ -468,12 +536,7 @@ export function FieldInput(props: FieldInputProps) {
         <PairInput {...props} kind={f().of ?? "date"} parts={["start", "end"]} names={["Start", "End"]} />
       </Match>
       <Match when={f().kind === "location"}>
-        <Show
-          when={f().image}
-          fallback={<PairInput {...props} kind="float" parts={["lat", "lng"]} names={["Latitude", "Longitude"]} />}
-        >
-          <PairInput {...props} kind="float" parts={["x", "y"]} names={["X", "Y"]} />
-        </Show>
+        <LocationInput {...props} />
       </Match>
     </Switch>
   );

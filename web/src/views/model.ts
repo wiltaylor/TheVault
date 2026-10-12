@@ -20,6 +20,9 @@ const KIND_ITEMS: Record<string, string[]> = {
   canvas: ["template"],
 };
 
+/** The calendar's `mode` values, the default first. */
+export const CALENDAR_MODES = ["month", "week", "day"];
+
 /** View names and template names are WCL block labels. */
 export const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -30,6 +33,14 @@ export interface ViewDef {
   title: string;
   template: string | null;
   columns: string[];
+  /** `map`: the location field pins sit at. */
+  location: string | null;
+  /** `kanban`: the single-term taxonomy field whose terms are the columns. */
+  group: string | null;
+  /** `calendar`, `timeline`: the date, datetime or date range field. */
+  date: string | null;
+  /** `calendar`: `month`, `week` or `day`. */
+  mode: string;
 }
 
 export interface QueryViewDef {
@@ -58,6 +69,10 @@ export function readView(view: Block): ViewDef {
     title: str(view.fields, "title") ?? name,
     template: str(view.fields, "template"),
     columns: Array.isArray(columns) ? columns.filter((c): c is string => typeof c === "string") : ["title"],
+    location: str(view.fields, "location"),
+    group: str(view.fields, "group"),
+    date: str(view.fields, "date"),
+    mode: str(view.fields, "mode") ?? "month",
   };
 }
 

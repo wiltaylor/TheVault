@@ -2,6 +2,7 @@ import { A, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, on } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { type Block, api } from "../api";
+import { newCanvas } from "../canvas/canvas";
 import { BlockView } from "../components/Render";
 import { type TemplateItemModel, type TemplateModel, templateWcl, unplaced } from "../defs/typeModel";
 import { reloadDefinitions } from "../session";
@@ -127,7 +128,9 @@ export function TemplateEditor() {
     const block: Block =
       kind === "heading"
         ? { kind: "heading", fields: { level: 2, text: "Heading" } }
-        : { kind: "paragraph", fields: { text: "Text shown on every note" } };
+        : kind === "canvas"
+          ? newCanvas()
+          : { kind: "paragraph", fields: { text: "Text shown on every note" } };
     edit((t) => void t.tabs[tab()]?.items.push({ block }));
   }
 
@@ -187,7 +190,8 @@ export function TemplateEditor() {
     return (
       <div
         class="template-item"
-        draggable="true"
+        // A canvas uses the pointer itself; it moves with the item's controls instead.
+        draggable={"block" in props.item && props.item.block.kind === "canvas" ? "false" : "true"}
         data-testid={`template-item-${name()}`}
         onDragStart={(e) => {
           dragging = { tab: tab(), index: props.index };
@@ -208,7 +212,18 @@ export function TemplateEditor() {
               <Show when={"block" in props.item ? props.item.block : null}>
                 {(block) => (
                   <>
-                    <BlockView block={block()} />
+                    <BlockView
+                      block={block()}
+                      onChange={
+                        block().kind === "canvas"
+                          ? (next) =>
+                              edit((t) => {
+                                const it = t.tabs[tab()]?.items[props.index];
+                                if (it && "block" in it) it.block = next;
+                              })
+                          : undefined
+                      }
+                    />
                     <Show when={block().kind === "paragraph" || block().kind === "heading"}>
                       <input
                         aria-label={`Text of ${name()}`}
@@ -442,6 +457,9 @@ export function TemplateEditor() {
               </button>
               <button type="button" onClick={() => addBlock("paragraph")}>
                 Add paragraph
+              </button>
+              <button type="button" onClick={() => addBlock("canvas")}>
+                Add canvas
               </button>
             </div>
 

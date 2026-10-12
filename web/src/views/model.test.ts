@@ -42,6 +42,23 @@ describe("readQueryView", () => {
     expect(def.first?.name).toBe("board");
   });
 
+  it("reads a kanban's group and a calendar's date and mode", () => {
+    const views = readQueryView({
+      kind: "query_view",
+      fields: { query: "from task" },
+      blocks: [
+        { kind: "view", labels: ["board"], fields: { kind: "kanban", group: "stage" } },
+        { kind: "view", labels: ["cal"], fields: { kind: "calendar", date: "due", mode: "week" } },
+        { kind: "view", labels: ["line"], fields: { kind: "timeline", date: "span" } },
+      ],
+    }).views;
+    expect(views.map((v) => [v.group, v.date, v.mode])).toEqual([
+      ["stage", null, "month"],
+      [null, "due", "week"],
+      [null, "span", "month"],
+    ]);
+  });
+
   it("shows the first view when default_view names none", () => {
     expect(readQueryView({ ...block, fields: { query: "from *" } }).first?.name).toBe("open");
   });

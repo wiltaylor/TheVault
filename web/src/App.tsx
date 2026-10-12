@@ -9,6 +9,7 @@ import { Login } from "./pages/Login";
 import { NoteView } from "./pages/NoteView";
 import { ScriptEditor, ScriptList } from "./pages/Scripts";
 import { Search } from "./pages/Search";
+import { Settings } from "./pages/Settings";
 import { TaskEditor, TaskList } from "./pages/Tasks";
 import { TaxonomyEditor, TaxonomyList } from "./pages/TaxonomyEditor";
 import { TemplateEditor } from "./pages/TemplateEditor";
@@ -53,6 +54,7 @@ export function App() {
         <Route path="/trash" component={Trash} />
         <Route path="/flagged" component={Flagged} />
         <Route path="/search" component={Search} />
+        <Route path="/settings" component={Settings} />
         <Route path="*" component={() => <p class="error">There is no page here.</p>} />
       </Route>
     </Router>

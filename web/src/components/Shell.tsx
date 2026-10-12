@@ -82,6 +82,11 @@ export function Shell(props: ParentProps) {
                   Taxonomies
                 </A>
               </li>
+              <li>
+                <A href="/settings" activeClass="active" onClick={() => setMenuOpen(false)}>
+                  Settings
+                </A>
+              </li>
             </ul>
           </nav>
           <nav aria-label="Vault">
