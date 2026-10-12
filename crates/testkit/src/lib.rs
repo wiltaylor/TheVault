@@ -36,12 +36,23 @@ impl TestServer {
         Self::start_with_binary(&server_binary())
     }
 
+    /// Starts a server on a new vault after `seed` has written files into the vault folder, such
+    /// as the type definitions a test needs.
+    pub fn start_seeded(seed: impl FnOnce(&Path)) -> Self {
+        Self::start_inner(&server_binary(), seed)
+    }
+
     /// Like [`TestServer::start`], with an explicit path to the `vault-server` binary.
     pub fn start_with_binary(binary: &Path) -> Self {
+        Self::start_inner(binary, |_| {})
+    }
+
+    fn start_inner(binary: &Path, seed: impl FnOnce(&Path)) -> Self {
         let vault = tempfile::Builder::new()
             .prefix("thevault-test-")
             .tempdir()
             .expect("create temporary vault directory");
+        seed(vault.path());
 
         let mut child = Command::new(binary)
             .arg("--vault")
