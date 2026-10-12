@@ -1,6 +1,7 @@
 import { A } from "@solidjs/router";
-import { Show, createEffect, createSignal, on } from "solid-js";
-import type { Page, Row } from "../api";
+import { Show } from "solid-js";
+import type { Page } from "../api";
+import { createPagedRows } from "./pagedRows";
 import { VirtualList } from "./VirtualList";
 
 const ROW_HEIGHT = 44;
@@ -21,50 +22,10 @@ export interface PagedListProps {
  * towards rows it does not have yet (D33).
  */
 export function PagedList(props: PagedListProps) {
-  const [rows, setRows] = createSignal<Row[]>([]);
-  const [total, setTotal] = createSignal<number | null>(null);
-  const [error, setError] = createSignal<string | null>(null);
-  let next: string | null = null;
-  let loading = false;
-  let wanted = 0;
-  let generation = 0;
-
-  async function loadUntil(index: number) {
-    wanted = Math.max(wanted, index);
-    if (loading) return;
-    const gen = generation;
-    loading = true;
-    try {
-      while (gen === generation && rows().length <= wanted) {
-        const first = total() === null;
-        if (!first && !next) break;
-        const page = await props.fetchPage(first ? null : next, PAGE_SIZE);
-        if (gen !== generation) return;
-        next = page.next;
-        setTotal(page.total);
-        setRows((r) => r.concat(page.rows));
-      }
-    } catch (e) {
-      if (gen === generation) setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (gen === generation) loading = false;
-    }
-  }
-
-  createEffect(
-    on(
-      () => props.key,
-      () => {
-        generation++;
-        loading = false;
-        next = null;
-        wanted = 0;
-        setRows([]);
-        setTotal(null);
-        setError(null);
-        void loadUntil(0);
-      },
-    ),
+  const { rows, total, error, loadUntil } = createPagedRows(
+    (cursor, size) => props.fetchPage(cursor, size),
+    () => props.key,
+    PAGE_SIZE,
   );
 
   return (

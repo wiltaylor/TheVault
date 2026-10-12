@@ -14,13 +14,6 @@ export const TITLE_FIELD: FieldDef = {
   compound: false,
 };
 
-/** Kinds the shell edits with a plain input. The rest wait for their editors. */
-const EDITABLE_KINDS = new Set(["string", "int", "float", "bool", "date", "datetime", "url", "select"]);
-
-export function isEditable(f: FieldDef): boolean {
-  return !f.compound && !f.computed && !f.multiple && EDITABLE_KINDS.has(f.kind);
-}
-
 /** The field a slot names: `title` or one of the type's fields. */
 export function slotField(type: TypeDef, name: string): FieldDef | undefined {
   return name === "title" ? TITLE_FIELD : type.fields.find((f) => f.name === name);
@@ -40,6 +33,7 @@ export function compoundBlock(doc: NoteDoc, f: FieldDef): Block | undefined {
 export function fieldValue(doc: NoteDoc, f: FieldDef): Json | undefined {
   if (f.compound) {
     const b = compoundBlock(doc, f);
+    if (f.kind === "dict") return b?.fields;
     return b === undefined ? undefined : (b as unknown as Json);
   }
   return doc.fields[f.name];
@@ -72,6 +66,21 @@ export function applyBlocks(doc: NoteDoc, f: FieldDef, blocks: Block[]): NoteDoc
   return { fields: doc.fields, blocks: next };
 }
 
+/** `doc` with dict field `f` holding `entries`, or without its block when `entries` is undefined. */
+export function applyDict(doc: NoteDoc, f: FieldDef, entries: Json | undefined): NoteDoc {
+  const at = doc.blocks.findIndex((b) => b.kind === "dict" && b.labels?.[0] === f.name);
+  const next = [...doc.blocks];
+  const record = entries && typeof entries === "object" && !Array.isArray(entries) ? entries : undefined;
+  if (record === undefined || Object.keys(record).length === 0) {
+    if (at >= 0) next.splice(at, 1);
+  } else if (at >= 0) {
+    next[at] = { ...next[at]!, fields: record };
+  } else {
+    next.push({ kind: "dict", labels: [f.name], fields: record });
+  }
+  return { fields: doc.fields, blocks: next };
+}
+
 /**
  * The fields to compare in a conflict: the title and the type's fields in type order, then any
  * other stored field. `created` and `updated` are the server's, so they are left out.
@@ -88,18 +97,4 @@ export function comparedFields(type: TypeDef | undefined, a: NoteDoc, b: NoteDoc
 
 export function sameValue(a: Json | undefined, b: Json | undefined): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-}
-
-/** Parse an input's text into the field's encoding. Empty text means no value. */
-export function parseInput(f: FieldDef, raw: string): Json | undefined {
-  if (raw === "") return undefined;
-  if (f.kind === "int") {
-    const n = Number(raw);
-    return Number.isFinite(n) ? Math.trunc(n) : raw;
-  }
-  if (f.kind === "float") {
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : raw;
-  }
-  return raw;
 }

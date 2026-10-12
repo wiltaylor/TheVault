@@ -1,6 +1,8 @@
 // The typed client of TheVault's HTTP API. Every UI action goes through one of these calls.
 // The browser authenticates with the session cookie that POST /api/login sets (D11).
 
+import type { SchemaType } from "./defs/typeModel";
+
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 /** A content block in its JSON form: the block's kind, labels, items and nested blocks. */
@@ -36,6 +38,16 @@ export interface FieldDef {
   compound: boolean;
   default?: Json;
   options?: string[];
+  /** `date_range`: whether the ends are dates or datetimes. */
+  of?: "date" | "datetime";
+  taxonomy?: string;
+  target?: string;
+  relation?: "one_way" | "two_way" | "peer";
+  inverse?: string | null;
+  items?: string;
+  values?: string;
+  /** `location`: the image an image map's pins sit on, null on a real-world map. */
+  image?: string | null;
 }
 
 export type TemplateItem = { slot: string; label: string | null } | { block: Block };
@@ -62,11 +74,47 @@ export interface TypeDef {
   templates: Template[];
 }
 
+export interface Term {
+  name: string;
+  path: string;
+  colour: string | null;
+  description: string | null;
+  children: Term[];
+}
+
+export interface Taxonomy {
+  name: string;
+  label: string;
+  description: string | null;
+  terms: Term[];
+}
+
+/** A planned type change (D6): what it adds, removes and renames, and every note it edits. */
+export interface TypePlan {
+  type: string;
+  applied: boolean;
+  plan: string;
+  wcl: string;
+  added: string[];
+  removed: string[];
+  renamed: { from: string; to: string }[];
+  changes: { id: string; title: string; version: string; edits: { op: string; [key: string]: Json }[] }[];
+  flagged: string[];
+}
+
 export interface Row {
   id: string;
   type: string;
   title: string;
   fields: Record<string, Json>;
+}
+
+/** An uploaded file, stored at `assets/<id>/<filename>` (D22). */
+export interface Asset {
+  id: string;
+  filename: string;
+  size: number;
+  path: string;
 }
 
 export interface Page {
@@ -103,7 +151,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     credentials: "same-origin",
     headers: { Accept: "application/json" },
   };
-  if (body !== undefined) {
+  if (body instanceof Blob) {
+    init.headers = { ...init.headers, "Content-Type": "application/octet-stream" };
+    init.body = body;
+  } else if (body !== undefined) {
     init.headers = { ...init.headers, "Content-Type": "application/json" };
     init.body = JSON.stringify(body);
   }
@@ -140,9 +191,26 @@ export const api = {
   /** Save `note` over version `base`. A stale base is an ApiError whose `isConflict` is true. */
   updateNote: (id: string, note: NoteDoc, base: string) =>
     request<Note>("PUT", `/api/notes/${enc(id)}`, { note, base_version: base }),
-  query: (query: string, cursor: string | null, pageSize: number) =>
+  /** Every type as schema inspection describes it, with handlers and reference rules. */
+  schema: () => request<{ types: SchemaType[]; taxonomies: Taxonomy[] }>("GET", "/api/schema"),
+  /** Create a type, or replace one that has no notes. */
+  putType: (name: string, wcl: string) => request<{ name: string; wcl: string }>("PUT", `/api/types/${enc(name)}`, { wcl }),
+  /** Plan a change to a type, or apply the plan whose token is `plan`. */
+  changeType: (name: string, wcl: string, renames: Record<string, string>, plan?: string) =>
+    request<TypePlan>("POST", `/api/types/${enc(name)}/change`, { wcl, renames, ...(plan ? { plan } : {}) }),
+  putTemplate: (type: string, name: string, wcl: string) =>
+    request<{ wcl: string }>("PUT", `/api/types/${enc(type)}/templates/${enc(name)}`, { wcl }),
+  deleteTemplate: (type: string, name: string) =>
+    request<unknown>("DELETE", `/api/types/${enc(type)}/templates/${enc(name)}`),
+  taxonomies: async () => (await request<{ taxonomies: Taxonomy[] }>("GET", "/api/taxonomies")).taxonomies,
+  /** Create or replace a taxonomy. `renames` maps old term paths to new ones. */
+  putTaxonomy: (name: string, wcl: string, renames: Record<string, string>) =>
+    request<Taxonomy & { notes: { id: string }[] }>("PUT", `/api/taxonomies/${enc(name)}`, { wcl, renames }),
+  /** One page of `query`. `thisId` is the note that holds the query, bound to `this`. */
+  query: (query: string, cursor: string | null, pageSize: number, thisId?: string) =>
     request<Page>("POST", "/api/query", {
       query,
+      ...(thisId ? { this: thisId } : {}),
       ...(cursor ? { cursor } : {}),
       page_size: pageSize,
     }),
@@ -151,5 +219,14 @@ export const api = {
     if (cursor) params.set("cursor", cursor);
     return request<Page>("GET", `/api/search?${params}`);
   },
+  assets: async () => (await request<{ assets: Asset[] }>("GET", "/api/assets")).assets,
+  /** Upload `file` as a new asset. The body is the file's bytes, unchanged. */
+  uploadAsset: (file: File) =>
+    request<Asset>("POST", `/api/assets?filename=${enc(file.name)}`, file),
 };
+
+/** Where the browser fetches an asset's bytes. */
+export function assetUrl(id: string): string {
+  return `/api/assets/${enc(id)}`;
+}
 

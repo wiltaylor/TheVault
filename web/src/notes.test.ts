@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TypeDef } from "./api";
-import { applyBlocks, applyEdits, comparedFields, fieldValue, parseInput, slotField, TITLE_FIELD } from "./notes";
+import { applyBlocks, applyDict, applyEdits, comparedFields, fieldValue, slotField, TITLE_FIELD } from "./notes";
 
 const task: TypeDef = {
   name: "task",
@@ -54,11 +54,14 @@ describe("notes", () => {
     expect(doc.blocks[0]?.blocks).toEqual([para("old")]);
   });
 
-  it("parses inputs into the field's encoding", () => {
-    const estimate = task.fields[0];
-    expect(estimate && parseInput(estimate, "4")).toBe(4);
-    expect(estimate && parseInput(estimate, "")).toBeUndefined();
-    expect(parseInput(TITLE_FIELD, "x")).toBe("x");
+  it("writes a dict field as its labelled block, and removes the block when emptied", () => {
+    const extra = { ...TITLE_FIELD, name: "extra", kind: "dict", compound: true };
+    const other = { kind: "content", labels: ["body"], blocks: [] };
+    const added = applyDict({ fields: {}, blocks: [other] }, extra, { owner: "Wil" });
+    expect(added.blocks).toEqual([other, { kind: "dict", labels: ["extra"], fields: { owner: "Wil" } }]);
+    expect(fieldValue(added, extra)).toEqual({ owner: "Wil" });
+    expect(applyDict(added, extra, { a: 1 }).blocks[1]).toEqual({ kind: "dict", labels: ["extra"], fields: { a: 1 } });
+    expect(applyDict(added, extra, undefined).blocks).toEqual([other]);
   });
 
   it("compares the title, the type's fields and unknown stored fields, not timestamps", () => {
