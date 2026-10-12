@@ -1,0 +1,60 @@
+label       = "Project"
+plural      = "Projects"
+description = "A piece of work made of tasks."
+icon        = "folder"
+
+field status {
+  kind     = "taxonomy"
+  label    = "Status"
+  default  = "Inbox"
+  taxonomy = "status"
+}
+
+field owner {
+  kind   = "reference"
+  label  = "Owner"
+  target = "person"
+}
+
+field due {
+  kind  = "date"
+  label = "Due"
+}
+
+field budget {
+  kind  = "float"
+  label = "Budget"
+}
+
+field topics {
+  kind     = "taxonomy"
+  label    = "Topics"
+  taxonomy = "topic"
+  multiple = true
+}
+
+field tasks {
+  kind     = "reference"
+  label    = "Tasks"
+  multiple = true
+  target   = "task"
+  relation = "two_way"
+  inverse  = "project"
+}
+
+field body {
+  kind  = "content"
+  label = "Notes"
+}
+
+template default {
+  tab "Project" {
+    slot "title"
+    slot "status"
+    slot "owner"
+    slot "due"
+    slot "budget"
+    slot "topics"
+    slot "body"
+  }
+}

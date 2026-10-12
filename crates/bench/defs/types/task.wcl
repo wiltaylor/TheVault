@@ -1,0 +1,67 @@
+label       = "Task"
+plural      = "Tasks"
+description = "One thing to do."
+icon        = "check-square"
+
+field status {
+  kind     = "taxonomy"
+  label    = "Status"
+  default  = "Inbox"
+  taxonomy = "status"
+}
+
+field priority {
+  kind    = "select"
+  label   = "Priority"
+  default = "medium"
+  options = ["low", "medium", "high"]
+}
+
+field due {
+  kind  = "date"
+  label = "Due"
+}
+
+field estimate {
+  kind  = "int"
+  label = "Estimate"
+}
+
+field done {
+  kind    = "bool"
+  label   = "Done"
+  default = false
+}
+
+field project {
+  kind     = "reference"
+  label    = "Project"
+  target   = "project"
+  relation = "two_way"
+  inverse  = "tasks"
+}
+
+field assignee {
+  kind   = "reference"
+  label  = "Assignee"
+  target = "person"
+}
+
+field body {
+  kind  = "content"
+  label = "Notes"
+}
+
+template default {
+  tab "Task" {
+    slot "title"
+    slot "status"
+    slot "priority"
+    slot "due"
+    slot "estimate"
+    slot "done"
+    slot "project"
+    slot "assignee"
+    slot "body"
+  }
+}
