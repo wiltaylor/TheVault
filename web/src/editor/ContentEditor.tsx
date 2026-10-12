@@ -1,9 +1,10 @@
 import { Editor } from "@tiptap/core";
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import type { Block } from "../api";
+import { FilePicker, upload } from "../blocks/MediaBlocks";
 import { blocksToDoc, docToBlocks } from "./doc";
-import { editorExtensions } from "./extensions";
 import { newQueryView } from "../views/model";
+import { editorExtensions } from "./extensions";
 import { PALETTE } from "./markup";
 
 type MarkName = "bold" | "italic" | "underline" | "strike" | "code" | "highlight";
@@ -25,6 +26,22 @@ const BLOCK_TYPES = [
   { value: "quote", label: "Quote" },
 ];
 
+/** Blocks the toolbar inserts as they are, ready to fill in. */
+const INSERTS: { label: string; text: string; block: () => Block }[] = [
+  { label: "Insert code", text: "Code", block: () => ({ kind: "code", fields: { source: "" } }) },
+  {
+    label: "Insert terminal",
+    text: "Terminal",
+    block: () => ({ kind: "terminal", blocks: [{ kind: "command", fields: { line: "" } }] }),
+  },
+  {
+    label: "Insert diagram",
+    text: "Diagram",
+    block: () => ({ kind: "mermaid", fields: { source: "graph LR\n  A --> B\n" } }),
+  },
+  { label: "Insert query view", text: "Query", block: newQueryView },
+];
+
 /**
  * The block editor for a content field (D29, D34): TipTap on ProseMirror, with a toolbar for the
  * inline marks of PRD Appendix A and the text blocks. `onChange` receives the field's blocks
@@ -37,6 +54,7 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
   const [tick, setTick] = createSignal(0);
   const [linkOpen, setLinkOpen] = createSignal(false);
   const [href, setHref] = createSignal("");
+  const [uploadError, setUploadError] = createSignal<string | null>(null);
 
   onMount(() => {
     editor = new Editor({
@@ -95,6 +113,21 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
     // Leave the caret after the link, so typing carries on rather than replacing it.
     if (editor) editor.commands.setTextSelection(editor.state.selection.to);
     setLinkOpen(false);
+  }
+
+  function insertBlock(block: Block) {
+    chain().insertContent({ type: "vaultBlock", attrs: { block } }).run();
+  }
+
+  /** Upload `file` through the assets API, then insert the block `make` builds for it. */
+  async function insertUpload(file: File, make: (asset: string) => Block) {
+    setUploadError(null);
+    try {
+      const asset = await upload(file);
+      insertBlock(make(asset.id));
+    } catch (e) {
+      setUploadError(`Could not upload ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // Toolbar buttons keep the editor's selection: pressing one must not move focus first.
@@ -175,16 +208,30 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
         >
           ☐
         </button>
-        <button
-          type="button"
-          aria-label="Insert query view"
-          title="Insert query view"
-          onMouseDown={keep}
-          onClick={() => chain().insertContent({ type: "vaultBlock", attrs: { block: newQueryView() } }).run()}
-        >
-          Query
-        </button>
+        <FilePicker
+          label="Insert image"
+          text="Image"
+          accept="image/*"
+          onFile={(f) => void insertUpload(f, (asset) => ({ kind: "image", fields: { asset } }))}
+        />
+        <FilePicker
+          label="Insert file"
+          text="File"
+          onFile={(f) => void insertUpload(f, (asset) => ({ kind: "asset", fields: { asset } }))}
+        />
+        <For each={INSERTS}>
+          {(b) => (
+            <button type="button" aria-label={b.label} onMouseDown={keep} onClick={() => insertBlock(b.block())}>
+              {b.text}
+            </button>
+          )}
+        </For>
       </div>
+      <Show when={uploadError()}>
+        <p class="error" role="alert">
+          {uploadError()}
+        </p>
+      </Show>
       <Show when={linkOpen()}>
         {/* Not a form: the editor sits inside the note's form, and forms do not nest. */}
         <div class="link-form">

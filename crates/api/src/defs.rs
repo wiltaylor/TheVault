@@ -33,7 +33,7 @@ use crate::{ApiError, Caller, blocking};
 type Shared = State<Arc<Writer>>;
 
 /// A JSON body as `T`, or a text body turned into `T` by `from_text`.
-fn body<T: DeserializeOwned>(
+pub(crate) fn body<T: DeserializeOwned>(
     headers: &HeaderMap,
     body: &Bytes,
     from_text: impl FnOnce(String) -> T,

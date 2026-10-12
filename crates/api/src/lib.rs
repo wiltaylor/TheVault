@@ -15,6 +15,9 @@
 //! each have their own routes, `/api/schema` describes every type and taxonomy, and
 //! `/api/openapi.json` lists every endpoint.
 //!
+//! Scheduled tasks live under `/api/tasks`, with their run history and a route to run one now;
+//! the secrets they read are written, never read back, under `/api/secrets` (D10).
+//!
 //! Every route but health and login needs a session cookie or a bearer token, and the scope
 //! [`auth::required_scope`] names for it (D11).
 
@@ -27,6 +30,7 @@ mod inspect;
 mod notes;
 mod openapi;
 mod query;
+mod tasks;
 mod tokens;
 mod types;
 
@@ -37,6 +41,7 @@ use axum::handler::Handler;
 use axum::http::{Method, StatusCode};
 use axum::routing::{MethodRouter, delete, get, post, put};
 use axum::{Json, Router, middleware};
+use scheduler::{Scheduler, TestClock};
 use serde_json::{Value, json};
 use writer::Writer;
 
@@ -99,8 +104,17 @@ impl<S: Clone + Send + Sync + 'static> Routes<S> {
     }
 }
 
-/// The routes that take the writer, and the login routes that take the session store.
-fn build() -> (Routes<Arc<Writer>>, Routes<Arc<auth::Sessions>>) {
+/// Every route, grouped by the state it takes.
+struct Built {
+    /// The routes that take the writer.
+    api: Routes<Arc<Writer>>,
+    /// The login routes, which take the session store.
+    login: Routes<Arc<auth::Sessions>>,
+    /// The task routes, which take the scheduler.
+    tasks: Routes<Arc<Scheduler>>,
+}
+
+fn build() -> Built {
     let login = Routes::new()
         .post("/api/login", auth::login)
         .post("/api/logout", auth::logout);
@@ -154,24 +168,54 @@ fn build() -> (Routes<Arc<Writer>>, Routes<Arc<auth::Sessions>>) {
         .delete("/api/assets/{id}", assets::delete)
         .get("/api/tokens", tokens::list)
         .post("/api/tokens", tokens::create)
-        .delete("/api/tokens/{name}", tokens::revoke);
-    (api, login)
+        .delete("/api/tokens/{name}", tokens::revoke)
+        .get("/api/secrets", tasks::secrets)
+        .get("/api/secrets/{name}", tasks::secret)
+        .put("/api/secrets/{name}", tasks::put_secret)
+        .delete("/api/secrets/{name}", tasks::delete_secret);
+    let tasks = Routes::new()
+        .get("/api/tasks", tasks::list)
+        .get("/api/tasks/{name}", tasks::read)
+        .put("/api/tasks/{name}", tasks::put)
+        .delete("/api/tasks/{name}", tasks::delete)
+        .get("/api/tasks/{name}/runs", tasks::runs)
+        .get("/api/tasks/{name}/runs/{id}", tasks::run)
+        .post("/api/tasks/{name}/run", tasks::trigger);
+    Built { api, login, tasks }
 }
 
 /// Every method and path the router registers, in registration order.
 pub fn routes() -> Vec<(Method, &'static str)> {
-    let (api, login) = build();
-    api.seen.into_iter().chain(login.seen).collect()
+    let Built { api, login, tasks } = build();
+    api.seen
+        .into_iter()
+        .chain(login.seen)
+        .chain(tasks.seen)
+        .collect()
 }
 
-/// Builds the router for every `/api` route.
-pub fn router(writer: Arc<Writer>) -> Router {
+/// Builds the router for every `/api` route. `test_clock` is the clock `scheduler` reads when the
+/// server runs with `--test-clock`; it adds `/api/test/clock`, which [`routes`] does not list (S7).
+pub fn router(
+    writer: Arc<Writer>,
+    scheduler: Arc<Scheduler>,
+    test_clock: Option<Arc<TestClock>>,
+) -> Router {
     let sessions = Arc::new(auth::Sessions::new(writer.clone()));
-    let (api, login) = build();
-    api.router
+    let Built { api, login, tasks } = build();
+    let mut app = api
+        .router
         .with_state(writer)
         .merge(login.router.with_state(sessions.clone()))
-        .layer(middleware::from_fn_with_state(sessions, auth::authenticate))
+        .merge(tasks.router.with_state(scheduler.clone()));
+    if let Some(clock) = test_clock {
+        app = app.merge(
+            Router::new()
+                .route("/api/test/clock", get(tasks::clock).post(tasks::move_clock))
+                .with_state(tasks::TestTime { scheduler, clock }),
+        );
+    }
+    app.layer(middleware::from_fn_with_state(sessions, auth::authenticate))
 }
 
 async fn health() -> Json<Value> {

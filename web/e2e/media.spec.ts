@@ -1,0 +1,265 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { APIRequestContext, Locator, Page } from "@playwright/test";
+import { expect, logIn, test, vaultDir } from "./fixtures";
+
+interface Block {
+  kind: string;
+  labels?: string[];
+  fields?: Record<string, unknown>;
+  blocks?: Block[];
+}
+
+interface Stored {
+  id: string;
+  version: string;
+  wcl: string;
+  note: { fields: Record<string, unknown>; blocks: Block[] };
+}
+
+function token(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function createTask(admin: APIRequestContext, title: string, body: Block[] = []): Promise<Stored> {
+  const blocks = body.length ? [{ kind: "content", labels: ["body"], blocks: body }] : [];
+  const res = await admin.post("/api/notes?type=task", { data: { note: { fields: { title }, blocks } } });
+  expect(res.status(), await res.text()).toBe(201);
+  return (await res.json()) as Stored;
+}
+
+async function stored(admin: APIRequestContext, id: string): Promise<Stored> {
+  const res = await admin.get(`/api/notes/${id}`);
+  expect(res.status()).toBe(200);
+  return (await res.json()) as Stored;
+}
+
+function body(note: Stored): Block[] | undefined {
+  return note.note.blocks.find((b) => b.kind === "content" && b.labels?.[0] === "body")?.blocks;
+}
+
+async function startEditing(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: "Edit" }).click();
+  return page.getByRole("textbox", { name: "Body" });
+}
+
+async function saveAndWait(page: Page) {
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+}
+
+/** The text of a CodeMirror view: its lines joined with newlines. */
+async function codeMirrorText(view: Locator): Promise<string> {
+  return view.locator(".cm-content").evaluate((el) =>
+    Array.from(el.querySelectorAll(".cm-line"), (line) => line.textContent ?? "").join("\n"),
+  );
+}
+
+async function imageLoaded(img: Locator): Promise<boolean> {
+  return img.evaluate((el) => (el as HTMLImageElement).complete && (el as HTMLImageElement).naturalWidth > 0);
+}
+
+// A 2 by 2 red PNG.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+test("uploading an image shows it and stores it under assets/", async ({ page, admin }) => {
+  const note = await createTask(admin, `Image ${token()}`);
+  await logIn(page, `/notes/${note.id}`);
+  const doc = await startEditing(page);
+  await doc.click();
+
+  const filename = `pixel-${token()}.png`;
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("toolbar", { name: "Body formatting" }).getByRole("button", { name: "Insert image" }).click();
+  await (await chooser).setFiles({ name: filename, mimeType: "image/png", buffer: PNG });
+
+  const img = doc.locator("figure.block-image img");
+  await expect(img).toBeVisible();
+  await expect.poll(() => imageLoaded(img)).toBe(true);
+  await doc.getByLabel("Alt text").fill("A red square");
+  await doc.getByLabel("Caption").fill("Two pixels wide");
+  await saveAndWait(page);
+
+  const blocks = body(await stored(admin, note.id)) ?? [];
+  expect(blocks).toHaveLength(1);
+  const image = blocks[0] as Block;
+  expect(image.kind).toBe("image");
+  const asset = image.fields?.asset as string;
+  expect(asset).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  expect(image.fields).toEqual({ asset, alt: "A red square", caption: "Two pixels wide" });
+
+  // The upload is the file, byte for byte, at assets/<ULID>/<filename>.
+  expect(readFileSync(join(vaultDir(), "assets", asset, filename))).toEqual(PNG);
+
+  await page.reload();
+  const shown = page.getByTestId("field-body").getByRole("img", { name: "A red square" });
+  await expect(shown).toBeVisible();
+  await expect.poll(() => imageLoaded(shown)).toBe(true);
+  await expect(page.getByTestId("field-body").locator("figcaption")).toHaveText("Two pixels wide");
+});
+
+test("a file upload becomes an asset card that downloads the file", async ({ page, admin }) => {
+  const note = await createTask(admin, `Asset ${token()}`);
+  await logIn(page, `/notes/${note.id}`);
+  const doc = await startEditing(page);
+  await doc.click();
+
+  const filename = `notes-${token()}.txt`;
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("toolbar", { name: "Body formatting" }).getByRole("button", { name: "Insert file" }).click();
+  await (await chooser).setFiles({ name: filename, mimeType: "text/plain", buffer: Buffer.from("hello\n") });
+  await expect(doc.getByRole("link", { name: filename })).toBeVisible();
+  await saveAndWait(page);
+
+  const blocks = body(await stored(admin, note.id)) ?? [];
+  expect(blocks.map((b) => b.kind)).toEqual(["asset"]);
+  const asset = blocks[0]?.fields?.asset as string;
+  expect(readFileSync(join(vaultDir(), "assets", asset, filename), "utf8")).toBe("hello\n");
+  await expect(page.getByTestId("field-body").getByRole("link", { name: filename })).toHaveAttribute(
+    "href",
+    `/api/assets/${asset}`,
+  );
+});
+
+test("a code block keeps tabs and trailing spaces through save and reload", async ({ page, admin }) => {
+  // Tabs, trailing spaces and tabs, a whitespace-only line and no final newline.
+  const source = 'fn main() {\n\tlet x = 1;   \n\t\tprintln!("{x}");\t\n}\n  \n\ttrailing   ';
+  const note = await createTask(admin, `Code ${token()}`, [
+    { kind: "code", fields: { language: "rust", caption: "main.rs", source } },
+  ]);
+  await logIn(page, `/notes/${note.id}`);
+
+  const field = page.getByTestId("field-body");
+  const view = field.locator(".block-code .cm-editor");
+  await expect(view).toBeVisible();
+  expect(await codeMirrorText(view)).toBe(source);
+  // Rust highlighting: `fn` and `let` are keywords.
+  await expect(view.locator(".tok-keyword").first()).toBeVisible();
+
+  const doc = await startEditing(page);
+  const code = doc.getByRole("textbox", { name: "Code" });
+  await code.click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.type(" end");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type("  ");
+  await doc.getByLabel("Language").selectOption({ label: "Python" });
+  await saveAndWait(page);
+
+  const edited = `${source} end\t  `;
+  expect(body(await stored(admin, note.id))).toEqual([
+    { kind: "code", fields: { language: "python", caption: "main.rs", source: edited } },
+  ]);
+
+  await page.reload();
+  await expect(view).toBeVisible();
+  expect(await codeMirrorText(view)).toBe(edited);
+
+  // Saving again without touching the code changes nothing in it.
+  await startEditing(page);
+  await saveAndWait(page);
+  expect(body(await stored(admin, note.id))).toEqual([
+    { kind: "code", fields: { language: "python", caption: "main.rs", source: edited } },
+  ]);
+});
+
+test("a terminal block with two commands saves, reloads identically and shows stderr apart", async ({
+  page,
+  admin,
+}) => {
+  const note = await createTask(admin, `Terminal ${token()}`);
+  await logIn(page, `/notes/${note.id}`);
+  const doc = await startEditing(page);
+  await doc.click();
+  await page.getByRole("toolbar", { name: "Body formatting" }).getByRole("button", { name: "Insert terminal" }).click();
+
+  const terminal = doc.locator(".block-terminal");
+  await terminal.getByLabel("Terminal title").fill("Dry run");
+  await terminal.getByLabel("Command 1", { exact: true }).fill("vault import --dry-run export/");
+  await terminal.getByLabel("Output of command 1").fill("42 notes would be created\n3 skipped");
+  await terminal.getByRole("button", { name: "Add command" }).click();
+  await terminal.getByLabel("Command 2", { exact: true }).fill("vault import export/missing");
+  await terminal.getByLabel("Errors of command 2").fill("error: export/missing: no such directory");
+  await terminal.getByLabel("Exit code of command 2").fill("1");
+  await saveAndWait(page);
+
+  const expected: Block[] = [
+    {
+      kind: "terminal",
+      fields: { title: "Dry run" },
+      blocks: [
+        {
+          kind: "command",
+          fields: { line: "vault import --dry-run export/", stdout: "42 notes would be created\n3 skipped" },
+        },
+        {
+          kind: "command",
+          fields: { line: "vault import export/missing", stderr: "error: export/missing: no such directory", exit_code: 1 },
+        },
+      ],
+    },
+  ];
+  const first = await stored(admin, note.id);
+  expect(body(first)).toEqual(expected);
+
+  await page.reload();
+  const shown = page.getByTestId("field-body").locator(".block-terminal");
+  await expect(shown.locator(".terminal-title")).toHaveText("Dry run");
+  await expect(shown.locator(".terminal-line")).toHaveText(["$ vault import --dry-run export/", "$ vault import export/missing"]);
+  const stdout = shown.locator(".terminal-stdout");
+  const stderr = shown.locator(".terminal-stderr");
+  await expect(stdout).toHaveText("42 notes would be created\n3 skipped");
+  await expect(stderr).toHaveText("error: export/missing: no such directory");
+  await expect(shown.locator(".terminal-exit")).toHaveText("exit 1");
+  const colour = (l: Locator) => l.evaluate((el) => getComputedStyle(el).color);
+  expect(await colour(stderr)).not.toBe(await colour(stdout));
+
+  // The editor reads back what it saved, and saving it again changes nothing.
+  const again = await startEditing(page);
+  await expect(again.getByLabel("Command 2", { exact: true })).toHaveValue("vault import export/missing");
+  await expect(again.getByLabel("Output of command 1")).toHaveValue("42 notes would be created\n3 skipped");
+  await saveAndWait(page);
+  const second = await stored(admin, note.id);
+  expect(body(second)).toEqual(expected);
+  const terminalWcl = (wcl: string) => wcl.slice(wcl.indexOf("terminal {"));
+  expect(terminalWcl(second.wcl)).toBe(terminalWcl(first.wcl));
+});
+
+test("a valid Mermaid diagram renders an SVG; an invalid one shows the error and keeps the source", async ({
+  page,
+  admin,
+}) => {
+  const valid = "graph LR\n  export --> importer --> vault\n";
+  const note = await createTask(admin, `Mermaid ${token()}`, [{ kind: "mermaid", fields: { source: valid } }]);
+  await logIn(page, `/notes/${note.id}`);
+
+  const block = page.getByTestId("field-body").locator(".block-mermaid");
+  await expect(block.locator("svg")).toBeVisible();
+  await expect(block.locator("svg")).toContainText("importer");
+
+  const doc = await startEditing(page);
+  const source = doc.getByLabel("Mermaid source");
+  await expect(source).toHaveValue(valid);
+  const editing = doc.locator(".block-mermaid");
+  await expect(editing.locator(".mermaid-render svg")).toBeVisible();
+
+  // A live render follows the source as it is typed.
+  await source.fill("graph LR\n  export --> checker\n");
+  await expect(editing.locator(".mermaid-render svg")).toContainText("checker");
+
+  const invalid = "graph LR\n  export --> [unclosed\n";
+  await source.fill(invalid);
+  await expect(editing.getByRole("alert")).toBeVisible();
+  await expect(editing.locator(".mermaid-render svg")).toHaveCount(0);
+  await expect(source).toHaveValue(invalid);
+  await saveAndWait(page);
+
+  expect(body(await stored(admin, note.id))).toEqual([{ kind: "mermaid", fields: { source: invalid } }]);
+
+  await page.reload();
+  await expect(block.getByRole("alert")).toBeVisible();
+  await expect(block.locator("pre")).toHaveText(invalid);
+});
