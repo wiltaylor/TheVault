@@ -20,6 +20,9 @@
 //! applies `on_delete`. [`Hooks::side_effects`] can add more. Steps 5 and 10 belong to later
 //! work, and [`NoHooks`] leaves them empty.
 
+mod assets;
+mod batch;
+mod defs;
 mod note;
 mod refs;
 mod time;
@@ -33,7 +36,9 @@ use schema::{Doc, Invalid, Issue, NoteLookup, NoteReport, Schema, TypeDef};
 use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, CommitStep, Vault};
 
-pub use note::{Input, doc_to_json};
+pub use assets::Asset;
+pub use batch::{Item, Op, Outcome, Report};
+pub use note::{Input, block_to_json, doc_to_json, value_to_json};
 pub use refs::Referrer;
 
 /// Errors from the write path.
@@ -91,6 +96,27 @@ pub enum Error {
     /// (D6).
     #[error("type {0:?} has notes, so changing it needs a planned schema change")]
     TypeInUse(String),
+    /// A request that is malformed in a way the other variants do not cover.
+    #[error("{0}")]
+    BadRequest(String),
+    /// Something other than a note that the request names does not exist.
+    #[error("{0}")]
+    Missing(String),
+    /// An upsert key matches more than one note.
+    #[error("{} notes of type {type_name:?} share that {key:?}: {}", .ids.len(), .ids.join(", "))]
+    KeyNotUnique {
+        type_name: String,
+        key: String,
+        ids: Vec<String>,
+    },
+    /// A definition, term or asset cannot be removed while something uses it. `code` names what
+    /// kind of thing it is for the API, and `by` lists the users.
+    #[error("{message}: used by {}", .by.join(", "))]
+    InUse {
+        code: &'static str,
+        message: String,
+        by: Vec<String>,
+    },
     #[error(transparent)]
     Store(store::Error),
     #[error(transparent)]
@@ -647,9 +673,24 @@ impl Writer {
     fn apply(
         &self,
         inner: &mut Inner,
+        changes: Vec<NoteChange>,
+        check_base: &dyn Fn() -> Result<()>,
+        author: &Author,
+    ) -> Result<Vec<Saved>> {
+        self.apply_with(inner, changes, check_base, author, Vec::new(), false)
+    }
+
+    /// [`Writer::apply`], committing `files` in the same commit as the notes. A `dry_run` stops
+    /// before the commit and returns what the write would save: each put with an empty version
+    /// and the text it would write, each delete with its current version and text.
+    fn apply_with(
+        &self,
+        inner: &mut Inner,
         mut changes: Vec<NoteChange>,
         check_base: &dyn Fn() -> Result<()>,
         author: &Author,
+        extra_files: Vec<Change>,
+        dry_run: bool,
     ) -> Result<Vec<Saved>> {
         // Validate what was submitted before any handler sees it.
         self.render(inner, &changes)?;
@@ -665,7 +706,37 @@ impl Writer {
         // Handlers may have changed the notes, so what is written is rendered and checked again.
         let rendered = self.render(inner, &changes)?;
 
-        let mut files = Vec::with_capacity(rendered.len());
+        if dry_run {
+            return rendered
+                .into_iter()
+                .map(|r| {
+                    let NoteChange {
+                        id,
+                        type_name,
+                        event,
+                        ..
+                    } = r.change;
+                    let (version, wcl) = match r.text {
+                        Some(text) => (String::new(), text),
+                        None => {
+                            let text = self.vault.read_text(&note_path(&type_name, &id))?;
+                            (self.head(&id, &type_name, &text)?, text)
+                        }
+                    };
+                    Ok(Saved {
+                        id,
+                        type_name,
+                        event,
+                        version,
+                        wcl,
+                        also: Vec::new(),
+                    })
+                })
+                .collect();
+        }
+
+        let mut files = extra_files;
+        files.reserve(rendered.len());
         for r in &rendered {
             let path = note_path(&r.change.type_name, &r.change.id);
             files.push(match &r.text {
@@ -804,7 +875,7 @@ impl NoteLookup for Lookup<'_> {
     }
 
     fn asset_exists(&self, id: &str) -> bool {
-        schema::is_ulid(id) && self.writer.vault.root().join("assets").join(id).is_dir()
+        self.writer.find_asset(id).is_some()
     }
 }
 

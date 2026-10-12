@@ -10,57 +10,163 @@
 //! cursor (D33). `/api/query/parse` and `/api/query/text` convert between text and the visual
 //! builder's model (D8).
 //!
+//! `/api/batch` applies many note writes in one commit, or dry-runs them, and `/api/upsert` writes
+//! a note matched by a key field (D32). Assets, templates, taxonomies, scripts and note canvases
+//! each have their own routes, `/api/schema` describes every type and taxonomy, and
+//! `/api/openapi.json` lists every endpoint.
+//!
 //! Every route but health and login needs a session cookie or a bearer token, and the scope
 //! [`auth::required_scope`] names for it (D11).
 
+mod assets;
 mod auth;
+mod batch;
+mod defs;
 mod error;
+mod inspect;
 mod notes;
+mod openapi;
 mod query;
 mod tokens;
 mod types;
 
 use std::sync::Arc;
 
-use axum::http::StatusCode;
-use axum::{
-    Json, Router, middleware,
-    routing::{delete, get, post},
-};
+use axum::extract::DefaultBodyLimit;
+use axum::handler::Handler;
+use axum::http::{Method, StatusCode};
+use axum::routing::{MethodRouter, delete, get, post, put};
+use axum::{Json, Router, middleware};
 use serde_json::{Value, json};
 use writer::Writer;
 
 pub use auth::{Caller, OWNER_SESSION, SESSION_COOKIE, required_scope};
 pub use error::ApiError;
+pub use openapi::{ENDPOINTS, document as openapi_document};
+
+/// The largest batch body accepted, in bytes.
+const MAX_BATCH: usize = 64 * 1024 * 1024;
+
+/// A router that records every method and path it registers, so the endpoint listing can be
+/// checked against what is actually served.
+struct Routes<S> {
+    router: Router<S>,
+    seen: Vec<(Method, &'static str)>,
+}
+
+impl<S: Clone + Send + Sync + 'static> Routes<S> {
+    fn new() -> Self {
+        Routes {
+            router: Router::new(),
+            seen: Vec::new(),
+        }
+    }
+
+    fn add(mut self, method: Method, path: &'static str, route: MethodRouter<S>) -> Self {
+        self.router = self.router.route(path, route);
+        self.seen.push((method, path));
+        self
+    }
+
+    fn get<H: Handler<T, S>, T: 'static>(self, path: &'static str, h: H) -> Self {
+        self.add(Method::GET, path, get(h))
+    }
+
+    fn post<H: Handler<T, S>, T: 'static>(self, path: &'static str, h: H) -> Self {
+        self.add(Method::POST, path, post(h))
+    }
+
+    fn put<H: Handler<T, S>, T: 'static>(self, path: &'static str, h: H) -> Self {
+        self.add(Method::PUT, path, put(h))
+    }
+
+    fn delete<H: Handler<T, S>, T: 'static>(self, path: &'static str, h: H) -> Self {
+        self.add(Method::DELETE, path, delete(h))
+    }
+
+    /// A POST whose body may be up to `limit` bytes.
+    fn post_up_to<H: Handler<T, S>, T: 'static>(
+        self,
+        path: &'static str,
+        limit: usize,
+        h: H,
+    ) -> Self {
+        self.add(
+            Method::POST,
+            path,
+            post(h).layer(DefaultBodyLimit::max(limit)),
+        )
+    }
+}
+
+/// The routes that take the writer, and the login routes that take the session store.
+fn build() -> (Routes<Arc<Writer>>, Routes<Arc<auth::Sessions>>) {
+    let login = Routes::new()
+        .post("/api/login", auth::login)
+        .post("/api/logout", auth::logout);
+    let api = Routes::new()
+        .get("/api/health", health)
+        .get("/api/openapi.json", openapi::serve)
+        .get("/api/schema", inspect::schema)
+        .get("/api/notes", notes::list)
+        .post("/api/notes", notes::create)
+        .get("/api/notes/{id}", notes::read)
+        .put("/api/notes/{id}", notes::update)
+        .delete("/api/notes/{id}", notes::delete)
+        .get("/api/notes/{id}/history", notes::history)
+        .get("/api/notes/{id}/history/{version}", notes::version)
+        .post("/api/notes/{id}/restore", notes::restore_version)
+        .get("/api/notes/{id}/canvas/{name}", defs::canvas)
+        .put("/api/notes/{id}/canvas/{name}", defs::put_canvas)
+        .post_up_to("/api/batch", MAX_BATCH, batch::run)
+        .post("/api/upsert", batch::upsert)
+        .get("/api/query", query::run_get)
+        .post("/api/query", query::run_post)
+        .post("/api/query/parse", query::parse_query)
+        .post("/api/query/text", query::model_text)
+        .get("/api/search", query::search)
+        .get("/api/trash", notes::trash)
+        .post("/api/trash/{id}/restore", notes::restore_from_trash)
+        .get("/api/types/{name}", types::read)
+        .put("/api/types/{name}", types::put)
+        .get("/api/types/{name}/templates", defs::templates)
+        .get("/api/types/{name}/templates/{template}", defs::template)
+        .put("/api/types/{name}/templates/{template}", defs::put_template)
+        .delete(
+            "/api/types/{name}/templates/{template}",
+            defs::delete_template,
+        )
+        .get("/api/taxonomies", defs::taxonomies)
+        .get("/api/taxonomies/{name}", defs::taxonomy)
+        .put("/api/taxonomies/{name}", defs::put_taxonomy)
+        .delete("/api/taxonomies/{name}", defs::delete_taxonomy)
+        .get("/api/scripts", defs::scripts)
+        .get("/api/scripts/{name}", defs::script)
+        .put("/api/scripts/{name}", defs::put_script)
+        .delete("/api/scripts/{name}", defs::delete_script)
+        .get("/api/assets", assets::list)
+        .post_up_to("/api/assets", assets::MAX_UPLOAD, assets::upload)
+        .get("/api/assets/{id}", assets::download)
+        .delete("/api/assets/{id}", assets::delete)
+        .get("/api/tokens", tokens::list)
+        .post("/api/tokens", tokens::create)
+        .delete("/api/tokens/{name}", tokens::revoke);
+    (api, login)
+}
+
+/// Every method and path the router registers, in registration order.
+pub fn routes() -> Vec<(Method, &'static str)> {
+    let (api, login) = build();
+    api.seen.into_iter().chain(login.seen).collect()
+}
 
 /// Builds the router for every `/api` route.
 pub fn router(writer: Arc<Writer>) -> Router {
     let sessions = Arc::new(auth::Sessions::new(writer.clone()));
-    let login = Router::new()
-        .route("/api/login", post(auth::login))
-        .route("/api/logout", post(auth::logout))
-        .with_state(sessions.clone());
-    Router::new()
-        .route("/api/health", get(health))
-        .route("/api/notes", get(notes::list).post(notes::create))
-        .route(
-            "/api/notes/{id}",
-            get(notes::read).put(notes::update).delete(notes::delete),
-        )
-        .route("/api/notes/{id}/history", get(notes::history))
-        .route("/api/notes/{id}/history/{version}", get(notes::version))
-        .route("/api/notes/{id}/restore", post(notes::restore_version))
-        .route("/api/query", get(query::run_get).post(query::run_post))
-        .route("/api/query/parse", post(query::parse_query))
-        .route("/api/query/text", post(query::model_text))
-        .route("/api/search", get(query::search))
-        .route("/api/trash", get(notes::trash))
-        .route("/api/trash/{id}/restore", post(notes::restore_from_trash))
-        .route("/api/types/{name}", get(types::read).put(types::put))
-        .route("/api/tokens", get(tokens::list).post(tokens::create))
-        .route("/api/tokens/{name}", delete(tokens::revoke))
+    let (api, login) = build();
+    api.router
         .with_state(writer)
-        .merge(login)
+        .merge(login.router.with_state(sessions.clone()))
         .layer(middleware::from_fn_with_state(sessions, auth::authenticate))
 }
 

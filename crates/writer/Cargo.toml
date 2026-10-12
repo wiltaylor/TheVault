@@ -10,9 +10,11 @@ store.workspace = true
 schema.workspace = true
 index.workspace = true
 state.workspace = true
+rusqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 ulid.workspace = true
+wcl_lang.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

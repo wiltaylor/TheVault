@@ -42,7 +42,7 @@ pub(crate) fn is_json(headers: &HeaderMap) -> bool {
 }
 
 /// The version in `If-Match`, without quotes or a weak prefix.
-fn if_match(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn if_match(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::IF_MATCH)?.to_str().ok()?.trim();
     let raw = raw.strip_prefix("W/").unwrap_or(raw);
     Some(raw.trim_matches('"').to_owned()).filter(|s| !s.is_empty())

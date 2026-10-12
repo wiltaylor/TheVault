@@ -54,7 +54,8 @@ fn fields_to_json(fields: &[(String, Value)]) -> Json {
     )
 }
 
-fn block_to_json(b: &DocBlock) -> Json {
+/// The JSON form of one block, as in [`Input::Json`].
+pub fn block_to_json(b: &DocBlock) -> Json {
     let mut out = Map::new();
     out.insert("kind".into(), Json::String(b.kind.clone()));
     if !b.labels.is_empty() {
@@ -75,7 +76,8 @@ fn block_to_json(b: &DocBlock) -> Json {
     Json::Object(out)
 }
 
-fn value_to_json(v: &Value) -> Json {
+/// The JSON form of one value. Records are objects.
+pub fn value_to_json(v: &Value) -> Json {
     match v {
         Value::Str(s) => Json::String(s.clone()),
         Value::Int(i) => Json::Number((*i).into()),
