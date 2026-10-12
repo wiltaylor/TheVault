@@ -271,6 +271,64 @@ pub struct Summary {
 /// copied into the vault before the server started.
 pub const ADOPTED_BY: &str = "vault";
 
+/// The author recorded when opening the vault finds `state.db` behind the note files, as a crash
+/// between steps 7 and 8 leaves it.
+pub const RECOVERED_BY: &str = "recovery";
+
+/// Bring `state.db` up to the note files. Opening the vault rolled forward any commit a crash
+/// interrupted, but a crash after the commit point and before step 8 leaves `state.db` without the
+/// versions of that commit. A note whose file differs from its current version gets a new version
+/// holding the file's text, and a note whose file is gone moves to the trash. A file `state.db`
+/// has never seen is left for [`Writer::head`] to adopt.
+fn recover(vault: &Vault, state: &State) -> Result<()> {
+    let author = Author::Session(RECOVERED_BY.to_owned());
+    let mut on_disk = HashSet::new();
+    for (type_name, id) in note_files(vault)? {
+        if let Some(head) = state.head(&id)? {
+            let text = vault.read_text(&note_path(&type_name, &id))?;
+            if head.content != text || head.note_type != type_name {
+                state.record_version(&id, &type_name, &author, &text)?;
+            }
+        }
+        on_disk.insert(id);
+    }
+    for id in state.live_notes()? {
+        if !on_disk.contains(&id) {
+            state.trash_note(&id, &author)?;
+        }
+    }
+    Ok(())
+}
+
+/// `(type, id)` of every `notes/<type>/<ULID>.wcl` file. Anything else under `notes/` is not a
+/// note and is skipped.
+fn note_files(vault: &Vault) -> Result<Vec<(String, String)>> {
+    let read_dir = |dir: &std::path::Path| {
+        std::fs::read_dir(dir).map_err(|source| {
+            Error::Store(store::Error::Io {
+                path: dir.to_owned(),
+                source,
+            })
+        })
+    };
+    let mut out = Vec::new();
+    for folder in read_dir(&vault.root().join("notes"))?.flatten() {
+        let type_name = folder.file_name().to_string_lossy().into_owned();
+        if !schema::is_name(&type_name) || !folder.path().is_dir() {
+            continue;
+        }
+        for entry in read_dir(&folder.path())?.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(id) = name.strip_suffix(".wcl").filter(|id| schema::is_ulid(id))
+                && entry.path().is_file()
+            {
+                out.push((type_name.clone(), id.to_owned()));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// The write path of one vault.
 pub struct Writer {
     vault: Vault,
@@ -299,8 +357,10 @@ struct Inner {
 }
 
 impl Writer {
-    /// Open the write path: load the schema and rebuild the index from the vault files.
+    /// Open the write path: bring `state.db` up to the vault files, load the schema and rebuild
+    /// the index from the files.
     pub fn open(vault: Vault, state: State) -> Result<Writer> {
+        recover(&vault, &state)?;
         let schema = Schema::load(&vault)?;
         let mut index = Index::open(&vault)?;
         index.rebuild(&vault)?;
