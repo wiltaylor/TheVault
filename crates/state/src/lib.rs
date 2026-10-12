@@ -204,6 +204,14 @@ fn migrate(conn: &mut Connection) -> Result<()> {
 }
 
 /// Fills `buf` from the operating system's random source.
+/// `bytes` random bytes from the operating system, as lowercase hex. For session ids and other
+/// secrets outside `state.db`.
+pub fn random_hex(bytes: usize) -> String {
+    let mut raw = vec![0u8; bytes];
+    random_bytes(&mut raw);
+    to_hex(&raw)
+}
+
 fn random_bytes(buf: &mut [u8]) {
     use chacha20poly1305::aead::OsRng;
     use chacha20poly1305::aead::rand_core::RngCore;

@@ -4,7 +4,9 @@
 use std::path::Path;
 
 use reqwest::blocking::{Client, RequestBuilder, Response};
-use reqwest::header::{ACCEPT, CONTENT_TYPE, ETAG, IF_MATCH};
+use reqwest::header::{
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue, IF_MATCH,
+};
 use serde_json::{Value, json};
 use testkit::TestServer;
 
@@ -45,10 +47,14 @@ struct Api {
 
 impl Api {
     fn start() -> Api {
-        Api {
-            server: TestServer::start_seeded(seed),
-            client: Client::new(),
-        }
+        let server = TestServer::start_seeded(seed);
+        let mut auth = HeaderMap::new();
+        auth.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", server.admin_token())).unwrap(),
+        );
+        let client = Client::builder().default_headers(auth).build().unwrap();
+        Api { server, client }
     }
 
     fn get(&self, path: &str) -> RequestBuilder {
@@ -440,8 +446,8 @@ fn history_lists_every_version_and_restore_makes_a_new_one() {
     assert_eq!(versions[0]["version"], v1.as_str());
     assert_eq!(versions[1]["version"], v2.as_str());
     for v in versions {
-        assert_eq!(v["author"]["kind"], "session", "{v}");
-        assert!(!s(&v["author"]["name"]).is_empty(), "{v}");
+        assert_eq!(v["author"]["kind"], "token", "{v}");
+        assert_eq!(v["author"]["name"], testkit::ADMIN_TOKEN_NAME, "{v}");
         assert!(v["at"].is_i64(), "{v}");
     }
     assert_eq!(versions[1]["current"], true);

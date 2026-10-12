@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use reqwest::blocking::{Client, Response};
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use testkit::TestServer;
 
@@ -38,10 +38,14 @@ struct Api {
 
 impl Api {
     fn start() -> Api {
-        Api {
-            server: TestServer::start_seeded(seed),
-            client: Client::new(),
-        }
+        let server = TestServer::start_seeded(seed);
+        let mut auth = HeaderMap::new();
+        auth.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", server.admin_token())).unwrap(),
+        );
+        let client = Client::builder().default_headers(auth).build().unwrap();
+        Api { server, client }
     }
 
     /// Create a task from WCL text and return its id.
@@ -275,4 +279,49 @@ fn parse_returns_the_builder_model_or_the_error() {
         400,
     );
     assert_eq!(body["error"], "bad_request", "{body}");
+}
+
+#[test]
+fn a_read_token_may_query_search_and_parse() {
+    let api = Api::start();
+    let id = api.create("title = \"Readable\"\nestimate = 1\n");
+    let secret = s(&expect(
+        api.post("/api/tokens", json!({ "name": "reader", "scope": "read" })),
+        201,
+    )["secret"])
+    .to_owned();
+    let reader = Client::new();
+    let bearer = format!("Bearer {secret}");
+    let post = |path: &str, body: Value| {
+        reader
+            .post(api.server.url(path))
+            .header(AUTHORIZATION, &bearer)
+            .json(&body)
+            .send()
+            .unwrap()
+    };
+
+    let page = expect(post("/api/query", json!({ "query": "from task" })), 200);
+    assert_eq!(ids(&page), [id]);
+    expect(
+        post("/api/query/parse", json!({ "query": "from task" })),
+        200,
+    );
+    let search = reader
+        .get(api.server.url("/api/search"))
+        .header(AUTHORIZATION, &bearer)
+        .query(&[("q", "Readable")])
+        .send()
+        .unwrap();
+    assert_eq!(expect(search, 200)["total"], 1);
+
+    // Writing a note still needs `write`.
+    let res = reader
+        .post(api.server.url("/api/notes?type=task"))
+        .header(AUTHORIZATION, &bearer)
+        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body("title = \"No\"\n")
+        .send()
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 403);
 }
