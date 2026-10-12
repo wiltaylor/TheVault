@@ -11,6 +11,8 @@ import {
   MASS_TYPE,
   PAGE_TYPE,
   PROJECT_TYPE,
+  STAGE_TAXONOMY,
+  STORY_TYPE,
   TASK_TYPE,
   bulkId,
   bulkTitle,
@@ -37,6 +39,9 @@ function seedVault(): string {
   writeFileSync(join(vault, "types/project.wcl"), PROJECT_TYPE);
   writeFileSync(join(vault, "types/page.wcl"), PAGE_TYPE);
   writeFileSync(join(vault, "types/mass.wcl"), MASS_TYPE);
+  writeFileSync(join(vault, "types/story.wcl"), STORY_TYPE);
+  mkdirSync(join(vault, "taxonomies"));
+  writeFileSync(join(vault, "taxonomies/stage.wcl"), STAGE_TAXONOMY);
   const note = (title: string) =>
     `title   = "${title}"\ncreated = "2026-10-12T09:15:00Z"\nupdated = "2026-10-12T09:15:00Z"\n`;
   mkdirSync(join(vault, "notes/bulk"), { recursive: true });

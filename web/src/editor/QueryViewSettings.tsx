@@ -1,6 +1,7 @@
 import { Index, Show } from "solid-js";
 import type { Block } from "../api";
 import {
+  CALENDAR_MODES,
   IDENT,
   VIEW_KINDS,
   addView,
@@ -102,6 +103,41 @@ export function QueryViewSettings(props: { block: Block; onChange: (block: Block
                   placeholder={view().kind === "details" ? "detail" : "card"}
                   onInput={(e) => set(setViewItem(props.block, i, "template", optional(e.currentTarget.value)))}
                 />
+              </label>
+            </Show>
+            <Show when={kindUses(view().kind, "group")}>
+              <label>
+                Group by
+                <input
+                  type="text"
+                  value={view().group ?? ""}
+                  placeholder="a single-term taxonomy field"
+                  onInput={(e) => set(setViewItem(props.block, i, "group", optional(e.currentTarget.value)))}
+                />
+              </label>
+            </Show>
+            <Show when={kindUses(view().kind, "date")}>
+              <label>
+                Date field
+                <input
+                  type="text"
+                  value={view().date ?? ""}
+                  placeholder="a date, datetime or date range field"
+                  onInput={(e) => set(setViewItem(props.block, i, "date", optional(e.currentTarget.value)))}
+                />
+              </label>
+            </Show>
+            <Show when={kindUses(view().kind, "mode")}>
+              <label>
+                Mode
+                <select
+                  value={view().mode}
+                  onChange={(e) =>
+                    set(setViewItem(props.block, i, "mode", e.currentTarget.value === "month" ? undefined : e.currentTarget.value))
+                  }
+                >
+                  <Index each={CALENDAR_MODES}>{(m) => <option value={m()}>{m()}</option>}</Index>
+                </select>
               </label>
             </Show>
             <Show when={views().length > 1}>
