@@ -1,0 +1,16 @@
+label       = "Board"
+plural      = "Boards"
+description = "A note that is mostly one canvas."
+icon        = "layout-dashboard"
+
+field board {
+  kind  = "canvas"
+  label = "Board"
+}
+
+template default {
+  tab "Board" {
+    slot "title"
+    slot "board"
+  }
+}

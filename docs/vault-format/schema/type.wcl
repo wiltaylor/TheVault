@@ -1,0 +1,74 @@
+# Schema for types/<type>.wcl: a type's fields, templates and handlers.
+# Check a type file with common.wcl, this file and the type file together.
+# See docs/vault-format.md.
+
+@block("field", required_fields = ["kind"])
+type FieldDef {
+  @inline(0) name: identifier
+  kind:        utf8
+  label:       utf8?
+  description: utf8?
+  required:    bool?
+  computed:    bool?
+  multiple:    bool?
+  @schemaless default: utf8?
+  options:     list<utf8>?
+  taxonomy:    utf8?
+  target:      utf8?
+  relation:    utf8?
+  inverse:     utf8?
+  on_delete:   utf8?
+  items:       utf8?
+  values:      utf8?
+  of:          utf8?
+  map:         utf8?
+  image:       utf8?
+}
+
+@block("slot") type Slot {
+  @inline(0) field: utf8
+  label: utf8?
+}
+
+@block("tab") type Tab {
+  @inline(0) title: utf8
+  @children("slot")       slots:       list<Slot>
+  @children("heading")    headings:    list<Heading>
+  @children("paragraph")  paragraphs:  list<Paragraph>
+  @children("list")       lists:       list<ListBlock>
+  @children("quote")      quotes:      list<Quote>
+  @children("image")      images:      list<Image>
+  @children("asset")      assets:      list<AssetBlock>
+  @children("code")       codes:       list<Code>
+  @children("terminal")   terminals:   list<Terminal>
+  @children("mermaid")    mermaids:    list<Mermaid>
+  @children("ink")        inks:        list<Ink>
+  @children("query_view") query_views: list<QueryView>
+  @children("canvas")     canvases:    list<Canvas>
+}
+
+@block("template") type Template {
+  @inline(0) name: identifier
+  label: utf8?
+  @children("tab", min = 1) tabs: list<Tab>
+}
+
+@block("handler", required_fields = ["script"])
+type Handler {
+  @inline(0) event: utf8
+  script:        utf8
+  function:      utf8?
+  allow_domains: list<utf8>?
+  secrets:       list<utf8>?
+}
+
+@document type TypeFile {
+  label:       utf8
+  plural:      utf8?
+  description: utf8?
+  icon:        utf8?
+  colour:      utf8?
+  @children("field")    fields:    list<FieldDef>
+  @children("template", min = 1) templates: list<Template>
+  @children("handler")  handlers:  list<Handler>
+}

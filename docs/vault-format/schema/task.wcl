@@ -1,0 +1,17 @@
+# Schema for tasks/<task>.wcl: a scheduled task definition (D10).
+# Check a task file with this file alone. See docs/vault-format.md.
+
+@document type TaskFile {
+  label:         utf8?
+  description:   utf8?
+  schedule:      utf8
+  timezone:      utf8?
+  script:        utf8
+  function:      utf8?
+  allow_domains: list<utf8>?
+  secrets:       list<utf8>?
+  @min(0) retries: i64?
+  retry_delay:   utf8?
+  timeout:       utf8?
+  paused:        bool?
+}

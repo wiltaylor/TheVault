@@ -1,0 +1,104 @@
+title   = "Importer board"
+created = "2026-10-12T09:20:00Z"
+updated = "2026-10-12T11:03:44Z"
+
+canvas board {
+  viewport {
+    x    = -120.0
+    y    = -80.0
+    zoom = 0.75
+  }
+
+  group plan {
+    label  = "Plan"
+    x      = -40.0
+    y      = -40.0
+    width  = 1000.0
+    height = 480.0
+    colour = "blue"
+  }
+
+  node goal {
+    kind   = "text"
+    x      = 0.0
+    y      = 0.0
+    width  = 260.0
+    height = 120.0
+    group  = "plan"
+    colour = "yellow"
+    text   = "Goal: **import Capacities** without losing [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZA]]"
+  }
+
+  node importer {
+    kind     = "note"
+    x        = 340.0
+    y        = 0.0
+    width    = 300.0
+    height   = 180.0
+    group    = "plan"
+    note     = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA"
+    template = "card"
+  }
+
+  node open_work {
+    kind     = "query"
+    x        = 700.0
+    y        = 0.0
+    width    = 240.0
+    height   = 400.0
+    group    = "plan"
+    query    = "from specimen where under(status, \"Active\") sort due asc limit 10"
+    view     = "cards"
+    template = "card"
+  }
+
+  node diagram {
+    kind   = "asset"
+    x      = 0.0
+    y      = 200.0
+    width  = 300.0
+    height = 200.0
+    group  = "plan"
+    asset  = "01JB9A0C3D4E5F6G7H8J9K0M1N"
+  }
+
+  node docs {
+    kind   = "link"
+    x      = 0.0
+    y      = 520.0
+    width  = 260.0
+    height = 80.0
+    url    = "https://example.com/importer-docs"
+  }
+
+  node scribble {
+    kind   = "ink"
+    x      = 340.0
+    y      = 520.0
+    width  = 200.0
+    height = 120.0
+
+    stroke {
+      tool   = "pen"
+      colour = "#dc2626"
+      size   = 3.0
+      points = [10.0, 60.0, 0.5, 100.0, 20.0, 0.7, 190.0, 60.0, 0.5]
+    }
+  }
+
+  edge goal_to_importer {
+    from      = "goal"
+    to        = "importer"
+    from_side = "right"
+    to_side   = "left"
+    label     = "delivers"
+    arrow     = "end"
+  }
+
+  edge importer_to_work {
+    from   = "importer"
+    to     = "open_work"
+    colour = "gray"
+    arrow  = "none"
+  }
+}

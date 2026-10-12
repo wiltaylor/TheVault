@@ -1,0 +1,11 @@
+label         = "Daily digest"
+description   = "Posts the day's open specimens to a chat webhook."
+schedule      = "0 7 * * 1-5"
+timezone      = "Australia/Melbourne"
+script        = "digest"
+function      = "run"
+allow_domains = ["hooks.example.com"]
+secrets       = ["digest_webhook"]
+retries       = 3
+retry_delay   = "PT1M"
+timeout       = "PT30S"

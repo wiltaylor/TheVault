@@ -1,0 +1,5 @@
+title    = "Estimate written as an expression"
+created  = "2026-10-12T09:15:00Z"
+updated  = "2026-10-12T09:15:00Z"
+estimate = 1 + 2
+status   = "Inbox"

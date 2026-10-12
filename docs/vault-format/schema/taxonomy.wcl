@@ -1,0 +1,15 @@
+# Schema for taxonomies/<taxonomy>.wcl: a global, hierarchical taxonomy (D7).
+# Check a taxonomy file with this file alone. See docs/vault-format.md.
+
+@block("term") type Term {
+  @inline(0) name: utf8
+  colour:      utf8?
+  description: utf8?
+  @children("term") terms: list<Term>
+}
+
+@document type TaxonomyFile {
+  label:       utf8
+  description: utf8?
+  @children("term", min = 1) terms: list<Term>
+}

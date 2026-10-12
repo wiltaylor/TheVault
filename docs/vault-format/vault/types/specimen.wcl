@@ -1,0 +1,246 @@
+label       = "Specimen"
+plural      = "Specimens"
+description = "A type with one field of every kind, used as the reference example."
+icon        = "flask-conical"
+colour      = "purple"
+
+field subtitle {
+  kind  = "string"
+  label = "Subtitle"
+}
+
+field estimate {
+  kind     = "int"
+  label    = "Estimate (hours)"
+  required = true
+  default  = 1
+}
+
+field word_count {
+  kind     = "int"
+  label    = "Word count"
+  computed = true
+}
+
+field score {
+  kind  = "float"
+  label = "Score"
+}
+
+field done {
+  kind    = "bool"
+  label   = "Done"
+  default = false
+}
+
+field due {
+  kind  = "date"
+  label = "Due"
+}
+
+field starts_at {
+  kind  = "datetime"
+  label = "Starts at"
+}
+
+field span {
+  kind  = "date_range"
+  label = "Span"
+  of    = "date"
+}
+
+field homepage {
+  kind  = "url"
+  label = "Homepage"
+}
+
+field priority {
+  kind    = "select"
+  label   = "Priority"
+  options = ["low", "medium", "high"]
+  default = "medium"
+}
+
+field channels {
+  kind     = "select"
+  label    = "Channels"
+  multiple = true
+  options  = ["email", "chat", "phone"]
+}
+
+field status {
+  kind     = "taxonomy"
+  label    = "Status"
+  taxonomy = "status"
+  required = true
+  default  = "Inbox"
+}
+
+field topics {
+  kind     = "taxonomy"
+  label    = "Topics"
+  taxonomy = "topic"
+  multiple = true
+}
+
+field board {
+  kind      = "reference"
+  label     = "Board"
+  target    = "board"
+  relation  = "one_way"
+  on_delete = "restrict"
+}
+
+field parent {
+  kind      = "reference"
+  label     = "Parent"
+  target    = "specimen"
+  relation  = "two_way"
+  inverse   = "children"
+  on_delete = "cascade"
+}
+
+field children {
+  kind      = "reference"
+  label     = "Children"
+  target    = "specimen"
+  relation  = "two_way"
+  inverse   = "parent"
+  multiple  = true
+  on_delete = "unlink"
+}
+
+field related {
+  kind     = "reference"
+  label    = "Related"
+  target   = "specimen"
+  relation = "peer"
+  multiple = true
+}
+
+field aliases {
+  kind  = "list"
+  label = "Aliases"
+  items = "string"
+}
+
+field extra {
+  kind   = "dict"
+  label  = "Extra"
+  values = "string"
+}
+
+field place {
+  kind  = "location"
+  label = "Place"
+  map   = "geo"
+}
+
+field desk {
+  kind  = "location"
+  label = "Desk"
+  map   = "image"
+  image = "01JB9A0C3D4E5F6G7H8J9K0M1Q"
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+field cover {
+  kind  = "asset"
+  label = "Cover"
+}
+
+field attachments {
+  kind     = "asset"
+  label    = "Attachments"
+  multiple = true
+}
+
+field sketch {
+  kind  = "ink"
+  label = "Sketch"
+}
+
+field plan {
+  kind  = "canvas"
+  label = "Plan"
+}
+
+template default {
+  label = "Full page"
+
+  tab "Overview" {
+    slot "title"
+    slot "subtitle"
+    slot "status"
+    slot "priority"
+    slot "due"
+    slot "estimate" {
+      label = "Hours"
+    }
+    slot "body"
+  }
+
+  tab "Relations" {
+    slot "parent"
+    slot "children"
+    slot "related"
+    heading {
+      level = 2
+      text  = "Open children"
+    }
+    query_view {
+      query        = "from specimen where parent == this && !done sort due asc"
+      default_view = "open"
+
+      view open {
+        kind    = "table"
+        columns = ["title", "status", "due"]
+      }
+    }
+  }
+
+  tab "Media" {
+    slot "cover"
+    slot "attachments"
+    slot "sketch"
+    slot "plan"
+    slot "place"
+    slot "desk"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "status"
+    slot "due"
+  }
+}
+
+template detail {
+  tab "Detail" {
+    slot "title"
+    slot "subtitle"
+    slot "status"
+    slot "priority"
+    slot "due"
+    slot "span"
+    slot "homepage"
+  }
+}
+
+handler "before_update" {
+  script   = "specimen"
+  function = "count_words"
+}
+
+handler "after_create" {
+  script        = "specimen"
+  function      = "announce"
+  allow_domains = ["hooks.example.com"]
+  secrets       = ["announce_token"]
+}

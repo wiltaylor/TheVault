@@ -1,0 +1,10 @@
+# Generated note schema for notes/board/*.wcl, derived from types/board.wcl
+# by the rules in docs/vault-format.md ("Generated note schemas"). Check a
+# note with common.wcl, this file and the note together.
+
+@document type BoardNote {
+  title:   utf8
+  created: utf8
+  updated: utf8
+  @children("canvas", max = 1) canvases: list<Canvas>
+}

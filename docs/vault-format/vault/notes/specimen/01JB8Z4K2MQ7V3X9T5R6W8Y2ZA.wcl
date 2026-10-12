@@ -1,0 +1,275 @@
+title       = "Ship the importer"
+created     = "2026-10-12T09:15:00Z"
+updated     = "2026-10-12T10:42:07Z"
+subtitle    = "Capacities first, then everything else"
+estimate    = 3
+word_count  = 41
+score       = 4.5
+done        = false
+due         = "2026-11-01"
+starts_at   = "2026-10-20T09:30:00+11:00"
+span        = { start: "2026-10-20", end: "2026-11-01" }
+homepage    = "https://example.com/importer"
+priority    = "high"
+channels    = ["email", "chat"]
+status      = "Active/In progress"
+topics      = ["Software/Rust", "Writing"]
+board       = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZF"
+parent      = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"
+children    = ["01JB8Z4K2MQ7V3X9T5R6W8Y2ZC"]
+related     = ["01JB8Z4K2MQ7V3X9T5R6W8Y2ZD", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZE"]
+aliases     = ["importer", "capacities import"]
+place       = { lat: -37.8136, lng: 144.9631 }
+desk        = { x: 412.0, y: 188.5 }
+cover       = "01JB9A0C3D4E5F6G7H8J9K0M1N"
+attachments = ["01JB9A0C3D4E5F6G7H8J9K0M1P"]
+
+dict extra {
+  owner  = "Wil"
+  source = "capacities"
+}
+
+content body {
+  heading {
+    level = 2
+    text  = "Plan"
+  }
+
+  paragraph {
+    text = "Import from **Capacities** first, then [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB|the parent]]. Mark risks {red}in red{/} and ==highlight== open questions."
+  }
+
+  list {
+    style = "todo"
+
+    item {
+      text    = "Export a sample from Capacities"
+      checked = true
+    }
+
+    item {
+      text    = "Map Capacities objects to types"
+      checked = false
+
+      item {
+        text    = "People become `person` notes"
+        checked = false
+      }
+    }
+  }
+
+  list {
+    style = "numbered"
+
+    item {
+      text = "Dry run"
+    }
+
+    item {
+      text = "Real run"
+    }
+  }
+
+  quote {
+    text = "Make it work, make it right, make it fast."
+  }
+
+  image {
+    asset   = "01JB9A0C3D4E5F6G7H8J9K0M1N"
+    alt     = "Importer architecture sketch"
+    caption = "The importer reads an export folder."
+    width   = 640
+  }
+
+  asset {
+    asset   = "01JB9A0C3D4E5F6G7H8J9K0M1P"
+    caption = "Sample export"
+  }
+
+  code {
+    language = "rust"
+    caption  = "Entry point"
+    source   = <<'END'
+    fn main() {
+        println!("importing");
+    }
+    END
+  }
+
+  terminal {
+    title  = "Dry run"
+    shell  = "bash"
+    prompt = "$"
+
+    command {
+      line      = "vault import --dry-run export/"
+      stdout    = "42 notes would be created"
+      exit_code = 0
+    }
+
+    command {
+      line      = "vault import export/missing"
+      stderr    = "error: export/missing: no such directory"
+      exit_code = 1
+    }
+  }
+
+  mermaid {
+    source = <<'END'
+    graph LR
+      export --> importer --> vault
+    END
+  }
+
+  ink {
+    width      = 800
+    height     = 300
+    background = "lines"
+
+    stroke {
+      tool   = "pen"
+      colour = "#1f2937"
+      size   = 4.0
+      points = [10.0, 20.0, 0.5, 14.5, 22.0, 0.6, 20.0, 25.5, 0.7]
+    }
+
+    stroke {
+      tool   = "highlighter"
+      colour = "#facc15"
+      size   = 16.0
+      points = [40.0, 60.0, 0.5, 120.0, 60.0, 0.5]
+    }
+  }
+
+  query_view {
+    title        = "Open children"
+    query        = "from specimen where parent == this && !done sort due asc"
+    default_view = "table"
+
+    view table {
+      kind    = "table"
+      columns = ["title", "status", "due", "estimate"]
+    }
+
+    view cards {
+      kind     = "cards"
+      template = "card"
+    }
+
+    view list {
+      kind  = "list"
+      title = "Compact"
+    }
+
+    view details {
+      kind     = "details"
+      template = "detail"
+    }
+
+    view board {
+      kind     = "kanban"
+      group    = "status"
+      template = "card"
+    }
+
+    view calendar {
+      kind = "calendar"
+      date = "due"
+      mode = "month"
+    }
+
+    view timeline {
+      kind = "timeline"
+      date = "span"
+    }
+
+    view map {
+      kind     = "map"
+      location = "place"
+    }
+
+    view desks {
+      kind     = "map"
+      location = "desk"
+    }
+
+    view canvas {
+      kind     = "canvas"
+      template = "card"
+
+      place "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC" {
+        x = 0.0
+        y = 0.0
+      }
+
+      place "01JB8Z4K2MQ7V3X9T5R6W8Y2ZD" {
+        x      = 320.0
+        y      = 0.0
+        width  = 280.0
+        height = 160.0
+      }
+    }
+  }
+
+  canvas {
+    viewport {
+      x    = 0.0
+      y    = 0.0
+      zoom = 1.0
+    }
+
+    node idea {
+      kind   = "text"
+      x      = 0.0
+      y      = 0.0
+      width  = 240.0
+      height = 120.0
+      text   = "Importer **v1**"
+    }
+
+    node parent {
+      kind     = "note"
+      x        = 320.0
+      y        = 0.0
+      width    = 280.0
+      height   = 160.0
+      note     = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"
+      template = "card"
+    }
+
+    edge e1 {
+      from  = "idea"
+      to    = "parent"
+      arrow = "end"
+    }
+  }
+}
+
+ink sketch {
+  width  = 400
+  height = 400
+
+  stroke {
+    tool   = "pen"
+    colour = "#2563eb"
+    size   = 3.0
+    points = [100.0, 100.0, 0.5, 200.0, 150.0, 0.8, 300.0, 100.0, 0.5]
+  }
+}
+
+canvas plan {
+  viewport {
+    x    = 0.0
+    y    = 0.0
+    zoom = 1.0
+  }
+
+  node start {
+    kind   = "text"
+    x      = 0.0
+    y      = 0.0
+    width  = 200.0
+    height = 80.0
+    text   = "Start here"
+  }
+}

@@ -1,0 +1,249 @@
+# Shared vocabulary for TheVault vault files.
+#
+# This file declares the record values, content blocks, ink and canvas that
+# several file kinds share. It has no @document of its own: put it in front
+# of a file-kind schema (type.wcl, or a generated note schema) when checking.
+# See docs/vault-format.md.
+
+# ---------------------------------------------------------------------------
+# Structured field values (D23, notes/26)
+# ---------------------------------------------------------------------------
+
+@doc("A date range field value. Both ends are ISO 8601 dates or datetimes, end inclusive.")
+type DateRange {
+  start: utf8
+  end:   utf8
+}
+
+@doc("A location on a real-world map, in WGS 84 decimal degrees.")
+type GeoPoint {
+  lat: f64
+  lng: f64
+}
+
+@doc("A location on an image map, in pixels from the image's top-left corner.")
+type ImagePoint {
+  x: f64
+  y: f64
+}
+
+# ---------------------------------------------------------------------------
+# Content blocks (D34). Text fields use the inline markup of PRD Appendix A.
+# ---------------------------------------------------------------------------
+
+@block("heading", required_fields = ["level", "text"])
+type Heading {
+  @min(1) @max(3) level: i64
+  text: utf8
+}
+
+@block("paragraph", required_fields = ["text"])
+type Paragraph {
+  text: utf8
+}
+
+@block("item", required_fields = ["text"])
+type ListItem {
+  text:    utf8
+  checked: bool?
+  @children("item") items: list<ListItem>
+}
+
+@block("list", required_fields = ["style"])
+type ListBlock {
+  style: utf8
+  @children("item", min = 1) items: list<ListItem>
+}
+
+@block("quote", required_fields = ["text"])
+type Quote {
+  text: utf8
+}
+
+@block("image", required_fields = ["asset"])
+type Image {
+  asset:   utf8
+  alt:     utf8?
+  caption: utf8?
+  width:   i64?
+}
+
+@block("asset", required_fields = ["asset"])
+type AssetBlock {
+  asset:   utf8
+  caption: utf8?
+}
+
+@block("code", required_fields = ["source"])
+type Code {
+  language: utf8?
+  caption:  utf8?
+  source:   utf8
+}
+
+@block("command", required_fields = ["line"])
+type Command {
+  line:      utf8
+  stdout:    utf8?
+  stderr:    utf8?
+  exit_code: i64?
+}
+
+@block("terminal") type Terminal {
+  title:  utf8?
+  shell:  utf8?
+  prompt: utf8?
+  @children("command", min = 1) commands: list<Command>
+}
+
+@block("mermaid", required_fields = ["source"])
+type Mermaid {
+  source: utf8
+}
+
+# ---------------------------------------------------------------------------
+# Ink (D18, D29). The same block is an ink content block (no label) and an
+# ink field value (labelled with the field name).
+# ---------------------------------------------------------------------------
+
+@block("stroke", required_fields = ["tool", "colour", "size", "points"])
+type Stroke {
+  tool:   utf8
+  colour: utf8
+  size:   f64
+  points: list<f64>
+}
+
+@block("ink", required_fields = ["width", "height"])
+type Ink {
+  @inline(0) field: identifier?
+  width:      i64
+  height:     i64
+  background: utf8?
+  @children("stroke") strokes: list<Stroke>
+}
+
+# ---------------------------------------------------------------------------
+# Query views (D8, D33, D42)
+# ---------------------------------------------------------------------------
+
+@block("place", required_fields = ["x", "y"])
+type Place {
+  @inline(0) note: utf8
+  x:      f64
+  y:      f64
+  width:  f64?
+  height: f64?
+}
+
+@block("view", required_fields = ["kind"])
+type View {
+  @inline(0) name: identifier
+  kind:     utf8
+  title:    utf8?
+  template: utf8?
+  columns:  list<utf8>?
+  group:    utf8?
+  date:     utf8?
+  mode:     utf8?
+  location: utf8?
+  @children("place") places: list<Place>
+}
+
+@block("query_view", required_fields = ["query"])
+type QueryView {
+  title:        utf8?
+  query:        utf8
+  default_view: utf8?
+  @children("view", min = 1) views: list<View>
+}
+
+# ---------------------------------------------------------------------------
+# Canvas (D15). The same block is a canvas content block (no label) and a
+# canvas field value (labelled with the field name).
+# ---------------------------------------------------------------------------
+
+@block("viewport", required_fields = ["x", "y", "zoom"])
+type Viewport {
+  x:    f64
+  y:    f64
+  zoom: f64
+}
+
+@block("node", required_fields = ["kind", "x", "y", "width", "height"])
+type CanvasNode {
+  @inline(0) id: identifier
+  kind:     utf8
+  x:        f64
+  y:        f64
+  width:    f64
+  height:   f64
+  group:    utf8?
+  colour:   utf8?
+  text:     utf8?
+  note:     utf8?
+  template: utf8?
+  query:    utf8?
+  view:     utf8?
+  asset:    utf8?
+  url:      utf8?
+  @children("stroke") strokes: list<Stroke>
+}
+
+@block("edge", required_fields = ["from", "to"])
+type CanvasEdge {
+  @inline(0) id: identifier
+  @ref("node") from: identifier
+  @ref("node") to:   identifier
+  from_side: utf8?
+  to_side:   utf8?
+  label:     utf8?
+  colour:    utf8?
+  arrow:     utf8?
+}
+
+@block("group", required_fields = ["x", "y", "width", "height"])
+type CanvasGroup {
+  @inline(0) id: identifier
+  label:  utf8?
+  x:      f64
+  y:      f64
+  width:  f64
+  height: f64
+  colour: utf8?
+}
+
+@block("canvas") type Canvas {
+  @inline(0) field: identifier?
+  @child("viewport") viewport: Viewport
+  @children("group") groups: list<CanvasGroup>
+  @children("node")  nodes:  list<CanvasNode>
+  @children("edge")  edges:  list<CanvasEdge>
+}
+
+# ---------------------------------------------------------------------------
+# Compound field values: a content field holds blocks, a dict field holds
+# one field per key. Both are labelled with the note field's name.
+# ---------------------------------------------------------------------------
+
+@block("content") type Content {
+  @inline(0) field: identifier
+  @children("heading")    headings:    list<Heading>
+  @children("paragraph")  paragraphs:  list<Paragraph>
+  @children("list")       lists:       list<ListBlock>
+  @children("quote")      quotes:      list<Quote>
+  @children("image")      images:      list<Image>
+  @children("asset")      assets:      list<AssetBlock>
+  @children("code")       codes:       list<Code>
+  @children("terminal")   terminals:   list<Terminal>
+  @children("mermaid")    mermaids:    list<Mermaid>
+  @children("ink")        inks:        list<Ink>
+  @children("query_view") query_views: list<QueryView>
+  @children("canvas")     canvases:    list<Canvas>
+}
+
+@doc("A dict field value. Keys are identifiers; TheVault checks every value against the field's value kind.")
+@block("dict") @schemaless
+type Dict {
+  @inline(0) field: identifier
+}
