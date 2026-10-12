@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use reqwest::blocking::{Client, Response};
-use reqwest::header::{CONTENT_TYPE, IF_MATCH};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, IF_MATCH};
 use serde_json::{Value, json};
 use testkit::TestServer;
 
@@ -96,10 +96,14 @@ struct Api {
 
 impl Api {
     fn start() -> Api {
-        Api {
-            server: TestServer::start_seeded(seed),
-            client: Client::new(),
-        }
+        let server = TestServer::start_seeded(seed);
+        let mut auth = HeaderMap::new();
+        auth.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", server.admin_token())).unwrap(),
+        );
+        let client = Client::builder().default_headers(auth).build().unwrap();
+        Api { server, client }
     }
 
     /// Create a note of `type_name` from WCL text and return its id.
