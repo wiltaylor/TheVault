@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TypeDef } from "./api";
-import { applyEdits, comparedFields, fieldValue, parseInput, slotField, TITLE_FIELD } from "./notes";
+import { applyBlocks, applyEdits, comparedFields, fieldValue, parseInput, slotField, TITLE_FIELD } from "./notes";
 
 const task: TypeDef = {
   name: "task",
@@ -36,6 +36,22 @@ describe("notes", () => {
     const doc = { fields: { title: "A", estimate: 3 }, blocks: [] };
     expect(applyEdits(doc, { title: "B", estimate: undefined }).fields).toEqual({ title: "B" });
     expect(doc.fields.estimate).toBe(3);
+  });
+
+  it("replaces, adds and removes a content field's block", () => {
+    const body = task.fields[1]!;
+    const para = (text: string) => ({ kind: "paragraph", fields: { text } });
+    const other = { kind: "ink", labels: ["sketch"], blocks: [] };
+    const doc = { fields: { title: "A" }, blocks: [{ kind: "content", labels: ["body"], blocks: [para("old")] }, other] };
+    expect(applyBlocks(doc, body, [para("new")]).blocks).toEqual([
+      { kind: "content", labels: ["body"], blocks: [para("new")] },
+      other,
+    ]);
+    expect(applyBlocks(doc, body, []).blocks).toEqual([other]);
+    expect(applyBlocks({ fields: {}, blocks: [] }, body, [para("x")]).blocks).toEqual([
+      { kind: "content", labels: ["body"], blocks: [para("x")] },
+    ]);
+    expect(doc.blocks[0]?.blocks).toEqual([para("old")]);
   });
 
   it("parses inputs into the field's encoding", () => {

@@ -51,6 +51,7 @@ impl Writer {
     /// Store `bytes` as a new asset called `filename`.
     pub fn put_asset(&self, filename: &str, bytes: Vec<u8>) -> Result<Asset> {
         check_filename(filename)?;
+        let _w = self.write_lock();
         let _inner = self.lock();
         let asset = Asset {
             id: ulid::Ulid::new().to_string(),
@@ -89,6 +90,7 @@ impl Writer {
 
     /// Delete asset `id`, unless a note or type file names it.
     pub fn delete_asset(&self, id: &str) -> Result<Asset> {
+        let _w = self.write_lock();
         let _inner = self.lock();
         let asset = self.find_asset(id).ok_or_else(|| missing(id))?;
         let by = self.files_naming(id)?;

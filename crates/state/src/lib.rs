@@ -1,9 +1,11 @@
-//! `.vault/state.db`: version history, trash, encrypted secrets, API tokens and task run logs.
+//! `.vault/state.db`: version history, trash, encrypted secrets, API tokens, task run logs and the
+//! queue of `after_*` handler jobs.
 //!
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
 mod auth;
 mod history;
+mod jobs;
 mod runs;
 mod secrets;
 
@@ -15,6 +17,7 @@ use rusqlite::Connection;
 
 pub use auth::{Scope, TokenInfo};
 pub use history::{Author, PrunePolicy, TrashEntry, Version};
+pub use jobs::{HandlerJob, JobStatus};
 pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{SecretInfo, SecretKey, key_file_path};
 
@@ -82,7 +85,7 @@ pub struct State {
     clock: Arc<dyn Clock>,
 }
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -147,6 +150,20 @@ CREATE TABLE task_runs (
 CREATE INDEX task_runs_task ON task_runs (task, id);
 ";
 
+/// What version 2 adds: the durable queue of `after_*` handler jobs (D9).
+const SCHEMA_V2: &str = "
+CREATE TABLE handler_jobs (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    payload   TEXT NOT NULL,
+    queued_ms INTEGER NOT NULL,
+    status    TEXT NOT NULL DEFAULT 'queued',
+    ended_ms  INTEGER,
+    message   TEXT,
+    log       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX handler_jobs_status ON handler_jobs (status, id);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -189,9 +206,12 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0 => {
+        0 | 1 => {
             let tx = conn.transaction()?;
-            tx.execute_batch(SCHEMA)?;
+            if version == 0 {
+                tx.execute_batch(SCHEMA)?;
+            }
+            tx.execute_batch(SCHEMA_V2)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

@@ -667,6 +667,18 @@ handler "after_create" {
 }
 ```
 
+A handler function takes one `Value`, the note as `{ id, type, event, version, note }`, where `note` is `{ fields, blocks }` and `version` is `null` for a note being created. What it returns:
+
+| Event | Return |
+|-------|--------|
+| `before_create`, `before_update` | A note body, `{ fields, blocks }` or a whole note, replaces the note. A body without `blocks` keeps the note's blocks. `null` or unit leaves the note as it is. `Err(message)` rejects the save with `message` |
+| `before_delete` | `Err(message)` rejects the delete. Anything else lets it go ahead |
+| `after_*` | Ignored, except that `Err(message)` records the run as failed |
+
+Only a handler writes a `computed` field. A change a handler makes through `vault::create`, `vault::update` or `vault::delete` goes through the write path again and runs that note's handlers. In a `before_*` handler, the change joins the write in progress and commits with it. A chain of handler runs, each set off by the one before, stops at a depth of 8 runs with an error that names the chain and any cycle in it.
+
+A schema change can name a migration: a function, `migrate` by default, of a script in `scripts/`. It takes each note of the type in the same form, after any renames and defaults, and returns the note body to write, or `null` to leave the note. It cannot change other notes.
+
 ## Note files
 
 `notes/<type>/<ULID>.wcl` holds one note of type `<type>`. The note's id is the ULID in the file name. A note file holds, in this order:

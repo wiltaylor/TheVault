@@ -56,6 +56,23 @@ export function applyEdits(doc: NoteDoc, edits: Record<string, Json | undefined>
 }
 
 /**
+ * `doc` with compound field `f` holding `blocks`: the field's block is replaced in place, added
+ * when it was missing, or removed when `blocks` is empty.
+ */
+export function applyBlocks(doc: NoteDoc, f: FieldDef, blocks: Block[]): NoteDoc {
+  const at = doc.blocks.findIndex((b) => b.kind === f.kind && b.labels?.[0] === f.name);
+  const next = [...doc.blocks];
+  if (blocks.length === 0) {
+    if (at >= 0) next.splice(at, 1);
+  } else {
+    const old = next[at];
+    if (old) next[at] = { ...old, blocks };
+    else next.push({ kind: f.kind, labels: [f.name], blocks });
+  }
+  return { fields: doc.fields, blocks: next };
+}
+
+/**
  * The fields to compare in a conflict: the title and the type's fields in type order, then any
  * other stored field. `created` and `updated` are the server's, so they are left out.
  */

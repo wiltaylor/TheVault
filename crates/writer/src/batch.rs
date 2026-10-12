@@ -123,7 +123,8 @@ fn is_key_kind(kind: &FieldKind) -> bool {
 impl Writer {
     /// Run `ops` as one write, or as a dry run of one.
     pub fn batch(&self, ops: Vec<Op>, dry_run: bool, author: &Author) -> Result<Report> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         let mut prepared: Vec<Result<Prepared>> = ops
             .into_iter()
             .map(|op| {
@@ -181,7 +182,7 @@ impl Writer {
         let result = if changes.is_empty() {
             Ok(Vec::new())
         } else {
-            self.apply_with(&mut inner, changes, &|| Ok(()), author, Vec::new(), dry_run)
+            self.apply_with(inner, changes, &|| Ok(()), author, Vec::new(), dry_run)
         };
 
         match result {

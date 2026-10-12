@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use state::{
-    Author, Clock, Error, PrunePolicy, RunOutcome, Scope, SecretKey, State, key_file_path,
+    Author, Clock, Error, JobStatus, PrunePolicy, RunOutcome, Scope, SecretKey, State,
+    key_file_path,
 };
 use tempfile::TempDir;
 
@@ -589,4 +590,65 @@ fn read_db_bytes(dir: &TempDir) -> Vec<u8> {
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn handler_jobs_stay_queued_until_they_finish_and_failures_are_kept() {
+    let dir = TempDir::new().unwrap();
+    let state = open(&dir);
+    let ids = state
+        .queue_jobs(&["one".to_owned(), "two".to_owned()])
+        .unwrap();
+    assert_eq!(ids.len(), 2);
+    drop(state);
+
+    // The queue survives a restart.
+    let state = open(&dir);
+    let queued = state.queued_jobs().unwrap();
+    let payloads: Vec<&str> = queued.iter().map(|j| j.payload.as_str()).collect();
+    assert_eq!(payloads, ["one", "two"]);
+    assert!(queued.iter().all(|j| j.status == JobStatus::Queued));
+
+    state.finish_job(ids[0], Ok(()), "").unwrap();
+    state
+        .finish_job(ids[1], Err("it broke".into()), "a log line\n")
+        .unwrap();
+    assert!(state.queued_jobs().unwrap().is_empty());
+    let failed = state.failed_jobs().unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].status, JobStatus::Failed("it broke".into()));
+    assert_eq!(failed[0].log, "a log line\n");
+    assert!(matches!(
+        state.finish_job(ids[1], Ok(()), ""),
+        Err(Error::Corrupt(_))
+    ));
+
+    let refused = state.record_failed_job("three", "too deep").unwrap();
+    assert_eq!(state.failed_jobs().unwrap()[1].id, refused);
+    assert!(state.queued_jobs().unwrap().is_empty());
+}
+
+#[test]
+fn a_version_1_state_db_gains_the_handler_queue() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("state.db");
+    let state = open(&dir);
+    state
+        .record_version(
+            NOTE_A,
+            "task",
+            &Author::Session("s".into()),
+            "title = \"A\"\n",
+        )
+        .unwrap();
+    drop(state);
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("DROP TABLE handler_jobs; PRAGMA user_version = 1;")
+            .unwrap();
+    }
+    let state = open(&dir);
+    assert_eq!(state.history(NOTE_A).unwrap().len(), 1);
+    state.queue_jobs(&["job".to_owned()]).unwrap();
+    assert_eq!(state.queued_jobs().unwrap().len(), 1);
 }

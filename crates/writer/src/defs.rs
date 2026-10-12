@@ -7,6 +7,7 @@
 //! holds is refused.
 
 use std::collections::BTreeMap;
+use std::sync::MutexGuard;
 
 use schema::{Doc, DocBlock, FieldKind, Invalid, Issue, Schema, Taxonomy, Value};
 use state::Author;
@@ -74,7 +75,7 @@ impl Writer {
     /// same commit. Refused when the definitions would not check.
     fn commit_definitions(
         &self,
-        inner: &mut Inner,
+        mut inner: MutexGuard<'_, Inner>,
         files: Vec<(String, Option<String>)>,
         notes: Vec<NoteChange>,
         author: &Author,
@@ -110,10 +111,11 @@ impl Writer {
             inner.schema = schema;
             return Ok(Vec::new());
         }
+        inner.index.set_schema(&schema)?;
         let old = std::mem::replace(&mut inner.schema, schema);
-        inner.index.set_schema(&inner.schema)?;
         let result = self.apply_with(inner, notes, &|| Ok(()), author, changes, false);
         if result.is_err() {
+            let mut inner = self.lock();
             inner.index.set_schema(&old)?;
             inner.schema = old;
         }
@@ -152,7 +154,8 @@ impl Writer {
     /// Templates change no note, so this works on a type that has notes. Returns the block as
     /// stored.
     pub fn put_template(&self, type_name: &str, name: &str, source: &str) -> Result<String> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         if !schema::is_ident(name) {
             return Err(Error::BadRequest(format!(
                 "{name:?} is not a valid template name"
@@ -188,14 +191,14 @@ impl Writer {
         }
         let text = store::to_canonical(&ast);
         let author = Author::Session(crate::ADOPTED_BY.to_owned());
-        self.commit_definitions(&mut inner, vec![(path, Some(text))], Vec::new(), &author)?;
-        drop(inner);
+        self.commit_definitions(inner, vec![(path, Some(text))], Vec::new(), &author)?;
         self.template(type_name, name)
     }
 
     /// Delete template `name` of `type_name`. The `default` template cannot be deleted.
     pub fn delete_template(&self, type_name: &str, name: &str) -> Result<()> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         if name == "default" {
             return Err(Error::BadRequest(
                 "every type needs a `default` template, so it cannot be deleted".to_owned(),
@@ -210,7 +213,7 @@ impl Writer {
         ast.items.remove(n);
         let text = store::to_canonical(&ast);
         let author = Author::Session(crate::ADOPTED_BY.to_owned());
-        self.commit_definitions(&mut inner, vec![(path, Some(text))], Vec::new(), &author)?;
+        self.commit_definitions(inner, vec![(path, Some(text))], Vec::new(), &author)?;
         Ok(())
     }
 
@@ -236,7 +239,8 @@ impl Writer {
         renames: &BTreeMap<String, String>,
         author: &Author,
     ) -> Result<(String, Vec<Saved>)> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         check_name("taxonomy", name)?;
         let path = taxonomy_path(name);
         let text = store::canonical(source, &path)?;
@@ -312,18 +316,15 @@ impl Writer {
                 by: stranded,
             });
         }
-        let saved = self.commit_definitions(
-            &mut inner,
-            vec![(path.clone(), Some(text))],
-            changes,
-            author,
-        )?;
+        let saved =
+            self.commit_definitions(inner, vec![(path.clone(), Some(text))], changes, author)?;
         Ok((self.vault.read_text(&path)?, saved))
     }
 
     /// Delete taxonomy `name`, unless a type's field uses it.
     pub fn delete_taxonomy(&self, name: &str) -> Result<()> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         if inner.schema.taxonomy(name).is_none() {
             return Err(missing_taxonomy(name));
         }
@@ -348,7 +349,7 @@ impl Writer {
         }
         let author = Author::Session(crate::ADOPTED_BY.to_owned());
         self.commit_definitions(
-            &mut inner,
+            inner,
             vec![(taxonomy_path(name), None)],
             Vec::new(),
             &author,
@@ -407,6 +408,7 @@ impl Writer {
 
     /// Create or replace `scripts/<name>.ws`, stored as sent.
     pub fn put_script(&self, name: &str, source: &str) -> Result<String> {
+        let _w = self.write_lock();
         let _inner = self.lock();
         check_name("script", name)?;
         self.vault
@@ -416,6 +418,7 @@ impl Writer {
 
     /// Delete `scripts/<name>.ws`, unless a type's handler or a task names it.
     pub fn delete_script(&self, name: &str) -> Result<()> {
+        let _w = self.write_lock();
         let inner = self.lock();
         self.read_script(name)?;
         let mut by: Vec<String> = inner
@@ -532,7 +535,8 @@ impl Writer {
         base: Option<&str>,
         author: &Author,
     ) -> Result<Saved> {
-        let mut inner = self.lock();
+        let _w = self.write_lock();
+        let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         let path = note_path(&type_name, id);
         let submitted = Input::Wcl(source.to_owned()).parse(&path)?;
@@ -574,7 +578,7 @@ impl Writer {
         }
         let change = self.prepare_put(&inner, id, &type_name, doc, Some(&old), author)?;
         let check = || self.check_base(id, &type_name, &old, base);
-        self.apply(&mut inner, vec![change], &check, author)
+        self.apply(inner, vec![change], &check, author)
             .map(crate::first)
     }
 }

@@ -74,6 +74,11 @@ pub fn finish() -> Option<Run> {
     RUN.with(|r| r.borrow_mut().take())
 }
 
+/// Look at the current run without changing it, or `None` outside one.
+pub fn peek<T>(f: impl FnOnce(&Run) -> T) -> Option<T> {
+    RUN.with(|r| r.borrow().as_ref().map(f))
+}
+
 /// Use the current run. Host functions only run inside one, so its absence is a host bug.
 pub fn with<T>(f: impl FnOnce(&mut Run) -> Result<T, HostError>) -> Result<T, HostError> {
     RUN.with(|r| match r.borrow_mut().as_mut() {

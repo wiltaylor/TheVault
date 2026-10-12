@@ -33,7 +33,7 @@ struct Args {
     test_clock: Option<String>,
 }
 
-/// Script worker threads, shared by scheduled tasks.
+/// Script worker threads for scheduled tasks.
 const SCRIPT_WORKERS: usize = 4;
 
 fn main() -> anyhow::Result<()> {
@@ -59,12 +59,16 @@ fn main() -> anyhow::Result<()> {
         clock.clone(),
     )
     .context("opening state.db")?;
+    let handlers = script::Handlers::new(script::Limits::default());
     let writer = Arc::new(
         writer::Writer::open(vault, state)
             .context("loading the vault")?
-            .with_clock(clock.clone()),
+            .with_clock(clock.clone())
+            .with_hooks(handlers.hooks()),
     );
-    // The script host's HTTP client blocks, so it is made outside the async runtime.
+    handlers.start(&writer);
+    // The script hosts' HTTP clients block, so they are made outside the async runtime. Tasks
+    // change notes through the writer, so a task's changes run handlers too.
     let host = Arc::new(script::Host::new(
         writer.clone(),
         SCRIPT_WORKERS,
