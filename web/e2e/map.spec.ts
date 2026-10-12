@@ -436,3 +436,100 @@ test("an image map view shows the image, and a dragged pin keeps its new pixel c
   expectNear(await centre(map.getByRole("button", { name: `Desk ${tag}` })), to);
   expect(seen).toEqual([]);
 });
+
+test("a pin dragged over a stale version opens the conflict view and loses neither save", async ({ page, admin, baseURL }) => {
+  const room = await ensureRoom(admin);
+  const tag = token();
+  const desk = await create(admin, room.name, { title: `Desk ${tag}`, tag, desk: { x: 100, y: 50 } });
+  const note = await mapPage(admin, `Clash ${tag}`, `from ${room.name} where tag == "${tag}"`, "desk");
+
+  await standIn(page, baseURL!);
+  await logIn(page, `/notes/${note.id}`);
+  const map = page.getByTestId("query-view").getByTestId("map");
+  const pin = map.getByRole("button", { name: `Desk ${tag}` });
+  await expect(pin).toBeVisible();
+  const f = await frame(map);
+
+  // Start the drag, then save the note elsewhere before the drop.
+  const from = await centre(pin);
+  const to = { x: from.x + 60, y: from.y + 40 };
+  const loaded = page.waitForResponse((r) => r.url().endsWith(`/api/notes/${desk.id}`) && r.request().method() === "GET");
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 20, from.y + 10, { steps: 4 });
+  await loaded;
+  const stored = (await (await admin.get(`/api/notes/${desk.id}`)).json()) as {
+    version: string;
+    note: { fields: Record<string, unknown>; blocks: unknown[] };
+  };
+  const res = await admin.put(`/api/notes/${desk.id}`, {
+    data: { note: { ...stored.note, fields: { ...stored.note.fields, title: `Desk ${tag} renamed` } }, base_version: stored.version },
+  });
+  expect(res.status(), await res.text()).toBe(200);
+  const rejected = page.waitForResponse((r) => r.request().method() === "PUT" && r.url().endsWith(`/api/notes/${desk.id}`));
+  await page.mouse.move(to.x, to.y, { steps: 4 });
+  await page.mouse.up();
+  expect((await rejected).status()).toBe(409);
+
+  const [mx, my] = toMap(f, to);
+  const expected = { x: Math.round(mx * 10) / 10, y: Math.round((IMAGE_HEIGHT - my) * 10) / 10 };
+  const conflict = page.getByTestId("conflict-view");
+  await expect(conflict).toBeVisible();
+  const row = conflict.locator('tr[data-field="desk"]');
+  await expect(row.getByTestId("conflict-mine")).toHaveText(`x: ${expected.x}, y: ${expected.y}`);
+  await expect(row.getByTestId("conflict-stored")).toHaveText("x: 100, y: 50");
+  await expect(conflict.locator('tr[data-field="title"]').getByTestId("conflict-stored")).toHaveText(`Desk ${tag} renamed`);
+  // The other save is not lost: the note keeps it until the user chooses, and the pin keeps the move.
+  expect(await fields(admin, desk.id)).toMatchObject({ title: `Desk ${tag} renamed`, desk: { x: 100, y: 50 } });
+  // The conflict view sits above the map and moves it down the page, so place the pin by the map.
+  expectNear(await centre(pin), toScreen(await frame(map), [expected.x, IMAGE_HEIGHT - expected.y]));
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  await conflict.getByRole("button", { name: "Save my version" }).click();
+  await expect(conflict).toHaveCount(0);
+  await expect.poll(async () => (await fields(admin, desk.id)).desk).toEqual(expected);
+  expectNear(await centre(pin), toScreen(await frame(map), [expected.x, IMAGE_HEIGHT - expected.y]));
+});
+
+test("keeping the stored version after a stale pin drag puts the pin back", async ({ page, admin, baseURL }) => {
+  const room = await ensureRoom(admin);
+  const tag = token();
+  const desk = await create(admin, room.name, { title: `Desk ${tag}`, tag, desk: { x: 100, y: 50 } });
+  const note = await mapPage(admin, `Keep ${tag}`, `from ${room.name} where tag == "${tag}"`, "desk");
+
+  await standIn(page, baseURL!);
+  await logIn(page, `/notes/${note.id}`);
+  const map = page.getByTestId("query-view").getByTestId("map");
+  const pin = map.getByRole("button", { name: `Desk ${tag}` });
+  await expect(pin).toBeVisible();
+  const f = await frame(map);
+
+  const from = await centre(pin);
+  const loaded = page.waitForResponse((r) => r.url().endsWith(`/api/notes/${desk.id}`) && r.request().method() === "GET");
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 20, from.y + 10, { steps: 4 });
+  await loaded;
+  // Someone else moves the pin meanwhile.
+  const stored = (await (await admin.get(`/api/notes/${desk.id}`)).json()) as {
+    version: string;
+    note: { fields: Record<string, unknown>; blocks: unknown[] };
+  };
+  const res = await admin.put(`/api/notes/${desk.id}`, {
+    data: { note: { ...stored.note, fields: { ...stored.note.fields, desk: { x: 300, y: 200 } } }, base_version: stored.version },
+  });
+  expect(res.status(), await res.text()).toBe(200);
+  await page.mouse.move(from.x + 60, from.y + 40, { steps: 4 });
+  await page.mouse.up();
+
+  const conflict = page.getByTestId("conflict-view");
+  await expect(conflict).toBeVisible();
+  await conflict.getByRole("button", { name: "Keep the stored version" }).click();
+  await expect(conflict).toHaveCount(0);
+  expect((await fields(admin, desk.id)).desk).toEqual({ x: 300, y: 200 });
+  const back = toScreen(f, [300, IMAGE_HEIGHT - 200]);
+  await expect.poll(async () => {
+    const at = await centre(pin);
+    return Math.hypot(at.x - back.x, at.y - back.y);
+  }).toBeLessThanOrEqual(1.5);
+});
