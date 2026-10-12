@@ -208,7 +208,7 @@ The CLI adds no behaviour of its own except these, as SPEC.md allows (D25, D28, 
 | Ticket | Gap |
 |---|---|
 | #39 | The web UI cannot create a note (closed) |
-| #40 | Types, taxonomies and assets cannot be deleted from the UI |
+| #40 | Types, taxonomies and assets cannot be deleted from the UI (closed) |
 | #41 | No CLI command for `POST /api/query/text` (closed) |
 | #42 | The canvas query view kind is not rendered |
 | #43 | Query views do not re-run after a note is saved |
