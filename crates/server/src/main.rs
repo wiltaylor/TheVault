@@ -8,6 +8,8 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use clap::Parser;
 
+mod web;
+
 #[derive(Parser)]
 #[command(name = "vault-server", about = "Serve a TheVault vault over HTTP")]
 struct Args {
@@ -18,12 +20,21 @@ struct Args {
     /// The address to listen on. Port 0 picks a free port.
     #[arg(long, default_value = "127.0.0.1:8080")]
     listen: SocketAddr,
+
+    /// A folder holding the built web client to serve outside `/api`, such as `web/dist`.
+    #[arg(long)]
+    web: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     if !args.vault.is_dir() {
         bail!("vault folder {} does not exist", args.vault.display());
+    }
+    if let Some(web) = &args.web
+        && !web.join("index.html").is_file()
+    {
+        bail!("web folder {} has no index.html", web.display());
     }
     let vault = store::Vault::init(&args.vault)
         .with_context(|| format!("opening vault {}", args.vault.display()))?;
@@ -40,10 +51,14 @@ fn main() -> anyhow::Result<()> {
     // The script host's HTTP client blocks, so it is made and dropped outside the runtime.
     tokio::runtime::Runtime::new()
         .context("starting the async runtime")?
-        .block_on(serve(args.listen, writer))
+        .block_on(serve(args.listen, args.web, writer))
 }
 
-async fn serve(listen: SocketAddr, writer: Arc<writer::Writer>) -> anyhow::Result<()> {
+async fn serve(
+    listen: SocketAddr,
+    web: Option<PathBuf>,
+    writer: Arc<writer::Writer>,
+) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;
@@ -59,7 +74,12 @@ async fn serve(listen: SocketAddr, writer: Arc<writer::Writer>) -> anyhow::Resul
     stdout.flush()?;
     drop(stdout);
 
-    axum::serve(listener, api::router(writer))
+    let mut app = api::router(writer);
+    if let Some(web) = web {
+        let root = Arc::new(web);
+        app = app.fallback(move |req| web::serve(root.clone(), req));
+    }
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())

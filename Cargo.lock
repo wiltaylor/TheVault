@@ -89,6 +89,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "query",
+ "schema",
  "serde",
  "serde_json",
  "state",
@@ -2860,6 +2861,7 @@ name = "writer"
 version = "0.1.0"
 dependencies = [
  "index",
+ "rusqlite",
  "schema",
  "serde_json",
  "sha2",
@@ -2868,6 +2870,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "ulid",
+ "wcl_lang",
 ]
 
 [[package]]

@@ -12,6 +12,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@solidjs/router": "^1.0.0",
     "solid-js": "~1.9.17"
   },
   "devDependencies": {

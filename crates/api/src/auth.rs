@@ -32,9 +32,15 @@ pub const SESSION_COOKIE: &str = "tv_session";
 /// How long a session lasts after login.
 const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// Paths whose non-read requests need `write`: notes and assets (D11). Any other change needs
-/// `admin`, so a new endpoint is admin-only until it is listed here.
-const WRITE_PATHS: [&str; 3] = ["/api/notes", "/api/trash", "/api/assets"];
+/// Paths whose non-read requests need `write`: notes and assets, and batches and upserts of notes
+/// (D11). Any other change needs `admin`, so a new endpoint is admin-only until it is listed here.
+const WRITE_PATHS: [&str; 5] = [
+    "/api/notes",
+    "/api/trash",
+    "/api/assets",
+    "/api/batch",
+    "/api/upsert",
+];
 
 /// Paths whose POST only reads: running a query and converting between query text and the
 /// builder's model send the query in the body but change nothing.
@@ -294,6 +300,21 @@ mod tests {
             (Method::GET, "/api/tokens", Some(Scope::Admin)),
             (Method::GET, "/api/secrets/x", Some(Scope::Admin)),
             (Method::POST, "/api/something-new", Some(Scope::Admin)),
+            (Method::POST, "/api/batch", Some(Scope::Write)),
+            (Method::POST, "/api/upsert", Some(Scope::Write)),
+            (Method::POST, "/api/assets", Some(Scope::Write)),
+            (Method::DELETE, "/api/assets/x", Some(Scope::Write)),
+            (Method::PUT, "/api/notes/x/canvas/board", Some(Scope::Write)),
+            (Method::GET, "/api/schema", Some(Scope::Read)),
+            (Method::GET, "/api/openapi.json", Some(Scope::Read)),
+            (
+                Method::PUT,
+                "/api/types/task/templates/card",
+                Some(Scope::Admin),
+            ),
+            (Method::PUT, "/api/taxonomies/status", Some(Scope::Admin)),
+            (Method::GET, "/api/scripts/x", Some(Scope::Read)),
+            (Method::PUT, "/api/scripts/x", Some(Scope::Admin)),
             (Method::GET, "/anything", Some(Scope::Read)),
         ];
         for (method, path, want) in cases {
