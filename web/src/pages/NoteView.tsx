@@ -1,4 +1,4 @@
-import { useParams } from "@solidjs/router";
+import { A, useNavigate, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, on } from "solid-js";
 import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, api } from "../api";
 import { ConflictView } from "../components/ConflictView";
@@ -36,6 +36,7 @@ function message(e: unknown): string {
 /** A note laid out by its type's default template, a tab per template tab (D14). */
 export function NoteView() {
   const params = useParams();
+  const navigate = useNavigate();
   const [note, setNote] = createSignal<Note | null>(null);
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const [tab, setTab] = createSignal(0);
@@ -134,6 +135,21 @@ export function NoteView() {
     for (const { field, blocks } of blockEdits.values()) doc = applyBlocks(doc, field, blocks);
     for (const { field, block } of Object.values(inkEdits())) doc = applyCompound(doc, field, block);
     void save(doc, n.version);
+  }
+
+  async function remove() {
+    const n = note();
+    if (!n || !confirm("Move this note to the trash?")) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api.deleteNote(n.id, n.version);
+      navigate(`/types/${n.type}`);
+    } catch (e) {
+      setSaveError(message(e));
+    } finally {
+      setSaving(false);
+    }
   }
 
   function keepStored() {
@@ -251,9 +267,17 @@ export function NoteView() {
                 <Show
                   when={editing()}
                   fallback={
-                    <button type="button" onClick={startEditing}>
-                      Edit
-                    </button>
+                    <div class="actions">
+                      <A href={`/notes/${n().id}/history`} class="button">
+                        History
+                      </A>
+                      <button type="button" class="danger" onClick={() => void remove()} disabled={saving()}>
+                        Delete
+                      </button>
+                      <button type="button" onClick={startEditing}>
+                        Edit
+                      </button>
+                    </div>
                   }
                 >
                   <div class="actions">

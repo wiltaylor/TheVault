@@ -32,7 +32,9 @@ use std::time::Duration;
 use schema::{Doc, Handler, Schema};
 use serde_json::{Value as Json, json};
 use state::Author;
-use writer::{Event, Hooks, Input, Migration, NoteChange, Saved, Writer, doc_to_json, note_path};
+use writer::{
+    Event, Hooks, Input, Migration, NoteChange, Saved, ScriptRole, Writer, doc_to_json, note_path,
+};
 
 use crate::{Host, Job, Kind, Limits, Vault, current_job};
 
@@ -463,6 +465,18 @@ impl Hooks for HandlerHooks {
         doc: &Doc,
     ) -> Result<Option<Doc>, String> {
         self.0.migrate(type_name, migration, id, doc)
+    }
+
+    fn check_script(&self, role: ScriptRole, name: &str, source: &str) -> Result<(), String> {
+        let kind = match role {
+            ScriptRole::Before => Kind::Before,
+            ScriptRole::After => Kind::After,
+            ScriptRole::Task => Kind::Task,
+        };
+        self.0
+            .after
+            .check(kind, name, source)
+            .map_err(|e| e.to_string())
     }
 }
 

@@ -15,9 +15,16 @@ use store::Change;
 use wcl_lang::ast::{Expr, Item, Source};
 
 use crate::{
-    Error, Event, Inner, Input, NoteChange, Result, Saved, Writer, created_of, note, note_path,
-    pairs, time, type_path,
+    Error, Event, Inner, Input, NoteChange, Result, Saved, ScriptRole, Writer, created_of, note,
+    note_path, pairs, time, type_path,
 };
+
+/// Why a script would not compile in one of the ways the vault runs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptProblem {
+    pub role: ScriptRole,
+    pub message: String,
+}
 
 /// The vault path of taxonomy `name`.
 pub fn taxonomy_path(name: &str) -> String {
@@ -414,6 +421,48 @@ impl Writer {
         self.vault
             .commit(vec![Change::write(script_path(name), source.as_bytes())])?;
         Ok(source.to_owned())
+    }
+
+    /// Why `source` would not compile as script `name`, once for each way the vault runs it: as
+    /// a `before_*` or `after_*` handler of some type, or as a task. A script nothing names yet is
+    /// checked as a task. Empty when it compiles every way it runs. Nothing is stored.
+    pub fn script_problems(&self, name: &str, source: &str) -> Result<Vec<ScriptProblem>> {
+        check_name("script", name)?;
+        let mut roles: Vec<ScriptRole> = self.read_index(|_, schema| {
+            schema
+                .types()
+                .flat_map(|t| t.handlers.iter())
+                .filter(|h| h.script == name)
+                .map(|h| {
+                    if h.event.starts_with("before_") {
+                        ScriptRole::Before
+                    } else {
+                        ScriptRole::After
+                    }
+                })
+                .collect()
+        });
+        for (_, text) in self.definitions("tasks").unwrap_or_default() {
+            if let Ok(doc) = Doc::parse(&text, "task.wcl")
+                && doc.field("script").and_then(Value::as_str) == Some(name)
+            {
+                roles.push(ScriptRole::Task);
+            }
+        }
+        if roles.is_empty() {
+            roles.push(ScriptRole::Task);
+        }
+        roles.sort();
+        roles.dedup();
+        Ok(roles
+            .into_iter()
+            .filter_map(|role| {
+                self.hooks
+                    .check_script(role, name, source)
+                    .err()
+                    .map(|message| ScriptProblem { role, message })
+            })
+            .collect())
     }
 
     /// Delete `scripts/<name>.ws`, unless a type's handler or a task names it.
