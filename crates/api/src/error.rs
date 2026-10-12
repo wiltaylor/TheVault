@@ -77,6 +77,14 @@ impl From<Error> for ApiError {
                         .collect::<Vec<_>>(),
                 }),
             ),
+            Error::TypeHasNotes { type_name, notes } => (
+                StatusCode::CONFLICT,
+                json!({ "error": "type_in_use", "type": type_name, "notes": notes }),
+            ),
+            Error::PlanStale(plan) => (
+                StatusCode::CONFLICT,
+                json!({ "error": "plan_stale", "plan": crate::types::plan_json(&plan, false) }),
+            ),
             Error::UnknownType(t) => (
                 StatusCode::BAD_REQUEST,
                 json!({ "error": "unknown_type", "type": t }),

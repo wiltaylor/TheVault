@@ -1,13 +1,36 @@
-import { test as base } from "@playwright/test";
+import { type APIRequestContext, type Page, test as base, expect, request } from "@playwright/test";
 
-export const test = base.extend({
+function env(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is not set; global setup did not run`);
+  }
+  return value;
+}
+
+export const password = () => env("E2E_PASSWORD");
+
+export const test = base.extend<{ admin: APIRequestContext }>({
   baseURL: async ({}, use) => {
-    const url = process.env.E2E_BASE_URL;
-    if (!url) {
-      throw new Error("E2E_BASE_URL is not set; global setup did not run");
-    }
-    await use(url);
+    await use(env("E2E_BASE_URL"));
+  },
+  // The API as an agent with the admin token sees it, for writes the UI does not make.
+  admin: async ({}, use) => {
+    const ctx = await request.newContext({
+      baseURL: env("E2E_BASE_URL"),
+      extraHTTPHeaders: { Authorization: `Bearer ${env("E2E_ADMIN_TOKEN")}` },
+    });
+    await use(ctx);
+    await ctx.dispose();
   },
 });
+
+/** Log in through the login page and wait for the app. */
+export async function logIn(page: Page, path = "/") {
+  await page.goto(`/login?next=${encodeURIComponent(path)}`);
+  await page.getByLabel("Password").fill(password());
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page.getByRole("navigation", { name: "Types" })).toBeVisible();
+}
 
 export { expect } from "@playwright/test";

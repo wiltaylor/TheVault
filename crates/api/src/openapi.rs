@@ -93,7 +93,27 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/trash/{id}/restore",
         "Bring a note back from the trash",
     ),
+    (
+        "GET",
+        "/api/types",
+        "Every type with its fields and templates",
+    ),
     ("GET", "/api/types/{name}", "Read a type definition"),
+    (
+        "DELETE",
+        "/api/types/{name}",
+        "Delete a type that has no notes",
+    ),
+    (
+        "POST",
+        "/api/types/{name}/change",
+        "Plan a schema change, or apply a plan by its token",
+    ),
+    (
+        "GET",
+        "/api/flagged",
+        "Notes holding data their type no longer describes",
+    ),
     (
         "PUT",
         "/api/types/{name}",

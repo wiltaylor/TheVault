@@ -8,6 +8,8 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use clap::Parser;
 
+mod web;
+
 #[derive(Parser)]
 #[command(name = "vault-server", about = "Serve a TheVault vault over HTTP")]
 struct Args {
@@ -18,6 +20,10 @@ struct Args {
     /// The address to listen on. Port 0 picks a free port.
     #[arg(long, default_value = "127.0.0.1:8080")]
     listen: SocketAddr,
+
+    /// A folder holding the built web client to serve outside `/api`, such as `web/dist`.
+    #[arg(long)]
+    web: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -25,6 +31,11 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     if !args.vault.is_dir() {
         bail!("vault folder {} does not exist", args.vault.display());
+    }
+    if let Some(web) = &args.web
+        && !web.join("index.html").is_file()
+    {
+        bail!("web folder {} has no index.html", web.display());
     }
     let vault = store::Vault::init(&args.vault)
         .with_context(|| format!("opening vault {}", args.vault.display()))?;
@@ -47,7 +58,12 @@ async fn main() -> anyhow::Result<()> {
     stdout.flush()?;
     drop(stdout);
 
-    axum::serve(listener, api::router(Arc::new(writer)))
+    let mut app = api::router(Arc::new(writer));
+    if let Some(web) = args.web {
+        let root = Arc::new(web);
+        app = app.fallback(move |req| web::serve(root.clone(), req));
+    }
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())

@@ -76,7 +76,7 @@ pub fn block_to_json(b: &DocBlock) -> Json {
     Json::Object(out)
 }
 
-/// The JSON form of one value. Records are objects.
+/// The JSON form of one value, as [`doc_to_json`] writes it.
 pub fn value_to_json(v: &Value) -> Json {
     match v {
         Value::Str(s) => Json::String(s.clone()),
