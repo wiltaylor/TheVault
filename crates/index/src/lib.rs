@@ -16,8 +16,8 @@
 //!
 //! | Table | One row per |
 //! |-------|-------------|
-//! | `notes` | Note: id, type, path, title, created, updated, flagged, and its fields as JSON |
-//! | `field_values` | Scalar inside a field value, including `title`, `created` and `updated` |
+//! | `notes` | Note: id, type, path, title, created, updated, both again as Unix time, flagged, and its fields as JSON |
+//! | `field_values` | Scalar inside a field value, including `title`, `created` and `updated`, with the type of its note |
 //! | `links` | Note reference in a field, or mention in inline text, from `src` to `dst` |
 //! | `terms` | Taxonomy term, with its parent, depth and display position |
 //! | `term_ancestors` | Pair of a term and itself or a term above it, for `under()` |

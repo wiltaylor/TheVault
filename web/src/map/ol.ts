@@ -43,6 +43,8 @@ export interface MapOptions {
   draggable?: boolean;
   /** A click on the map away from any pin, with the stored point under it. */
   onPick?: (value: Json) => void;
+  /** A pin starting to move, before it is dropped. */
+  onDragStart?: (id: string) => void;
   /** A pin dropped at a new point. */
   onMove?: (id: string, value: Json) => void;
   /** A pin clicked without being dragged. */
@@ -151,6 +153,7 @@ export function createMap(opts: MapOptions): MapHandle {
       const move = (ev: PointerEvent) => {
         if (!opts.draggable) return;
         if (!moved && Math.hypot(ev.clientX - down.clientX, ev.clientY - down.clientY) < DRAG_SLOP) return;
+        if (!moved) opts.onDragStart?.(id);
         moved = true;
         dragging = id;
         entry()?.overlay.setPosition(map.getCoordinateFromPixel(map.getEventPixel(ev)));

@@ -1004,6 +1004,251 @@ fn a_model_built_in_the_ui_becomes_text() {
     assert!(matches!(empty.to_text(), Err(ModelError::Invalid(_))));
 }
 
+/// Every page of `text`, from [`query::run`] or from the note-by-note [`query::run_scan`].
+fn every_page(
+    f: &Fixture,
+    text: &str,
+    this: Option<&str>,
+    size: usize,
+    scan: bool,
+) -> Result<Vec<query::Page>, Error> {
+    let q = query::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+    let mut ctx = f.ctx();
+    if let Some(t) = this {
+        ctx = ctx.with_this(t);
+    }
+    let mut pages = Vec::new();
+    let mut cursor = None;
+    loop {
+        let req = PageRequest {
+            cursor: cursor.take(),
+            size,
+        };
+        let page = if scan {
+            query::run_scan(&q, &ctx, &req)?
+        } else {
+            query::run(&q, &ctx, &req)?
+        };
+        let next = page.next.clone();
+        pages.push(page);
+        match next {
+            Some(c) if pages.len() < 100 => cursor = Some(c),
+            _ => return Ok(pages),
+        }
+    }
+}
+
+/// Pages compared on everything but the cursor text, which each way of running encodes itself.
+fn same_pages(a: &[query::Page], b: &[query::Page]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x.rows == y.rows
+                && x.total == y.total
+                && x.groups == y.groups
+                && x.next.is_some() == y.next.is_some()
+        })
+}
+
+/// Queries beyond the table that probe the planner's edges: builtins, negation, flipped sides,
+/// mixed sort directions, missing values, limits and groups.
+fn edge_queries() -> Vec<(&'static str, Option<&'static str>)> {
+    vec![
+        ("from * sort created desc", None),
+        ("from * sort updated", None),
+        ("from * sort title desc", None),
+        ("from * sort type, title", None),
+        ("from * group by type", None),
+        ("from * where title == \"Loose end\"", None),
+        ("from * where title < \"G\" sort title", None),
+        (
+            "from * where updated > \"2026-10-04\" sort updated desc",
+            None,
+        ),
+        ("from * where id == \"01JB8Z4K2MQ7V3X9T5R6W8Y2T3\"", None),
+        ("from task where 3 < estimate", None),
+        ("from task where estimate == 3.0", None),
+        ("from task where !(done || estimate > 2)", None),
+        (
+            "from task where !(estimate >= 1 && has(tags, \"code\"))",
+            None,
+        ),
+        (
+            "from task where due < \"2026-10-15\" || has(topics, \"Life\")",
+            None,
+        ),
+        ("from task where starts_at >= \"2026-10-12\"", None),
+        ("from task where due == \"2026-10-12T00:00:00Z\"", None),
+        ("from task where project != this", Some(P1)),
+        (
+            "from task where !under(status, \"Active\") sort status desc",
+            None,
+        ),
+        ("from task where !has(tags, \"code\") sort title", None),
+        ("from task sort status desc, due desc", None),
+        ("from task sort score desc, due", None),
+        ("from task sort project", None),
+        ("from task sort title limit 3", None),
+        ("from task group by project", None),
+        ("from task sort due desc group by done", None),
+        ("from task group by status limit 3", None),
+        (
+            "from task where status != \"Done\" sort due desc limit 3",
+            None,
+        ),
+        (
+            "from project where has(tasks, \"01JB8Z4K2MQ7V3X9T5R6W8Y2T4\")",
+            None,
+        ),
+        (
+            "from * where under(topics, \"Tech\") sort title desc limit 1",
+            None,
+        ),
+        ("from task where done == true", None),
+        ("from task where true", None),
+        ("from task where !false && estimate * 1 > 0", None),
+        ("from task where estimate > \"3\"", None),
+        ("from task where tags == \"code\"", None),
+        ("from task where !done sort updated desc", None),
+        (
+            "from task where has(tags, \"code\") sort created desc",
+            None,
+        ),
+        ("from task where estimate > 0", None),
+        ("from * where updated > \"2026-10-01\"", None),
+    ]
+}
+
+#[test]
+fn the_sql_plan_and_the_note_by_note_scan_agree() {
+    let f = fixture();
+    let mut cases: Vec<(&str, Option<&str>)> = table()
+        .into_iter()
+        .map(|(t, this, _, _)| (t, this))
+        .collect();
+    cases.extend(edge_queries());
+    let mut failures = Vec::new();
+    for (text, this) in cases {
+        for size in [0, 1, 2, 3] {
+            let planned = every_page(&f, text, this, size, false);
+            let scanned = every_page(&f, text, this, size, true);
+            match (planned, scanned) {
+                (Ok(a), Ok(b)) if same_pages(&a, &b) => {}
+                (Err(a), Err(b)) if a.to_string() == b.to_string() => {}
+                (a, b) => failures.push(format!(
+                    "{text} (pages of {size})\n  planned {a:?}\n  scanned {b:?}"
+                )),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n\n"));
+}
+
+#[test]
+fn limits_cursors_and_groups_agree_over_many_notes() {
+    let f = many(200);
+    for text in [
+        "from item sort n limit 120",
+        "from item sort n desc limit 37",
+        "from item where n >= 3 group by n limit 50",
+        "from item where n != 4 sort n desc, title",
+        "from item sort updated desc",
+    ] {
+        for size in [7, 50] {
+            let a = every_page(&f, text, None, size, false).unwrap();
+            let b = every_page(&f, text, None, size, true).unwrap();
+            assert!(same_pages(&a, &b), "{text} (pages of {size})");
+        }
+    }
+}
+
+/// A note may hold the same value twice in a list, and several values below one term. It is
+/// still one result.
+#[test]
+fn a_note_matching_several_list_items_is_one_result() {
+    let mut files = vec![
+        ("taxonomies/topic.wcl".to_owned(), TOPIC.to_owned()),
+        (
+            "types/item.wcl".to_owned(),
+            with_template(
+                "label = \"Item\"\n\nfield tags {\n  kind  = \"list\"\n  items = \"string\"\n}\n\n\
+                 field topics {\n  kind     = \"taxonomy\"\n  taxonomy = \"topic\"\n  multiple = true\n}\n",
+            ),
+        ),
+    ];
+    let lists = [
+        "tags = [\"a\", \"a\", \"b\"]\ntopics = [\"Tech\", \"Tech/Rust\"]\n",
+        "tags = [\"b\"]\ntopics = [\"Life\", \"Tech/Rust\"]\n",
+        "tags = [\"a\"]\ntopics = [\"Life\"]\n",
+        "",
+    ];
+    for (i, fields) in lists.iter().enumerate() {
+        let id = format!("01JB8Z4K2MQ7V3X9T5R6W8Y2M{i}");
+        files.push((
+            format!("notes/item/{id}.wcl"),
+            note(&format!("Item {i}"), "2026-10-02T09:00:00Z", fields),
+        ));
+    }
+    let f = build(&files, lists.len());
+    for text in [
+        "from item where has(tags, \"a\")",
+        "from item where under(topics, \"Tech\") sort title desc",
+        "from item where has(tags, \"a\") && under(topics, \"Tech\")",
+        "from item where under(topics, \"Tech\") group by title",
+        "from item where has(tags, \"b\") sort updated desc",
+        "from item where !has(tags, \"a\")",
+    ] {
+        for size in [0, 1, 2] {
+            let a = every_page(&f, text, None, size, false).unwrap();
+            let b = every_page(&f, text, None, size, true).unwrap();
+            assert!(
+                same_pages(&a, &b),
+                "{text} (pages of {size})\n{a:#?}\n{b:#?}"
+            );
+        }
+    }
+    let ids = ids(&f, "from item where has(tags, \"a\")", None).unwrap();
+    assert_eq!(ids.len(), 2, "{ids:?}");
+}
+
+/// The shapes the S6 benchmark times, against this fixture's fields, must run as SQL: run note
+/// by note they read every note of their types (D33).
+#[test]
+fn the_benchmarked_query_shapes_run_as_sql() {
+    let f = fixture();
+    for text in [
+        "from task where status == \"Active/In progress\" sort due asc",
+        "from task where under(status, \"Active\") && due < \"2026-01-01\" sort due asc",
+        "from task where status == \"Inbox\" && !done sort updated desc",
+        "from task where project == \"01JB8Z4K2MQ7V3X9T5R6W8Y2P1\" sort due asc",
+        "from book where author == \"Kleppmann\" sort title asc",
+        "from book where has(topics, \"Tech\") sort updated desc",
+        "from task where under(topics, \"Tech\") && score >= 4.0 sort score desc",
+        "from * sort updated desc",
+        "from task where estimate > 8 && !done group by status",
+        "from task where project == this && due < today() + days(7)",
+    ] {
+        let q = query::parse(text).unwrap();
+        let ctx = f.ctx().with_this(P1);
+        assert!(
+            query::is_planned(&q, &ctx).unwrap(),
+            "{text} runs note by note"
+        );
+    }
+    // Searches, paths through a reference and closures still run note by note.
+    for text in [
+        "from task search \"importer\"",
+        "from task where project.status == \"Inbox\"",
+        "from task sort project.title",
+        "from task where any(tags, |t| t == \"docs\")",
+    ] {
+        let q = query::parse(text).unwrap();
+        assert!(
+            !query::is_planned(&q, &f.ctx()).unwrap(),
+            "{text} runs as SQL"
+        );
+    }
+}
+
 /// Items whose titles repeat `apple` a varying number of times, so scores both tie and differ.
 fn searchable(n: usize) -> Fixture {
     let mut files = vec![(

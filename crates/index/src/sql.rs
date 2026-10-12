@@ -10,7 +10,7 @@ use crate::rebuild::Failure;
 
 /// Bump when the tables change. An index of another version is dropped and recreated empty, and
 /// the next rebuild fills it.
-const VERSION: i64 = 2;
+const VERSION: i64 = 3;
 
 const TABLES: &str = "
 CREATE TABLE notes (
@@ -20,10 +20,16 @@ CREATE TABLE notes (
   title   TEXT NOT NULL,
   created TEXT,
   updated TEXT,
+  -- created and updated as seconds since the Unix epoch, so they sort in time order.
+  created_at REAL,
+  updated_at REAL,
   flagged INTEGER NOT NULL,
   data    TEXT NOT NULL
 );
-CREATE INDEX notes_by_type ON notes(type);
+CREATE INDEX notes_by_type ON notes(type, id);
+-- Newest first, ties by id: the order of `sort updated desc`, read without sorting.
+CREATE INDEX notes_by_updated ON notes(updated_at DESC, id);
+CREATE INDEX notes_by_created ON notes(created_at DESC, id);
 
 CREATE TABLE field_values (
   note  TEXT NOT NULL,
@@ -34,10 +40,12 @@ CREATE TABLE field_values (
   str   TEXT,
   -- No declared type, so an integer and a real each keep their storage class.
   num,
+  -- The note's type, so a condition on a field of some types reads only the index.
+  type  TEXT NOT NULL,
   PRIMARY KEY (note, field, pos, part)
-);
-CREATE INDEX field_values_by_str ON field_values(field, str);
-CREATE INDEX field_values_by_num ON field_values(field, num);
+) WITHOUT ROWID;
+CREATE INDEX field_values_by_str ON field_values(field, type, str);
+CREATE INDEX field_values_by_num ON field_values(field, type, num);
 
 CREATE TABLE links (
   src   TEXT NOT NULL,
@@ -147,8 +155,9 @@ pub(crate) fn note_path(type_name: &str, id: &str) -> String {
 
 pub(crate) fn insert_note(conn: &Connection, n: &Note) -> Result<()> {
     conn.execute(
-        "INSERT INTO notes (id, type, path, title, created, updated, flagged, data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO notes
+           (id, type, path, title, created, updated, created_at, updated_at, flagged, data)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             n.id,
             n.type_name,
@@ -156,20 +165,31 @@ pub(crate) fn insert_note(conn: &Connection, n: &Note) -> Result<()> {
             n.title,
             n.created,
             n.updated,
+            n.created_at,
+            n.updated_at,
             n.flagged,
             n.data
         ],
     )?;
     let mut values = conn.prepare_cached(
-        "INSERT INTO field_values (note, field, pos, part, kind, str, num)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO field_values (note, field, pos, part, kind, str, num, type)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
     for v in &n.values {
         let num = v.num.map(|n| match n {
             Num::Int(i) => rusqlite::types::Value::Integer(i),
             Num::Real(f) => rusqlite::types::Value::Real(f),
         });
-        values.execute(params![n.id, v.field, v.pos, v.part, v.kind, v.str, num])?;
+        values.execute(params![
+            n.id,
+            v.field,
+            v.pos,
+            v.part,
+            v.kind,
+            v.str,
+            num,
+            n.type_name
+        ])?;
     }
     let mut links = conn.prepare_cached(
         "INSERT INTO links (src, via, field, pos, dst) VALUES (?1, ?2, ?3, ?4, ?5)",

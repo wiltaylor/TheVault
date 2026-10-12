@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import { type Block, type Row, api } from "../api";
 import { CanvasSurface } from "../canvas/CanvasSurface";
+import { changes } from "../changes";
 import { formatValue } from "../components/Render";
 import { VirtualList } from "../components/VirtualList";
 import { type PagedRows, createPagedRows } from "../components/pagedRows";
@@ -165,8 +166,8 @@ function CardsView(props: { view: ViewDef; data: PagedRows; total: number }) {
 
 function Detail(props: { row: Row; view: ViewDef }) {
   const [note] = createResource(
-    () => props.row.id,
-    (id) => api.note(id),
+    () => [props.row.id, changes()] as const,
+    ([id]) => api.note(id),
   );
   return (
     <article class="query-detail" data-testid="query-detail">
@@ -176,7 +177,7 @@ function Detail(props: { row: Row; view: ViewDef }) {
       <TemplateBody
         row={props.row}
         template={viewTemplate(typeDef(props.row.type), props.view.template, "detail")}
-        doc={note.error ? undefined : note()?.note}
+        doc={note.error ? undefined : note.latest?.note}
         tabTitles
       />
     </article>
@@ -264,7 +265,8 @@ function CanvasResultsView(props: { view: ViewDef; data: PagedRows; total: numbe
  * A query view block: one query, shown through its saved views (D8, D33). `this` is the note
  * that holds the block. Every view keeps only what is on screen in the DOM: table, list and cards
  * virtualise, details, map and kanban columns page, calendar and timeline load the dates in view, and
- * canvas draws a bounded number of cards.
+ * canvas draws a bounded number of cards. Every view runs its query again after each note write
+ * this client makes, so a change made in one view shows in the others on the page.
  */
 export function QueryView(props: { block: Block }) {
   const thisId = useThisNote();
@@ -275,6 +277,7 @@ export function QueryView(props: { block: Block }) {
     (cursor, size) => api.query(def().query, cursor, size, thisId),
     () => `${def().query}\u0000${thisId ?? ""}`,
     PAGE_SIZE,
+    changes,
   );
 
   return (

@@ -78,7 +78,7 @@ impl V {
 }
 
 /// A string read as a date or datetime, so `due < "2026-11-01"` compares dates.
-fn str_time(s: &str) -> Option<f64> {
+pub(crate) fn str_time(s: &str) -> Option<f64> {
     time::date(s)
         .map(|d| d as f64 * 86_400.0)
         .or_else(|| time::datetime(s))

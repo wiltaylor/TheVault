@@ -9,6 +9,9 @@ pub(crate) struct Note {
     pub title: String,
     pub created: Option<String>,
     pub updated: Option<String>,
+    /// `created` and `updated` as seconds since the Unix epoch, when they read as datetimes.
+    pub created_at: Option<f64>,
+    pub updated_at: Option<f64>,
     pub flagged: bool,
     /// Every top-level field, as a JSON object in file order.
     pub data: String,
@@ -145,6 +148,8 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
         title,
         created: str_field("created"),
         updated: str_field("updated"),
+        created_at: str_field("created").as_deref().and_then(time::datetime),
+        updated_at: str_field("updated").as_deref().and_then(time::datetime),
         flagged: report.is_flagged(),
         data: data.to_string(),
         values,

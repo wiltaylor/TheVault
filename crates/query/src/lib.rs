@@ -19,6 +19,7 @@
 mod ast;
 mod model;
 mod parser;
+mod plan;
 mod print;
 mod run;
 mod value;
@@ -26,7 +27,9 @@ mod value;
 pub use ast::{BinOp, Dir, Expr, FUNCTIONS, From, Lit, Path, Query, SortKey, UnOp};
 pub use model::{Condition, Group, Item, Join, Model, ModelError, Op, Operand, Order, Sort};
 pub use parser::{ParseError, parse};
-pub use run::{Context, Error, GroupCount, MAX_PAGE, Page, PageRequest, Result, Row, run};
+pub use run::{
+    Context, Error, GroupCount, MAX_PAGE, Page, PageRequest, Result, Row, is_planned, run, run_scan,
+};
 
 /// Text in canonical form: one line, single spaces and only the parentheses that matter.
 pub fn format(text: &str) -> std::result::Result<String, ParseError> {
