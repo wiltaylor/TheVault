@@ -30,8 +30,20 @@ struct Fixture {
     host: Host,
 }
 
+/// A wall-clock limit no test that is not about the limit can reach, however loaded the machine
+/// running the tests is. The tests about the limit set a tight one on the job instead.
+const ROOMY: Duration = Duration::from_secs(600);
+
+/// The default limits with a [`ROOMY`] wall-clock limit.
+fn roomy() -> Limits {
+    Limits {
+        timeout: ROOMY,
+        ..Limits::default()
+    }
+}
+
 fn fixture() -> Fixture {
-    fixture_with(Limits::default())
+    fixture_with(roomy())
 }
 
 fn fixture_with(limits: Limits) -> Fixture {
@@ -65,7 +77,7 @@ fn job(kind: Kind, source: &str) -> Job {
 fn an_infinite_loop_stops_at_the_instruction_limit() {
     let f = fixture_with(Limits {
         instructions: 100_000,
-        ..Limits::default()
+        ..roomy()
     });
     let out = f.host.run(job(Kind::Task, "fn run() {\n    loop { }\n}\n"));
     let err = out.result.unwrap_err();
@@ -86,7 +98,7 @@ fn an_infinite_loop_stops_at_the_instruction_limit() {
 fn unbounded_recursion_stops_at_the_call_depth_limit() {
     let f = fixture_with(Limits {
         call_depth: 50,
-        ..Limits::default()
+        ..roomy()
     });
     let src = "fn down(n: int) -> int { down(n + 1) }\nfn run() -> int { down(0) }\n";
     let err = f.host.run(job(Kind::Task, src)).result.unwrap_err();
@@ -105,11 +117,13 @@ fn a_script_sleeping_in_a_host_call_stops_at_the_wall_clock_timeout() {
     let api = StandIn::start();
     api.route(
         "/slow",
-        Reply::text(200, "late").delay(Duration::from_secs(10)),
+        Reply::text(200, "late").delay(Duration::from_secs(60)),
     );
     let src = format!(
         r#"use http
+use vault
 fn run() -> string {{
+    vault::log("asking")
     match http::get("{}", #{{}}) {{
         Ok(r) => r.body,
         Err(e) => "caught: " + e,
@@ -123,7 +137,6 @@ fn run() -> string {{
     j.timeout = Some(Duration::from_millis(500));
     let started = Instant::now();
     let out = f.host.run(j);
-    let took = started.elapsed();
     // The timeout ends the run: the script cannot catch it as an `Err` and carry on.
     assert_eq!(
         out.result.unwrap_err(),
@@ -132,7 +145,9 @@ fn run() -> string {{
             limit: Duration::from_millis(500)
         }
     );
-    assert!(took < Duration::from_secs(3), "took {took:?}");
+    // The run ended itself, inside the HTTP call: the host's own wait gives up with an empty log.
+    assert_eq!(out.log, "asking\n");
+    assert!(started.elapsed() < Duration::from_secs(60));
     assert_eq!(api.requests().len(), 1);
 }
 
@@ -195,7 +210,7 @@ fn run() -> Result[string, string] {
 }
 "#;
     let mut j = Job::new(Kind::Task, "rollup", src, "run");
-    j.timeout = Some(Duration::from_secs(10));
+    j.timeout = Some(ROOMY);
     let out = f.host.run(j);
     let id = out.result.unwrap();
     let id = id.as_str().unwrap();
@@ -388,7 +403,7 @@ fn http_does_not_follow_a_redirect_to_another_host() {
 fn an_http_response_over_the_size_limit_is_refused() {
     let f = fixture_with(Limits {
         max_http_response: 1000,
-        ..Limits::default()
+        ..roomy()
     });
     let api = StandIn::start();
     api.route("/big", Reply::text(200, "x".repeat(1001)));
@@ -507,7 +522,7 @@ fn a_fault_is_reported_with_its_message() {
 fn the_log_is_capped() {
     let f = fixture_with(Limits {
         max_log: 100,
-        ..Limits::default()
+        ..roomy()
     });
     let src = "use vault\nfn run() { for i in 0..50 { vault::log(\"0123456789\") } }\n";
     let out = f.host.run(job(Kind::Task, src));
@@ -522,7 +537,7 @@ fn scripts_run_in_parallel_on_the_workers() {
     let api = StandIn::start();
     api.route(
         "/wait",
-        Reply::text(200, "ok").delay(Duration::from_millis(400)),
+        Reply::text(200, "ok").delay(Duration::from_secs(3)),
     );
     let src = format!(
         "use http\nfn run() -> Result[int, string] {{ Ok(http::get(\"{}\", #{{}})?.status) }}\n",
@@ -541,5 +556,7 @@ fn scripts_run_in_parallel_on_the_workers() {
     for t in threads {
         assert_eq!(t.join().unwrap().unwrap(), json!(200));
     }
-    assert!(started.elapsed() < Duration::from_millis(750));
+    // One after the other would take 6 s.
+    let took = started.elapsed();
+    assert!(took < Duration::from_millis(5500), "took {took:?}");
 }

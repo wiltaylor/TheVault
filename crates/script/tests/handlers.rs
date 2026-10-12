@@ -100,7 +100,11 @@ fn seed(dir: &Path) {
 fn open(dir: &Path, start: bool) -> (Arc<Writer>, Handlers) {
     let vault = store::Vault::init(dir).unwrap();
     let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
-    let handlers = Handlers::new(Limits::default());
+    // A wall-clock limit a loaded test machine cannot reach: these tests are not about the limit.
+    let handlers = Handlers::new(Limits {
+        timeout: Duration::from_secs(600),
+        ..Limits::default()
+    });
     let writer = Arc::new(
         Writer::open(vault, state)
             .unwrap()
@@ -147,7 +151,7 @@ fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
 
     // The next start runs it.
     let (writer, _handlers) = open(dir.path(), true);
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(300);
     while writer.history(&saved.id).unwrap().len() < 3 {
         assert!(Instant::now() < deadline, "the queued job never ran");
         thread::sleep(Duration::from_millis(50));
