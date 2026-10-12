@@ -41,7 +41,8 @@ web-dev: web-deps-install
 web-build: web-deps-install
 	pnpm -C web build
 
-# Run the Playwright tests against the built web client
+# Run the Playwright tests against vault-server serving the built web client
 [group('web')]
-web-e2e-test: web-build
+web-e2e-test: web-build (require-tool "cargo")
+	cargo build -p server -p testkit --bins
 	pnpm -C web e2e

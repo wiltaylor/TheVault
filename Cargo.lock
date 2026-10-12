@@ -89,6 +89,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "query",
+ "schema",
  "serde",
  "serde_json",
  "state",

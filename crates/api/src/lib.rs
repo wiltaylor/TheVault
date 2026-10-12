@@ -56,6 +56,7 @@ pub fn router(writer: Arc<Writer>) -> Router {
         .route("/api/search", get(query::search))
         .route("/api/trash", get(notes::trash))
         .route("/api/trash/{id}/restore", post(notes::restore_from_trash))
+        .route("/api/types", get(types::list))
         .route(
             "/api/types/{name}",
             get(types::read).put(types::put).delete(types::delete),
