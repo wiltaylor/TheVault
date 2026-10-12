@@ -140,9 +140,11 @@ export const api = {
   /** Save `note` over version `base`. A stale base is an ApiError whose `isConflict` is true. */
   updateNote: (id: string, note: NoteDoc, base: string) =>
     request<Note>("PUT", `/api/notes/${enc(id)}`, { note, base_version: base }),
-  query: (query: string, cursor: string | null, pageSize: number) =>
+  /** One page of `query`. `thisId` is the note that holds the query, bound to `this`. */
+  query: (query: string, cursor: string | null, pageSize: number, thisId?: string) =>
     request<Page>("POST", "/api/query", {
       query,
+      ...(thisId ? { this: thisId } : {}),
       ...(cursor ? { cursor } : {}),
       page_size: pageSize,
     }),

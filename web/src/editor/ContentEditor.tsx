@@ -3,6 +3,7 @@ import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import type { Block } from "../api";
 import { blocksToDoc, docToBlocks } from "./doc";
 import { editorExtensions } from "./extensions";
+import { newQueryView } from "../views/model";
 import { PALETTE } from "./markup";
 
 type MarkName = "bold" | "italic" | "underline" | "strike" | "code" | "highlight";
@@ -173,6 +174,15 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
           onClick={() => chain().toggleTaskList().run()}
         >
           ☐
+        </button>
+        <button
+          type="button"
+          aria-label="Insert query view"
+          title="Insert query view"
+          onMouseDown={keep}
+          onClick={() => chain().insertContent({ type: "vaultBlock", attrs: { block: newQueryView() } }).run()}
+        >
+          Query
         </button>
       </div>
       <Show when={linkOpen()}>

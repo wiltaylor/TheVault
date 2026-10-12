@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import type { Block, Json } from "../api";
+import { QueryView } from "../views/QueryView";
 import { Inline } from "./Inline";
 
 /** A field value as plain text. Lists join with commas and records list their members. */
@@ -75,6 +76,9 @@ export function BlockView(props: { block: Block }) {
             <code>{text(b(), "source")}</code>
           </pre>
         </figure>
+      </Match>
+      <Match when={b().kind === "query_view"}>
+        <QueryView block={b()} />
       </Match>
       <Match when={b().kind === "terminal"}>
         <pre class="block-terminal">
