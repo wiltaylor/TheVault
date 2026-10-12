@@ -101,6 +101,7 @@ test("a query returning 50,000 notes renders fewer than 300 rows or cards in eve
         { kind: "view", labels: ["table"], fields: { kind: "table", columns: ["title", "created"] } },
         { kind: "view", labels: ["cards"], fields: { kind: "cards" } },
         { kind: "view", labels: ["list"], fields: { kind: "list" } },
+        { kind: "view", labels: ["canvas"], fields: { kind: "canvas" } },
         { kind: "view", labels: ["details"], fields: { kind: "details" } },
       ],
     },
@@ -111,7 +112,7 @@ test("a query returning 50,000 notes renders fewer than 300 rows or cards in eve
   await expect(view.getByTestId("query-count")).toHaveText(`${MASS_NOTES} notes`);
   const items = view.locator("[data-testid=query-row], [data-testid=query-card], [data-testid=query-detail]");
 
-  for (const kind of ["table", "cards", "list", "details"]) {
+  for (const kind of ["table", "cards", "list", "canvas", "details"]) {
     await viewTab(view, kind).click();
     await expect(view.locator(`[data-view-kind=${kind}]`)).toBeVisible();
     await expect(items.first()).toContainText("Mass 00001");
@@ -135,6 +136,64 @@ test("a query returning 50,000 notes renders fewer than 300 rows or cards in eve
     await expect(items.getByText(/^Mass 02\d{3}$/).first()).toBeVisible({ timeout: 15_000 });
     expect(await items.count()).toBeLessThan(300);
   }
+});
+
+test("a query view switched to canvas shows the query's notes as cards on a canvas, placed ones where saved", async ({
+  page: p,
+  admin,
+}) => {
+  const title = unique("Canvas view");
+  const project = await create(admin, "project", { title });
+  const tag = unique("Node");
+  const a = await create(admin, "task", { title: `${tag} a`, status: "todo", project: project.id });
+  await create(admin, "task", { title: `${tag} b`, status: "doing", project: project.id });
+  await create(admin, "task", { title: `${tag} c`, status: "done", project: project.id });
+  const note = await page(admin, title, [
+    {
+      kind: "query_view",
+      fields: { query: `from task where project == "${project.id}" sort title asc` },
+      blocks: [
+        { kind: "view", labels: ["table"], fields: { kind: "table" } },
+        {
+          kind: "view",
+          labels: ["board"],
+          fields: { kind: "canvas", title: "Board" },
+          blocks: [{ kind: "place", labels: [a.id], fields: { x: 600.0, y: 40.0, width: 300.0, height: 200.0 } }],
+        },
+      ],
+    },
+  ]);
+
+  await openNote(p, note.id, title);
+  const view = p.getByTestId("query-view");
+  await expect(view.getByTestId("query-row")).toHaveCount(3);
+  await viewTab(view, "Board").click();
+  await expect(view.locator("[data-view-kind=canvas]")).toBeVisible();
+  await expect(view.getByText(/not available yet/)).toHaveCount(0);
+
+  const canvas = view.getByTestId("canvas");
+  const nodes = canvas.getByTestId("canvas-node");
+  await expect(nodes).toHaveCount(3);
+  const cards = canvas.getByTestId("query-card");
+  expect(await titles(cards)).toEqual([`${tag} a`, `${tag} b`, `${tag} c`]);
+  // The task type's card template draws each card.
+  await expect(cards.nth(1)).toContainText("State");
+  await expect(cards.nth(1)).toContainText("doing");
+
+  // The placed note sits at its place; the others are laid out below it, left to right.
+  const boxes = await nodes.evaluateAll((els) =>
+    els.map((el) => {
+      const s = (el as HTMLElement).style;
+      return [el.getAttribute("data-id"), s.left, s.top, s.width, s.height].join(" ");
+    }),
+  );
+  expect(boxes[0]).toBe(`${a.id} 600px 40px 300px 200px`);
+  expect(boxes[1]).toMatch(/ 600px 264px 240px 176px$/);
+  expect(boxes[2]).toMatch(/ 864px 264px 240px 176px$/);
+
+  // A card's title opens its note.
+  await cards.nth(1).getByTestId("query-title").click();
+  await expect(p.getByRole("heading", { level: 1, name: `${tag} b` })).toBeVisible();
 });
 
 test("views saved in the editor persist across reload", async ({ page: p, admin }) => {

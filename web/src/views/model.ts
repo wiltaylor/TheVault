@@ -3,6 +3,8 @@
 // itself, so items this client does not edit yet, such as a canvas view's `place` blocks, are kept.
 
 import type { Block, Json, Template, TypeDef } from "../api";
+import type { Box } from "../canvas/canvas";
+import { placesOf } from "./canvasView";
 
 /** Every view kind the format allows, in the order the settings offer them. */
 export const VIEW_KINDS = ["table", "cards", "list", "details", "kanban", "calendar", "timeline", "map", "canvas"];
@@ -41,6 +43,8 @@ export interface ViewDef {
   date: string | null;
   /** `calendar`: `month`, `week` or `day`. */
   mode: string;
+  /** `canvas`: the saved card positions, by note id. */
+  places: Map<string, Box>;
 }
 
 export interface QueryViewDef {
@@ -73,6 +77,7 @@ export function readView(view: Block): ViewDef {
     group: str(view.fields, "group"),
     date: str(view.fields, "date"),
     mode: str(view.fields, "mode") ?? "month",
+    places: placesOf(view),
   };
 }
 
