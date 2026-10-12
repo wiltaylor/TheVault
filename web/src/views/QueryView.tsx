@@ -12,12 +12,14 @@ import {
   onMount,
 } from "solid-js";
 import { type Block, type Row, api } from "../api";
+import { CanvasSurface } from "../canvas/CanvasSurface";
 import { formatValue } from "../components/Render";
 import { VirtualList } from "../components/VirtualList";
 import { type PagedRows, createPagedRows } from "../components/pagedRows";
 import { MapView } from "../map/MapView";
 import { slotField } from "../notes";
 import { typeDef } from "../session";
+import { resultCanvas } from "./canvasView";
 import { CalendarView, TimelineView } from "./DateViews";
 import { KanbanView } from "./KanbanView";
 import { type ViewDef, readQueryView, viewTemplate } from "./model";
@@ -30,6 +32,8 @@ const ROW_HEIGHT = 40;
 const CARD_HEIGHT = 176;
 const CARD_MIN_WIDTH = 240;
 const DETAILS_PER_PAGE = 20;
+/** Cards a canvas view draws at first, and how many more each "Show more" adds. */
+const CANVAS_STEP = 200;
 
 /** Ask for more rows once the viewport is this close to the end of what is loaded. */
 const LOOKAHEAD = PAGE_SIZE / 4;
@@ -217,9 +221,50 @@ function DetailsView(props: { view: ViewDef; data: PagedRows; total: number }) {
 }
 
 /**
+ * The results as cards on a canvas, each at its saved `place` or laid out after the placed ones.
+ * A canvas cannot virtualise the way a list does, so it draws the first CANVAS_STEP results and
+ * more on request (D33). The view pans and zooms but is not saved.
+ */
+function CanvasResultsView(props: { view: ViewDef; data: PagedRows; total: number }) {
+  const [limit, setLimit] = createSignal(CANVAS_STEP);
+  const wanted = () => Math.min(props.total, limit());
+  createEffect(on(wanted, (n) => void props.data.loadUntil(n - 1)));
+  const shown = createMemo(() => props.data.rows().slice(0, wanted()));
+  const byId = createMemo(() => new Map(shown().map((r) => [r.id, r])));
+  const block = createMemo(() => resultCanvas(shown(), props.view.places));
+  return (
+    <div class="query-canvas">
+      <Show when={wanted() < props.total}>
+        <p class="muted query-canvas-more">
+          Showing the first {wanted()} of {props.total}.{" "}
+          <button type="button" onClick={() => setLimit(limit() + CANVAS_STEP)}>
+            Show more
+          </button>
+        </p>
+      </Show>
+      <CanvasSurface
+        block={block()}
+        label={props.view.title}
+        body={(node) => (
+          <Show when={byId().get(node.id)}>
+            {(row) => (
+              <article class="canvas-card" data-testid="query-card">
+                <NoteLink row={row()} />
+                <TemplateBody row={row()} template={viewTemplate(typeDef(row().type), props.view.template, "card")} />
+              </article>
+            )}
+          </Show>
+        )}
+      />
+    </div>
+  );
+}
+
+/**
  * A query view block: one query, shown through its saved views (D8, D33). `this` is the note
  * that holds the block. Every view keeps only what is on screen in the DOM: table, list and cards
- * virtualise, details, map and kanban columns page, and calendar and timeline load the dates in view.
+ * virtualise, details, map and kanban columns page, calendar and timeline load the dates in view, and
+ * canvas draws a bounded number of cards.
  */
 export function QueryView(props: { block: Block }) {
   const thisId = useThisNote();
@@ -305,6 +350,9 @@ export function QueryView(props: { block: Block }) {
                     </Match>
                     <Match when={view().kind === "timeline"}>
                       <TimelineView view={view()} query={def().query} thisId={thisId} />
+                    </Match>
+                    <Match when={view().kind === "canvas"}>
+                      <CanvasResultsView view={view()} data={data} total={total()} />
                     </Match>
                   </Switch>
                 </div>

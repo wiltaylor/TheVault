@@ -1003,3 +1003,104 @@ fn a_model_built_in_the_ui_becomes_text() {
     };
     assert!(matches!(empty.to_text(), Err(ModelError::Invalid(_))));
 }
+
+/// Items whose titles repeat `apple` a varying number of times, so scores both tie and differ.
+fn searchable(n: usize) -> Fixture {
+    let mut files = vec![(
+        "types/item.wcl".to_owned(),
+        with_template("label = \"Item\"\n\nfield n {\n  kind = \"int\"\n}\n"),
+    )];
+    for i in 0..n {
+        let id = format!("01JB8Z4K2MQ7V3X9T5R6W8{i:04}");
+        let title = if i % 3 == 2 {
+            "pear".to_owned()
+        } else {
+            format!(
+                "{} {}",
+                vec!["apple"; i % 4 + 1].join(" "),
+                vec!["pear"; i % 5].join(" ")
+            )
+        };
+        let text = format!(
+            "title = \"{title}\"\ncreated = \"2026-10-01T09:00:00Z\"\nupdated = \"2026-10-01T09:00:00Z\"\nn = {}\n",
+            i % 7
+        );
+        files.push((format!("notes/item/{id}.wcl"), text));
+    }
+    build(&files, n)
+}
+
+#[test]
+fn a_plain_search_pages_in_the_order_the_general_runner_gives() {
+    let f = searchable(300);
+    // `from item` takes the general path, which reads every note and sorts them itself.
+    let q = query::parse("from item search \"apple\"").unwrap();
+    let whole = query::run(&q, &f.ctx(), &PageRequest::default()).unwrap();
+    assert_eq!(whole.total, 200);
+    let expected: Vec<String> = whole.rows.iter().map(|r| r.id.clone()).collect();
+
+    for size in [1, 7, 50, 1000] {
+        let (seen, pages) = page_through(&f, "from * search \"apple\"", size);
+        assert_eq!(seen, expected, "pages of {size}");
+        assert_eq!(pages, 200usize.div_ceil(size), "pages of {size}");
+    }
+    let q = query::parse("from * search \"apple\" select n").unwrap();
+    let first = query::run(
+        &q,
+        &f.ctx(),
+        &PageRequest {
+            cursor: None,
+            size: 10,
+        },
+    )
+    .unwrap();
+    assert_eq!(first.total, 200);
+    assert_eq!(first.rows.len(), 10);
+    assert_eq!(first.rows[0].id, expected[0]);
+    assert_eq!(first.rows[0].fields.keys().collect::<Vec<_>>(), ["n"]);
+    // The general path's cursor and the plain search's cursor are the same shape.
+    let q = query::parse("from * search \"apple\"").unwrap();
+    let general = query::parse("from item search \"apple\"").unwrap();
+    let g = query::run(
+        &general,
+        &f.ctx(),
+        &PageRequest {
+            cursor: None,
+            size: 10,
+        },
+    )
+    .unwrap();
+    let rest = query::run(
+        &q,
+        &f.ctx(),
+        &PageRequest {
+            cursor: g.next,
+            size: 1000,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        rest.rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+        expected[10..]
+    );
+    // A cursor of another query shape is refused.
+    let sorted = query::parse("from item sort n").unwrap();
+    let s = query::run(
+        &sorted,
+        &f.ctx(),
+        &PageRequest {
+            cursor: None,
+            size: 10,
+        },
+    )
+    .unwrap();
+    let r = query::run(
+        &q,
+        &f.ctx(),
+        &PageRequest {
+            cursor: s.next,
+            size: 10,
+        },
+    );
+    assert!(matches!(r, Err(Error::BadCursor)), "{r:?}");
+}

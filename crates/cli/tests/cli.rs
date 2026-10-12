@@ -784,6 +784,36 @@ fn every_command_in_the_skill_document_runs_against_a_starter_vault() {
 }
 
 #[test]
+fn a_builder_model_round_trips_through_query_parse_and_query_text() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    let text = "from task where (title == \"A\" || estimate > 2) && status != \"Done\" sort title desc limit 5";
+    let parsed = vault.ok(&["query-parse", text], "");
+    let model = parsed["model"].clone();
+    assert!(model.is_object(), "no builder model: {parsed}");
+
+    // The model alone on stdin, and the whole `query-parse` answer from a file.
+    let printed = vault.ok(&["query-text"], &model.to_string());
+    assert_eq!(printed["text"], parsed["text"]);
+    let scratch = TempDir::new().unwrap();
+    let file = tmp_path(&scratch, "parsed.json");
+    std::fs::write(&file, parsed.to_string()).unwrap();
+    assert_eq!(
+        vault.ok(&["query-text", "-f", &file], "")["text"],
+        parsed["text"]
+    );
+
+    let again = vault.ok(&["query-parse", s(&printed["text"])], "");
+    assert_eq!(again["model"], model);
+    assert_eq!(again["text"], printed["text"]);
+
+    let not_json = vault.fails(&["query-text"], "from task");
+    assert_eq!(not_json["error"], "usage");
+    let not_a_model = vault.fails(&["query-text"], r#"{"from": 3}"#);
+    assert_eq!(not_a_model["status"], 400);
+}
+
+#[test]
 fn init_without_a_terminal_needs_password_stdin() {
     let vault = Vault::offline();
     let dirs = TempDir::new().unwrap();
@@ -840,7 +870,8 @@ fn every_command_prints_json() {
         "title = \"C\"\next_id = \"X\"\n",
     );
     run("query", &["from task", "--all", "--page-size", "1"], "");
-    run("query-parse", &["from task sort title asc"], "");
+    let parsed = run("query-parse", &["from task sort title asc"], "");
+    run("query-text", &[], &parsed["model"].to_string());
     run("search", &["A2"], "");
     run("flagged", &[], "");
 

@@ -3,9 +3,10 @@
 // While editing, nodes are added from the toolbar, moved by dragging, resized from their corner,
 // joined by edges in connect mode, and changed in the inspector; every change, the view included,
 // reports the whole new block. Without `onChange` the canvas is shown, and the view moves without
-// being saved.
+// being saved. `body` draws a node in place of its kind's own body, which is how a canvas query
+// view shows its results as cards.
 
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { type JSX, For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import type { Block, Json } from "../api";
 import { FilePicker, upload } from "../blocks/MediaBlocks";
 import { PALETTE } from "../editor/markup";
@@ -65,7 +66,12 @@ type Pending = { kind: "link"; url: string } | { kind: "note"; q: string; result
 
 let surfaces = 0;
 
-export function CanvasSurface(props: { block: Block | undefined; label: string; onChange?: (block: Block) => void }) {
+export function CanvasSurface(props: {
+  block: Block | undefined;
+  label: string;
+  onChange?: (block: Block) => void;
+  body?: (node: CanvasNode) => JSX.Element;
+}) {
   const uid = `canvas-${++surfaces}`;
   const stored = createMemo(() => canvasOf(props.block));
   const [view, setView] = createSignal<Viewport>(stored().viewport);
@@ -338,7 +344,7 @@ export function CanvasSurface(props: { block: Block | undefined; label: string; 
           onPointerDown={(e) => onItemDown(e, p.id, true)}
         >
           <div class="canvas-node-body">
-            <NodeBody node={node()} />
+            {props.body ? props.body(node()) : <NodeBody node={node()} />}
           </div>
           <Show when={editing() && selected() === p.id}>
             <span

@@ -30,7 +30,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 
 | UI action | Where | API | CLI | Gap |
 |---|---|---|---|---|
-| Create a note | none | `POST /api/notes` | `vault put --type <type>` | **#39**: the UI has no way to create a note |
+| Create a note | `pages/TypeList.tsx` (New note), `NoteView.tsx` at `/notes/new?type=` | `POST /api/notes` | `vault put --type <type>` | Closed by #39 |
 | Open a note | `pages/NoteView.tsx` | `GET /api/notes/{id}` | `vault get <id>` | |
 | Save a note (fields, content, ink, canvas) | `NoteView.tsx` | `PUT /api/notes/{id}` with `base_version` | `vault put <id> --base <version>` | |
 | Conflict view: save my version | `components/ConflictView.tsx` | `GET /api/notes/{id}`, then `PUT` at the stored version | `vault get <id>`, then `vault put <id> --base <stored version>` (the CLI prints the 409 body) | |
@@ -71,7 +71,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Canvas query view kind | `QueryView.tsx` | — | — | **#42**: the view shows "not available yet" |
 | Edit a query view's settings and views | `editor/QueryViewSettings.tsx` | — then the note or template `PUT` | `vault put <id>` / `vault template put` | |
 | Visual builder: text to model | `editor/QueryEditor.tsx` | `POST /api/query/parse` | `vault query-parse <q>` | |
-| Visual builder: model to text | `QueryEditor.tsx` | `POST /api/query/text` | none | **#41**: no CLI command |
+| Visual builder: model to text | `QueryEditor.tsx` | `POST /api/query/text` | `vault query-text` | |
 | Views refresh after a save | `QueryView.tsx` | — | — | **#43**: query views do not re-run after a note write |
 
 ### Canvas
@@ -148,7 +148,7 @@ The listing has 60 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/query` | `vault query` (sends `POST`) | not used | Explained: the same query as a URL, for links and simple clients |
 | `POST /api/query` | `vault query` | Lists and views | |
 | `POST /api/query/parse` | `vault query-parse` | Visual builder | |
-| `POST /api/query/text` | none | Visual builder | **#41** |
+| `POST /api/query/text` | `vault query-text` | Visual builder | |
 | `GET /api/search` | `vault search` | Search and pickers | |
 | `GET /api/trash` | `vault trash list` | Trash | |
 | `POST /api/trash/{id}/restore` | `vault trash restore` | Trash | |
@@ -207,9 +207,9 @@ The CLI adds no behaviour of its own except these, as SPEC.md allows (D25, D28, 
 
 | Ticket | Gap |
 |---|---|
-| #39 | The web UI cannot create a note |
+| #39 | The web UI cannot create a note (closed) |
 | #40 | Types, taxonomies and assets cannot be deleted from the UI |
-| #41 | No CLI command for `POST /api/query/text` |
+| #41 | No CLI command for `POST /api/query/text` (closed) |
 | #42 | The canvas query view kind is not rendered |
 | #43 | Query views do not re-run after a note is saved |
 | #44 | A map pin drag that hits a 409 reverts the pin with no conflict view |
