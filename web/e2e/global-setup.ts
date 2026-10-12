@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
+  BOARD_TYPE,
   BULK_NOTES,
   BULK_TYPE,
+  CREW_TYPE,
   MASS_NOTES,
   MASS_TYPE,
   PAGE_TYPE,
@@ -39,6 +41,8 @@ function seedVault(): string {
   writeFileSync(join(vault, "types/project.wcl"), PROJECT_TYPE);
   writeFileSync(join(vault, "types/page.wcl"), PAGE_TYPE);
   writeFileSync(join(vault, "types/mass.wcl"), MASS_TYPE);
+  writeFileSync(join(vault, "types/board.wcl"), BOARD_TYPE);
+  writeFileSync(join(vault, "types/crew.wcl"), CREW_TYPE);
   const note = (title: string) =>
     `title   = "${title}"\ncreated = "2026-10-12T09:15:00Z"\nupdated = "2026-10-12T09:15:00Z"\n`;
   mkdirSync(join(vault, "notes/bulk"), { recursive: true });

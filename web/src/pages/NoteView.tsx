@@ -6,6 +6,7 @@ import { FieldInput, hasInput } from "../components/FieldInput";
 import { BlockView, Blocks, formatValue } from "../components/Render";
 import { ContentEditor } from "../editor/ContentEditor";
 import { knowTitle, noteTitle } from "../editor/titles";
+import { CanvasSurface } from "../canvas/CanvasSurface";
 import { InkSurface } from "../ink/InkSurface";
 import {
   applyBlocks,
@@ -44,7 +45,7 @@ export function NoteView() {
   const [edits, setEdits] = createSignal<Record<string, Json | undefined>>({});
   // Content fields edited in the block editor, by field name.
   let blockEdits = new Map<string, { field: FieldDef; blocks: Block[] }>();
-  // Ink fields drawn on, by field name.
+  // Ink and canvas fields changed, by field name.
   const [inkEdits, setInkEdits] = createSignal<Record<string, { field: FieldDef; block: Block }>>({});
   const [saving, setSaving] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
@@ -185,6 +186,17 @@ export function NoteView() {
                 </Show>
               </div>
               <div class="field-value">
+                <Show when={field().kind !== "canvas"} fallback={
+                  <CanvasSurface
+                    label={label}
+                    block={(editing() && inkEdits()[field().name]?.block) || compoundBlock(n().note, field())}
+                    onChange={
+                      editing()
+                        ? (block) => setInkEdits({ ...inkEdits(), [field().name]: { field: field(), block } })
+                        : undefined
+                    }
+                  />
+                }>
                 <Show when={field().kind !== "ink"} fallback={
                   <InkSurface
                     label={label}
@@ -221,6 +233,7 @@ export function NoteView() {
                     label={label}
                     id={`field-input-${field().name}`}
                   />
+                </Show>
                 </Show>
                 </Show>
                 </Show>

@@ -47,7 +47,7 @@ function NoteLink(props: { row: Row }) {
  * The slots and blocks of a template for one result note, below its title. Values come from
  * `doc` when the full note is loaded, else from the row. Blocks see the result note as `this`.
  */
-function TemplateBody(props: { row: Row; template: Template | undefined; doc?: NoteDoc; tabTitles?: boolean }) {
+export function TemplateBody(props: { row: Row; template: Template | undefined; doc?: NoteDoc; tabTitles?: boolean }) {
   const type = () => typeDef(props.row.type);
   return (
     <For each={props.template?.tabs ?? []}>

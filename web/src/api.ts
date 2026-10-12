@@ -1,6 +1,7 @@
 // The typed client of TheVault's HTTP API. Every UI action goes through one of these calls.
 // The browser authenticates with the session cookie that POST /api/login sets (D11).
 
+import { noteWritten } from "./changes";
 import type { SchemaType } from "./defs/typeModel";
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -145,6 +146,9 @@ export function setUnauthorizedHandler(handler: () => void) {
   onUnauthorized = handler;
 }
 
+/** Requests other than GET to these paths change notes. */
+const NOTE_WRITES = /^\/api\/(notes|batch|upsert|trash)(\/|\?|$)/;
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = {
     method,
@@ -160,6 +164,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   const res = await fetch(path, init);
   if (res.status === 204) {
+    if (method !== "GET" && NOTE_WRITES.test(path)) noteWritten();
     return undefined as T;
   }
   const text = await res.text();
@@ -176,6 +181,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     const errBody = parsed && typeof parsed === "object" ? (parsed as ApiError["body"]) : {};
     throw new ApiError(res.status, errBody);
   }
+  if (method !== "GET" && NOTE_WRITES.test(path)) noteWritten();
   return parsed as T;
 }
 
