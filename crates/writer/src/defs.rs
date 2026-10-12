@@ -113,8 +113,9 @@ impl Writer {
             })
             .collect();
         if notes.is_empty() {
-            self.vault.commit(changes)?;
+            let generation = self.vault.commit(changes)?;
             inner.index.set_schema(&schema)?;
+            inner.index.advance(generation)?;
             inner.schema = schema;
             return Ok(Vec::new());
         }
@@ -416,10 +417,12 @@ impl Writer {
     /// Create or replace `scripts/<name>.ws`, stored as sent.
     pub fn put_script(&self, name: &str, source: &str) -> Result<String> {
         let _w = self.write_lock();
-        let _inner = self.lock();
+        let mut inner = self.lock();
         check_name("script", name)?;
-        self.vault
+        let generation = self
+            .vault
             .commit(vec![Change::write(script_path(name), source.as_bytes())])?;
+        inner.index.advance(generation)?;
         Ok(source.to_owned())
     }
 
@@ -468,7 +471,7 @@ impl Writer {
     /// Delete `scripts/<name>.ws`, unless a type's handler or a task names it.
     pub fn delete_script(&self, name: &str) -> Result<()> {
         let _w = self.write_lock();
-        let inner = self.lock();
+        let mut inner = self.lock();
         self.read_script(name)?;
         let mut by: Vec<String> = inner
             .schema
@@ -495,7 +498,8 @@ impl Writer {
                 by,
             });
         }
-        self.vault.commit(vec![Change::delete(script_path(name))])?;
+        let generation = self.vault.commit(vec![Change::delete(script_path(name))])?;
+        inner.index.advance(generation)?;
         Ok(())
     }
 
@@ -529,7 +533,7 @@ impl Writer {
         source: &str,
         check: impl FnOnce(&str) -> std::result::Result<(), Invalid>,
     ) -> Result<String> {
-        let _inner = self.lock();
+        let mut inner = self.lock();
         check_name("task", name)?;
         let path = task_path(name);
         let text = store::canonical(source, &path)?;
@@ -546,16 +550,19 @@ impl Writer {
                 )],
             }));
         }
-        self.vault
+        let generation = self
+            .vault
             .commit(vec![Change::write(path, text.as_bytes())])?;
+        inner.index.advance(generation)?;
         Ok(text)
     }
 
     /// Delete `tasks/<name>.wcl`.
     pub fn delete_task(&self, name: &str) -> Result<()> {
-        let _inner = self.lock();
+        let mut inner = self.lock();
         self.read_task(name)?;
-        self.vault.commit(vec![Change::delete(task_path(name))])?;
+        let generation = self.vault.commit(vec![Change::delete(task_path(name))])?;
+        inner.index.advance(generation)?;
         Ok(())
     }
 

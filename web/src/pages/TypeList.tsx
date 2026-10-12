@@ -16,6 +16,9 @@ export function TypeList() {
             <header class="note-header">
               <h1>{t().plural}</h1>
               <div class="actions">
+                <A href={`/notes/new?type=${encodeURIComponent(name())}`} class="button primary">
+                  New {t().label.toLowerCase()}
+                </A>
                 <A href={`/types/${name()}/edit`}>Edit type</A>
                 <A href={`/types/${name()}/templates`}>Templates</A>
               </div>

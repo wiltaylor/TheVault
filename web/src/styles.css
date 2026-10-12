@@ -42,7 +42,8 @@ button {
   cursor: pointer;
 }
 
-button.primary {
+button.primary,
+a.button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);

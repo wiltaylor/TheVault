@@ -30,7 +30,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 
 | UI action | Where | API | CLI | Gap |
 |---|---|---|---|---|
-| Create a note | none | `POST /api/notes` | `vault put --type <type>` | **#39**: the UI has no way to create a note |
+| Create a note | `pages/TypeList.tsx` (New note), `NoteView.tsx` at `/notes/new?type=` | `POST /api/notes` | `vault put --type <type>` | Closed by #39 |
 | Open a note | `pages/NoteView.tsx` | `GET /api/notes/{id}` | `vault get <id>` | |
 | Save a note (fields, content, ink, canvas) | `NoteView.tsx` | `PUT /api/notes/{id}` with `base_version` | `vault put <id> --base <version>` | |
 | Conflict view: save my version | `components/ConflictView.tsx` | `GET /api/notes/{id}`, then `PUT` at the stored version | `vault get <id>`, then `vault put <id> --base <stored version>` (the CLI prints the 409 body) | |
@@ -207,7 +207,7 @@ The CLI adds no behaviour of its own except these, as SPEC.md allows (D25, D28, 
 
 | Ticket | Gap |
 |---|---|
-| #39 | The web UI cannot create a note |
+| #39 | The web UI cannot create a note (closed) |
 | #40 | Types, taxonomies and assets cannot be deleted from the UI |
 | #41 | No CLI command for `POST /api/query/text` |
 | #42 | The canvas query view kind is not rendered |

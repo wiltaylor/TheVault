@@ -6,7 +6,7 @@ import { Secrets, Tokens } from "./pages/Access";
 import { Flagged, NoteHistory, Trash } from "./pages/History";
 import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
-import { NoteView } from "./pages/NoteView";
+import { NewNote, NoteView } from "./pages/NoteView";
 import { ScriptEditor, ScriptList } from "./pages/Scripts";
 import { Search } from "./pages/Search";
 import { Settings } from "./pages/Settings";
@@ -42,6 +42,7 @@ export function App() {
         <Route path="/taxonomies" component={TaxonomyList} />
         <Route path="/taxonomies/new" component={TaxonomyEditor} />
         <Route path="/taxonomies/:name" component={TaxonomyEditor} />
+        <Route path="/notes/new" component={NewNote} />
         <Route path="/notes/:id" component={NoteView} />
         <Route path="/notes/:id/history" component={NoteHistory} />
         <Route path="/scripts" component={ScriptList} />
