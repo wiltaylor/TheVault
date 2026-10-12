@@ -5,25 +5,36 @@
 //! JSON form of [`writer::Input::Json`]; any other body is the note's WCL text, with the base
 //! version in `If-Match`. A response is JSON unless `Accept` asks for `text/plain` or WCL, in
 //! which case the body is the canonical WCL on disk and the version is in `ETag` (D21).
+//!
+//! Every route but health and login needs a session cookie or a bearer token, and the scope
+//! [`auth::required_scope`] names for it (D11).
 
 mod auth;
 mod error;
 mod notes;
+mod tokens;
+mod types;
 
 use std::sync::Arc;
 
+use axum::http::StatusCode;
 use axum::{
-    Json, Router,
-    routing::{get, post},
+    Json, Router, middleware,
+    routing::{delete, get, post},
 };
 use serde_json::{Value, json};
 use writer::Writer;
 
-pub use auth::Caller;
+pub use auth::{Caller, OWNER_SESSION, SESSION_COOKIE, required_scope};
 pub use error::ApiError;
 
 /// Builds the router for every `/api` route.
 pub fn router(writer: Arc<Writer>) -> Router {
+    let sessions = Arc::new(auth::Sessions::new(writer.clone()));
+    let login = Router::new()
+        .route("/api/login", post(auth::login))
+        .route("/api/logout", post(auth::logout))
+        .with_state(sessions.clone());
     Router::new()
         .route("/api/health", get(health))
         .route("/api/notes", get(notes::list).post(notes::create))
@@ -36,9 +47,29 @@ pub fn router(writer: Arc<Writer>) -> Router {
         .route("/api/notes/{id}/restore", post(notes::restore_version))
         .route("/api/trash", get(notes::trash))
         .route("/api/trash/{id}/restore", post(notes::restore_from_trash))
+        .route("/api/types/{name}", get(types::read).put(types::put))
+        .route("/api/tokens", get(tokens::list).post(tokens::create))
+        .route("/api/tokens/{name}", delete(tokens::revoke))
         .with_state(writer)
+        .merge(login)
+        .layer(middleware::from_fn_with_state(sessions, auth::authenticate))
 }
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+/// Run blocking work against the writer off the async runtime.
+pub(crate) async fn blocking<T, E>(
+    writer: Arc<Writer>,
+    f: impl FnOnce(&Writer) -> Result<T, E> + Send + 'static,
+) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    E: Into<ApiError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || f(&writer))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
+        .map_err(Into::into)
 }

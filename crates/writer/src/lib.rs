@@ -70,6 +70,13 @@ pub enum Error {
     Rejected(String),
     #[error("the vault's type definitions are invalid: {0}")]
     Schema(#[from] schema::SchemaError),
+    /// A submitted type definition does not validate, alone or against the rest of the schema.
+    #[error("{0}")]
+    InvalidType(schema::SchemaError),
+    /// Replacing this type could change its existing notes, which needs a planned schema change
+    /// (D6).
+    #[error("type {0:?} has notes, so changing it needs a planned schema change")]
+    TypeInUse(String),
     #[error(transparent)]
     Store(store::Error),
     #[error(transparent)]
@@ -241,6 +248,76 @@ impl Writer {
         inner.index.set_schema(&schema)?;
         inner.schema = schema;
         Ok(())
+    }
+
+    /// The canonical text of `types/<name>.wcl`.
+    pub fn read_type(&self, name: &str) -> Result<String> {
+        let inner = self.lock();
+        if !inner_has_type(&inner, name) {
+            return Err(Error::UnknownType(name.to_owned()));
+        }
+        Ok(self.vault.read_text(&type_path(name))?)
+    }
+
+    /// Create type `name`, or replace it while it has no notes, and reload the schema. Changing a
+    /// type that has notes goes through a planned schema change instead (D6).
+    pub fn put_type(&self, name: &str, source: &str) -> Result<String> {
+        let mut inner = self.lock();
+        let path = type_path(name);
+        let invalid = |message: String| {
+            Error::InvalidType(schema::SchemaError(vec![Invalid {
+                file: path.clone(),
+                issues: vec![Issue::new("type", message)],
+            }]))
+        };
+        if !schema::is_name(name) {
+            return Err(invalid(format!("{name:?} is not a type name")));
+        }
+        let text = store::canonical(source, &path)?;
+        if inner_has_type(&inner, name) {
+            let has_notes = inner
+                .index
+                .connection()
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM notes WHERE type = ?1)",
+                    [name],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(index::Error::from)?;
+            if has_notes {
+                return Err(Error::TypeInUse(name.to_owned()));
+            }
+        }
+        let mut types = self.definitions("types")?;
+        types.retain(|(n, _)| n != name);
+        types.push((name.to_owned(), text.clone()));
+        let taxonomies = self.definitions("taxonomies")?;
+        let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
+            .map_err(Error::InvalidType)?;
+        self.vault.commit(vec![Change::write(path, text.clone())])?;
+        inner.index.set_schema(&schema)?;
+        inner.schema = schema;
+        Ok(text)
+    }
+
+    /// The `(stem, text)` of every definition file in `dir`.
+    fn definitions(&self, dir: &str) -> Result<Vec<(String, String)>> {
+        let root = self.vault.root().join(dir);
+        let entries = std::fs::read_dir(&root).map_err(|source| {
+            Error::Store(store::Error::Io {
+                path: root.clone(),
+                source,
+            })
+        })?;
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(stem) = file_name.strip_suffix(".wcl") {
+                let text = self.vault.read_text(&format!("{dir}/{file_name}"))?;
+                out.push((stem.to_owned(), text));
+            }
+        }
+        Ok(out)
     }
 
     /// Create a note of `type_name` with a new id.
@@ -688,6 +765,19 @@ impl NoteLookup for Lookup<'_> {
 }
 
 /// `notes/<type>/<id>.wcl`.
+/// The vault path of type `name`'s definition.
+pub fn type_path(name: &str) -> String {
+    format!("types/{name}.wcl")
+}
+
+fn inner_has_type(inner: &Inner, name: &str) -> bool {
+    inner.schema.type_def(name).is_some()
+}
+
+fn pairs(v: &[(String, String)]) -> Vec<(&str, &str)> {
+    v.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect()
+}
+
 pub fn note_path(type_name: &str, id: &str) -> String {
     format!("notes/{type_name}/{id}.wcl")
 }
