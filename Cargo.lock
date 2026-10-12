@@ -457,6 +457,7 @@ dependencies = [
  "store",
  "tempfile",
  "testkit",
+ "writer",
 ]
 
 [[package]]

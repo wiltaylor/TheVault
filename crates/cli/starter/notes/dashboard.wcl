@@ -1,0 +1,44 @@
+title = "Dashboard"
+tags  = ["starter"]
+
+content body {
+  heading {
+    level = 1
+    text  = "Dashboard"
+  }
+
+  query_view {
+    title        = "Tasks"
+    query        = "from task sort due asc"
+    default_view = "board"
+
+    view board {
+      kind  = "kanban"
+      group = "status"
+    }
+
+    view table {
+      kind    = "table"
+      columns = ["title", "status", "priority", "due", "project"]
+    }
+  }
+
+  query_view {
+    title = "Calendar"
+    query = "from task where !under(status, \"Done\") sort due asc"
+
+    view calendar {
+      kind = "calendar"
+      date = "due"
+    }
+  }
+
+  query_view {
+    title = "Projects"
+    query = "from project sort due asc"
+
+    view cards {
+      kind = "cards"
+    }
+  }
+}

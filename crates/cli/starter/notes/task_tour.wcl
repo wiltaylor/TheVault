@@ -1,0 +1,20 @@
+title    = "Take the tour of the dashboard"
+status   = "In progress"
+priority = "medium"
+due      = "{{date:+0}}"
+project  = "{{id:project}}"
+assignee = "{{id:alex}}"
+
+content body {
+  list {
+    style = "todo"
+
+    item {
+      text = "Drag this card to another column of the board"
+    }
+
+    item {
+      text = "Switch the board to its table view"
+    }
+  }
+}

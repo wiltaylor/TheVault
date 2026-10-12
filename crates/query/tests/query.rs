@@ -622,6 +622,43 @@ fn text_to_model_to_text_reproduces_every_query_the_model_can_represent() {
     }
 }
 
+/// The model exactly as the web builder sends it for a type, two conditions, a sort and a limit.
+#[test]
+fn a_model_built_in_the_web_builder_prints_the_expected_text() {
+    let model: Model = serde_json::from_value(serde_json::json!({
+        "from": ["task"],
+        "filter": {
+            "join": "all",
+            "items": [
+                { "condition": { "field": "status", "op": "eq", "value": { "kind": "str", "value": "todo" } } },
+                { "condition": { "field": "estimate", "op": "gt", "value": { "kind": "int", "value": 2 } } },
+            ],
+        },
+        "search": null,
+        "sort": [{ "field": "title", "order": "desc" }],
+        "group_by": null,
+        "select": [],
+        "limit": 10,
+    }))
+    .unwrap();
+    assert_eq!(
+        model.to_text().unwrap(),
+        "from task where status == \"todo\" && estimate > 2 sort title desc limit 10"
+    );
+}
+
+/// An agent may write any spacing. The builder still shows such a query; the web client keeps
+/// the text as written until the model is edited.
+#[test]
+fn agent_spacing_still_opens_in_the_builder() {
+    let text = "from   task\nwhere status==\"todo\"  &&estimate>2\n  sort title desc limit 10";
+    let model = Model::from_text(text).unwrap();
+    assert_eq!(
+        model.to_text().unwrap(),
+        "from task where status == \"todo\" && estimate > 2 sort title desc limit 10"
+    );
+}
+
 #[test]
 fn under_matches_a_term_and_every_term_below_it() {
     let f = fixture();

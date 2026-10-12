@@ -1,5 +1,5 @@
 //! The commands that work on a vault folder directly rather than through the API: `init`,
-//! `passwd` and `reindex` (D28, OQ-S2, OQ-S3).
+//! `passwd` and `reindex` (D28, D37, OQ-S2, OQ-S3).
 
 use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -47,12 +47,6 @@ pub fn open_state(vault: &Path) -> Result<State, Fail> {
 
 /// `vault init`: create the layout, the key file and the first password.
 pub fn init(dir: &Path, starter: bool, password_stdin: bool) -> Result<Value, Fail> {
-    if starter {
-        return Err(Fail::new(
-            "not_available",
-            "vault init --starter is not yet available: the starter pack has not landed",
-        ));
-    }
     if state_db(dir).exists() {
         return Err(Fail::new(
             "already_a_vault",
@@ -76,14 +70,18 @@ pub fn init(dir: &Path, starter: bool, password_stdin: bool) -> Result<Value, Fa
     state
         .set_password(&password)
         .map_err(Fail::from_display("state"))?;
-    Ok(json!({
+    let mut out = json!({
         "vault": root,
         "vault_id": vault_id,
         "layout": store::LAYOUT_DIRS,
         "key_file": key_file,
         "key_created": key_created,
         "password_set": true,
-    }))
+    });
+    if starter {
+        out["starter"] = crate::starter::install(vault, state)?;
+    }
+    Ok(out)
 }
 
 /// `vault passwd`: replace the login password.

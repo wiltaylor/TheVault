@@ -158,3 +158,66 @@ export function massId(i: number): string {
 export function bulkTitle(i: number): string {
   return `Bulk ${String(i).padStart(5, "0")}`;
 }
+
+/** The taxonomy a story's stage comes from, in kanban column order. */
+export const STAGE_TAXONOMY = `label = "Stage"
+
+term "Todo" {
+  colour = "gray"
+}
+
+term "Doing" {
+  colour = "blue"
+}
+
+term "Done" {
+  colour = "green"
+}
+`;
+
+/** Stories, for the kanban, calendar and timeline views. `tag` keeps each test's notes apart. */
+export const STORY_TYPE = `label  = "Story"
+plural = "Stories"
+
+field tag {
+  kind  = "string"
+  label = "Tag"
+}
+
+field stage {
+  kind     = "taxonomy"
+  label    = "Stage"
+  taxonomy = "stage"
+}
+
+field topics {
+  kind     = "taxonomy"
+  label    = "Topics"
+  taxonomy = "stage"
+  multiple = true
+}
+
+field due {
+  kind  = "date"
+  label = "Due"
+}
+
+field span {
+  kind  = "date_range"
+  label = "Span"
+}
+
+field estimate {
+  kind  = "int"
+  label = "Estimate"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "stage"
+    slot "due"
+    slot "span"
+  }
+}
+`;
