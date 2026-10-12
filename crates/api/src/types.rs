@@ -2,10 +2,12 @@
 //! needs the `admin` scope (D11).
 //!
 //! - `PUT /api/types/{name}` creates a type, or replaces one that has no notes, at once.
-//! - `POST /api/types/{name}/change` takes `{ "wcl", "renames"?, "plan"? }` and changes a type
-//!   that has notes. Without `plan` it returns the plan and changes nothing. With the `plan` token
-//!   from that response it applies the change as one commit, or answers 409 `plan_stale` with the
-//!   plan as it is now.
+//! - `POST /api/types/{name}/change` takes `{ "wcl", "renames"?, "migration"?, "plan"? }` and
+//!   changes a type that has notes. Without `plan` it returns the plan and changes nothing. With
+//!   the `plan` token from that response it applies the change as one commit, or answers 409
+//!   `plan_stale` with the plan as it is now. `migration` is `{ "script", "function"? }`: function
+//!   `function`, by default `migrate`, of `scripts/<script>.ws` runs over every note of the type
+//!   (D6). A migration that fails on a note answers 422 `migration_failed` naming the note.
 //! - `DELETE /api/types/{name}` deletes a type that has no notes.
 //! - `GET /api/flagged` lists notes holding data their type no longer describes.
 
@@ -19,7 +21,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use writer::{NoteEdit, TypeChange, TypePlan, Writer};
+use writer::{Migration, NoteEdit, TypeChange, TypePlan, Writer};
 
 use crate::notes::{is_json, wants_wcl};
 use crate::{ApiError, Caller, blocking};
@@ -79,7 +81,15 @@ pub struct ChangeBody {
     wcl: String,
     #[serde(default)]
     renames: BTreeMap<String, String>,
+    migration: Option<MigrationBody>,
     plan: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MigrationBody {
+    script: String,
+    function: Option<String>,
 }
 
 /// `POST /api/types/{name}/change`: plan a change, or apply a planned one.
@@ -92,6 +102,10 @@ pub async fn change(
     let change = TypeChange {
         wcl: body.wcl,
         renames: body.renames,
+        migration: body.migration.map(|m| Migration {
+            script: m.script,
+            function: m.function.unwrap_or_else(|| "migrate".to_owned()),
+        }),
     };
     let Some(token) = body.plan else {
         let plan = blocking(w, move |w| w.plan_type_change(&name, &change))
@@ -164,6 +178,11 @@ pub(crate) fn plan_json(plan: &TypePlan, applied: bool) -> Value {
                         "op": "default",
                         "field": field,
                         "value": writer::value_to_json(value),
+                    }),
+                    NoteEdit::Migrated { script, function } => json!({
+                        "op": "migrate",
+                        "script": script,
+                        "function": function,
                     }),
                 })
                 .collect();

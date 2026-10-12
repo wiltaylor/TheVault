@@ -1827,6 +1827,7 @@ version = "0.1.0"
 dependencies = [
  "query",
  "reqwest",
+ "schema",
  "serde_json",
  "state",
  "store",
@@ -1921,6 +1922,7 @@ dependencies = [
  "axum",
  "clap",
  "reqwest",
+ "script",
  "serde_json",
  "state",
  "store",

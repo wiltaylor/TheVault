@@ -20,8 +20,7 @@ struct Args {
     listen: SocketAddr,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     if !args.vault.is_dir() {
         bail!("vault folder {} does not exist", args.vault.display());
@@ -30,11 +29,24 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("opening vault {}", args.vault.display()))?;
     let state = state::State::open(&vault.server_dir().join("state.db"), None)
         .context("opening state.db")?;
-    let writer = writer::Writer::open(vault, state).context("loading the vault")?;
+    let handlers = script::Handlers::new(script::Limits::default());
+    let writer = Arc::new(
+        writer::Writer::open(vault, state)
+            .context("loading the vault")?
+            .with_hooks(handlers.hooks()),
+    );
+    handlers.start(&writer);
 
-    let listener = tokio::net::TcpListener::bind(args.listen)
+    // The script host's HTTP client blocks, so it is made and dropped outside the runtime.
+    tokio::runtime::Runtime::new()
+        .context("starting the async runtime")?
+        .block_on(serve(args.listen, writer))
+}
+
+async fn serve(listen: SocketAddr, writer: Arc<writer::Writer>) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(listen)
         .await
-        .with_context(|| format!("binding {}", args.listen))?;
+        .with_context(|| format!("binding {listen}"))?;
     let addr = listener.local_addr()?;
 
     // One JSON line on stdout, so whoever started the server can read the port it got.
@@ -47,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     stdout.flush()?;
     drop(stdout);
 
-    axum::serve(listener, api::router(Arc::new(writer)))
+    axum::serve(listener, api::router(writer))
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())

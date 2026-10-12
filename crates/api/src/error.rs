@@ -123,6 +123,10 @@ impl From<Error> for ApiError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({ "error": "rejected" }),
             ),
+            Error::Migration { id, .. } => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({ "error": "migration_failed", "id": id }),
+            ),
             Error::InvalidType(e) => (
                 StatusCode::BAD_REQUEST,
                 json!({

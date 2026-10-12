@@ -9,8 +9,14 @@
 //! note changed or created since planning fails the apply with [`Error::PlanStale`] rather than
 //! being overwritten.
 //!
+//! A change can name a wscript [`Migration`] for what the simple rules cannot express. It runs
+//! once over every note of the type, after the simple rules, in both the plan and the apply, and
+//! what it returns joins the same commit (D6). A migration that fails on any note fails the whole
+//! change with [`Error::Migration`], before anything is written. The token covers what the
+//! migration returned, so a script that changed since planning makes the plan stale.
+//!
 //! A schema change runs no handlers: it records a version of every note it edits, authored by the
-//! caller, and leaves wscript migrations to later work.
+//! caller.
 
 use std::collections::BTreeMap;
 
@@ -33,6 +39,15 @@ pub struct TypeChange {
     pub wcl: String,
     /// Old field name to new field name.
     pub renames: BTreeMap<String, String>,
+    /// A script to run over every note of the type.
+    pub migration: Option<Migration>,
+}
+
+/// A wscript migration: function `function` of `scripts/<script>.ws` (D6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Migration {
+    pub script: String,
+    pub function: String,
 }
 
 /// What a type change would do, from [`Writer::plan_type_change`].
@@ -84,8 +99,9 @@ struct Worked {
 impl Writer {
     /// Plan a change to type `name` without applying it.
     pub fn plan_type_change(&self, name: &str, change: &TypeChange) -> Result<TypePlan> {
-        let inner = self.lock();
-        Ok(self.work(&inner, name, change)?.plan)
+        let _w = self.write_lock();
+        let current = self.schema();
+        Ok(self.work(&current, name, change)?.plan)
     }
 
     /// Apply a change to type `name` that [`Writer::plan_type_change`] planned with `token`.
@@ -97,8 +113,9 @@ impl Writer {
         token: &str,
         author: &Author,
     ) -> Result<(TypePlan, Vec<Saved>)> {
-        let mut inner = self.lock();
-        let worked = self.work(&inner, name, change)?;
+        let _w = self.write_lock();
+        let current = self.schema();
+        let worked = self.work(&current, name, change)?;
         if worked.plan.token != token {
             return Err(Error::PlanStale(Box::new(worked.plan)));
         }
@@ -159,6 +176,7 @@ impl Writer {
                 report,
             });
         }
+        let mut inner = self.lock();
         let inner = &mut *inner;
         install(inner, schema)?;
         inner.index.update(&inner.schema, &updates)?;
@@ -167,6 +185,7 @@ impl Writer {
 
     /// Delete type `name`. A type that still has notes is not deleted.
     pub fn delete_type(&self, name: &str) -> Result<()> {
+        let _w = self.write_lock();
         let mut inner = self.lock();
         if inner.schema.type_def(name).is_none() {
             return Err(Error::UnknownType(name.to_owned()));
@@ -228,18 +247,18 @@ impl Writer {
         Ok(out)
     }
 
-    /// Plan a change: check it, work out every note's edits, and validate the result.
-    fn work(&self, inner: &Inner, name: &str, change: &TypeChange) -> Result<Worked> {
-        let old = inner
-            .schema
+    /// Plan a change against the `current` schema: check it, work out every note's edits, run the
+    /// migration, and validate the result. Runs without the data lock, so a migration can read
+    /// the vault; the caller holds the write lock.
+    fn work(&self, current: &Schema, name: &str, change: &TypeChange) -> Result<Worked> {
+        let old = current
             .type_def(name)
             .ok_or_else(|| Error::UnknownType(name.to_owned()))?;
         let old_text = self.vault.read_text(&type_path(name))?;
         let (new, text) = parse_type(name, &change.wcl)?;
         let rules = FieldChanges::new(old, &new, &change.renames)
             .map_err(|e| Error::InvalidType(SchemaError(vec![e])))?;
-        let types = inner
-            .schema
+        let types = current
             .types()
             .map(|t| {
                 if t.name == name {
@@ -249,7 +268,7 @@ impl Writer {
                 }
             })
             .collect();
-        let schema = rebuild_schema(&inner.schema, types)?;
+        let schema = rebuild_schema(current, types)?;
 
         let lookup = Lookup {
             writer: self,
@@ -264,6 +283,9 @@ impl Writer {
         for (from, to) in &change.renames {
             hasher.update(format!("{from}\0{to}\0").as_bytes());
         }
+        if let Some(m) = &change.migration {
+            hasher.update(format!("migration\0{}\0{}\0", m.script, m.function).as_bytes());
+        }
 
         let mut changes = Vec::new();
         let mut flagged = Vec::new();
@@ -271,11 +293,31 @@ impl Writer {
         let mut notes = Vec::new();
         for id in self.note_ids(name)? {
             let path = note_path(name, &id);
-            let current = self.vault.read_text(&path)?;
-            let version = self.head(&id, name, &current)?;
+            let text = self.vault.read_text(&path)?;
+            let version = self.head(&id, name, &text)?;
             hasher.update(format!("{id}\0{version}\0").as_bytes());
-            let doc = Input::Wcl(current).parse(&path)?;
-            let (after, edits) = rules.apply(&doc);
+            let doc = Input::Wcl(text).parse(&path)?;
+            let (mut after, mut edits) = rules.apply(&doc);
+            if let Some(m) = &change.migration {
+                let migrated = self
+                    .hooks
+                    .migrate(name, m, &id, &after)
+                    .map_err(|message| Error::Migration {
+                        id: id.clone(),
+                        message,
+                    })?;
+                if let Some(migrated) = migrated.map(|d| keep_stamps(&after, d))
+                    && migrated != after
+                {
+                    edits.push(NoteEdit::Migrated {
+                        script: m.script.clone(),
+                        function: m.function.clone(),
+                    });
+                    after = migrated;
+                }
+                hasher.update(note::print(&after).as_bytes());
+                hasher.update([0]);
+            }
             match schema.validate_note(name, &after, &lookup) {
                 Ok(report) => {
                     if report.is_flagged() {
@@ -283,7 +325,7 @@ impl Writer {
                     }
                 }
                 // A note that was already invalid does not hold the change up.
-                Err(issues) if inner.schema.validate_note(name, &doc, &lookup).is_ok() => {
+                Err(issues) if current.validate_note(name, &doc, &lookup).is_ok() => {
                     invalid.push(Invalid {
                         file: path.clone(),
                         issues,
@@ -370,6 +412,18 @@ fn parse_type(name: &str, wcl: &str) -> Result<(TypeDef, String)> {
 /// The schema with `types` in place of its types, checked across types and taxonomies.
 fn rebuild_schema(current: &Schema, types: Vec<TypeDef>) -> Result<Schema> {
     Schema::new(types, current.taxonomies().cloned().collect()).map_err(Error::InvalidType)
+}
+
+/// `migrated` with the `created` and `updated` times of `before` where the script left them out.
+fn keep_stamps(before: &Doc, mut migrated: Doc) -> Doc {
+    for stamp in ["created", "updated"] {
+        if migrated.field(stamp).is_none()
+            && let Some(v) = before.field(stamp)
+        {
+            migrated.fields.push((stamp.to_owned(), v.clone()));
+        }
+    }
+    migrated
 }
 
 /// Make `schema` the writer's schema.
