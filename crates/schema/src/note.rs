@@ -1,0 +1,402 @@
+//! Note validation: a note's fields and blocks against its type, its references against the notes
+//! that exist, and its terms against the taxonomies (D3, D4, D7, D23).
+
+use std::collections::HashSet;
+
+use crate::blocks::Check;
+use crate::doc::{Doc, Value};
+use crate::encoding::{
+    is_date, is_datetime, is_ulid, is_url, is_utc_datetime, parse_date, parse_datetime,
+};
+use crate::types::{FieldDef, FieldKind, Scalar};
+use crate::{Issue, Schema};
+
+/// What validation needs to know about the rest of the vault.
+pub trait NoteLookup {
+    /// The type of the note with this id, or `None` when no such note exists.
+    fn note_type(&self, id: &str) -> Option<String>;
+
+    /// Whether `assets/<id>/` exists.
+    fn asset_exists(&self, id: &str) -> bool;
+}
+
+/// A note that passed validation. `unknown` names the items its type does not describe; the data
+/// is kept and the note is flagged (D6).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NoteReport {
+    pub unknown: Vec<String>,
+}
+
+impl NoteReport {
+    pub fn is_flagged(&self) -> bool {
+        !self.unknown.is_empty()
+    }
+}
+
+/// The vault around a note, for the checks that look beyond it.
+pub(crate) struct Context<'a> {
+    pub schema: &'a Schema,
+    pub lookup: &'a dyn NoteLookup,
+}
+
+pub(crate) fn validate(
+    schema: &Schema,
+    type_name: &str,
+    doc: &Doc,
+    lookup: &dyn NoteLookup,
+) -> Result<NoteReport, Vec<Issue>> {
+    let mut issues = Vec::new();
+    let Some(ty) = schema.type_def(type_name) else {
+        return Err(vec![Issue::new(
+            "note",
+            format!("there is no type {type_name:?}"),
+        )]);
+    };
+    let ctx = Context { schema, lookup };
+    let mut c = Check {
+        issues: &mut issues,
+    };
+    let mut report = NoteReport::default();
+    let mut seen = HashSet::new();
+
+    for (name, value) in &doc.fields {
+        if !seen.insert(name.as_str()) {
+            c.fail(name, "appears more than once");
+            continue;
+        }
+        match name.as_str() {
+            "title" => match value {
+                Value::Str(s) if !s.trim().is_empty() => {}
+                Value::Str(_) => c.fail(name, "cannot be empty"),
+                v => c.fail(name, format!("must be a string, not {}", v.describe())),
+            },
+            "created" | "updated" => match value {
+                Value::Str(s) if is_utc_datetime(s) => {}
+                _ => c.fail(
+                    name,
+                    "must be a UTC datetime such as \"2026-10-12T09:15:00Z\"",
+                ),
+            },
+            _ => match ty.field(name) {
+                Some(f) if f.kind.is_compound() => c.fail(
+                    name,
+                    format!(
+                        "is a {} field, written as a `{} {name}` block",
+                        f.kind.name(),
+                        f.kind.name()
+                    ),
+                ),
+                Some(f) => {
+                    if f.multiple && f.required && value == &Value::List(Vec::new()) {
+                        c.fail(name, "is required and cannot be empty");
+                    }
+                    check_value(f, value, Some(&ctx), &mut c, name);
+                }
+                None => report.unknown.push(name.clone()),
+            },
+        }
+    }
+    if doc.field("title").is_none() {
+        c.fail("title", "is required");
+    }
+
+    for b in &doc.blocks {
+        let at = b.name();
+        let field = match b.labels.as_slice() {
+            [l] => ty.field(l),
+            _ => None,
+        };
+        let Some(f) = field else {
+            report.unknown.push(at);
+            continue;
+        };
+        if !f.kind.is_compound() || f.kind.name() != b.kind {
+            c.fail(&at, format!("{:?} is a {} field", f.name, f.kind.name()));
+            continue;
+        }
+        if !seen.insert(f.name.as_str()) {
+            c.fail(&at, "appears more than once");
+            continue;
+        }
+        match &f.kind {
+            FieldKind::Content => {
+                c.items(&b.body, &[], &[], &at);
+                c.content_blocks(&b.body.blocks, &at);
+            }
+            FieldKind::Dict { values } => {
+                c.only_blocks(&b.body, &[], &at);
+                let mut keys = HashSet::new();
+                for (k, v) in &b.body.fields {
+                    let path = format!("{at}.{k}");
+                    if !keys.insert(k) {
+                        c.fail(&path, "appears more than once");
+                    }
+                    check_scalar(*values, v, &mut c, &path);
+                }
+            }
+            FieldKind::Ink => c.ink(&b.body, &at),
+            FieldKind::Canvas => c.canvas(&b.body, &at),
+            _ => {}
+        }
+    }
+
+    for f in ty.fields.iter().filter(|f| f.required) {
+        if !seen.contains(f.name.as_str()) {
+            c.fail(&f.name, "is required");
+        }
+    }
+
+    if issues.is_empty() {
+        Ok(report)
+    } else {
+        Err(issues)
+    }
+}
+
+/// Check one non-compound field value, or a definition's `default`. Without a context, references,
+/// assets and terms are checked for form only.
+pub(crate) fn check_value(f: &FieldDef, v: &Value, ctx: Option<&Context>, c: &mut Check, at: &str) {
+    if !f.multiple {
+        return check_single(f, v, ctx, c, at);
+    }
+    let Value::List(items) = v else {
+        return c.fail(
+            at,
+            format!(
+                "holds several values and must be a list, not {}",
+                v.describe()
+            ),
+        );
+    };
+    let mut seen = Vec::new();
+    for (n, item) in items.iter().enumerate() {
+        if seen.contains(&item) {
+            c.fail(at, format!("lists {} twice", show(item)));
+        }
+        seen.push(item);
+        check_single(f, item, ctx, c, &format!("{at}[{n}]"));
+    }
+}
+
+fn check_single(f: &FieldDef, v: &Value, ctx: Option<&Context>, c: &mut Check, at: &str) {
+    match &f.kind {
+        FieldKind::String => check_scalar(Scalar::String, v, c, at),
+        FieldKind::Int => check_scalar(Scalar::Int, v, c, at),
+        FieldKind::Float => check_scalar(Scalar::Float, v, c, at),
+        FieldKind::Bool => check_scalar(Scalar::Bool, v, c, at),
+        FieldKind::Date => check_scalar(Scalar::Date, v, c, at),
+        FieldKind::Datetime => check_scalar(Scalar::Datetime, v, c, at),
+        FieldKind::Url => check_scalar(Scalar::Url, v, c, at),
+        FieldKind::DateRange { datetime } => date_range(*datetime, v, c, at),
+        FieldKind::Select { options } => match v {
+            Value::Str(s) if options.contains(s) => {}
+            Value::Str(s) => c.fail(
+                at,
+                format!("{s:?} is not one of the options: {}", options.join(", ")),
+            ),
+            v => c.fail(at, format!("must be a string, not {}", v.describe())),
+        },
+        FieldKind::Taxonomy { taxonomy } => match v {
+            Value::Str(s) if s.is_empty() => c.fail(at, "a term path cannot be empty"),
+            Value::Str(s) => {
+                if let Some(ctx) = ctx {
+                    match ctx.schema.taxonomy(taxonomy) {
+                        None => c.fail(at, format!("there is no taxonomy {taxonomy:?}")),
+                        Some(t) if !t.contains(s) => {
+                            c.fail(at, format!("{s:?} is not a term of taxonomy {taxonomy:?}"))
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            v => c.fail(
+                at,
+                format!("must be a term path string, not {}", v.describe()),
+            ),
+        },
+        FieldKind::Reference(r) => match v {
+            Value::Str(id) if is_ulid(id) => {
+                let Some(ctx) = ctx else { return };
+                match ctx.lookup.note_type(id) {
+                    None => c.fail(at, format!("note {id} does not exist")),
+                    Some(t) => {
+                        if let Some(target) = &r.target
+                            && &t != target
+                        {
+                            c.fail(
+                                at,
+                                format!("note {id} is a {t}, but this field holds a {target}"),
+                            );
+                        }
+                    }
+                }
+            }
+            Value::Str(id) => c.fail(at, format!("{id:?} is not a note ULID")),
+            v => c.fail(
+                at,
+                format!("must be a note ULID string, not {}", v.describe()),
+            ),
+        },
+        FieldKind::Asset => match v {
+            Value::Str(id) if is_ulid(id) => {
+                if let Some(ctx) = ctx
+                    && !ctx.lookup.asset_exists(id)
+                {
+                    c.fail(at, format!("asset {id} does not exist"));
+                }
+            }
+            Value::Str(id) => c.fail(at, format!("{id:?} is not an asset ULID")),
+            v => c.fail(
+                at,
+                format!("must be an asset ULID string, not {}", v.describe()),
+            ),
+        },
+        FieldKind::List { items } => match v {
+            Value::List(l) => {
+                for (n, item) in l.iter().enumerate() {
+                    check_scalar(*items, item, c, &format!("{at}[{n}]"));
+                }
+            }
+            v => c.fail(at, format!("must be a list, not {}", v.describe())),
+        },
+        FieldKind::Location { image } => {
+            let (a, b, ranges) = if image.is_some() {
+                ("x", "y", None)
+            } else {
+                ("lat", "lng", Some((90.0, 180.0)))
+            };
+            let Some([x, y]) = record(v, [a, b], c, at) else {
+                return;
+            };
+            let (Some(x), Some(y)) = (x.as_f64(), y.as_f64()) else {
+                return c.fail(at, format!("`{a}` and `{b}` must be numbers"));
+            };
+            if let Some((lat, lng)) = ranges {
+                if !(-lat..=lat).contains(&x) {
+                    c.fail(&format!("{at}.lat"), "must be from -90 to 90");
+                }
+                if !(-lng..=lng).contains(&y) {
+                    c.fail(&format!("{at}.lng"), "must be from -180 to 180");
+                }
+            } else if !x.is_finite() || !y.is_finite() {
+                c.fail(at, "`x` and `y` must be finite");
+            }
+        }
+        FieldKind::Content | FieldKind::Dict { .. } | FieldKind::Ink | FieldKind::Canvas => c.fail(
+            at,
+            format!(
+                "a {} field is written as a block, not a value",
+                f.kind.name()
+            ),
+        ),
+    }
+}
+
+pub(crate) fn check_scalar(kind: Scalar, v: &Value, c: &mut Check, at: &str) {
+    let problem = match (kind, v) {
+        (Scalar::String, Value::Str(_)) => None,
+        (Scalar::Int, Value::Int(_)) => None,
+        (Scalar::Float, Value::Int(_) | Value::Float(_)) => None,
+        (Scalar::Bool, Value::Bool(_)) => None,
+        (Scalar::Date, Value::Str(s)) if is_date(s) => None,
+        (Scalar::Date, Value::Str(s)) => {
+            Some(format!("{s:?} is not an ISO 8601 date (YYYY-MM-DD)"))
+        }
+        (Scalar::Datetime, Value::Str(s)) if is_datetime(s) => None,
+        (Scalar::Datetime, Value::Str(s)) => Some(format!(
+            "{s:?} is not an ISO 8601 datetime with seconds and an offset"
+        )),
+        (Scalar::Url, Value::Str(s)) if is_url(s) => None,
+        (Scalar::Url, Value::Str(s)) => Some(format!("{s:?} is not an absolute URL")),
+        (Scalar::Int, Value::Float(_)) => Some("must be an integer, not a float".to_owned()),
+        (Scalar::Int | Scalar::Float, v) => Some(format!("must be a number, not {}", v.describe())),
+        (Scalar::Bool, v) => Some(format!("must be true or false, not {}", v.describe())),
+        (Scalar::String | Scalar::Date | Scalar::Datetime | Scalar::Url, v) => {
+            Some(format!("must be a string, not {}", v.describe()))
+        }
+    };
+    if let Some(p) = problem {
+        c.fail(at, p);
+    }
+}
+
+fn date_range(datetime: bool, v: &Value, c: &mut Check, at: &str) {
+    let Some([start, end]) = record(v, ["start", "end"], c, at) else {
+        return;
+    };
+    let parse = |v: &Value| -> Option<f64> {
+        let s = v.as_str()?;
+        if datetime {
+            parse_datetime(s)
+        } else {
+            parse_date(s).map(|d| d as f64)
+        }
+    };
+    let what = if datetime { "datetime" } else { "date" };
+    match (parse(start), parse(end)) {
+        (Some(s), Some(e)) if e < s => c.fail(&format!("{at}.end"), "is before start"),
+        (Some(_), Some(_)) => {}
+        (s, e) => {
+            if s.is_none() {
+                c.fail(
+                    &format!("{at}.start"),
+                    format!("must be an ISO 8601 {what}"),
+                );
+            }
+            if e.is_none() {
+                c.fail(&format!("{at}.end"), format!("must be an ISO 8601 {what}"));
+            }
+        }
+    }
+}
+
+/// A record holding exactly `keys`, in any order. WCL does not check record members, so a missing
+/// or extra key is caught here.
+fn record<'v, const N: usize>(
+    v: &'v Value,
+    keys: [&str; N],
+    c: &mut Check,
+    at: &str,
+) -> Option<[&'v Value; N]> {
+    let Value::Record(members) = v else {
+        c.fail(
+            at,
+            format!(
+                "must be a record {{ {} }}, not {}",
+                keys.join(", "),
+                v.describe()
+            ),
+        );
+        return None;
+    };
+    let mut ok = true;
+    for (k, _) in members {
+        if !keys.contains(&k.as_str()) {
+            c.fail(at, format!("has an unexpected key `{k}`"));
+            ok = false;
+        }
+    }
+    let mut out = Vec::with_capacity(N);
+    for k in keys {
+        let found: Vec<_> = members.iter().filter(|(m, _)| m == k).collect();
+        match found.as_slice() {
+            [(_, v)] => out.push(v),
+            [] => {
+                c.fail(at, format!("is missing key `{k}`"));
+                ok = false;
+            }
+            _ => {
+                c.fail(at, format!("repeats key `{k}`"));
+                ok = false;
+            }
+        }
+    }
+    if ok { out.try_into().ok() } else { None }
+}
+
+fn show(v: &Value) -> String {
+    match v {
+        Value::Str(s) => format!("{s:?}"),
+        other => other.describe().to_owned(),
+    }
+}

@@ -1102,6 +1102,12 @@ version = "0.1.0"
 [[package]]
 name = "schema"
 version = "0.1.0"
+dependencies = [
+ "store",
+ "tempfile",
+ "thiserror",
+ "wcl_lang",
+]
 
 [[package]]
 name = "script"
