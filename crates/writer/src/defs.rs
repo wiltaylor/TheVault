@@ -113,8 +113,9 @@ impl Writer {
             })
             .collect();
         if notes.is_empty() {
-            self.vault.commit(changes)?;
+            let generation = self.vault.commit(changes)?;
             inner.index.set_schema(&schema)?;
+            inner.index.advance(generation)?;
             inner.schema = schema;
             return Ok(Vec::new());
         }
@@ -328,25 +329,47 @@ impl Writer {
         Ok((self.vault.read_text(&path)?, saved))
     }
 
-    /// Delete taxonomy `name`, unless a type's field uses it.
+    /// Delete taxonomy `name`, unless a type's field uses it. The refusal lists those fields,
+    /// then every note holding one of the taxonomy's terms.
     pub fn delete_taxonomy(&self, name: &str) -> Result<()> {
         let _w = self.write_lock();
         let inner = self.lock();
         if inner.schema.taxonomy(name).is_none() {
             return Err(missing_taxonomy(name));
         }
-        let by: Vec<String> = inner
-            .schema
-            .types()
-            .flat_map(|t| {
-                t.fields.iter().filter_map(move |f| match &f.kind {
-                    FieldKind::Taxonomy { taxonomy } if taxonomy == name => {
-                        Some(format!("{} (field {})", type_path(&t.name), f.name))
+        let mut by = Vec::new();
+        let mut holders = Vec::new();
+        for ty in inner.schema.types() {
+            let fields: Vec<&str> = ty
+                .fields
+                .iter()
+                .filter(|f| matches!(&f.kind, FieldKind::Taxonomy { taxonomy } if taxonomy == name))
+                .map(|f| f.name.as_str())
+                .collect();
+            if fields.is_empty() {
+                continue;
+            }
+            for field in &fields {
+                by.push(format!("{} (field {field})", type_path(&ty.name)));
+            }
+            for id in self.ids_of_type(&inner, &ty.name)? {
+                let file = note_path(&ty.name, &id);
+                let doc = Input::Wcl(self.vault.read_text(&file)?).parse(&file)?;
+                for (field, value) in &doc.fields {
+                    if !fields.contains(&field.as_str()) {
+                        continue;
                     }
-                    _ => None,
-                })
-            })
-            .collect();
+                    let terms: Vec<&Value> = match value {
+                        Value::List(l) => l.iter().collect(),
+                        v => vec![v],
+                    };
+                    for term in terms.into_iter().filter_map(Value::as_str) {
+                        holders.push(format!("{file} ({field} = {term:?})"));
+                    }
+                }
+            }
+        }
+        by.extend(holders);
         if !by.is_empty() {
             return Err(Error::InUse {
                 code: "taxonomy_in_use",
@@ -416,10 +439,12 @@ impl Writer {
     /// Create or replace `scripts/<name>.ws`, stored as sent.
     pub fn put_script(&self, name: &str, source: &str) -> Result<String> {
         let _w = self.write_lock();
-        let _inner = self.lock();
+        let mut inner = self.lock();
         check_name("script", name)?;
-        self.vault
+        let generation = self
+            .vault
             .commit(vec![Change::write(script_path(name), source.as_bytes())])?;
+        inner.index.advance(generation)?;
         Ok(source.to_owned())
     }
 
@@ -468,7 +493,7 @@ impl Writer {
     /// Delete `scripts/<name>.ws`, unless a type's handler or a task names it.
     pub fn delete_script(&self, name: &str) -> Result<()> {
         let _w = self.write_lock();
-        let inner = self.lock();
+        let mut inner = self.lock();
         self.read_script(name)?;
         let mut by: Vec<String> = inner
             .schema
@@ -495,7 +520,8 @@ impl Writer {
                 by,
             });
         }
-        self.vault.commit(vec![Change::delete(script_path(name))])?;
+        let generation = self.vault.commit(vec![Change::delete(script_path(name))])?;
+        inner.index.advance(generation)?;
         Ok(())
     }
 
@@ -529,7 +555,7 @@ impl Writer {
         source: &str,
         check: impl FnOnce(&str) -> std::result::Result<(), Invalid>,
     ) -> Result<String> {
-        let _inner = self.lock();
+        let mut inner = self.lock();
         check_name("task", name)?;
         let path = task_path(name);
         let text = store::canonical(source, &path)?;
@@ -546,16 +572,19 @@ impl Writer {
                 )],
             }));
         }
-        self.vault
+        let generation = self
+            .vault
             .commit(vec![Change::write(path, text.as_bytes())])?;
+        inner.index.advance(generation)?;
         Ok(text)
     }
 
     /// Delete `tasks/<name>.wcl`.
     pub fn delete_task(&self, name: &str) -> Result<()> {
-        let _inner = self.lock();
+        let mut inner = self.lock();
         self.read_task(name)?;
-        self.vault.commit(vec![Change::delete(task_path(name))])?;
+        let generation = self.vault.commit(vec![Change::delete(task_path(name))])?;
+        inner.index.advance(generation)?;
         Ok(())
     }
 

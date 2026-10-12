@@ -6,6 +6,7 @@ import { Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } 
 import { Timeline } from "vis-timeline/standalone";
 import "vis-timeline/styles/vis-timeline-graph2d.min.css";
 import { type Row, api } from "../api";
+import { changes } from "../changes";
 import { types } from "../session";
 import type { ViewDef } from "./model";
 import { type TimelineItem, calendarEvent, dateField, hasDate, narrow, timelineItem, visibleWindow } from "./narrow";
@@ -102,7 +103,7 @@ export function CalendarView(props: { view: ViewDef; query: string; thisId: stri
         });
         createEffect(
           on(
-            () => [props.query, props.thisId, f()],
+            () => [props.query, props.thisId, f(), changes()],
             () => calendar?.refetchEvents(),
             { defer: true },
           ),
@@ -168,6 +169,23 @@ export function TimelineView(props: { view: ViewDef; query: string; thisId: stri
           }
         }
 
+        /** Load the range on screen again and show only what it holds, keeping the view where it is. */
+        async function reloadWindow() {
+          if (!timeline) return;
+          const gen = ++generation;
+          const { start, end } = timeline.getWindow();
+          try {
+            const { rows, capped } = await loadAll(narrow(props.query, visibleWindow(f(), start, end)), props.thisId);
+            if (gen !== generation) return;
+            setError(null);
+            setCapped(capped);
+            items.clear();
+            add(rows);
+          } catch (e) {
+            if (gen === generation) setError(message(e));
+          }
+        }
+
         async function reset() {
           const gen = ++generation;
           items.clear();
@@ -211,6 +229,7 @@ export function TimelineView(props: { view: ViewDef; query: string; thisId: stri
             { defer: true },
           ),
         );
+        createEffect(on(changes, () => void reloadWindow(), { defer: true }));
         return (
           <div class="query-timeline">
             <Show when={error()}>

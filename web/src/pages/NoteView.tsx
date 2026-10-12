@@ -1,4 +1,4 @@
-import { A, useNavigate, useParams } from "@solidjs/router";
+import { A, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, on } from "solid-js";
 import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, api } from "../api";
 import { ConflictView } from "../components/ConflictView";
@@ -34,8 +34,27 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** A note laid out by its type's default template, a tab per template tab (D14). */
-export function NoteView() {
+/** The form for a new note of the type named in `?type=`: its default template, empty (D14). */
+export function NewNote() {
+  const [search] = useSearchParams();
+  const type = () => (typeof search.type === "string" ? search.type : "");
+  return (
+    <Show when={typeDef(type())} keyed fallback={<p class="error">There is no type {type()}.</p>}>
+      {(t) => <NoteView newType={t.name} />}
+    </Show>
+  );
+}
+
+/** A draft of a note of `type` that has not been created yet. */
+function draftNote(type: string): Note {
+  return { id: "", type, version: "", wcl: "", note: { fields: {}, blocks: [] } };
+}
+
+/**
+ * A note laid out by its type's default template, a tab per template tab (D14). With `newType`,
+ * an unsaved note of that type, open for editing, which Save creates.
+ */
+export function NoteView(props: { newType?: string }) {
   const params = useParams();
   const navigate = useNavigate();
   const [note, setNote] = createSignal<Note | null>(null);
@@ -61,6 +80,11 @@ export function NoteView() {
         setTab(0);
         setEditing(false);
         setConflict(null);
+        if (props.newType) {
+          setNote(draftNote(props.newType));
+          startEditing();
+          return;
+        }
         try {
           setNote(await api.note(id ?? ""));
         } catch (e) {
@@ -90,6 +114,8 @@ export function NoteView() {
   function draftValue(f: FieldDef): Json | undefined {
     const n = note();
     if (f.name in edits()) return edits()[f.name];
+    // A new note shows each field's default, which the server fills in when the field is not sent.
+    if (props.newType) return f.default;
     return n ? fieldValue(n.note, f) : undefined;
   }
 
@@ -99,9 +125,13 @@ export function NoteView() {
     setSaving(true);
     setSaveError(null);
     try {
-      const saved = await api.updateNote(n.id, doc, base);
+      const saved = props.newType ? await api.createNote(n.type, doc) : await api.updateNote(n.id, doc, base);
       const title = saved.note.fields.title;
       if (typeof title === "string") knowTitle(saved.id, title);
+      if (props.newType) {
+        navigate(`/notes/${saved.id}`);
+        return;
+      }
       setNote(saved);
       setConflict(null);
       setEditing(false);
@@ -274,7 +304,7 @@ export function NoteView() {
             <header class="note-header">
               <div>
                 <p class="note-kind">{type()?.label ?? n().type}</p>
-                <h1>{formatValue(n().note.fields.title) || "Untitled"}</h1>
+                <h1>{props.newType ? `New ${type()?.label ?? n().type}` : formatValue(n().note.fields.title) || "Untitled"}</h1>
               </div>
               <Show when={!conflict()}>
                 <Show
@@ -294,7 +324,11 @@ export function NoteView() {
                   }
                 >
                   <div class="actions">
-                    <button type="button" onClick={() => setEditing(false)} disabled={saving()}>
+                    <button
+                      type="button"
+                      onClick={() => (props.newType ? navigate(`/types/${n().type}`) : setEditing(false))}
+                      disabled={saving()}
+                    >
                       Cancel
                     </button>
                     <button type="submit" form="note-form" class="primary" disabled={saving()}>

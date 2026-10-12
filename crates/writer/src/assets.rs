@@ -1,11 +1,15 @@
 //! Uploaded files, stored byte for byte at `assets/<ULID>/<filename>` (D22).
 //!
-//! An asset folder holds exactly one file. An asset cannot be deleted while a note or a type file
-//! names its id, because those files would stop validating.
+//! An asset folder holds exactly one file. An asset cannot be deleted while a type file names its
+//! id, because the type would stop validating. Notes that name it refuse the delete too, unless
+//! the caller asks to unlink: then every reference to the asset is taken out of those notes in the
+//! same commit, as `on_delete = "unlink"` does for a deleted note (D5).
 
+use schema::{Doc, Value};
+use state::Author;
 use store::Change;
 
-use crate::{Error, Result, Writer};
+use crate::{Error, Event, NoteChange, Result, Saved, Writer, created_of, note, time};
 
 /// The longest file name an asset may have, in bytes.
 pub const MAX_FILENAME: usize = 255;
@@ -52,14 +56,16 @@ impl Writer {
     pub fn put_asset(&self, filename: &str, bytes: Vec<u8>) -> Result<Asset> {
         check_filename(filename)?;
         let _w = self.write_lock();
-        let _inner = self.lock();
+        let mut inner = self.lock();
         let asset = Asset {
             id: ulid::Ulid::new().to_string(),
             filename: filename.to_owned(),
             size: bytes.len() as u64,
         };
-        self.vault
+        let generation = self
+            .vault
             .commit(vec![Change::write(asset.path(), bytes)])?;
+        inner.index.advance(generation)?;
         Ok(asset)
     }
 
@@ -88,23 +94,71 @@ impl Writer {
         Ok((asset, bytes))
     }
 
-    /// Delete asset `id`, unless a note or type file names it.
-    pub fn delete_asset(&self, id: &str) -> Result<Asset> {
+    /// Delete asset `id`. A type file naming it refuses the delete. Notes naming it refuse it
+    /// too, unless `unlink` is set: then each loses its references to the asset in the same
+    /// commit, and the update is theirs, so their handlers run. Returns the asset and the notes
+    /// saved.
+    pub fn delete_asset(
+        &self,
+        id: &str,
+        unlink: bool,
+        author: &Author,
+    ) -> Result<(Asset, Vec<Saved>)> {
         let _w = self.write_lock();
-        let _inner = self.lock();
+        let mut inner = self.lock();
         let asset = self.find_asset(id).ok_or_else(|| missing(id))?;
         let by = self.files_naming(id)?;
-        if !by.is_empty() {
+        let types: Vec<String> = by
+            .iter()
+            .filter(|p| p.starts_with("types/"))
+            .cloned()
+            .collect();
+        if !types.is_empty() || (!by.is_empty() && !unlink) {
+            let by = if types.is_empty() { by } else { types };
             return Err(Error::InUse {
                 code: "asset_in_use",
                 message: format!("asset {id} cannot be deleted"),
                 by,
             });
         }
-        self.vault.commit(vec![Change::delete(asset.path())])?;
+
+        let now = time::utc(self.clock.now_ms());
+        let mut changes = Vec::new();
+        for path in &by {
+            let Some((type_name, note_id)) = path
+                .strip_prefix("notes/")
+                .and_then(|rest| rest.strip_suffix(".wcl"))
+                .and_then(|rest| rest.split_once('/'))
+            else {
+                continue;
+            };
+            let Some(ty) = inner.schema.type_def(type_name) else {
+                continue;
+            };
+            let mut doc = crate::Input::Wcl(self.vault.read_text(path)?).parse(path)?;
+            if !unlink_asset(&mut doc, id) {
+                continue;
+            }
+            let created = created_of(&doc).unwrap_or_else(|| now.clone());
+            changes.push(NoteChange {
+                id: note_id.to_owned(),
+                type_name: type_name.to_owned(),
+                event: Event::Update,
+                doc: Some(note::arrange(ty, doc, &created, &now)),
+            });
+        }
+
+        let delete = vec![Change::delete(asset.path())];
+        let saved = if changes.is_empty() {
+            let generation = self.vault.commit(delete)?;
+            inner.index.advance(generation)?;
+            Vec::new()
+        } else {
+            self.apply_with(inner, changes, &|| Ok(()), author, delete, false)?
+        };
         let dir = self.vault.root().join("assets").join(id);
         let _ = std::fs::remove_dir(dir);
-        Ok(asset)
+        Ok((asset, saved))
     }
 
     /// The asset in `assets/<id>/`, when the folder holds its file.
@@ -160,6 +214,56 @@ impl Writer {
         }
         Ok(out)
     }
+}
+
+/// Take every reference to asset `id` out of a note: the values of its fields, and each block
+/// whose `asset` item names it, at any depth. A canvas node that goes takes its edges with it.
+/// Returns whether anything changed.
+fn unlink_asset(doc: &mut Doc, id: &str) -> bool {
+    let is_id = |v: &Value| v.as_str() == Some(id);
+    let mut changed = false;
+    doc.fields.retain_mut(|(_, value)| match value {
+        v if is_id(v) => {
+            changed = true;
+            false
+        }
+        Value::List(items) => {
+            let before = items.len();
+            items.retain(|v| !is_id(v));
+            changed |= items.len() != before;
+            !items.is_empty()
+        }
+        _ => true,
+    });
+    strip_blocks(doc, id) || changed
+}
+
+fn strip_blocks(body: &mut Doc, id: &str) -> bool {
+    let names = |b: &schema::DocBlock| b.body.field("asset").and_then(Value::as_str) == Some(id);
+    let gone: Vec<String> = body
+        .blocks
+        .iter()
+        .filter(|b| b.kind == "node" && names(b))
+        .filter_map(|b| b.label().map(str::to_owned))
+        .collect();
+    let before = body.blocks.len();
+    body.blocks.retain(|b| !names(b));
+    if !gone.is_empty() {
+        body.blocks.retain(|b| {
+            b.kind != "edge"
+                || !["from", "to"].iter().any(|end| {
+                    b.body
+                        .field(end)
+                        .and_then(Value::as_str)
+                        .is_some_and(|n| gone.iter().any(|g| g == n))
+                })
+        });
+    }
+    let mut changed = body.blocks.len() != before;
+    for b in &mut body.blocks {
+        changed |= strip_blocks(&mut b.body, id);
+    }
+    changed
 }
 
 fn missing(id: &str) -> Error {

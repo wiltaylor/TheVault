@@ -6,6 +6,12 @@
 //! validated and committed them. A rebuild and the same notes applied one at a time produce the
 //! same [`Index::dump`].
 //!
+//! The index records the vault commit generation it is current with (see
+//! [`store::Vault::generation`]). [`Index::rebuild`] sets it and [`Index::advance`] moves it one
+//! commit at a time, so [`Index::is_current`] tells a server on start whether it may skip the
+//! rebuild. A commit whose changes never reached the index leaves it behind for good, and the
+//! next start rebuilds.
+//!
 //! `index.db` holds these tables, which `query` reads:
 //!
 //! | Table | One row per |
@@ -16,6 +22,7 @@
 //! | `terms` | Taxonomy term, with its parent, depth and display position |
 //! | `term_ancestors` | Pair of a term and itself or a term above it, for `under()` |
 //! | `failures` | Vault file the last rebuild could not index, with its diagnostic |
+//! | `meta` | Fact about the index itself: `generation` |
 
 mod project;
 mod rebuild;
@@ -29,7 +36,7 @@ use schema::{Doc, NoteReport, Schema};
 
 pub use project::mentions;
 pub use rebuild::{Failure, RebuildReport};
-pub use search::Hit;
+pub use search::{Hit, SearchPage};
 
 /// Errors from the index. A file that fails validation is not an error: a rebuild reports it.
 #[derive(Debug, thiserror::Error)]
@@ -85,12 +92,36 @@ impl Index {
         Index::open_at(&dir.join("index.db"), &dir.join("search"))
     }
 
-    /// Open an index at explicit paths.
+    /// Open an index at explicit paths. A full-text index that is missing, or was written with
+    /// another schema, is created empty, and the index is then behind whatever generation
+    /// `index.db` recorded.
     pub fn open_at(db: &Path, search_dir: &Path) -> Result<Index> {
         let conn = Connection::open(db)?;
         sql::init(&conn)?;
-        let search = search::Search::open(search_dir)?;
+        let missing = !search_dir.join("meta.json").is_file();
+        let (search, reset) = search::Search::open(search_dir)?;
+        if missing || reset {
+            sql::forget_generation(&conn)?;
+        }
         Ok(Index { conn, search })
+    }
+
+    /// The vault generation the index holds every change up to, or `None` when it has never
+    /// been rebuilt or its full-text half went missing.
+    pub fn generation(&self) -> Result<Option<u64>> {
+        sql::generation(&self.conn)
+    }
+
+    /// Whether the index holds every commit of `vault`, so a rebuild would change nothing.
+    pub fn is_current(&self, vault: &store::Vault) -> Result<bool> {
+        Ok(self.generation()? == Some(vault.generation()?))
+    }
+
+    /// Record that the commit that made `generation` has been applied: call it after the
+    /// commit's [`Index::update`], or straight after a commit that changes no note. The index
+    /// moves only from the generation before, so missing one commit leaves it behind.
+    pub fn advance(&mut self, generation: u64) -> Result<()> {
+        sql::advance_generation(&self.conn, generation)
     }
 
     /// The SQLite connection, for `query` to read from.
@@ -141,7 +172,8 @@ impl Index {
     }
 
     /// Rebuild both indexes from the vault files. Every file that fails validation is reported
-    /// and left out, and every other file is indexed (D28).
+    /// and left out, and every other file is indexed (D28). The index is then current with the
+    /// vault's generation as it stood when the rebuild began.
     pub fn rebuild(&mut self, vault: &store::Vault) -> Result<RebuildReport> {
         rebuild::rebuild(self, vault)
     }
@@ -150,6 +182,18 @@ impl Index {
     /// score, then by id. `limit` of `None` returns every hit.
     pub fn search(&self, text: &str, limit: Option<usize>) -> Result<Vec<Hit>> {
         self.search.search(text, limit)
+    }
+
+    /// One page of a full-text search: the best `size` hits strictly after `after`, the score
+    /// and id of the previous page's last hit, ordered by score and then by id, and the count of
+    /// every hit. Its cost grows with the page, not with the number of hits.
+    pub fn search_page(
+        &self,
+        text: &str,
+        after: Option<(f32, &str)>,
+        size: usize,
+    ) -> Result<SearchPage> {
+        self.search.page(text, after, size)
     }
 
     /// The files the last rebuild could not index.

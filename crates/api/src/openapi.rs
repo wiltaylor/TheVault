@@ -173,7 +173,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "DELETE",
         "/api/assets/{id}",
-        "Delete an asset no note names",
+        "Delete an asset; ?unlink=true first takes it out of every note that names it",
     ),
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),

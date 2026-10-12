@@ -392,13 +392,18 @@ struct Inner {
 }
 
 impl Writer {
-    /// Open the write path: bring `state.db` up to the vault files, load the schema and rebuild
-    /// the index from the files.
+    /// Open the write path and load the schema. When the index is behind the vault's commits,
+    /// bring `state.db` up to the vault files and rebuild the index from them. An index that is
+    /// current is trusted as it is: every commit it holds also finished its `state.db` step, and
+    /// files edited outside the server are not watched (D28), so `vault reindex` is how to pick
+    /// them up.
     pub fn open(vault: Vault, state: State) -> Result<Writer> {
-        recover(&vault, &state)?;
-        let schema = Schema::load(&vault)?;
         let mut index = Index::open(&vault)?;
-        index.rebuild(&vault)?;
+        if !index.is_current(&vault)? {
+            recover(&vault, &state)?;
+            index.rebuild(&vault)?;
+        }
+        let schema = Schema::load(&vault)?;
         Ok(Writer {
             vault,
             state,
@@ -507,8 +512,9 @@ impl Writer {
         let taxonomies = self.definitions("taxonomies")?;
         let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
             .map_err(Error::InvalidType)?;
-        self.vault.commit(vec![Change::write(path, text.clone())])?;
+        let generation = self.vault.commit(vec![Change::write(path, text.clone())])?;
         inner.index.set_schema(&schema)?;
+        inner.index.advance(generation)?;
         inner.schema = schema;
         Ok(text)
     }
@@ -718,6 +724,19 @@ impl Writer {
             wcl,
             doc,
         })
+    }
+
+    /// The indexed title of note `id`, if the index holds the note.
+    pub fn title(&self, id: &str) -> Result<Option<String>> {
+        let inner = self.lock();
+        let conn = inner.index.connection();
+        let mut stmt = conn
+            .prepare("SELECT title FROM notes WHERE id = ?1")
+            .map_err(index::Error::from)?;
+        let mut rows = stmt
+            .query_map([id], |r| r.get::<_, String>(0))
+            .map_err(index::Error::from)?;
+        Ok(rows.next().transpose().map_err(index::Error::from)?)
     }
 
     /// Every indexed note, or every note of one type, oldest first.
@@ -1012,10 +1031,10 @@ impl Writer {
                 None => Change::delete(path),
             });
         }
-        match inner.commit_hook.as_mut() {
+        let generation = match inner.commit_hook.as_mut() {
             Some(hook) => self.vault.commit_with_hook(files, &mut **hook)?,
             None => self.vault.commit(files)?,
-        }
+        };
 
         let mut saved = Vec::with_capacity(rendered.len());
         let mut updates = Vec::with_capacity(rendered.len());
@@ -1061,6 +1080,7 @@ impl Writer {
         }
         let inner = &mut *inner;
         inner.index.update(&inner.schema, &updates)?;
+        inner.index.advance(generation)?;
         self.hooks.after(&saved, author, &inner.schema);
         Ok(saved)
     }

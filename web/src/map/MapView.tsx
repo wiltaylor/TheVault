@@ -1,6 +1,8 @@
 import { type JSX, Show, createEffect, createMemo, createSignal, on } from "solid-js";
-import { type Json, type Row, api } from "../api";
+import { ApiError, type Json, type Note, type NoteDoc, type Row, api } from "../api";
+import { ConflictView } from "../components/ConflictView";
 import type { PagedRows } from "../components/pagedRows";
+import { applyEdits } from "../notes";
 import { typeDef } from "../session";
 import { MapCanvas, type PinView } from "./MapCanvas";
 import { type MapKind, mapKind, pinsOf } from "./model";
@@ -8,10 +10,21 @@ import { type MapKind, mapKind, pinsOf } from "./model";
 /** Pins drawn at once. A larger result pages, like the details view (D33). */
 export const PINS_PER_PAGE = 500;
 
+function message(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+interface Conflict {
+  id: string;
+  mine: NoteDoc;
+  stored: Note;
+}
+
 /**
  * A query view's `map` view: a pin per result note at its `location` field (D29). The field
  * decides the map: a real-world map, or the image an image-map field names. Dragging a pin writes
- * the note's field; clicking one opens its card.
+ * the note's field against the version the note had when the drag started, so a save that lands
+ * meanwhile answers 409 and opens the conflict view (D12); clicking a pin opens its card.
  */
 export function MapView(props: {
   location: string | null;
@@ -22,8 +35,12 @@ export function MapView(props: {
   const [page, setPage] = createSignal(0);
   const [open, setOpen] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
-  // Points written by dragging, until the query is run again.
+  // Points written by dragging, until the query is run again. `null` is a note with no point.
   const [moved, setMoved] = createSignal<Record<string, Json>>({});
+  const [conflict, setConflict] = createSignal<Conflict | null>(null);
+  const [busy, setBusy] = createSignal(false);
+  // The note as it was when each pin's drag started.
+  const reads = new Map<string, Promise<Note>>();
 
   const pages = () => Math.max(1, Math.ceil(props.total / PINS_PER_PAGE));
   createEffect(on(pages, (n) => page() >= n && setPage(n - 1)));
@@ -63,19 +80,65 @@ export function MapView(props: {
 
   const openRow = () => shown().find((r) => r.id === open());
 
+  function startDrag(id: string) {
+    const note = api.note(id);
+    // Awaited when the pin drops; until then a failed read is not an unhandled rejection.
+    note.catch(() => {});
+    reads.set(id, note);
+  }
+
+  async function save(id: string, mine: NoteDoc, base: string) {
+    try {
+      await api.updateNote(id, mine, base);
+      setConflict(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.isConflict) {
+        setConflict({ id, mine, stored: await api.note(id) });
+      } else {
+        throw e;
+      }
+    }
+  }
+
   async function move(id: string, value: Json) {
     const name = props.location;
     if (!name) return;
+    const read = reads.get(id) ?? api.note(id);
+    reads.delete(id);
     setMoved({ ...moved(), [id]: value });
+    setBusy(true);
     try {
-      const note = await api.note(id);
-      await api.updateNote(id, { ...note.note, fields: { ...note.note.fields, [name]: value } }, note.version);
+      const n = await read;
+      await save(id, applyEdits(n.note, { [name]: value }), n.version);
       setError(null);
     } catch (e) {
       const { [id]: _, ...rest } = moved();
       setMoved(rest);
-      setError(`The pin did not move: ${e instanceof Error ? e.message : String(e)}`);
+      setError(`The pin did not move: ${message(e)}`);
+    } finally {
+      setBusy(false);
     }
+  }
+
+  async function saveMine() {
+    const c = conflict();
+    if (!c) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await save(c.id, c.mine, c.stored.version);
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function keepStored() {
+    const c = conflict();
+    const name = props.location;
+    setConflict(null);
+    if (c && name) setMoved({ ...moved(), [c.id]: c.stored.note.fields[name] ?? null });
   }
 
   return (
@@ -103,6 +166,18 @@ export function MapView(props: {
             {error()}
           </p>
         </Show>
+        <Show when={conflict()}>
+          {(c) => (
+            <ConflictView
+              type={typeDef(c().stored.type)}
+              mine={c().mine}
+              stored={c().stored.note}
+              busy={busy()}
+              onKeepStored={keepStored}
+              onSaveMine={() => void saveMine()}
+            />
+          )}
+        </Show>
         <Show
           when={kind()}
           keyed
@@ -122,6 +197,7 @@ export function MapView(props: {
               label="Map"
               class="query-map-canvas"
               draggable
+              onDragStart={startDrag}
               onMove={(id, v) => void move(id, v)}
               onOpen={(id) => setOpen(open() === id ? null : id)}
               open={openRow() ? open() : null}

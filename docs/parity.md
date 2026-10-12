@@ -30,7 +30,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 
 | UI action | Where | API | CLI | Gap |
 |---|---|---|---|---|
-| Create a note | none | `POST /api/notes` | `vault put --type <type>` | **#39**: the UI has no way to create a note |
+| Create a note | `pages/TypeList.tsx` (New note), `NoteView.tsx` at `/notes/new?type=` | `POST /api/notes` | `vault put --type <type>` | Closed by #39 |
 | Open a note | `pages/NoteView.tsx` | `GET /api/notes/{id}` | `vault get <id>` | |
 | Save a note (fields, content, ink, canvas) | `NoteView.tsx` | `PUT /api/notes/{id}` with `base_version` | `vault put <id> --base <version>` | |
 | Conflict view: save my version | `components/ConflictView.tsx` | `GET /api/notes/{id}`, then `PUT` at the stored version | `vault get <id>`, then `vault put <id> --base <stored version>` (the CLI prints the 409 body) | |
@@ -55,7 +55,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Insert or replace an image or file | `blocks/MediaBlocks.tsx` | `POST /api/assets?filename=` | `vault asset upload <path> [--filename]` | |
 | Show an image or download an asset | `MediaBlocks.tsx`, `canvas/CanvasNodes.tsx` | `GET /api/assets/{id}` | `vault asset get <id> --out <file>` | |
 | Show an asset block's name and size | `MediaBlocks.tsx` | `GET /api/assets` | `vault asset list` | |
-| Delete an asset | none | `DELETE /api/assets/{id}` | `vault asset delete <id>` | **#40**: no UI action |
+| Delete an asset, taking it out of the notes that use it after confirming | `pages/Assets.tsx` | `DELETE /api/assets/{id}[?unlink=true]` | `vault asset delete <id> [--unlink]` | |
 
 ### Query views
 
@@ -71,7 +71,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Canvas query view kind | `QueryView.tsx` | — | — | **#42**: the view shows "not available yet" |
 | Edit a query view's settings and views | `editor/QueryViewSettings.tsx` | — then the note or template `PUT` | `vault put <id>` / `vault template put` | |
 | Visual builder: text to model | `editor/QueryEditor.tsx` | `POST /api/query/parse` | `vault query-parse <q>` | |
-| Visual builder: model to text | `QueryEditor.tsx` | `POST /api/query/text` | none | **#41**: no CLI command |
+| Visual builder: model to text | `QueryEditor.tsx` | `POST /api/query/text` | `vault query-text` | |
 | Views refresh after a save | `QueryView.tsx` | — | — | **#43**: query views do not re-run after a note write |
 
 ### Canvas
@@ -92,13 +92,13 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Preview a change to a type (renames, migration) | `TypeEditor.tsx` | `POST /api/types/{name}/change` | `vault type change <name> -f <file> [--rename old=new] [--migration <script>] [--function <fn>]` | |
 | List the notes a refused plan affects | `TypeEditor.tsx` | `POST /api/query` | `vault query` | |
 | Apply a type change | `TypeEditor.tsx` | `POST /api/types/{name}/change` with `plan` | `vault type change <name> … --apply <plan token>` | |
-| Delete a type | none | `DELETE /api/types/{name}` | `vault type delete <name>` | **#40**: no UI action |
+| Delete a type | `TypeEditor.tsx` | `DELETE /api/types/{name}` | `vault type delete <name>` | |
 | Open the template editor | `pages/TemplateEditor.tsx` | `GET /api/schema` | `vault schema` or `vault template list <type>` | |
 | Save a template | `TemplateEditor.tsx` | `PUT /api/types/{type}/templates/{name}` | `vault template put <type> <name> -f <file>` | |
 | Delete a template | `TemplateEditor.tsx` | `DELETE /api/types/{type}/templates/{name}` | `vault template delete <type> <name>` | |
 | Open a taxonomy | `pages/TaxonomyEditor.tsx` | `GET /api/taxonomies` | `vault taxonomy list` or `vault taxonomy get <name>` | |
 | Save a taxonomy, with term renames and moves | `TaxonomyEditor.tsx` | `PUT /api/taxonomies/{name}` with `renames` | `vault taxonomy put <name> -f <file> [--rename old=new]` | |
-| Delete a taxonomy | none | `DELETE /api/taxonomies/{name}` | `vault taxonomy delete <name>` | **#40**: no UI action |
+| Delete a taxonomy | `TaxonomyEditor.tsx` | `DELETE /api/taxonomies/{name}` | `vault taxonomy delete <name>` | |
 
 ### Scripts, tasks, secrets and tokens
 
@@ -148,14 +148,14 @@ The listing has 60 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/query` | `vault query` (sends `POST`) | not used | Explained: the same query as a URL, for links and simple clients |
 | `POST /api/query` | `vault query` | Lists and views | |
 | `POST /api/query/parse` | `vault query-parse` | Visual builder | |
-| `POST /api/query/text` | none | Visual builder | **#41** |
+| `POST /api/query/text` | `vault query-text` | Visual builder | |
 | `GET /api/search` | `vault search` | Search and pickers | |
 | `GET /api/trash` | `vault trash list` | Trash | |
 | `POST /api/trash/{id}/restore` | `vault trash restore` | Trash | |
 | `GET /api/types` | `vault type list` | Session load | |
 | `GET /api/types/{name}` | `vault type get` | not used | The UI reads the type from `GET /api/schema` |
 | `PUT /api/types/{name}` | `vault type put` | Create a type | |
-| `DELETE /api/types/{name}` | `vault type delete` | none | **#40** |
+| `DELETE /api/types/{name}` | `vault type delete` | Type editor | |
 | `POST /api/types/{name}/change` | `vault type change` | Type editor | |
 | `GET /api/flagged` | `vault flagged` | Flagged | |
 | `GET /api/types/{name}/templates` | `vault template list` | not used | The UI reads templates from `GET /api/schema` |
@@ -165,7 +165,7 @@ The listing has 60 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/taxonomies` | `vault taxonomy list` | Taxonomy editor, session load | |
 | `GET /api/taxonomies/{name}` | `vault taxonomy get` | not used | The UI reads the full list |
 | `PUT /api/taxonomies/{name}` | `vault taxonomy put` | Taxonomy editor | |
-| `DELETE /api/taxonomies/{name}` | `vault taxonomy delete` | none | **#40** |
+| `DELETE /api/taxonomies/{name}` | `vault taxonomy delete` | Taxonomy editor | |
 | `GET /api/scripts` | `vault script list` | Scripts, type and task editors | |
 | `GET /api/scripts/{name}` | `vault script get` | Scripts | |
 | `PUT /api/scripts/{name}` | `vault script put` | Scripts | |
@@ -173,7 +173,7 @@ The listing has 60 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/assets` | `vault asset list` | Asset field, asset block | |
 | `POST /api/assets` | `vault asset upload` | Image and file blocks, canvas | |
 | `GET /api/assets/{id}` | `vault asset get` | Images, downloads | |
-| `DELETE /api/assets/{id}` | `vault asset delete` | none | **#40** |
+| `DELETE /api/assets/{id}` | `vault asset delete [--unlink]` | Assets | |
 | `GET /api/tokens` | `vault token list` | Access | |
 | `POST /api/tokens` | `vault token create` | Access | |
 | `DELETE /api/tokens/{name}` | `vault token revoke` | Access | |
@@ -207,9 +207,9 @@ The CLI adds no behaviour of its own except these, as SPEC.md allows (D25, D28, 
 
 | Ticket | Gap |
 |---|---|
-| #39 | The web UI cannot create a note |
-| #40 | Types, taxonomies and assets cannot be deleted from the UI |
-| #41 | No CLI command for `POST /api/query/text` |
+| #39 | The web UI cannot create a note (closed) |
+| #40 | Types, taxonomies and assets cannot be deleted from the UI (closed) |
+| #41 | No CLI command for `POST /api/query/text` (closed) |
 | #42 | The canvas query view kind is not rendered |
 | #43 | Query views do not re-run after a note is saved |
 | #44 | A map pin drag that hits a 409 reverts the pin with no conflict view |

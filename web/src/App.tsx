@@ -3,10 +3,11 @@ import { type ParentProps, onMount } from "solid-js";
 import { setUnauthorizedHandler } from "./api";
 import { Shell } from "./components/Shell";
 import { Secrets, Tokens } from "./pages/Access";
+import { Assets } from "./pages/Assets";
 import { Flagged, NoteHistory, Trash } from "./pages/History";
 import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
-import { NoteView } from "./pages/NoteView";
+import { NewNote, NoteView } from "./pages/NoteView";
 import { ScriptEditor, ScriptList } from "./pages/Scripts";
 import { Search } from "./pages/Search";
 import { Settings } from "./pages/Settings";
@@ -42,6 +43,7 @@ export function App() {
         <Route path="/taxonomies" component={TaxonomyList} />
         <Route path="/taxonomies/new" component={TaxonomyEditor} />
         <Route path="/taxonomies/:name" component={TaxonomyEditor} />
+        <Route path="/notes/new" component={NewNote} />
         <Route path="/notes/:id" component={NoteView} />
         <Route path="/notes/:id/history" component={NoteHistory} />
         <Route path="/scripts" component={ScriptList} />
@@ -49,6 +51,7 @@ export function App() {
         <Route path="/tasks" component={TaskList} />
         <Route path="/tasks/new" component={TaskEditor} />
         <Route path="/tasks/:name" component={TaskEditor} />
+        <Route path="/assets" component={Assets} />
         <Route path="/secrets" component={Secrets} />
         <Route path="/tokens" component={Tokens} />
         <Route path="/trash" component={Trash} />

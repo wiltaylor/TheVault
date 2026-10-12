@@ -85,19 +85,38 @@ fn a_commit_stopped_at_any_step_is_all_or_nothing_after_reopening() {
         );
         drop(vault);
 
-        Vault::open(dir.path()).unwrap();
+        let reopened = Vault::open(dir.path()).unwrap();
         let found = snapshot(dir.path());
-        let want = if matches!(stop, CommitStep::Staged(_)) {
-            &before
+        let (want, generation) = if matches!(stop, CommitStep::Staged(_)) {
+            (&before, 1)
         } else {
-            &after
+            (&after, 2)
         };
         assert_eq!(&found, want, "stopped at {stop:?}");
+        assert_eq!(reopened.generation().unwrap(), generation, "{stop:?}");
         assert!(
             !dir.path().join(".vault/txn").exists(),
             "{stop:?}: journal left behind"
         );
     }
+}
+
+#[test]
+fn every_commit_adds_one_to_the_generation() {
+    let dir = TempDir::new().unwrap();
+    let vault = Vault::init(dir.path()).unwrap();
+    assert_eq!(vault.generation().unwrap(), 0);
+    assert_eq!(
+        vault
+            .commit(vec![Change::write(A, "title = \"A\"\n")])
+            .unwrap(),
+        1
+    );
+    assert_eq!(vault.commit(vec![Change::delete(A)]).unwrap(), 2);
+    assert!(vault.commit(vec![Change::delete(A)]).is_err());
+    assert_eq!(vault.generation().unwrap(), 2);
+    drop(vault);
+    assert_eq!(Vault::open(dir.path()).unwrap().generation().unwrap(), 2);
 }
 
 /// Run inside a child process: commit and abort the process at the step named in the environment.

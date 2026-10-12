@@ -34,6 +34,7 @@ export function MapCanvas(props: {
   class?: string;
   draggable?: boolean;
   onPick?: (value: Json) => void;
+  onDragStart?: (id: string) => void;
   onMove?: (id: string, value: Json) => void;
   onOpen?: (id: string) => void;
   /** Pin whose popup is open, and what the popup shows. */
@@ -65,6 +66,7 @@ export function MapCanvas(props: {
           base,
           draggable: props.draggable,
           onPick: (v) => props.onPick?.(v),
+          onDragStart: (id) => props.onDragStart?.(id),
           onMove: (id, v) => props.onMove?.(id, v),
           onOpen: (id) => props.onOpen?.(id),
         }),

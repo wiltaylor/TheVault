@@ -1,6 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -34,7 +34,7 @@ function binary(env: string, name: string): string {
   return path;
 }
 
-/** A fresh vault in a temporary folder: the test types, BULK_NOTES notes of `bulk` and MASS_NOTES of `mass`. */
+/** A fresh vault in a temporary folder: the test types, the starter note type, BULK_NOTES notes of `bulk` and MASS_NOTES of `mass`. */
 function seedVault(): string {
   const vault = mkdtempSync(join(tmpdir(), "thevault-e2e-"));
   mkdirSync(join(vault, "types"));
@@ -47,6 +47,8 @@ function seedVault(): string {
   writeFileSync(join(vault, "types/board.wcl"), BOARD_TYPE);
   writeFileSync(join(vault, "types/crew.wcl"), CREW_TYPE);
   writeFileSync(join(vault, "types/story.wcl"), STORY_TYPE);
+  // The starter pack's note type, as `vault init --starter` writes it.
+  copyFileSync(join(repo, "crates/cli/starter/types/note.wcl"), join(vault, "types/note.wcl"));
   mkdirSync(join(vault, "taxonomies"));
   writeFileSync(join(vault, "taxonomies/stage.wcl"), STAGE_TAXONOMY);
   const note = (title: string) =>

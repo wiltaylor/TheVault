@@ -1,7 +1,7 @@
 //! The tables of `index.db` and every statement that writes them.
 
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use schema::{Schema, Term};
 
 use crate::Result;
@@ -10,7 +10,7 @@ use crate::rebuild::Failure;
 
 /// Bump when the tables change. An index of another version is dropped and recreated empty, and
 /// the next rebuild fills it.
-const VERSION: i64 = 2;
+const VERSION: i64 = 3;
 
 const TABLES: &str = "
 CREATE TABLE notes (
@@ -78,6 +78,12 @@ CREATE TABLE failures (
   path       TEXT PRIMARY KEY,
   diagnostic TEXT NOT NULL
 );
+
+-- `generation`: the vault commit generation the index holds every change up to.
+CREATE TABLE meta (
+  key   TEXT PRIMARY KEY,
+  value INTEGER NOT NULL
+);
 ";
 
 /// The tables [`dump`] prints. `failures` is left out: it records a rebuild, not the notes.
@@ -108,6 +114,38 @@ pub(crate) fn clear(conn: &Connection) -> Result<()> {
         "DELETE FROM notes; DELETE FROM field_values; DELETE FROM links;
          DELETE FROM terms; DELETE FROM term_ancestors; DELETE FROM failures;",
     )?;
+    Ok(())
+}
+
+pub(crate) fn generation(conn: &Connection) -> Result<Option<u64>> {
+    let value: Option<i64> = conn
+        .query_row("SELECT value FROM meta WHERE key = 'generation'", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    Ok(value.map(|v| v as u64))
+}
+
+pub(crate) fn set_generation(conn: &Connection, generation: u64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('generation', ?1)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [generation as i64],
+    )?;
+    Ok(())
+}
+
+/// Move the generation from `generation - 1` to `generation`. Any other value is left alone.
+pub(crate) fn advance_generation(conn: &Connection, generation: u64) -> Result<()> {
+    conn.execute(
+        "UPDATE meta SET value = ?1 WHERE key = 'generation' AND value = ?1 - 1",
+        [generation as i64],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn forget_generation(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM meta WHERE key = 'generation'", [])?;
     Ok(())
 }
 

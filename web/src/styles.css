@@ -42,7 +42,8 @@ button {
   cursor: pointer;
 }
 
-button.primary {
+button.primary,
+a.button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
@@ -1821,6 +1822,18 @@ a.button {
 
 .admin-table tr.failing td:first-child {
   border-left: 3px solid var(--danger);
+}
+
+.confirm-panel {
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+}
+
+.using-notes {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
 }
 
 .danger-badge {

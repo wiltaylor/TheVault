@@ -1,4 +1,4 @@
-import { type Accessor, createEffect, createSignal, on } from "solid-js";
+import { type Accessor, batch, createEffect, createSignal, on } from "solid-js";
 import type { Page, Row } from "../api";
 
 export interface PagedRows {
@@ -13,12 +13,15 @@ export interface PagedRows {
 
 /**
  * The rows of a paged API result, loaded a page at a time in cursor order as callers ask for
- * them (D33). Starts again from the first page whenever `key` changes.
+ * them (D33). Starts again from the first page whenever `key` changes. Whenever `refresh`
+ * changes, loads the rows it already holds again and swaps them in at once, so a result that
+ * changed under it updates in place rather than emptying first.
  */
 export function createPagedRows(
   fetchPage: (cursor: string | null, pageSize: number) => Promise<Page>,
   key: Accessor<string>,
   pageSize: number,
+  refresh?: Accessor<unknown>,
 ): PagedRows {
   const [rows, setRows] = createSignal<Row[]>([]);
   const [total, setTotal] = createSignal<number | null>(null);
@@ -49,6 +52,35 @@ export function createPagedRows(
       if (gen === generation) loading = false;
     }
   }
+
+  async function reload() {
+    const gen = ++generation;
+    loading = true;
+    let fresh: Row[] = [];
+    let cursor: string | null = null;
+    let count: number | null = null;
+    try {
+      do {
+        const page = await fetchPage(cursor, pageSize);
+        if (gen !== generation) return;
+        cursor = page.next;
+        fresh = fresh.concat(page.rows);
+        count = page.total;
+      } while (cursor && fresh.length <= wanted);
+      next = cursor;
+      batch(() => {
+        setRows(fresh);
+        setTotal(count);
+        setError(null);
+      });
+    } catch (e) {
+      if (gen === generation) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (gen === generation) loading = false;
+    }
+  }
+
+  if (refresh) createEffect(on(refresh, () => void reload(), { defer: true }));
 
   createEffect(
     on(key, () => {

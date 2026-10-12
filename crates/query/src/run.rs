@@ -191,6 +191,9 @@ pub(crate) struct Runner<'a> {
 pub fn run(q: &Query, ctx: &Context<'_>, page: &PageRequest) -> Result<Page> {
     let types = check(q, ctx)?;
     let r = Runner::new(ctx)?;
+    if let Some(text) = plain_search(q) {
+        return r.search_page(text, &types, &q.select, page);
+    }
     match plan::run(q, &types, &r, page)? {
         Some(p) => Ok(p),
         None => r.scan(q, &types, page),
@@ -320,10 +323,7 @@ impl<'a> Runner<'a> {
             }
             None => 0,
         };
-        let size = match page.size {
-            0 => MAX_PAGE,
-            n => n.min(MAX_PAGE),
-        };
+        let size = page_size(page);
         let end = (start + size).min(hits.len());
         let next = (end < hits.len()).then(|| encode_cursor(&hits[end - 1].keys));
         let mut rows = Vec::new();
@@ -336,6 +336,30 @@ impl<'a> Runner<'a> {
             total: hits.len(),
             groups,
         })
+    }
+}
+
+/// The search text of a query that only searches: every type, no filter, sort, grouping or
+/// limit. Its order is tantivy's ranking, so it pages without reading every hit.
+fn plain_search(q: &Query) -> Option<&str> {
+    match q {
+        Query {
+            from: From::All,
+            filter: None,
+            search: Some(text),
+            group_by: None,
+            limit: None,
+            sort,
+            ..
+        } if sort.is_empty() => Some(text),
+        _ => None,
+    }
+}
+
+fn page_size(page: &PageRequest) -> usize {
+    match page.size {
+        0 => MAX_PAGE,
+        n => n.min(MAX_PAGE),
     }
 }
 
@@ -490,6 +514,53 @@ fn name_arg(e: &Expr) -> Result<String> {
 }
 
 impl Runner<'_> {
+    /// A [`plain_search`] page: the page's hits from tantivy, by score then id as `run` orders
+    /// them, and only those notes read from `index.db`. The cursor is the one `run` writes.
+    fn search_page(
+        &self,
+        text: &str,
+        types: &[String],
+        select: &[Path],
+        page: &PageRequest,
+    ) -> Result<Page> {
+        let after = match &page.cursor {
+            Some(c) => match decode_cursor(c, 2)?.as_slice() {
+                [Key::Float(score), Key::Str(id)] => Some((*score as f32, id.clone())),
+                _ => return Err(Error::BadCursor),
+            },
+            None => None,
+        };
+        let mut out = Page {
+            rows: Vec::new(),
+            next: None,
+            total: 0,
+            groups: Vec::new(),
+        };
+        if types.is_empty() {
+            return Ok(out);
+        }
+        let size = page_size(page);
+        let after = after.as_ref().map(|(s, id)| (*s, id.as_str()));
+        // One more than the page, to know whether another page follows.
+        let found = self.ctx.index.search_page(text, after, size + 1)?;
+        out.total = found.total;
+        let page_hits = &found.hits[..found.hits.len().min(size)];
+        for h in page_hits {
+            if let Some(note) = self.note(&h.id)? {
+                out.rows.push(self.row(&note, select, None)?);
+            }
+        }
+        if found.hits.len() > size
+            && let Some(last) = page_hits.last()
+        {
+            out.next = Some(encode_cursor(&[
+                Key::Float(f64::from(last.score)),
+                Key::Str(last.id.clone()),
+            ]));
+        }
+        Ok(out)
+    }
+
     fn candidates(
         &self,
         types: &[String],

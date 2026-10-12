@@ -174,6 +174,13 @@ enum Command {
     },
     /// Turn query text into the visual builder's model.
     QueryParse { query: String },
+    /// Turn a visual builder model into query text. The input is the model as JSON, or the
+    /// whole answer of `query-parse`.
+    QueryText {
+        /// Read the model from this file; `-` or nothing reads stdin.
+        #[arg(long, short)]
+        file: Option<PathBuf>,
+    },
     /// Full-text search, a page at a time.
     Search {
         text: String,
@@ -295,8 +302,13 @@ enum Asset {
         #[arg(long, short)]
         out: PathBuf,
     },
-    /// Delete an asset no note names.
-    Delete { id: String },
+    /// Delete an asset. Refused while notes name it, unless --unlink is given.
+    Delete {
+        id: String,
+        /// Take the asset out of every note that names it, in the same commit.
+        #[arg(long)]
+        unlink: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -583,6 +595,15 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
         Command::QueryParse { query } => {
             api.post(&["api", "query", "parse"], json!({ "query": query }))
         }
+        Command::QueryText { file } => {
+            let input: Value = serde_json::from_str(&read_text(file.as_deref())?)
+                .map_err(|e| Fail::new("usage", format!("the model is not JSON: {e}")))?;
+            let model = match input {
+                Value::Object(mut o) if o.contains_key("model") => o.remove("model").unwrap(),
+                other => other,
+            };
+            api.post(&["api", "query", "text"], json!({ "model": model }))
+        }
         Command::Search { text, page } => page.fetch(|cursor, size| {
             let mut query = vec![("q", text.clone())];
             query.extend(cursor.map(|c| ("cursor", c)));
@@ -756,7 +777,13 @@ fn asset(api: &Api, a: Asset) -> Result<Value, Fail> {
                 .map_err(|e| Fail::new("io", format!("{}: {e}", out.display())))?;
             Ok(json!({ "id": id, "out": out, "bytes": bytes.len() }))
         }
-        Asset::Delete { id } => api.delete(&["api", "assets", &id]),
+        Asset::Delete { id, unlink } => {
+            let query: Vec<_> = unlink
+                .then(|| ("unlink", "true".to_owned()))
+                .into_iter()
+                .collect();
+            api.call(Method::DELETE, &["api", "assets", &id], &query, Body::None)
+        }
     }
 }
 
