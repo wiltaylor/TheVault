@@ -58,7 +58,11 @@ export function MentionPicker(props: SolidNodeViewProps) {
     } else {
       props.replaceWith();
     }
-    if (pos !== undefined) editor.chain().focus().setTextSelection(pos + (content ? 1 : 0)).run();
+    if (pos !== undefined) {
+      // Focus now, not on TipTap's next frame: the box is gone, so keys typed before then are lost.
+      editor.view.focus();
+      editor.commands.setTextSelection(pos + (content ? 1 : 0));
+    }
   }
 
   function choose(i: number) {

@@ -124,6 +124,32 @@ test("typing each mark through shortcuts and the toolbar saves the expected WCL"
   await expect(field).toContainText("2*3");
 });
 
+test("text typed straight after choosing a mention and saved at once is all in the file", async ({ page, admin }) => {
+  const word = `quick${token()}`;
+  const target = await createTask(admin, `Mention ${word}`);
+  const note = await createTask(admin, `Quick ${token()}`);
+  await editBody(page, note.id);
+  const kb = page.keyboard;
+
+  await kb.type("see [[");
+  await kb.type(word);
+  await expect(page.getByRole("option", { name: new RegExp(word) })).toBeVisible();
+  // A busy machine runs animation frames late. Anything that hands focus back to the editor on
+  // the next frame drops the keys typed in between, so make that gap wide enough to type into.
+  await page.evaluate(() => {
+    window.requestAnimationFrame = (cb) => window.setTimeout(() => cb(performance.now()), 300);
+  });
+  // No waiting between choosing the note, typing and saving: every key must still land.
+  await kb.press("Enter");
+  await kb.type(" and 2*3 more");
+  await saveAndWait(page);
+
+  const expected = `see [[${target.id}]] and 2\\*3 more`;
+  const after = await stored(admin, note.id);
+  expect(body(after)).toEqual([{ kind: "paragraph", fields: { text: expected } }]);
+  expect(after.wcl).toContain(`text = ${wclString(expected)}`);
+});
+
 test("headings, lists and quotes made with the toolbar save as content blocks", async ({ page, admin }) => {
   const note = await createTask(admin, `Blocks ${token()}`);
   const doc = await editBody(page, note.id);
