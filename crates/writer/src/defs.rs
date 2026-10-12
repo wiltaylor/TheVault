@@ -329,25 +329,47 @@ impl Writer {
         Ok((self.vault.read_text(&path)?, saved))
     }
 
-    /// Delete taxonomy `name`, unless a type's field uses it.
+    /// Delete taxonomy `name`, unless a type's field uses it. The refusal lists those fields,
+    /// then every note holding one of the taxonomy's terms.
     pub fn delete_taxonomy(&self, name: &str) -> Result<()> {
         let _w = self.write_lock();
         let inner = self.lock();
         if inner.schema.taxonomy(name).is_none() {
             return Err(missing_taxonomy(name));
         }
-        let by: Vec<String> = inner
-            .schema
-            .types()
-            .flat_map(|t| {
-                t.fields.iter().filter_map(move |f| match &f.kind {
-                    FieldKind::Taxonomy { taxonomy } if taxonomy == name => {
-                        Some(format!("{} (field {})", type_path(&t.name), f.name))
+        let mut by = Vec::new();
+        let mut holders = Vec::new();
+        for ty in inner.schema.types() {
+            let fields: Vec<&str> = ty
+                .fields
+                .iter()
+                .filter(|f| matches!(&f.kind, FieldKind::Taxonomy { taxonomy } if taxonomy == name))
+                .map(|f| f.name.as_str())
+                .collect();
+            if fields.is_empty() {
+                continue;
+            }
+            for field in &fields {
+                by.push(format!("{} (field {field})", type_path(&ty.name)));
+            }
+            for id in self.ids_of_type(&inner, &ty.name)? {
+                let file = note_path(&ty.name, &id);
+                let doc = Input::Wcl(self.vault.read_text(&file)?).parse(&file)?;
+                for (field, value) in &doc.fields {
+                    if !fields.contains(&field.as_str()) {
+                        continue;
                     }
-                    _ => None,
-                })
-            })
-            .collect();
+                    let terms: Vec<&Value> = match value {
+                        Value::List(l) => l.iter().collect(),
+                        v => vec![v],
+                    };
+                    for term in terms.into_iter().filter_map(Value::as_str) {
+                        holders.push(format!("{file} ({field} = {term:?})"));
+                    }
+                }
+            }
+        }
+        by.extend(holders);
         if !by.is_empty() {
             return Err(Error::InUse {
                 code: "taxonomy_in_use",

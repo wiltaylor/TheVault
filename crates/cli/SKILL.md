@@ -225,6 +225,8 @@ vault asset list
 
 `asset upload` prints the asset's `id`. Put that id in an `asset` field, or in an `image` or `asset` content block.
 
+`vault asset delete <id>` is refused with `asset_in_use` while notes name the asset, and the error lists them under `notes`. Add `--unlink` to take the asset out of those notes and delete it in one commit.
+
 ## Setting up a vault
 
 Only when the user asks for a new vault. `init --starter` adds Task, Project, Person and Note types, a Status taxonomy, a few example notes, and a dashboard note. `reindex` rebuilds the search index from the files and lists every file that fails validation; stop the server first.

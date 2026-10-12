@@ -978,3 +978,35 @@ fn every_command_prints_json() {
     .fails(&["health"], "");
     assert_eq!(offline["error"], "connect");
 }
+
+#[test]
+fn asset_delete_is_refused_while_a_note_names_it_and_unlink_takes_it_out() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    let dir = TempDir::new().unwrap();
+    let file = tmp_path(&dir, "photo.png");
+    std::fs::write(&file, b"bytes").unwrap();
+    let asset = vault.ok(&["asset", "upload", &file], "");
+    let id = s(&asset["id"]).to_owned();
+    let wcl = format!(
+        "title = \"Board\"\n\ncanvas board {{\n  viewport {{\n    x    = 0.0\n    y    = 0.0\n    zoom = 1.0\n  }}\n\n  node pic {{\n    kind   = \"asset\"\n    x      = 0.0\n    y      = 0.0\n    width  = 10.0\n    height = 10.0\n    asset  = \"{id}\"\n  }}\n}}\n"
+    );
+    let note = vault.ok(&["put", "--type", "board"], &wcl);
+    let note_id = s(&note["id"]).to_owned();
+
+    let err = vault.fails(&["asset", "delete", &id], "");
+    assert_eq!(err["error"], "asset_in_use", "{err}");
+    assert_eq!(err["notes"][0]["id"], note_id.as_str(), "{err}");
+
+    let out = vault.ok(&["asset", "delete", &id, "--unlink"], "");
+    assert_eq!(out["deleted"], true);
+    assert_eq!(out["notes"][0]["id"], note_id.as_str(), "{out}");
+    let now = vault.ok(&["get", &note_id], "");
+    assert!(!s(&now["wcl"]).contains(&id), "{now}");
+    assert!(
+        vault.ok(&["asset", "list"], "")["assets"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}

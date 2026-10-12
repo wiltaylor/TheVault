@@ -887,3 +887,224 @@ fn a_write_token_can_batch_and_upload_but_not_change_definitions() {
         expect(res, 403);
     }
 }
+
+#[test]
+fn a_type_with_notes_is_not_deleted_and_the_refusal_counts_them() {
+    let api = Api::start();
+    let mut ids = Vec::new();
+    for title in ["One", "Two"] {
+        let res = api
+            .post("/api/notes?type=task")
+            .json(&json!({ "note": { "fields": { "title": title } } }))
+            .send()
+            .unwrap();
+        ids.push(expect(res, 201));
+    }
+    let before = api.files();
+    let err = expect(api.delete("/api/types/task").send().unwrap(), 409);
+    assert_eq!(err["error"], "type_in_use");
+    assert_eq!(err["count"], 2, "{err}");
+    assert_eq!(err["notes"].as_array().unwrap().len(), 2, "{err}");
+    assert!(s(&err["message"]).contains("2 notes"), "{err}");
+    assert_eq!(api.files(), before);
+
+    for note in &ids {
+        let res = api
+            .delete(&format!("/api/notes/{}", s(&note["id"])))
+            .header("if-match", s(&note["version"]))
+            .send()
+            .unwrap();
+        expect(res, 200);
+    }
+    let out = expect(api.delete("/api/types/task").send().unwrap(), 200);
+    assert_eq!(out["deleted"], true);
+    assert!(!api.server.vault_path().join("types/task.wcl").exists());
+    let types = expect(api.get("/api/types").send().unwrap(), 200);
+    assert!(
+        types["types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["name"] != "task"),
+        "{types}"
+    );
+    expect(api.delete("/api/types/task").send().unwrap(), 404);
+}
+
+#[test]
+fn a_taxonomy_in_use_is_not_deleted_and_the_refusal_lists_the_notes() {
+    let api = Api::start();
+    let res = api
+        .post("/api/notes?type=task")
+        .json(&json!({ "note": { "fields": { "title": "Finish", "status": "Done" } } }))
+        .send()
+        .unwrap();
+    let note = expect(res, 201);
+    let id = s(&note["id"]);
+    expect(
+        api.post("/api/notes?type=task")
+            .json(&json!({ "note": { "fields": { "title": "No status" } } }))
+            .send()
+            .unwrap(),
+        201,
+    );
+
+    let before = api.files();
+    let err = expect(api.delete("/api/taxonomies/status").send().unwrap(), 409);
+    assert_eq!(err["error"], "taxonomy_in_use");
+    let by: Vec<&str> = err["by"].as_array().unwrap().iter().map(s).collect();
+    assert!(by.contains(&"types/task.wcl (field status)"), "{err}");
+    let notes = err["notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 1, "{err}");
+    assert_eq!(notes[0]["id"], id);
+    assert_eq!(notes[0]["type"], "task");
+    assert_eq!(notes[0]["title"], "Finish");
+    assert_eq!(api.files(), before);
+
+    // Dropping the term the note holds is refused the same way.
+    let res = api
+        .put("/api/taxonomies/status")
+        .header(CONTENT_TYPE, "text/plain")
+        .body("label = \"Status\"\n\nterm \"Inbox\"\n")
+        .send()
+        .unwrap();
+    let err = expect(res, 409);
+    assert_eq!(err["error"], "term_in_use");
+    assert_eq!(err["notes"][0]["id"], id, "{err}");
+    assert_eq!(err["notes"][0]["title"], "Finish", "{err}");
+    assert_eq!(api.files(), before);
+
+    // A term no note holds can go.
+    let res = api
+        .put("/api/taxonomies/status")
+        .header(CONTENT_TYPE, "text/plain")
+        .body("label = \"Status\"\n\nterm \"Done\"\n")
+        .send()
+        .unwrap();
+    expect(res, 200);
+    expect(api.delete("/api/taxonomies/nope").send().unwrap(), 404);
+}
+
+#[test]
+fn an_asset_notes_name_is_deleted_with_unlink_and_every_reference_goes() {
+    let api = Api::start();
+    let upload = |name: &str| {
+        let res = api
+            .post(&format!("/api/assets?filename={name}"))
+            .body("bytes")
+            .send()
+            .unwrap();
+        s(&expect(res, 201)["id"]).to_owned()
+    };
+    let id = upload("photo.png");
+    let keep = upload("other.png");
+
+    let res = api
+        .post("/api/notes?type=task")
+        .json(&json!({ "note": { "fields": { "title": "Covered", "cover": id } } }))
+        .send()
+        .unwrap();
+    let task = expect(res, 201);
+    let board_wcl = format!(
+        "title = \"Board\"\n\ncanvas board {{\n  viewport {{\n    x    = 0.0\n    y    = 0.0\n    zoom = 1.0\n  }}\n\n  node pic {{\n    kind   = \"asset\"\n    x      = 0.0\n    y      = 0.0\n    width  = 100.0\n    height = 100.0\n    asset  = \"{id}\"\n  }}\n\n  node goal {{\n    kind   = \"text\"\n    x      = 200.0\n    y      = 0.0\n    width  = 100.0\n    height = 50.0\n    text   = \"Goal\"\n  }}\n\n  edge pic_goal {{\n    from = \"pic\"\n    to   = \"goal\"\n  }}\n}}\n\ncontent body {{\n  paragraph {{\n    text = \"Intro\"\n  }}\n\n  image {{\n    asset = \"{id}\"\n    alt   = \"Photo\"\n  }}\n\n  asset {{\n    asset = \"{id}\"\n  }}\n\n  image {{\n    asset = \"{keep}\"\n  }}\n}}\n"
+    );
+    let res = api
+        .post("/api/notes?type=board")
+        .header(CONTENT_TYPE, "text/plain")
+        .body(board_wcl)
+        .send()
+        .unwrap();
+    let board = expect(res, 201);
+    let (task_id, board_id) = (s(&task["id"]).to_owned(), s(&board["id"]).to_owned());
+
+    // Without unlink the delete is refused, listing the notes by title.
+    let before = api.files();
+    let err = expect(
+        api.delete(&format!("/api/assets/{id}")).send().unwrap(),
+        409,
+    );
+    assert_eq!(err["error"], "asset_in_use");
+    let mut titles: Vec<&str> = err["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| s(&n["title"]))
+        .collect();
+    titles.sort();
+    assert_eq!(titles, ["Board", "Covered"], "{err}");
+    assert_eq!(api.files(), before);
+
+    // With unlink the references go in the same commit as the asset.
+    let res = api
+        .delete(&format!("/api/assets/{id}?unlink=true"))
+        .send()
+        .unwrap();
+    let out = expect(res, 200);
+    assert_eq!(out["deleted"], true);
+    assert_eq!(out["notes"].as_array().unwrap().len(), 2, "{out}");
+    assert!(
+        !api.server
+            .vault_path()
+            .join(format!("assets/{id}"))
+            .exists()
+    );
+    expect(api.get(&format!("/api/assets/{id}")).send().unwrap(), 404);
+
+    let task_now = api.read(&task_id);
+    assert!(
+        task_now["note"]["fields"].get("cover").is_none(),
+        "{task_now}"
+    );
+    assert_ne!(task_now["version"], task["version"]);
+    let board_file = api.file(&format!("notes/board/{board_id}.wcl"));
+    assert!(!board_file.contains(&id), "{board_file}");
+    assert!(!board_file.contains("node pic"), "{board_file}");
+    assert!(!board_file.contains("edge pic_goal"), "{board_file}");
+    assert!(board_file.contains("node goal"), "{board_file}");
+    assert!(board_file.contains(&keep), "{board_file}");
+    assert!(board_file.contains("text = \"Intro\""), "{board_file}");
+    let history = expect(
+        api.get(&format!("/api/notes/{board_id}/history"))
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(history["versions"].as_array().unwrap().len(), 2);
+
+    // An asset a type file names is kept even with unlink: a type is not a note.
+    let pinned = upload("floor.png");
+    let room = format!(
+        "label = \"Room\"\n\nfield desk {{\n  kind  = \"location\"\n  map   = \"image\"\n  image = \"{pinned}\"\n}}\n\ntemplate default {{\n  tab \"Main\" {{\n    slot \"title\"\n  }}\n}}\n"
+    );
+    expect(
+        api.put("/api/types/room")
+            .header(CONTENT_TYPE, "text/plain")
+            .body(room)
+            .send()
+            .unwrap(),
+        200,
+    );
+    let before = api.files();
+    let err = expect(
+        api.delete(&format!("/api/assets/{pinned}?unlink=true"))
+            .send()
+            .unwrap(),
+        409,
+    );
+    assert_eq!(err["error"], "asset_in_use");
+    assert_eq!(err["by"][0], "types/room.wcl", "{err}");
+    assert_eq!(api.files(), before);
+
+    // An asset nothing names is deleted with or without unlink.
+    let lone = upload("lone.png");
+    expect(
+        api.delete(&format!("/api/assets/{lone}?unlink=true"))
+            .send()
+            .unwrap(),
+        200,
+    );
+    expect(
+        api.delete(&format!("/api/assets/{lone}")).send().unwrap(),
+        404,
+    );
+}
