@@ -1,10 +1,13 @@
 import { useParams } from "@solidjs/router";
 import { For, Match, Show, Switch, createEffect, createSignal, on } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { ApiError, type FieldDef, type Json, type Note, type NoteDoc, type Tab, api } from "../api";
+import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, api } from "../api";
 import { ConflictView } from "../components/ConflictView";
 import { BlockView, Blocks, formatValue } from "../components/Render";
+import { ContentEditor } from "../editor/ContentEditor";
+import { knowTitle } from "../editor/titles";
 import {
+  applyBlocks,
   applyEdits,
   compoundBlock,
   fieldValue,
@@ -36,6 +39,8 @@ export function NoteView() {
   const [tab, setTab] = createSignal(0);
   const [editing, setEditing] = createSignal(false);
   const [edits, setEdits] = createStore<Record<string, Json | undefined>>({});
+  // Content fields edited in the block editor, by field name.
+  let blockEdits = new Map<string, { field: FieldDef; blocks: Block[] }>();
   const [saving, setSaving] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
   const [conflict, setConflict] = createSignal<Conflict | null>(null);
@@ -69,6 +74,7 @@ export function NoteView() {
 
   function startEditing() {
     setEdits(reconcile({}));
+    blockEdits = new Map();
     setSaveError(null);
     setEditing(true);
   }
@@ -86,6 +92,8 @@ export function NoteView() {
     setSaveError(null);
     try {
       const saved = await api.updateNote(n.id, doc, base);
+      const title = saved.note.fields.title;
+      if (typeof title === "string") knowTitle(saved.id, title);
       setNote(saved);
       setConflict(null);
       setEditing(false);
@@ -107,7 +115,10 @@ export function NoteView() {
   function onSubmit(ev: SubmitEvent) {
     ev.preventDefault();
     const n = note();
-    if (n) void save(applyEdits(n.note, { ...edits }), n.version);
+    if (!n) return;
+    let doc = applyEdits(n.note, { ...edits });
+    for (const { field, blocks } of blockEdits.values()) doc = applyBlocks(doc, field, blocks);
+    void save(doc, n.version);
   }
 
   function keepStored() {
@@ -185,6 +196,13 @@ export function NoteView() {
                 <label for={`field-input-${field().name}`}>{label}</label>
               </div>
               <div class="field-value">
+                <Show when={!(editing() && field().kind === "content")} fallback={
+                  <ContentEditor
+                    label={label}
+                    blocks={compoundBlock(n().note, field())?.blocks ?? []}
+                    onChange={(blocks) => blockEdits.set(field().name, { field: field(), blocks })}
+                  />
+                }>
                 <Show
                   when={editing() && isEditable(field())}
                   fallback={
@@ -204,6 +222,7 @@ export function NoteView() {
                   }
                 >
                   <Editor field={field()} label={label} />
+                </Show>
                 </Show>
               </div>
             </div>
