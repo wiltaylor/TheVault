@@ -1,4 +1,4 @@
-import { useParams } from "@solidjs/router";
+import { A, useNavigate, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, on } from "solid-js";
 import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, api } from "../api";
 import { ConflictView } from "../components/ConflictView";
@@ -6,6 +6,7 @@ import { FieldInput, hasInput } from "../components/FieldInput";
 import { BlockView, Blocks, formatValue } from "../components/Render";
 import { ContentEditor } from "../editor/ContentEditor";
 import { knowTitle, noteTitle } from "../editor/titles";
+import { CanvasSurface } from "../canvas/CanvasSurface";
 import { InkSurface } from "../ink/InkSurface";
 import {
   applyBlocks,
@@ -36,6 +37,7 @@ function message(e: unknown): string {
 /** A note laid out by its type's default template, a tab per template tab (D14). */
 export function NoteView() {
   const params = useParams();
+  const navigate = useNavigate();
   const [note, setNote] = createSignal<Note | null>(null);
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const [tab, setTab] = createSignal(0);
@@ -44,7 +46,7 @@ export function NoteView() {
   const [edits, setEdits] = createSignal<Record<string, Json | undefined>>({});
   // Content fields edited in the block editor, by field name.
   let blockEdits = new Map<string, { field: FieldDef; blocks: Block[] }>();
-  // Ink fields drawn on, by field name.
+  // Ink and canvas fields changed, by field name.
   const [inkEdits, setInkEdits] = createSignal<Record<string, { field: FieldDef; block: Block }>>({});
   const [saving, setSaving] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
@@ -136,6 +138,21 @@ export function NoteView() {
     void save(doc, n.version);
   }
 
+  async function remove() {
+    const n = note();
+    if (!n || !confirm("Move this note to the trash?")) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api.deleteNote(n.id, n.version);
+      navigate(`/types/${n.type}`);
+    } catch (e) {
+      setSaveError(message(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function keepStored() {
     const c = conflict();
     if (!c) return;
@@ -185,6 +202,17 @@ export function NoteView() {
                 </Show>
               </div>
               <div class="field-value">
+                <Show when={field().kind !== "canvas"} fallback={
+                  <CanvasSurface
+                    label={label}
+                    block={(editing() && inkEdits()[field().name]?.block) || compoundBlock(n().note, field())}
+                    onChange={
+                      editing()
+                        ? (block) => setInkEdits({ ...inkEdits(), [field().name]: { field: field(), block } })
+                        : undefined
+                    }
+                  />
+                }>
                 <Show when={field().kind !== "ink"} fallback={
                   <InkSurface
                     label={label}
@@ -224,6 +252,7 @@ export function NoteView() {
                 </Show>
                 </Show>
                 </Show>
+                </Show>
               </div>
             </div>
           );
@@ -251,9 +280,17 @@ export function NoteView() {
                 <Show
                   when={editing()}
                   fallback={
-                    <button type="button" onClick={startEditing}>
-                      Edit
-                    </button>
+                    <div class="actions">
+                      <A href={`/notes/${n().id}/history`} class="button">
+                        History
+                      </A>
+                      <button type="button" class="danger" onClick={() => void remove()} disabled={saving()}>
+                        Delete
+                      </button>
+                      <button type="button" onClick={startEditing}>
+                        Edit
+                      </button>
+                    </div>
                   }
                 >
                   <div class="actions">

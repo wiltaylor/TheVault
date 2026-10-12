@@ -1362,6 +1362,105 @@ a.button {
   gap: 0.5rem;
 }
 
+/* Maps: the query view's map view and the location field editor (D29). */
+.map {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.map-target {
+  width: 100%;
+  height: 100%;
+}
+
+.query-map-canvas {
+  height: 28rem;
+}
+
+.location-map {
+  height: 16rem;
+  margin-bottom: 0.5rem;
+}
+
+.map-error {
+  position: absolute;
+  inset: 0.5rem 0.5rem auto 0.5rem;
+  margin: 0;
+}
+
+.map-attribution {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.75rem;
+  background: rgb(255 255 255 / 0.85);
+  border-top-left-radius: 4px;
+}
+
+.map-pin {
+  width: 1rem;
+  height: 1rem;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.5);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.map-pin.draggable {
+  cursor: grab;
+}
+
+.map-pin:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.map-popup .map-card {
+  position: relative;
+  padding-right: 1.75rem;
+  min-width: 14rem;
+  max-width: 20rem;
+  box-shadow: 0 4px 12px rgb(15 23 42 / 0.25);
+}
+
+.map-card-close {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  min-height: 0;
+  padding: 0 0.375rem;
+  border: none;
+  background: transparent;
+}
+
+.location-input .pair-input {
+  align-items: end;
+}
+
+.settings-form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 40rem;
+}
+
+.settings-form label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 /* Kanban: one column per term, scrolling sideways when they do not fit. */
 .kanban {
   display: flex;
@@ -1429,4 +1528,380 @@ a.button {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* ---- canvas ---------------------------------------------------------------------------- */
+
+.canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.canvas-toolbar,
+.canvas-pending,
+.canvas-inspector {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.canvas-toolbar button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.canvas-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.canvas-zoom-level {
+  min-width: 3.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.canvas-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.canvas-inspector textarea {
+  min-width: 20rem;
+  min-height: 4rem;
+}
+
+.canvas-view {
+  position: relative;
+  height: 480px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background-color: var(--bg);
+  background-image: radial-gradient(circle, var(--line) 1px, transparent 1.5px);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.canvas-view:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.canvas-view.connecting {
+  cursor: crosshair;
+}
+
+.canvas-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+
+.canvas-group {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed var(--muted);
+  border-radius: 0.75rem;
+  background: rgb(148 163 184 / 0.08);
+}
+
+.canvas-group.selected {
+  border-style: solid;
+  border-color: var(--accent);
+}
+
+.canvas-group-label {
+  position: absolute;
+  top: -1.6rem;
+  left: 0;
+  padding: 0.1rem 0.4rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: move;
+}
+
+.canvas-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.canvas-edge {
+  color: var(--muted);
+}
+
+.canvas-edge-line {
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.canvas-edge-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+}
+
+.canvas-view.editing .canvas-edge-hit {
+  cursor: pointer;
+}
+
+.canvas-edge.selected .canvas-edge-line {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.canvas-arrow {
+  fill: var(--muted);
+}
+
+.canvas-edge-label {
+  fill: var(--ink);
+  font-size: 0.8rem;
+  text-anchor: middle;
+}
+
+.canvas-node {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.12);
+  cursor: default;
+}
+
+.canvas-view.editing .canvas-node {
+  cursor: move;
+}
+
+.canvas-node.selected {
+  outline: 2px solid var(--accent);
+}
+
+.canvas-node.connect-from {
+  outline: 2px dashed var(--accent);
+}
+
+.canvas-node-body {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 0.6rem 0.75rem;
+}
+
+.canvas-node-asset .canvas-node-body,
+.canvas-node-ink .canvas-node-body {
+  padding: 0;
+}
+
+.canvas-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 0.9rem;
+  height: 0.9rem;
+  background: linear-gradient(135deg, transparent 50%, var(--accent) 50%);
+  cursor: nwse-resize;
+}
+
+.canvas-text {
+  white-space: pre-wrap;
+}
+
+.canvas-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.canvas-query-head {
+  margin: 0 0 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.canvas-query-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.canvas-query-cards .canvas-card {
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--bg);
+}
+
+.canvas-query-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.canvas-query-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.canvas-query-table td {
+  padding: 0.2rem 0.3rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.canvas-image,
+.canvas-ink {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.canvas-link,
+.canvas-file {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  overflow-wrap: anywhere;
+}
+
+/* Scripts, tasks, secrets, tokens, history and trash */
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.admin-form {
+  max-width: 40rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.admin-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+}
+
+.admin-table th,
+.admin-table td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.admin-table tr.failing td:first-child {
+  border-left: 3px solid var(--danger);
+}
+
+.danger-badge {
+  background: var(--danger);
+}
+
+.muted-badge {
+  background: var(--muted);
+}
+
+.outcome {
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  color: #ffffff;
+  background: var(--muted);
+}
+
+.outcome-succeeded {
+  background: #16a34a;
+}
+
+.outcome-failed {
+  background: var(--danger);
+}
+
+.run-list,
+.version-list {
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.run-list summary {
+  cursor: pointer;
+}
+
+.run-log,
+.note-wcl {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+}
+
+.version-list li.chosen {
+  font-weight: 600;
+}
+
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.script-editor .code-mirror {
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  min-height: 16rem;
+}
+
+.token-secret {
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.token-secret input {
+  font-family: ui-monospace, monospace;
+  min-width: min(32rem, 100%);
+}
+
+.hint {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
 }

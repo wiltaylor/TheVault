@@ -17,6 +17,13 @@ export const test = base.extend<{ admin: APIRequestContext }>({
   baseURL: async ({}, use) => {
     await use(env("E2E_BASE_URL"));
   },
+  // No test reaches the internet: a request to any other host fails unless the test answers it
+  // with a route of its own, as the map tests do with their tile stand-in.
+  context: async ({ context, baseURL }, use) => {
+    const origin = new URL(baseURL!).origin;
+    await context.route((url) => url.origin !== origin, (route) => route.abort());
+    await use(context);
+  },
   // The API as an agent with the admin token sees it, for writes the UI does not make.
   admin: async ({}, use) => {
     const ctx = await request.newContext({

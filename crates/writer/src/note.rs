@@ -254,18 +254,24 @@ pub(crate) fn arrange(ty: &TypeDef, doc: Doc, created: &str, updated: &str) -> D
     }
 }
 
-/// Print a doc as WCL text, ready for [`store::canonical`].
+/// Print a doc as WCL text, ready for [`store::canonical`]. Ink stroke points are rounded as
+/// `docs/vault-format.md` "Ink" says: coordinates to two decimal places, pressure to three.
 pub(crate) fn print(doc: &Doc) -> String {
     let mut out = String::new();
-    print_body(&mut out, doc);
+    print_body(&mut out, doc, false);
     out
 }
 
-fn print_body(out: &mut String, doc: &Doc) {
+fn print_body(out: &mut String, doc: &Doc, stroke: bool) {
     for (name, value) in &doc.fields {
         out.push_str(name);
         out.push_str(" = ");
-        print_value(out, value);
+        match value {
+            Value::List(points) if stroke && name == "points" => {
+                print_value(out, &Value::List(round_points(points)));
+            }
+            _ => print_value(out, value),
+        }
         out.push('\n');
     }
     for b in &doc.blocks {
@@ -279,9 +285,24 @@ fn print_body(out: &mut String, doc: &Doc) {
             }
         }
         out.push_str(" {\n");
-        print_body(out, &b.body);
+        print_body(out, &b.body, b.kind == "stroke");
         out.push_str("}\n");
     }
+}
+
+/// Round flat `x, y, pressure` triples: `x` and `y` to two places, `pressure` to three.
+fn round_points(points: &[Value]) -> Vec<Value> {
+    points
+        .iter()
+        .enumerate()
+        .map(|(n, v)| match v {
+            Value::Float(f) => {
+                let scale = if n % 3 == 2 { 1000.0 } else { 100.0 };
+                Value::Float((f * scale).round() / scale)
+            }
+            other => other.clone(),
+        })
+        .collect()
 }
 
 fn print_value(out: &mut String, v: &Value) {

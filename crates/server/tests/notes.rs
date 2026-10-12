@@ -33,11 +33,40 @@ template default {
 }
 "#;
 
+/// A type whose fields carry defaults: required, optional and computed.
+const CHORE_TYPE: &str = r#"label = "Chore"
+
+field owner {
+  kind     = "string"
+  required = true
+  default  = "me"
+}
+
+field points {
+  kind    = "int"
+  default = 1
+}
+
+field rank {
+  kind     = "int"
+  computed = true
+  default  = 0
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "owner"
+  }
+}
+"#;
+
 const WCL: &str = "text/plain; charset=utf-8";
 
 fn seed(vault: &Path) {
     std::fs::create_dir_all(vault.join("types")).unwrap();
     std::fs::write(vault.join("types/task.wcl"), TASK_TYPE).unwrap();
+    std::fs::write(vault.join("types/chore.wcl"), CHORE_TYPE).unwrap();
 }
 
 struct Api {
@@ -518,4 +547,70 @@ fn unknown_notes_and_versions_are_404() {
         404,
     );
     expect(api.get("/api/notes/not-a-ulid").send().unwrap(), 404);
+}
+
+#[test]
+fn create_fills_field_defaults_and_update_does_not() {
+    let api = Api::start();
+    let post = |body: &str| {
+        api.post("/api/notes?type=chore")
+            .header(CONTENT_TYPE, WCL)
+            .body(body.to_owned())
+            .send()
+            .unwrap()
+    };
+    let file = |id: &str| {
+        std::fs::read_to_string(
+            api.server
+                .vault_path()
+                .join(format!("notes/chore/{id}.wcl")),
+        )
+        .unwrap()
+    };
+
+    // A create that omits defaulted fields, a required one among them, gets every default.
+    let created = expect(post("title = \"Bins\"\n"), 201);
+    let id = s(&created["id"]).to_owned();
+    let on_disk = file(&id);
+    assert_eq!(s(&created["wcl"]), on_disk);
+    let lines: Vec<&str> = on_disk.lines().collect();
+    assert_eq!(
+        lines[3..],
+        ["owner   = \"me\"", "points  = 1", "rank    = 0"]
+    );
+
+    // The JSON form gets them too.
+    let res = api
+        .post("/api/notes?type=chore")
+        .json(&json!({ "note": { "fields": { "title": "Dishes" } } }))
+        .send()
+        .unwrap();
+    let created = expect(res, 201);
+    assert_eq!(file(s(&created["id"])), s(&created["wcl"]));
+    assert!(s(&created["wcl"]).contains("owner   = \"me\""));
+
+    // An explicit value wins over the default.
+    let created = expect(post("title = \"Lawn\"\nowner = \"sam\"\npoints = 5\n"), 201);
+    let id = s(&created["id"]).to_owned();
+    let on_disk = file(&id);
+    assert!(on_disk.contains("owner   = \"sam\""), "{on_disk}");
+    assert!(on_disk.contains("points  = 5"), "{on_disk}");
+    assert!(!on_disk.contains("\"me\""), "{on_disk}");
+
+    // An update does not re-apply defaults: an omitted optional field stays omitted...
+    let v1 = s(&created["version"]).to_owned();
+    let updated = expect(
+        api.update(&id, &v1, "title = \"Lawn\"\nowner = \"sam\"\n"),
+        200,
+    );
+    let on_disk = file(&id);
+    assert_eq!(s(&updated["wcl"]), on_disk);
+    assert!(!on_disk.contains("points"), "{on_disk}");
+    assert!(!on_disk.contains("rank"), "{on_disk}");
+
+    // ...and an omitted required field is still a 400.
+    let v2 = s(&updated["version"]).to_owned();
+    let err = expect(api.update(&id, &v2, "title = \"Lawn\"\n"), 400);
+    assert_eq!(err["issues"][0]["at"], "owner");
+    assert_eq!(file(&id), on_disk);
 }

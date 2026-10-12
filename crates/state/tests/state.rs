@@ -129,6 +129,28 @@ fn version_tokens_are_unique_per_write() {
 }
 
 #[test]
+fn head_is_the_current_version_of_each_live_note() {
+    let dir = TempDir::new().unwrap();
+    let state = open(&dir);
+    let author = Author::Session("s".into());
+    assert_eq!(state.head(NOTE_A).unwrap(), None);
+    state
+        .record_version(NOTE_A, "task", &author, "first")
+        .unwrap();
+    let last = state
+        .record_version(NOTE_A, "task", &author, "last")
+        .unwrap();
+    state.record_version(NOTE_B, "task", &author, "b").unwrap();
+
+    assert_eq!(state.head(NOTE_A).unwrap(), Some(last));
+    assert_eq!(state.live_notes().unwrap(), vec![NOTE_A, NOTE_B]);
+
+    state.trash_note(NOTE_B, &author).unwrap();
+    assert_eq!(state.head(NOTE_B).unwrap(), None);
+    assert_eq!(state.live_notes().unwrap(), vec![NOTE_A]);
+}
+
+#[test]
 fn history_survives_reopen() {
     let dir = TempDir::new().unwrap();
     {

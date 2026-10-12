@@ -245,6 +245,13 @@ export function problems(m: TypeModel): string[] {
     }
     if (f.kind === "location" && f.map === "image" && !f.image) out.push(`${who}: choose the map image.`);
   }
+  m.handlers.forEach((h, i) => {
+    const who = `Handler ${i + 1} (${h.event})`;
+    if (!h.script) out.push(`${who}: choose a script.`);
+    if (!h.event.startsWith("after_") && (h.allow_domains.length || h.secrets.length)) {
+      out.push(`${who}: only after_* handlers may reach hosts or read secrets.`);
+    }
+  });
   return out;
 }
 

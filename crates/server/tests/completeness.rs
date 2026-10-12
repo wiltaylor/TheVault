@@ -738,6 +738,53 @@ fn scripts_are_stored_as_sent_and_kept_while_a_handler_names_them() {
 }
 
 #[test]
+fn a_script_that_does_not_compile_is_stored_and_its_problems_reported() {
+    let api = Api::start();
+    let put = |name: &str, source: &str| {
+        expect(
+            api.put(&format!("/api/scripts/{name}"))
+                .json(&json!({ "source": source }))
+                .send()
+                .unwrap(),
+            200,
+        )
+    };
+
+    let fine = put("fine", "fn run() { }\n");
+    assert_eq!(fine["problems"], json!([]));
+
+    let broken = put("broken", "fn run( {\n");
+    assert_eq!(api.file("scripts/broken.ws"), "fn run( {\n");
+    let problems = broken["problems"].as_array().unwrap();
+    assert_eq!(problems.len(), 1, "{broken}");
+    assert_eq!(problems[0]["role"], "task");
+    assert!(
+        problems[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not compile"),
+        "{broken}"
+    );
+    let read = expect(api.get("/api/scripts/broken").send().unwrap(), 200);
+    assert_eq!(read["problems"], broken["problems"]);
+
+    // A before_* handler cannot reach HTTP, so a script one names that uses it is a problem there.
+    let source = "use http\nfn before_update(note: Value) -> Result[Value, string] { Ok(note) }\n";
+    put("gate", source);
+    let res = api
+        .put("/api/types/gated")
+        .header(CONTENT_TYPE, "text/plain")
+        .body("label = \"Gated\"\n\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n\nhandler \"before_update\" {\n  script = \"gate\"\n}\n")
+        .send()
+        .unwrap();
+    expect(res, 200);
+    let read = expect(api.get("/api/scripts/gate").send().unwrap(), 200);
+    let problems = read["problems"].as_array().unwrap();
+    assert_eq!(problems.len(), 1, "{read}");
+    assert_eq!(problems[0]["role"], "before_handler");
+}
+
+#[test]
 fn a_note_canvas_is_read_and_replaced_at_its_version() {
     let api = Api::start();
     let wcl = "title = \"Plan\"\n\ncanvas board {\n  viewport {\n    x    = 0.0\n    y    = 0.0\n    zoom = 1.0\n  }\n}\n\ncontent body {\n  paragraph {\n    text = \"Intro\"\n  }\n\n  canvas {\n    viewport {\n      x    = 5.0\n      y    = 5.0\n      zoom = 2.0\n    }\n  }\n}\n";

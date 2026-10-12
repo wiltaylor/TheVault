@@ -146,6 +146,30 @@ impl State {
             .optional()?)
     }
 
+    /// The current version of a live note, or `None` when it has none or is trashed.
+    pub fn head(&self, note_id: &str) -> Result<Option<Version>> {
+        let conn = self.conn();
+        let row = conn
+            .query_row(
+                &format!(
+                    "SELECT {VERSION_COLUMNS} FROM versions
+                     WHERE token = (SELECT token FROM heads WHERE note_id = ?1)"
+                ),
+                [note_id],
+                version_row,
+            )
+            .optional()?;
+        row.map(finish_version).transpose()
+    }
+
+    /// The id of every note with a current version, sorted.
+    pub fn live_notes(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT note_id FROM heads ORDER BY note_id")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Every recorded version of the note, oldest first.
     pub fn history(&self, note_id: &str) -> Result<Vec<Version>> {
         let conn = self.conn();

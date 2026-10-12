@@ -1,12 +1,15 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
+  BOARD_TYPE,
   BULK_NOTES,
   BULK_TYPE,
+  CREW_TYPE,
   MASS_NOTES,
   MASS_TYPE,
   PAGE_TYPE,
@@ -41,6 +44,8 @@ function seedVault(): string {
   writeFileSync(join(vault, "types/project.wcl"), PROJECT_TYPE);
   writeFileSync(join(vault, "types/page.wcl"), PAGE_TYPE);
   writeFileSync(join(vault, "types/mass.wcl"), MASS_TYPE);
+  writeFileSync(join(vault, "types/board.wcl"), BOARD_TYPE);
+  writeFileSync(join(vault, "types/crew.wcl"), CREW_TYPE);
   writeFileSync(join(vault, "types/story.wcl"), STORY_TYPE);
   mkdirSync(join(vault, "taxonomies"));
   writeFileSync(join(vault, "taxonomies/stage.wcl"), STAGE_TAXONOMY);
@@ -77,7 +82,8 @@ function listenAddress(server: ChildProcess): Promise<string> {
 }
 
 // Starts vault-server on a seeded temporary vault and port 0, serving web/dist, and hands the
-// URL, credentials and vault folder to the tests through the environment (S5).
+// URL, credentials and vault folder to the tests through the environment (S5). The server gets a
+// secret key file, so secrets can be stored.
 export default async function globalSetup() {
   if (!existsSync(join(web, "dist/index.html"))) {
     throw new Error("web/dist is missing. Run `pnpm build` first.");
@@ -87,10 +93,15 @@ export default async function globalSetup() {
     execFileSync(binary("TESTKIT_SEED_BIN", "testkit-seed"), [vault], { encoding: "utf8" }),
   ) as { password: string; admin_token: string };
 
+  // The key that encrypts secrets (OQ-S2), in a folder of its own outside the vault.
+  const config = mkdtempSync(join(tmpdir(), "thevault-e2e-config-"));
+  const key = join(config, "vault.key");
+  writeFileSync(key, randomBytes(32), { mode: 0o600 });
+
   const server = spawn(
     binary("VAULT_SERVER_BIN", "vault-server"),
     ["--vault", vault, "--listen", "127.0.0.1:0", "--web", join(web, "dist")],
-    { stdio: ["ignore", "pipe", "inherit"] },
+    { stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, VAULT_SECRET_KEY_FILE: key } },
   );
   let address: string;
   try {
@@ -98,6 +109,7 @@ export default async function globalSetup() {
   } catch (e) {
     server.kill();
     rmSync(vault, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
     throw e;
   }
 
@@ -108,5 +120,6 @@ export default async function globalSetup() {
   return async () => {
     server.kill();
     rmSync(vault, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
   };
 }

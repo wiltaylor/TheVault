@@ -33,6 +33,8 @@ export interface ViewDef {
   title: string;
   template: string | null;
   columns: string[];
+  /** `map`: the location field pins sit at. */
+  location: string | null;
   /** `kanban`: the single-term taxonomy field whose terms are the columns. */
   group: string | null;
   /** `calendar`, `timeline`: the date, datetime or date range field. */
@@ -67,6 +69,7 @@ export function readView(view: Block): ViewDef {
     title: str(view.fields, "title") ?? name,
     template: str(view.fields, "template"),
     columns: Array.isArray(columns) ? columns.filter((c): c is string => typeof c === "string") : ["title"],
+    location: str(view.fields, "location"),
     group: str(view.fields, "group"),
     date: str(view.fields, "date"),
     mode: str(view.fields, "mode") ?? "month",

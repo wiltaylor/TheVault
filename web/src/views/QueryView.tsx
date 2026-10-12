@@ -15,6 +15,7 @@ import { type Block, type Row, api } from "../api";
 import { formatValue } from "../components/Render";
 import { VirtualList } from "../components/VirtualList";
 import { type PagedRows, createPagedRows } from "../components/pagedRows";
+import { MapView } from "../map/MapView";
 import { slotField } from "../notes";
 import { typeDef } from "../session";
 import { CalendarView, TimelineView } from "./DateViews";
@@ -218,7 +219,7 @@ function DetailsView(props: { view: ViewDef; data: PagedRows; total: number }) {
 /**
  * A query view block: one query, shown through its saved views (D8, D33). `this` is the note
  * that holds the block. Every view keeps only what is on screen in the DOM: table, list and cards
- * virtualise, details and kanban columns page, and calendar and timeline load the dates in view.
+ * virtualise, details, map and kanban columns page, and calendar and timeline load the dates in view.
  */
 export function QueryView(props: { block: Block }) {
   const thisId = useThisNote();
@@ -282,6 +283,19 @@ export function QueryView(props: { block: Block }) {
                     </Match>
                     <Match when={view().kind === "details"}>
                       <DetailsView view={view()} data={data} total={total()} />
+                    </Match>
+                    <Match when={view().kind === "map"}>
+                      <MapView
+                        location={view().location}
+                        data={data}
+                        total={total()}
+                        card={(row) => (
+                          <>
+                            <NoteLink row={row} />
+                            <TemplateBody row={row} template={viewTemplate(typeDef(row.type), view().template, "card")} />
+                          </>
+                        )}
+                      />
                     </Match>
                     <Match when={view().kind === "kanban"}>
                       <KanbanView view={view()} query={def().query} thisId={thisId} />

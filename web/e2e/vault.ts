@@ -112,6 +112,81 @@ template default {
 }
 `;
 
+/** A board has a canvas of its own, placed on its template, and belongs to a crew. */
+export const BOARD_TYPE = `label  = "Board"
+plural = "Boards"
+
+field board {
+  kind  = "canvas"
+  label = "Board"
+}
+
+field crew {
+  kind   = "reference"
+  label  = "Crew"
+  target = "crew"
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "board"
+    slot "body"
+  }
+}
+`;
+
+/**
+ * A crew's template holds one fixed canvas: a text node, and a query node listing the crew's own
+ * boards through `this`.
+ */
+export const CREW_TYPE = `label  = "Crew"
+plural = "Crews"
+
+template default {
+  tab "Main" {
+    slot "title"
+
+    canvas {
+      viewport {
+        x    = 0.0
+        y    = 0.0
+        zoom = 1.0
+      }
+
+      node intro {
+        kind   = "text"
+        x      = 20.0
+        y      = 20.0
+        width  = 240.0
+        height = 100.0
+        text   = "This crew's **boards**"
+      }
+
+      node boards {
+        kind   = "query"
+        x      = 320.0
+        y      = 20.0
+        width  = 320.0
+        height = 400.0
+        view   = "list"
+        query  = "from board where crew == this sort title asc"
+      }
+
+      edge intro_to_boards {
+        from = "intro"
+        to   = "boards"
+      }
+    }
+  }
+}
+`;
+
 export const BULK_TYPE = `label  = "Bulk note"
 plural = "Bulk notes"
 

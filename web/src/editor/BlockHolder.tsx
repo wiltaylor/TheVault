@@ -6,7 +6,7 @@ import type { SolidNodeViewProps } from "./solidNodeView";
 
 /**
  * A content block the editor holds as one node: an image, an asset, code, a terminal, a
- * diagram or a drawing is edited in place by its own component, and a query view by its
+ * diagram, a drawing or a canvas is edited in place by its own component, and a query view by its
  * settings; any other kind is shown read-only.
  */
 export function BlockHolder(props: SolidNodeViewProps) {

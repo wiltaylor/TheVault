@@ -1,13 +1,15 @@
 import { A, useNavigate, useParams } from "@solidjs/router";
-import { For, Show, createEffect, createSignal, on } from "solid-js";
+import { For, Show, createEffect, createResource, createSignal, on } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 import { ApiError, type FieldDef, type Json, type Row, type TypePlan, api } from "../api";
 import { FieldInput } from "../components/FieldInput";
 import {
   DEFAULT_KINDS,
+  EVENTS,
   FIELD_KINDS,
   type FieldKind,
   type FieldModel,
+  type HandlerModel,
   MULTIPLE_KINDS,
   ON_DELETE,
   PALETTE,
@@ -97,6 +99,10 @@ export function TypeEditor() {
   const [plan, setPlan] = createSignal<TypePlan | null>(null);
   // A preview the server refused: why, and the notes the change would reach.
   const [refused, setRefused] = createSignal<{ message: string; notes: Row[]; total: number } | null>(null);
+  // The script and function a change runs over every note of the type, if any (D6).
+  const [migrationScript, setMigrationScript] = createSignal("");
+  const [migrationFunction, setMigrationFunction] = createSignal("");
+  const [scripts] = createResource(() => api.scripts().catch(() => [] as string[]), { initialValue: [] });
 
   createEffect(
     on(
@@ -137,6 +143,28 @@ export function TypeEditor() {
     setRefused(null);
     setSaveError(null);
   }
+  const editHandler = (index: number, fn: (h: HandlerModel) => void) =>
+    edit((m) => {
+      const h = m.handlers[index];
+      if (h) fn(h);
+    });
+
+  function moveHandler(index: number, by: number) {
+    edit((m) => {
+      const j = index + by;
+      if (j < 0 || j >= m.handlers.length) return;
+      const [h] = m.handlers.splice(index, 1);
+      m.handlers.splice(j, 0, h!);
+    });
+  }
+
+  function migration() {
+    const script = migrationScript();
+    if (!script) return undefined;
+    const fn = migrationFunction().trim();
+    return fn ? { script, function: fn } : { script };
+  }
+
   const editField = (key: number, fn: (f: FieldModel) => void) =>
     edit((m) => {
       const f = m.fields.find((x) => x.key === key);
@@ -195,7 +223,7 @@ export function TypeEditor() {
     setPlan(null);
     setRefused(null);
     try {
-      setPlan(await api.changeType(name(), typeWcl(model), renames(model)));
+      setPlan(await api.changeType(name(), typeWcl(model), renames(model), undefined, migration()));
     } catch (e) {
       if (e instanceof ApiError && (e.status === 400 || e.status === 422)) {
         // Show what the change would reach even though it cannot be applied as it stands.
@@ -219,7 +247,7 @@ export function TypeEditor() {
     setBusy(true);
     setSaveError(null);
     try {
-      await api.changeType(name(), typeWcl(model), renames(model), p.plan);
+      await api.changeType(name(), typeWcl(model), renames(model), p.plan, migration());
       await reloadDefinitions();
       navigate(`/types/${name()}`);
     } catch (e) {
@@ -514,6 +542,84 @@ export function TypeEditor() {
     );
   }
 
+  function HandlerCard(props: { handler: HandlerModel; index: number }) {
+    const h = () => props.handler;
+    const i = () => props.index;
+    const set = (fn: (x: HandlerModel) => void) => editHandler(i(), fn);
+    const id = (part: string) => `h${i()}-${part}`;
+    const lines = (text: string) =>
+      text
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+    return (
+      <fieldset class="field-card" data-testid={`handler-card-${i()}`}>
+        <legend>
+          {h().event} <span class="muted">{h().script ? `${h().script}.${h().function || h().event}` : ""}</span>
+        </legend>
+        <div class="form-grid">
+          <label for={id("event")}>Event</label>
+          <select id={id("event")} onChange={(e) => set((x) => (x.event = e.currentTarget.value))}>
+            <For each={EVENTS}>
+              {(ev) => (
+                <option value={ev} selected={h().event === ev}>
+                  {ev}
+                </option>
+              )}
+            </For>
+          </select>
+          <label for={id("script")}>Script</label>
+          <select id={id("script")} onChange={(e) => set((x) => (x.script = e.currentTarget.value))}>
+            <option value="" selected={!h().script}>
+              —
+            </option>
+            <For each={[...new Set([...scripts(), ...(h().script ? [h().script] : [])])].sort()}>
+              {(sc) => (
+                <option value={sc} selected={h().script === sc}>
+                  {sc}
+                </option>
+              )}
+            </For>
+          </select>
+          <label for={id("function")}>Function</label>
+          <input
+            id={id("function")}
+            value={h().function ?? ""}
+            placeholder={h().event}
+            onInput={(e) => set((x) => (x.function = e.currentTarget.value.trim() || null))}
+          />
+          <Show when={h().event.startsWith("after_")}>
+            <label for={id("domains")}>Allowed hosts, one per line</label>
+            <textarea
+              id={id("domains")}
+              rows={2}
+              value={h().allow_domains.join("\n")}
+              onChange={(e) => set((x) => (x.allow_domains = lines(e.currentTarget.value)))}
+            />
+            <label for={id("secrets")}>Secrets, one per line</label>
+            <textarea
+              id={id("secrets")}
+              rows={2}
+              value={h().secrets.join("\n")}
+              onChange={(e) => set((x) => (x.secrets = lines(e.currentTarget.value)))}
+            />
+          </Show>
+        </div>
+        <div class="actions">
+          <button type="button" onClick={() => moveHandler(i(), -1)} disabled={i() === 0}>
+            Move up
+          </button>
+          <button type="button" onClick={() => moveHandler(i(), 1)} disabled={i() === model.handlers.length - 1}>
+            Move down
+          </button>
+          <button type="button" class="danger" onClick={() => edit((m) => void m.handlers.splice(i(), 1))}>
+            Remove handler
+          </button>
+        </div>
+      </fieldset>
+    );
+  }
+
   return (
     <section class="def-editor">
       <Show when={loadError()}>
@@ -585,6 +691,65 @@ export function TypeEditor() {
         <button type="button" onClick={addField}>
           Add field
         </button>
+
+        <h2>Handlers</h2>
+        <p class="muted">
+          Scripts that run when a note of this type is created, updated or deleted. Handlers for one event run in
+          this order. <A href="/scripts">Edit scripts</A>
+        </p>
+        <For each={model.handlers} fallback={<p class="muted">No handlers.</p>}>
+          {(h, i) => <HandlerCard handler={h} index={i()} />}
+        </For>
+        <button
+          type="button"
+          onClick={() =>
+            edit((m) =>
+              void m.handlers.push({ event: "before_update", script: "", function: null, allow_domains: [], secrets: [] }),
+            )
+          }
+        >
+          Add handler
+        </button>
+
+        <Show when={!isNew()}>
+          <h2>Migration</h2>
+          <p class="muted">
+            Optionally run a script function over every note of this type when the change is applied.
+          </p>
+          <div class="form-grid">
+            <label for="migration-script">Migration script</label>
+            <select
+              id="migration-script"
+              onChange={(e) => {
+                setMigrationScript(e.currentTarget.value);
+                setPlan(null);
+              }}
+            >
+              <option value="" selected={!migrationScript()}>
+                None
+              </option>
+              <For each={scripts()}>
+                {(sc) => (
+                  <option value={sc} selected={migrationScript() === sc}>
+                    {sc}
+                  </option>
+                )}
+              </For>
+            </select>
+            <Show when={migrationScript()}>
+              <label for="migration-function">Migration function</label>
+              <input
+                id="migration-function"
+                value={migrationFunction()}
+                placeholder="migrate"
+                onInput={(e) => {
+                  setMigrationFunction(e.currentTarget.value);
+                  setPlan(null);
+                }}
+              />
+            </Show>
+          </div>
+        </Show>
 
         <div class="save-bar">
           <Show when={issues().length > 0}>
