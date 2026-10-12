@@ -53,7 +53,7 @@ function listenAddress(server: ChildProcess): Promise<string> {
 }
 
 // Starts vault-server on a seeded temporary vault and port 0, serving web/dist, and hands the
-// URL and credentials to the tests through the environment (S5).
+// URL, credentials and vault folder to the tests through the environment (S5).
 export default async function globalSetup() {
   if (!existsSync(join(web, "dist/index.html"))) {
     throw new Error("web/dist is missing. Run `pnpm build` first.");
@@ -80,6 +80,7 @@ export default async function globalSetup() {
   process.env.E2E_BASE_URL = `http://${address}`;
   process.env.E2E_PASSWORD = seeded.password;
   process.env.E2E_ADMIN_TOKEN = seeded.admin_token;
+  process.env.E2E_VAULT = vault;
   return async () => {
     server.kill();
     rmSync(vault, { recursive: true, force: true });

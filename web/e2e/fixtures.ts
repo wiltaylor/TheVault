@@ -10,6 +10,9 @@ function env(name: string): string {
 
 export const password = () => env("E2E_PASSWORD");
 
+/** The vault folder the server runs on. */
+export const vaultDir = () => env("E2E_VAULT");
+
 export const test = base.extend<{ admin: APIRequestContext }>({
   baseURL: async ({}, use) => {
     await use(env("E2E_BASE_URL"));

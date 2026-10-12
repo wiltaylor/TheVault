@@ -69,6 +69,14 @@ export interface Row {
   fields: Record<string, Json>;
 }
 
+/** An uploaded file, stored at `assets/<id>/<filename>` (D22). */
+export interface Asset {
+  id: string;
+  filename: string;
+  size: number;
+  path: string;
+}
+
 export interface Page {
   rows: Row[];
   next: string | null;
@@ -103,7 +111,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     credentials: "same-origin",
     headers: { Accept: "application/json" },
   };
-  if (body !== undefined) {
+  if (body instanceof Blob) {
+    init.headers = { ...init.headers, "Content-Type": "application/octet-stream" };
+    init.body = body;
+  } else if (body !== undefined) {
     init.headers = { ...init.headers, "Content-Type": "application/json" };
     init.body = JSON.stringify(body);
   }
@@ -151,5 +162,14 @@ export const api = {
     if (cursor) params.set("cursor", cursor);
     return request<Page>("GET", `/api/search?${params}`);
   },
+  assets: async () => (await request<{ assets: Asset[] }>("GET", "/api/assets")).assets,
+  /** Upload `file` as a new asset. The body is the file's bytes, unchanged. */
+  uploadAsset: (file: File) =>
+    request<Asset>("POST", `/api/assets?filename=${enc(file.name)}`, file),
 };
+
+/** Where the browser fetches an asset's bytes. */
+export function assetUrl(id: string): string {
+  return `/api/assets/${enc(id)}`;
+}
 
