@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::sync::MutexGuard;
 
-use schema::{Doc, DocBlock, FieldKind, Schema, Taxonomy, Value};
+use schema::{Doc, DocBlock, FieldKind, Invalid, Issue, Schema, Taxonomy, Value};
 use state::Author;
 use store::Change;
 use wcl_lang::ast::{Expr, Item, Source};
@@ -22,6 +22,11 @@ use crate::{
 /// The vault path of taxonomy `name`.
 pub fn taxonomy_path(name: &str) -> String {
     format!("taxonomies/{name}.wcl")
+}
+
+/// The vault path of task `name`.
+pub fn task_path(name: &str) -> String {
+    format!("tasks/{name}.wcl")
 }
 
 /// The vault path of script `name`.
@@ -427,7 +432,7 @@ impl Writer {
             })
             .collect();
         for (task, text) in self.definitions("tasks")? {
-            let file = format!("tasks/{task}.wcl");
+            let file = task_path(&task);
             if let Ok(doc) = Doc::parse(&text, &file)
                 && doc.field("script").and_then(Value::as_str) == Some(name)
             {
@@ -442,6 +447,66 @@ impl Writer {
             });
         }
         self.vault.commit(vec![Change::delete(script_path(name))])?;
+        Ok(())
+    }
+
+    // ---- tasks ----------------------------------------------------------------------------
+
+    /// The `(name, text)` of every `tasks/<name>.wcl`, sorted by name.
+    pub fn task_files(&self) -> Result<Vec<(String, String)>> {
+        let mut tasks: Vec<_> = self
+            .definitions("tasks")?
+            .into_iter()
+            .filter(|(n, _)| schema::is_name(n))
+            .collect();
+        tasks.sort();
+        Ok(tasks)
+    }
+
+    /// The text of `tasks/<name>.wcl`.
+    pub fn read_task(&self, name: &str) -> Result<String> {
+        check_name("task", name)?;
+        match self.vault.read_text(&task_path(name)) {
+            Err(store::Error::NotFound(_)) => Err(missing_task(name)),
+            other => Ok(other?),
+        }
+    }
+
+    /// Create or replace `tasks/<name>.wcl` in canonical form. `check` validates the canonical
+    /// text, which the `scheduler` crate knows how to read; the script the task names must exist.
+    pub fn put_task(
+        &self,
+        name: &str,
+        source: &str,
+        check: impl FnOnce(&str) -> std::result::Result<(), Invalid>,
+    ) -> Result<String> {
+        let _inner = self.lock();
+        check_name("task", name)?;
+        let path = task_path(name);
+        let text = store::canonical(source, &path)?;
+        check(&text).map_err(Error::Invalid)?;
+        let doc = Doc::parse(&text, &path).map_err(Error::Invalid)?;
+        if let Some(script) = doc.field("script").and_then(Value::as_str)
+            && self.read_script(script).is_err()
+        {
+            return Err(Error::Invalid(Invalid {
+                file: path,
+                issues: vec![Issue::new(
+                    "script",
+                    format!("there is no script {script:?}"),
+                )],
+            }));
+        }
+        self.vault
+            .commit(vec![Change::write(path, text.as_bytes())])?;
+        Ok(text)
+    }
+
+    /// Delete `tasks/<name>.wcl`.
+    pub fn delete_task(&self, name: &str) -> Result<()> {
+        let _inner = self.lock();
+        self.read_task(name)?;
+        self.vault.commit(vec![Change::delete(task_path(name))])?;
         Ok(())
     }
 
@@ -568,6 +633,10 @@ fn missing_taxonomy(name: &str) -> Error {
 
 fn missing_script(name: &str) -> Error {
     Error::Missing(format!("there is no script {name:?}"))
+}
+
+fn missing_task(name: &str) -> Error {
+    Error::Missing(format!("there is no task {name:?}"))
 }
 
 fn missing_canvas(id: &str, name: &str) -> Error {
