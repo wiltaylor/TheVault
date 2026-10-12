@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+wcl_lang = { git = "https://github.com/wiltaylor/wcl.git", rev = "0531228286cb19d5b73daf7de23e79790a5e15d4" }
+wscript  = { git = "https://github.com/Configweave/wscript.git", rev = "ddb6d9fedc77e68736a1281eaf8a122250f40aa3" }
+
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+
+store = { path = "crates/store" }
+schema = { path = "crates/schema" }
+writer = { path = "crates/writer" }
+index = { path = "crates/index" }
+state = { path = "crates/state" }
+query = { path = "crates/query" }
+script = { path = "crates/script" }
+scheduler = { path = "crates/scheduler" }
+api = { path = "crates/api" }
+testkit = { path = "crates/testkit" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

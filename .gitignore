@@ -4,3 +4,5 @@ node_modules/
 /web/dist/
 .scratch/
 *.vault-test/
+/web/test-results/
+/web/playwright-report/
