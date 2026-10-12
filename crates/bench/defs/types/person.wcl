@@ -1,0 +1,34 @@
+label       = "Person"
+plural      = "People"
+description = "Someone you work with."
+icon        = "user"
+
+field email {
+  kind  = "string"
+  label = "Email"
+}
+
+field organisation {
+  kind  = "string"
+  label = "Organisation"
+}
+
+field homepage {
+  kind  = "url"
+  label = "Homepage"
+}
+
+field body {
+  kind  = "content"
+  label = "Notes"
+}
+
+template default {
+  tab "Person" {
+    slot "title"
+    slot "email"
+    slot "organisation"
+    slot "homepage"
+    slot "body"
+  }
+}

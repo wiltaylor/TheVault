@@ -31,6 +31,12 @@ server-run vault='.scratch/dev-vault' listen='127.0.0.1:8080': (require-tool "ca
 	mkdir -p {{vault}}
 	cargo run -p server --bin vault-server -- --vault {{vault}} --listen {{listen}}
 
+# Run the S6 benchmark: generate a seeded vault, time reindex, query, search, open and save, and write target/bench/report.md
+[group('rust')]
+bench notes='1000000' seed='42' samples='200': (require-tool "cargo")
+	cargo build --release -p bench -p server -p cli --bins
+	target/release/vault-bench --notes {{notes}} --seed {{seed}} --samples {{samples}}
+
 # Run the Vite dev server for the web client
 [group('web')]
 web-dev: web-deps-install

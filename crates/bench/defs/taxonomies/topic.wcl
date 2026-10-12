@@ -1,0 +1,114 @@
+label       = "Topic"
+description = "What a note is about."
+
+term "Science" {
+  term "Physics"
+
+  term "Chemistry"
+
+  term "Biology"
+
+  term "Astronomy"
+
+  term "Geology"
+
+  term "Maths"
+}
+
+term "Tech" {
+  term "Rust"
+
+  term "Web"
+
+  term "Databases"
+
+  term "Networking"
+
+  term "Security"
+
+  term "Hardware"
+}
+
+term "Arts" {
+  term "Music"
+
+  term "Painting"
+
+  term "Film"
+
+  term "Theatre"
+
+  term "Poetry"
+
+  term "Design"
+}
+
+term "History" {
+  term "Ancient"
+
+  term "Medieval"
+
+  term "Modern"
+
+  term "Military"
+
+  term "Economic"
+
+  term "Social"
+}
+
+term "Business" {
+  term "Finance"
+
+  term "Marketing"
+
+  term "Strategy"
+
+  term "Operations"
+
+  term "Legal"
+
+  term "Sales"
+}
+
+term "Health" {
+  term "Fitness"
+
+  term "Nutrition"
+
+  term "Sleep"
+
+  term "Medicine"
+
+  term "Mental"
+
+  term "Recovery"
+}
+
+term "Travel" {
+  term "Europe"
+
+  term "Asia"
+
+  term "Africa"
+
+  term "Americas"
+
+  term "Oceania"
+
+  term "Polar"
+}
+
+term "Food" {
+  term "Baking"
+
+  term "Grilling"
+
+  term "Fermentation"
+
+  term "Vegetables"
+
+  term "Seafood"
+
+  term "Desserts"
+}

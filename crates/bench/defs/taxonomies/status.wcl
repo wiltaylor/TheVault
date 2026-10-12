@@ -1,0 +1,28 @@
+label       = "Status"
+description = "Where a piece of work is."
+
+term "Inbox" {
+  colour = "gray"
+}
+
+term "Active" {
+  colour = "blue"
+
+  term "In progress"
+
+  term "Blocked" {
+    colour = "red"
+  }
+
+  term "Review" {
+    colour = "purple"
+  }
+}
+
+term "Done" {
+  colour = "green"
+}
+
+term "Archived" {
+  colour = "brown"
+}

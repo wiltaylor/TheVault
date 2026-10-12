@@ -1,0 +1,52 @@
+label       = "Article"
+plural      = "Articles"
+description = "A longer piece of writing."
+icon        = "file-text"
+
+field topics {
+  kind     = "taxonomy"
+  label    = "Topics"
+  taxonomy = "topic"
+  multiple = true
+}
+
+field published {
+  kind  = "date"
+  label = "Published"
+}
+
+field rating {
+  kind  = "float"
+  label = "Rating"
+}
+
+field tags {
+  kind  = "list"
+  label = "Tags"
+  items = "string"
+}
+
+field related {
+  kind     = "reference"
+  label    = "Related"
+  target   = "article"
+  relation = "peer"
+  multiple = true
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+template default {
+  tab "Article" {
+    slot "title"
+    slot "topics"
+    slot "published"
+    slot "rating"
+    slot "tags"
+    slot "related"
+    slot "body"
+  }
+}
