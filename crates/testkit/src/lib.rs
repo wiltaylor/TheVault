@@ -16,6 +16,8 @@
 //! [`ADMIN_TOKEN_NAME`], whose secret [`TestServer::admin_token`] returns. It also writes a secret
 //! key file in a second temporary folder, outside the vault, and points the server at it through
 //! `VAULT_SECRET_KEY_FILE` (OQ-S2), so secrets can be stored.
+//!
+//! A server gets 120 seconds to start. Set `TESTKIT_START_TIMEOUT_SECS` to change that.
 
 mod standin;
 
@@ -31,7 +33,26 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
-const START_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a server gets to print its listen line and answer health. The full gate runs many
+/// test binaries at once, so a start can take far longer than it does alone.
+const DEFAULT_START_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Overrides [`DEFAULT_START_TIMEOUT`], in whole seconds.
+const START_TIMEOUT_VAR: &str = "TESTKIT_START_TIMEOUT_SECS";
+
+fn start_timeout() -> Duration {
+    parse_start_timeout(std::env::var(START_TIMEOUT_VAR).ok().as_deref())
+}
+
+fn parse_start_timeout(value: Option<&str>) -> Duration {
+    let Some(value) = value else {
+        return DEFAULT_START_TIMEOUT;
+    };
+    match value.trim().parse::<u64>() {
+        Ok(secs) if secs > 0 => Duration::from_secs(secs),
+        _ => panic!("{START_TIMEOUT_VAR} must be a whole number of seconds above 0, not {value:?}"),
+    }
+}
 
 /// The login password of every test vault.
 pub const PASSWORD: &str = "correct horse battery staple";
@@ -173,7 +194,7 @@ impl TestServer {
     }
 
     fn wait_healthy(&self) {
-        let deadline = Instant::now() + START_TIMEOUT;
+        let deadline = Instant::now() + start_timeout();
         loop {
             match http_get_status(self.addr, "/api/health") {
                 Ok(200) => return,
@@ -219,7 +240,7 @@ fn read_listen_line(child: &mut Child) -> Result<SocketAddr, String> {
     });
 
     let line = rx
-        .recv_timeout(START_TIMEOUT)
+        .recv_timeout(start_timeout())
         .map_err(|_| "timed out".to_string())?
         .map_err(|e| e.to_string())?;
     let value: serde_json::Value =
@@ -268,4 +289,31 @@ pub fn server_binary() -> PathBuf {
         binary.display()
     );
     binary
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_start_timeout_defaults_to_120_seconds() {
+        assert_eq!(parse_start_timeout(None), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn the_start_timeout_reads_whole_seconds_from_the_variable() {
+        assert_eq!(parse_start_timeout(Some(" 300 ")), Duration::from_secs(300));
+    }
+
+    #[test]
+    #[should_panic(expected = "TESTKIT_START_TIMEOUT_SECS")]
+    fn a_start_timeout_that_is_not_a_number_is_refused() {
+        parse_start_timeout(Some("soon"));
+    }
+
+    #[test]
+    #[should_panic(expected = "TESTKIT_START_TIMEOUT_SECS")]
+    fn a_zero_start_timeout_is_refused() {
+        parse_start_timeout(Some("0"));
+    }
 }
