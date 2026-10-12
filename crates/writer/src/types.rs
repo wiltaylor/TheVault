@@ -153,7 +153,7 @@ impl Writer {
                 .unwrap_or_else(|_| NoteReport::default());
             staged.push((id, doc, report, text));
         }
-        self.vault.commit(files)?;
+        let generation = self.vault.commit(files)?;
 
         let mut saved = Vec::new();
         let mut updates = Vec::with_capacity(staged.len());
@@ -180,6 +180,7 @@ impl Writer {
         let inner = &mut *inner;
         install(inner, schema)?;
         inner.index.update(&inner.schema, &updates)?;
+        inner.index.advance(generation)?;
         Ok((plan, saved))
     }
 
@@ -204,8 +205,10 @@ impl Writer {
             .cloned()
             .collect();
         let schema = rebuild_schema(&inner.schema, types)?;
-        self.vault.commit(vec![Change::delete(type_path(name))])?;
-        install(&mut inner, schema)
+        let generation = self.vault.commit(vec![Change::delete(type_path(name))])?;
+        install(&mut inner, schema)?;
+        inner.index.advance(generation)?;
+        Ok(())
     }
 
     /// Every note that holds items its type does not describe, in id order (D6).
