@@ -96,6 +96,7 @@ export function Shell(props: ParentProps) {
                 each={[
                   ["/scripts", "Scripts"],
                   ["/tasks", "Tasks"],
+                  ["/assets", "Assets"],
                   ["/secrets", "Secrets"],
                   ["/tokens", "API tokens"],
                   ["/trash", "Trash"],

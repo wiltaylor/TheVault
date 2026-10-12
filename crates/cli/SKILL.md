@@ -46,6 +46,7 @@ vault taxonomy get status
 - `computed`: only the server's handlers write it. Never send it.
 - `multiple`: the value is a list.
 - `options` for `select`, `taxonomy` for `taxonomy`, `target` for `reference`.
+- `relation` and `inverse` for `reference`: see "Two-way references" below.
 
 Every note also has `title`, which is required. The server sets `created` and `updated` itself and ignores yours.
 
@@ -64,9 +65,13 @@ Every note also has `title`, which is required. The server sets `created` and `u
 | `asset` | The id of an uploaded asset |
 | `list` | A list of the field's `items` kind |
 | `location` | `{ lat: -37.81, lng: 144.96 }` |
-| `content` | A `content <field> { ... }` block of paragraphs, headings and lists |
+| `content` | A `content <field> { ... }` block of paragraphs, headings and lists. In JSON it is a block, not a field: see step 3 |
 
 Write every field you care about. Do not rely on a field's `default` being filled in for you.
+
+### Two-way references
+
+A `reference` field with `relation = "two_way"` names its `inverse`, a field on the target type that holds the other side. In the starter types, a task's `project` and a project's `tasks` are the two sides of one link. Set one side only. The server writes the other side in the same commit: give a task a `project` and the task's id is added to that project's `tasks`. A write reports the other notes it changed this way under `also`.
 
 ## 2. Read notes
 
@@ -80,6 +85,8 @@ vault search "dashboard"
 ```
 
 `get` returns the note as `wcl`, the stored WCL text, and as `note`, its JSON form, with the `version` to send back when you change it.
+
+`list`, `query` and `search` return `rows`. Each row has the note's `id`, `type` and `title`, and its field values under `fields`. A row never holds `content` fields, so to read a note's body, `get` the note by its `id`.
 
 A query is a `from` clause followed by optional clauses in this order: `where`, `search`, `sort`, `group by`, `select`, `limit`. A `where` expression uses `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||` and `!`, and these functions:
 
@@ -110,12 +117,24 @@ content body {
 EOF
 ```
 
-The same note as JSON, with `--json`:
+The same kind of note as JSON, with `--json`. Plain fields go under `fields`. Each `content` field is a block under `blocks`: `kind` is `"content"`, `labels` holds the field name, and its paragraphs, headings and lists are blocks inside it. Every block has the same four keys: `kind`, `labels`, `fields` and `blocks`, each optional except `kind`.
 
 ```sh
-echo '{ "fields": { "title": "Book the venue", "status": "Todo", "priority": "medium" } }' \
-  | vault put --type task --json
+cat > note.json <<'EOF'
+{
+  "fields": { "title": "Book the venue", "status": "Todo", "priority": "medium" },
+  "blocks": [
+    { "kind": "content", "labels": ["body"],
+      "blocks": [
+        { "kind": "paragraph", "fields": { "text": "Ask for **two** quotes." } }
+      ] }
+  ]
+}
+EOF
+vault put --type task --json < note.json
 ```
+
+To see any other block in JSON, `get` a note that has one and read its `note.blocks`.
 
 To change a note, send the whole note with the version you read. A note that changed since you read it is refused with `"status": 409` and `"error": "conflict"`; read it again, reapply your change, and retry.
 
@@ -163,11 +182,60 @@ The operations are:
 | `delete` | `id`, `base_version` |
 | `upsert` | `type`, `key`, and the note |
 
-The batch commits all or nothing. The report has `ok`, and one entry in `items` per operation with its `result`: `created`, `updated`, `unchanged`, `deleted`, or `error` with the `error` that stopped it. Fix every `error` item and run the dry run again until `ok` is `true`.
+The batch commits all or nothing. The report holds:
+
+| Key | Meaning |
+|-----|---------|
+| `ok` | Every item succeeded. A real run committed exactly when this is `true` |
+| `dry_run`, `committed` | Whether this was a dry run, and whether anything was written |
+| `items` | One entry per operation, in order. `index` is its position, `result` is `created`, `updated`, `unchanged`, `deleted` or `error`. A successful entry has the note's `id`, `type`, `version` and `wcl`. An `error` entry has the item's error under `error` |
+| `also` | Other notes the batch changed: the far side of a two-way reference, and the effects of deleting a referenced note. Each has `id`, `type`, `event` and `version` |
+| `error` | `null`, or a failure that no single item caused, such as an event handler refusing the batch |
+| `status` | Only on a failed batch: the HTTP status, `422`. The command then exits 1 |
+
+Fix every `error` item, and the top-level `error` when it is not `null`, then run the dry run again until `ok` is `true`.
+
+### Notes that refer to each other
+
+A dry run makes up the ids of the notes it would create. The real run creates different ones, and `version` is `null` in a dry run. Never copy an id from a dry run into a note.
+
+No item in a batch can refer to a note that another item in the same batch creates, and no two items may change the same note. So import in stages, in reference order: first the notes that others point at, then the notes that point at them. Run each stage for real, take the new ids from its `items`, and put them in the next stage. Here the first stage creates a person and a project, and the second creates a task that refers to both:
+
+```sh
+cat > first.json <<'EOF'
+[
+  { "op": "upsert", "type": "person", "key": "email",
+    "note": { "fields": { "title": "Robin Rivera", "email": "robin@example.com" } } },
+  { "op": "upsert", "type": "project", "key": "title",
+    "note": { "fields": { "title": "Launch the shop", "status": "Todo" } } }
+]
+EOF
+vault batch --dry-run --file first.json
+vault batch --file first.json > first-report.json
+PERSON=$(jq -r '.items[0].id' first-report.json)
+PROJECT=$(jq -r '.items[1].id' first-report.json)
+
+cat > second.json <<EOF
+[
+  { "op": "upsert", "type": "task", "key": "title",
+    "note": { "fields": { "title": "Order the stock", "status": "Todo",
+                          "assignee": "$PERSON", "project": "$PROJECT" } } }
+]
+EOF
+vault batch --dry-run --file second.json
+vault batch --file second.json
+```
+
+The second report lists the project under `also`, because the server added the task to the project's `tasks`. Upserts make every stage safe to rerun. To find the ids of an earlier stage later, query by the key, as in `vault query 'from person where email == "robin@example.com"'`.
 
 ## 5. Upsert by a key field
 
 An upsert finds the note of the type whose `key` field holds the same value. It updates that note, or creates one when there is none. Running the same upsert twice changes nothing the second time, so an import that uses upserts can be rerun safely.
+
+- The key is `title` or a single `string`, `int`, `url`, `date`, `datetime` or `select` field, and the note you send must have a value for it.
+- The server does not keep key values unique. When more than one note of the type holds the value, the upsert is refused with `"status": 409` and `"error": "key_not_unique"`, and `ids` lists the matching notes. Choose a key that is unique in your data, such as a person's `email`. `title` works when no two notes of the type share a title.
+- Two upserts in one batch may not have the same key value.
+- An update sets only the fields and `content` blocks you send. Every other field keeps its value, so an upsert cannot clear a field. To clear one, `put` the whole note.
 
 ```sh
 vault upsert --type person --key email <<'EOF'
@@ -213,7 +281,7 @@ due    = "2026-11-01"
 EOF
 ```
 
-In a batch, each failing item carries the same error under `error`, and `index` says which operation it was.
+In a batch, each failing item carries the same error under `error`, and `index` says which operation it was. The `status` and `error` at the top of a batch report are not an item's error: see step 4.
 
 ## 7. Files
 
@@ -224,6 +292,8 @@ vault asset list
 ```
 
 `asset upload` prints the asset's `id`. Put that id in an `asset` field, or in an `image` or `asset` content block.
+
+`vault asset delete <id>` is refused with `asset_in_use` while notes name the asset, and the error lists them under `notes`. Add `--unlink` to take the asset out of those notes and delete it in one commit.
 
 ## Setting up a vault
 

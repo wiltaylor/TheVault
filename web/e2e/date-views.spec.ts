@@ -82,6 +82,55 @@ test("dragging a card to another column changes the note's taxonomy value in its
   await expect.poll(() => storyFile(a.id)).not.toMatch(/^stage\s/m);
 });
 
+test("a kanban drag shows in every other view of the note on the page without a reload", async ({ page: p, admin }) => {
+  const tag = unique("live");
+  const a = await create(admin, "story", { title: `${tag} A`, tag, stage: "Todo" });
+  await create(admin, "story", { title: `${tag} B`, tag, stage: "Todo" });
+  const query = `from story where tag == "${tag}" sort title asc`;
+  const block = (name: string, fields: Record<string, unknown>) => ({
+    kind: "query_view",
+    fields: { query },
+    blocks: [{ kind: "view", labels: [name], fields }],
+  });
+  const title = unique("Live ");
+  const page = await create(admin, "page", { title }, [
+    {
+      kind: "content",
+      labels: ["body"],
+      blocks: [
+        block("board", { kind: "kanban", group: "stage" }),
+        block("rows", { kind: "table", columns: ["title", "stage"] }),
+        block("expanded", { kind: "details" }),
+        block("again", { kind: "kanban", group: "stage" }),
+      ],
+    },
+  ]);
+
+  await open(p, page.id, title);
+  const views = p.getByTestId("query-view");
+  await expect(views).toHaveCount(4);
+  const [board, table, details, again] = [views.nth(0), views.nth(1), views.nth(2), views.nth(3)];
+  const rowA = table.getByTestId("query-row").filter({ hasText: `${tag} A` });
+  const detailA = details.getByTestId("query-detail").filter({ hasText: `${tag} A` });
+  await expect(rowA).toContainText("Todo");
+  await expect(detailA).toContainText("Todo");
+  await expect(column(again, "Todo").getByTestId("kanban-card")).toHaveCount(2);
+
+  // A reload would drop this marker.
+  await p.evaluate(() => ((window as unknown as { liveMarker: boolean }).liveMarker = true));
+  await column(board, "Todo").locator(`[data-id="${a.id}"]`).dragTo(column(board, "Doing"));
+  await expect.poll(() => storyFile(a.id)).toMatch(/^stage\s+= "Doing"$/m);
+
+  await expect(rowA).toContainText("Doing");
+  await expect(rowA).not.toContainText("Todo");
+  await expect(detailA).toContainText("Doing");
+  await expect(column(again, "Doing").getByTestId("kanban-card")).toHaveText([new RegExp(`${tag} A`)]);
+  await expect(column(again, "Todo").getByTestId("kanban-card")).toHaveCount(1);
+  // The rows changed in place: the views kept their rows and the page never reloaded.
+  await expect(table.getByTestId("query-row")).toHaveCount(2);
+  expect(await p.evaluate(() => (window as unknown as { liveMarker?: boolean }).liveMarker)).toBe(true);
+});
+
 test("kanban columns page through long columns", async ({ page: p, admin }) => {
   const tag = unique("many");
   for (let i = 0; i < 30; i++) {
