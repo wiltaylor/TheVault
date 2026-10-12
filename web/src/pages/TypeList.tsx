@@ -1,4 +1,4 @@
-import { useParams } from "@solidjs/router";
+import { A, useParams } from "@solidjs/router";
 import { Show } from "solid-js";
 import { api } from "../api";
 import { PagedList } from "../components/PagedList";
@@ -13,7 +13,13 @@ export function TypeList() {
       <Show when={typeDef(name())} fallback={<p class="error">There is no type {name()}.</p>}>
         {(t) => (
           <>
-            <h1>{t().plural}</h1>
+            <header class="note-header">
+              <h1>{t().plural}</h1>
+              <div class="actions">
+                <A href={`/types/${name()}/edit`}>Edit type</A>
+                <A href={`/types/${name()}/templates`}>Templates</A>
+              </div>
+            </header>
             <PagedList
               key={name()}
               label={t().plural}

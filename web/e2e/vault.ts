@@ -93,6 +93,25 @@ template default {
 }
 `;
 
+export const SKETCH_TYPE = `label  = "Sketch"
+plural = "Sketches"
+
+field drawing {
+  kind  = "ink"
+  label = "Drawing"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+  }
+
+  tab "Drawing" {
+    slot "drawing"
+  }
+}
+`;
+
 export const BULK_TYPE = `label  = "Bulk note"
 plural = "Bulk notes"
 

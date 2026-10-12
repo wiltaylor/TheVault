@@ -1,0 +1,5 @@
+title    = "Design a type of your own"
+status   = "Blocked"
+priority = "low"
+due      = "{{date:+10}}"
+project  = "{{id:project}}"

@@ -70,6 +70,18 @@ export function Shell(props: ParentProps) {
               )}
             </For>
           </ul>
+          <ul class="sidebar-admin">
+            <li>
+              <A href="/types/new" activeClass="active" end onClick={() => setMenuOpen(false)}>
+                New type
+              </A>
+            </li>
+            <li>
+              <A href="/taxonomies" activeClass="active" onClick={() => setMenuOpen(false)}>
+                Taxonomies
+              </A>
+            </li>
+          </ul>
         </nav>
         <div class="scrim" onClick={() => setMenuOpen(false)} />
         <main class="content">{props.children}</main>

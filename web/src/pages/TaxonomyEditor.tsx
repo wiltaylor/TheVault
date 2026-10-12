@@ -1,0 +1,286 @@
+import { A, useNavigate, useParams } from "@solidjs/router";
+import { For, Show, createEffect, createSignal, on } from "solid-js";
+import { createStore, produce, reconcile } from "solid-js/store";
+import { api } from "../api";
+import {
+  type TaxonomyModel,
+  type TermModel,
+  locate,
+  newTerm,
+  problems,
+  taxonomyFromSchema,
+  taxonomyWcl,
+  termRenames,
+} from "../defs/taxonomyModel";
+import { isName, PALETTE } from "../defs/typeModel";
+import { reloadDefinitions, taxonomies } from "../session";
+import { errorText } from "./TypeEditor";
+
+/** Every taxonomy, and a way to start a new one (D7). */
+export function TaxonomyList() {
+  return (
+    <section class="list-page">
+      <header class="note-header">
+        <h1>Taxonomies</h1>
+        <A href="/taxonomies/new" class="button">
+          New taxonomy
+        </A>
+      </header>
+      <Show when={taxonomies().length > 0} fallback={<p class="muted">No taxonomies yet.</p>}>
+        <ul class="type-cards">
+          <For each={taxonomies()}>
+            {(t) => (
+              <li>
+                <A href={`/taxonomies/${t.name}`}>
+                  <strong>{t.label}</strong>
+                  <span class="muted">{t.description ?? t.name}</span>
+                </A>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+    </section>
+  );
+}
+
+/**
+ * The taxonomy editor (D7): a term tree whose terms are added, renamed, reordered, nested and
+ * removed in place. Saving rewrites every note holding a renamed or moved term in the same commit.
+ */
+export function TaxonomyEditor() {
+  const params = useParams();
+  const navigate = useNavigate();
+  const isNew = () => params.name === undefined;
+  const [name, setName] = createSignal("");
+  const [model, setModel] = createStore<TaxonomyModel>({ label: "", description: "", terms: [] });
+  const [loaded, setLoaded] = createSignal(false);
+  const [loadError, setLoadError] = createSignal<string | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  const [status, setStatus] = createSignal<string | null>(null);
+  const [busy, setBusy] = createSignal(false);
+
+  createEffect(
+    on(
+      () => params.name,
+      async (n) => {
+        setLoaded(false);
+        setLoadError(null);
+        setError(null);
+        setStatus(null);
+        if (n === undefined) {
+          setName("");
+          setModel(reconcile({ label: "", description: "", terms: [newTerm("First term")] }));
+          setLoaded(true);
+          return;
+        }
+        try {
+          const t = (await api.taxonomies()).find((x) => x.name === n);
+          if (!t) {
+            setLoadError(`There is no taxonomy ${n}.`);
+            return;
+          }
+          setName(n);
+          setModel(reconcile(taxonomyFromSchema(t)));
+          setLoaded(true);
+        } catch (e) {
+          setLoadError(errorText(e));
+        }
+      },
+    ),
+  );
+
+  function edit(fn: (m: TaxonomyModel) => void) {
+    setModel(produce(fn));
+    setError(null);
+    setStatus(null);
+  }
+
+  /** Apply `fn` to the term `key` where it sits in the tree. */
+  function at(key: number, fn: (where: NonNullable<ReturnType<typeof locate>>) => void) {
+    edit((m) => {
+      const where = locate(m.terms, key);
+      if (where) fn(where);
+    });
+  }
+
+  const moveBy = (key: number, by: number) =>
+    at(key, ({ list, index }) => {
+      const j = index + by;
+      if (j < 0 || j >= list.length) return;
+      const [t] = list.splice(index, 1);
+      list.splice(j, 0, t!);
+    });
+
+  /** Make the term a child of the sibling above it. */
+  const indent = (key: number) =>
+    at(key, ({ list, index }) => {
+      const above = list[index - 1];
+      if (!above) return;
+      const [t] = list.splice(index, 1);
+      above.children.push(t!);
+    });
+
+  /** Make the term a sibling following its parent. */
+  const outdent = (key: number) =>
+    at(key, ({ list, index, parent, parentList }) => {
+      if (!parent || !parentList) return;
+      const [t] = list.splice(index, 1);
+      parentList.splice(parentList.indexOf(parent) + 1, 0, t!);
+    });
+
+  const issues = () => [...(isNew() && !isName(name()) ? ["The taxonomy needs a name: a-z, 0-9 and _."] : []), ...problems(model)];
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const renames = termRenames(model);
+      const saved = await api.putTaxonomy(name(), taxonomyWcl(model), renames);
+      await reloadDefinitions();
+      if (isNew()) {
+        navigate(`/taxonomies/${name()}`);
+        return;
+      }
+      setModel(reconcile(taxonomyFromSchema(saved)));
+      const n = saved.notes?.length ?? 0;
+      setStatus(n ? `Saved. ${n} ${n === 1 ? "note was" : "notes were"} updated.` : "Saved.");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function TermRow(props: { term: TermModel; path: string; first: boolean; last: boolean; nested: boolean }) {
+    const t = () => props.term;
+    const key = t().key;
+    return (
+      <li class="term" data-testid={`term-${props.path}`}>
+        <div class="term-row">
+          <span class={`term-swatch colour-${t().colour || "none"}`} aria-hidden="true">
+            ●
+          </span>
+          <input
+            aria-label={`Name of ${props.path}`}
+            value={t().name}
+            onInput={(e) => at(key, ({ list, index }) => (list[index]!.name = e.currentTarget.value))}
+          />
+          <Show when={t().original !== null && t().original !== props.path}>
+            <span class="muted">was {t().original}</span>
+          </Show>
+          <select
+            aria-label={`Colour of ${props.path}`}
+            onChange={(e) => at(key, ({ list, index }) => (list[index]!.colour = e.currentTarget.value))}
+          >
+            <option value="" selected={!t().colour}>
+              No colour
+            </option>
+            <For each={PALETTE}>
+              {(c) => (
+                <option value={c} selected={t().colour === c}>
+                  {c}
+                </option>
+              )}
+            </For>
+          </select>
+          <button type="button" aria-label={`Add a term under ${props.path}`} onClick={() => at(key, ({ list, index }) => void list[index]!.children.push(newTerm("New term")))}>
+            + child
+          </button>
+          <button type="button" aria-label={`Move ${props.path} up`} disabled={props.first} onClick={() => moveBy(key, -1)}>
+            ↑
+          </button>
+          <button type="button" aria-label={`Move ${props.path} down`} disabled={props.last} onClick={() => moveBy(key, 1)}>
+            ↓
+          </button>
+          <button type="button" aria-label={`Nest ${props.path} under the term above`} disabled={props.first} onClick={() => indent(key)}>
+            →
+          </button>
+          <button type="button" aria-label={`Move ${props.path} out a level`} disabled={!props.nested} onClick={() => outdent(key)}>
+            ←
+          </button>
+          <button type="button" aria-label={`Remove ${props.path}`} onClick={() => at(key, ({ list, index }) => void list.splice(index, 1))}>
+            ×
+          </button>
+        </div>
+        <Show when={t().children.length > 0}>
+          <Terms terms={t().children} prefix={props.path} />
+        </Show>
+      </li>
+    );
+  }
+
+  function Terms(props: { terms: TermModel[]; prefix: string }) {
+    return (
+      <ul class="term-tree" role={props.prefix ? "group" : "tree"} aria-label={props.prefix ? undefined : "Terms"}>
+        <For each={props.terms}>
+          {(t, i) => (
+            <TermRow
+              term={t}
+              path={props.prefix ? `${props.prefix}/${t.name}` : t.name}
+              first={i() === 0}
+              last={i() === props.terms.length - 1}
+              nested={props.prefix !== ""}
+            />
+          )}
+        </For>
+      </ul>
+    );
+  }
+
+  return (
+    <section class="def-editor">
+      <Show when={loadError()}>
+        <p class="error" role="alert">
+          {loadError()}
+        </p>
+      </Show>
+      <Show when={loaded()}>
+        <header class="note-header">
+          <div>
+            <p class="note-kind">{isNew() ? "New taxonomy" : "Taxonomy"}</p>
+            <h1>{model.label || name() || "Untitled taxonomy"}</h1>
+          </div>
+        </header>
+        <div class="form-grid">
+          <Show when={isNew()}>
+            <label for="taxonomy-name">Name</label>
+            <input id="taxonomy-name" value={name()} placeholder="status" onInput={(e) => setName(e.currentTarget.value)} />
+          </Show>
+          <label for="taxonomy-label">Label</label>
+          <input id="taxonomy-label" value={model.label} onInput={(e) => edit((m) => (m.label = e.currentTarget.value))} />
+          <label for="taxonomy-description">Description</label>
+          <input
+            id="taxonomy-description"
+            value={model.description}
+            onInput={(e) => edit((m) => (m.description = e.currentTarget.value))}
+          />
+        </div>
+        <h2>Terms</h2>
+        <Terms terms={model.terms} prefix="" />
+        <button type="button" onClick={() => edit((m) => void m.terms.push(newTerm("New term")))}>
+          Add term
+        </button>
+        <div class="save-bar">
+          <Show when={issues().length > 0}>
+            <ul class="error" role="alert" aria-label="Problems">
+              <For each={issues()}>{(p) => <li>{p}</li>}</For>
+            </ul>
+          </Show>
+          <Show when={error()}>
+            <p class="error" role="alert">
+              {error()}
+            </p>
+          </Show>
+          <Show when={status()}>
+            <p role="status">{status()}</p>
+          </Show>
+          <button type="button" class="primary" disabled={busy() || issues().length > 0} onClick={() => void save()}>
+            {isNew() ? "Create taxonomy" : "Save taxonomy"}
+          </button>
+        </div>
+      </Show>
+    </section>
+  );
+}

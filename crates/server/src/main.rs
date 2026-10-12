@@ -53,12 +53,11 @@ fn main() -> anyhow::Result<()> {
         Some(c) => c.clone(),
         None => Arc::new(SystemClock),
     };
-    let state = state::State::open_with_clock(
-        &vault.server_dir().join("state.db"),
-        secret_key()?,
-        clock.clone(),
-    )
-    .context("opening state.db")?;
+    let state =
+        state::State::open_with_clock(&vault.server_dir().join("state.db"), None, clock.clone())
+            .context("opening state.db")?;
+    let key = secret_key(&state.vault_id().context("reading the vault id")?)?;
+    let state = state.with_key(key);
     let handlers = script::Handlers::new(script::Limits::default());
     let writer = Arc::new(
         writer::Writer::open(vault, state)
@@ -99,18 +98,26 @@ fn test_clock(at: &str) -> anyhow::Result<Arc<TestClock>> {
     Ok(Arc::new(TestClock::new(ms)))
 }
 
-/// The key that encrypts secrets, from the file `VAULT_SECRET_KEY_FILE` names (OQ-S2). Without
-/// it, secrets can be listed but not written or read.
-fn secret_key() -> anyhow::Result<Option<SecretKey>> {
-    match std::env::var_os("VAULT_SECRET_KEY_FILE").filter(|p| !p.is_empty()) {
-        Some(path) => {
-            let path = PathBuf::from(path);
-            SecretKey::load_file(&path)
-                .map(Some)
-                .with_context(|| format!("reading the secret key {}", path.display()))
-        }
-        None => Ok(None),
+/// The key that encrypts secrets (OQ-S2): the file `VAULT_SECRET_KEY_FILE` names, which must
+/// exist, or else `$XDG_CONFIG_HOME/thevault/<vault-id>.key` when `vault init` wrote one. Without
+/// a key, secrets can be listed but not written or read.
+fn secret_key(vault_id: &str) -> anyhow::Result<Option<SecretKey>> {
+    let named = std::env::var_os("VAULT_SECRET_KEY_FILE").filter(|p| !p.is_empty());
+    let required = named.is_some();
+    let Some(path) = state::key_file_path(
+        vault_id,
+        named.map(PathBuf::from),
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    ) else {
+        return Ok(None);
+    };
+    if !required && !path.exists() {
+        return Ok(None);
     }
+    SecretKey::load_file(&path)
+        .map(Some)
+        .with_context(|| format!("reading the secret key {}", path.display()))
 }
 
 async fn serve(

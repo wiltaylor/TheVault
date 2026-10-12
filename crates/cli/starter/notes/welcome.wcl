@@ -1,0 +1,12 @@
+title = "Welcome to TheVault"
+tags  = ["starter"]
+
+content body {
+  paragraph {
+    text = "Every note has a **type**. This vault starts with four: Task, Project, Person and Note."
+  }
+
+  paragraph {
+    text = "Open the [[{{id:dashboard}}|dashboard]] to see your tasks on a board and a calendar."
+  }
+}

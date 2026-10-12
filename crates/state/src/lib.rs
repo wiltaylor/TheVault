@@ -85,7 +85,7 @@ pub struct State {
     clock: Arc<dyn Clock>,
 }
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -164,6 +164,14 @@ CREATE TABLE handler_jobs (
 CREATE INDEX handler_jobs_status ON handler_jobs (status, id);
 ";
 
+/// What version 3 adds: facts about the vault itself, such as its id.
+const SCHEMA_V3: &str = "
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -194,6 +202,37 @@ impl State {
         })
     }
 
+    /// Use `key` for secrets from now on, such as once [`State::vault_id`] has named the key file.
+    pub fn with_key(mut self, key: Option<SecretKey>) -> Self {
+        self.key = key;
+        self
+    }
+
+    /// The vault's id, which names its secret key file (OQ-S2). The first call makes one up and
+    /// stores it, so the id travels with `state.db` into a backup.
+    pub fn vault_id(&self) -> Result<String> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT OR IGNORE INTO meta (key, value) VALUES ('vault_id', ?1)",
+            [random_hex(16)],
+        )?;
+        Ok(
+            conn.query_row("SELECT value FROM meta WHERE key = 'vault_id'", [], |r| {
+                r.get(0)
+            })?,
+        )
+    }
+
+    /// Write a consistent copy of the whole database to `path`, which must not exist yet. Safe
+    /// while another process has `state.db` open.
+    pub fn backup_to(&self, path: &Path) -> Result<()> {
+        let target = path
+            .to_str()
+            .ok_or_else(|| Error::Corrupt(format!("{} is not UTF-8", path.display())))?;
+        self.conn().execute("VACUUM INTO ?1", [target])?;
+        Ok(())
+    }
+
     fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -206,12 +245,15 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0 | 1 => {
+        0..=2 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
             }
-            tx.execute_batch(SCHEMA_V2)?;
+            if version <= 1 {
+                tx.execute_batch(SCHEMA_V2)?;
+            }
+            tx.execute_batch(SCHEMA_V3)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

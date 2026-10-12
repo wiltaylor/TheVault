@@ -8,7 +8,7 @@ export function Home() {
       <h1>Your vault</h1>
       <Show
         when={types().length > 0}
-        fallback={<p class="muted">This vault has no types yet. Create one through the API or the CLI.</p>}
+        fallback={<p class="muted">This vault has no types yet. Create one with New type, or through the API or the CLI.</p>}
       >
         <ul class="type-cards">
           <For each={types()}>
