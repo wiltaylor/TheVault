@@ -1,18 +1,28 @@
-//! Type definitions. Creating a type, or replacing one that has no notes, writes its file at once;
-//! changing a type that has notes needs a planned schema change (D6).
+//! Type definitions, planned schema changes and flagged notes (D6). Every route but the reads
+//! needs the `admin` scope (D11).
+//!
+//! - `PUT /api/types/{name}` creates a type, or replaces one that has no notes, at once.
+//! - `POST /api/types/{name}/change` takes `{ "wcl", "renames"?, "plan"? }` and changes a type
+//!   that has notes. Without `plan` it returns the plan and changes nothing. With the `plan` token
+//!   from that response it applies the change as one commit, or answers 409 `plan_stale` with the
+//!   plan as it is now.
+//! - `DELETE /api/types/{name}` deletes a type that has no notes.
+//! - `GET /api/flagged` lists notes holding data their type no longer describes.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
 use serde_json::{Value, json};
-use writer::Writer;
+use writer::{NoteEdit, TypeChange, TypePlan, Writer};
 
 use crate::notes::{is_json, wants_wcl};
-use crate::{ApiError, blocking};
+use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
@@ -61,4 +71,116 @@ pub async fn put(
     let n = name.clone();
     let wcl = blocking(w, move |w| w.put_type(&n, &source)).await?;
     Ok(type_response(&headers, &name, wcl))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangeBody {
+    wcl: String,
+    #[serde(default)]
+    renames: BTreeMap<String, String>,
+    plan: Option<String>,
+}
+
+/// `POST /api/types/{name}/change`: plan a change, or apply a planned one.
+pub async fn change(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(name): Path<String>,
+    Json(body): Json<ChangeBody>,
+) -> Result<Json<Value>, ApiError> {
+    let change = TypeChange {
+        wcl: body.wcl,
+        renames: body.renames,
+    };
+    let Some(token) = body.plan else {
+        let plan = blocking(w, move |w| w.plan_type_change(&name, &change))
+            .await
+            .map_err(missing_type)?;
+        return Ok(Json(plan_json(&plan, false)));
+    };
+    let (plan, saved) = blocking(w, move |w| {
+        w.apply_type_change(&name, &change, &token, &author)
+    })
+    .await
+    .map_err(missing_type)?;
+    let mut out = plan_json(&plan, true);
+    out["notes"] = saved
+        .iter()
+        .map(|s| json!({ "id": s.id, "version": s.version }))
+        .collect();
+    Ok(Json(out))
+}
+
+/// `DELETE /api/types/{name}`.
+pub async fn delete(State(w): Shared, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+    let name2 = name.clone();
+    blocking(w, move |w| w.delete_type(&name2))
+        .await
+        .map_err(missing_type)?;
+    Ok(Json(json!({ "name": name, "deleted": true })))
+}
+
+/// `GET /api/flagged`.
+pub async fn flagged(State(w): Shared) -> Result<Json<Value>, ApiError> {
+    let notes = blocking(w, |w| w.flagged()).await?;
+    let notes: Vec<Value> = notes
+        .into_iter()
+        .map(|n| {
+            json!({
+                "id": n.id,
+                "type": n.type_name,
+                "title": n.title,
+                "version": n.version,
+                "unknown": n.unknown,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "notes": notes })))
+}
+
+/// A type named in the path that does not exist is a 404, where a note naming one is a 400.
+fn missing_type(mut e: ApiError) -> ApiError {
+    if e.body["error"] == "unknown_type" {
+        e.status = StatusCode::NOT_FOUND;
+    }
+    e
+}
+
+/// A plan as JSON. Its `plan` member is the token that applies it.
+pub(crate) fn plan_json(plan: &TypePlan, applied: bool) -> Value {
+    let changes: Vec<Value> = plan
+        .changes
+        .iter()
+        .map(|c| {
+            let edits: Vec<Value> = c
+                .edits
+                .iter()
+                .map(|e| match e {
+                    NoteEdit::Rename { from, to } => {
+                        json!({ "op": "rename", "from": from, "to": to })
+                    }
+                    NoteEdit::Default { field, value } => json!({
+                        "op": "default",
+                        "field": field,
+                        "value": writer::value_to_json(value),
+                    }),
+                })
+                .collect();
+            json!({ "id": c.id, "title": c.title, "version": c.version, "edits": edits })
+        })
+        .collect();
+    json!({
+        "type": plan.type_name,
+        "applied": applied,
+        "plan": plan.token,
+        "wcl": plan.wcl,
+        "added": plan.added,
+        "removed": plan.removed,
+        "renamed": plan.renamed.iter()
+            .map(|(from, to)| json!({ "from": from, "to": to }))
+            .collect::<Vec<_>>(),
+        "changes": changes,
+        "flagged": plan.flagged,
+    })
 }

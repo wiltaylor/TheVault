@@ -16,20 +16,28 @@
 //! 10. [`Hooks::after`]: queue the `after_*` handlers.
 //! 11. Return the canonical WCL and the new version of every changed note (D21).
 //!
-//! Steps 5, 6 and 10 belong to later work. [`NoHooks`] leaves them empty.
+//! Step 6 is built in: [`refs`] works out the reverse sides of two-way and peer references and
+//! applies `on_delete`. [`Hooks::side_effects`] can add more. Steps 5 and 10 belong to later
+//! work, and [`NoHooks`] leaves them empty.
 
 mod note;
+mod refs;
 mod time;
+mod types;
 
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use index::{Index, Update};
 use schema::{Doc, Invalid, Issue, NoteLookup, NoteReport, Schema, TypeDef};
 use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
-use store::{Change, Vault};
+use store::{Change, CommitStep, Vault};
 
-pub use note::{Input, doc_to_json};
+pub use note::{Input, doc_to_json, value_to_json};
+pub use refs::Referrer;
+pub use schema::NoteEdit;
+pub use types::{Flagged, PlannedNote, TypeChange, TypePlan};
 
 /// Errors from the write path.
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +72,24 @@ pub enum Error {
         current_version: String,
         /// The note's current canonical WCL, for the client to compare.
         current: String,
+    },
+    /// A type that still has notes cannot be deleted.
+    #[error("type {type_name:?} still has {} notes", .notes.len())]
+    TypeHasNotes {
+        type_name: String,
+        notes: Vec<String>,
+    },
+    /// The type or its notes changed since the plan was made. Carries the plan as it is now.
+    #[error("the plan is out of date: the type or its notes changed since it was made")]
+    PlanStale(Box<TypePlan>),
+    /// A delete is refused because notes refer to the note through `restrict` fields (D5).
+    #[error(
+        "note {id} cannot be deleted: {} refer to it with on_delete = \"restrict\"",
+        describe_referrers(.referrers)
+    )]
+    Restricted {
+        id: String,
+        referrers: Vec<Referrer>,
     },
     /// A `before_*` handler refused the change (D9).
     #[error("{0}")]
@@ -131,6 +157,9 @@ pub struct Saved {
     pub version: String,
     /// The canonical WCL now on disk, or for a delete the WCL that went to the trash.
     pub wcl: String,
+    /// The other notes the same write changed: reverse references and `on_delete` effects
+    /// (D4, D5). Empty on those other notes themselves.
+    pub also: Vec<Saved>,
 }
 
 /// The extension points of the write path. Every method defaults to doing nothing.
@@ -142,8 +171,8 @@ pub trait Hooks: Send + Sync {
         Ok(())
     }
 
-    /// Step 6: the changes a write implies beyond what was submitted: reverse references (D4) and
-    /// `on_delete` rules (D5). They join the same commit.
+    /// Step 6: changes a write implies beyond what was submitted and beyond the built-in reverse
+    /// references (D4) and `on_delete` rules (D5). They join the same commit.
     fn side_effects(&self, changes: &[NoteChange]) -> Result<Vec<NoteChange>> {
         let _ = changes;
         Ok(Vec::new())
@@ -195,10 +224,14 @@ pub struct Writer {
     inner: Mutex<Inner>,
 }
 
+/// Called at each step of a commit; breaking stops the commit the way a crash would.
+pub type CommitHook = Box<dyn FnMut(CommitStep) -> ControlFlow<()> + Send>;
+
 /// What every write changes, behind one lock, so writes run one at a time.
 struct Inner {
     schema: Schema,
     index: Index,
+    commit_hook: Option<CommitHook>,
 }
 
 impl Writer {
@@ -212,7 +245,11 @@ impl Writer {
             state,
             clock: Arc::new(SystemClock),
             hooks: Box::new(NoHooks),
-            inner: Mutex::new(Inner { schema, index }),
+            inner: Mutex::new(Inner {
+                schema,
+                index,
+                commit_hook: None,
+            }),
         })
     }
 
@@ -226,6 +263,13 @@ impl Writer {
     pub fn with_hooks(mut self, hooks: Box<dyn Hooks>) -> Writer {
         self.hooks = hooks;
         self
+    }
+
+    /// Pass every commit's steps to `hook`, which can stop a commit part way. For fault-injection
+    /// tests.
+    #[doc(hidden)]
+    pub fn set_commit_hook(&self, hook: Option<CommitHook>) {
+        self.lock().commit_hook = hook;
     }
 
     pub fn vault(&self) -> &Vault {
@@ -626,6 +670,7 @@ impl Writer {
         for change in &mut changes {
             self.hooks.before(change, author).map_err(Error::Rejected)?;
         }
+        let mut changes = refs::expand(self, inner, changes)?;
         let extra = self.hooks.side_effects(&changes)?;
         changes.extend(extra);
 
@@ -640,7 +685,10 @@ impl Writer {
                 None => Change::delete(path),
             });
         }
-        self.vault.commit(files)?;
+        match inner.commit_hook.as_mut() {
+            Some(hook) => self.vault.commit_with_hook(files, &mut **hook)?,
+            None => self.vault.commit(files)?,
+        }
 
         let mut saved = Vec::with_capacity(rendered.len());
         let mut updates = Vec::with_capacity(rendered.len());
@@ -666,6 +714,7 @@ impl Writer {
                         event,
                         version: v.token,
                         wcl: text,
+                        also: Vec::new(),
                     });
                 }
                 _ => {
@@ -677,6 +726,7 @@ impl Writer {
                         event,
                         version: entry.version,
                         wcl: entry.content,
+                        also: Vec::new(),
                     });
                 }
             }
@@ -824,6 +874,20 @@ fn set_field(doc: &mut Doc, name: &str, value: String) {
     }
 }
 
-fn first(mut saved: Vec<Saved>) -> Saved {
-    saved.swap_remove(0)
+/// The submitted note, carrying every other change of the write in `also`.
+fn first(saved: Vec<Saved>) -> Saved {
+    let mut saved = saved.into_iter();
+    let mut first = saved
+        .next()
+        .expect("a write changes at least the submitted note");
+    first.also = saved.collect();
+    first
+}
+
+fn describe_referrers(referrers: &[Referrer]) -> String {
+    referrers
+        .iter()
+        .map(|r| format!("{} {} (field {})", r.type_name, r.id, r.field))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

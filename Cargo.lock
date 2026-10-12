@@ -2860,6 +2860,7 @@ dependencies = [
  "index",
  "schema",
  "serde_json",
+ "sha2",
  "state",
  "store",
  "tempfile",
