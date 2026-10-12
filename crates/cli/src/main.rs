@@ -174,6 +174,13 @@ enum Command {
     },
     /// Turn query text into the visual builder's model.
     QueryParse { query: String },
+    /// Turn a visual builder model into query text. The input is the model as JSON, or the
+    /// whole answer of `query-parse`.
+    QueryText {
+        /// Read the model from this file; `-` or nothing reads stdin.
+        #[arg(long, short)]
+        file: Option<PathBuf>,
+    },
     /// Full-text search, a page at a time.
     Search {
         text: String,
@@ -582,6 +589,15 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
         }),
         Command::QueryParse { query } => {
             api.post(&["api", "query", "parse"], json!({ "query": query }))
+        }
+        Command::QueryText { file } => {
+            let input: Value = serde_json::from_str(&read_text(file.as_deref())?)
+                .map_err(|e| Fail::new("usage", format!("the model is not JSON: {e}")))?;
+            let model = match input {
+                Value::Object(mut o) if o.contains_key("model") => o.remove("model").unwrap(),
+                other => other,
+            };
+            api.post(&["api", "query", "text"], json!({ "model": model }))
         }
         Command::Search { text, page } => page.fetch(|cursor, size| {
             let mut query = vec![("q", text.clone())];
