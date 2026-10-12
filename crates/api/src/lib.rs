@@ -9,12 +9,13 @@
 mod auth;
 mod error;
 mod notes;
+mod types;
 
 use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde_json::{Value, json};
 use writer::Writer;
@@ -36,6 +37,12 @@ pub fn router(writer: Arc<Writer>) -> Router {
         .route("/api/notes/{id}/restore", post(notes::restore_version))
         .route("/api/trash", get(notes::trash))
         .route("/api/trash/{id}/restore", post(notes::restore_from_trash))
+        .route("/api/types", post(types::create))
+        .route(
+            "/api/types/{name}",
+            put(types::change).delete(types::delete),
+        )
+        .route("/api/flagged", get(types::flagged))
         .with_state(writer)
 }
 

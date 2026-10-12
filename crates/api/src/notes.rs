@@ -17,7 +17,7 @@ use crate::{ApiError, Caller};
 type Shared = State<Arc<Writer>>;
 
 /// Run blocking writer work off the async runtime.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     writer: Arc<Writer>,
     f: impl FnOnce(&Writer) -> writer::Result<T> + Send + 'static,
 ) -> Result<T, ApiError> {

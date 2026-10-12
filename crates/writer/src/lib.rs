@@ -20,6 +20,7 @@
 
 mod note;
 mod time;
+mod types;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -29,7 +30,9 @@ use schema::{Doc, Invalid, Issue, NoteLookup, NoteReport, Schema, TypeDef};
 use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, Vault};
 
-pub use note::{Input, doc_to_json};
+pub use note::{Input, doc_to_json, value_to_json};
+pub use schema::NoteEdit;
+pub use types::{Flagged, PlannedNote, TypeChange, TypePlan};
 
 /// Errors from the write path.
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +68,20 @@ pub enum Error {
         /// The note's current canonical WCL, for the client to compare.
         current: String,
     },
+    /// Definition or note files that a type change would leave invalid.
+    #[error("{}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))]
+    Invalids(Vec<Invalid>),
+    #[error("type {0:?} already exists")]
+    TypeExists(String),
+    /// A type that still has notes cannot be deleted.
+    #[error("type {type_name:?} still has {} notes", .notes.len())]
+    TypeInUse {
+        type_name: String,
+        notes: Vec<String>,
+    },
+    /// The type or its notes changed since the plan was made. Carries the plan as it is now.
+    #[error("the plan is out of date: the type or its notes changed since it was made")]
+    PlanStale(Box<TypePlan>),
     /// A `before_*` handler refused the change (D9).
     #[error("{0}")]
     Rejected(String),
