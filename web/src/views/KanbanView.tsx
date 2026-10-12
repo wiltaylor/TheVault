@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { ApiError, type Note, type NoteDoc, type Row, api } from "../api";
+import { changes } from "../changes";
 import { ConflictView } from "../components/ConflictView";
 import { createPagedRows } from "../components/pagedRows";
 import { applyEdits } from "../notes";
@@ -49,6 +50,7 @@ function Column(props: {
     (cursor, size) => api.query(query(), cursor, size, props.thisId),
     () => `${query()}\u0000${props.thisId ?? ""}\u0000${props.stamp}`,
     COLUMN_PAGE,
+    changes,
   );
   const [over, setOver] = createSignal(false);
   const accepts = () => props.dragging !== null && props.dragging.from !== props.column.key;
@@ -160,9 +162,9 @@ export function KanbanView(props: { view: ViewDef; query: string; thisId: string
 
   async function save(row: Row, from: string, to: string, mine: NoteDoc, base: string) {
     try {
+      // The write bumps `changes`, which runs every column's query again.
       await api.updateNote(row.id, mine, base);
       setConflict(null);
-      refresh(from, to);
     } catch (e) {
       if (e instanceof ApiError && e.isConflict) {
         setConflict({ row, from, to, mine, stored: await api.note(row.id) });
