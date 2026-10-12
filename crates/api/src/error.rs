@@ -42,6 +42,9 @@ impl ApiError {
                 (StatusCode::NOT_FOUND, "not_found")
             }
             S::UnknownScope(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+            S::KeyMissing { .. } | S::WrongKey { .. } => {
+                (StatusCode::SERVICE_UNAVAILABLE, "secret_key")
+            }
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
         };
         ApiError::new(status, code, message)

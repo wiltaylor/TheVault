@@ -178,6 +178,49 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),
     ("DELETE", "/api/tokens/{name}", "Revoke an API token"),
+    (
+        "GET",
+        "/api/secrets",
+        "Every secret's name and times, never a value",
+    ),
+    (
+        "GET",
+        "/api/secrets/{name}",
+        "A secret's name and times, never its value",
+    ),
+    (
+        "PUT",
+        "/api/secrets/{name}",
+        "Store or replace a secret, encrypted at rest",
+    ),
+    ("DELETE", "/api/secrets/{name}", "Delete a secret"),
+    (
+        "GET",
+        "/api/tasks",
+        "Every scheduled task with its next run and latest run",
+    ),
+    (
+        "GET",
+        "/api/tasks/{name}",
+        "Read a scheduled task's file and status",
+    ),
+    (
+        "PUT",
+        "/api/tasks/{name}",
+        "Create or replace a scheduled task",
+    ),
+    ("DELETE", "/api/tasks/{name}", "Delete a scheduled task"),
+    (
+        "GET",
+        "/api/tasks/{name}/runs",
+        "A task's runs, newest first, with their logs",
+    ),
+    ("GET", "/api/tasks/{name}/runs/{id}", "One run of a task"),
+    (
+        "POST",
+        "/api/tasks/{name}/run",
+        "Run a task now and wait for the run to end",
+    ),
 ];
 
 /// The OpenAPI document of [`ENDPOINTS`].

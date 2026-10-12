@@ -13,7 +13,9 @@
 //!
 //! Every endpoint but health and login needs credentials (D11). Before the server starts, the
 //! testkit sets the login password to [`PASSWORD`] and creates an `admin` token named
-//! [`ADMIN_TOKEN_NAME`], whose secret [`TestServer::admin_token`] returns.
+//! [`ADMIN_TOKEN_NAME`], whose secret [`TestServer::admin_token`] returns. It also writes a secret
+//! key file in a second temporary folder, outside the vault, and points the server at it through
+//! `VAULT_SECRET_KEY_FILE` (OQ-S2), so secrets can be stored.
 
 mod standin;
 
@@ -43,6 +45,8 @@ pub struct TestServer {
     child: Child,
     addr: SocketAddr,
     vault: TempDir,
+    /// Holds the secret key file, outside the vault.
+    _config: TempDir,
     admin_token: String,
 }
 
@@ -76,8 +80,15 @@ impl TestServer {
             .expect("create temporary vault directory");
         seed(vault.path());
         let admin_token = seed_credentials(vault.path());
+        let config = tempfile::Builder::new()
+            .prefix("thevault-config-")
+            .tempdir()
+            .expect("create temporary config directory");
+        let key = config.path().join("vault.key");
+        state::SecretKey::create_file(&key).expect("write the secret key file");
 
         let mut child = Command::new(binary)
+            .env("VAULT_SECRET_KEY_FILE", &key)
             .arg("--vault")
             .arg(vault.path())
             .arg("--listen")
@@ -102,6 +113,7 @@ impl TestServer {
             child,
             addr,
             vault,
+            _config: config,
             admin_token,
         };
         server.wait_healthy();
