@@ -79,6 +79,16 @@ impl From<Error> for ApiError {
                     "current": current,
                 }),
             ),
+            Error::Restricted { id, referrers } => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "restricted",
+                    "id": id,
+                    "referrers": referrers.iter()
+                        .map(|r| json!({ "id": r.id, "type": r.type_name, "field": r.field }))
+                        .collect::<Vec<_>>(),
+                }),
+            ),
             Error::Rejected(_) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({ "error": "rejected" }),

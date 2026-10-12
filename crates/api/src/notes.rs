@@ -175,8 +175,21 @@ fn note_response(
     res
 }
 
+/// A saved note. `also` lists the other notes the write changed, without their WCL.
 fn saved_response(status: StatusCode, headers: &HeaderMap, s: Saved) -> Response {
-    let extra = json!({ "event": event_name(s.event) });
+    let also: Vec<Value> = s
+        .also
+        .iter()
+        .map(|o| {
+            json!({
+                "id": o.id,
+                "type": o.type_name,
+                "event": event_name(o.event),
+                "version": o.version,
+            })
+        })
+        .collect();
+    let extra = json!({ "event": event_name(s.event), "also": also });
     note_response(
         status,
         headers,
