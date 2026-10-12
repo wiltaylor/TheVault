@@ -145,10 +145,25 @@ fn pages_joined_are_the_whole_result_and_report_every_match() {
 }
 
 #[test]
-fn an_index_written_without_the_id_fast_field_is_replaced_on_open() {
+fn an_index_written_without_the_id_fast_field_is_replaced_and_rebuilt() {
     use tantivy::schema::{STORED, STRING, TEXT};
-    let (_dir, vault, schema) = vault();
+    let (_dir, vault, _schema) = vault();
+    let note = format!("notes/item/{}.wcl", id(1));
+    std::fs::create_dir_all(vault.root().join("notes/item")).unwrap();
+    std::fs::write(
+        vault.root().join(&note),
+        "title   = \"apple\"\ncreated = \"2026-10-01T09:00:00Z\"\nupdated = \"2026-10-01T09:00:00Z\"\n",
+    )
+    .unwrap();
+    {
+        let mut index = Index::open(&vault).unwrap();
+        index.rebuild(&vault).unwrap();
+        assert!(index.is_current(&vault).unwrap());
+    }
+
+    // Replace the full-text index with one in the schema before `id` was a fast field.
     let dir = vault.server_dir().join("search");
+    std::fs::remove_dir_all(&dir).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
     {
         let mut b = tantivy::schema::Schema::builder();
@@ -158,15 +173,17 @@ fn an_index_written_without_the_id_fast_field_is_replaced_on_open() {
         b.add_text_field("body", TEXT);
         let old = tantivy::Index::create_in_dir(&dir, b.build()).unwrap();
         let mut w = old.writer_with_num_threads(1, 15_000_000).unwrap();
-        w.add_document(tantivy::doc!(id_f => "stale", title_f => "apple"))
+        w.add_document(tantivy::doc!(id_f => id(1), title_f => "apple"))
             .unwrap();
         w.commit().unwrap();
     }
 
+    // It opens, empty, and the index says it is behind so the next open rebuilds it.
     let mut index = Index::open(&vault).unwrap();
-    index.rebuild(&vault).unwrap();
     assert_eq!(index.search("apple", None).unwrap(), vec![]);
-    index.update(&schema, &[put(&schema, 1)]).unwrap();
+    assert!(!index.is_current(&vault).unwrap());
+    index.rebuild(&vault).unwrap();
+    assert!(index.is_current(&vault).unwrap());
     let hits = index.search("apple", None).unwrap();
     assert_eq!(
         hits.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(),

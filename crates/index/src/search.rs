@@ -52,7 +52,9 @@ pub(crate) struct Search {
 }
 
 impl Search {
-    pub fn open(dir: &Path) -> Result<Search> {
+    /// Open or create the index in `dir`. The flag is true when an index written with another
+    /// schema was found and replaced by an empty one.
+    pub fn open(dir: &Path) -> Result<(Search, bool)> {
         std::fs::create_dir_all(dir).map_err(io_err(dir))?;
         let mut b = Schema::builder();
         // `id` is a fast field so a search can order ties by id without reading stored docs.
@@ -61,13 +63,15 @@ impl Search {
         let title = b.add_text_field("title", TEXT);
         let body = b.add_text_field("body", TEXT);
         let schema = b.build();
+        let mut reset = false;
         let index = match tantivy::Index::open_or_create(MmapDirectory::open(dir)?, schema.clone())
         {
             // An index written with an older schema is derived data: start it again empty, and
-            // the rebuild that follows every open fills it.
+            // let the caller know it must be rebuilt.
             Err(TantivyError::SchemaError(_)) => {
                 std::fs::remove_dir_all(dir).map_err(io_err(dir))?;
                 std::fs::create_dir_all(dir).map_err(io_err(dir))?;
+                reset = true;
                 tantivy::Index::create_in_dir(dir, schema)?
             }
             other => other?,
@@ -77,7 +81,7 @@ impl Search {
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
-        Ok(Search {
+        let search = Search {
             index,
             writer,
             reader,
@@ -85,7 +89,8 @@ impl Search {
             type_name,
             title,
             body,
-        })
+        };
+        Ok((search, reset))
     }
 
     /// Apply changes in one commit.

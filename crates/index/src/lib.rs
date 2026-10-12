@@ -92,15 +92,17 @@ impl Index {
         Index::open_at(&dir.join("index.db"), &dir.join("search"))
     }
 
-    /// Open an index at explicit paths. A full-text index that is missing is created empty,
-    /// and the index is then behind whatever generation `index.db` recorded.
+    /// Open an index at explicit paths. A full-text index that is missing, or was written with
+    /// another schema, is created empty, and the index is then behind whatever generation
+    /// `index.db` recorded.
     pub fn open_at(db: &Path, search_dir: &Path) -> Result<Index> {
         let conn = Connection::open(db)?;
         sql::init(&conn)?;
-        if !search_dir.join("meta.json").is_file() {
+        let missing = !search_dir.join("meta.json").is_file();
+        let (search, reset) = search::Search::open(search_dir)?;
+        if missing || reset {
             sql::forget_generation(&conn)?;
         }
-        let search = search::Search::open(search_dir)?;
         Ok(Index { conn, search })
     }
 
