@@ -3,11 +3,14 @@
 //! Every command prints one JSON document on stdout. A command that fails prints the error as JSON
 //! too, with the HTTP status when the server refused it, and exits 1. The API commands send
 //! exactly what the API takes and print exactly what it answers; only `init`, `passwd`,
-//! `reindex`, `backup` and `restore-backup` work on a vault folder directly (D25, D28).
+//! `reindex`, `backup` and `restore-backup` work on a vault folder directly (D25, D28). `skill`
+//! prints the agent skill document bundled with the binary, as JSON or with `--raw` as Markdown
+//! (D32).
 
 mod backup;
 mod client;
 mod local;
+mod starter;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -84,6 +87,12 @@ struct Cli {
 enum Command {
     /// Every command this binary has, with what it does.
     Commands,
+    /// The agent skill document: how to drive a vault with this CLI. Start here.
+    Skill {
+        /// Print the document as Markdown rather than inside JSON.
+        #[arg(long)]
+        raw: bool,
+    },
     /// Check that the server is up.
     Health,
     /// Every type with its fields, kinds, relationships, templates and handlers, and every
@@ -446,6 +455,11 @@ enum Canvas {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // The one output that is not JSON, and only when asked for.
+    if let Command::Skill { raw: true } = cli.command {
+        print!("{SKILL}");
+        return ExitCode::SUCCESS;
+    }
     let (out, code) = match run(cli) {
         Ok(v) => (v, ExitCode::SUCCESS),
         Err(f) => (f.body, ExitCode::FAILURE),
@@ -461,6 +475,7 @@ fn run(cli: Cli) -> Result<Value, Fail> {
     let vault = cli.vault.as_path();
     match cli.command {
         Command::Commands => Ok(commands()),
+        Command::Skill { .. } => Ok(json!({ "name": "thevault", "document": SKILL })),
         Command::Init {
             dir,
             starter,
@@ -684,6 +699,7 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
             ),
         },
         Command::Commands
+        | Command::Skill { .. }
         | Command::Init { .. }
         | Command::Passwd { .. }
         | Command::Reindex
@@ -691,6 +707,9 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
         | Command::RestoreBackup { .. } => unreachable!("local commands are handled in run"),
     }
 }
+
+/// The agent skill document that ships with the binary (D32).
+const SKILL: &str = include_str!("../SKILL.md");
 
 /// Every leaf command, as the words that name it, with its one-line description.
 fn commands() -> Value {

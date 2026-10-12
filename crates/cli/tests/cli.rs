@@ -554,17 +554,233 @@ fn init_creates_the_layout_and_key_file_and_sets_the_password() {
     assert_eq!(res.status(), 200, "{}", res.text().unwrap());
 }
 
+/// A starter vault made by `vault init --starter`, with the `init` output.
+struct Starter {
+    vault: Vault,
+    /// Holds `dir` until `serve` moves it out.
+    _dirs: TempDir,
+    dir: PathBuf,
+    init: Value,
+}
+
+impl Starter {
+    fn new() -> Starter {
+        let vault = Vault::offline();
+        let dirs = TempDir::new().unwrap();
+        let dir = dirs.path().join("vault");
+        let init = vault.ok(
+            &[
+                "init",
+                dir.to_str().unwrap(),
+                "--starter",
+                "--password-stdin",
+            ],
+            "pw\n",
+        );
+        Starter {
+            vault,
+            _dirs: dirs,
+            dir,
+            init,
+        }
+    }
+
+    /// The ids of the starter notes.
+    fn note_ids(&self) -> BTreeSet<String> {
+        self.init["starter"]["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| s(&n["id"]).to_owned())
+            .collect()
+    }
+
+    /// Serve the starter vault, with an admin token added to it.
+    fn serve(self) -> (TestServer, Vault, Value) {
+        let token = testkit::seed_credentials(&self.dir);
+        // The server owns the vault from here, so it moves out of `dirs`, which goes away.
+        let folder = TempDir::new().unwrap();
+        std::fs::remove_dir(folder.path()).unwrap();
+        std::fs::rename(&self.dir, folder.path()).unwrap();
+        let server = TestServer::start_existing(
+            folder,
+            &token,
+            &[("XDG_CONFIG_HOME", self.vault.config_dir())],
+        );
+        let vault = Vault::against(&server);
+        (server, vault, self.init)
+    }
+}
+
 #[test]
-fn init_starter_says_it_is_not_yet_available() {
-    let vault = Vault::offline();
-    let dirs = TempDir::new().unwrap();
-    let dir = tmp_path(&dirs, "v");
-    let out = vault.fails(&["init", &dir, "--starter", "--password-stdin"], "pw\n");
-    assert_eq!(out["error"], "not_available");
-    assert!(
-        !Path::new(&dir).exists(),
-        "--starter created the folder anyway"
+fn init_starter_writes_files_that_all_validate() {
+    let starter = Starter::new();
+    let dir = &starter.dir;
+    for path in [
+        "types/task.wcl",
+        "types/project.wcl",
+        "types/person.wcl",
+        "types/note.wcl",
+        "taxonomies/status.wcl",
+    ] {
+        assert!(dir.join(path).is_file(), "no {path}");
+    }
+    assert_eq!(
+        starter.init["starter"]["types"],
+        json!(["person", "project", "task", "note"])
     );
+    let ids = starter.note_ids();
+    assert!(ids.contains(s(&starter.init["starter"]["dashboard"])));
+    let written: BTreeSet<String> = files(dir)
+        .iter()
+        .filter(|(p, _)| p.starts_with("notes"))
+        .map(|(p, _)| p.file_stem().unwrap().to_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(written, ids);
+
+    // Every file is already canonical.
+    for (path, bytes) in files(dir) {
+        let text = String::from_utf8(bytes).unwrap();
+        let rel = path.to_str().unwrap();
+        assert_eq!(
+            store::canonical(&text, rel).unwrap(),
+            text,
+            "{rel} is not canonical"
+        );
+    }
+
+    let out = starter
+        .vault
+        .ok(&["reindex", "--vault", dir.to_str().unwrap()], "");
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(out["failures"], json!([]));
+    assert_eq!(out["indexed"], json!(ids.len()));
+}
+
+#[test]
+fn the_dashboard_queries_return_starter_notes() {
+    let starter = Starter::new();
+    let ids = starter.note_ids();
+    let (_server, vault, init) = starter.serve();
+    let dashboard = s(&init["starter"]["dashboard"]).to_owned();
+
+    let note = vault.ok(&["get", &dashboard], "");
+    let mut views = Vec::new();
+    fn walk(blocks: &Value, out: &mut Vec<Value>) {
+        for b in blocks.as_array().into_iter().flatten() {
+            if b["kind"] == "query_view" {
+                out.push(b.clone());
+            }
+            walk(&b["blocks"], out);
+        }
+    }
+    walk(&note["note"]["blocks"], &mut views);
+    let kinds: BTreeSet<String> = views
+        .iter()
+        .flat_map(|v| v["blocks"].as_array().unwrap().clone())
+        .map(|view| s(&view["fields"]["kind"]).to_owned())
+        .collect();
+    assert!(kinds.contains("kanban"), "{kinds:?}");
+    assert!(kinds.contains("calendar"), "{kinds:?}");
+
+    for view in &views {
+        let query = s(&view["fields"]["query"]);
+        let out = vault.ok(&["query", query, "--this", &dashboard, "--all"], "");
+        let rows = out["rows"].as_array().unwrap();
+        assert!(!rows.is_empty(), "{query} returned nothing");
+        for row in rows {
+            assert!(ids.contains(s(&row["id"])), "{query} returned {row}");
+        }
+    }
+}
+
+/// The fenced code blocks of `lang` in a Markdown document.
+fn fenced<'a>(doc: &'a str, lang: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current: Option<Vec<&'a str>> = None;
+    for line in doc.lines() {
+        match &mut current {
+            None if line.trim_start() == format!("```{lang}") => current = Some(Vec::new()),
+            Some(lines) if line.trim_start() == "```" => {
+                out.push(lines.join("\n") + "\n");
+                current = None;
+            }
+            Some(lines) => lines.push(line),
+            None => {}
+        }
+    }
+    out
+}
+
+#[test]
+fn every_command_in_the_skill_document_runs_against_a_starter_vault() {
+    let doc = Vault::offline().ok(&["skill"], "");
+    let text = s(&doc["document"]).to_owned();
+    let raw = Command::new(env!("CARGO_BIN_EXE_vault"))
+        .args(["skill", "--raw"])
+        .output()
+        .unwrap();
+    assert!(raw.status.success());
+    assert_eq!(String::from_utf8(raw.stdout).unwrap(), text);
+    assert!(text.starts_with("---\nname: thevault\n"), "no front matter");
+
+    // Every command block is `sh`, so every command the document shows is run below.
+    for other in ["bash", "shell", "console", "text"] {
+        assert!(
+            fenced(&text, other).iter().all(|b| !b.contains("vault ")),
+            "a ```{other} block holds a command"
+        );
+    }
+    let blocks = fenced(&text, "sh");
+    assert!(blocks.len() >= 10, "only {} command blocks", blocks.len());
+    for needed in [
+        "vault schema",
+        "--dry-run",
+        "vault upsert",
+        "vault query",
+        "vault init",
+    ] {
+        assert!(
+            blocks.iter().any(|b| b.contains(needed)),
+            "no block runs {needed}"
+        );
+    }
+
+    let (server, vault, _) = Starter::new().serve();
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_vault")).parent().unwrap();
+    let path = std::env::join_paths(std::iter::once(bin_dir.to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    for block in &blocks {
+        // `$ID` and `$VERSION`: a task of the block's own, so blocks cannot disturb each other.
+        let note = vault.ok(
+            &["put", "--type", "task"],
+            "title = \"Scratch\"\nstatus = \"Todo\"\n",
+        );
+        let cwd = TempDir::new().unwrap();
+        let out = Command::new("sh")
+            .args(["-e", "-c", block])
+            .current_dir(cwd.path())
+            .env("PATH", &path)
+            .env("VAULT_URL", server.base_url())
+            .env("VAULT_TOKEN", server.admin_token())
+            .env("VAULT_PASSWORD", "a password")
+            .env("ID", s(&note["id"]))
+            .env("VERSION", s(&note["version"]))
+            .env_remove("VAULT_DIR")
+            .env_remove("VAULT_SECRET_KEY_FILE")
+            .env("XDG_CONFIG_HOME", cwd.path())
+            .env("HOME", cwd.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "this block of the skill document failed:\n{block}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 #[test]
@@ -594,6 +810,7 @@ fn every_command_prints_json() {
     };
 
     let listing = run("commands", &[], "");
+    run("skill", &[], "");
     run("health", &[], "");
     run("schema", &[], "");
 

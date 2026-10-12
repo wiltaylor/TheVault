@@ -1,0 +1,31 @@
+label       = "Note"
+plural      = "Notes"
+description = "Free-form writing, and pages such as the dashboard."
+icon        = "file-text"
+colour      = "gray"
+
+field tags {
+  kind  = "list"
+  label = "Tags"
+  items = "string"
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+template default {
+  tab "Note" {
+    slot "title"
+    slot "tags"
+    slot "body"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "tags"
+  }
+}

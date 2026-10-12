@@ -1,0 +1,6 @@
+title    = "Install TheVault"
+status   = "Done"
+priority = "high"
+due      = "{{date:-1}}"
+project  = "{{id:project}}"
+assignee = "{{id:alex}}"

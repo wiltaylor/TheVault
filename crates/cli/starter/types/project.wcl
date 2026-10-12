@@ -1,0 +1,73 @@
+label       = "Project"
+plural      = "Projects"
+description = "A piece of work made of tasks."
+icon        = "folder"
+colour      = "blue"
+
+field status {
+  kind     = "taxonomy"
+  label    = "Status"
+  default  = "Todo"
+  taxonomy = "status"
+}
+
+field owner {
+  kind   = "reference"
+  label  = "Owner"
+  target = "person"
+}
+
+field due {
+  kind  = "date"
+  label = "Due"
+}
+
+field tasks {
+  kind     = "reference"
+  label    = "Tasks"
+  multiple = true
+  target   = "task"
+  relation = "two_way"
+  inverse  = "project"
+}
+
+field body {
+  kind  = "content"
+  label = "Notes"
+}
+
+template default {
+  tab "Project" {
+    slot "title"
+    slot "status"
+    slot "owner"
+    slot "due"
+    slot "body"
+  }
+
+  tab "Tasks" {
+    query_view {
+      title        = "Tasks"
+      query        = "from task where project == this sort due asc"
+      default_view = "board"
+
+      view board {
+        kind  = "kanban"
+        group = "status"
+      }
+
+      view table {
+        kind    = "table"
+        columns = ["title", "status", "assignee", "due"]
+      }
+    }
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "status"
+    slot "due"
+  }
+}
