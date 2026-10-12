@@ -4,7 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { BULK_NOTES, BULK_TYPE, SKETCH_TYPE, TASK_TYPE, bulkId, bulkTitle } from "./vault";
+import {
+  BULK_NOTES,
+  BULK_TYPE,
+  MASS_NOTES,
+  MASS_TYPE,
+  PAGE_TYPE,
+  PROJECT_TYPE,
+  SKETCH_TYPE,
+  TASK_TYPE,
+  bulkId,
+  bulkTitle,
+  massId,
+} from "./vault";
 
 const web = fileURLToPath(new URL("..", import.meta.url));
 const repo = join(web, "..");
@@ -17,19 +29,25 @@ function binary(env: string, name: string): string {
   return path;
 }
 
-/** A fresh vault in a temporary folder: the test types and BULK_NOTES notes of `bulk`. */
+/** A fresh vault in a temporary folder: the test types, BULK_NOTES notes of `bulk` and MASS_NOTES of `mass`. */
 function seedVault(): string {
   const vault = mkdtempSync(join(tmpdir(), "thevault-e2e-"));
   mkdirSync(join(vault, "types"));
   writeFileSync(join(vault, "types/task.wcl"), TASK_TYPE);
   writeFileSync(join(vault, "types/bulk.wcl"), BULK_TYPE);
   writeFileSync(join(vault, "types/sketch.wcl"), SKETCH_TYPE);
+  writeFileSync(join(vault, "types/project.wcl"), PROJECT_TYPE);
+  writeFileSync(join(vault, "types/page.wcl"), PAGE_TYPE);
+  writeFileSync(join(vault, "types/mass.wcl"), MASS_TYPE);
+  const note = (title: string) =>
+    `title   = "${title}"\ncreated = "2026-10-12T09:15:00Z"\nupdated = "2026-10-12T09:15:00Z"\n`;
   mkdirSync(join(vault, "notes/bulk"), { recursive: true });
   for (let i = 1; i <= BULK_NOTES; i++) {
-    writeFileSync(
-      join(vault, "notes/bulk", `${bulkId(i)}.wcl`),
-      `title   = "${bulkTitle(i)}"\ncreated = "2026-10-12T09:15:00Z"\nupdated = "2026-10-12T09:15:00Z"\n`,
-    );
+    writeFileSync(join(vault, "notes/bulk", `${bulkId(i)}.wcl`), note(bulkTitle(i)));
+  }
+  mkdirSync(join(vault, "notes/mass"), { recursive: true });
+  for (let i = 1; i <= MASS_NOTES; i++) {
+    writeFileSync(join(vault, "notes/mass", `${massId(i)}.wcl`), note(`Mass ${String(i).padStart(5, "0")}`));
   }
   return vault;
 }

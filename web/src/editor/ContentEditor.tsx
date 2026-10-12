@@ -4,6 +4,7 @@ import type { Block } from "../api";
 import { FilePicker, upload } from "../blocks/MediaBlocks";
 import { NEW_HEIGHT, NEW_WIDTH } from "../ink/ink";
 import { blocksToDoc, docToBlocks } from "./doc";
+import { newQueryView } from "../views/model";
 import { editorExtensions } from "./extensions";
 import { PALETTE } from "./markup";
 
@@ -44,6 +45,7 @@ const INSERTS: { label: string; text: string; block: () => Block }[] = [
     text: "Ink",
     block: () => ({ kind: "ink", fields: { width: NEW_WIDTH, height: NEW_HEIGHT }, blocks: [] }),
   },
+  { label: "Insert query view", text: "Query", block: newQueryView },
 ];
 
 /**

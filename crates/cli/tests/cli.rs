@@ -1,0 +1,763 @@
+//! Seam S2: the real `vault` binary against a running server, asserting its JSON output (D25,
+//! D28, D32).
+//!
+//! Each test gives the binary its own config folder through `XDG_CONFIG_HOME` and `HOME`, so key
+//! files never land in the real home folder.
+
+use std::collections::BTreeSet;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use serde_json::{Value, json};
+use tempfile::TempDir;
+use testkit::TestServer;
+
+const STATUS: &str = r#"label = "Status"
+
+term "Inbox"
+
+term "Active" {
+  term "In progress"
+
+  term "Blocked"
+}
+
+term "Done"
+"#;
+
+const TASK: &str = r#"label = "Task"
+
+field ext_id {
+  kind = "string"
+}
+
+field estimate {
+  kind = "int"
+}
+
+field status {
+  kind     = "taxonomy"
+  taxonomy = "status"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "status"
+  }
+}
+"#;
+
+const BOARD: &str = r#"label = "Board"
+
+field board {
+  kind = "canvas"
+}
+
+template default {
+  tab "Board" {
+    slot "title"
+    slot "board"
+  }
+}
+"#;
+
+fn seed(vault: &Path) {
+    for (dir, name, body) in [
+        ("taxonomies", "status", STATUS),
+        ("types", "task", TASK),
+        ("types", "board", BOARD),
+    ] {
+        std::fs::create_dir_all(vault.join(dir)).unwrap();
+        std::fs::write(vault.join(dir).join(format!("{name}.wcl")), body).unwrap();
+    }
+}
+
+/// What one run of `vault` did.
+struct Out {
+    ok: bool,
+    json: Value,
+    stdout: String,
+}
+
+/// Runs `vault` with its own config folder, against `url` with `token` when given.
+struct Vault {
+    url: Option<String>,
+    token: Option<String>,
+    config: TempDir,
+}
+
+impl Vault {
+    fn offline() -> Vault {
+        Vault {
+            url: None,
+            token: None,
+            config: TempDir::new().unwrap(),
+        }
+    }
+
+    fn against(server: &TestServer) -> Vault {
+        Vault {
+            url: Some(server.base_url()),
+            token: Some(server.admin_token().to_owned()),
+            ..Vault::offline()
+        }
+    }
+
+    /// The folder `XDG_CONFIG_HOME` points at.
+    fn config_dir(&self) -> &Path {
+        self.config.path()
+    }
+
+    fn run(&self, args: &[&str], stdin: &str) -> Out {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_vault"));
+        cmd.args(args)
+            .env_remove("VAULT_URL")
+            .env_remove("VAULT_TOKEN")
+            .env_remove("VAULT_DIR")
+            .env_remove("VAULT_SECRET_KEY_FILE")
+            .env("XDG_CONFIG_HOME", self.config.path())
+            .env("HOME", self.config.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(url) = &self.url {
+            cmd.env("VAULT_URL", url);
+        }
+        if let Some(token) = &self.token {
+            cmd.env("VAULT_TOKEN", token);
+        }
+        let mut child = cmd.spawn().expect("start vault");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let json = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "vault {args:?} printed something that is not JSON ({e}):\n{stdout}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        Out {
+            ok: output.status.success(),
+            json,
+            stdout,
+        }
+    }
+
+    /// Run, expecting success.
+    fn ok(&self, args: &[&str], stdin: &str) -> Value {
+        let out = self.run(args, stdin);
+        assert!(out.ok, "vault {args:?} failed:\n{}", out.stdout);
+        out.json
+    }
+
+    /// Run, expecting failure.
+    fn fails(&self, args: &[&str], stdin: &str) -> Value {
+        let out = self.run(args, stdin);
+        assert!(!out.ok, "vault {args:?} succeeded:\n{}", out.stdout);
+        out.json
+    }
+}
+
+fn s(v: &Value) -> &str {
+    v.as_str().unwrap_or_else(|| panic!("not a string: {v}"))
+}
+
+fn tmp_path(dir: &TempDir, name: &str) -> String {
+    dir.path().join(name).to_str().unwrap().to_owned()
+}
+
+/// Every vault file outside `.vault/`, with its bytes.
+fn files(vault: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = e.path();
+            let rel = path.strip_prefix(root).unwrap().to_path_buf();
+            if rel == Path::new(".vault") {
+                continue;
+            }
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                out.push((rel, std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(vault, vault, &mut out);
+    out.sort();
+    out
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(e.file_name());
+        if e.path().is_dir() {
+            copy_dir(&e.path(), &target);
+        } else {
+            std::fs::copy(e.path(), &target).unwrap();
+        }
+    }
+}
+
+#[test]
+fn put_of_wcl_then_get_returns_the_canonical_form() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    // Untidy on purpose: a comment, odd spacing, and fields out of order.
+    let messy = "// a comment\nstatus=\"Inbox\"\n   title   =    \"Ship it\"\nestimate=3\n";
+    let created = vault.ok(&["put", "--type", "task"], messy);
+    let id = s(&created["id"]).to_owned();
+
+    let got = vault.ok(&["get", &id], "");
+    let wcl = s(&got["wcl"]);
+    let on_disk =
+        std::fs::read_to_string(server.vault_path().join(format!("notes/task/{id}.wcl"))).unwrap();
+    assert_eq!(wcl, on_disk, "get did not return the file as stored");
+    assert_eq!(wcl, s(&created["wcl"]));
+    assert!(!wcl.contains("comment"), "{wcl}");
+    assert!(wcl.contains("title    = \"Ship it\"\n"), "{wcl}");
+
+    // Writing the canonical form back changes nothing but the version stamp.
+    let again = vault.ok(
+        &["put", &id, "--base", s(&got["version"])],
+        &wcl.replace("Ship it", "Ship it now"),
+    );
+    let reread = vault.ok(&["get", &id], "");
+    assert_eq!(reread["wcl"], again["wcl"]);
+    assert!(s(&reread["wcl"]).contains("Ship it now"));
+
+    // A stale base is a 409, printed as JSON.
+    let stale = vault.fails(&["put", &id, "--base", s(&got["version"])], wcl);
+    assert_eq!(stale["status"], 409, "{stale}");
+    assert_eq!(stale["error"], "conflict");
+}
+
+/// A batch report with what a dry run cannot know replaced: the versions, the ids of notes the
+/// batch creates, the `created` and `updated` stamps, and the flags that name the run.
+fn comparable(report: &Value) -> Value {
+    let mut r = report.clone();
+    let obj = r.as_object_mut().unwrap();
+    obj.remove("dry_run");
+    obj.remove("committed");
+    for item in r["items"].as_array_mut().unwrap() {
+        item["version"] = Value::Null;
+        if item["result"] == "created" {
+            item["id"] = json!("<new>");
+        }
+        // A create that fails names the file the new note would have had.
+        if item["op"] == "create"
+            && let Some(file) = item["error"]["file"].as_str().map(str::to_owned)
+        {
+            let message = s(&item["error"]["message"]).replace(&file, "<new>");
+            item["error"]["file"] = json!("<new>");
+            item["error"]["message"] = json!(message);
+        }
+        if let Some(wcl) = item["wcl"].as_str() {
+            let kept: Vec<&str> = wcl
+                .lines()
+                .filter(|l| !l.starts_with("created") && !l.starts_with("updated"))
+                .collect();
+            item["wcl"] = json!(kept.join("\n"));
+        }
+    }
+    for also in r["also"].as_array_mut().unwrap() {
+        also["version"] = Value::Null;
+    }
+    r
+}
+
+#[test]
+fn batch_dry_run_prints_what_the_real_run_prints() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    let old = vault.ok(&["put", "--type", "task"], "title = \"Old\"\n");
+    let doomed = vault.ok(&["put", "--type", "task"], "title = \"Doomed\"\n");
+    let ops = json!([
+        { "op": "create", "type": "task", "note": { "fields": { "title": "New", "status": "Active/Blocked" } } },
+        { "op": "update", "id": old["id"], "base_version": old["version"],
+          "wcl": "title = \"Old, edited\"\nstatus = \"Done\"\n" },
+        { "op": "delete", "id": doomed["id"], "base_version": doomed["version"] },
+        { "op": "upsert", "type": "task", "key": "ext_id",
+          "note": { "fields": { "title": "Imported", "ext_id": "EXT-1" } } },
+    ])
+    .to_string();
+
+    let before = files(server.vault_path());
+    let dry = vault.ok(&["batch", "--dry-run"], &ops);
+    assert_eq!(
+        files(server.vault_path()),
+        before,
+        "a dry run changed files"
+    );
+    assert_eq!(dry["dry_run"], true);
+
+    let real = vault.ok(&["batch"], &ops);
+    assert_eq!(real["committed"], true);
+    assert_eq!(comparable(&dry), comparable(&real));
+    let results: Vec<&str> = real["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| s(&i["result"]))
+        .collect();
+    assert_eq!(results, ["created", "updated", "deleted", "created"]);
+
+    // A failing batch fails the same way dry or real, and the CLI exits non-zero for both.
+    let bad = json!({ "ops": [
+        { "op": "create", "type": "task", "note": { "fields": { "title": "Bad", "status": "Nope" } } },
+    ] })
+    .to_string();
+    let before = files(server.vault_path());
+    let dry = vault.fails(&["batch", "--dry-run"], &bad);
+    let real = vault.fails(&["batch"], &bad);
+    assert_eq!(files(server.vault_path()), before);
+    assert_eq!(dry["status"], 422);
+    assert_eq!(comparable(&dry), comparable(&real));
+}
+
+#[test]
+fn upsert_twice_changes_nothing_the_second_time() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    let note = r#"{ "fields": { "title": "Imported", "ext_id": "EXT-7", "estimate": 2 } }"#;
+    let args = ["upsert", "--type", "task", "--key", "ext_id", "--json"];
+    let first = vault.ok(&args, note);
+    assert_eq!(first["items"][0]["result"], "created", "{first}");
+    let before = files(server.vault_path());
+    let second = vault.ok(&args, note);
+    assert_eq!(second["items"][0]["result"], "unchanged", "{second}");
+    assert_eq!(files(server.vault_path()), before);
+}
+
+#[test]
+fn reindex_reports_the_one_broken_file_and_exits_non_zero() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    let good = vault.ok(&["put", "--type", "task"], "title = \"Fine\"\n");
+    let broken = vault.ok(&["put", "--type", "task"], "title = \"Soon broken\"\n");
+    // The server's vault goes when the server does, so reindex a copy of it.
+    let copy = TempDir::new().unwrap();
+    copy_dir(server.vault_path(), copy.path());
+    drop(server);
+    let root = copy.path();
+
+    let dir = root.to_str().unwrap();
+    let clean = vault.ok(&["reindex", "--vault", dir], "");
+    assert_eq!(clean["ok"], true);
+    assert_eq!(clean["indexed"], 2);
+    assert_eq!(clean["failures"], json!([]));
+
+    let path = format!("notes/task/{}.wcl", s(&broken["id"]));
+    std::fs::write(root.join(&path), "title = \"x\"\nstatus = \"Nope\"\n").unwrap();
+    let out = vault.fails(&["reindex", "--vault", dir], "");
+    assert_eq!(out["ok"], false);
+    assert_eq!(out["indexed"], 1);
+    let failures = out["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 1, "{out}");
+    assert_eq!(failures[0]["path"], json!(path));
+    assert!(!s(&failures[0]["diagnostic"]).is_empty());
+    assert!(!out.to_string().contains(s(&good["id"])));
+}
+
+#[test]
+fn a_restored_backup_serves_the_same_notes_and_history() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    let a = vault.ok(&["put", "--type", "task"], "title = \"First\"\n");
+    let id = s(&a["id"]).to_owned();
+    vault.ok(
+        &["put", &id, "--base", s(&a["version"])],
+        "title = \"First, edited\"\n",
+    );
+    let b = vault.ok(&["put", "--type", "task"], "title = \"Second\"\n");
+    vault.ok(&["delete", s(&b["id"]), "--base", s(&b["version"])], "");
+    let bytes = b"\x89PNG not really".to_vec();
+    let out = TempDir::new().unwrap();
+    let asset_file = tmp_path(&out, "cover.png");
+    std::fs::write(&asset_file, &bytes).unwrap();
+    let asset = vault.ok(&["asset", "upload", &asset_file], "");
+
+    let list = vault.ok(&["list"], "");
+    let history = vault.ok(&["history", &id], "");
+    let trash = vault.ok(&["trash", "list"], "");
+    let note = vault.ok(&["get", &id], "");
+
+    let archive = tmp_path(&out, "vault.backup");
+    let dir = server.vault_path().to_str().unwrap().to_owned();
+    let made = vault.run(&["backup", &archive, "--vault", &dir], "");
+    assert!(made.ok, "{}", made.stdout);
+    assert_eq!(made.json["key"]["included"], false);
+    assert!(
+        s(&made.json["key"]["message"]).contains("--include-key"),
+        "{}",
+        made.stdout
+    );
+    assert_eq!(made.json["files"], json!(files(server.vault_path()).len()));
+    // Never overwrites.
+    assert_eq!(
+        vault.fails(&["backup", &archive, "--vault", &dir], "")["error"],
+        "exists"
+    );
+
+    let target = TempDir::new().unwrap();
+    let into = target.path().join("restored");
+    let restored = vault.ok(&["restore-backup", &archive, into.to_str().unwrap()], "");
+    assert_eq!(restored["vault_id"], made.json["vault_id"]);
+    assert_eq!(files(&into), files(server.vault_path()));
+    let token = server.admin_token().to_owned();
+    drop(server);
+
+    // Serve the restored folder; the old token lives in its state.db.
+    let moved = TempDir::new_in(target.path()).unwrap();
+    std::fs::remove_dir(moved.path()).unwrap();
+    std::fs::rename(&into, moved.path()).unwrap();
+    let server = TestServer::start_existing(moved, &token, &[]);
+    let vault = Vault::against(&server);
+    assert_eq!(vault.ok(&["list"], ""), list);
+    assert_eq!(vault.ok(&["history", &id], ""), history);
+    assert_eq!(vault.ok(&["trash", "list"], ""), trash);
+    assert_eq!(vault.ok(&["get", &id], ""), note);
+    let copy = tmp_path(&out, "copy.png");
+    vault.ok(&["asset", "get", s(&asset["id"]), "--out", &copy], "");
+    assert_eq!(std::fs::read(&copy).unwrap(), bytes);
+}
+
+#[test]
+fn backup_with_include_key_carries_the_key_to_a_new_machine() {
+    let here = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let vault_dir = tmp_path(&dirs, "v");
+    let init = here.ok(&["init", &vault_dir, "--password-stdin"], "pw\n");
+    let archive = tmp_path(&dirs, "with-key.backup");
+    let made = here.ok(
+        &["backup", &archive, "--include-key", "--vault", &vault_dir],
+        "",
+    );
+    assert_eq!(made["key"]["included"], true);
+
+    // Another machine: a fresh config folder with no key in it.
+    let there = Vault::offline();
+    let into = tmp_path(&dirs, "w");
+    let restored = there.ok(&["restore-backup", &archive, &into], "");
+    assert_eq!(restored["key"]["restored"], true);
+    let key = there
+        .config_dir()
+        .join(format!("thevault/{}.key", s(&init["vault_id"])));
+    assert_eq!(
+        std::fs::read(&key).unwrap(),
+        std::fs::read(s(&init["key_file"])).unwrap()
+    );
+}
+
+#[test]
+fn init_creates_the_layout_and_key_file_and_sets_the_password() {
+    let vault = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let dir = dirs.path().join("vault");
+    let out = vault.ok(
+        &["init", dir.to_str().unwrap(), "--password-stdin"],
+        "hunter22\n",
+    );
+    for sub in [
+        "notes",
+        "types",
+        "taxonomies",
+        "scripts",
+        "tasks",
+        "assets",
+        ".vault",
+    ] {
+        assert!(dir.join(sub).is_dir(), "no {sub}/");
+    }
+    let vault_id = s(&out["vault_id"]).to_owned();
+    let key = vault
+        .config_dir()
+        .join("thevault")
+        .join(format!("{vault_id}.key"));
+    assert_eq!(out["key_file"], json!(key));
+    assert_eq!(std::fs::read(&key).unwrap().len(), 32);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    {
+        let state = state::State::open(&dir.join(".vault/state.db"), None).unwrap();
+        assert!(state.verify_password("hunter22").unwrap());
+        assert!(!state.verify_password("hunter22\n").unwrap());
+        assert_eq!(state.vault_id().unwrap(), vault_id);
+    }
+
+    // A second init refuses, and changes nothing.
+    let again = vault.fails(
+        &["init", dir.to_str().unwrap(), "--password-stdin"],
+        "other\n",
+    );
+    assert_eq!(again["error"], "already_a_vault");
+
+    // passwd replaces the password.
+    vault.ok(
+        &[
+            "passwd",
+            "--vault",
+            dir.to_str().unwrap(),
+            "--password-stdin",
+        ],
+        "new password\n",
+    );
+
+    // A server on the new vault logs in with the password and finds the key on its own.
+    let folder = TempDir::new_in(dirs.path()).unwrap();
+    std::fs::remove_dir(folder.path()).unwrap();
+    std::fs::rename(&dir, folder.path()).unwrap();
+    let server = TestServer::start_existing(folder, "", &[("XDG_CONFIG_HOME", vault.config_dir())]);
+    let http = reqwest::blocking::Client::new();
+    let res = http
+        .post(server.url("/api/login"))
+        .json(&json!({ "password": "hunter22" }))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), 401);
+    let res = http
+        .post(server.url("/api/login"))
+        .json(&json!({ "password": "new password" }))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let cookie = res
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let res = http
+        .put(server.url("/api/secrets/api_key"))
+        .header("cookie", cookie)
+        .json(&json!({ "value": "s3cret" }))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().unwrap());
+}
+
+#[test]
+fn init_starter_says_it_is_not_yet_available() {
+    let vault = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let dir = tmp_path(&dirs, "v");
+    let out = vault.fails(&["init", &dir, "--starter", "--password-stdin"], "pw\n");
+    assert_eq!(out["error"], "not_available");
+    assert!(
+        !Path::new(&dir).exists(),
+        "--starter created the folder anyway"
+    );
+}
+
+#[test]
+fn init_without_a_terminal_needs_password_stdin() {
+    let vault = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let dir = tmp_path(&dirs, "v");
+    let out = vault.fails(&["init", &dir], "");
+    assert_eq!(out["error"], "usage");
+    assert!(!Path::new(&dir).exists());
+}
+
+#[test]
+fn every_command_prints_json() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    let scratch = TempDir::new().unwrap();
+    let mut seen = BTreeSet::new();
+    let mut run = |words: &str, args: &[&str], stdin: &str| -> Value {
+        seen.insert(words.to_owned());
+        let mut all: Vec<&str> = words.split(' ').collect();
+        all.extend(args);
+        // `Vault::run` panics on anything that is not JSON.
+        let out = vault.run(&all, stdin);
+        assert!(out.ok, "vault {all:?} failed:\n{}", out.stdout);
+        out.json
+    };
+
+    let listing = run("commands", &[], "");
+    run("health", &[], "");
+    run("schema", &[], "");
+
+    let a = run("put", &["--type", "task"], "title = \"A\"\n");
+    let id = s(&a["id"]).to_owned();
+    let b = run(
+        "put",
+        &[&id, "--base", s(&a["version"])],
+        "title = \"A2\"\n",
+    );
+    run("list", &["--type", "task"], "");
+    run("get", &[&id, "--version", s(&a["version"])], "");
+    run("history", &[&id], "");
+    let c = run(
+        "restore",
+        &[&id, s(&a["version"]), "--base", s(&b["version"])],
+        "",
+    );
+    run("delete", &[&id, "--base", s(&c["version"])], "");
+    run("trash list", &[], "");
+    run("trash restore", &[&id], "");
+    let ops = json!([{ "op": "create", "type": "task", "wcl": "title = \"B\"\n" }]).to_string();
+    run("batch", &["--dry-run"], &ops);
+    run(
+        "upsert",
+        &["--type", "task", "--key", "ext_id", "--dry-run"],
+        "title = \"C\"\next_id = \"X\"\n",
+    );
+    run("query", &["from task", "--all", "--page-size", "1"], "");
+    run("query-parse", &["from task sort title asc"], "");
+    run("search", &["A2"], "");
+    run("flagged", &[], "");
+
+    let file = tmp_path(&scratch, "f.txt");
+    std::fs::write(&file, "hello").unwrap();
+    let asset = run("asset upload", &[&file], "");
+    run("asset list", &[], "");
+    run(
+        "asset get",
+        &[s(&asset["id"]), "--out", &tmp_path(&scratch, "g.txt")],
+        "",
+    );
+    run("asset delete", &[s(&asset["id"])], "");
+
+    run("type list", &[], "");
+    run("type get", &["task"], "");
+    run(
+        "type put",
+        &["memo"],
+        "label = \"Memo\"\n\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n",
+    );
+    run("type delete", &["memo"], "");
+    let changed = TASK.replace(
+        "field estimate {",
+        "field owner {\n  kind = \"string\"\n}\n\nfield estimate {",
+    );
+    let plan = run("type change", &["task"], &changed);
+    run(
+        "type change",
+        &["task", "--apply", s(&plan["plan"])],
+        &changed,
+    );
+
+    run("template list", &["task"], "");
+    run("template get", &["task", "default"], "");
+    run(
+        "template put",
+        &["task", "card"],
+        "template card {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n",
+    );
+    run("template delete", &["task", "card"], "");
+
+    run("taxonomy list", &[], "");
+    run("taxonomy get", &["status"], "");
+    run(
+        "taxonomy put",
+        &["colour"],
+        "label = \"Colour\"\n\nterm \"Red\"\n",
+    );
+    run("taxonomy delete", &["colour"], "");
+
+    run(
+        "script put",
+        &["tick"],
+        "use vault\nfn run() { vault::log(\"tick\") }\n",
+    );
+    run("script list", &[], "");
+    run("script get", &["tick"], "");
+    run(
+        "task put",
+        &["tick"],
+        "schedule = \"0 0 1 1 *\"\nscript = \"tick\"\n",
+    );
+    run("task list", &[], "");
+    run("task get", &["tick"], "");
+    let ran = run("task run", &["tick"], "");
+    run("task history", &["tick", "--limit", "5"], "");
+    run("task show-run", &["tick", &ran["id"].to_string()], "");
+    run("task delete", &["tick"], "");
+    run("script delete", &["tick"], "");
+
+    let token = run("token create", &["agent", "--scope", "read"], "");
+    assert!(token["secret"].is_string());
+    run("token list", &[], "");
+    run("token revoke", &["agent"], "");
+
+    run("secret set", &["api_key"], "s3cret\n");
+    run("secret list", &[], "");
+    run("secret get", &["api_key"], "");
+    run("secret delete", &["api_key"], "");
+
+    let board = run(
+        "put",
+        &["--type", "board"],
+        "title = \"Plan\"\n\ncanvas board {\n  viewport {\n    x    = 0.0\n    y    = 0.0\n    zoom = 1.0\n  }\n}\n",
+    );
+    let canvas = run("canvas get", &[s(&board["id"]), "board"], "");
+    run(
+        "canvas put",
+        &[s(&board["id"]), "board", "--base", s(&canvas["version"])],
+        "canvas {\n  viewport {\n    x    = 1.0\n    y    = 2.0\n    zoom = 0.5\n  }\n}\n",
+    );
+
+    // The local commands, on a vault of their own.
+    let dir = tmp_path(&scratch, "local");
+    run("init", &[&dir, "--password-stdin"], "pw\n");
+    run("passwd", &["--vault", &dir, "--password-stdin"], "pw2\n");
+    run("reindex", &["--vault", &dir], "");
+    let archive = tmp_path(&scratch, "local.backup");
+    run("backup", &[&archive, "--vault", &dir], "");
+    run(
+        "restore-backup",
+        &[&archive, &tmp_path(&scratch, "again")],
+        "",
+    );
+
+    let all: BTreeSet<String> = listing["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| s(&c["command"]).to_owned())
+        .collect();
+    let missed: Vec<_> = all.difference(&seen).collect();
+    assert!(missed.is_empty(), "commands never run: {missed:?}");
+
+    // Failures print JSON too.
+    let missing = vault.fails(&["get", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA"], "");
+    assert_eq!(missing["status"], 404);
+    let unauthorised = Vault {
+        token: None,
+        ..Vault::against(&server)
+    }
+    .fails(&["list"], "");
+    assert_eq!(unauthorised["status"], 401);
+    // A port nothing listens on: bound, read back, then released.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let offline = Vault {
+        url: Some(format!("http://127.0.0.1:{port}")),
+        ..Vault::offline()
+    }
+    .fails(&["health"], "");
+    assert_eq!(offline["error"], "connect");
+}

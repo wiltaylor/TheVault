@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import type { Block, Json } from "../api";
+import { QueryView } from "../views/QueryView";
 import { CodeBlock } from "../blocks/CodeBlock";
 import { text } from "../blocks/fields";
 import { AssetBlock, ImageBlock } from "../blocks/MediaBlocks";
@@ -72,6 +73,9 @@ export function BlockView(props: { block: Block; onChange?: (block: Block) => vo
       </Match>
       <Match when={b().kind === "code"}>
         <CodeBlock block={b()} onChange={props.onChange} />
+      </Match>
+      <Match when={b().kind === "query_view"}>
+        <QueryView block={b()} />
       </Match>
       <Match when={b().kind === "terminal"}>
         <TerminalBlock block={b()} onChange={props.onChange} />

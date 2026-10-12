@@ -86,14 +86,41 @@ impl TestServer {
             .expect("create temporary config directory");
         let key = config.path().join("vault.key");
         state::SecretKey::create_file(&key).expect("write the secret key file");
+        let mut command = Command::new(binary);
+        command.env("VAULT_SECRET_KEY_FILE", &key).args(args);
+        Self::launch(command, binary, vault, config, admin_token)
+    }
 
-        let mut child = Command::new(binary)
-            .env("VAULT_SECRET_KEY_FILE", &key)
+    /// Serves a vault folder that already holds its `state.db`, such as one `vault init` made or
+    /// one restored from a backup, setting nothing up first. `admin_token` is whatever token secret
+    /// that vault already accepts, or empty. The server sees `env` and no `VAULT_SECRET_KEY_FILE`
+    /// unless `env` names one, so it finds its key the way a real server does (OQ-S2).
+    pub fn start_existing(vault: TempDir, admin_token: &str, env: &[(&str, &Path)]) -> Self {
+        let binary = server_binary();
+        let config = tempfile::Builder::new()
+            .prefix("thevault-config-")
+            .tempdir()
+            .expect("create temporary config directory");
+        let mut command = Command::new(&binary);
+        command.env_remove("VAULT_SECRET_KEY_FILE");
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        Self::launch(command, &binary, vault, config, admin_token.to_owned())
+    }
+
+    fn launch(
+        mut command: Command,
+        binary: &Path,
+        vault: TempDir,
+        config: TempDir,
+        admin_token: String,
+    ) -> Self {
+        let mut child = command
             .arg("--vault")
             .arg(vault.path())
             .arg("--listen")
             .arg("127.0.0.1:0")
-            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

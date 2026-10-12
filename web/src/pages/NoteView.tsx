@@ -1,24 +1,24 @@
 import { useParams } from "@solidjs/router";
-import { For, Match, Show, Switch, createEffect, createSignal, on } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import { For, Show, createEffect, createSignal, on } from "solid-js";
 import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, api } from "../api";
 import { ConflictView } from "../components/ConflictView";
+import { FieldInput, hasInput } from "../components/FieldInput";
 import { BlockView, Blocks, formatValue } from "../components/Render";
 import { ContentEditor } from "../editor/ContentEditor";
-import { knowTitle } from "../editor/titles";
+import { knowTitle, noteTitle } from "../editor/titles";
 import { InkSurface } from "../ink/InkSurface";
 import {
   applyBlocks,
   applyCompound,
+  applyDict,
   applyEdits,
   compoundBlock,
   fieldValue,
-  isEditable,
   pageTemplate,
-  parseInput,
   slotField,
 } from "../notes";
 import { typeDef } from "../session";
+import { ThisNote } from "../views/thisNote";
 
 interface Conflict {
   mine: NoteDoc;
@@ -40,7 +40,8 @@ export function NoteView() {
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const [tab, setTab] = createSignal(0);
   const [editing, setEditing] = createSignal(false);
-  const [edits, setEdits] = createStore<Record<string, Json | undefined>>({});
+  // Field values edited so far, by field name. `undefined` clears a field.
+  const [edits, setEdits] = createSignal<Record<string, Json | undefined>>({});
   // Content fields edited in the block editor, by field name.
   let blockEdits = new Map<string, { field: FieldDef; blocks: Block[] }>();
   // Ink fields drawn on, by field name.
@@ -77,7 +78,7 @@ export function NoteView() {
   };
 
   function startEditing() {
-    setEdits(reconcile({}));
+    setEdits({});
     blockEdits = new Map();
     setInkEdits({});
     setSaveError(null);
@@ -86,8 +87,8 @@ export function NoteView() {
 
   function draftValue(f: FieldDef): Json | undefined {
     const n = note();
-    if (f.name in edits) return edits[f.name];
-    return n ? n.note.fields[f.name] : undefined;
+    if (f.name in edits()) return edits()[f.name];
+    return n ? fieldValue(n.note, f) : undefined;
   }
 
   async function save(doc: NoteDoc, base: string) {
@@ -121,7 +122,15 @@ export function NoteView() {
     ev.preventDefault();
     const n = note();
     if (!n) return;
-    let doc = applyEdits(n.note, { ...edits });
+    const t = type();
+    const plain: Record<string, Json | undefined> = {};
+    let doc = n.note;
+    for (const [name, value] of Object.entries(edits())) {
+      const f = t?.fields.find((x) => x.name === name);
+      if (f?.kind === "dict") doc = applyDict(doc, f, value);
+      else plain[name] = value;
+    }
+    doc = applyEdits(doc, plain);
     for (const { field, blocks } of blockEdits.values()) doc = applyBlocks(doc, field, blocks);
     for (const { field, block } of Object.values(inkEdits())) doc = applyCompound(doc, field, block);
     void save(doc, n.version);
@@ -140,51 +149,22 @@ export function NoteView() {
     if (c) void save(c.mine, c.stored.version);
   }
 
-  function Editor(props: { field: FieldDef; label: string }) {
-    const f = props.field;
-    const id = `field-input-${f.name}`;
-    const value = () => draftValue(f);
-    const set = (raw: string) => setEdits(f.name, parseInput(f, raw));
+  /** A field's value as read-only text: references by their notes' titles. */
+  function Display(props: { field: FieldDef; value: Json | undefined }) {
+    const ids = () => (Array.isArray(props.value) ? props.value : [props.value]).filter((x) => typeof x === "string");
     return (
-      <Switch
-        fallback={
-          <input
-            id={id}
-            type={{ int: "number", float: "number", date: "date", url: "url" }[f.kind] ?? "text"}
-            step={f.kind === "float" ? "any" : undefined}
-            value={formatValue(value())}
-            required={f.required}
-            aria-label={props.label}
-            onInput={(e) => set(e.currentTarget.value)}
-          />
-        }
-      >
-        <Match when={f.kind === "bool"}>
-          <input
-            id={id}
-            type="checkbox"
-            checked={value() === true}
-            aria-label={props.label}
-            onChange={(e) => setEdits(f.name, e.currentTarget.checked)}
-          />
-        </Match>
-        <Match when={f.kind === "select"}>
-          <select id={id} aria-label={props.label} onChange={(e) => set(e.currentTarget.value)}>
-            <Show when={!f.required}>
-              <option value="" selected={value() === undefined}>
-                —
-              </option>
-            </Show>
-            <For each={f.options ?? []}>
-              {(o) => (
-                <option value={o} selected={value() === o}>
-                  {o}
-                </option>
-              )}
-            </For>
-          </select>
-        </Match>
-      </Switch>
+      <Show when={props.value !== undefined} fallback={<span class="muted">—</span>}>
+        <Show when={props.field.kind === "reference"} fallback={formatValue(props.value)}>
+          <For each={ids()}>
+            {(id, i) => (
+              <>
+                {i() > 0 ? ", " : ""}
+                <a href={`/notes/${id}`}>{noteTitle(id) ?? id}</a>
+              </>
+            )}
+          </For>
+        </Show>
+      </Show>
     );
   }
 
@@ -200,6 +180,9 @@ export function NoteView() {
             <div class="field" data-field={field().name} data-testid={`field-${field().name}`}>
               <div class="field-label">
                 <label for={`field-input-${field().name}`}>{label}</label>
+                <Show when={field().computed}>
+                  <span class="badge" title="Only handlers write this field">computed</span>
+                </Show>
               </div>
               <div class="field-value">
                 <Show when={field().kind !== "ink"} fallback={
@@ -221,24 +204,23 @@ export function NoteView() {
                   />
                 }>
                 <Show
-                  when={editing() && isEditable(field())}
+                  when={editing() && hasInput(field())}
                   fallback={
                     <Show
-                      when={field().compound}
-                      fallback={
-                        <Show
-                          when={fieldValue(n().note, field()) !== undefined}
-                          fallback={<span class="muted">—</span>}
-                        >
-                          {formatValue(fieldValue(n().note, field()))}
-                        </Show>
-                      }
+                      when={field().compound && field().kind !== "dict"}
+                      fallback={<Display field={field()} value={fieldValue(n().note, field())} />}
                     >
                       <Blocks blocks={compoundBlock(n().note, field())?.blocks ?? []} />
                     </Show>
                   }
                 >
-                  <Editor field={field()} label={label} />
+                  <FieldInput
+                    field={field()}
+                    value={draftValue(field())}
+                    onChange={(v) => setEdits({ ...edits(), [field().name]: v })}
+                    label={label}
+                    id={`field-input-${field().name}`}
+                  />
                 </Show>
                 </Show>
                 </Show>
@@ -259,7 +241,7 @@ export function NoteView() {
       </Show>
       <Show when={note()} fallback={<Show when={!loadError()}><p class="muted">Loading…</p></Show>}>
         {(n) => (
-          <>
+          <ThisNote.Provider value={n().id}>
             <header class="note-header">
               <div>
                 <p class="note-kind">{type()?.label ?? n().type}</p>
@@ -344,7 +326,7 @@ export function NoteView() {
                 />
               )}
             </Show>
-          </>
+          </ThisNote.Provider>
         )}
       </Show>
     </article>
