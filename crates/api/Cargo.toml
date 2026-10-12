@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 axum.workspace = true
 query.workspace = true
+scheduler.workspace = true
 schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true

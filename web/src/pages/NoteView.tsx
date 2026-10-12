@@ -16,6 +16,7 @@ import {
   slotField,
 } from "../notes";
 import { typeDef } from "../session";
+import { ThisNote } from "../views/thisNote";
 
 interface Conflict {
   mine: NoteDoc;
@@ -222,7 +223,7 @@ export function NoteView() {
       </Show>
       <Show when={note()} fallback={<Show when={!loadError()}><p class="muted">Loading…</p></Show>}>
         {(n) => (
-          <>
+          <ThisNote.Provider value={n().id}>
             <header class="note-header">
               <div>
                 <p class="note-kind">{type()?.label ?? n().type}</p>
@@ -307,7 +308,7 @@ export function NoteView() {
                 />
               )}
             </Show>
-          </>
+          </ThisNote.Provider>
         )}
       </Show>
     </article>

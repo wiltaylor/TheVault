@@ -89,12 +89,6 @@ export interface Taxonomy {
   terms: Term[];
 }
 
-export interface Asset {
-  id: string;
-  filename: string;
-  size: number;
-}
-
 /** A planned type change (D6): what it adds, removes and renames, and every note it edits. */
 export interface TypePlan {
   type: string;
@@ -113,6 +107,14 @@ export interface Row {
   type: string;
   title: string;
   fields: Record<string, Json>;
+}
+
+/** An uploaded file, stored at `assets/<id>/<filename>` (D22). */
+export interface Asset {
+  id: string;
+  filename: string;
+  size: number;
+  path: string;
 }
 
 export interface Page {
@@ -149,7 +151,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     credentials: "same-origin",
     headers: { Accept: "application/json" },
   };
-  if (body !== undefined) {
+  if (body instanceof Blob) {
+    init.headers = { ...init.headers, "Content-Type": "application/octet-stream" };
+    init.body = body;
+  } else if (body !== undefined) {
     init.headers = { ...init.headers, "Content-Type": "application/json" };
     init.body = JSON.stringify(body);
   }
@@ -201,10 +206,11 @@ export const api = {
   /** Create or replace a taxonomy. `renames` maps old term paths to new ones. */
   putTaxonomy: (name: string, wcl: string, renames: Record<string, string>) =>
     request<Taxonomy & { notes: { id: string }[] }>("PUT", `/api/taxonomies/${enc(name)}`, { wcl, renames }),
-  assets: async () => (await request<{ assets: Asset[] }>("GET", "/api/assets")).assets,
-  query: (query: string, cursor: string | null, pageSize: number) =>
+  /** One page of `query`. `thisId` is the note that holds the query, bound to `this`. */
+  query: (query: string, cursor: string | null, pageSize: number, thisId?: string) =>
     request<Page>("POST", "/api/query", {
       query,
+      ...(thisId ? { this: thisId } : {}),
       ...(cursor ? { cursor } : {}),
       page_size: pageSize,
     }),
@@ -213,5 +219,14 @@ export const api = {
     if (cursor) params.set("cursor", cursor);
     return request<Page>("GET", `/api/search?${params}`);
   },
+  assets: async () => (await request<{ assets: Asset[] }>("GET", "/api/assets")).assets,
+  /** Upload `file` as a new asset. The body is the file's bytes, unchanged. */
+  uploadAsset: (file: File) =>
+    request<Asset>("POST", `/api/assets?filename=${enc(file.name)}`, file),
 };
+
+/** Where the browser fetches an asset's bytes. */
+export function assetUrl(id: string): string {
+  return `/api/assets/${enc(id)}`;
+}
 
