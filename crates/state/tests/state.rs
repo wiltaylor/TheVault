@@ -652,3 +652,34 @@ fn a_version_1_state_db_gains_the_handler_queue() {
     state.queue_jobs(&["job".to_owned()]).unwrap();
     assert_eq!(state.queued_jobs().unwrap().len(), 1);
 }
+
+#[test]
+fn the_vault_id_is_made_once_and_kept() {
+    let dir = TempDir::new().unwrap();
+    let id = open(&dir).vault_id().unwrap();
+    assert_eq!(id.len(), 32);
+    assert_eq!(open(&dir).vault_id().unwrap(), id);
+    let other = TempDir::new().unwrap();
+    assert_ne!(open(&other).vault_id().unwrap(), id);
+}
+
+#[test]
+fn a_backup_copy_holds_the_history_and_the_vault_id() {
+    let dir = TempDir::new().unwrap();
+    let state = open(&dir);
+    let id = state.vault_id().unwrap();
+    state
+        .record_version(
+            NOTE_A,
+            "task",
+            &Author::Session("s".into()),
+            "title = \"A\"\n",
+        )
+        .unwrap();
+    let out = TempDir::new().unwrap();
+    let copy = out.path().join("copy.db");
+    state.backup_to(&copy).unwrap();
+    let restored = State::open(&copy, None).unwrap();
+    assert_eq!(restored.vault_id().unwrap(), id);
+    assert_eq!(restored.history(NOTE_A).unwrap().len(), 1);
+}

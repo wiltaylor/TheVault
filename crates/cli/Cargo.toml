@@ -10,7 +10,22 @@ name = "vault"
 path = "src/main.rs"
 
 [dependencies]
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
+index.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+rustix.workspace = true
+serde_json.workspace = true
+state.workspace = true
+store.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+serde_json.workspace = true
+state.workspace = true
+tempfile.workspace = true
+testkit.workspace = true
 
 [lints]
 workspace = true
