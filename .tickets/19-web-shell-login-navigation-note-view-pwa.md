@@ -5,8 +5,8 @@ plan: thevault-prd
 blocked_by:
 - 08
 - '12'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Web shell: login, navigation, note view, PWA, conflicts
@@ -31,3 +31,23 @@ Acceptance criteria (S5 Playwright):
 Seam: S5. Decisions D12, D14, D18, D19, D33, D36.
 
 ## Worklog
+
+### 2026-10-12T13:15:30Z — /work
+
+Claimed.
+
+### 2026-10-12T13:26:01Z — wil
+
+Verified set to verified.
+
+### 2026-10-12T13:26:01Z — wil
+
+Status set to done.
+
+### 2026-10-12T13:26:01Z — wil
+
+Committed ba08afb on ticket/thevault-prd-19. All five criteria proven by web/e2e/shell.spec.ts via ./dev just web-e2e-test (10 passed). Additions outside web/: GET /api/types (parsed type definitions incl. templates; ticket 16's schema inspection may supersede it — if 16 merges first, its endpoint-listing test needs /api/types added), vault-server --web <dir> (SPA fallback, /api never falls back), testkit-seed binary for S5 credentials. The note view's edit mode only covers title and single-valued scalar kinds; compound/multiple/reference fields are read-only until the editor tickets. web-e2e-test now builds vault-server and testkit-seed first.
+
+### 2026-10-12T13:27:32Z — wil
+
+Merged into main as f670c77 (fast-forward after merging main into the branch). Resolved conflicts in crates/api/src/lib.rs and types.rs by keeping main's type change/delete/flagged routes alongside GET /api/types. ./dev just check and web-e2e-test (10/10) pass on the merged tree.

@@ -3,8 +3,8 @@ id: '01'
 title: Workspace skeleton, justfile gate and S1 testkit
 plan: thevault-prd
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Workspace skeleton, justfile gate and S1 testkit
@@ -28,3 +28,23 @@ Acceptance criteria:
 Spec: SPEC.md Components, Testing decisions S1. Decisions D19.
 
 ## Worklog
+
+### 2026-10-12T12:09:43Z — /work
+
+Claimed.
+
+### 2026-10-12T12:14:21Z — wil
+
+Verified set to verified.
+
+### 2026-10-12T12:14:21Z — wil
+
+Status set to done.
+
+### 2026-10-12T12:14:21Z — wil
+
+Branch ticket/thevault-prd-01 @ b03de88. All five criteria shown on a fresh clone: just check exit 0; pnpm build made web/dist; just test-e2e 1 passed; health test binary run twice at once, 4/4 passed each (each copy starts 6 servers on port 0); two Playwright runs at once both passed. Choices other tickets should know: S1 tests live in crates/server/tests, because testkit finds vault-server in the cargo target dir (or VAULT_SERVER_BIN) and cargo only guarantees that binary for the server crate's tests or a workspace run. vault-server refuses a missing --vault dir. The gate parts are in .just/ci (just ci::check); top-level check depends on it. 'server' and 'test-e2e' are aliases for server-run and web-e2e-test. Playwright serves web/dist with vite preview on port 0 from global setup and passes the URL through E2E_BASE_URL. pnpm store-dir=/pnpm-store/store is set in web/.npmrc. store depends on wcl_lang and script on wscript, which proves the pins build. Resolved versions: Vite 8, Vitest 5, TypeScript 7, solid-js 1.9.17, @playwright/test pinned to 1.56.1 to match the browser in the image.
+
+### 2026-10-12T12:15:16Z — wil
+
+Merged into main by fast-forward (07bf833..b03de88).

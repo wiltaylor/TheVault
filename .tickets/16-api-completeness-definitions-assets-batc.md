@@ -7,8 +7,8 @@ blocked_by:
 - 09
 - '10'
 - '12'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # API completeness: definitions, assets, batch, upsert, inspection
@@ -32,3 +32,23 @@ Acceptance criteria (S1):
 Seam: S1. Decisions D17, D32.
 
 ## Worklog
+
+### 2026-10-12T13:15:03Z — /work
+
+Claimed.
+
+### 2026-10-12T13:29:40Z — wil
+
+Verified set to verified.
+
+### 2026-10-12T13:29:40Z — wil
+
+Status set to done.
+
+### 2026-10-12T13:29:40Z — wil
+
+Branch ticket/thevault-prd-16 @ e21a727. Builds on ticket/thevault-prd-09 (merged into this branch, clean); ticket/thevault-prd-10 is NOT merged here because it conflicts with main (it predates 08's PUT /api/types and Error::TypeInUse(String)). Whoever merges 10 after 16 must add 10's routes (POST /api/types, DELETE /api/types/{name}, GET /api/flagged, and its PUT contract) to crates/api/src/openapi.rs ENDPOINTS and register them through the Routes builder in crates/api/src/lib.rs, or api's openapi unit test and server/tests/completeness.rs fail. Batch atomicity choice: all-or-nothing, one commit; dry run = same path stopped before commit. Two items may not target the same note or upsert key. Upsert merges submitted fields/blocks into the matched note; base_version optional for upsert. Scripts are stored without wscript syntax checking (script crate is still a stub). Taxonomy renames do not rewrite type-field defaults that name a renamed term; such a rename is refused as invalid_type until the type is changed. Tasks endpoints left out (not in this ticket's scope).
+
+### 2026-10-12T13:31:28Z — wil
+
+Merged into main at 4d8339b (fast-forward) after merging main (with ticket 10) into the branch; 10's routes were added to the Routes builder and the openapi ENDPOINTS table. ./dev just check passed on the merged tree.

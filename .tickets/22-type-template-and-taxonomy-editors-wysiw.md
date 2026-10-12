@@ -5,8 +5,8 @@ plan: thevault-prd
 blocked_by:
 - '20'
 - '16'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Type, template and taxonomy editors (WYSIWYG)
@@ -29,3 +29,23 @@ Acceptance criteria (S5):
 Seam: S5. Decisions D3, D6, D7, D14.
 
 ## Worklog
+
+### 2026-10-12T13:44:00Z — /work
+
+Claimed.
+
+### 2026-10-12T13:58:55Z — wil
+
+Verified set to verified.
+
+### 2026-10-12T13:58:55Z — wil
+
+Branch ticket/thevault-prd-22 @ ca3ce04 (merged ticket/thevault-prd-20 first, which was done but not on main). All five criteria proven by web/e2e/definitions.spec.ts (6 Playwright tests, also 3x --repeat-each green); ./dev just check green; full e2e 20/20. Assumptions: 'every field kind' on note pages = every kind except content (ticket 20's editor), ink (ticket 27) and canvas (canvas ticket), which keep their own editors; the type editor still defines all 18 kinds. The required-field preview lists notes from a query when the plan endpoint refuses (400 invalid_type), because the server does not plan a change without a default. Handlers in a type file are preserved by the type editor but not edited. Template editor adds heading/paragraph blocks only; other blocks already in a template are kept, rendered and movable. No server changes.
+
+### 2026-10-12T13:58:55Z — wil
+
+Status set to done.
+
+### 2026-10-12T14:03:32Z — wil
+
+Merged into main at cb3b44a (ff). Merge of main into the branch conflicted in web/src/api.ts and styles.css; kept both sides. just check green, e2e 29/29 twice.

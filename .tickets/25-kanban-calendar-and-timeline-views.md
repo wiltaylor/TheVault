@@ -4,8 +4,8 @@ title: Kanban, calendar and timeline views
 plan: thevault-prd
 blocked_by:
 - '23'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Kanban, calendar and timeline views
@@ -27,3 +27,19 @@ Acceptance criteria (S5):
 Seam: S5. Decisions D7, D12, D29.
 
 ## Worklog
+
+### 2026-10-12T14:05:10Z — /work
+
+Claimed.
+
+### 2026-10-12T14:19:45Z — wil
+
+Verified set to verified.
+
+### 2026-10-12T14:19:45Z — wil
+
+Status set to done.
+
+### 2026-10-12T14:19:45Z — wil
+
+Branch ticket/thevault-prd-25, commit 75f0c42. Evidence: web/e2e/date-views.spec.ts (6 S5 tests, all pass; 18/18 at --repeat-each=3), full e2e 35/35, just check exit 0. Kanban columns are the view's query narrowed client-side (web/src/views/narrow.ts) to field == "term", paged 25 per column; the API has no extra-filter parameter. Drop saves against the version fetched at dragstart because query rows carry no version. FullCalendar pinned to ~6.1.21: v7 is headless and its plugins still peer on 6.1. Calendar/timeline need one date field kind per view: mixing date and date_range under one name across types would make the window condition fail.

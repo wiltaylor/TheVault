@@ -4,8 +4,8 @@ title: 'schema: types, field kinds, validation, taxonomies'
 plan: thevault-prd
 blocked_by:
 - '03'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # schema: types, field kinds, validation, taxonomies
@@ -28,3 +28,19 @@ Acceptance criteria:
 Seam: unit tests in the crate; S1 coverage arrives with ticket `writer`. Decisions D3, D4, D5, D7, D14, D23.
 
 ## Worklog
+
+### 2026-10-12T12:37:50Z — /work
+
+Claimed.
+
+### 2026-10-12T12:47:06Z — wil
+
+Verified set to verified.
+
+### 2026-10-12T12:47:07Z — wil
+
+Status set to done.
+
+### 2026-10-12T12:47:07Z — wil
+
+Committed 9a6d544 on ticket/thevault-prd-04. Criteria proven by crates/schema/tests/validation.rs: every_field_kind_accepts_a_valid_value_and_rejects_an_invalid_one (table of 27 rows, asserts a row exists for each of the 18 FieldKind::NAMES), a_reference_to_a_missing_note_fails, a_reference_to_a_note_of_the_wrong_type_fails, a_term_must_exist_in_the_taxonomy, a_deep_term_passes_in_a_deeper_hierarchy, a_template_naming_a_field_the_type_lacks_fails. Mutation-checked: disabling the missing-note, term-existence and slot checks turns those tests red. Assumptions: schema does the semantic layer on the store's AST and is strict about unknown items in definition files, so it does not also run wcl_lang structural validation; a required multiple field must hold at least one value; references inside content blocks (image assets, canvas note nodes, mentions) are checked for ULID form only, not existence; query_view view items (group, date, location) are not resolved against the queried type, that belongs with query. Schema-change planning (D6) is not in this ticket.
