@@ -783,6 +783,97 @@ fn every_command_in_the_skill_document_runs_against_a_starter_vault() {
     }
 }
 
+/// What the skill document says about batches, references, upsert keys and rows, against the
+/// starter types it describes.
+#[test]
+fn the_skill_documents_how_batches_report_and_refer() {
+    let (_server, vault, _) = Starter::new().serve();
+    let upsert = |ty: &str, key: &str, fields: Value| json!({ "op": "upsert", "type": ty, "key": key, "note": { "fields": fields } });
+    let first = json!([
+        upsert(
+            "person",
+            "email",
+            json!({ "title": "Robin", "email": "robin@example.com" })
+        ),
+        upsert("project", "title", json!({ "title": "Launch the shop" })),
+    ])
+    .to_string();
+
+    // A dry run's ids are not the ids the real run creates.
+    let dry = vault.ok(&["batch", "--dry-run"], &first);
+    assert_eq!(dry["items"][0]["version"], Value::Null);
+    let real = vault.ok(&["batch"], &first);
+    assert_ne!(dry["items"][0]["id"], real["items"][0]["id"]);
+    let person = s(&real["items"][0]["id"]).to_owned();
+    let project = s(&real["items"][1]["id"]).to_owned();
+
+    // Setting one side of a two-way reference writes the other, and `also` reports it.
+    let second = json!([upsert(
+        "task",
+        "title",
+        json!({ "title": "Order the stock", "assignee": person, "project": project }),
+    )])
+    .to_string();
+    let out = vault.ok(&["batch"], &second);
+    let task = s(&out["items"][0]["id"]).to_owned();
+    assert_eq!(out["also"][0]["id"], json!(project), "{out}");
+    assert_eq!(out["also"][0]["type"], "project");
+    assert_eq!(out["also"][0]["event"], "update");
+    let got = vault.ok(&["get", &project], "");
+    assert_eq!(got["note"]["fields"]["tasks"], json!([task]), "{got}");
+
+    // A failed batch carries `status` and `error` at the top as well as per item.
+    let bad = json!([upsert(
+        "task",
+        "title",
+        json!({ "title": "Bad", "status": "Nope" })
+    )])
+    .to_string();
+    let failed = vault.fails(&["batch", "--dry-run"], &bad);
+    assert_eq!(failed["status"], 422);
+    assert_eq!(failed["error"], Value::Null);
+    assert_eq!(failed["items"][0]["error"]["error"], "invalid");
+
+    // An upsert key matching two notes is refused with their ids; a list field is no key.
+    vault.ok(&["put", "--type", "task"], "title = \"Twin\"\n");
+    vault.ok(&["put", "--type", "task"], "title = \"Twin\"\n");
+    let twins = vault.fails(
+        &["upsert", "--type", "task", "--key", "title"],
+        "title = \"Twin\"\n",
+    );
+    let item = &twins["items"][0]["error"];
+    assert_eq!(item["error"], "key_not_unique", "{twins}");
+    assert_eq!(item["status"], 409);
+    assert_eq!(item["ids"].as_array().unwrap().len(), 2);
+    vault.fails(
+        &["upsert", "--type", "project", "--key", "tasks"],
+        "title = \"X\"\n",
+    );
+
+    // An upsert keeps the fields it was not sent.
+    let out = vault.ok(
+        &["upsert", "--type", "task", "--key", "title"],
+        "title = \"Order the stock\"\npriority = \"high\"\n",
+    );
+    assert_eq!(out["items"][0]["result"], "updated", "{out}");
+    let got = vault.ok(&["get", &task], "");
+    assert_eq!(got["note"]["fields"]["assignee"], json!(person));
+
+    // A JSON content field is a block, and rows leave it out.
+    let note = json!({
+        "fields": { "title": "With a body" },
+        "blocks": [{ "kind": "content", "labels": ["body"],
+                     "blocks": [{ "kind": "paragraph", "fields": { "text": "Hello" } }] }],
+    })
+    .to_string();
+    let put = vault.ok(&["put", "--type", "task", "--json"], &note);
+    assert!(s(&put["wcl"]).contains("content body {"), "{put}");
+    let rows = vault.ok(&["query", "from task where title == \"With a body\""], "");
+    let row = &rows["rows"][0];
+    assert_eq!(row["title"], "With a body", "{rows}");
+    assert!(row["fields"].get("body").is_none(), "{row}");
+}
+
 #[test]
 fn a_builder_model_round_trips_through_query_parse_and_query_text() {
     let server = TestServer::start_seeded(seed);
