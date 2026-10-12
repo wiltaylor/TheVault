@@ -1,0 +1,95 @@
+//! Error responses: a status and a JSON body with a stable `error` code and a `message`.
+
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde_json::{Value, json};
+use writer::Error;
+
+/// An error response.
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: StatusCode,
+    pub body: Value,
+}
+
+impl ApiError {
+    pub fn new(status: StatusCode, code: &str, message: impl Into<String>) -> ApiError {
+        ApiError {
+            status,
+            body: json!({ "error": code, "message": message.into() }),
+        }
+    }
+
+    pub fn bad_request(message: impl Into<String>) -> ApiError {
+        ApiError::new(StatusCode::BAD_REQUEST, "bad_request", message)
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(self.body)).into_response()
+    }
+}
+
+impl From<Error> for ApiError {
+    fn from(e: Error) -> ApiError {
+        let message = e.to_string();
+        let (status, body) = match &e {
+            Error::Parse { file, .. } => (
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "parse", "file": file }),
+            ),
+            Error::DataOnly(d) => (
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "not_data_only", "file": d.file, "line": d.line, "item": d.item }),
+            ),
+            Error::BadJson(_) => (StatusCode::BAD_REQUEST, json!({ "error": "bad_json" })),
+            Error::Invalid(inv) => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid",
+                    "file": inv.file,
+                    "issues": inv.issues.iter()
+                        .map(|i| json!({ "at": i.at, "message": i.message }))
+                        .collect::<Vec<_>>(),
+                }),
+            ),
+            Error::UnknownType(t) => (
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "unknown_type", "type": t }),
+            ),
+            Error::NotFound(_) | Error::VersionNotFound { .. } | Error::NotInTrash(_) => {
+                (StatusCode::NOT_FOUND, json!({ "error": "not_found" }))
+            }
+            Error::BaseRequired(_) => (
+                StatusCode::PRECONDITION_REQUIRED,
+                json!({ "error": "base_version_required" }),
+            ),
+            Error::Conflict {
+                id,
+                current_version,
+                current,
+            } => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "conflict",
+                    "id": id,
+                    "current_version": current_version,
+                    "current": current,
+                }),
+            ),
+            Error::Rejected(_) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({ "error": "rejected" }),
+            ),
+            Error::Schema(_) | Error::Store(_) | Error::State(_) | Error::Index(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "internal" }),
+            ),
+        };
+        let mut body = body;
+        body["message"] = Value::String(message);
+        ApiError { status, body }
+    }
+}

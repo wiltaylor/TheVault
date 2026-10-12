@@ -1,1 +1,733 @@
-//! The single write path that every change to the vault goes through.
+//! The single write path that every change goes through (D4, D12, D13, D20, D21).
+//!
+//! A write runs the steps of SPEC.md "The write path":
+//!
+//! 1. Parse the submitted note, WCL text or JSON (D32): [`Input`].
+//! 2. Reject expressions and imports (D20).
+//! 3. Validate against the type schema. A client cannot write a computed field (D3).
+//! 4. Check the base version against the note's current one; a stale one is a [`Error::Conflict`]
+//!    (D12).
+//! 5. [`Hooks::before`]: the `before_*` handlers.
+//! 6. [`Hooks::side_effects`]: reverse references and `on_delete` rules.
+//! 7. Commit every file atomically (D4).
+//! 8. Record a version of every changed note in `state.db`, or move a deleted note to the trash
+//!    (D13).
+//! 9. Update `index.db` and the tantivy index.
+//! 10. [`Hooks::after`]: queue the `after_*` handlers.
+//! 11. Return the canonical WCL and the new version of every changed note (D21).
+//!
+//! Steps 5, 6 and 10 belong to later work. [`NoHooks`] leaves them empty.
+
+mod note;
+mod time;
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use index::{Index, Update};
+use schema::{Doc, Invalid, Issue, NoteLookup, NoteReport, Schema, TypeDef};
+use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
+use store::{Change, Vault};
+
+pub use note::{Input, doc_to_json};
+
+/// Errors from the write path.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The submitted WCL does not parse.
+    #[error("{file}: {message}")]
+    Parse { file: String, message: String },
+    /// The submitted WCL holds an expression, an import or another non-data item (D20).
+    #[error(transparent)]
+    DataOnly(store::DataOnlyError),
+    /// The submitted JSON is not a note.
+    #[error("{0}")]
+    BadJson(String),
+    /// The note does not validate against its type.
+    #[error(transparent)]
+    Invalid(Invalid),
+    #[error("there is no type {0:?}")]
+    UnknownType(String),
+    #[error("note {0} does not exist")]
+    NotFound(String),
+    #[error("note {id} has no version {version:?}")]
+    VersionNotFound { id: String, version: String },
+    #[error("note {0} is not in the trash")]
+    NotInTrash(String),
+    /// A change to an existing note carried no base version (D12).
+    #[error("a change to note {0} must carry the version it was based on")]
+    BaseRequired(String),
+    /// The base version is not the note's current version (D12).
+    #[error("note {id} has changed: its current version is {current_version}")]
+    Conflict {
+        id: String,
+        current_version: String,
+        /// The note's current canonical WCL, for the client to compare.
+        current: String,
+    },
+    /// A `before_*` handler refused the change (D9).
+    #[error("{0}")]
+    Rejected(String),
+    #[error("the vault's type definitions are invalid: {0}")]
+    Schema(#[from] schema::SchemaError),
+    #[error(transparent)]
+    Store(store::Error),
+    #[error(transparent)]
+    State(#[from] state::Error),
+    #[error(transparent)]
+    Index(#[from] index::Error),
+}
+
+impl Error {
+    pub(crate) fn from_store(e: store::Error) -> Error {
+        match e {
+            store::Error::DataOnly(e) => Error::DataOnly(e),
+            store::Error::Parse { file, message } => Error::Parse { file, message },
+            other => Error::Store(other),
+        }
+    }
+}
+
+impl From<store::Error> for Error {
+    fn from(e: store::Error) -> Error {
+        Error::from_store(e)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// What a change does to a note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    Create,
+    Update,
+    Delete,
+}
+
+/// One note change inside a write, after validation.
+#[derive(Debug, Clone)]
+pub struct NoteChange {
+    pub id: String,
+    pub type_name: String,
+    pub event: Event,
+    /// The note as it will be written. `None` for a delete.
+    pub doc: Option<Doc>,
+}
+
+/// A note change that has been committed, recorded and indexed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Saved {
+    pub id: String,
+    pub type_name: String,
+    pub event: Event,
+    /// The new version, or for a delete the version the note had when it went to the trash.
+    pub version: String,
+    /// The canonical WCL now on disk, or for a delete the WCL that went to the trash.
+    pub wcl: String,
+}
+
+/// The extension points of the write path. Every method defaults to doing nothing.
+pub trait Hooks: Send + Sync {
+    /// Step 5: run `before_*` handlers on one change. An error rejects the whole write with its
+    /// message (D9).
+    fn before(&self, change: &mut NoteChange, author: &Author) -> std::result::Result<(), String> {
+        let _ = (change, author);
+        Ok(())
+    }
+
+    /// Step 6: the changes a write implies beyond what was submitted: reverse references (D4) and
+    /// `on_delete` rules (D5). They join the same commit.
+    fn side_effects(&self, changes: &[NoteChange]) -> Result<Vec<NoteChange>> {
+        let _ = changes;
+        Ok(Vec::new())
+    }
+
+    /// Step 10: queue `after_*` handlers for the committed changes (D9).
+    fn after(&self, saved: &[Saved], author: &Author) {
+        let _ = (saved, author);
+    }
+}
+
+/// [`Hooks`] that do nothing.
+pub struct NoHooks;
+
+impl Hooks for NoHooks {}
+
+/// A note as stored, with its current version.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Note {
+    pub id: String,
+    pub type_name: String,
+    pub version: String,
+    pub wcl: String,
+    pub doc: Doc,
+}
+
+/// One row of a note listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Summary {
+    pub id: String,
+    pub type_name: String,
+    pub title: String,
+    pub created: Option<String>,
+    pub updated: Option<String>,
+    pub flagged: bool,
+    pub version: String,
+}
+
+/// The author recorded for a note found on disk with no version in `state.db`, such as a file
+/// copied into the vault before the server started.
+pub const ADOPTED_BY: &str = "vault";
+
+/// The write path of one vault.
+pub struct Writer {
+    vault: Vault,
+    state: State,
+    clock: Arc<dyn Clock>,
+    hooks: Box<dyn Hooks>,
+    inner: Mutex<Inner>,
+}
+
+/// What every write changes, behind one lock, so writes run one at a time.
+struct Inner {
+    schema: Schema,
+    index: Index,
+}
+
+impl Writer {
+    /// Open the write path: load the schema and rebuild the index from the vault files.
+    pub fn open(vault: Vault, state: State) -> Result<Writer> {
+        let schema = Schema::load(&vault)?;
+        let mut index = Index::open(&vault)?;
+        index.rebuild(&vault)?;
+        Ok(Writer {
+            vault,
+            state,
+            clock: Arc::new(SystemClock),
+            hooks: Box::new(NoHooks),
+            inner: Mutex::new(Inner { schema, index }),
+        })
+    }
+
+    /// Read `created` and `updated` times from `clock`.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Writer {
+        self.clock = clock;
+        self
+    }
+
+    /// Run `hooks` at steps 5, 6 and 10.
+    pub fn with_hooks(mut self, hooks: Box<dyn Hooks>) -> Writer {
+        self.hooks = hooks;
+        self
+    }
+
+    pub fn vault(&self) -> &Vault {
+        &self.vault
+    }
+
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    /// A copy of the current schema.
+    pub fn schema(&self) -> Schema {
+        self.lock().schema.clone()
+    }
+
+    /// Reload the types and taxonomies from the vault and refresh the index's terms.
+    pub fn reload_schema(&self) -> Result<()> {
+        let schema = Schema::load(&self.vault)?;
+        let mut inner = self.lock();
+        inner.index.set_schema(&schema)?;
+        inner.schema = schema;
+        Ok(())
+    }
+
+    /// Create a note of `type_name` with a new id.
+    pub fn create(&self, type_name: &str, input: &Input, author: &Author) -> Result<Saved> {
+        let mut inner = self.lock();
+        let id = ulid::Ulid::new().to_string();
+        let doc = input.parse(&note_path(type_name, &id))?;
+        let change = self.prepare_put(&inner, &id, type_name, doc, None, author)?;
+        self.apply(&mut inner, vec![change], &|| Ok(()), author)
+            .map(first)
+    }
+
+    /// Replace note `id`, which must be at version `base`.
+    pub fn update(
+        &self,
+        id: &str,
+        input: &Input,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
+        let mut inner = self.lock();
+        let (type_name, old) = self.existing(id)?;
+        let doc = input.parse(&note_path(&type_name, id))?;
+        let change = self.prepare_put(&inner, id, &type_name, doc, Some(&old), author)?;
+        let check = || self.check_base(id, &type_name, &old, base);
+        self.apply(&mut inner, vec![change], &check, author)
+            .map(first)
+    }
+
+    /// Delete note `id`, which must be at version `base`, moving it to the trash.
+    pub fn delete(&self, id: &str, base: Option<&str>, author: &Author) -> Result<Saved> {
+        let mut inner = self.lock();
+        let (type_name, old) = self.existing(id)?;
+        self.check_base(id, &type_name, &old, base)?;
+        let change = NoteChange {
+            id: id.to_owned(),
+            type_name,
+            event: Event::Delete,
+            doc: None,
+        };
+        self.apply(&mut inner, vec![change], &|| Ok(()), author)
+            .map(first)
+    }
+
+    /// Write an earlier version of note `id` back as a new version. The note must be at `base`.
+    pub fn restore_version(
+        &self,
+        id: &str,
+        version: &str,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
+        let mut inner = self.lock();
+        let (type_name, old) = self.existing(id)?;
+        let past = self.version(id, version)?;
+        let doc = Input::Wcl(past.content).parse(&note_path(&type_name, id))?;
+        let change = self.prepare_put(&inner, id, &type_name, doc, Some(&old), author)?;
+        let check = || self.check_base(id, &type_name, &old, base);
+        self.apply(&mut inner, vec![change], &check, author)
+            .map(first)
+    }
+
+    /// Bring note `id` back from the trash with its last content, as a new version.
+    pub fn restore_from_trash(&self, id: &str, author: &Author) -> Result<Saved> {
+        let mut inner = self.lock();
+        if let Some(type_name) = self.locate(id)? {
+            let current = self.vault.read_text(&note_path(&type_name, id))?;
+            let current_version = self.head(id, &type_name, &current)?;
+            return Err(Error::Conflict {
+                id: id.to_owned(),
+                current_version,
+                current,
+            });
+        }
+        let entry = self
+            .trash()?
+            .into_iter()
+            .find(|t| t.note_id == id)
+            .ok_or_else(|| Error::NotInTrash(id.to_owned()))?;
+        let doc = Input::Wcl(entry.content.clone()).parse(&note_path(&entry.note_type, id))?;
+        let created = created_of(&doc);
+        let mut change = self.prepare_put(&inner, id, &entry.note_type, doc, None, author)?;
+        // The note existed before; it keeps the time it was first created.
+        if let (Some(created), Some(doc)) = (created, change.doc.as_mut()) {
+            set_field(doc, "created", created);
+        }
+        change.event = Event::Create;
+        self.apply(&mut inner, vec![change], &|| Ok(()), author)
+            .map(first)
+    }
+
+    /// Read note `id`.
+    pub fn read(&self, id: &str) -> Result<Note> {
+        let _inner = self.lock();
+        let (type_name, wcl) = self.existing(id)?;
+        let version = self.head(id, &type_name, &wcl)?;
+        let doc = Input::Wcl(wcl.clone()).parse(&note_path(&type_name, id))?;
+        Ok(Note {
+            id: id.to_owned(),
+            type_name,
+            version,
+            wcl,
+            doc,
+        })
+    }
+
+    /// Every indexed note, or every note of one type, oldest first.
+    pub fn list(&self, type_name: Option<&str>) -> Result<Vec<Summary>> {
+        let inner = self.lock();
+        let conn = inner.index.connection();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, type, title, created, updated, flagged FROM notes
+                 WHERE ?1 IS NULL OR type = ?1 ORDER BY id",
+            )
+            .map_err(index::Error::from)?;
+        let rows = stmt
+            .query_map([type_name], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, bool>(5)?,
+                ))
+            })
+            .map_err(index::Error::from)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, type_name, title, created, updated, flagged) =
+                row.map_err(index::Error::from)?;
+            let wcl = self.vault.read_text(&note_path(&type_name, &id))?;
+            let version = self.head(&id, &type_name, &wcl)?;
+            out.push(Summary {
+                id,
+                type_name,
+                title,
+                created,
+                updated,
+                flagged,
+                version,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Every recorded version of note `id`, oldest first, live or trashed.
+    pub fn history(&self, id: &str) -> Result<Vec<Version>> {
+        let _inner = self.lock();
+        if let Some(type_name) = self.locate(id)? {
+            let wcl = self.vault.read_text(&note_path(&type_name, id))?;
+            self.head(id, &type_name, &wcl)?;
+        }
+        let versions = self.state.history(id)?;
+        if versions.is_empty() {
+            return Err(Error::NotFound(id.to_owned()));
+        }
+        Ok(versions)
+    }
+
+    /// The current version token of a live note, or `None` when it is not live.
+    pub fn current_version(&self, id: &str) -> Result<Option<String>> {
+        Ok(self.state.current_version(id)?)
+    }
+
+    /// One recorded version of note `id`.
+    pub fn version(&self, id: &str, version: &str) -> Result<Version> {
+        self.state
+            .version(id, version)?
+            .ok_or_else(|| Error::VersionNotFound {
+                id: id.to_owned(),
+                version: version.to_owned(),
+            })
+    }
+
+    /// Every note in the trash, most recently deleted first.
+    pub fn trash(&self) -> Result<Vec<TrashEntry>> {
+        Ok(self.state.list_trash()?)
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The type folder holding note `id`, from the files on disk.
+    fn locate(&self, id: &str) -> Result<Option<String>> {
+        if !schema::is_ulid(id) {
+            return Ok(None);
+        }
+        let notes = self.vault.root().join("notes");
+        let entries = std::fs::read_dir(&notes).map_err(|source| {
+            Error::Store(store::Error::Io {
+                path: notes.clone(),
+                source,
+            })
+        })?;
+        for entry in entries.flatten() {
+            let type_name = entry.file_name().to_string_lossy().into_owned();
+            if schema::is_name(&type_name) && entry.path().join(format!("{id}.wcl")).is_file() {
+                return Ok(Some(type_name));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The type and current text of a live note.
+    fn existing(&self, id: &str) -> Result<(String, String)> {
+        let type_name = self
+            .locate(id)?
+            .ok_or_else(|| Error::NotFound(id.to_owned()))?;
+        let text = self.vault.read_text(&note_path(&type_name, id))?;
+        Ok((type_name, text))
+    }
+
+    /// The current version of a live note. A note on disk that `state.db` has never seen is
+    /// adopted: its text is recorded as its first version.
+    fn head(&self, id: &str, type_name: &str, text: &str) -> Result<String> {
+        if let Some(v) = self.state.current_version(id)? {
+            return Ok(v);
+        }
+        let author = Author::Session(ADOPTED_BY.to_owned());
+        Ok(self
+            .state
+            .record_version(id, type_name, &author, text)?
+            .token)
+    }
+
+    /// Step 4.
+    fn check_base(&self, id: &str, type_name: &str, text: &str, base: Option<&str>) -> Result<()> {
+        let base = base.ok_or_else(|| Error::BaseRequired(id.to_owned()))?;
+        let current_version = self.head(id, type_name, text)?;
+        if base == current_version {
+            Ok(())
+        } else {
+            Err(Error::Conflict {
+                id: id.to_owned(),
+                current_version,
+                current: text.to_owned(),
+            })
+        }
+    }
+
+    /// Steps 3 and the canonical layout: arrange the submitted doc, stamp `created` and
+    /// `updated`, and validate it. `old` is the note's current text for an update.
+    fn prepare_put(
+        &self,
+        inner: &Inner,
+        id: &str,
+        type_name: &str,
+        doc: Doc,
+        old: Option<&str>,
+        author: &Author,
+    ) -> Result<NoteChange> {
+        let ty = inner
+            .schema
+            .type_def(type_name)
+            .ok_or_else(|| Error::UnknownType(type_name.to_owned()))?;
+        let path = note_path(type_name, id);
+        let now = time::utc(self.clock.now_ms());
+        let old_doc = old
+            .map(|t| Input::Wcl(t.to_owned()).parse(&path))
+            .transpose()?;
+        let created = old_doc
+            .as_ref()
+            .and_then(created_of)
+            .unwrap_or_else(|| now.clone());
+        let doc = note::arrange(ty, doc, &created, &now);
+
+        if !matches!(author, Author::Handler(_)) {
+            let issues = computed_writes(ty, &doc, old_doc.as_ref());
+            if !issues.is_empty() {
+                return Err(Error::Invalid(Invalid { file: path, issues }));
+            }
+        }
+        Ok(NoteChange {
+            id: id.to_owned(),
+            type_name: type_name.to_owned(),
+            event: if old.is_some() {
+                Event::Update
+            } else {
+                Event::Create
+            },
+            doc: Some(doc),
+        })
+    }
+
+    /// Validate (step 3), run `check_base` (step 4), then steps 5 to 11 for one write.
+    fn apply(
+        &self,
+        inner: &mut Inner,
+        mut changes: Vec<NoteChange>,
+        check_base: &dyn Fn() -> Result<()>,
+        author: &Author,
+    ) -> Result<Vec<Saved>> {
+        // Validate what was submitted before any handler sees it.
+        self.render(inner, &changes)?;
+        check_base()?;
+
+        for change in &mut changes {
+            self.hooks.before(change, author).map_err(Error::Rejected)?;
+        }
+        let extra = self.hooks.side_effects(&changes)?;
+        changes.extend(extra);
+
+        // Handlers may have changed the notes, so what is written is rendered and checked again.
+        let rendered = self.render(inner, &changes)?;
+
+        let mut files = Vec::with_capacity(rendered.len());
+        for r in &rendered {
+            let path = note_path(&r.change.type_name, &r.change.id);
+            files.push(match &r.text {
+                Some(text) => Change::write(path, text.as_bytes()),
+                None => Change::delete(path),
+            });
+        }
+        self.vault.commit(files)?;
+
+        let mut saved = Vec::with_capacity(rendered.len());
+        let mut updates = Vec::with_capacity(rendered.len());
+        for r in rendered {
+            let NoteChange {
+                id,
+                type_name,
+                event,
+                ..
+            } = r.change;
+            match (r.text, r.doc) {
+                (Some(text), Some((doc, report))) => {
+                    let v = self.state.record_version(&id, &type_name, author, &text)?;
+                    updates.push(Update::Put {
+                        id: id.clone(),
+                        type_name: type_name.clone(),
+                        doc,
+                        report,
+                    });
+                    saved.push(Saved {
+                        id,
+                        type_name,
+                        event,
+                        version: v.token,
+                        wcl: text,
+                    });
+                }
+                _ => {
+                    let entry = self.state.trash_note(&id, author)?;
+                    updates.push(Update::Delete { id: id.clone() });
+                    saved.push(Saved {
+                        id,
+                        type_name,
+                        event,
+                        version: entry.version,
+                        wcl: entry.content,
+                    });
+                }
+            }
+        }
+        inner.index.update(&inner.schema, &updates)?;
+        self.hooks.after(&saved, author);
+        Ok(saved)
+    }
+
+    /// The canonical text of every put and the validation of the note it holds. A delete renders
+    /// to nothing, after making sure `state.db` holds the content it will trash.
+    fn render(&self, inner: &Inner, changes: &[NoteChange]) -> Result<Vec<Rendered>> {
+        let mut pending = HashMap::new();
+        let mut deleted = HashSet::new();
+        for c in changes {
+            match c.event {
+                Event::Delete => {
+                    deleted.insert(c.id.clone());
+                }
+                _ => {
+                    pending.insert(c.id.clone(), c.type_name.clone());
+                }
+            }
+        }
+        let lookup = Lookup {
+            writer: self,
+            pending,
+            deleted,
+        };
+        let mut out = Vec::with_capacity(changes.len());
+        for c in changes {
+            let path = note_path(&c.type_name, &c.id);
+            let Some(doc) = &c.doc else {
+                let text = self.vault.read_text(&path)?;
+                self.head(&c.id, &c.type_name, &text)?;
+                out.push(Rendered {
+                    change: c.clone(),
+                    text: None,
+                    doc: None,
+                });
+                continue;
+            };
+            let text = store::canonical(&note::print(doc), &path)?;
+            let doc = Input::Wcl(text.clone()).parse(&path)?;
+            let report = inner
+                .schema
+                .validate_note(&c.type_name, &doc, &lookup)
+                .map_err(|issues| {
+                    Error::Invalid(Invalid {
+                        file: path.clone(),
+                        issues,
+                    })
+                })?;
+            out.push(Rendered {
+                change: c.clone(),
+                text: Some(text),
+                doc: Some((doc, report)),
+            });
+        }
+        Ok(out)
+    }
+}
+
+struct Rendered {
+    change: NoteChange,
+    text: Option<String>,
+    doc: Option<(Doc, NoteReport)>,
+}
+
+/// Note and asset existence as validation sees it: the files on disk, with this write's own
+/// creates added and its deletes removed.
+struct Lookup<'a> {
+    writer: &'a Writer,
+    pending: HashMap<String, String>,
+    deleted: HashSet<String>,
+}
+
+impl NoteLookup for Lookup<'_> {
+    fn note_type(&self, id: &str) -> Option<String> {
+        if self.deleted.contains(id) {
+            return None;
+        }
+        if let Some(t) = self.pending.get(id) {
+            return Some(t.clone());
+        }
+        self.writer.locate(id).ok().flatten()
+    }
+
+    fn asset_exists(&self, id: &str) -> bool {
+        schema::is_ulid(id) && self.writer.vault.root().join("assets").join(id).is_dir()
+    }
+}
+
+/// `notes/<type>/<id>.wcl`.
+pub fn note_path(type_name: &str, id: &str) -> String {
+    format!("notes/{type_name}/{id}.wcl")
+}
+
+/// A client may not change a computed field: on a new note it must be absent, and on an update it
+/// must hold what the note already holds (D3).
+fn computed_writes(ty: &TypeDef, doc: &Doc, old: Option<&Doc>) -> Vec<Issue> {
+    let block = |d: &'_ Doc, name: &str| d.blocks.iter().find(|b| b.label() == Some(name)).cloned();
+    let mut issues = Vec::new();
+    for f in ty.fields.iter().filter(|f| f.computed) {
+        let changed = if f.kind.is_compound() {
+            let new = block(doc, &f.name);
+            new.is_some() && new != old.and_then(|d| block(d, &f.name))
+        } else {
+            let new = doc.field(&f.name);
+            new.is_some() && new != old.and_then(|d| d.field(&f.name))
+        };
+        if changed {
+            issues.push(Issue::new(&f.name, "is computed: only handlers write it"));
+        }
+    }
+    issues
+}
+
+fn created_of(doc: &Doc) -> Option<String> {
+    doc.field("created")
+        .and_then(schema::Value::as_str)
+        .filter(|s| schema::is_utc_datetime(s))
+        .map(str::to_owned)
+}
+
+fn set_field(doc: &mut Doc, name: &str, value: String) {
+    for (n, v) in &mut doc.fields {
+        if n == name {
+            *v = schema::Value::Str(value);
+            return;
+        }
+    }
+}
+
+fn first(mut saved: Vec<Saved>) -> Saved {
+    saved.swap_remove(0)
+}

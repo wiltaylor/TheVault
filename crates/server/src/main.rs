@@ -3,6 +3,7 @@
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use clap::Parser;
@@ -25,6 +26,11 @@ async fn main() -> anyhow::Result<()> {
     if !args.vault.is_dir() {
         bail!("vault folder {} does not exist", args.vault.display());
     }
+    let vault = store::Vault::init(&args.vault)
+        .with_context(|| format!("opening vault {}", args.vault.display()))?;
+    let state = state::State::open(&vault.server_dir().join("state.db"), None)
+        .context("opening state.db")?;
+    let writer = writer::Writer::open(vault, state).context("loading the vault")?;
 
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await
@@ -41,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     stdout.flush()?;
     drop(stdout);
 
-    axum::serve(listener, api::router())
+    axum::serve(listener, api::router(Arc::new(writer)))
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())
