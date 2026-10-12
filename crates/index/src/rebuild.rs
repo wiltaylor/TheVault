@@ -25,6 +25,9 @@ pub struct RebuildReport {
 }
 
 pub(crate) fn rebuild(index: &mut Index, vault: &store::Vault) -> Result<RebuildReport> {
+    // Read first: a commit that lands while the files are read leaves the index behind, never
+    // marked current without it.
+    let generation = vault.generation()?;
     let mut failures = Vec::new();
     let schema = load_schema(vault, &mut failures)?;
 
@@ -79,6 +82,7 @@ pub(crate) fn rebuild(index: &mut Index, vault: &store::Vault) -> Result<Rebuild
     for f in &failures {
         sql::insert_failure(&tx, f)?;
     }
+    sql::set_generation(&tx, generation)?;
     let indexed = notes.len();
     index
         .search

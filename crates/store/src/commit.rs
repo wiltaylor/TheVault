@@ -6,7 +6,11 @@
 //! 2. `manifest.json` lists every write and delete. It is written to a temporary name, synced and
 //!    renamed into place. That rename is the commit point.
 //! 3. Each staged file is renamed over its target and each delete is applied.
-//! 4. The journal is removed.
+//! 4. `.vault/generation` is set to the commit's generation, written into the manifest.
+//! 5. The journal is removed.
+//!
+//! The generation counts commits: each one is one more than the last. The index records the
+//! generation it has applied, so a server can tell on start whether the index is current.
 //!
 //! Recovery runs when a vault is opened and before every commit. A journal with a manifest is
 //! rolled forward: applying an operation twice is harmless, because a staged file that is gone
@@ -26,6 +30,7 @@ use crate::{Error, Result, Vault, canonical, io_err};
 const TXN_DIR: &str = "txn";
 const MANIFEST: &str = "manifest.json";
 const LOCK_FILE: &str = "commit.lock";
+const GENERATION_FILE: &str = "generation";
 
 /// One file change in a commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +74,10 @@ pub enum CommitStep {
 #[derive(Serialize, Deserialize)]
 struct Manifest {
     ops: Vec<Op>,
+    /// The generation this commit makes. A journal from before generations has none, and takes
+    /// the next one when it is rolled forward.
+    #[serde(default)]
+    generation: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -79,8 +88,9 @@ enum Op {
 }
 
 impl Vault {
-    /// Apply every change or none of them, even across a crash.
-    pub fn commit(&self, changes: Vec<Change>) -> Result<()> {
+    /// Apply every change or none of them, even across a crash. Returns the generation the
+    /// commit made.
+    pub fn commit(&self, changes: Vec<Change>) -> Result<u64> {
         self.commit_with_hook(changes, &mut |_| ControlFlow::Continue(()))
     }
 
@@ -92,11 +102,12 @@ impl Vault {
         &self,
         changes: Vec<Change>,
         hook: &mut dyn FnMut(CommitStep) -> ControlFlow<()>,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         let changes = self.prepare(changes)?;
         let _guard = self.commit_lock.lock().unwrap_or_else(|e| e.into_inner());
         let _lock = self.lock_journal()?;
         recover_locked(self)?;
+        let generation = read_generation(self)? + 1;
 
         let txn = self.server_dir().join(TXN_DIR);
         std::fs::create_dir_all(&txn).map_err(io_err(&txn))?;
@@ -115,8 +126,11 @@ impl Vault {
                     return Ok(None);
                 }
             }
-            let manifest =
-                serde_json::to_vec(&Manifest { ops }).expect("a manifest always serialises");
+            let manifest = serde_json::to_vec(&Manifest {
+                ops,
+                generation: Some(generation),
+            })
+            .expect("a manifest always serialises");
             let tmp = txn.join("manifest.tmp");
             write_synced(&tmp, &manifest)?;
             let path = txn.join(MANIFEST);
@@ -136,7 +150,14 @@ impl Vault {
         if hook(CommitStep::Committed).is_break() {
             return Err(Error::Interrupted);
         }
-        roll_forward(self, hook)
+        roll_forward(self, hook)?;
+        Ok(generation)
+    }
+
+    /// The generation of the last commit, 0 before the first. Every commit adds one, and a crash
+    /// part way through a commit leaves it where it was until recovery finishes the commit.
+    pub fn generation(&self) -> Result<u64> {
+        read_generation(self)
     }
 
     /// Check every change and put each `.wcl` write into canonical form before anything touches
@@ -232,10 +253,36 @@ fn roll_forward(vault: &Vault, hook: &mut dyn FnMut(CommitStep) -> ControlFlow<(
             return Err(Error::Interrupted);
         }
     }
+    let generation = match manifest.generation {
+        Some(g) => g,
+        None => read_generation(vault)? + 1,
+    };
+    write_generation(vault, generation)?;
     // The manifest goes first: a crash after this leaves a journal with nothing to redo.
     std::fs::remove_file(&manifest_path).map_err(io_err(&manifest_path))?;
     sync_dir(&txn)?;
     std::fs::remove_dir_all(&txn).map_err(io_err(&txn))
+}
+
+fn read_generation(vault: &Vault) -> Result<u64> {
+    let path = vault.server_dir().join(GENERATION_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => text.trim().parse().map_err(|_| {
+            Error::Corrupt(format!("{} holds {:?}, not a number", path.display(), text))
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(e) => Err(io_err(&path)(e)),
+    }
+}
+
+/// Replace `.vault/generation` atomically: a crash leaves the old number or the new one.
+fn write_generation(vault: &Vault, generation: u64) -> Result<()> {
+    let dir = vault.server_dir();
+    let tmp = dir.join("generation.tmp");
+    write_synced(&tmp, generation.to_string().as_bytes())?;
+    let path = dir.join(GENERATION_FILE);
+    std::fs::rename(&tmp, &path).map_err(io_err(&path))?;
+    sync_dir(&dir)
 }
 
 fn write_synced(path: &Path, contents: &[u8]) -> Result<()> {

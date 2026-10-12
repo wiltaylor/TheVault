@@ -672,7 +672,7 @@ fn markdown(rows: &[Row], c: &RunInfo) -> String {
         out.push_str(&format!("- {name}: {n}\n"));
     }
     out.push_str(&format!(
-        "- Note files: {:.1} MiB\n- Generated in {} on {} threads, written through `store`\n- `vault-server` start, which rebuilds the index: {}\n",
+        "- Note files: {:.1} MiB\n- Generated in {} on {} threads, written through `store`\n- `vault-server` start on the reindexed vault, whose index is current: {}\n",
         c.generated.bytes as f64 / (1024.0 * 1024.0),
         secs(c.generate_time),
         c.threads,

@@ -571,3 +571,59 @@ fn a_second_rebuild_replaces_the_first() {
     assert_ne!(index.dump().unwrap(), first);
     assert!(index.search("blocker", None).unwrap().is_empty());
 }
+
+#[test]
+fn a_rebuild_makes_the_index_current_with_the_vault_generation() {
+    let (_dir, vault) = fixture();
+    let mut index = Index::open(&vault).unwrap();
+    assert_eq!(index.generation().unwrap(), None, "a new index is behind");
+    assert!(!index.is_current(&vault).unwrap());
+    index.rebuild(&vault).unwrap();
+    assert_eq!(index.generation().unwrap(), Some(0));
+    assert!(index.is_current(&vault).unwrap());
+    drop(index);
+    assert!(Index::open(&vault).unwrap().is_current(&vault).unwrap());
+}
+
+#[test]
+fn the_index_advances_one_commit_at_a_time_and_a_missed_commit_leaves_it_behind() {
+    let (_dir, vault) = fixture();
+    let mut index = Index::open(&vault).unwrap();
+    index.rebuild(&vault).unwrap();
+    let schema = Schema::load(&vault).unwrap();
+
+    let text = notes()[1].2.replace("Importer", "Importer two");
+    let path = format!("notes/task/{TASK_A}.wcl");
+    let g = vault
+        .commit(vec![store::Change::write(&path, text.as_str())])
+        .unwrap();
+    assert!(!index.is_current(&vault).unwrap(), "committed, not applied");
+    index
+        .update(&schema, &[put(&schema, "task", TASK_A, &text)])
+        .unwrap();
+    index.advance(g).unwrap();
+    assert!(index.is_current(&vault).unwrap());
+
+    // A commit the index never hears of, then one it does: it stays behind.
+    vault
+        .commit(vec![store::Change::write(&path, notes()[1].2.as_str())])
+        .unwrap();
+    let g = vault.commit(vec![]).unwrap();
+    index.advance(g).unwrap();
+    assert_eq!(index.generation().unwrap(), Some(g - 2));
+    assert!(!index.is_current(&vault).unwrap());
+
+    index.rebuild(&vault).unwrap();
+    assert!(index.is_current(&vault).unwrap());
+}
+
+#[test]
+fn an_index_whose_full_text_half_is_gone_is_behind() {
+    let (_dir, vault) = fixture();
+    let mut index = Index::open(&vault).unwrap();
+    index.rebuild(&vault).unwrap();
+    drop(index);
+    std::fs::remove_dir_all(vault.server_dir().join("search")).unwrap();
+    let index = Index::open(&vault).unwrap();
+    assert!(!index.is_current(&vault).unwrap());
+}
