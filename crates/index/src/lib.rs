@@ -29,7 +29,7 @@ use schema::{Doc, NoteReport, Schema};
 
 pub use project::mentions;
 pub use rebuild::{Failure, RebuildReport};
-pub use search::Hit;
+pub use search::{Hit, SearchPage};
 
 /// Errors from the index. A file that fails validation is not an error: a rebuild reports it.
 #[derive(Debug, thiserror::Error)]
@@ -150,6 +150,18 @@ impl Index {
     /// score, then by id. `limit` of `None` returns every hit.
     pub fn search(&self, text: &str, limit: Option<usize>) -> Result<Vec<Hit>> {
         self.search.search(text, limit)
+    }
+
+    /// One page of a full-text search: the best `size` hits strictly after `after`, the score
+    /// and id of the previous page's last hit, ordered by score and then by id, and the count of
+    /// every hit. Its cost grows with the page, not with the number of hits.
+    pub fn search_page(
+        &self,
+        text: &str,
+        after: Option<(f32, &str)>,
+        size: usize,
+    ) -> Result<SearchPage> {
+        self.search.page(text, after, size)
     }
 
     /// The files the last rebuild could not index.
