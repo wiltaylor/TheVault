@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Run a command inside the thevault-dev container, in the current directory.
+# Usage: ./dev cargo test    ./dev pnpm -C web test    ./dev just check
+set -euo pipefail
+
+image=thevault-dev
+workdir=$(pwd)
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  repo_root=$(cd "$(dirname "$0")" && pwd)
+  docker build -t "$image" -f "$repo_root/docker/dev.Dockerfile" "$repo_root/docker" >&2
+fi
+
+tty_flags=()
+if [ -t 0 ] && [ -t 1 ]; then
+  tty_flags=(-it)
+fi
+
+exec docker run --rm "${tty_flags[@]}" \
+  --network host \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp/home \
+  -e CARGO_TERM_COLOR=always \
+  -v thevault-cargo:/cargo \
+  -v thevault-pnpm:/pnpm-store \
+  -v "$workdir:$workdir" \
+  -w "$workdir" \
+  "$image" "$@"
