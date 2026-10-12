@@ -7,6 +7,7 @@
 //! references and the terms it holds.
 
 mod blocks;
+mod change;
 mod doc;
 mod encoding;
 mod note;
@@ -17,6 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub use blocks::{CONTENT_KINDS, VIEW_KINDS};
+pub use change::{FieldChanges, NoteEdit};
 pub use doc::{Doc, DocBlock, Value};
 pub use encoding::{
     PALETTE, is_date, is_datetime, is_duration, is_ident, is_ink_colour, is_name, is_palette,

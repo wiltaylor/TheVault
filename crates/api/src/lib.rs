@@ -57,7 +57,12 @@ pub fn router(writer: Arc<Writer>) -> Router {
         .route("/api/trash", get(notes::trash))
         .route("/api/trash/{id}/restore", post(notes::restore_from_trash))
         .route("/api/types", get(types::list))
-        .route("/api/types/{name}", get(types::read).put(types::put))
+        .route(
+            "/api/types/{name}",
+            get(types::read).put(types::put).delete(types::delete),
+        )
+        .route("/api/types/{name}/change", post(types::change))
+        .route("/api/flagged", get(types::flagged))
         .route("/api/tokens", get(tokens::list).post(tokens::create))
         .route("/api/tokens/{name}", delete(tokens::revoke))
         .with_state(writer)

@@ -23,6 +23,7 @@
 mod note;
 mod refs;
 mod time;
+mod types;
 
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
@@ -33,8 +34,10 @@ use schema::{Doc, Invalid, Issue, NoteLookup, NoteReport, Schema, TypeDef};
 use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, CommitStep, Vault};
 
-pub use note::{Input, doc_to_json};
+pub use note::{Input, doc_to_json, value_to_json};
 pub use refs::Referrer;
+pub use schema::NoteEdit;
+pub use types::{Flagged, PlannedNote, TypeChange, TypePlan};
 
 /// Errors from the write path.
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +73,15 @@ pub enum Error {
         /// The note's current canonical WCL, for the client to compare.
         current: String,
     },
+    /// A type that still has notes cannot be deleted.
+    #[error("type {type_name:?} still has {} notes", .notes.len())]
+    TypeHasNotes {
+        type_name: String,
+        notes: Vec<String>,
+    },
+    /// The type or its notes changed since the plan was made. Carries the plan as it is now.
+    #[error("the plan is out of date: the type or its notes changed since it was made")]
+    PlanStale(Box<TypePlan>),
     /// A delete is refused because notes refer to the note through `restrict` fields (D5).
     #[error(
         "note {id} cannot be deleted: {} refer to it with on_delete = \"restrict\"",
