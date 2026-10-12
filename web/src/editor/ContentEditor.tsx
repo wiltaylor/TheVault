@@ -87,7 +87,12 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
     tick();
     return editor?.isActive(name, attrs) ?? false;
   };
-  const chain = () => editor!.chain().focus();
+  // TipTap's focus() hands focus back a frame later, and keys typed before then are lost. Taking it
+  // now also makes the focus() in the chain a no-op.
+  const chain = () => {
+    editor!.view.focus();
+    return editor!.chain().focus();
+  };
 
   const blockType = () => {
     tick();
@@ -256,7 +261,7 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
               } else if (e.key === "Escape") {
                 e.preventDefault();
                 setLinkOpen(false);
-                editor?.commands.focus();
+                editor?.view.focus();
               }
             }}
             ref={(el) => queueMicrotask(() => el.focus())}
