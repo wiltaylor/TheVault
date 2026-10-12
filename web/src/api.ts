@@ -125,6 +125,107 @@ export interface Page {
   total: number;
 }
 
+/** Who wrote a version or deleted a note: the owner's session, a token, or a handler's script. */
+export interface Author {
+  kind: "session" | "token" | "handler";
+  name: string;
+}
+
+/** One stored version of a note, newest first in a history (D13). */
+export interface Version {
+  version: string;
+  type: string;
+  author: Author;
+  at: number;
+  current: boolean;
+}
+
+/** A deleted note waiting in the trash, with the WCL it had (D13). */
+export interface TrashEntry {
+  id: string;
+  type: string;
+  version: string;
+  wcl: string;
+  deleted_by: Author;
+  deleted_at: number;
+}
+
+/** A note holding data its type no longer describes, after a schema change (D6). */
+export interface FlaggedNote {
+  id: string;
+  type: string;
+  title: string;
+  version: string;
+  unknown: string[];
+}
+
+/** Why a script would not compile when the vault runs it in one role. */
+export interface ScriptProblem {
+  role: "before_handler" | "after_handler" | "task";
+  message: string;
+}
+
+export interface Script {
+  name: string;
+  source: string;
+  problems: ScriptProblem[];
+}
+
+/** One run of a scheduled task. Times are milliseconds since the epoch (D10). */
+export interface TaskRun {
+  id: number;
+  task: string;
+  attempt: number;
+  started: number;
+  ended: number | null;
+  outcome: "running" | "succeeded" | "failed";
+  message: string | null;
+  log: string;
+}
+
+/** A scheduled task: its file's items, when it runs next, and how its latest run went. */
+export interface Task {
+  name: string;
+  next_run: number | null;
+  retry: { attempt: number; at: number } | null;
+  running: boolean;
+  failing: boolean;
+  latest_run: TaskRun | null;
+  /** Why the task file does not check, when it does not. The items below are then absent. */
+  error?: string;
+  label?: string;
+  description?: string | null;
+  schedule?: string;
+  timezone?: string;
+  script?: string;
+  function?: string;
+  allow_domains?: string[];
+  secrets?: string[];
+  retries?: number;
+  retry_delay_ms?: number;
+  timeout_ms?: number;
+  paused?: boolean;
+  wcl?: string;
+}
+
+/** A secret's name and times. No response ever carries its value (D10). */
+export interface Secret {
+  name: string;
+  created: number;
+  updated: number;
+}
+
+export type Scope = "read" | "write" | "admin";
+
+/** An API token. Only the response that creates it carries `secret` (D11). */
+export interface Token {
+  name: string;
+  scope: Scope;
+  created: number;
+  last_used: number | null;
+  secret?: string;
+}
+
 /** A response other than 2xx, with the API's JSON error body when it sent one. */
 export class ApiError extends Error {
   constructor(
@@ -203,8 +304,19 @@ export const api = {
   /** Create a type, or replace one that has no notes. */
   putType: (name: string, wcl: string) => request<{ name: string; wcl: string }>("PUT", `/api/types/${enc(name)}`, { wcl }),
   /** Plan a change to a type, or apply the plan whose token is `plan`. */
-  changeType: (name: string, wcl: string, renames: Record<string, string>, plan?: string) =>
-    request<TypePlan>("POST", `/api/types/${enc(name)}/change`, { wcl, renames, ...(plan ? { plan } : {}) }),
+  changeType: (
+    name: string,
+    wcl: string,
+    renames: Record<string, string>,
+    plan?: string,
+    migration?: { script: string; function?: string },
+  ) =>
+    request<TypePlan>("POST", `/api/types/${enc(name)}/change`, {
+      wcl,
+      renames,
+      ...(plan ? { plan } : {}),
+      ...(migration ? { migration } : {}),
+    }),
   putTemplate: (type: string, name: string, wcl: string) =>
     request<{ wcl: string }>("PUT", `/api/types/${enc(type)}/templates/${enc(name)}`, { wcl }),
   deleteTemplate: (type: string, name: string) =>
@@ -234,6 +346,41 @@ export const api = {
     if (cursor) params.set("cursor", cursor);
     return request<Page>("GET", `/api/search?${params}`);
   },
+  /** Move a note to the trash, over version `base`. A stale base is a conflict. */
+  deleteNote: (id: string, base: string) =>
+    request<unknown>("DELETE", `/api/notes/${enc(id)}?base_version=${enc(base)}`),
+  history: async (id: string) =>
+    (await request<{ versions: Version[] }>("GET", `/api/notes/${enc(id)}/history`)).versions,
+  /** A stored version of a note, in the same form as the note itself. */
+  version: (id: string, version: string) =>
+    request<Note & { author: Author; at: number }>("GET", `/api/notes/${enc(id)}/history/${enc(version)}`),
+  /** Make `version` the note's current content again, over current version `base`. */
+  restoreVersion: (id: string, version: string, base: string) =>
+    request<Note>("POST", `/api/notes/${enc(id)}/restore`, { version, base_version: base }),
+  trash: async () => (await request<{ notes: TrashEntry[] }>("GET", "/api/trash")).notes,
+  restoreFromTrash: (id: string) => request<Note>("POST", `/api/trash/${enc(id)}/restore`),
+  flagged: async () => (await request<{ notes: FlaggedNote[] }>("GET", "/api/flagged")).notes,
+  scripts: async () => (await request<{ scripts: string[] }>("GET", "/api/scripts")).scripts,
+  script: (name: string) => request<Script>("GET", `/api/scripts/${enc(name)}`),
+  /** Store a script as sent. The answer says why it would not compile, if it would not. */
+  putScript: (name: string, source: string) => request<Script>("PUT", `/api/scripts/${enc(name)}`, { source }),
+  deleteScript: (name: string) => request<unknown>("DELETE", `/api/scripts/${enc(name)}`),
+  tasks: async () => (await request<{ tasks: Task[] }>("GET", "/api/tasks")).tasks,
+  task: (name: string) => request<Task>("GET", `/api/tasks/${enc(name)}`),
+  putTask: (name: string, wcl: string) => request<Task>("PUT", `/api/tasks/${enc(name)}`, { wcl }),
+  deleteTask: (name: string) => request<unknown>("DELETE", `/api/tasks/${enc(name)}`),
+  taskRuns: async (name: string, limit = 50) =>
+    (await request<{ runs: TaskRun[] }>("GET", `/api/tasks/${enc(name)}/runs?limit=${limit}`)).runs,
+  /** Run a task now, paused or not. Answers once the run ends. */
+  runTask: (name: string) => request<TaskRun>("POST", `/api/tasks/${enc(name)}/run`),
+  secrets: async () => (await request<{ secrets: Secret[] }>("GET", "/api/secrets")).secrets,
+  /** Store or replace a secret's value. It is never read back. */
+  putSecret: (name: string, value: string) => request<Secret>("PUT", `/api/secrets/${enc(name)}`, { value }),
+  deleteSecret: (name: string) => request<unknown>("DELETE", `/api/secrets/${enc(name)}`),
+  tokens: async () => (await request<{ tokens: Token[] }>("GET", "/api/tokens")).tokens,
+  /** Create a token. The answer is the only time its secret is shown. */
+  createToken: (name: string, scope: Scope) => request<Token>("POST", "/api/tokens", { name, scope }),
+  revokeToken: (name: string) => request<void>("DELETE", `/api/tokens/${enc(name)}`),
   assets: async () => (await request<{ assets: Asset[] }>("GET", "/api/assets")).assets,
   /** Upload `file` as a new asset. The body is the file's bytes, unchanged. */
   uploadAsset: (file: File) =>

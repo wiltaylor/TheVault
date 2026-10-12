@@ -52,42 +52,67 @@ export function Shell(props: ParentProps) {
             Log out
           </button>
         </header>
-        <nav id="sidebar" class="sidebar" aria-label="Types">
-          <h2>Types</h2>
-          <ul>
-            <For each={types()}>
-              {(t) => (
-                <li>
-                  <A
-                    href={`/types/${t.name}`}
-                    activeClass="active"
-                    data-colour={t.colour ?? undefined}
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    {t.plural}
-                  </A>
-                </li>
-              )}
-            </For>
-          </ul>
-          <ul class="sidebar-admin">
-            <li>
-              <A href="/types/new" activeClass="active" end onClick={() => setMenuOpen(false)}>
-                New type
-              </A>
-            </li>
-            <li>
-              <A href="/taxonomies" activeClass="active" onClick={() => setMenuOpen(false)}>
-                Taxonomies
-              </A>
-            </li>
-            <li>
-              <A href="/settings" activeClass="active" onClick={() => setMenuOpen(false)}>
-                Settings
-              </A>
-            </li>
-          </ul>
-        </nav>
+        <div id="sidebar" class="sidebar">
+          <nav aria-label="Types">
+            <h2>Types</h2>
+            <ul>
+              <For each={types()}>
+                {(t) => (
+                  <li>
+                    <A
+                      href={`/types/${t.name}`}
+                      activeClass="active"
+                      data-colour={t.colour ?? undefined}
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      {t.plural}
+                    </A>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <ul class="sidebar-admin">
+              <li>
+                <A href="/types/new" activeClass="active" end onClick={() => setMenuOpen(false)}>
+                  New type
+                </A>
+              </li>
+              <li>
+                <A href="/taxonomies" activeClass="active" onClick={() => setMenuOpen(false)}>
+                  Taxonomies
+                </A>
+              </li>
+              <li>
+                <A href="/settings" activeClass="active" onClick={() => setMenuOpen(false)}>
+                  Settings
+                </A>
+              </li>
+            </ul>
+          </nav>
+          <nav aria-label="Vault">
+            <h2 class="sidebar-admin">Vault</h2>
+            <ul>
+              <For
+                each={[
+                  ["/scripts", "Scripts"],
+                  ["/tasks", "Tasks"],
+                  ["/secrets", "Secrets"],
+                  ["/tokens", "API tokens"],
+                  ["/trash", "Trash"],
+                  ["/flagged", "Flagged notes"],
+                ]}
+              >
+                {([href, label]) => (
+                  <li>
+                    <A href={href!} activeClass="active" onClick={() => setMenuOpen(false)}>
+                      {label}
+                    </A>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </nav>
+        </div>
         <div class="scrim" onClick={() => setMenuOpen(false)} />
         <main class="content">{props.children}</main>
       </div>

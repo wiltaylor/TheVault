@@ -157,8 +157,69 @@ fn a_fault_after_the_commit_point_leaves_both_sides_changed_on_reopen() {
         .unwrap_err();
     drop(w);
 
-    open(root);
+    let w = open(root);
     assert!(file(root, "task", &task).contains(&project));
     assert!(file(root, "project", &project).contains(&task));
     assert!(!root.join(".vault/txn").exists());
+
+    // state.db caught up with the files: each note's current version is its file's text.
+    for (type_name, id) in [("task", &task), ("project", &project)] {
+        let current = w.current_version(id).unwrap().unwrap();
+        let version = w.version(id, &current).unwrap();
+        assert_eq!(version.content, file(root, type_name, id), "{type_name}");
+        assert_eq!(version.author, Author::Session("recovery".into()));
+        assert_eq!(w.history(id).unwrap().len(), 2, "{type_name}");
+    }
+    assert_ne!(w.current_version(&task).unwrap().unwrap(), base);
+
+    // The recovered version is a base a client can write against.
+    let current = w.current_version(&task).unwrap().unwrap();
+    w.update(
+        &task,
+        &wcl("title = \"Parse files\"\n"),
+        Some(&current),
+        &author(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_fault_after_the_commit_point_of_a_delete_trashes_the_note_on_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let (w, _project, task) = setup(root);
+    let base = w.current_version(&task).unwrap().unwrap();
+
+    fail_at(&w, CommitStep::Applied(0));
+    w.delete(&task, Some(&base), &author()).unwrap_err();
+    drop(w);
+
+    let w = open(root);
+    assert!(!root.join(format!("notes/task/{task}.wcl")).exists());
+    assert_eq!(w.current_version(&task).unwrap(), None);
+    let trash = w.trash().unwrap();
+    assert_eq!(trash.len(), 1);
+    assert_eq!(trash[0].note_id, task);
+    assert_eq!(trash[0].version, base);
+    assert_eq!(trash[0].deleted_by, Author::Session("recovery".into()));
+}
+
+#[test]
+fn reopening_a_vault_with_nothing_to_recover_records_no_versions() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let (w, project, task) = setup(root);
+    let base = w.current_version(&task).unwrap().unwrap();
+    let link = format!("title = \"Parse\"\nproject = \"{project}\"\n");
+    w.update(&task, &wcl(&link), Some(&base), &author())
+        .unwrap();
+    let before = (w.history(&project).unwrap(), w.history(&task).unwrap());
+    drop(w);
+
+    let w = open(root);
+    assert_eq!(
+        (w.history(&project).unwrap(), w.history(&task).unwrap()),
+        before
+    );
+    assert!(w.trash().unwrap().is_empty());
 }
