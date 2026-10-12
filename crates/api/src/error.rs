@@ -32,10 +32,32 @@ impl IntoResponse for ApiError {
     }
 }
 
+impl ApiError {
+    fn from_state(e: state::Error) -> ApiError {
+        use state::Error as S;
+        let message = e.to_string();
+        let (status, code) = match &e {
+            S::TokenExists(_) => (StatusCode::CONFLICT, "token_exists"),
+            S::UnknownToken(_) | S::UnknownSecret(_) | S::UnknownNote(_) | S::NotInTrash(_) => {
+                (StatusCode::NOT_FOUND, "not_found")
+            }
+            S::UnknownScope(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+        };
+        ApiError::new(status, code, message)
+    }
+}
+
+impl From<state::Error> for ApiError {
+    fn from(e: state::Error) -> ApiError {
+        ApiError::from_state(e)
+    }
+}
+
 impl From<Error> for ApiError {
     fn from(e: Error) -> ApiError {
         let message = e.to_string();
-        let (status, body) = match &e {
+        let (status, body) = match e {
             Error::Parse { file, .. } => (
                 StatusCode::BAD_REQUEST,
                 json!({ "error": "parse", "file": file }),
@@ -55,31 +77,13 @@ impl From<Error> for ApiError {
                         .collect::<Vec<_>>(),
                 }),
             ),
-            Error::Invalids(files) => (
-                StatusCode::BAD_REQUEST,
-                json!({
-                    "error": "invalid",
-                    "files": files.iter()
-                        .map(|f| json!({
-                            "file": f.file,
-                            "issues": f.issues.iter()
-                                .map(|i| json!({ "at": i.at, "message": i.message }))
-                                .collect::<Vec<_>>(),
-                        }))
-                        .collect::<Vec<_>>(),
-                }),
-            ),
-            Error::TypeExists(t) => (
-                StatusCode::CONFLICT,
-                json!({ "error": "type_exists", "type": t }),
-            ),
-            Error::TypeInUse { type_name, notes } => (
+            Error::TypeHasNotes { type_name, notes } => (
                 StatusCode::CONFLICT,
                 json!({ "error": "type_in_use", "type": type_name, "notes": notes }),
             ),
             Error::PlanStale(plan) => (
                 StatusCode::CONFLICT,
-                json!({ "error": "plan_stale", "plan": crate::types::plan_json(plan, false) }),
+                json!({ "error": "plan_stale", "plan": crate::types::plan_json(&plan, false) }),
             ),
             Error::UnknownType(t) => (
                 StatusCode::BAD_REQUEST,
@@ -105,11 +109,38 @@ impl From<Error> for ApiError {
                     "current": current,
                 }),
             ),
+            Error::Restricted { id, referrers } => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "restricted",
+                    "id": id,
+                    "referrers": referrers.iter()
+                        .map(|r| json!({ "id": r.id, "type": r.type_name, "field": r.field }))
+                        .collect::<Vec<_>>(),
+                }),
+            ),
             Error::Rejected(_) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({ "error": "rejected" }),
             ),
-            Error::Schema(_) | Error::Store(_) | Error::State(_) | Error::Index(_) => (
+            Error::InvalidType(e) => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_type",
+                    "failures": e.0.iter().map(|inv| json!({
+                        "file": inv.file,
+                        "issues": inv.issues.iter()
+                            .map(|i| json!({ "at": i.at, "message": i.message }))
+                            .collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                }),
+            ),
+            Error::TypeInUse(t) => (
+                StatusCode::CONFLICT,
+                json!({ "error": "type_in_use", "type": t }),
+            ),
+            Error::State(e) => return ApiError::from_state(e),
+            Error::Schema(_) | Error::Store(_) | Error::Index(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": "internal" }),
             ),

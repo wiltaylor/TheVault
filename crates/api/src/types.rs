@@ -1,11 +1,11 @@
-//! Type create, change and delete, and the flagged-note listing (D6).
+//! Type definitions, planned schema changes and flagged notes (D6). Every route but the reads
+//! needs the `admin` scope (D11).
 //!
-//! These change the schema, so they need the `admin` scope once tokens land (D11).
-//!
-//! - `POST /api/types` takes `{ "name", "wcl" }` and creates `types/<name>.wcl`.
-//! - `PUT /api/types/{name}` takes `{ "wcl", "renames"?, "plan"? }`. Without `plan` it returns the
-//!   plan and changes nothing. With the `plan` token from that response it applies the change as
-//!   one commit, or answers 409 `plan_stale` with the plan as it is now.
+//! - `PUT /api/types/{name}` creates a type, or replaces one that has no notes, at once.
+//! - `POST /api/types/{name}/change` takes `{ "wcl", "renames"?, "plan"? }` and changes a type
+//!   that has notes. Without `plan` it returns the plan and changes nothing. With the `plan` token
+//!   from that response it applies the change as one commit, or answers 409 `plan_stale` with the
+//!   plan as it is now.
 //! - `DELETE /api/types/{name}` deletes a type that has no notes.
 //! - `GET /api/flagged` lists notes holding data their type no longer describes.
 
@@ -13,23 +13,64 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use writer::{NoteEdit, TypeChange, TypePlan, Writer};
 
-use crate::notes::blocking;
-use crate::{ApiError, Caller};
+use crate::notes::{is_json, wants_wcl};
+use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CreateBody {
-    name: String,
-    wcl: String,
+fn type_response(headers: &HeaderMap, name: &str, wcl: String) -> Response {
+    if wants_wcl(headers) {
+        let mut res = wcl.into_response();
+        res.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        );
+        return res;
+    }
+    Json(json!({ "name": name, "wcl": wcl })).into_response()
+}
+
+/// `GET /api/types/{name}`: the type's definition as stored.
+pub async fn read(
+    State(w): Shared,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let n = name.clone();
+    let wcl = blocking(w, move |w| w.read_type(&n)).await?;
+    Ok(type_response(&headers, &name, wcl))
+}
+
+/// `PUT /api/types/{name}`: create or replace a type from its WCL, sent as text or as
+/// `{ "wcl": "..." }`.
+pub async fn put(
+    State(w): Shared,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let source = if is_json(&headers) {
+        let value: Value = serde_json::from_slice(&body)
+            .map_err(|e| ApiError::bad_request(format!("the body is not JSON: {e}")))?;
+        match value.as_object().map(|o| (o.len(), o.get("wcl"))) {
+            Some((1, Some(Value::String(s)))) => s.clone(),
+            _ => return Err(ApiError::bad_request("send `{ \"wcl\": \"...\" }`")),
+        }
+    } else {
+        String::from_utf8(body.to_vec())
+            .map_err(|_| ApiError::bad_request("the WCL body is not UTF-8"))?
+    };
+    let n = name.clone();
+    let wcl = blocking(w, move |w| w.put_type(&n, &source)).await?;
+    Ok(type_response(&headers, &name, wcl))
 }
 
 #[derive(Deserialize)]
@@ -41,16 +82,7 @@ pub struct ChangeBody {
     plan: Option<String>,
 }
 
-pub async fn create(State(w): Shared, Json(body): Json<CreateBody>) -> Result<Response, ApiError> {
-    let name = body.name.clone();
-    let wcl = blocking(w, move |w| w.create_type(&body.name, &body.wcl)).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "name": name, "wcl": wcl })),
-    )
-        .into_response())
-}
-
+/// `POST /api/types/{name}/change`: plan a change, or apply a planned one.
 pub async fn change(
     State(w): Shared,
     Caller(author): Caller,
@@ -80,6 +112,7 @@ pub async fn change(
     Ok(Json(out))
 }
 
+/// `DELETE /api/types/{name}`.
 pub async fn delete(State(w): Shared, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
     let name2 = name.clone();
     blocking(w, move |w| w.delete_type(&name2))
@@ -88,6 +121,7 @@ pub async fn delete(State(w): Shared, Path(name): Path<String>) -> Result<Json<V
     Ok(Json(json!({ "name": name, "deleted": true })))
 }
 
+/// `GET /api/flagged`.
 pub async fn flagged(State(w): Shared) -> Result<Json<Value>, ApiError> {
     let notes = blocking(w, |w| w.flagged()).await?;
     let notes: Vec<Value> = notes

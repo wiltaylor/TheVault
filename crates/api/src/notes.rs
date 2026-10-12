@@ -12,20 +12,9 @@ use serde_json::{Value, json};
 use state::Author;
 use writer::{Event, Input, Saved, Writer, doc_to_json, note_path};
 
-use crate::{ApiError, Caller};
+use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
-
-/// Run blocking writer work off the async runtime.
-pub(crate) async fn blocking<T: Send + 'static>(
-    writer: Arc<Writer>,
-    f: impl FnOnce(&Writer) -> writer::Result<T> + Send + 'static,
-) -> Result<T, ApiError> {
-    tokio::task::spawn_blocking(move || f(&writer))
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
-        .map_err(ApiError::from)
-}
 
 #[derive(Deserialize)]
 pub struct TypeQuery {
@@ -45,7 +34,7 @@ struct Submitted {
     type_name: Option<String>,
 }
 
-fn is_json(headers: &HeaderMap) -> bool {
+pub(crate) fn is_json(headers: &HeaderMap) -> bool {
     headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -101,7 +90,7 @@ fn submitted(headers: &HeaderMap, body: &Bytes) -> Result<Submitted, ApiError> {
 }
 
 /// Whether the client asked for the note as WCL text rather than JSON.
-fn wants_wcl(headers: &HeaderMap) -> bool {
+pub(crate) fn wants_wcl(headers: &HeaderMap) -> bool {
     let Some(accept) = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()) else {
         return false;
     };
@@ -175,8 +164,21 @@ fn note_response(
     res
 }
 
+/// A saved note. `also` lists the other notes the write changed, without their WCL.
 fn saved_response(status: StatusCode, headers: &HeaderMap, s: Saved) -> Response {
-    let extra = json!({ "event": event_name(s.event) });
+    let also: Vec<Value> = s
+        .also
+        .iter()
+        .map(|o| {
+            json!({
+                "id": o.id,
+                "type": o.type_name,
+                "event": event_name(o.event),
+                "version": o.version,
+            })
+        })
+        .collect();
+    let extra = json!({ "event": event_name(s.event), "also": also });
     note_response(
         status,
         headers,
@@ -282,7 +284,7 @@ pub async fn delete(
 
 pub async fn history(State(w): Shared, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
     let id2 = id.clone();
-    let (versions, current) = blocking(w, move |w| {
+    let (versions, current) = blocking(w, move |w| -> writer::Result<_> {
         let versions = w.history(&id2)?;
         Ok((versions, w.current_version(&id2)?))
     })

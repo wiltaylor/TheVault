@@ -1,6 +1,7 @@
-//! Type create, change and delete, and the flagged-note listing (D6).
+//! Planned type changes, type delete, and the flagged-note listing (D6).
 //!
-//! A change to an existing type is two calls. [`Writer::plan_type_change`] works out every note
+//! [`Writer::put_type`] creates a type, or replaces one that has no notes. A change to a type that
+//! has notes is two calls. [`Writer::plan_type_change`] works out every note
 //! the change edits and returns a [`TypePlan`] without touching a file. [`Writer::apply_type_change`]
 //! takes the same change with the plan's token, plans it again, and commits the type file and
 //! every edited note as one commit only when the new plan's token matches. The token covers the
@@ -14,12 +15,16 @@
 use std::collections::BTreeMap;
 
 use index::Update;
-use schema::{Doc, FieldChanges, Invalid, Issue, NoteEdit, NoteReport, Schema, TypeDef, Value};
+use schema::{
+    Doc, FieldChanges, Invalid, Issue, NoteEdit, NoteReport, Schema, SchemaError, TypeDef, Value,
+};
 use sha2::{Digest, Sha256};
 use state::Author;
 use store::Change;
 
-use crate::{Error, Event, Inner, Input, Lookup, Result, Saved, Writer, note, note_path, time};
+use crate::{
+    Error, Event, Inner, Input, Lookup, Result, Saved, Writer, note, note_path, time, type_path,
+};
 
 /// A change to an existing type, as the client submitted it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -77,22 +82,6 @@ struct Worked {
 }
 
 impl Writer {
-    /// Create `types/<name>.wcl`. Returns the canonical text written.
-    pub fn create_type(&self, name: &str, wcl: &str) -> Result<String> {
-        let mut inner = self.lock();
-        if inner.schema.type_def(name).is_some() || self.vault.read(&type_path(name)).is_ok() {
-            return Err(Error::TypeExists(name.to_owned()));
-        }
-        let (ty, text) = parse_type(name, wcl)?;
-        let mut types: Vec<TypeDef> = inner.schema.types().cloned().collect();
-        types.push(ty);
-        let schema = rebuild_schema(&inner.schema, types)?;
-        self.vault
-            .commit(vec![Change::write(type_path(name), text.as_bytes())])?;
-        install(&mut inner, schema)?;
-        Ok(text)
-    }
-
     /// Plan a change to type `name` without applying it.
     pub fn plan_type_change(&self, name: &str, change: &TypeChange) -> Result<TypePlan> {
         let inner = self.lock();
@@ -160,6 +149,7 @@ impl Writer {
                     event: Event::Update,
                     version: v.token,
                     wcl: text,
+                    also: Vec::new(),
                 });
             }
             updates.push(Update::Put {
@@ -183,7 +173,7 @@ impl Writer {
         }
         let notes = self.note_ids(name)?;
         if !notes.is_empty() {
-            return Err(Error::TypeInUse {
+            return Err(Error::TypeHasNotes {
                 type_name: name.to_owned(),
                 notes,
             });
@@ -246,8 +236,8 @@ impl Writer {
             .ok_or_else(|| Error::UnknownType(name.to_owned()))?;
         let old_text = self.vault.read_text(&type_path(name))?;
         let (new, text) = parse_type(name, &change.wcl)?;
-        let rules =
-            FieldChanges::new(old, &new, &change.renames).map_err(|e| Error::Invalids(vec![e]))?;
+        let rules = FieldChanges::new(old, &new, &change.renames)
+            .map_err(|e| Error::InvalidType(SchemaError(vec![e])))?;
         let types = inner
             .schema
             .types()
@@ -316,7 +306,7 @@ impl Writer {
             notes.push((id, after, !edits.is_empty()));
         }
         if !invalid.is_empty() {
-            return Err(Error::Invalids(invalid));
+            return Err(Error::InvalidType(SchemaError(invalid)));
         }
         let token = hasher
             .finalize()
@@ -360,30 +350,26 @@ impl Writer {
     }
 }
 
-fn type_path(name: &str) -> String {
-    format!("types/{name}.wcl")
-}
-
 /// Check a submitted type file: a valid name, data-only, and a valid definition on its own.
 /// Returns the definition and the file's canonical text.
 fn parse_type(name: &str, wcl: &str) -> Result<(TypeDef, String)> {
     if !schema::is_name(name) {
-        return Err(Error::Invalids(vec![Invalid {
+        return Err(Error::InvalidType(SchemaError(vec![Invalid {
             file: type_path(name),
             issues: vec![Issue::new(
                 "file",
                 format!("{name:?} is not a valid type name"),
             )],
-        }]));
+        }])));
     }
     let text = store::canonical(wcl, &type_path(name))?;
-    let ty = TypeDef::parse(name, &text).map_err(|e| Error::Invalids(vec![e]))?;
+    let ty = TypeDef::parse(name, &text).map_err(|e| Error::InvalidType(SchemaError(vec![e])))?;
     Ok((ty, text))
 }
 
 /// The schema with `types` in place of its types, checked across types and taxonomies.
 fn rebuild_schema(current: &Schema, types: Vec<TypeDef>) -> Result<Schema> {
-    Schema::new(types, current.taxonomies().cloned().collect()).map_err(|e| Error::Invalids(e.0))
+    Schema::new(types, current.taxonomies().cloned().collect()).map_err(Error::InvalidType)
 }
 
 /// Make `schema` the writer's schema.

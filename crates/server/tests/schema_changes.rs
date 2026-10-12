@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use reqwest::blocking::{Client, RequestBuilder, Response};
-use reqwest::header::{CONTENT_TYPE, IF_MATCH};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, IF_MATCH};
 use serde_json::{Value, json};
 use testkit::TestServer;
 
@@ -50,10 +50,14 @@ struct Api {
 
 impl Api {
     fn start() -> Api {
-        Api {
-            server: TestServer::start_seeded(seed),
-            client: Client::new(),
-        }
+        let server = TestServer::start_seeded(seed);
+        let mut auth = HeaderMap::new();
+        auth.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", server.admin_token())).unwrap(),
+        );
+        let client = Client::builder().default_headers(auth).build().unwrap();
+        Api { server, client }
     }
 
     fn get(&self, path: &str) -> RequestBuilder {
@@ -97,7 +101,7 @@ impl Api {
     /// Plan a change to `type_name`: the response to the first call.
     fn plan(&self, type_name: &str, wcl: &str, renames: &[(&str, &str)]) -> Response {
         let renames: BTreeMap<&str, &str> = renames.iter().copied().collect();
-        self.put(&format!("/api/types/{type_name}"))
+        self.post(&format!("/api/types/{type_name}/change"))
             .json(&json!({ "wcl": wcl, "renames": renames }))
             .send()
             .unwrap()
@@ -106,7 +110,7 @@ impl Api {
     /// Apply a planned change: the second call, carrying the plan token.
     fn apply(&self, type_name: &str, wcl: &str, renames: &[(&str, &str)], plan: &str) -> Response {
         let renames: BTreeMap<&str, &str> = renames.iter().copied().collect();
-        self.put(&format!("/api/types/{type_name}"))
+        self.post(&format!("/api/types/{type_name}/change"))
             .json(&json!({ "wcl": wcl, "renames": renames, "plan": plan }))
             .send()
             .unwrap()
@@ -176,13 +180,13 @@ fn a_new_required_field_without_a_default_is_rejected() {
 
     let wcl = task_with("field owner {\n  kind = \"string\"\n  required = true\n}");
     let err = expect(api.plan("task", &wcl, &[]), 400);
-    assert_eq!(err["error"], "invalid");
-    assert_eq!(err["files"][0]["file"], "types/task.wcl");
-    assert_eq!(err["files"][0]["issues"][0]["at"], "field owner.default");
+    assert_eq!(err["error"], "invalid_type");
+    assert_eq!(err["failures"][0]["file"], "types/task.wcl");
+    assert_eq!(err["failures"][0]["issues"][0]["at"], "field owner.default");
 
     // A plan token cannot force it through either.
     let err = expect(api.apply("task", &wcl, &[], "anything"), 400);
-    assert_eq!(err["error"], "invalid");
+    assert_eq!(err["error"], "invalid_type");
 
     assert_eq!(api.type_file("task").unwrap(), TASK_TYPE);
     assert_eq!(api.note_files(&ids), before);
@@ -367,11 +371,11 @@ fn types_are_created_and_deleted() {
     let project = "label = \"Project\"\n\nfield code {\n  kind     = \"string\"\n  required = true\n}\n\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n";
 
     let created = expect(
-        api.post("/api/types")
-            .json(&json!({ "name": "project", "wcl": project }))
+        api.put("/api/types/project")
+            .json(&json!({ "wcl": project }))
             .send()
             .unwrap(),
-        201,
+        200,
     );
     assert_eq!(created["name"], "project");
     assert_eq!(api.type_file("project").as_deref(), Some(project));
@@ -387,20 +391,13 @@ fn types_are_created_and_deleted() {
         .unwrap();
     assert_eq!(expect(res, 400)["issues"][0]["at"], "code");
 
-    // A type that exists cannot be created again, and a broken one not at all.
+    // Once it has notes, replacing it outright is refused in favour of a planned change.
     let res = api
-        .post("/api/types")
-        .json(&json!({ "name": "project", "wcl": project }))
+        .put("/api/types/project")
+        .json(&json!({ "wcl": project }))
         .send()
         .unwrap();
-    assert_eq!(expect(res, 409)["error"], "type_exists");
-    let res = api
-        .post("/api/types")
-        .json(&json!({ "name": "broken", "wcl": "label = 3\n" }))
-        .send()
-        .unwrap();
-    assert_eq!(expect(res, 400)["error"], "invalid");
-    assert!(api.type_file("broken").is_none());
+    assert_eq!(expect(res, 409)["error"], "type_in_use");
 
     // A type with notes is not deleted.
     let in_use = expect(api.delete("/api/types/project").send().unwrap(), 409);
@@ -427,6 +424,10 @@ fn types_are_created_and_deleted() {
     assert_eq!(expect(res, 400)["error"], "unknown_type");
     expect(api.delete("/api/types/project").send().unwrap(), 404);
     expect(api.plan("project", project, &[]), 404);
+
+    // A change through the plan route to a type with no notes is an empty plan.
+    let plan = expect(api.plan("task", TASK_TYPE, &[]), 200);
+    assert_eq!(plan["changes"], json!([]));
 }
 
 #[test]
@@ -440,8 +441,8 @@ fn a_change_that_would_break_existing_notes_is_refused() {
     );
 
     let err = expect(api.plan("task", &wcl, &[]), 400);
-    assert_eq!(err["error"], "invalid");
-    let mut files: Vec<String> = err["files"]
+    assert_eq!(err["error"], "invalid_type");
+    let mut files: Vec<String> = err["failures"]
         .as_array()
         .unwrap()
         .iter()
@@ -453,7 +454,7 @@ fn a_change_that_would_break_existing_notes_is_refused() {
         .map(|id| format!("notes/task/{id}.wcl"))
         .collect();
     assert_eq!(files, expected);
-    assert_eq!(err["files"][0]["issues"][0]["at"], "estimate");
+    assert_eq!(err["failures"][0]["issues"][0]["at"], "estimate");
     assert_eq!(api.note_files(&ids), before);
     assert_eq!(api.type_file("task").unwrap(), TASK_TYPE);
 }

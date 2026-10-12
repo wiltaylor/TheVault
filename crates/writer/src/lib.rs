@@ -16,21 +16,26 @@
 //! 10. [`Hooks::after`]: queue the `after_*` handlers.
 //! 11. Return the canonical WCL and the new version of every changed note (D21).
 //!
-//! Steps 5, 6 and 10 belong to later work. [`NoHooks`] leaves them empty.
+//! Step 6 is built in: [`refs`] works out the reverse sides of two-way and peer references and
+//! applies `on_delete`. [`Hooks::side_effects`] can add more. Steps 5 and 10 belong to later
+//! work, and [`NoHooks`] leaves them empty.
 
 mod note;
+mod refs;
 mod time;
 mod types;
 
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use index::{Index, Update};
 use schema::{Doc, Invalid, Issue, NoteLookup, NoteReport, Schema, TypeDef};
 use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
-use store::{Change, Vault};
+use store::{Change, CommitStep, Vault};
 
 pub use note::{Input, doc_to_json, value_to_json};
+pub use refs::Referrer;
 pub use schema::NoteEdit;
 pub use types::{Flagged, PlannedNote, TypeChange, TypePlan};
 
@@ -68,25 +73,36 @@ pub enum Error {
         /// The note's current canonical WCL, for the client to compare.
         current: String,
     },
-    /// Definition or note files that a type change would leave invalid.
-    #[error("{}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))]
-    Invalids(Vec<Invalid>),
-    #[error("type {0:?} already exists")]
-    TypeExists(String),
     /// A type that still has notes cannot be deleted.
     #[error("type {type_name:?} still has {} notes", .notes.len())]
-    TypeInUse {
+    TypeHasNotes {
         type_name: String,
         notes: Vec<String>,
     },
     /// The type or its notes changed since the plan was made. Carries the plan as it is now.
     #[error("the plan is out of date: the type or its notes changed since it was made")]
     PlanStale(Box<TypePlan>),
+    /// A delete is refused because notes refer to the note through `restrict` fields (D5).
+    #[error(
+        "note {id} cannot be deleted: {} refer to it with on_delete = \"restrict\"",
+        describe_referrers(.referrers)
+    )]
+    Restricted {
+        id: String,
+        referrers: Vec<Referrer>,
+    },
     /// A `before_*` handler refused the change (D9).
     #[error("{0}")]
     Rejected(String),
     #[error("the vault's type definitions are invalid: {0}")]
     Schema(#[from] schema::SchemaError),
+    /// A submitted type definition does not validate, alone or against the rest of the schema.
+    #[error("{0}")]
+    InvalidType(schema::SchemaError),
+    /// Replacing this type could change its existing notes, which needs a planned schema change
+    /// (D6).
+    #[error("type {0:?} has notes, so changing it needs a planned schema change")]
+    TypeInUse(String),
     #[error(transparent)]
     Store(store::Error),
     #[error(transparent)]
@@ -141,6 +157,9 @@ pub struct Saved {
     pub version: String,
     /// The canonical WCL now on disk, or for a delete the WCL that went to the trash.
     pub wcl: String,
+    /// The other notes the same write changed: reverse references and `on_delete` effects
+    /// (D4, D5). Empty on those other notes themselves.
+    pub also: Vec<Saved>,
 }
 
 /// The extension points of the write path. Every method defaults to doing nothing.
@@ -152,8 +171,8 @@ pub trait Hooks: Send + Sync {
         Ok(())
     }
 
-    /// Step 6: the changes a write implies beyond what was submitted: reverse references (D4) and
-    /// `on_delete` rules (D5). They join the same commit.
+    /// Step 6: changes a write implies beyond what was submitted and beyond the built-in reverse
+    /// references (D4) and `on_delete` rules (D5). They join the same commit.
     fn side_effects(&self, changes: &[NoteChange]) -> Result<Vec<NoteChange>> {
         let _ = changes;
         Ok(Vec::new())
@@ -205,10 +224,14 @@ pub struct Writer {
     inner: Mutex<Inner>,
 }
 
+/// Called at each step of a commit; breaking stops the commit the way a crash would.
+pub type CommitHook = Box<dyn FnMut(CommitStep) -> ControlFlow<()> + Send>;
+
 /// What every write changes, behind one lock, so writes run one at a time.
 struct Inner {
     schema: Schema,
     index: Index,
+    commit_hook: Option<CommitHook>,
 }
 
 impl Writer {
@@ -222,7 +245,11 @@ impl Writer {
             state,
             clock: Arc::new(SystemClock),
             hooks: Box::new(NoHooks),
-            inner: Mutex::new(Inner { schema, index }),
+            inner: Mutex::new(Inner {
+                schema,
+                index,
+                commit_hook: None,
+            }),
         })
     }
 
@@ -238,6 +265,13 @@ impl Writer {
         self
     }
 
+    /// Pass every commit's steps to `hook`, which can stop a commit part way. For fault-injection
+    /// tests.
+    #[doc(hidden)]
+    pub fn set_commit_hook(&self, hook: Option<CommitHook>) {
+        self.lock().commit_hook = hook;
+    }
+
     pub fn vault(&self) -> &Vault {
         &self.vault
     }
@@ -251,6 +285,12 @@ impl Writer {
         self.lock().schema.clone()
     }
 
+    /// Run `f` over the index and schema, with writes held off until it returns.
+    pub fn read_index<T>(&self, f: impl FnOnce(&Index, &Schema) -> T) -> T {
+        let inner = self.lock();
+        f(&inner.index, &inner.schema)
+    }
+
     /// Reload the types and taxonomies from the vault and refresh the index's terms.
     pub fn reload_schema(&self) -> Result<()> {
         let schema = Schema::load(&self.vault)?;
@@ -258,6 +298,76 @@ impl Writer {
         inner.index.set_schema(&schema)?;
         inner.schema = schema;
         Ok(())
+    }
+
+    /// The canonical text of `types/<name>.wcl`.
+    pub fn read_type(&self, name: &str) -> Result<String> {
+        let inner = self.lock();
+        if !inner_has_type(&inner, name) {
+            return Err(Error::UnknownType(name.to_owned()));
+        }
+        Ok(self.vault.read_text(&type_path(name))?)
+    }
+
+    /// Create type `name`, or replace it while it has no notes, and reload the schema. Changing a
+    /// type that has notes goes through a planned schema change instead (D6).
+    pub fn put_type(&self, name: &str, source: &str) -> Result<String> {
+        let mut inner = self.lock();
+        let path = type_path(name);
+        let invalid = |message: String| {
+            Error::InvalidType(schema::SchemaError(vec![Invalid {
+                file: path.clone(),
+                issues: vec![Issue::new("type", message)],
+            }]))
+        };
+        if !schema::is_name(name) {
+            return Err(invalid(format!("{name:?} is not a type name")));
+        }
+        let text = store::canonical(source, &path)?;
+        if inner_has_type(&inner, name) {
+            let has_notes = inner
+                .index
+                .connection()
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM notes WHERE type = ?1)",
+                    [name],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(index::Error::from)?;
+            if has_notes {
+                return Err(Error::TypeInUse(name.to_owned()));
+            }
+        }
+        let mut types = self.definitions("types")?;
+        types.retain(|(n, _)| n != name);
+        types.push((name.to_owned(), text.clone()));
+        let taxonomies = self.definitions("taxonomies")?;
+        let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
+            .map_err(Error::InvalidType)?;
+        self.vault.commit(vec![Change::write(path, text.clone())])?;
+        inner.index.set_schema(&schema)?;
+        inner.schema = schema;
+        Ok(text)
+    }
+
+    /// The `(stem, text)` of every definition file in `dir`.
+    fn definitions(&self, dir: &str) -> Result<Vec<(String, String)>> {
+        let root = self.vault.root().join(dir);
+        let entries = std::fs::read_dir(&root).map_err(|source| {
+            Error::Store(store::Error::Io {
+                path: root.clone(),
+                source,
+            })
+        })?;
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(stem) = file_name.strip_suffix(".wcl") {
+                let text = self.vault.read_text(&format!("{dir}/{file_name}"))?;
+                out.push((stem.to_owned(), text));
+            }
+        }
+        Ok(out)
     }
 
     /// Create a note of `type_name` with a new id.
@@ -560,6 +670,7 @@ impl Writer {
         for change in &mut changes {
             self.hooks.before(change, author).map_err(Error::Rejected)?;
         }
+        let mut changes = refs::expand(self, inner, changes)?;
         let extra = self.hooks.side_effects(&changes)?;
         changes.extend(extra);
 
@@ -574,7 +685,10 @@ impl Writer {
                 None => Change::delete(path),
             });
         }
-        self.vault.commit(files)?;
+        match inner.commit_hook.as_mut() {
+            Some(hook) => self.vault.commit_with_hook(files, &mut **hook)?,
+            None => self.vault.commit(files)?,
+        }
 
         let mut saved = Vec::with_capacity(rendered.len());
         let mut updates = Vec::with_capacity(rendered.len());
@@ -600,6 +714,7 @@ impl Writer {
                         event,
                         version: v.token,
                         wcl: text,
+                        also: Vec::new(),
                     });
                 }
                 _ => {
@@ -611,6 +726,7 @@ impl Writer {
                         event,
                         version: entry.version,
                         wcl: entry.content,
+                        also: Vec::new(),
                     });
                 }
             }
@@ -705,6 +821,19 @@ impl NoteLookup for Lookup<'_> {
 }
 
 /// `notes/<type>/<id>.wcl`.
+/// The vault path of type `name`'s definition.
+pub fn type_path(name: &str) -> String {
+    format!("types/{name}.wcl")
+}
+
+fn inner_has_type(inner: &Inner, name: &str) -> bool {
+    inner.schema.type_def(name).is_some()
+}
+
+fn pairs(v: &[(String, String)]) -> Vec<(&str, &str)> {
+    v.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect()
+}
+
 pub fn note_path(type_name: &str, id: &str) -> String {
     format!("notes/{type_name}/{id}.wcl")
 }
@@ -745,6 +874,20 @@ fn set_field(doc: &mut Doc, name: &str, value: String) {
     }
 }
 
-fn first(mut saved: Vec<Saved>) -> Saved {
-    saved.swap_remove(0)
+/// The submitted note, carrying every other change of the write in `also`.
+fn first(saved: Vec<Saved>) -> Saved {
+    let mut saved = saved.into_iter();
+    let mut first = saved
+        .next()
+        .expect("a write changes at least the submitted note");
+    first.also = saved.collect();
+    first
+}
+
+fn describe_referrers(referrers: &[Referrer]) -> String {
+    referrers
+        .iter()
+        .map(|r| format!("{} {} (field {})", r.type_name, r.id, r.field))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

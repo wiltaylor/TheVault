@@ -41,3 +41,10 @@ testkit = { path = "crates/testkit" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# Argon2 is unusably slow unoptimised, and every test server checks a password.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
