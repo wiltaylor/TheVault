@@ -773,7 +773,7 @@ impl Writer {
         inner: &Inner,
         id: &str,
         type_name: &str,
-        doc: Doc,
+        mut doc: Doc,
         old: Option<&str>,
         author: &Author,
     ) -> Result<NoteChange> {
@@ -790,14 +790,21 @@ impl Writer {
             .as_ref()
             .and_then(created_of)
             .unwrap_or_else(|| now.clone());
-        let doc = note::arrange(ty, doc, &created, &now);
-
         if !matches!(author, Author::Handler(_)) {
             let issues = computed_writes(ty, &doc, old_doc.as_ref());
             if !issues.is_empty() {
                 return Err(Error::Invalid(Invalid { file: path, issues }));
             }
         }
+        // A new note gets the default of every field it omits; an update does not.
+        if old.is_none() {
+            for f in &ty.fields {
+                if let Some(value) = f.default.as_ref().filter(|_| doc.field(&f.name).is_none()) {
+                    doc.fields.push((f.name.clone(), value.clone()));
+                }
+            }
+        }
+        let doc = note::arrange(ty, doc, &created, &now);
         Ok(NoteChange {
             id: id.to_owned(),
             type_name: type_name.to_owned(),
