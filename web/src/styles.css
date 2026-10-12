@@ -966,6 +966,91 @@ mark {
   font-family: ui-monospace, monospace;
 }
 
+.query-editor {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.query-editor-modes {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.query-editor-modes span {
+  margin-right: auto;
+}
+
+.query-editor-modes button[aria-pressed="true"] {
+  font-weight: 600;
+  border-color: var(--accent);
+}
+
+.query-editor-notice,
+.query-editor-error {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.query-editor-error {
+  color: var(--danger);
+}
+
+.query-builder {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.query-builder fieldset {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+}
+
+.query-builder legend {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.query-builder .query-builder-from {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.query-builder-check {
+  display: flex !important;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.query-builder-hint {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.query-builder-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.query-builder-group {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.query-builder-group .query-builder-group {
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--line);
+}
+
 .view-settings {
   display: flex;
   flex-wrap: wrap;
