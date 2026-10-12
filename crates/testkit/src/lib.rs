@@ -50,15 +50,21 @@ impl TestServer {
     /// Starts a server on a new vault after `seed` has written files into the vault folder, such
     /// as the type definitions a test needs.
     pub fn start_seeded(seed: impl FnOnce(&Path)) -> Self {
-        Self::start_inner(&server_binary(), seed)
+        Self::start_inner(&server_binary(), seed, &[])
+    }
+
+    /// Like [`TestServer::start_seeded`], passing `args` to `vault-server` as well, such as
+    /// `--web <dir>`.
+    pub fn start_with_args(seed: impl FnOnce(&Path), args: &[&std::ffi::OsStr]) -> Self {
+        Self::start_inner(&server_binary(), seed, args)
     }
 
     /// Like [`TestServer::start`], with an explicit path to the `vault-server` binary.
     pub fn start_with_binary(binary: &Path) -> Self {
-        Self::start_inner(binary, |_| {})
+        Self::start_inner(binary, |_| {}, &[])
     }
 
-    fn start_inner(binary: &Path, seed: impl FnOnce(&Path)) -> Self {
+    fn start_inner(binary: &Path, seed: impl FnOnce(&Path), args: &[&std::ffi::OsStr]) -> Self {
         let vault = tempfile::Builder::new()
             .prefix("thevault-test-")
             .tempdir()
@@ -71,6 +77,7 @@ impl TestServer {
             .arg(vault.path())
             .arg("--listen")
             .arg("127.0.0.1:0")
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -143,9 +150,9 @@ impl Drop for TestServer {
     }
 }
 
-/// Sets the login password and creates the admin token in the vault's `state.db`, returning the
-/// token's secret. The server opens the same file when it starts.
-fn seed_credentials(vault: &Path) -> String {
+/// Sets the login password to [`PASSWORD`] and creates the admin token in the vault's
+/// `state.db`, returning the token's secret. The server opens the same file when it starts.
+pub fn seed_credentials(vault: &Path) -> String {
     let state = state::State::open(&vault.join(".vault/state.db"), None).expect("open state.db");
     state.set_password(PASSWORD).expect("set the test password");
     let (_, secret) = state
