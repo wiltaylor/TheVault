@@ -3,6 +3,7 @@ import { type ParentProps, onMount } from "solid-js";
 import { setUnauthorizedHandler } from "./api";
 import { Shell } from "./components/Shell";
 import { Secrets, Tokens } from "./pages/Access";
+import { Assets } from "./pages/Assets";
 import { Flagged, NoteHistory, Trash } from "./pages/History";
 import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
@@ -50,6 +51,7 @@ export function App() {
         <Route path="/tasks" component={TaskList} />
         <Route path="/tasks/new" component={TaskEditor} />
         <Route path="/tasks/:name" component={TaskEditor} />
+        <Route path="/assets" component={Assets} />
         <Route path="/secrets" component={Secrets} />
         <Route path="/tokens" component={Tokens} />
         <Route path="/trash" component={Trash} />

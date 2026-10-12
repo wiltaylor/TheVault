@@ -1,7 +1,8 @@
 import { A, useNavigate, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, on } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
-import { api } from "../api";
+import { ApiError, type UsingNote, api, usingNotes } from "../api";
+import { UsingNotes } from "../components/UsingNotes";
 import {
   type TaxonomyModel,
   type TermModel,
@@ -59,6 +60,8 @@ export function TaxonomyEditor() {
   const [error, setError] = createSignal<string | null>(null);
   const [status, setStatus] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
+  // The notes named by a refused save or delete.
+  const [using, setUsing] = createSignal<UsingNote[]>([]);
 
   createEffect(
     on(
@@ -68,6 +71,7 @@ export function TaxonomyEditor() {
         setLoadError(null);
         setError(null);
         setStatus(null);
+        setUsing([]);
         if (n === undefined) {
           setName("");
           setModel(reconcile({ label: "", description: "", terms: [newTerm("First term")] }));
@@ -135,6 +139,7 @@ export function TaxonomyEditor() {
     setBusy(true);
     setError(null);
     setStatus(null);
+    setUsing([]);
     try {
       const renames = termRenames(model);
       const saved = await api.putTaxonomy(name(), taxonomyWcl(model), renames);
@@ -147,7 +152,44 @@ export function TaxonomyEditor() {
       const n = saved.notes?.length ?? 0;
       setStatus(n ? `Saved. ${n} ${n === 1 ? "note was" : "notes were"} updated.` : "Saved.");
     } catch (e) {
-      setError(errorText(e));
+      if (e instanceof ApiError && e.body.error === "term_in_use") {
+        setError("Notes still hold terms this change removes. Keep those terms, or rename them, and save again.");
+        setUsing(usingNotes(e));
+      } else {
+        setError(errorText(e));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!confirm(`Delete taxonomy ${name()}?`)) return;
+    setBusy(true);
+    setError(null);
+    setStatus(null);
+    setUsing([]);
+    try {
+      await api.deleteTaxonomy(name());
+      await reloadDefinitions();
+      navigate("/taxonomies");
+    } catch (e) {
+      if (e instanceof ApiError && e.body.error === "taxonomy_in_use") {
+        const by = Array.isArray(e.body.by) ? (e.body.by as string[]) : [];
+        const fields = by.flatMap((b) => {
+          const m = /^types\/([^/]+)\.wcl \(field (\w+)\)$/.exec(b);
+          return m ? [`${m[1]}.${m[2]}`] : [];
+        });
+        const notes = usingNotes(e);
+        setError(
+          `${model.label || name()} is in use, so it was not deleted. ` +
+            (fields.length ? `Fields that use it: ${fields.join(", ")}. ` : "") +
+            (notes.length ? `${notes.length} ${notes.length === 1 ? "note holds" : "notes hold"} its terms.` : "No note holds its terms."),
+        );
+        setUsing(notes);
+      } else {
+        setError(errorText(e));
+      }
     } finally {
       setBusy(false);
     }
@@ -242,6 +284,13 @@ export function TaxonomyEditor() {
             <p class="note-kind">{isNew() ? "New taxonomy" : "Taxonomy"}</p>
             <h1>{model.label || name() || "Untitled taxonomy"}</h1>
           </div>
+          <Show when={!isNew()}>
+            <div class="actions">
+              <button type="button" class="danger" disabled={busy()} onClick={() => void remove()}>
+                Delete taxonomy
+              </button>
+            </div>
+          </Show>
         </header>
         <div class="form-grid">
           <Show when={isNew()}>
@@ -273,6 +322,7 @@ export function TaxonomyEditor() {
               {error()}
             </p>
           </Show>
+          <UsingNotes notes={using()} label="Notes using it" />
           <Show when={status()}>
             <p role="status">{status()}</p>
           </Show>

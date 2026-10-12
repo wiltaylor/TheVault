@@ -302,8 +302,13 @@ enum Asset {
         #[arg(long, short)]
         out: PathBuf,
     },
-    /// Delete an asset no note names.
-    Delete { id: String },
+    /// Delete an asset. Refused while notes name it, unless --unlink is given.
+    Delete {
+        id: String,
+        /// Take the asset out of every note that names it, in the same commit.
+        #[arg(long)]
+        unlink: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -772,7 +777,13 @@ fn asset(api: &Api, a: Asset) -> Result<Value, Fail> {
                 .map_err(|e| Fail::new("io", format!("{}: {e}", out.display())))?;
             Ok(json!({ "id": id, "out": out, "bytes": bytes.len() }))
         }
-        Asset::Delete { id } => api.delete(&["api", "assets", &id]),
+        Asset::Delete { id, unlink } => {
+            let query: Vec<_> = unlink
+                .then(|| ("unlink", "true".to_owned()))
+                .into_iter()
+                .collect();
+            api.call(Method::DELETE, &["api", "assets", &id], &query, Body::None)
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, setUnauthorizedHandler } from "./api";
+import { ApiError, api, setUnauthorizedHandler, usingNotes } from "./api";
 
 function respond(status: number, body: unknown) {
   return vi.fn(async () => new Response(JSON.stringify(body), { status }));
@@ -34,5 +34,21 @@ describe("api", () => {
     expect(handler).not.toHaveBeenCalled();
     await expect(api.types()).rejects.toMatchObject({ status: 401 });
     expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it("deletes an asset with unlink only when asked, and reads the notes a refusal lists", async () => {
+    const notes = [{ id: "N1", type: "task", title: "Covered" }];
+    const fetch = respond(409, { error: "asset_in_use", by: ["notes/task/N1.wcl"], notes, message: "in use" });
+    vi.stubGlobal("fetch", fetch);
+    const err = await api.deleteAsset("A1").catch((e) => e);
+    expect(usingNotes(err)).toEqual(notes);
+    await api.deleteAsset("A1", true).catch(() => {});
+    const calls = fetch.mock.calls as unknown as [string, RequestInit][];
+    expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      "DELETE /api/assets/A1",
+      "DELETE /api/assets/A1?unlink=true",
+    ]);
+    expect(usingNotes(new ApiError(400, { notes }))).toEqual([]);
+    expect(usingNotes(new Error("x"))).toEqual([]);
   });
 });

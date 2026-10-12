@@ -4,7 +4,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
-use writer::Error;
+use writer::{Error, Writer};
 
 /// An error response.
 #[derive(Debug)]
@@ -82,7 +82,12 @@ impl From<Error> for ApiError {
             ),
             Error::TypeHasNotes { type_name, notes } => (
                 StatusCode::CONFLICT,
-                json!({ "error": "type_in_use", "type": type_name, "notes": notes }),
+                json!({
+                    "error": "type_in_use",
+                    "type": type_name,
+                    "count": notes.len(),
+                    "notes": notes,
+                }),
             ),
             Error::PlanStale(plan) => (
                 StatusCode::CONFLICT,
@@ -169,4 +174,31 @@ impl From<Error> for ApiError {
         body["message"] = Value::String(message);
         ApiError { status, body }
     }
+}
+
+/// `e` as a response. A refusal because something is in use also lists, under `notes`, each note
+/// among its users with the note's type and title, so a client can show what to change.
+pub fn in_use(w: &Writer, e: Error) -> ApiError {
+    let paths: Vec<String> = match &e {
+        Error::InUse { by, .. } => by.clone(),
+        _ => return e.into(),
+    };
+    let mut err = ApiError::from(e);
+    let mut notes: Vec<Value> = Vec::new();
+    for path in &paths {
+        let Some((type_name, id)) = path
+            .strip_prefix("notes/")
+            .and_then(|rest| rest.split_once(".wcl"))
+            .and_then(|(rest, _)| rest.split_once('/'))
+        else {
+            continue;
+        };
+        if notes.iter().any(|n| n["id"] == id) {
+            continue;
+        }
+        let title = w.title(id).ok().flatten().unwrap_or_default();
+        notes.push(json!({ "id": id, "type": type_name, "title": title }));
+    }
+    err.body["notes"] = Value::Array(notes);
+    err
 }

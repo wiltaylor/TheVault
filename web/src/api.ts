@@ -317,6 +317,8 @@ export const api = {
       ...(plan ? { plan } : {}),
       ...(migration ? { migration } : {}),
     }),
+  /** Delete a type. A type that still has notes answers 409 `type_in_use` with their `count`. */
+  deleteType: (name: string) => request<unknown>("DELETE", `/api/types/${enc(name)}`),
   putTemplate: (type: string, name: string, wcl: string) =>
     request<{ wcl: string }>("PUT", `/api/types/${enc(type)}/templates/${enc(name)}`, { wcl }),
   deleteTemplate: (type: string, name: string) =>
@@ -325,6 +327,8 @@ export const api = {
   /** Create or replace a taxonomy. `renames` maps old term paths to new ones. */
   putTaxonomy: (name: string, wcl: string, renames: Record<string, string>) =>
     request<Taxonomy & { notes: { id: string }[] }>("PUT", `/api/taxonomies/${enc(name)}`, { wcl, renames }),
+  /** Delete a taxonomy. One a field uses answers 409 `taxonomy_in_use`, listing the notes. */
+  deleteTaxonomy: (name: string) => request<unknown>("DELETE", `/api/taxonomies/${enc(name)}`),
   /** One page of `query`. `thisId` is the note that holds the query, bound to `this`. */
   query: (query: string, cursor: string | null, pageSize: number, thisId?: string) =>
     request<Page>("POST", "/api/query", {
@@ -385,7 +389,31 @@ export const api = {
   /** Upload `file` as a new asset. The body is the file's bytes, unchanged. */
   uploadAsset: (file: File) =>
     request<Asset>("POST", `/api/assets?filename=${enc(file.name)}`, file),
+  /**
+   * Delete an asset. Notes naming it answer 409 `asset_in_use`, listing them, unless `unlink` is
+   * set: then the asset is taken out of those notes in the same commit.
+   */
+  deleteAsset: (id: string, unlink = false) =>
+    request<Asset & { notes: { id: string; type: string; version: string }[] }>(
+      "DELETE",
+      `/api/assets/${enc(id)}${unlink ? "?unlink=true" : ""}`,
+    ),
 };
+
+/** A note named in a refusal because it uses what was to be deleted. */
+export interface UsingNote {
+  id: string;
+  type: string;
+  title: string;
+}
+
+/** The notes a 409 "in use" refusal lists, or none for any other error. */
+export function usingNotes(e: unknown): UsingNote[] {
+  if (!(e instanceof ApiError) || e.status !== 409) return [];
+  const notes = e.body.notes;
+  if (!Array.isArray(notes)) return [];
+  return notes.filter((n): n is UsingNote => typeof n === "object" && n !== null && typeof n.id === "string");
+}
 
 /** Where the browser fetches an asset's bytes. */
 export function assetUrl(id: string): string {

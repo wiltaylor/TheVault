@@ -726,6 +726,19 @@ impl Writer {
         })
     }
 
+    /// The indexed title of note `id`, if the index holds the note.
+    pub fn title(&self, id: &str) -> Result<Option<String>> {
+        let inner = self.lock();
+        let conn = inner.index.connection();
+        let mut stmt = conn
+            .prepare("SELECT title FROM notes WHERE id = ?1")
+            .map_err(index::Error::from)?;
+        let mut rows = stmt
+            .query_map([id], |r| r.get::<_, String>(0))
+            .map_err(index::Error::from)?;
+        Ok(rows.next().transpose().map_err(index::Error::from)?)
+    }
+
     /// Every indexed note, or every note of one type, oldest first.
     pub fn list(&self, type_name: Option<&str>) -> Result<Vec<Summary>> {
         let inner = self.lock();

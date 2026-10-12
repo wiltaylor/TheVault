@@ -28,6 +28,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use writer::Writer;
 
+use crate::error::in_use;
 use crate::inspect::{taxonomy_json, template_json};
 use crate::notes::{if_match, is_json, wants_wcl};
 use crate::{ApiError, Caller, blocking};
@@ -175,8 +176,10 @@ pub async fn put_taxonomy(
     })?;
     let n = name.clone();
     let (wcl, saved, schema) = blocking(w, move |w| {
-        let (wcl, saved) = w.put_taxonomy(&n, &b.wcl, &b.renames, &author)?;
-        Ok::<_, writer::Error>((wcl, saved, w.schema()))
+        let (wcl, saved) = w
+            .put_taxonomy(&n, &b.wcl, &b.renames, &author)
+            .map_err(|e| in_use(w, e))?;
+        Ok::<_, ApiError>((wcl, saved, w.schema()))
     })
     .await?;
     let mut json = schema
@@ -197,7 +200,7 @@ pub async fn delete_taxonomy(
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let n = name.clone();
-    blocking(w, move |w| w.delete_taxonomy(&n)).await?;
+    blocking(w, move |w| w.delete_taxonomy(&n).map_err(|e| in_use(w, e))).await?;
     Ok(Json(json!({ "name": name, "deleted": true })))
 }
 

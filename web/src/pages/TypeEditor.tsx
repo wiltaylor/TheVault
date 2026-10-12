@@ -97,6 +97,8 @@ export function TypeEditor() {
   const [busy, setBusy] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
   const [plan, setPlan] = createSignal<TypePlan | null>(null);
+  // Why the type was not deleted, and whether it was its notes that stopped it.
+  const [deleteError, setDeleteError] = createSignal<{ message: string; hasNotes: boolean } | null>(null);
   // A preview the server refused: why, and the notes the change would reach.
   const [refused, setRefused] = createSignal<{ message: string; notes: Row[]; total: number } | null>(null);
   // The script and function a change runs over every note of the type, if any (D6).
@@ -113,6 +115,7 @@ export function TypeEditor() {
         setPlan(null);
         setRefused(null);
         setSaveError(null);
+        setDeleteError(null);
         if (type === undefined) {
           setName("");
           setModel(reconcile(emptyType()));
@@ -235,6 +238,30 @@ export function TypeEditor() {
         }
       } else {
         setSaveError(errorText(e));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+
+  async function remove() {
+    if (!confirm(`Delete type ${name()}? Its type file and templates go too.`)) return;
+    setBusy(true);
+    setDeleteError(null);
+    try {
+      await api.deleteType(name());
+      await reloadDefinitions();
+      navigate("/");
+    } catch (e) {
+      if (e instanceof ApiError && e.body.error === "type_in_use") {
+        const n = Number(e.body.count ?? 0);
+        setDeleteError({
+          message: `${model.label || name()} still has ${n} ${n === 1 ? "note" : "notes"}. Delete ${n === 1 ? "it" : "them"} before deleting the type.`,
+          hasNotes: true,
+        });
+      } else {
+        setDeleteError({ message: errorText(e), hasNotes: false });
       }
     } finally {
       setBusy(false);
@@ -636,9 +663,22 @@ export function TypeEditor() {
           <Show when={!isNew()}>
             <div class="actions">
               <A href={`/types/${name()}/templates`}>Templates</A>
+              <button type="button" class="danger" disabled={busy()} onClick={() => void remove()}>
+                Delete type
+              </button>
             </div>
           </Show>
         </header>
+        <Show when={deleteError()}>
+          {(err) => (
+            <p class="error" role="alert">
+              {err().message}{" "}
+              <Show when={err().hasNotes}>
+                <A href={`/types/${name()}`}>Show its notes</A>
+              </Show>
+            </p>
+          )}
+        </Show>
         <div class="form-grid">
           <Show when={isNew()}>
             <label for="type-name">Name</label>

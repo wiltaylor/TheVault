@@ -15,7 +15,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use writer::{Asset, Writer};
 
-use crate::{ApiError, blocking};
+use crate::error::in_use;
+use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
@@ -80,11 +81,31 @@ pub async fn download(State(w): Shared, Path(id): Path<String>) -> Result<Respon
     Ok(res)
 }
 
-/// `DELETE /api/assets/{id}`.
-pub async fn delete(State(w): Shared, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
-    let asset = blocking(w, move |w| w.delete_asset(&id)).await?;
+#[derive(Deserialize)]
+pub struct DeleteQuery {
+    #[serde(default)]
+    unlink: bool,
+}
+
+/// `DELETE /api/assets/{id}[?unlink=true]`. Notes naming the asset refuse the delete, listing
+/// them, unless `unlink` is set: then they lose their references to it in the same commit.
+pub async fn delete(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(id): Path<String>,
+    Query(q): Query<DeleteQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (asset, saved) = blocking(w, move |w| {
+        w.delete_asset(&id, q.unlink, &author)
+            .map_err(|e| in_use(w, e))
+    })
+    .await?;
     let mut body = asset_json(&asset);
     body["deleted"] = json!(true);
+    body["notes"] = saved
+        .iter()
+        .map(|s| json!({ "id": s.id, "type": s.type_name, "version": s.version }))
+        .collect();
     Ok(Json(body))
 }
 
