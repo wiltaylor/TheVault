@@ -739,6 +739,22 @@ impl Writer {
         Ok(rows.next().transpose().map_err(index::Error::from)?)
     }
 
+    /// The type and indexed title of note `id`, if the index holds the note. A note in the trash
+    /// is not indexed.
+    pub fn type_and_title(&self, id: &str) -> Result<Option<(String, String)>> {
+        let inner = self.lock();
+        let conn = inner.index.connection();
+        let mut stmt = conn
+            .prepare("SELECT type, title FROM notes WHERE id = ?1")
+            .map_err(index::Error::from)?;
+        let mut rows = stmt
+            .query_map([id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(index::Error::from)?;
+        Ok(rows.next().transpose().map_err(index::Error::from)?)
+    }
+
     /// Every indexed note, or every note of one type, oldest first.
     pub fn list(&self, type_name: Option<&str>) -> Result<Vec<Summary>> {
         let inner = self.lock();

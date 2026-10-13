@@ -59,6 +59,9 @@ importers:
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
+      lucide:
+        specifier: ^1.56.0
+        version: 1.56.0
       mermaid:
         specifier: ^12.1.0
         version: 12.1.0
@@ -1541,6 +1544,9 @@ packages:
 
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
+
+  lucide@1.56.0:
+    resolution: {integrity: sha512-BOrr2xku0dGUzWvdBZK3NlEdEzcEvXoLRyGvC27lyFB1tSL7Lc7vW61CKeVcw92K2L9y6aNKS7fJ8fVzw/MXIw==}
 
   lz-string@1.5.0:
     resolution: {integrity: sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ==}
@@ -3607,6 +3613,8 @@ snapshots:
   lru-cache@5.1.1:
     dependencies:
       yallist: 3.1.1
+
+  lucide@1.56.0: {}
 
   lz-string@1.5.0: {}
 

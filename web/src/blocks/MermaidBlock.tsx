@@ -4,6 +4,7 @@
 
 import { Show, createEffect, createSignal, on, onCleanup } from "solid-js";
 import type { Block } from "../api";
+import { theme } from "../theme";
 import { text, withItem } from "./fields";
 
 type Mermaid = (typeof import("mermaid"))["default"];
@@ -13,10 +14,24 @@ let loading: Promise<Mermaid> | undefined;
 /** Mermaid, loaded on first use: it is large, and most pages have no diagram. */
 function mermaid(): Promise<Mermaid> {
   loading ??= import("mermaid").then(({ default: m }) => {
-    m.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true });
+    configure(m);
     return m;
   });
   return loading;
+}
+
+let configuredFor: string | undefined;
+
+/** Point Mermaid at the theme the page is in, so diagrams stay readable in dark mode. */
+function configure(m: Mermaid) {
+  if (configuredFor === theme()) return;
+  configuredFor = theme();
+  m.initialize({
+    startOnLoad: false,
+    securityLevel: "strict",
+    suppressErrorRendering: true,
+    theme: theme() === "dark" ? "dark" : "default",
+  });
 }
 
 let renders = 0;
@@ -27,6 +42,7 @@ export type Rendered = { svg: string } | { error: string };
 export async function renderMermaid(source: string): Promise<Rendered> {
   try {
     const m = await mermaid();
+    configure(m);
     const { svg } = await m.render(`mermaid-${++renders}`, source);
     return { svg };
   } catch (e) {
@@ -45,8 +61,8 @@ export function MermaidDiagram(props: { source: string; delay?: number; showSour
 
   createEffect(
     on(
-      () => props.source,
-      (source) => {
+      () => [props.source, theme()] as const,
+      ([source]) => {
         clearTimeout(timer);
         const run = async () => {
           const mine = ++latest;

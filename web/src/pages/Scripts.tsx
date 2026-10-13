@@ -31,13 +31,13 @@ export function ScriptList() {
       return;
     }
     if (scripts()?.includes(n)) {
-      navigate(`/scripts/${n}`);
+      navigate(`/settings/scripts/${n}`);
       return;
     }
     try {
       await api.putScript(n, STARTER);
       await refetch();
-      navigate(`/scripts/${n}`);
+      navigate(`/settings/scripts/${n}`);
     } catch (e) {
       setError(errorText(e));
     }
@@ -66,7 +66,7 @@ export function ScriptList() {
               <For each={list()}>
                 {(s) => (
                   <li>
-                    <A href={`/scripts/${s}`}>{s}</A>
+                    <A href={`/settings/scripts/${s}`}>{s}</A>
                   </li>
                 )}
               </For>
@@ -131,7 +131,7 @@ export function ScriptEditor() {
     setError(null);
     try {
       await api.deleteScript(params.name!);
-      navigate("/scripts");
+      navigate("/settings/scripts");
     } catch (e) {
       const by = e instanceof ApiError ? (e.body.by as string[] | undefined) : undefined;
       setError(by?.length ? `${errorText(e)}: it is used by ${by.join(", ")}.` : errorText(e));
@@ -151,7 +151,7 @@ export function ScriptEditor() {
         <header class="note-header">
           <div>
             <p class="note-kind">
-              <A href="/scripts">Scripts</A>
+              <A href="/settings/scripts">Scripts</A>
             </p>
             <h1>{params.name}</h1>
           </div>

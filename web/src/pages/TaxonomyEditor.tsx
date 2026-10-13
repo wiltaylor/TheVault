@@ -23,7 +23,7 @@ export function TaxonomyList() {
     <section class="list-page">
       <header class="note-header">
         <h1>Taxonomies</h1>
-        <A href="/taxonomies/new" class="button">
+        <A href="/settings/taxonomies/new" class="button">
           New taxonomy
         </A>
       </header>
@@ -32,7 +32,7 @@ export function TaxonomyList() {
           <For each={taxonomies()}>
             {(t) => (
               <li>
-                <A href={`/taxonomies/${t.name}`}>
+                <A href={`/settings/taxonomies/${t.name}`}>
                   <strong>{t.label}</strong>
                   <span class="muted">{t.description ?? t.name}</span>
                 </A>
@@ -145,7 +145,7 @@ export function TaxonomyEditor() {
       const saved = await api.putTaxonomy(name(), taxonomyWcl(model), renames);
       await reloadDefinitions();
       if (isNew()) {
-        navigate(`/taxonomies/${name()}`);
+        navigate(`/settings/taxonomies/${name()}`);
         return;
       }
       setModel(reconcile(taxonomyFromSchema(saved)));
@@ -172,7 +172,7 @@ export function TaxonomyEditor() {
     try {
       await api.deleteTaxonomy(name());
       await reloadDefinitions();
-      navigate("/taxonomies");
+      navigate("/settings/taxonomies");
     } catch (e) {
       if (e instanceof ApiError && e.body.error === "taxonomy_in_use") {
         const by = Array.isArray(e.body.by) ? (e.body.by as string[]) : [];

@@ -175,6 +175,17 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/assets/{id}",
         "Delete an asset; ?unlink=true first takes it out of every note that names it",
     ),
+    (
+        "GET",
+        "/api/pins",
+        "The notes pinned to the sidebar, in order, with type and title",
+    ),
+    (
+        "PUT",
+        "/api/pins/{id}",
+        "Pin a note to the end of the sidebar list",
+    ),
+    ("DELETE", "/api/pins/{id}", "Unpin a note"),
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),
     ("DELETE", "/api/tokens/{name}", "Revoke an API token"),

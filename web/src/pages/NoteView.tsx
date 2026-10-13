@@ -20,6 +20,7 @@ import {
 } from "../notes";
 import { typeDef } from "../session";
 import { ThisNote } from "../views/thisNote";
+import { isPinned, togglePin } from "../pins";
 
 interface Conflict {
   mine: NoteDoc;
@@ -311,6 +312,17 @@ export function NoteView(props: { newType?: string }) {
                   when={editing()}
                   fallback={
                     <div class="actions">
+                      <button
+                        type="button"
+                        class="pin-button"
+                        aria-pressed={isPinned(n().id)}
+                        title={isPinned(n().id) ? "Unpin from the sidebar" : "Pin to the sidebar"}
+                        onClick={() =>
+                          void togglePin(n().id, formatValue(n().note.fields.title) || "Untitled", n().type)
+                        }
+                      >
+                        {isPinned(n().id) ? "Unpin" : "Pin"}
+                      </button>
                       <A href={`/notes/${n().id}/history`} class="button">
                         History
                       </A>

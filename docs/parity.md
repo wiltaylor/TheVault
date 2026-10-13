@@ -45,7 +45,10 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Restore an earlier version | `History.tsx` | `POST /api/notes/{id}/restore` | `vault restore <id> <version> --base <version>` | |
 | List the trash | `History.tsx` (`Trash`) | `GET /api/trash` | `vault trash list` | |
 | Restore from the trash | `History.tsx` (`Trash`) | `POST /api/trash/{id}/restore` | `vault trash restore <id>` | |
-| List flagged notes | `History.tsx` (`Flagged`) | `GET /api/flagged` | `vault flagged` | |
+| List the pinned notes in the sidebar | `Shell.tsx`, `pins.ts` | `GET /api/pins` | `vault pin list` | |
+| Pin a note to the sidebar | `NoteView.tsx` (Pin button) | `PUT /api/pins/{id}` | `vault pin add <id>` | |
+| Unpin a note | `NoteView.tsx` (Unpin button) | `DELETE /api/pins/{id}` | `vault pin remove <id>` | |
+| List flagged notes | None. The page was removed from the UI at the owner's request | `GET /api/flagged` | `vault flagged` | Owner decision: API and CLI only |
 
 ### Content blocks and assets
 
@@ -152,12 +155,15 @@ The listing has 60 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/search` | `vault search` | Search and pickers | |
 | `GET /api/trash` | `vault trash list` | Trash | |
 | `POST /api/trash/{id}/restore` | `vault trash restore` | Trash | |
+| `GET /api/pins` | `vault pin list` | Sidebar, Pinned | |
+| `PUT /api/pins/{id}` | `vault pin add` | Note page, Pin | |
+| `DELETE /api/pins/{id}` | `vault pin remove` | Note page, Unpin | |
 | `GET /api/types` | `vault type list` | Session load | |
 | `GET /api/types/{name}` | `vault type get` | not used | The UI reads the type from `GET /api/schema` |
 | `PUT /api/types/{name}` | `vault type put` | Create a type | |
 | `DELETE /api/types/{name}` | `vault type delete` | Type editor | |
 | `POST /api/types/{name}/change` | `vault type change` | Type editor | |
-| `GET /api/flagged` | `vault flagged` | Flagged | |
+| `GET /api/flagged` | `vault flagged` | Not used. Removed from the UI at the owner's request | |
 | `GET /api/types/{name}/templates` | `vault template list` | not used | The UI reads templates from `GET /api/schema` |
 | `GET /api/types/{name}/templates/{template}` | `vault template get` | not used | Same reason |
 | `PUT /api/types/{name}/templates/{template}` | `vault template put` | Template editor | |

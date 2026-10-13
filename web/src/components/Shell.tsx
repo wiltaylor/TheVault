@@ -1,8 +1,11 @@
 import { A, Navigate, useLocation, useNavigate } from "@solidjs/router";
 import { For, type ParentProps, Show, createSignal } from "solid-js";
-import { logOut, sessionState, types } from "../session";
+import { pins } from "../pins";
+import { logOut, sessionState, typeDef } from "../session";
+import { theme, toggleTheme } from "../theme";
+import { GearIcon, ThemeGlyph, TrashIcon, TypeIcon } from "./Icon";
 
-/** The signed-in layout: a header with search, the types sidebar, and the page. */
+/** The signed-in layout: a header with search, the sidebar with the theme switch and settings, and the page. */
 export function Shell(props: ParentProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -53,59 +56,17 @@ export function Shell(props: ParentProps) {
           </button>
         </header>
         <div id="sidebar" class="sidebar">
-          <nav aria-label="Types">
-            <h2>Types</h2>
-            <ul>
-              <For each={types()}>
-                {(t) => (
-                  <li>
-                    <A
-                      href={`/types/${t.name}`}
-                      activeClass="active"
-                      data-colour={t.colour ?? undefined}
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      {t.plural}
-                    </A>
-                  </li>
-                )}
-              </For>
-            </ul>
-            <ul class="sidebar-admin">
-              <li>
-                <A href="/types/new" activeClass="active" end onClick={() => setMenuOpen(false)}>
-                  New type
-                </A>
-              </li>
-              <li>
-                <A href="/taxonomies" activeClass="active" onClick={() => setMenuOpen(false)}>
-                  Taxonomies
-                </A>
-              </li>
-              <li>
-                <A href="/settings" activeClass="active" onClick={() => setMenuOpen(false)}>
-                  Settings
-                </A>
-              </li>
-            </ul>
-          </nav>
-          <nav aria-label="Vault">
-            <h2 class="sidebar-admin">Vault</h2>
+          <nav aria-label="Main">
             <ul>
               <For
                 each={[
-                  ["/scripts", "Scripts"],
-                  ["/tasks", "Tasks"],
-                  ["/assets", "Assets"],
-                  ["/secrets", "Secrets"],
-                  ["/tokens", "API tokens"],
-                  ["/trash", "Trash"],
-                  ["/flagged", "Flagged notes"],
+                  ["/", "Home"],
+                  ["/types", "Types"],
                 ]}
               >
                 {([href, label]) => (
                   <li>
-                    <A href={href!} activeClass="active" onClick={() => setMenuOpen(false)}>
+                    <A href={href!} activeClass="active" end={href === "/"} onClick={() => setMenuOpen(false)}>
                       {label}
                     </A>
                   </li>
@@ -113,6 +74,65 @@ export function Shell(props: ParentProps) {
               </For>
             </ul>
           </nav>
+          <Show when={pins().length > 0}>
+            <nav aria-label="Pinned" class="pinned">
+              <h2>Pinned</h2>
+              <ul>
+                <For each={pins()}>
+                  {(p) => (
+                    <li>
+                      <A
+                        href={`/notes/${p.id}`}
+                        activeClass="active"
+                        title={p.title}
+                        onClick={() => setMenuOpen(false)}
+                      >
+                        <TypeIcon name={typeDef(p.type)?.icon} size={16} />
+                        <span>{p.title || "Untitled"}</span>
+                      </A>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </nav>
+          </Show>
+          <div class="sidebar-footer">
+            <button
+              type="button"
+              role="switch"
+              class="theme-switch"
+              aria-checked={theme() === "dark"}
+              aria-label="Dark mode"
+              title={theme() === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              onClick={toggleTheme}
+            >
+              <span class="theme-switch-track" aria-hidden="true">
+                <span class="theme-switch-thumb">
+                  <ThemeGlyph dark={theme() === "dark"} />
+                </span>
+              </span>
+            </button>
+            <A
+              href="/trash"
+              class="footer-button"
+              activeClass="active"
+              aria-label="Trash"
+              title="Trash"
+              onClick={() => setMenuOpen(false)}
+            >
+              <TrashIcon />
+            </A>
+            <A
+              href="/settings"
+              class="footer-button"
+              activeClass="active"
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => setMenuOpen(false)}
+            >
+              <GearIcon />
+            </A>
+          </div>
         </div>
         <div class="scrim" onClick={() => setMenuOpen(false)} />
         <main class="content">{props.children}</main>

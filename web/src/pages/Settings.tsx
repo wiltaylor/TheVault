@@ -16,7 +16,7 @@ export function Settings() {
 
   return (
     <section class="settings">
-      <h1>Settings</h1>
+      <h1>General settings</h1>
       <form class="settings-form" aria-label="Map tiles" onSubmit={save}>
         <h2>Map tiles</h2>
         <p class="muted">

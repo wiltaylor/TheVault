@@ -192,6 +192,9 @@ enum Command {
     /// The trash.
     #[command(subcommand)]
     Trash(Trash),
+    /// Notes pinned to the web sidebar.
+    #[command(subcommand)]
+    Pin(Pin),
     /// Uploaded files.
     #[command(subcommand)]
     Asset(Asset),
@@ -283,6 +286,16 @@ enum Trash {
     List,
     /// Bring a note back from the trash.
     Restore { id: String },
+}
+
+#[derive(Subcommand)]
+enum Pin {
+    /// The pinned notes, in sidebar order, with type and title.
+    List,
+    /// Pin a note to the end of the sidebar list.
+    Add { id: String },
+    /// Unpin a note.
+    Remove { id: String },
 }
 
 #[derive(Subcommand)]
@@ -618,6 +631,13 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
             &[],
             Body::None,
         ),
+        Command::Pin(Pin::List) => api.get(&["api", "pins"]),
+        Command::Pin(Pin::Add { id }) => {
+            api.call(Method::PUT, &["api", "pins", &id], &[], Body::None)
+        }
+        Command::Pin(Pin::Remove { id }) => {
+            api.call(Method::DELETE, &["api", "pins", &id], &[], Body::None)
+        }
         Command::Asset(a) => asset(api, a),
         Command::Type(t) => type_cmd(api, t),
         Command::Template(t) => match t {

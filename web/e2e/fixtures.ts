@@ -40,7 +40,7 @@ export async function logIn(page: Page, path = "/") {
   await page.goto(`/login?next=${encodeURIComponent(path)}`);
   await page.getByLabel("Password").fill(password());
   await page.getByRole("button", { name: "Log in" }).click();
-  await expect(page.getByRole("navigation", { name: "Types" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
 }
 
 export { expect } from "@playwright/test";

@@ -1,6 +1,6 @@
 import { A, useNavigate, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createResource, createSignal, on } from "solid-js";
-import { ApiError, type FlaggedNote, type Note, type TrashEntry, type Version, api } from "../api";
+import { ApiError, type Note, type TrashEntry, type Version, api } from "../api";
 import { authorText, when, wclTitle } from "../admin/format";
 import { formatValue } from "../components/Render";
 import { knowTitle } from "../editor/titles";
@@ -193,54 +193,6 @@ export function Trash() {
             </tbody>
           </table>
         </Show>
-      </Show>
-    </section>
-  );
-}
-
-/** Notes holding data their type no longer describes, after a schema change removed it (D6). */
-export function Flagged() {
-  const [notes] = createResource(api.flagged);
-  return (
-    <section class="list-page">
-      <header class="note-header">
-        <h1>Flagged notes</h1>
-      </header>
-      <p class="muted">
-        These notes keep values for fields their type no longer has. Edit the note or change the type to clear them.
-      </p>
-      <Show when={notes.error}>
-        <p class="error" role="alert">
-          {errorText(notes.error)}
-        </p>
-      </Show>
-      <Show when={notes()}>
-        {(list) => (
-          <Show when={list().length > 0} fallback={<p class="muted">No flagged notes.</p>}>
-            <table class="admin-table" aria-label="Flagged notes">
-              <thead>
-                <tr>
-                  <th>Note</th>
-                  <th>Type</th>
-                  <th>Unknown fields</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={list()}>
-                  {(n: FlaggedNote) => (
-                    <tr data-note={n.id}>
-                      <td>
-                        <A href={`/notes/${n.id}`}>{n.title || "Untitled"}</A>
-                      </td>
-                      <td>{typeDef(n.type)?.label ?? n.type}</td>
-                      <td>{n.unknown.join(", ")}</td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
-          </Show>
-        )}
       </Show>
     </section>
   );

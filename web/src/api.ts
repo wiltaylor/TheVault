@@ -119,6 +119,13 @@ export interface Asset {
   path: string;
 }
 
+/** A note pinned to the sidebar. */
+export interface Pin {
+  id: string;
+  type: string;
+  title: string;
+}
+
 export interface Page {
   rows: Row[];
   next: string | null;
@@ -148,15 +155,6 @@ export interface TrashEntry {
   wcl: string;
   deleted_by: Author;
   deleted_at: number;
-}
-
-/** A note holding data its type no longer describes, after a schema change (D6). */
-export interface FlaggedNote {
-  id: string;
-  type: string;
-  title: string;
-  version: string;
-  unknown: string[];
 }
 
 /** Why a script would not compile when the vault runs it in one role. */
@@ -361,9 +359,12 @@ export const api = {
   /** Make `version` the note's current content again, over current version `base`. */
   restoreVersion: (id: string, version: string, base: string) =>
     request<Note>("POST", `/api/notes/${enc(id)}/restore`, { version, base_version: base }),
+  /** The notes pinned to the sidebar, in order. Pins live on the server, shared by every device. */
+  pins: async () => (await request<{ pins: Pin[] }>("GET", "/api/pins")).pins,
+  pin: (id: string) => request<Pin & { added: boolean }>("PUT", `/api/pins/${enc(id)}`),
+  unpin: (id: string) => request<unknown>("DELETE", `/api/pins/${enc(id)}`),
   trash: async () => (await request<{ notes: TrashEntry[] }>("GET", "/api/trash")).notes,
   restoreFromTrash: (id: string) => request<Note>("POST", `/api/trash/${enc(id)}/restore`),
-  flagged: async () => (await request<{ notes: FlaggedNote[] }>("GET", "/api/flagged")).notes,
   scripts: async () => (await request<{ scripts: string[] }>("GET", "/api/scripts")).scripts,
   script: (name: string) => request<Script>("GET", `/api/scripts/${enc(name)}`),
   /** Store a script as sent. The answer says why it would not compile, if it would not. */

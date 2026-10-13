@@ -23,7 +23,7 @@ test.describe("login", () => {
     await page.getByLabel("Password").fill(password());
     await page.getByRole("button", { name: "Log in" }).click();
     await expect(page.getByRole("heading", { name: "Your vault" })).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Types" }).getByRole("link", { name: "Tasks" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Types" })).toBeVisible();
     await expect(page).not.toHaveURL(/\/login/);
   });
 
@@ -33,7 +33,7 @@ test.describe("login", () => {
     await page.getByRole("button", { name: "Log in" }).click();
     await expect(page.getByRole("alert")).toHaveText("That password is not right.");
     await expect(page).toHaveURL(/\/login/);
-    await expect(page.getByRole("navigation", { name: "Types" })).toHaveCount(0);
+    await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
   });
 
   test("logging out returns to the login page", async ({ page }) => {
@@ -53,7 +53,8 @@ test("a note created through the API appears in its type list and opens with its
   const created = await createTask(admin, { title, status: "doing", estimate: 7 }, "Body text here");
 
   await logIn(page);
-  await page.getByRole("navigation", { name: "Types" }).getByRole("link", { name: "Tasks" }).click();
+  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Types" }).click();
+  await page.getByRole("list", { name: "Types" }).getByRole("link", { name: /^Tasks/ }).click();
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   const row = page.getByTestId("note-row").filter({ hasText: title });
   await expect(row).toBeVisible();
@@ -207,15 +208,15 @@ test(`a list of ${BULK_NOTES} notes scrolls with fewer than 200 rows in the DOM`
 test.describe("at tablet width", () => {
   test.use({ viewport: devices["iPad Mini"].viewport });
 
-  test("the types sidebar opens from the menu button", async ({ page }) => {
+  test("the sidebar opens from the menu button", async ({ page }) => {
     await logIn(page);
-    const nav = page.getByRole("navigation", { name: "Types" });
-    const tasks = nav.getByRole("link", { name: "Tasks" });
-    await expect(tasks).not.toBeInViewport();
+    const nav = page.getByRole("navigation", { name: "Main" });
+    const types = nav.getByRole("link", { name: "Types" });
+    await expect(types).not.toBeInViewport();
     await page.getByRole("button", { name: "Menu" }).click();
-    await expect(tasks).toBeInViewport();
-    await tasks.click();
-    await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
-    await expect(tasks).not.toBeInViewport();
+    await expect(types).toBeInViewport();
+    await types.click();
+    await expect(page.getByRole("heading", { name: "Types" })).toBeVisible();
+    await expect(types).not.toBeInViewport();
   });
 });

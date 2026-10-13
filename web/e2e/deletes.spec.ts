@@ -51,7 +51,8 @@ test("a type with notes is refused with their count, and deleted once they are g
   page.once("dialog", (d) => void d.accept());
   await page.getByRole("button", { name: "Delete type" }).click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("navigation", { name: "Types" }).getByRole("link", { name })).toHaveCount(0);
+  await page.goto("/types");
+  await expect(page.getByRole("list", { name: "Types" }).getByRole("link", { name })).toHaveCount(0);
   expect(existsSync(join(vaultDir(), "types", `${name}.wcl`))).toBe(false);
 });
 

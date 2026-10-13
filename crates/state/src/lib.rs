@@ -6,6 +6,7 @@
 mod auth;
 mod history;
 mod jobs;
+mod pins;
 mod runs;
 mod secrets;
 
@@ -85,7 +86,7 @@ pub struct State {
     clock: Arc<dyn Clock>,
 }
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -172,6 +173,15 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 ";
 
+/// What version 4 adds: the notes pinned to the sidebar, in the order they show.
+const SCHEMA_V4: &str = "
+CREATE TABLE IF NOT EXISTS pins (
+    note_id   TEXT PRIMARY KEY,
+    position  INTEGER NOT NULL,
+    pinned_ms INTEGER NOT NULL
+);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -245,7 +255,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=2 => {
+        0..=3 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -253,7 +263,10 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             if version <= 1 {
                 tx.execute_batch(SCHEMA_V2)?;
             }
-            tx.execute_batch(SCHEMA_V3)?;
+            if version <= 2 {
+                tx.execute_batch(SCHEMA_V3)?;
+            }
+            tx.execute_batch(SCHEMA_V4)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

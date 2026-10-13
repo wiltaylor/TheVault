@@ -735,7 +735,7 @@ export function TypeEditor() {
         <h2>Handlers</h2>
         <p class="muted">
           Scripts that run when a note of this type is created, updated or deleted. Handlers for one event run in
-          this order. <A href="/scripts">Edit scripts</A>
+          this order. <A href="/settings/scripts">Edit scripts</A>
         </p>
         <For each={model.handlers} fallback={<p class="muted">No handlers.</p>}>
           {(h, i) => <HandlerCard handler={h} index={i()} />}

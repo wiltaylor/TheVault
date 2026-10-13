@@ -325,7 +325,7 @@ test("changing the tile URL setting changes the tile requests", async ({ page, a
   await expect(map.getByTestId("map-pin")).toHaveCount(1);
   await expect.poll(() => seen.filter((u) => u.startsWith(OPENFREEMAP) && tileRequest.test(u)).length).toBeGreaterThan(0);
 
-  await page.getByRole("navigation", { name: "Types" }).getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("link", { name: "Settings" }).click();
   const tiles = page.getByLabel("Tile URL");
   await tiles.fill("not a url");
   await expect(page.getByText("The tile URL must be an absolute http or https URL.")).toBeVisible();

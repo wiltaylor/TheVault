@@ -29,6 +29,7 @@ mod error;
 mod inspect;
 mod notes;
 mod openapi;
+mod pins;
 mod query;
 mod tasks;
 mod tokens;
@@ -139,6 +140,9 @@ fn build() -> Built {
         .post("/api/query/parse", query::parse_query)
         .post("/api/query/text", query::model_text)
         .get("/api/search", query::search)
+        .get("/api/pins", pins::list)
+        .put("/api/pins/{id}", pins::pin)
+        .delete("/api/pins/{id}", pins::unpin)
         .get("/api/trash", notes::trash)
         .post("/api/trash/{id}/restore", notes::restore_from_trash)
         .get("/api/types", types::list)

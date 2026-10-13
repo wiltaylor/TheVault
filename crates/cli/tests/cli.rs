@@ -953,6 +953,12 @@ fn every_command_prints_json() {
     run("delete", &[&id, "--base", s(&c["version"])], "");
     run("trash list", &[], "");
     run("trash restore", &[&id], "");
+    let pinned = run("pin add", &[&id], "");
+    assert_eq!(pinned["id"], id.as_str());
+    let pins = run("pin list", &[], "");
+    assert_eq!(pins["pins"][0]["id"], id.as_str());
+    run("pin remove", &[&id], "");
+    assert_eq!(run("pin list", &[], "")["pins"], json!([]));
     let ops = json!([{ "op": "create", "type": "task", "wcl": "title = \"B\"\n" }]).to_string();
     run("batch", &["--dry-run"], &ops);
     run(

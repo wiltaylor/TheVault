@@ -23,7 +23,7 @@ export function TaskList() {
     <section class="list-page">
       <header class="note-header">
         <h1>Tasks</h1>
-        <A href="/tasks/new" class="button">
+        <A href="/settings/tasks/new" class="button">
           New task
         </A>
       </header>
@@ -49,7 +49,7 @@ export function TaskList() {
                   {(t) => (
                     <tr data-task={t.name} classList={{ failing: t.failing }}>
                       <td>
-                        <A href={`/tasks/${t.name}`}>{t.label ?? t.name}</A>
+                        <A href={`/settings/tasks/${t.name}`}>{t.label ?? t.name}</A>
                         <Show when={t.paused}>
                           <span class="badge muted-badge">paused</span>
                         </Show>
@@ -182,7 +182,7 @@ export function TaskEditor() {
     try {
       const t = await api.putTask(name(), taskWcl(model));
       if (isNew()) {
-        navigate(`/tasks/${name()}`);
+        navigate(`/settings/tasks/${name()}`);
         return;
       }
       setTask(t);
@@ -216,7 +216,7 @@ export function TaskEditor() {
     setBusy(true);
     try {
       await api.deleteTask(name());
-      navigate("/tasks");
+      navigate("/settings/tasks");
     } catch (e) {
       setError(errorText(e));
       setBusy(false);
@@ -247,7 +247,7 @@ export function TaskEditor() {
         <header class="note-header">
           <div>
             <p class="note-kind">
-              <A href="/tasks">Tasks</A>
+              <A href="/settings/tasks">Tasks</A>
             </p>
             <h1>
               {model.label || name() || "New task"}
@@ -324,7 +324,7 @@ export function TaskEditor() {
               onChange={(e) => setModel("secrets", lines(e.currentTarget.value))}
             />
             <p class="muted hint">
-              Known secrets: {secrets().length ? secrets().join(", ") : "none"}. <A href="/secrets">Set values</A>
+              Known secrets: {secrets().length ? secrets().join(", ") : "none"}. <A href="/settings/secrets">Set values</A>
             </p>
           </div>
           <label for="task-retries">Retries</label>
