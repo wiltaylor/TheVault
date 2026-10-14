@@ -18,6 +18,8 @@ function linkTarget(e: MouseEvent): { a: HTMLAnchorElement | SVGAElement; url: s
     .composedPath()
     .find((el): el is HTMLAnchorElement | SVGAElement => el instanceof Element && el.nodeName.toUpperCase() === "A");
   if (!a) return null;
+  // Links in editable text are the editor's to follow, so that a click that selects stays put.
+  if (a instanceof HTMLElement && a.isContentEditable) return null;
   if (a.hasAttribute("download")) return null;
   const rel = (a.getAttribute("rel") ?? "").split(/\s+/);
   if (rel.includes("external")) return null;
@@ -38,6 +40,30 @@ export function openInBackground(url: string) {
 /** Whether a click asks for a new tab rather than this pane. */
 export function wantsNewTab(e: MouseEvent): boolean {
   return e.button === 1 || ((e.ctrlKey || e.metaKey) && e.button === 0 && !e.shiftKey && !e.altKey);
+}
+
+/**
+ * Follow `href` as a click on a link to it would, for links the browser does not follow itself,
+ * such as those in the editor: an in-app location opens in the pane `from` is in, or in a
+ * background tab when `background`; another site opens in a new browser tab. Anything else is
+ * left alone. Returns whether it went anywhere.
+ */
+export function followLink(href: string, from: Element, background: boolean): boolean {
+  const url = new URL(href, document.baseURI);
+  const path = url.pathname + url.search + url.hash;
+  if (url.origin === window.location.origin && (M.isAppPath(path) || url.pathname === "/")) {
+    if (background) {
+      openInBackground(path);
+    } else {
+      const pane = paneAt(from);
+      navigatePane(pane, path);
+      scrollPaneTop(pane);
+    }
+    return true;
+  }
+  if (!/^(https?|mailto):$/.test(url.protocol)) return false;
+  window.open(url.href, "_blank", "noopener,noreferrer");
+  return true;
 }
 
 function onClick(e: MouseEvent) {

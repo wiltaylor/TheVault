@@ -1,13 +1,13 @@
 import { mentionText } from "./titles";
 import type { SolidNodeViewProps } from "./solidNodeView";
 
-/** A mention inside the editor: its label, or its target's current title. */
+/** A mention inside the editor: its label, or its target's current title, linking to the note. */
 export function MentionChip(props: SolidNodeViewProps) {
   const id = () => String(props.node().attrs.id ?? "");
   const label = () => (props.node().attrs.label as string | null) ?? null;
   return (
-    <span class="mention" data-testid="mention" data-id={id()} title={id()}>
+    <a class="mention" href={`/notes/${id()}`} draggable={false} data-testid="mention" data-id={id()} title={id()}>
       {mentionText(id(), label())}
-    </span>
+    </a>
   );
 }

@@ -963,6 +963,11 @@ mark {
   outline: none;
 }
 
+/* A click on a link or mention in the editor opens it. */
+.content-editor-doc a[href] {
+  cursor: pointer;
+}
+
 .content-editor-doc ul[data-type="taskList"] {
   list-style: none;
   padding-left: 0.5rem;

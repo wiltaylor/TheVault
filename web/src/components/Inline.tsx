@@ -5,6 +5,8 @@ import { FieldRefs } from "./fieldRefs";
 
 /** Only these link targets render as links; anything else shows as plain text. */
 const SAFE_HREF = /^(https?:|mailto:|\/|#)/i;
+/** Link targets inside the app: a path on this site, or a place on this page. */
+const IN_APP_HREF = /^(\/(?!\/)|#)/;
 
 function wrap(mark: Mark, child: JSX.Element): JSX.Element {
   switch (mark.type) {
@@ -27,12 +29,15 @@ function wrap(mark: Mark, child: JSX.Element): JSX.Element {
         </span>
       );
     case "link":
-      return SAFE_HREF.test(mark.attrs.href) ? (
+      if (!SAFE_HREF.test(mark.attrs.href)) return child;
+      // A link into the app opens in the pane, as the workspace opens every in-app link;
+      // another site opens in a new browser tab.
+      return IN_APP_HREF.test(mark.attrs.href) ? (
+        <a href={mark.attrs.href}>{child}</a>
+      ) : (
         <a href={mark.attrs.href} target="_blank" rel="noopener noreferrer">
           {child}
         </a>
-      ) : (
-        child
       );
   }
 }

@@ -2,11 +2,14 @@
 // the mention picker, column layouts and a holder for content blocks this editor does not edit
 // yet (D29, D34).
 
-import { type AnyExtension, Mark, Node, mergeAttributes, nodeInputRule } from "@tiptap/core";
+import { type AnyExtension, Extension, Mark, Node, mergeAttributes, nodeInputRule } from "@tiptap/core";
 import Code from "@tiptap/extension-code";
 import Highlight from "@tiptap/extension-highlight";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
+import type { EditorView } from "@tiptap/pm/view";
 import StarterKit from "@tiptap/starter-kit";
+import { followLink, wantsNewTab } from "../workspace/events";
 import { BlockHolder } from "./BlockHolder";
 import {
   type BlockHandleOptions,
@@ -104,6 +107,57 @@ export const Mention = Node.create({
   },
   addNodeView() {
     return solidNodeView(MentionChip);
+  },
+});
+
+/** The link or mention a mouse event in the editor is on, as its `<a>`. */
+function linkAt(view: EditorView, e: MouseEvent): HTMLAnchorElement | null {
+  const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+  return a instanceof HTMLAnchorElement && view.dom.contains(a) ? a : null;
+}
+
+/**
+ * Links and mentions in the editor open when clicked, though the browser follows no link in
+ * editable text: a click opens a note in the pane, Ctrl/Cmd+click or a middle-click opens it in
+ * a background tab, and a link to another site opens in a new browser tab. A click that selects
+ * (a drag across the link, a double click) only selects; the caret goes into a link's text
+ * from beside it or with the keyboard, and the selection bubble edits the link.
+ */
+export const FollowLinks = Extension.create({
+  name: "followLinks",
+  addProseMirrorPlugins() {
+    const follow = (view: EditorView, e: MouseEvent, background: boolean) => {
+      const a = linkAt(view, e);
+      if (!a || !followLink(a.getAttribute("href")!, a, background)) return false;
+      e.preventDefault();
+      return true;
+    };
+    // Where the last press went down: a click that ends elsewhere was a drag that selected.
+    let down: { x: number; y: number } | null = null;
+    return [
+      new Plugin({
+        key: new PluginKey("followLinks"),
+        props: {
+          handleDOMEvents: {
+            mousedown: (view, e) => {
+              down = { x: e.clientX, y: e.clientY };
+              if (!linkAt(view, e)) return false;
+              // A middle press on a link would paste or start the browser's autoscroll, and a
+              // Ctrl/Cmd press would select the block around it.
+              if (e.button !== 1 && !(e.button === 0 && wantsNewTab(e))) return false;
+              e.preventDefault();
+              return true;
+            },
+            click: (view, e) => {
+              if (e.defaultPrevented || e.button !== 0 || e.altKey || e.shiftKey || e.detail > 1) return false;
+              if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 3) return false;
+              return follow(view, e, wantsNewTab(e));
+            },
+            auxclick: (view, e) => e.button === 1 && !e.defaultPrevented && follow(view, e, true),
+          },
+        },
+      }),
+    ];
   },
 });
 
@@ -277,6 +331,7 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
     TaskItem.configure({ nested: true }),
     Mention,
     MentionPickerNode,
+    FollowLinks,
     VaultBlock,
   ];
 }
