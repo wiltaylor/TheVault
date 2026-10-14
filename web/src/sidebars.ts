@@ -3,6 +3,7 @@
 // browser. On a phone they are drawers instead, closed until asked for.
 
 import { type JSX, createRoot, createSignal } from "solid-js";
+import type { Note } from "./api";
 
 export const SIDEBARS_KEY = "thevault.sidebars";
 
@@ -11,8 +12,8 @@ export const MAX_WIDTH = 560;
 export const LEFT_DEFAULT = 240;
 export const RIGHT_DEFAULT = 320;
 
-/** The right sidebar's panels. Only one so far. */
-export const PANELS = ["properties"] as const;
+/** The right sidebar's panels, one shown at a time. */
+export const PANELS = ["properties", "history"] as const;
 export type Panel = (typeof PANELS)[number];
 
 export type Side = "left" | "right";
@@ -141,23 +142,45 @@ export function resizeSidebar(side: Side, width: number) {
   update((s) => setWidth(s, side, width));
 }
 
-/** Open the right sidebar on `panel` and move focus to it. */
+/** Show `panel` in the right sidebar, open or not. */
+export function setPanel(panel: Panel) {
+  if (state.sidebars().right.panel !== panel) update((s) => ({ ...s, right: { ...s.right, panel } }));
+}
+
+/** Open the right sidebar on `panel` (its drawer on a phone) and move focus to it. */
 export function focusPanel(panel: Panel) {
-  if (matches(RIGHT_DRAWER)) setRightDrawer(true);
-  else update((s) => showPanel(s, panel));
+  if (matches(RIGHT_DRAWER)) {
+    setPanel(panel);
+    setRightDrawer(true);
+  } else update((s) => showPanel(s, panel));
   queueMicrotask(() => document.getElementById(`${panel}-panel`)?.focus());
 }
 
-/** What a mounted note page gives the Properties panel: the editors of its unplaced fields. */
-export interface PropertiesSource {
-  noteId: () => string;
-  render: () => JSX.Element;
+/** Reactive: whether the right sidebar shows `panel` now, as a column or a drawer. */
+export function panelShown(panel: Panel): boolean {
+  return sidebarShown("right", rightIsDrawer()) && sidebars().right.panel === panel;
 }
 
-const [sources, setSources] = createRoot(() => createSignal<Record<string, PropertiesSource>>({}));
+/**
+ * What a mounted note page gives the right sidebar's panels: the editors of its unplaced fields
+ * (Properties), and its note's version and save path (History).
+ */
+export interface NoteSource {
+  /** The note's id; empty for a new note not created yet. */
+  noteId: () => string;
+  /** Reactive: the stored version the page holds, which changes on every save. */
+  version: () => string;
+  render: () => JSX.Element;
+  /** Save any unsaved edits now. False when they could not be saved (a conflict, an error). */
+  flush: () => Promise<boolean>;
+  /** Take `note`, just written by a restore, as the live note. */
+  restored: (note: Note) => void;
+}
 
-/** A note page in `pane` offers its properties; returns the withdrawal. */
-export function offerProperties(pane: string, source: PropertiesSource): () => void {
+const [sources, setSources] = createRoot(() => createSignal<Record<string, NoteSource>>({}));
+
+/** A note page in `pane` offers itself to the panels; returns the withdrawal. */
+export function offerNote(pane: string, source: NoteSource): () => void {
   setSources((all) => ({ ...all, [pane]: source }));
   return () =>
     setSources((all) => {
@@ -168,7 +191,7 @@ export function offerProperties(pane: string, source: PropertiesSource): () => v
     });
 }
 
-/** Reactive: the properties the note page in `pane` offers, if it shows one. */
-export function propertiesOf(pane: string): PropertiesSource | undefined {
+/** Reactive: what the note page in `pane` offers, if it shows one. */
+export function noteOf(pane: string): NoteSource | undefined {
   return sources()[pane];
 }

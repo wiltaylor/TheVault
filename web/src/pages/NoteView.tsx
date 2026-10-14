@@ -1,4 +1,4 @@
-import { A, useNavigate, useParams, useSearchParams } from "@solidjs/router";
+import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import { For, type JSX, Show, batch, createEffect, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, type TypeDef, api } from "../api";
 import { type Autosave, type SaveState, createAutosave } from "../autosave";
@@ -29,7 +29,10 @@ import {
 import { changes } from "../changes";
 import { isPinned, togglePin } from "../pins";
 import { typeDef } from "../session";
-import { focusPanel, offerProperties, rightIsDrawer, sidebarShown, sidebars, toggleSidebar } from "../sidebars";
+import { focusPanel, offerNote, panelShown, rightIsDrawer, toggleSidebar } from "../sidebars";
+import { authorText, when } from "../admin/format";
+import { type Preview, previewOf, setPreview } from "../history/preview";
+import { restoreVersion } from "../history/restore";
 import { activePane } from "../workspace/model";
 import { usePane } from "../workspace/pane";
 import { workspace } from "../workspace/store";
@@ -149,15 +152,34 @@ export function NoteView(props: { newType?: string; id?: string }) {
   let autosave: Autosave | null = null;
   let loadedId = "";
 
-  /** Whether the right sidebar shows this note's properties now. */
-  const propertiesShown = () =>
-    sidebarShown("right", rightIsDrawer()) && sidebars().right.panel === "properties" && (!pane || activePane(workspace()) === pane.id);
+  /** Whether the right sidebar shows this note's properties, or its history, now. */
+  const isActive = () => !pane || activePane(workspace()) === pane.id;
+  const propertiesShown = () => panelShown("properties") && isActive();
+  const historyShown = () => panelShown("history") && isActive();
 
   /** The properties button: open the right sidebar on this note's properties, or close it. */
   function toggleProperties() {
     if (propertiesShown()) toggleSidebar("right", false);
     else focusPanel("properties");
   }
+
+  /** The history button: open the right sidebar on this note's versions, or close it. */
+  function toggleHistory() {
+    if (historyShown()) toggleSidebar("right", false);
+    else focusPanel("history");
+  }
+
+  /** The version of this note the History panel shows in this pane, read-only, if any. */
+  const preview = (): Preview | undefined => {
+    const p = pane ? previewOf(pane.id) : undefined;
+    const n = note();
+    return p && n && p.noteId === n.id ? p : undefined;
+  };
+  /** The note as the page shows it: the previewed version, or the note as edited. */
+  const shown = (): NoteDoc => preview()?.note.note ?? doc();
+  const endPreview = () => {
+    if (pane) setPreview(pane.id, null);
+  };
 
   /** The autosave for the note `id`: each save sends what is edited now over the last version. */
   function autosaveFor(id: string): Autosave {
@@ -206,6 +228,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
       async (id) => {
         // Whatever the last note had unsaved goes now, over that note.
         void autosave?.flush();
+        endPreview();
         autosave = null;
         loadedId = props.newType ? "" : (id ?? "");
         setNote(null);
@@ -301,11 +324,16 @@ export function NoteView(props: { newType?: string; id?: string }) {
         {(n) => (
           <ThisNote.Provider value={n().id || undefined}>
             <Show when={!conflict()} fallback={<p class="muted">Resolve the conflict in the pane first.</p>}>
-              <Show when={generation() + 1} keyed>
+              <Show when={layoutKey()} keyed>
                 {(_) => (
-                  <For each={type() ? unplacedFields(type()!, doc()) : []} fallback={<p class="muted">Every property is on the page.</p>}>
-                    {(f) => <Property field={f} label={f.label} ns="properties-" />}
-                  </For>
+                  <fieldset class="preview-lock" disabled={!!preview()}>
+                    <Show when={preview()}>
+                      <p class="muted preview-note">Showing the version from {when(preview()!.at)}, read-only.</p>
+                    </Show>
+                    <For each={type() ? unplacedFields(type()!, shown()) : []} fallback={<p class="muted">Every property is on the page.</p>}>
+                      {(f) => <Property field={f} label={f.label} ns="properties-" />}
+                    </For>
+                  </fieldset>
                 )}
               </Show>
             </Show>
@@ -314,7 +342,55 @@ export function NoteView(props: { newType?: string; id?: string }) {
       </Show>
     </div>
   );
-  if (pane) onCleanup(offerProperties(pane.id, { noteId: () => note()?.id ?? "", render: renderProperties }));
+  /** A restore wrote `saved`: it is the live note now. */
+  function takeRestored(saved: Note) {
+    if (saved.id !== note()?.id) return;
+    autosave?.cancel();
+    batch(() => {
+      setNote(saved);
+      setDoc(saved.note);
+      setGeneration(generation() + 1);
+      setConflict(null);
+      setSaveState("idle");
+      endPreview();
+    });
+  }
+
+  if (pane) {
+    onCleanup(
+      offerNote(pane.id, {
+        noteId: () => note()?.id ?? "",
+        version: () => note()?.version ?? "",
+        render: renderProperties,
+        flush: async () => {
+          await autosave?.flush();
+          return !conflict() && !autosave?.dirty();
+        },
+        restored: takeRestored,
+      }),
+    );
+    // Leaving the note (another page in the pane, the pane closing) ends its preview.
+    onCleanup(endPreview);
+  }
+
+  /** Restore the previewed version, after asking. */
+  async function restorePreview() {
+    const p = preview();
+    const n = note();
+    if (!p || !n || !pane) return;
+    setSaveError(null);
+    const err = await restoreVersion(pane.id, p);
+    if (err) setSaveError(err);
+  }
+
+  // Escape anywhere returns to the live note while a version shows.
+  const onPreviewKey = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || e.defaultPrevented || !preview()) return;
+    e.preventDefault();
+    endPreview();
+  };
+  onMount(() => document.addEventListener("keydown", onPreviewKey));
+  onCleanup(() => document.removeEventListener("keydown", onPreviewKey));
 
   const onHidden = () => {
     if (document.visibilityState === "hidden") flush();
@@ -340,6 +416,8 @@ export function NoteView(props: { newType?: string; id?: string }) {
 
   /** Apply an edit to the note, and save it after a pause (a draft waits for Create). */
   function edit(fn: (d: NoteDoc) => NoteDoc) {
+    // A version on show is read-only: nothing edits or saves until the live note is back.
+    if (preview()) return;
     setDoc(fn(doc()));
     autosave?.schedule();
   }
@@ -421,7 +499,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
   }
 
   /** `{{name}}` in the template's fixed blocks shows the note's values as edited. */
-  const refs: FieldRefValues = { text: (name) => refText(type(), doc(), name) };
+  const refs: FieldRefValues = { text: (name) => refText(type(), shown(), name) };
 
   const status = (): string => {
     if (props.newType) return missing().length ? `Required: ${missing().join(", ")}` : "";
@@ -441,20 +519,63 @@ export function NoteView(props: { newType?: string; id?: string }) {
 
   // Controls anywhere on the page (the template, the note's content, a canvas card) edit this
   // note's fields through the same edit path as the field editors.
+  // While a version shows, they show its values and cannot write.
+  const write = (f: FieldDef, v: Json | undefined) => setField(f, v);
   const controls: ControlBinding = {
     type: () => type(),
-    value: (f) => fieldValue(doc(), f),
-    set: (f, v) => setField(f, v),
+    value: (f) => fieldValue(shown(), f),
+    get set() {
+      return preview() ? undefined : write;
+    },
+    get reason() {
+      return preview() ? "Viewing an older version." : undefined;
+    },
     noteId: () => note()?.id || undefined,
   };
+  /** The editors remount when the note is replaced from outside, or a preview starts or ends. */
+  const layoutKey = () => `${generation()}:${preview()?.version ?? ""}`;
 
   return (
     <ControlBindingContext.Provider value={controls}>
     <article
       class="note-view"
+      classList={{ previewing: !!preview() }}
       data-save-state={saveState()}
       onFocusOut={flushOnLeave}
     >
+      <Show when={preview()}>
+        {(p) => (
+          <div class="preview-banner" role="region" aria-label="Version preview">
+            <span class="preview-banner-text">
+              Viewing the version from <time datetime={new Date(p().at).toISOString()}>{when(p().at)}</time> by {authorText(p().author)}
+            </span>
+            <span class="preview-banner-actions">
+              <button type="button" class="link" onClick={() => void restorePreview()}>
+                Restore this version
+              </button>
+              <span class="preview-banner-action">
+                <span aria-hidden="true">·</span>
+                <button type="button" class="link" onClick={endPreview}>
+                  Back to current
+                </button>
+              </span>
+              <Show when={rightIsDrawer()}>
+                <span class="preview-banner-action">
+                  <span aria-hidden="true">·</span>
+                  <button type="button" class="link" onClick={() => focusPanel("history")}>
+                    Versions
+                  </button>
+                </span>
+              </Show>
+            </span>
+            <Show when={saveError()}>
+              <p class="error" role="alert">
+                {saveError()}
+              </p>
+            </Show>
+          </div>
+        )}
+      </Show>
       <Show when={loadError()}>
         <p class="error" role="alert">
           {loadError()}
@@ -478,7 +599,9 @@ export function NoteView(props: { newType?: string; id?: string }) {
                       rows={1}
                       autocomplete="off"
                       spellcheck={false}
-                      value={typeof doc().fields.title === "string" ? (doc().fields.title as string) : ""}
+                      readOnly={!!preview()}
+                      aria-readonly={preview() ? "true" : undefined}
+                      value={typeof shown().fields.title === "string" ? (shown().fields.title as string) : ""}
                       ref={(el) => fitTitle(el)}
                       onInput={(e) => {
                         const el = e.currentTarget;
@@ -517,9 +640,17 @@ export function NoteView(props: { newType?: string; id?: string }) {
                     >
                       <PinIcon filled={isPinned(n().id)} />
                     </button>
-                    <A href={`/notes/${n().id}/history`} class="icon-button" aria-label="History" title="History">
+                    <button
+                      type="button"
+                      class="icon-button history-toggle"
+                      aria-label="History"
+                      title="History"
+                      aria-expanded={historyShown()}
+                      aria-controls="history-panel"
+                      onClick={toggleHistory}
+                    >
                       <HistoryIcon />
-                    </A>
+                    </button>
                     <button
                       type="button"
                       class="icon-button danger"
@@ -591,9 +722,11 @@ export function NoteView(props: { newType?: string; id?: string }) {
                         </For>
                       </div>
                     </Show>
-                    {/* Keyed on the generation: a note replaced from outside remounts its editors. */}
-                    <Show when={generation() + 1} keyed>
+                    {/* Keyed on the generation and the preview: a note replaced from outside, or a version
+                        shown in its place, remounts the editors. */}
+                    <Show when={layoutKey()} keyed>
                       {(_) => (
+                        <fieldset class="preview-lock" disabled={!!preview()}>
                         <div
                           id={`${uid}tab-panel`}
                           role={tabs().length > 1 ? "tabpanel" : undefined}
@@ -625,6 +758,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
                             }
                           </For>
                         </div>
+                        </fieldset>
                       )}
                     </Show>
                   </div>
@@ -674,17 +808,29 @@ export function NoteView(props: { newType?: string; id?: string }) {
     const id = `${p.ns}field-input-${f.name}`;
     if (f.computed) {
       return (
-        <Show when={f.compound && f.kind !== "dict"} fallback={<Display field={f} value={fieldValue(doc(), f)} />}>
-          <Blocks blocks={compoundBlock(doc(), f)?.blocks ?? []} />
+        <Show when={f.compound && f.kind !== "dict"} fallback={<Display field={f} value={fieldValue(shown(), f)} />}>
+          <Blocks blocks={compoundBlock(shown(), f)?.blocks ?? []} />
         </Show>
       );
+    }
+    // A version on show: the same layout, nothing editable. Inputs sit in a disabled fieldset.
+    if (preview()) {
+      if (f.kind === "content") {
+        return (
+          <div class="content-readonly" role="document" aria-label={p.label}>
+            <Blocks blocks={compoundBlock(shown(), f)?.blocks ?? []} />
+          </div>
+        );
+      }
+      if (f.kind === "ink") return <InkSurface label={p.label} block={compoundBlock(shown(), f)} />;
+      if (f.kind === "canvas") return <CanvasSurface label={p.label} block={compoundBlock(shown(), f)} />;
     }
     switch (f.kind) {
       case "content":
         return (
           <ContentEditor
             label={p.label}
-            blocks={compoundBlock(doc(), f)?.blocks ?? []}
+            blocks={compoundBlock(shown(), f)?.blocks ?? []}
             onChange={(blocks) => edit((d) => applyBlocks(d, f, blocks))}
           />
         );
@@ -692,7 +838,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
         return (
           <InkSurface
             label={p.label}
-            block={compoundBlock(doc(), f)}
+            block={compoundBlock(shown(), f)}
             onChange={(block) => edit((d) => applyCompound(d, f, block))}
           />
         );
@@ -700,7 +846,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
         return (
           <CanvasSurface
             label={p.label}
-            block={compoundBlock(doc(), f)}
+            block={compoundBlock(shown(), f)}
             onChange={(block) => edit((d) => applyCompound(d, f, block))}
           />
         );
@@ -708,7 +854,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
     if (hasInput(f)) {
       return <FieldInput
           field={f}
-          value={fieldValue(doc(), f)}
+          value={fieldValue(shown(), f)}
           onChange={(v) => setField(f, v)}
           label={p.label}
           id={id}
@@ -716,8 +862,8 @@ export function NoteView(props: { newType?: string; id?: string }) {
         />;
     }
     return (
-      <Show when={f.compound && f.kind !== "dict"} fallback={<Display field={f} value={fieldValue(doc(), f)} />}>
-        <Blocks blocks={compoundBlock(doc(), f)?.blocks ?? []} />
+      <Show when={f.compound && f.kind !== "dict"} fallback={<Display field={f} value={fieldValue(shown(), f)} />}>
+        <Blocks blocks={compoundBlock(shown(), f)?.blocks ?? []} />
       </Show>
     );
   }

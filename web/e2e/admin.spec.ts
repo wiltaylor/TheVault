@@ -151,14 +151,18 @@ test("a note is restored from its history and from the trash in the UI", async (
   expect(res.status(), await res.text()).toBe(200);
 
   await logIn(page, `/notes/${note.id}`);
-  await page.getByRole("link", { name: "History" }).click();
-  await expect(page).toHaveURL(new RegExp(`/notes/${note.id}/history$`));
-  const versions = page.getByRole("list", { name: "Versions" }).getByRole("listitem");
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/notes/${note.id}$`));
+  const versions = page.getByRole("complementary", { name: "History" }).getByRole("list", { name: "Versions" }).getByRole("listitem");
   await expect(versions).toHaveCount(2);
   await expect(versions.first()).toContainText("current");
-  await versions.last().getByRole("button").click();
-  await expect(page.getByRole("region", { name: "Chosen version" })).toContainText(`First ${t}`);
-  await page.getByRole("button", { name: "Restore this version" }).click();
+  await versions.last().getByRole("button").first().click();
+  const preview = page.getByRole("region", { name: "Version preview" });
+  await expect(preview).toBeVisible();
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue(`First ${t}`);
+  page.once("dialog", (d) => void d.accept());
+  await preview.getByRole("button", { name: "Restore this version" }).click();
+  await expect(preview).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`/notes/${note.id}$`));
   await expect(page.getByRole("heading", { level: 1, name: `First ${t}`, exact: true })).toBeVisible();
   expect((await readNote(admin, note.id)).body.note.fields.title).toBe(`First ${t}`);

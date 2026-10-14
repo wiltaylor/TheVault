@@ -1,15 +1,19 @@
 import { Navigate, useLocation } from "@solidjs/router";
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { HistoryPanel } from "../history/HistoryPanel";
+import { endPreviews } from "../history/preview";
 import { sessionState } from "../session";
 import {
   type Side,
   MAX_WIDTH,
   MIN_WIDTH,
+  type Panel,
   leftDrawer,
-  propertiesOf,
+  noteOf,
   resizeSidebar,
   rightDrawer,
   setLeftDrawer,
+  setPanel,
   setRightDrawer,
   sidebars,
   toggleSidebar,
@@ -100,17 +104,50 @@ function Resizer(props: { side: Side }) {
   );
 }
 
-/** The right sidebar: context for the active pane, a column of panels (Properties for now). */
+const PANEL_TABS: { panel: Panel; label: string }[] = [
+  { panel: "properties", label: "Properties" },
+  { panel: "history", label: "History" },
+];
+
+/** The right sidebar: context for the active pane, one panel at a time (Properties, History). */
 function RightSidebar(props: { shown: boolean }) {
-  const source = () => propertiesOf(activePane(workspace()));
+  const pane = () => activePane(workspace());
+  const source = () => noteOf(pane());
+  const panel = () => sidebars().right.panel;
+  // The History panel starts again for each pane and note it follows.
+  const historyOf = createMemo(() => {
+    const s = source();
+    const id = s?.noteId();
+    return s && id ? { pane: pane(), source: s, id } : null;
+  }, null, { equals: (a, b) => a?.pane === b?.pane && a?.source === b?.source && a?.id === b?.id });
+  function onTabKey(e: KeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const i = PANEL_TABS.findIndex((t) => t.panel === panel());
+    const next = PANEL_TABS[(i + (e.key === "ArrowRight" ? 1 : PANEL_TABS.length - 1)) % PANEL_TABS.length]!;
+    setPanel(next.panel);
+    document.getElementById(`${next.panel}-tab`)?.focus();
+  }
   return (
     <div id="right-sidebar" class="right-sidebar">
       <Resizer side="right" />
       <div class="sidebar-head right-head">
-        <div class="panel-tabs" role="tablist" aria-label="Panels">
-          <button type="button" role="tab" aria-selected={sidebars().right.panel === "properties"} aria-controls="properties-panel">
-            Properties
-          </button>
+        <div class="panel-tabs" role="tablist" aria-label="Panels" onKeyDown={onTabKey}>
+          <For each={PANEL_TABS}>
+            {(t) => (
+              <button
+                type="button"
+                role="tab"
+                id={`${t.panel}-tab`}
+                aria-selected={panel() === t.panel}
+                aria-controls={`${t.panel}-panel`}
+                tabindex={panel() === t.panel ? 0 : -1}
+                onClick={() => setPanel(t.panel)}
+              >
+                {t.label}
+              </button>
+            )}
+          </For>
         </div>
         <button
           type="button"
@@ -122,13 +159,24 @@ function RightSidebar(props: { shown: boolean }) {
           <Chevron dir="right" />
         </button>
       </div>
-      <aside id="properties-panel" class="side-panel" aria-label="Properties" tabindex={-1}>
-        <Show when={props.shown}>
-          <Show when={source()} keyed fallback={<p class="muted">Open a note to see its properties.</p>}>
-            {(s) => s.render()}
+      <Show when={panel() === "properties"}>
+        <aside id="properties-panel" class="side-panel" aria-label="Properties" tabindex={-1}>
+          <Show when={props.shown}>
+            <Show when={source()} keyed fallback={<p class="muted">Open a note to see its properties.</p>}>
+              {(s) => s.render()}
+            </Show>
           </Show>
-        </Show>
-      </aside>
+        </aside>
+      </Show>
+      <Show when={panel() === "history"}>
+        <aside id="history-panel" class="side-panel" aria-label="History" tabindex={-1}>
+          <Show when={props.shown}>
+            <Show when={historyOf()} keyed fallback={<p class="muted">Open a note to see its history.</p>}>
+              {(h) => <HistoryPanel pane={h.pane} source={h.source} />}
+            </Show>
+          </Show>
+        </aside>
+      </Show>
     </div>
   );
 }
@@ -144,6 +192,13 @@ export function Shell() {
   const leftIsDrawer = mediaSignal(LEFT_DRAWER);
   const rightIsDrawer = mediaSignal(RIGHT_DRAWER);
   const rightShown = () => (rightIsDrawer() ? rightDrawer() : sidebars().right.open);
+  // A version shows in a pane only while the History panel lists its versions: switching the
+  // panel, closing the sidebar or moving to another pane returns to the live note. On a phone the
+  // drawer closes to show the version, so there only switching the panel ends it.
+  createEffect(() => {
+    const listed = sidebars().right.panel === "history" && (rightIsDrawer() || sidebars().right.open);
+    endPreviews(listed ? activePane(workspace()) : undefined);
+  });
   const closeDrawers = () => {
     setLeftDrawer(false);
     setRightDrawer(false);

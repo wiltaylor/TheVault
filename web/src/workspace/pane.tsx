@@ -47,13 +47,14 @@ const NAMES: [RegExp, string][] = [
 /** A name for the page at `url`, from the location alone. Reactive: note titles load. */
 export function locationTitle(url: string): PageTitle {
   const path = url.split(/[?#]/)[0]!;
-  const note = /^\/notes\/([^/]+)(\/history)?$/.exec(path);
+  // The old history address redirects to its note, so it is named as the note.
+  const note = /^\/notes\/([^/]+)(?:\/history)?$/.exec(path);
   if (note && note[1] !== "new") {
     const id = note[1]!;
     const t = noteTitle(id);
     const title = t === undefined ? "…" : (t ?? "Missing note");
     const icon = typeDef(noteType(id) ?? "")?.icon ?? null;
-    return { title: note[2] ? `History: ${title}` : title || "Untitled", icon };
+    return { title: title || "Untitled", icon };
   }
   if (path === "/notes/new") {
     const type = new URLSearchParams(url.split("?")[1] ?? "").get("type") ?? "";

@@ -26,6 +26,8 @@ describe("sidebars", () => {
     expect(toggleSide(d, "right").right.open).toBe(true);
     expect(toggleSide(d, "right", false)).toEqual(d);
     expect(showPanel(d, "properties").right).toEqual({ open: true, width: RIGHT_DEFAULT, panel: "properties" });
+    expect(showPanel(d, "history").right).toEqual({ open: true, width: RIGHT_DEFAULT, panel: "history" });
+    expect(readSidebars(JSON.stringify(showPanel(d, "history"))).right.panel).toBe("history");
     expect(setWidth(d, "left", 10).left.width).toBe(MIN_WIDTH);
     expect(setWidth(d, "right", 9999).right.width).toBe(MAX_WIDTH);
     expect(clampWidth(300.4)).toBe(300);

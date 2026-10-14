@@ -4,12 +4,13 @@ import { Navigate, Route } from "@solidjs/router";
 import { Secrets, Tokens } from "./pages/Access";
 import { Assets } from "./pages/Assets";
 import { DailyNotes } from "./pages/DailyNotes";
-import { NoteHistory, Trash } from "./pages/History";
+import { NoteHistoryRedirect } from "./history/redirect";
 import { NewNote, NoteView } from "./pages/NoteView";
 import { Search } from "./pages/Search";
 import { Settings } from "./pages/Settings";
 import { MovedToSettings, SettingsLayout } from "./pages/SettingsLayout";
 import { TaskEditor, TaskList } from "./pages/Tasks";
+import { Trash } from "./pages/Trash";
 import { TaxonomyEditor, TaxonomyList } from "./pages/TaxonomyEditor";
 import { TemplateEditor } from "./pages/TemplateEditor";
 import { TypeEditor } from "./pages/TypeEditor";
@@ -25,7 +26,7 @@ export function paneRoutes() {
       <Route path="/types/:type" component={TypeList} />
       <Route path="/notes/new" component={NewNote} />
       <Route path="/notes/:id" component={NoteView} />
-      <Route path="/notes/:id/history" component={NoteHistory} />
+      <Route path="/notes/:id/history" component={NoteHistoryRedirect} />
       <Route path="/assets" component={Assets} />
       <Route
         path={["/tasks", "/tasks/new", "/tasks/:name", "/secrets", "/tokens", "/taxonomies", "/taxonomies/new", "/taxonomies/:name"]}

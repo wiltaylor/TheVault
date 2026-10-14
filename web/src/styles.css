@@ -2297,8 +2297,7 @@ a.button {
   background: var(--danger);
 }
 
-.run-list,
-.version-list {
+.run-list {
   padding-left: 1.25rem;
   display: grid;
   gap: 0.4rem;
@@ -2308,8 +2307,7 @@ a.button {
   cursor: pointer;
 }
 
-.run-log,
-.note-wcl {
+.run-log {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 0.375rem;
@@ -2319,8 +2317,154 @@ a.button {
   font-size: 0.85rem;
 }
 
-.version-list li.chosen {
+/* History: the right sidebar's list of versions, and a version previewed in its pane. */
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.history-list li {
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+}
+
+.history-list li.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.history-item {
+  display: grid;
+  gap: 0.1rem;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.history-item:hover {
+  background: var(--hover);
+}
+
+.history-list li.selected .history-item:hover {
+  background: transparent;
+}
+
+.history-when {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
   font-weight: 600;
+}
+
+.history-current {
+  margin-left: 0;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.history-meta,
+.history-summary {
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.history-summary {
+  color: var(--ink);
+}
+
+.history-author {
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0 0.6rem 0.55rem;
+}
+
+.history-actions button {
+  padding: 0.25rem 0.65rem;
+  font-size: 0.85rem;
+}
+
+.history-more {
+  margin-top: 0.5rem;
+  width: 100%;
+}
+
+.preview-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.preview-banner-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.preview-banner-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.preview-banner .error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.preview-note {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+/* The editors of a previewed version sit in a disabled fieldset, which lays out as nothing. */
+fieldset.preview-lock {
+  display: contents;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.note-view.previewing .note-title-input {
+  cursor: default;
+}
+
+.content-readonly {
+  padding: 0.25rem 0;
+}
+
+.content-readonly > :first-child {
+  margin-top: 0;
 }
 
 button.link {
