@@ -178,11 +178,19 @@ template default {
       text = "**{{title}}** is due {{due}}, in {{status}}."
     }
     slot "subtitle"
-    slot "status"
-    slot "priority"
-    slot "due"
-    slot "estimate" {
-      label = "Hours"
+    columns {
+      column {
+        width = 1
+        slot "status"
+        slot "priority"
+      }
+      column {
+        width = 1
+        slot "due"
+        slot "estimate" {
+          label = "Hours"
+        }
+      }
     }
     slot "body"
   }

@@ -2,6 +2,7 @@
 // back as WCL in the order docs/vault-format.md gives.
 
 import type { Block, Json } from "../api";
+import { slotOfBlock, slotsOf } from "../blocks/columns";
 import { renameFieldRefs } from "../editor/markup";
 import { wclBlock, wclField, wclString } from "./wcl";
 
@@ -348,18 +349,40 @@ export function followFields(m: TypeModel): TemplateModel[] {
     const to = byOriginal.get(name) ?? (known.has(name) ? name : undefined);
     return to !== undefined && known.has(to) ? to : null;
   };
+  // A slot's field after the change, or null when the field is gone.
+  const slotName = (slot: string): string | null => {
+    if (slot === "title") return slot;
+    const name = byOriginal.get(slot) ?? (known.has(slot) ? slot : undefined);
+    return name === undefined || !known.has(name) ? null : name;
+  };
   return m.templates.map((t) => ({
     ...t,
     tabs: t.tabs.map((tab) => ({
       ...tab,
       items: tab.items.flatMap((item): TemplateItemModel[] => {
-        if (!("slot" in item)) return [{ block: followRefs(item.block, rename) }];
-        if (item.slot === "title") return [item];
-        const name = byOriginal.get(item.slot) ?? (known.has(item.slot) ? item.slot : undefined);
-        return name === undefined || !known.has(name) ? [] : [{ ...item, slot: name }];
+        if (!("slot" in item)) return [{ block: followSlots(followRefs(item.block, rename), slotName) }];
+        const name = slotName(item.slot);
+        return name === null ? [] : [{ ...item, slot: name }];
       }),
     })),
   }));
+}
+
+/** A `columns` block with the slots in its columns following their fields. Any other block as it is. */
+function followSlots(block: Block, slotName: (slot: string) => string | null): Block {
+  if (block.kind !== "columns") return block;
+  return {
+    ...block,
+    blocks: (block.blocks ?? []).map((col) => ({
+      ...col,
+      blocks: (col.blocks ?? []).flatMap((b) => {
+        const slot = slotOfBlock(b);
+        if (slot === null) return [b];
+        const name = slotName(slot);
+        return name === null ? [] : [{ ...b, labels: [name] }];
+      }),
+    })),
+  };
 }
 
 /** `block` with the `{{name}}` references in its text items, at any depth, renamed. */
@@ -387,6 +410,6 @@ export function typeWcl(m: TypeModel): string {
 
 /** Every field a template does not place yet, in type order, with `title` first. */
 export function unplaced(t: TemplateModel, fields: { name: string }[]): string[] {
-  const placed = new Set(t.tabs.flatMap((tab) => tab.items.flatMap((i) => ("slot" in i ? [i.slot] : []))));
+  const placed = new Set(t.tabs.flatMap((tab) => slotsOf(tab.items)));
   return ["title", ...fields.map((f) => f.name)].filter((n) => !placed.has(n));
 }

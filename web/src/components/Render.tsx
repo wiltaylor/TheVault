@@ -1,8 +1,9 @@
-import { For, Match, Show, Switch } from "solid-js";
+import { For, type JSX, Match, Show, Switch } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import type { Block, Json } from "../api";
 import { QueryView } from "../views/QueryView";
 import { CodeBlock } from "../blocks/CodeBlock";
+import { columnWidth, columnsOf } from "../blocks/columns";
 import { text } from "../blocks/fields";
 import { AssetBlock, ImageBlock } from "../blocks/MediaBlocks";
 import { MermaidBlock } from "../blocks/MermaidBlock";
@@ -96,7 +97,33 @@ export function BlockView(props: { block: Block; onChange?: (block: Block) => vo
       <Match when={b().kind === "canvas"}>
         <CanvasSurface block={b()} label="Canvas" onChange={props.onChange} />
       </Match>
+      <Match when={b().kind === "columns"}>
+        <ColumnsView block={b()} />
+      </Match>
     </Switch>
+  );
+}
+
+/**
+ * A `columns` layout, read-only: its columns side by side at their widths, stacked in order when
+ * the space it has is narrow (styles.css, `@container columns`). `child` renders each block of a
+ * column; by default, as `BlockView` does. A template passes its own, to render slots.
+ */
+export function ColumnsView(props: { block: Block; child?: (block: Block) => JSX.Element }) {
+  return (
+    <div class="columns-block" data-testid="columns">
+      <div class="columns-row">
+        <For each={columnsOf(props.block)}>
+          {(col) => (
+            <div class="column" data-testid="column" data-width={columnWidth(col)} style={{ "flex-grow": String(columnWidth(col)) }}>
+              <div class="column-content">
+                <For each={col.blocks ?? []}>{(block) => (props.child ? props.child(block) : <BlockView block={block} />)}</For>
+              </div>
+            </div>
+          )}
+        </For>
+      </div>
+    </div>
   );
 }
 

@@ -1,5 +1,6 @@
 // The editor's schema: TipTap's text blocks and marks, plus TheVault's colour mark, mentions,
-// the mention picker and a holder for content blocks this editor does not edit yet (D29, D34).
+// the mention picker, column layouts and a holder for content blocks this editor does not edit
+// yet (D29, D34).
 
 import { type AnyExtension, Mark, Node, mergeAttributes, nodeInputRule } from "@tiptap/core";
 import Code from "@tiptap/extension-code";
@@ -9,6 +10,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { BlockHolder } from "./BlockHolder";
 import {
   type BlockHandleOptions,
+  EdgeDropColumns,
   MoveBlock,
   SteadyFocus,
   type SuggestOptions,
@@ -18,6 +20,7 @@ import {
   matchSlash,
   suggestion,
 } from "./blockTools";
+import { Column, ColumnRules, Columns, VaultDoc } from "./columns";
 import { FieldRefChip } from "./FieldRefChip";
 import { type SlotContext, SlotHolder } from "./SlotHolder";
 import { MentionChip } from "./MentionChip";
@@ -234,7 +237,7 @@ export interface EditorOptions {
 }
 
 export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
-  const tools: AnyExtension[] = [MoveBlock, SteadyFocus, blockHandle(options.handle)];
+  const tools: AnyExtension[] = [MoveBlock, SteadyFocus, blockHandle(options.handle), EdgeDropColumns, ColumnRules];
   if (options.slash) tools.push(placeholder(options.template ? "Type / for blocks and properties, {{ for a field" : "Type / for blocks"));
   if (options.slash) {
     tools.push(suggestion({ key: "slashMenu", topLevelOnly: true, match: matchSlash, ...options.slash }));
@@ -252,7 +255,12 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
   }
   return [
     ...tools,
+    // The document holds layouts as well as blocks.
+    VaultDoc,
+    Columns,
+    Column,
     StarterKit.configure({
+      document: false,
       heading: { levels: [1, 2, 3] },
       code: false,
       codeBlock: false,

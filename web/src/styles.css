@@ -1019,6 +1019,8 @@ mark {
 
 .content-editor-doc ul[data-type="taskList"] li {
   display: flex;
+  /* The box sits on the first line of the item's text. */
+  align-items: baseline;
   gap: 0.4rem;
 }
 
@@ -4953,4 +4955,235 @@ a.icon-button {
 
 .icon-button.danger:hover {
   color: var(--danger);
+}
+
+/* Column layouts (docs/vault-format.md, "columns"). The layout is its own size container: where
+   the space it has (a pane, a card) is under 560px, its columns stack in order. Each column's
+   flex-grow is its width, so the columns share the row by their widths. */
+
+.columns-block {
+  container: columns / inline-size;
+  position: relative;
+  margin: 0.6rem 0;
+}
+
+.columns-row {
+  display: flex;
+  align-items: stretch;
+  gap: 1.75rem;
+}
+
+.column {
+  flex: 1 1 0;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.column-content {
+  container: column / inline-size;
+  min-width: 0;
+}
+
+.column-content > :first-child {
+  margin-top: 0;
+}
+
+.column-content > :last-child {
+  margin-bottom: 0;
+}
+
+@container columns (max-width: 560px) {
+  .columns-row {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .column {
+    flex: none !important;
+  }
+}
+
+/* Properties inside a column lay out by the column's width. */
+@container column (max-width: 340px) {
+  .field {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+}
+
+@container column (min-width: 341px) {
+  .field {
+    grid-template-columns: minmax(5rem, 9rem) 1fr;
+  }
+}
+
+/* In the editor: room before each column after the first for the gutter of its blocks, the gap
+   that resizes, and the layout's toolbar. */
+
+/* A strip above the columns holds the toolbar, so it never covers text, and is where the
+   gutter's handle drags the whole layout. */
+.content-editor-doc .columns-block {
+  margin: 0.25rem 0 0.5rem;
+  padding-top: 1.6rem;
+}
+
+.content-editor-doc .columns-row {
+  gap: 0;
+}
+
+.content-editor-doc .column {
+  position: relative;
+  border-radius: 0.3rem;
+}
+
+.content-editor-doc .column:not(:last-child) {
+  padding-right: 0.9rem;
+}
+
+.content-editor-doc .column + .column {
+  padding-left: 2.9rem;
+}
+
+.content-editor-doc .column-content {
+  min-height: 1.75rem;
+}
+
+.content-editor-doc .column-content > * {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.content-editor-doc .column-content > :first-child {
+  margin-top: 0;
+}
+
+.column-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -0.9rem;
+  width: 0.9rem;
+  display: flex;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 1;
+  outline: none;
+}
+
+.column-resize::after {
+  content: "";
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.12s;
+}
+
+.columns-block:hover .column-resize::after,
+.columns-block.columns-active .column-resize::after {
+  background: var(--line);
+}
+
+.columns-block .column-resize:hover::after,
+.column-resize:focus-visible::after,
+.column.resizing > .column-resize::after {
+  background: var(--accent);
+  width: 3px;
+}
+
+.column:first-child > .column-resize {
+  display: none;
+}
+
+.columns-tools {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 3;
+  display: none;
+  gap: 0.1rem;
+  padding: 0.1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--panel);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+}
+
+.columns-block:hover > .columns-tools,
+.columns-block.columns-active > .columns-tools,
+.columns-tools:focus-within {
+  display: flex;
+}
+
+.columns-tool {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.3rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+}
+
+.columns-tool:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.columns-tool:disabled {
+  opacity: 0.4;
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .columns-tool {
+    width: 2.2rem;
+    height: 1.9rem;
+  }
+
+  .content-editor-doc .columns-block {
+    padding-top: 2.3rem;
+  }
+}
+
+@container columns (max-width: 560px) {
+  .content-editor-doc .column:not(:last-child) {
+    padding-right: 0;
+  }
+
+  .content-editor-doc .column + .column {
+    padding-left: 0;
+    padding-top: 0.5rem;
+    border-top: 1px dashed var(--line);
+  }
+
+  .column-resize {
+    display: none;
+  }
+}
+
+/* A block dragged to another's edge goes beside it: this bar shows where, in place of the drop cursor. */
+.columns-drop-bar {
+  position: absolute;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 3;
+}
+
+body.columns-edge-drop .prosemirror-dropcursor-block,
+body.columns-edge-drop .prosemirror-dropcursor-inline {
+  display: none;
+}
+
+/* Fields side by side on a note page: a template's columns of property blocks. */
+.template-columns .columns-block {
+  margin: 0.25rem 0;
+}
+
+.template-columns .template-block {
+  padding: 0.3rem 0;
 }

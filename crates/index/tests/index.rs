@@ -627,3 +627,71 @@ fn an_index_whose_full_text_half_is_gone_is_behind() {
     let index = Index::open(&vault).unwrap();
     assert!(!index.is_current(&vault).unwrap());
 }
+
+#[test]
+fn text_and_mentions_inside_columns_are_indexed() {
+    let (_dir, vault) = fixture();
+    let mut index = Index::open(&vault).unwrap();
+    index.rebuild(&vault).unwrap();
+    let schema = Schema::load(&vault).unwrap();
+    let text = format!(
+        r#"title   = "Laid out"
+created = "2026-10-01T09:00:00Z"
+updated = "2026-10-01T09:00:00Z"
+
+content body {{
+  columns {{
+    column {{
+      width = 2
+      paragraph {{
+        text = "A narwhal beside [[{PROJECT}|the project]]."
+      }}
+    }}
+
+    column {{
+      width = 1
+      list {{
+        style = "bullet"
+
+        item {{
+          text = "An axolotl, see [[{TASK_B}]]"
+        }}
+      }}
+
+      code {{
+        source = "let pangolin = 1;"
+      }}
+    }}
+  }}
+}}
+"#
+    );
+    index
+        .update(&schema, &[put(&schema, "task", SCRATCH, &text)])
+        .unwrap();
+    for word in ["narwhal", "axolotl", "pangolin"] {
+        let ids: Vec<String> = index
+            .search(word, None)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        assert_eq!(ids, vec![SCRATCH], "{word}");
+    }
+    let mut stmt = index
+        .connection()
+        .prepare("SELECT via || ' ' || field || ' ' || dst FROM links WHERE src = ?1 ORDER BY pos")
+        .unwrap();
+    let links: Vec<String> = stmt
+        .query_map([SCRATCH], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        links,
+        vec![
+            format!("mention body {PROJECT}"),
+            format!("mention body {TASK_B}")
+        ]
+    );
+}

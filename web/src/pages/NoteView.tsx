@@ -1,13 +1,14 @@
 import { A, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import { For, type JSX, Show, batch, createEffect, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
-import { ApiError, type FieldDef, type Json, type Note, type NoteDoc, type Tab, type TypeDef, api } from "../api";
+import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, type TypeDef, api } from "../api";
 import { type Autosave, type SaveState, createAutosave } from "../autosave";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { ConflictView } from "../components/ConflictView";
 import { FieldInput, hasInput } from "../components/FieldInput";
 import { FieldRefs, type FieldRefValues } from "../components/fieldRefs";
 import { refText } from "../components/refText";
-import { BlockView, Blocks, formatValue } from "../components/Render";
+import { BlockView, Blocks, ColumnsView, formatValue } from "../components/Render";
+import { slotOfBlock } from "../blocks/columns";
 import { ContentEditor } from "../editor/ContentEditor";
 import { knowTitle, noteTitle } from "../editor/titles";
 import { InkSurface } from "../ink/InkSurface";
@@ -595,9 +596,19 @@ export function NoteView(props: { newType?: string; id?: string }) {
                                 item.slot === "title" ? null : <Slot name={item.slot} label={item.label} />
                               ) : (
                                 <FieldRefs.Provider value={refs}>
-                                  <div class="template-block" data-testid="template-block">
-                                    <BlockView block={item.block} />
-                                  </div>
+                                  <Show
+                                    when={item.block.kind === "columns"}
+                                    fallback={
+                                      <div class="template-block" data-testid="template-block">
+                                        <BlockView block={item.block} />
+                                      </div>
+                                    }
+                                  >
+                                    {/* Fields side by side: the slots in a layout's columns are edited in place too. */}
+                                    <div class="template-columns" data-testid="template-columns">
+                                      <ColumnsView block={item.block} child={templateChild} />
+                                    </div>
+                                  </Show>
                                 </FieldRefs.Provider>
                               )
                             }
@@ -726,6 +737,21 @@ export function NoteView(props: { newType?: string; id?: string }) {
         </div>
       </div>
     );
+  }
+
+  /** A block in a column of the template: a slot's property editor, or a fixed block. */
+  function templateChild(b: Block): JSX.Element {
+    const slot = slotOfBlock(b);
+    if (slot === null) {
+      return (
+        <div class="template-block" data-testid="template-block">
+          <BlockView block={b} />
+        </div>
+      );
+    }
+    if (slot === "title") return null;
+    const label = b.fields?.label;
+    return <Slot name={slot} label={typeof label === "string" ? label : null} />;
   }
 
   function Slot(p: { name: string; label: string | null }) {

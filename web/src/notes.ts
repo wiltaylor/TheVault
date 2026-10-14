@@ -1,6 +1,7 @@
 // How a note's JSON form maps onto its type's fields and templates (D14).
 
 import type { Block, FieldDef, Json, NoteDoc, Template, TypeDef } from "./api";
+import { slotsOf } from "./blocks/columns";
 
 /** The built-in title, treated as a string field wherever a template places it. */
 export const TITLE_FIELD: FieldDef = {
@@ -109,10 +110,10 @@ export function sameValue(a: Json | undefined, b: Json | undefined): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
-/** The fields the type's default template places with a slot, on any tab. */
+/** The fields the type's default template places with a slot, on any tab and in any column. */
 export function slottedFields(type: TypeDef): Set<string> {
   const t = pageTemplate(type);
-  return new Set((t?.tabs ?? []).flatMap((tab) => tab.items.flatMap((i) => ("slot" in i ? [i.slot] : []))));
+  return new Set((t?.tabs ?? []).flatMap((tab) => slotsOf(tab.items)));
 }
 
 /**

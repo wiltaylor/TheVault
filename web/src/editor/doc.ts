@@ -1,9 +1,11 @@
 // A content field's blocks (docs/vault-format.md, "Content blocks", D34) to and from the editor's
 // ProseMirror JSON. Headings, paragraphs, lists and quotes become editable nodes with their text
-// parsed as inline markup (D41). Every other block kind rides along untouched in a `vaultBlock`.
+// parsed as inline markup (D41). A `columns` layout becomes `columns` and `column` nodes holding
+// the same editable blocks. Every other block kind rides along untouched in a `vaultBlock`.
 
 import type { JSONContent } from "@tiptap/core";
 import type { Block, TemplateItem } from "../api";
+import { columnWidth, columnsOf, slotOfBlock } from "../blocks/columns";
 import { parseInline, serializeInline } from "./markup";
 
 const LIST_NODE: Record<string, string> = { bullet: "bulletList", numbered: "orderedList", todo: "taskList" };
@@ -55,9 +57,31 @@ function blockToDoc(block: Block): JSONContent {
       return { type: "blockquote", content: [paragraph(str(block, "text"))] };
     case "list":
       return listToDoc(block, str(block, "style"));
+    case "columns":
+      return {
+        type: "columns",
+        content: columnsOf(block).map((col) => {
+          const content = (col.blocks ?? []).map(blockToDoc);
+          return { type: "column", attrs: { width: columnWidth(col) }, content: content.length ? content : [{ type: "paragraph" }] };
+        }),
+      };
+    case "slot":
+      // A property block inside a template's column.
+      if (fieldRefs) {
+        const label = block.fields?.label;
+        return { type: "templateSlot", attrs: { slot: slotOfBlock(block) ?? "", label: typeof label === "string" && label ? label : null } };
+      }
+      return { type: "vaultBlock", attrs: { block } };
     default:
       return { type: "vaultBlock", attrs: { block } };
   }
+}
+
+/** Blocks without the empty paragraphs at their end, which are only room for the caret. */
+function trimmed(blocks: Block[]): Block[] {
+  const out = [...blocks];
+  for (let last = out.at(-1); last?.kind === "paragraph" && last.fields?.text === ""; last = out.at(-1)) out.pop();
+  return out;
 }
 
 /** The editor document for a content field's blocks. */
@@ -105,6 +129,25 @@ function docToBlock(node: JSONContent): Block | null {
       const style = LIST_STYLE[node.type] ?? "bullet";
       return { kind: "list", fields: { style }, blocks: itemsOf(node, style) };
     }
+    case "columns":
+      return {
+        kind: "columns",
+        blocks: (node.content ?? [])
+          .filter((c) => c.type === "column")
+          .map((col) => {
+            const blocks = trimmed((col.content ?? []).map(docToBlock).filter((b): b is Block => b !== null));
+            const out: Block = { kind: "column", fields: { width: Number(col.attrs?.width ?? 1) || 1 } };
+            if (blocks.length) out.blocks = blocks;
+            return out;
+          }),
+      };
+    case "templateSlot": {
+      // A property block inside a template's column: `slot "<field>"`, with its label if any.
+      const label = node.attrs?.label;
+      const out: Block = { kind: "slot", labels: [String(node.attrs?.slot ?? "")] };
+      if (typeof label === "string" && label) out.fields = { label };
+      return out;
+    }
     case "vaultBlock":
       return (node.attrs?.block as Block | null) ?? null;
     default:
@@ -117,11 +160,7 @@ function docToBlock(node: JSONContent): Block | null {
  * they are the editor's resting place for the caret, not content.
  */
 export function docToBlocks(doc: JSONContent): Block[] {
-  const blocks = (doc.content ?? []).map(docToBlock).filter((b): b is Block => b !== null);
-  for (let last = blocks.at(-1); last?.kind === "paragraph" && last.fields?.text === ""; last = blocks.at(-1)) {
-    blocks.pop();
-  }
-  return blocks;
+  return trimmed((doc.content ?? []).map(docToBlock).filter((b): b is Block => b !== null));
 }
 
 /**

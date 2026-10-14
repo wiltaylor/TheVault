@@ -596,6 +596,31 @@ A tab holds an ordered mix of slots and content blocks:
 | `slot "<field>"` | block | Places a field. `<field>` is a field of the type or `title`. A field appears at most once per template |
 | `label` inside a slot | string | Overrides the field's label in this template |
 | any [content block](#content-blocks) | block | Fixed content shown on every note. In a `query_view`, `this` is the note being shown |
+| `columns { ... }` | block | A [columns](#columns) layout whose columns hold slots and fixed blocks, so fields sit side by side |
+
+A slot inside a column counts as placing its field, as one directly in the tab does, and the rule of one slot per field covers the whole template, columns included. `{{name}}` references in fixed blocks inside columns are checked as anywhere else. Inside a tab, the canonical form writes a `columns` block and its columns compactly, with no blank lines between their blocks.
+
+```wcl
+template default {
+  tab "Overview" {
+    columns {
+      column {
+        width = 2
+        slot "status"
+        slot "due"
+      }
+      column {
+        width = 1
+        paragraph {
+          text = "Owned by {{owner}}."
+        }
+        slot "estimate"
+      }
+    }
+    slot "body"
+  }
+}
+```
 
 A field that no slot places is still stored and editable through the API and in the note page's properties sidebar. The template only controls the layout.
 
@@ -929,6 +954,59 @@ A live query with saved views. See [Query views](#query-views).
 
 A canvas inside the content. See [Canvas](#canvas). A canvas content block has no label.
 
+### `columns`
+
+A layout block: two to six columns side by side, each holding its own ordered sequence of content blocks. It takes no items of its own, only `column` blocks.
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `column { ... }` | block | From 2 to 6, in order from left to right |
+
+Each `column` holds:
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `width` | int or float | Optional, default `1`. Greater than 0. The column's share of the row: a column's width is its `width` over the sum of the row's widths, so `2` and `1` split the row two thirds to one third |
+| any [content block](#content-blocks) but `columns` | block | The column's blocks, in order. A column may be empty |
+
+Rules:
+
+- A column cannot hold another `columns` block: layouts do not nest. `schema` rejects one with "a column cannot hold another columns block".
+- A canvas card may hold a `columns` block, and its columns follow the card's rule: no canvas.
+- In a [template](#templates) tab, a column may also hold `slot` blocks, which place their fields as a slot in the tab does. A slot in a note's column is rejected.
+- Text inside columns is searched and its mentions are links, as anywhere else in the content.
+- Where the space a `columns` block has (the pane, a card) is narrower than about 560 pixels, the columns stack, top to bottom in column order. The file does not change.
+- The editor writes `width` on every column. A layout left with one column after an edit is not written as a `columns` block: its blocks take its place.
+
+```wcl
+columns {
+  column {
+    width = 2
+
+    heading {
+      level = 3
+      text  = "Risks"
+    }
+
+    paragraph {
+      text = "Rate limits on the export API."
+    }
+  }
+
+  column {
+    width = 1
+
+    list {
+      style = "bullet"
+
+      item {
+        text = "Retry with backoff"
+      }
+    }
+  }
+}
+```
+
 ## Inline markup
 
 These text items use the inline markup in PRD Appendix A (D41): `heading.text`, `paragraph.text`, `item.text` and `quote.text`, wherever the block sits, a canvas card included. No other string is parsed as markup.
@@ -1122,7 +1200,7 @@ Each node kind adds its own items:
 
 | Node kind | Items | Shows |
 |-----------|-------|-------|
-| `card` | Content blocks, as in [Content blocks](#content-blocks): headings, paragraphs, lists, quotes, images, files, code, terminals, diagrams, drawings and query views. Not a `canvas` | The blocks, in order, as a content field shows them. A query view in a card shows live results; its `this` is the note that holds the canvas |
+| `card` | Content blocks, as in [Content blocks](#content-blocks): headings, paragraphs, lists, quotes, images, files, code, terminals, diagrams, drawings, query views and column layouts. Not a `canvas`, in the card or in its columns | The blocks, in order, as a content field shows them. A query view in a card shows live results; its `this` is the note that holds the canvas |
 | `note` | `note`: note ULID, required. `template`: default `card`. No blocks | A note rendered with a template |
 
 #### Reading older canvases
@@ -1302,8 +1380,8 @@ A vault file is checked in three layers. Each catches what the one before cannot
 
 | File | Declares |
 |------|----------|
-| `common.wcl` | Date range and location records, every content block, ink, query view, canvas, `content` and `dict`. No `@document` |
-| `type.wcl` | The `@document` of a type file, with `field`, `template`, `tab`, `slot` and `handler` |
+| `common.wcl` | Date range and location records, every content block, ink, query view, canvas, `columns`, `slot`, `content` and `dict`. No `@document` |
+| `type.wcl` | The `@document` of a type file, with `field`, `template`, `tab` and `handler` |
 | `taxonomy.wcl` | The `@document` of a taxonomy file |
 | `task.wcl` | The `@document` of a task file |
 | `notes/<type>.wcl` | A generated `@document` for the notes of one type |

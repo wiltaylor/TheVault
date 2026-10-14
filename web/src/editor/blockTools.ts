@@ -55,7 +55,7 @@ export interface SuggestState {
 
 export interface SuggestOptions {
   key: string;
-  /** Only top-level paragraphs open the menu when true. */
+  /** Only paragraphs at the top level or directly in a column open the menu when true. */
   topLevelOnly: boolean;
   match: (before: string, after: string) => TriggerMatch | null;
   /** The menu's state after every change: where its text is and what it holds, or null. */
@@ -70,7 +70,7 @@ export function suggestAt(state: EditorState, options: Pick<SuggestOptions, "mat
   if (!sel.empty) return null;
   const $from = sel.$from;
   if ($from.parent.type.name !== "paragraph") return null;
-  if (options.topLevelOnly && $from.depth !== 1) return null;
+  if (options.topLevelOnly && !isContainer($from.node($from.depth - 1))) return null;
   const before = $from.parent.textBetween(0, $from.parentOffset, undefined, "￼");
   const after = $from.parent.textBetween($from.parentOffset, $from.parent.content.size, undefined, "￼");
   const m = options.match(before, after);
@@ -123,32 +123,67 @@ export function suggestion(options: SuggestOptions) {
 // ---------------------------------------------------------------------------------------------
 // Moving blocks
 
-/** The index of the top-level block holding the selection. */
-function topIndex(state: EditorState): number {
-  return state.selection.$from.index(0);
+/** Whether `node` holds a sequence of blocks the block tools work in: the document or a column. */
+export function isContainer(node: PMNode | null | undefined): boolean {
+  return node?.type.name === "doc" || node?.type.name === "column";
 }
 
-/** The position before top-level block `index`. */
-function topPos(doc: PMNode, index: number): number {
-  let pos = 0;
-  for (let i = 0; i < index; i++) pos += doc.child(i).nodeSize;
+/** A block of a container: the document or a column. */
+export interface ContainerBlock {
+  pos: number;
+  node: PMNode;
+  index: number;
+  /** The container, and the position its content starts at. */
+  parent: PMNode;
+  start: number;
+}
+
+/**
+ * The block of a container holding the selection: a top-level block, or a block in a column.
+ * A selected block node is that block.
+ */
+export function blockOfSelection(state: EditorState): ContainerBlock | null {
+  const sel = state.selection;
+  if (sel instanceof NodeSelection && isContainer(sel.$from.parent)) {
+    const $p = sel.$from;
+    return { pos: sel.from, node: sel.node, index: $p.index(), parent: $p.parent, start: $p.start() };
+  }
+  const $f = sel.$from;
+  for (let d = $f.depth; d > 0; d--) {
+    const parent = $f.node(d - 1);
+    if (isContainer(parent)) return { pos: $f.before(d), node: $f.node(d), index: $f.index(d - 1), parent, start: $f.start(d - 1) };
+  }
+  return null;
+}
+
+/** The position before child `index` of `parent`, whose content starts at `start`. */
+function childPos(parent: PMNode, start: number, index: number): number {
+  let pos = start;
+  for (let i = 0; i < index; i++) pos += parent.child(i).nodeSize;
   return pos;
 }
 
 /**
- * A transaction moving top-level block `index` one place up (`by` -1) or down (+1), keeping the
- * selection on it, or null when it is already at that end.
+ * A transaction moving block `index` of a container one place up (`by` -1) or down (+1),
+ * keeping the selection on it, or null when it is already at that end. The container is the
+ * document unless `within` names a column and where its content starts.
  */
-export function moveBlockTr(state: EditorState, index: number, by: -1 | 1): Transaction | null {
-  const { doc } = state;
+export function moveBlockTr(
+  state: EditorState,
+  index: number,
+  by: -1 | 1,
+  within?: { parent: PMNode; start: number },
+): Transaction | null {
+  const parent = within?.parent ?? state.doc;
+  const base = within?.start ?? 0;
   const target = index + by;
-  if (target < 0 || target >= doc.childCount) return null;
+  if (target < 0 || target >= parent.childCount) return null;
   const first = Math.min(index, target);
-  const a = doc.child(first);
-  const b = doc.child(first + 1);
-  const start = topPos(doc, first);
-  const moved = doc.child(index);
-  const oldStart = topPos(doc, index);
+  const a = parent.child(first);
+  const b = parent.child(first + 1);
+  const start = childPos(parent, base, first);
+  const moved = parent.child(index);
+  const oldStart = childPos(parent, base, index);
   const tr = state.tr.replaceWith(start, start + a.nodeSize + b.nodeSize, [b, a]);
   const newStart = by < 0 ? start : start + b.nodeSize;
   const sel = state.selection;
@@ -163,7 +198,8 @@ export function moveBlockTr(state: EditorState, index: number, by: -1 | 1): Tran
 }
 
 /**
- * Alt+ArrowUp and Alt+ArrowDown move the block holding the caret. Before any key binding runs,
+ * Alt+ArrowUp and Alt+ArrowDown move the block holding the caret, within its column when it is
+ * in one. Before any key binding runs,
  * the caret is read from the page: a click or a native caret move just before a key press may
  * not have reached the editor's state yet, and a binding would act at the old caret.
  */
@@ -184,9 +220,11 @@ export const MoveBlock = Extension.create({
     ];
   },
   addKeyboardShortcuts() {
+    // The block moves within its container: a block in a column stays in that column.
     const move = (by: -1 | 1) => () => {
       const { state, view } = this.editor;
-      const tr = moveBlockTr(state, topIndex(state), by);
+      const at = blockOfSelection(state);
+      const tr = at && moveBlockTr(state, at.index, by, at);
       if (!tr) return true;
       view.dispatch(tr);
       return true;
@@ -268,35 +306,70 @@ function noHover(): boolean {
   return typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 600px), (pointer: coarse)").matches;
 }
 
-/** The top-level block under the pointer's height, with its DOM and position. */
-function blockAtY(view: EditorView, y: number): { pos: number; node: PMNode; dom: HTMLElement } | null {
+/** A block the gutter can sit beside: its position, node and DOM, and whether it is in a column. */
+export interface BlockHit {
+  pos: number;
+  node: PMNode;
+  dom: HTMLElement;
+  nested: boolean;
+}
+
+const near = (r: DOMRect, y: number) => y >= r.top - 4 && y <= r.bottom + 4;
+
+/**
+ * The block of column layout `layout` at `pos` under the pointer: the column under `x` (or, with
+ * the columns stacked, under `y`), then its block under `y`. Null over the layout's own space,
+ * between and below the blocks, where the layout itself is the block.
+ */
+function columnBlockAt(view: EditorView, layout: PMNode, pos: number, x: number, y: number): BlockHit | null {
+  const cols: { pos: number; node: PMNode; rect: DOMRect }[] = [];
+  layout.forEach((node, offset) => {
+    const dom = view.nodeDOM(pos + 1 + offset);
+    if (dom instanceof HTMLElement) cols.push({ pos: pos + 1 + offset, node, rect: dom.getBoundingClientRect() });
+  });
+  if (!cols.length) return null;
+  // Left of the first column is its gutter; right of the last is still the last.
+  const cx = Math.min(Math.max(x, cols[0]!.rect.left), Math.max(...cols.map((c) => c.rect.right)) - 1);
+  const col = cols.find((c) => cx >= c.rect.left && cx < c.rect.right && near(c.rect, y));
+  if (!col) return null;
+  let at = col.pos + 1;
+  for (let i = 0; i < col.node.childCount; i++) {
+    const node = col.node.child(i);
+    const dom = view.nodeDOM(at);
+    if (dom instanceof HTMLElement && near(dom.getBoundingClientRect(), y)) return { pos: at, node, dom, nested: true };
+    at += node.nodeSize;
+  }
+  return null;
+}
+
+/** The block under the pointer, with its DOM and position: a top-level block, or one in a column. */
+export function blockAt(view: EditorView, x: number, y: number): BlockHit | null {
   const { doc } = view.state;
   let pos = 0;
   for (let i = 0; i < doc.childCount; i++) {
     const node = doc.child(i);
     const dom = view.nodeDOM(pos);
-    if (dom instanceof HTMLElement) {
-      const r = dom.getBoundingClientRect();
-      if (y >= r.top - 4 && y <= r.bottom + 4) return { pos, node, dom };
+    if (dom instanceof HTMLElement && near(dom.getBoundingClientRect(), y)) {
+      if (node.type.name === "columns") return columnBlockAt(view, node, pos, x, y) ?? { pos, node, dom, nested: false };
+      return { pos, node, dom, nested: false };
     }
     pos += node.nodeSize;
   }
   return null;
 }
 
-/** The top-level block holding the selection. */
-function blockAtSelection(view: EditorView): { pos: number; node: PMNode; dom: HTMLElement } | null {
-  const { doc, selection } = view.state;
-  const index = selection.$from.index(0);
-  if (index >= doc.childCount) return null;
-  const pos = topPos(doc, index);
-  const dom = view.nodeDOM(pos);
-  return dom instanceof HTMLElement ? { pos, node: doc.child(index), dom } : null;
+/** The block holding the selection, at the top level or in a column. */
+function blockAtSelection(view: EditorView): BlockHit | null {
+  const at = blockOfSelection(view.state);
+  if (!at) return null;
+  const dom = view.nodeDOM(at.pos);
+  return dom instanceof HTMLElement ? { pos: at.pos, node: at.node, dom, nested: at.parent.type.name === "column" } : null;
 }
 
 /**
- * A gutter beside the top-level block under the pointer: "+" adds a block after it, through the
- * same menu as `/`, and the "⋮⋮" handle drags it. ProseMirror drops a dragged block where the
+ * A gutter beside the block under the pointer, at the top level or in a column: "+" adds a block
+ * after it, through the same menu as `/`, and the "⋮⋮" handle drags it, into, out of and between
+ * columns too. ProseMirror drops a dragged block where the
  * drop cursor shows, as it does for any dragged selection. Without hover (touch, phones) the
  * gutter sits beside the block holding the caret.
  */
@@ -329,9 +402,9 @@ export function blockHandle(options: BlockHandleOptions = {}) {
             handle.setAttribute("aria-hidden", "true");
             gutter.append(add, handle);
             host?.appendChild(gutter);
-            let current: { pos: number; node: PMNode; dom: HTMLElement } | null = null;
+            let current: BlockHit | null = null;
 
-            function place(hit: { pos: number; node: PMNode; dom: HTMLElement } | null) {
+            function place(hit: BlockHit | null) {
               if (!editor.isEditable || !host || !hit) return;
               current = hit;
               const hr = host.getBoundingClientRect();
@@ -342,11 +415,13 @@ export function blockHandle(options: BlockHandleOptions = {}) {
               const line = Math.min(br.height, 28 * scale);
               gutter.style.top = `${(br.top - hr.top + line / 2) / scale - 12}px`;
               gutter.hidden = false;
+              // A block in a column has its gutter just left of it, in the space before the column.
+              gutter.style.left = hit.nested ? `${(br.left - hr.left) / scale - gutter.offsetWidth - 2}px` : "";
             }
 
             const onMove = (e: MouseEvent) => {
               if (gutter.contains(e.target as Node)) return;
-              place(blockAtY(view, e.clientY));
+              place(blockAt(view, e.clientX, e.clientY));
             };
             const onLeave = (e: MouseEvent) => {
               if (noHover()) return;
@@ -410,6 +485,152 @@ export function blockHandle(options: BlockHandleOptions = {}) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Dropping a block beside another
+
+/** Where a block dropped at a point goes beside another block, making or widening a layout. */
+export interface EdgeDrop {
+  target: BlockHit;
+  side: "left" | "right";
+}
+
+/** How far into a block from its right edge, and out from its left, a drop lands beside it. */
+const EDGE = 48;
+
+/**
+ * The block a drop at `x`, `y` lands beside, and on which side: over a block's last 48 pixels
+ * (a fifth of a narrow one) on the right, or in the space left of it. A layout itself takes no
+ * drop beside it, nor does a layout that already has six columns.
+ */
+export function edgeDropAt(view: EditorView, x: number, y: number, dragged: PMNode | null, maxColumns = 6): EdgeDrop | null {
+  if (!dragged || dragged.type.name === "columns") return null;
+  const target = blockAt(view, x, y);
+  if (!target || target.node.type.name === "columns") return null;
+  const r = target.dom.getBoundingClientRect();
+  if (y < r.top || y > r.bottom || r.width === 0) return null;
+  let side: EdgeDrop["side"] | null = null;
+  if (x > r.right - Math.min(EDGE, r.width / 5) && x <= r.right + 8) side = "right";
+  else if (x < r.left && x >= r.left - EDGE) side = "left";
+  if (!side) return null;
+  if (target.nested) {
+    const layout = view.state.doc.resolve(target.pos).node(1);
+    if (layout.childCount >= maxColumns) return null;
+  }
+  return { target, side };
+}
+
+/**
+ * The transaction for a block dropped beside another: the dragged block `from` (a node at
+ * `from.pos`) leaves where it was, and beside a top-level block the two become a layout of two
+ * equal columns; beside a block in a column, it gets a new column there, which takes half of
+ * that column's width.
+ */
+export function edgeDropTr(state: EditorState, from: { pos: number; node: PMNode }, drop: { pos: number; side: "left" | "right" }): Transaction | null {
+  const { schema } = state;
+  const target = state.doc.nodeAt(drop.pos);
+  if (!target || drop.pos === from.pos) return null;
+  // Not into itself.
+  if (drop.pos > from.pos && drop.pos < from.pos + from.node.nodeSize) return null;
+  const tr = state.tr.delete(from.pos, from.pos + from.node.nodeSize);
+  const tpos = tr.mapping.map(drop.pos);
+  const $t = tr.doc.resolve(tpos);
+  const moved = from.node;
+  if ($t.parent.type.name === "column") {
+    const col = $t.parent;
+    const colPos = $t.before();
+    const half = Math.max(0.01, Math.round((Number(col.attrs.width) || 1) * 50) / 100);
+    tr.setNodeAttribute(colPos, "width", half);
+    const at = drop.side === "right" ? colPos + col.nodeSize : colPos;
+    tr.insert(at, schema.nodes.column!.create({ width: half }, moved));
+    tr.setSelection(NodeSelection.create(tr.doc, at + 1));
+    return tr;
+  }
+  if ($t.parent.type.name !== "doc") return null;
+  const now = tr.doc.nodeAt(tpos)!;
+  const pair = drop.side === "right" ? [now, moved] : [moved, now];
+  const layout = schema.nodes.columns!.create(
+    null,
+    pair.map((n) => schema.nodes.column!.create({ width: 1 }, n)),
+  );
+  tr.replaceWith(tpos, tpos + now.nodeSize, layout);
+  // The moved block, selected where it landed.
+  const movedAt = drop.side === "right" ? tpos + 1 + (now.nodeSize + 2) + 1 : tpos + 2;
+  tr.setSelection(NodeSelection.create(tr.doc, movedAt));
+  return tr;
+}
+
+/**
+ * Drops beside a block, Notion's way: a block dragged by its handle onto another block's right
+ * edge, or just left of it, sits beside it in columns. A bar shows where it will go, in place of
+ * the drop cursor.
+ */
+export const EdgeDropColumns = Extension.create({
+  name: "edgeDropColumns",
+  addProseMirrorPlugins() {
+    let bar: HTMLDivElement | null = null;
+    const hide = () => {
+      bar?.remove();
+      bar = null;
+      document.body.classList.remove("columns-edge-drop");
+    };
+    const dragged = (view: EditorView): { pos: number; node: PMNode } | null => {
+      const d = (view as unknown as { dragging: { node?: NodeSelection } | null }).dragging;
+      return d?.node instanceof NodeSelection ? { pos: d.node.from, node: d.node.node } : null;
+    };
+    return [
+      new Plugin({
+        key: new PluginKey("edgeDropColumns"),
+        props: {
+          handleDOMEvents: {
+            dragover(view, e) {
+              const drop = edgeDropAt(view, e.clientX, e.clientY, dragged(view)?.node ?? null);
+              const host = view.dom.parentElement;
+              if (!drop || !host) {
+                hide();
+                return false;
+              }
+              const hr = host.getBoundingClientRect();
+              const scale = host.offsetHeight > 0 ? hr.height / host.offsetHeight || 1 : 1;
+              const r = drop.target.dom.getBoundingClientRect();
+              if (!bar) {
+                bar = document.createElement("div");
+                bar.className = "columns-drop-bar";
+                bar.setAttribute("data-testid", "columns-drop-bar");
+                host.appendChild(bar);
+              }
+              const x = drop.side === "right" ? r.right : r.left - 6;
+              bar.style.left = `${(x - hr.left) / scale}px`;
+              bar.style.top = `${(r.top - hr.top) / scale}px`;
+              bar.style.height = `${r.height / scale}px`;
+              document.body.classList.add("columns-edge-drop");
+              return false;
+            },
+            dragleave(view, e) {
+              if (!(e.relatedTarget instanceof Node && view.dom.contains(e.relatedTarget))) hide();
+              return false;
+            },
+            dragend() {
+              hide();
+              return false;
+            },
+          },
+          handleDrop(view, event) {
+            hide();
+            const from = dragged(view);
+            const drop = edgeDropAt(view, event.clientX, event.clientY, from?.node ?? null);
+            if (!from || !drop) return false;
+            const tr = edgeDropTr(view.state, from, { pos: drop.target.pos, side: drop.side });
+            if (!tr) return false;
+            view.dispatch(tr.scrollIntoView());
+            view.focus();
+            return true;
+          },
+        },
+      }),
+    ];
+  },
+});
+
+// ---------------------------------------------------------------------------------------------
 // Placeholder
 
 /**
@@ -428,12 +649,15 @@ export function placeholder(text: string) {
               const { doc, selection } = state;
               const marks: Decoration[] = [];
               const lone = doc.childCount === 1;
-              doc.forEach((node, pos) => {
-                if (node.type.name !== "paragraph" || node.content.size > 0) return;
+              // Paragraphs at the top level and in columns: a column's empty line shows it too.
+              doc.descendants((node, pos, parent) => {
+                if (node.type.name === "columns" || node.type.name === "column") return true;
+                if (node.type.name !== "paragraph" || node.content.size > 0) return false;
                 const here = selection.empty && selection.from === pos + 1;
-                if (lone || here) {
+                if ((lone && parent === doc) || here) {
                   marks.push(Decoration.node(pos, pos + node.nodeSize, { class: "is-empty", "data-placeholder": text }));
                 }
+                return false;
               });
               return marks.length ? DecorationSet.create(doc, marks) : null;
             },

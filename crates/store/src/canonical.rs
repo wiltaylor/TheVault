@@ -22,6 +22,9 @@ const INDENT: &str = "  ";
 /// blank lines between them, as `docs/vault-format/` writes a template tab.
 const COMPACT_KINDS: [&str; 1] = ["tab"];
 
+/// Layout blocks, which keep the layout of the body they sit in: compact inside a tab.
+const LAYOUT_KINDS: [&str; 2] = ["columns", "column"];
+
 /// Check that `source` is data-only and return its canonical text. `file` names it in diagnostics.
 pub fn canonical(source: &str, file: &str) -> Result<String> {
     Ok(to_canonical(&parse_data_only(source, file)?))
@@ -35,7 +38,7 @@ pub fn to_canonical(ast: &Source) -> String {
     out
 }
 
-/// Print one body. `compact` drops the blank lines between blocks.
+/// Print one body. `compact` drops the blank lines between blocks and after the fields.
 fn print_items(out: &mut String, items: &[Item], depth: usize, compact: bool) {
     let fields: Vec<&Field> = items
         .iter()
@@ -62,18 +65,18 @@ fn print_items(out: &mut String, items: &[Item], depth: usize, compact: bool) {
     for b in blocks {
         let both_bare = previous.is_some_and(|p| p.items.is_empty()) && b.items.is_empty();
         let blank = match previous {
-            None => !fields.is_empty(),
+            None => !fields.is_empty() && !compact,
             Some(_) => !both_bare && !compact,
         };
         if blank {
             out.push('\n');
         }
-        print_block(out, b, depth);
+        print_block(out, b, depth, compact);
         previous = Some(b);
     }
 }
 
-fn print_block(out: &mut String, b: &Block, depth: usize) {
+fn print_block(out: &mut String, b: &Block, depth: usize, in_compact: bool) {
     out.push_str(&INDENT.repeat(depth));
     out.push_str(&b.kind);
     for label in &b.labels {
@@ -88,12 +91,9 @@ fn print_block(out: &mut String, b: &Block, depth: usize) {
         return;
     }
     out.push_str(" {\n");
-    print_items(
-        out,
-        &b.items,
-        depth + 1,
-        COMPACT_KINDS.contains(&b.kind.as_str()),
-    );
+    let kind = b.kind.as_str();
+    let compact = COMPACT_KINDS.contains(&kind) || (in_compact && LAYOUT_KINDS.contains(&kind));
+    print_items(out, &b.items, depth + 1, compact);
     out.push_str(&INDENT.repeat(depth));
     out.push_str("}\n");
 }

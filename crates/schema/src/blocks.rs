@@ -11,7 +11,7 @@ use crate::doc::{Doc, DocBlock, Value};
 use crate::encoding::{is_ident, is_ink_colour, is_palette, is_ulid};
 
 /// The closed set of content block kinds.
-pub const CONTENT_KINDS: [&str; 12] = [
+pub const CONTENT_KINDS: [&str; 13] = [
     "heading",
     "paragraph",
     "list",
@@ -24,10 +24,11 @@ pub const CONTENT_KINDS: [&str; 12] = [
     "ink",
     "query_view",
     "canvas",
+    "columns",
 ];
 
 /// The content block kinds a canvas card holds: every content block kind but a canvas.
-pub const CARD_BLOCK_KINDS: [&str; 11] = [
+pub const CARD_BLOCK_KINDS: [&str; 12] = [
     "heading",
     "paragraph",
     "list",
@@ -39,7 +40,12 @@ pub const CARD_BLOCK_KINDS: [&str; 11] = [
     "mermaid",
     "ink",
     "query_view",
+    "columns",
 ];
+
+/// How many `column` blocks a `columns` block holds, at least and at most.
+pub const COLUMNS_MIN: usize = 2;
+pub const COLUMNS_MAX: usize = 6;
 
 /// The kinds of a canvas node. Groups are blocks of their own, not nodes.
 pub const NODE_KINDS: [&str; 2] = ["card", "note"];
@@ -209,12 +215,50 @@ impl Check<'_> {
     pub fn content_blocks<'b>(&mut self, blocks: impl IntoIterator<Item = &'b DocBlock>, at: &str) {
         for (n, b) in blocks.into_iter().enumerate() {
             let path = format!("{at} > {}#{}", b.kind, n + 1);
-            if !CONTENT_KINDS.contains(&b.kind.as_str()) {
-                self.fail(&path, format!("{:?} is not a content block kind", b.kind));
-                continue;
+            self.content_item(b, &path);
+        }
+    }
+
+    /// One block of a content sequence, at `at`: a content block kind, unlabelled, and valid.
+    pub fn content_item(&mut self, b: &DocBlock, at: &str) {
+        if !CONTENT_KINDS.contains(&b.kind.as_str()) {
+            self.fail(at, format!("{:?} is not a content block kind", b.kind));
+            return;
+        }
+        self.no_label(b, at);
+        self.content_block(b, at);
+    }
+
+    /// The body of a `columns` block: 2 to 6 `column` blocks, each with an optional positive
+    /// `width` and an ordered sequence of blocks. `child` checks each block of a column; a
+    /// column never holds another `columns` block. In a template, `child` also takes slots.
+    pub fn columns(
+        &mut self,
+        d: &Doc,
+        at: &str,
+        child: &mut dyn FnMut(&mut Self, &DocBlock, &str),
+    ) {
+        self.items(d, &[], &[], at);
+        self.only_blocks(d, &["column"], at);
+        let count = d.blocks_of("column").count();
+        if !(COLUMNS_MIN..=COLUMNS_MAX).contains(&count) {
+            self.fail(
+                at,
+                format!("needs {COLUMNS_MIN} to {COLUMNS_MAX} columns, not {count}"),
+            );
+        }
+        for (n, col) in d.blocks_of("column").enumerate() {
+            let path = format!("{at} > column#{}", n + 1);
+            self.no_label(col, &path);
+            self.items(&col.body, &[opt("width", Form::Positive)], &[], &path);
+            for (k, b) in col.body.blocks.iter().enumerate() {
+                let block_at = format!("{path} > {}#{}", b.kind, k + 1);
+                if b.kind == "columns" {
+                    self.fail(&block_at, "a column cannot hold another columns block");
+                    continue;
+                }
+                child(self, b, &block_at);
             }
-            self.no_label(b, &path);
-            self.content_block(b, &path);
         }
     }
 
@@ -272,6 +316,7 @@ impl Check<'_> {
             "ink" => self.ink(d, at),
             "query_view" => self.query_view(d, at),
             "canvas" => self.canvas(d, at),
+            "columns" => self.columns(d, at, &mut |c, b, path| c.content_item(b, path)),
             _ => {}
         }
     }
@@ -588,6 +633,24 @@ impl Check<'_> {
                         &format!("{at} > canvas#{}", n + 1),
                         "a card cannot hold a canvas",
                     );
+                }
+                // Nor can a column of a card.
+                if b.kind == "columns" {
+                    for (k, col) in b.body.blocks_of("column").enumerate() {
+                        for (j, cb) in col.body.blocks.iter().enumerate() {
+                            if cb.kind == "canvas" {
+                                self.fail(
+                                    &format!(
+                                        "{at} > columns#{} > column#{} > canvas#{}",
+                                        n + 1,
+                                        k + 1,
+                                        j + 1
+                                    ),
+                                    "a card cannot hold a canvas",
+                                );
+                            }
+                        }
+                    }
                 }
             }
             let blocks = d.blocks.iter().filter(|b| b.kind != "canvas");

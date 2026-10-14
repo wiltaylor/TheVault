@@ -632,24 +632,23 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
         for (n, block) in t.body.blocks.iter().enumerate() {
             if block.kind == "slot" {
                 let slot_at = format!("{tab_at} > {}", block.name());
-                let [field] = block.labels.as_slice() else {
-                    c.fail(&slot_at, "needs exactly one label, the field name");
-                    continue;
-                };
-                if field != "title" && !fields.iter().any(|f| &f.name == field) {
-                    c.fail(&slot_at, format!("the type has no field {field:?}"));
-                } else if !placed.insert(field.clone()) {
-                    c.fail(
-                        &slot_at,
-                        format!("places {field:?} a second time in this template"),
-                    );
+                if let Some(item) = slot(c, block, fields, &mut placed, &slot_at) {
+                    items.push(item);
                 }
-                c.items(&block.body, &[opt("label", Form::Str)], &[], &slot_at);
-                c.only_blocks(&block.body, &[], &slot_at);
-                items.push(TabItem::Slot {
-                    field: field.clone(),
-                    label: string(&block.body, "label"),
+            } else if block.kind == "columns" {
+                // A layout of slots and fixed blocks side by side: each column is checked as a
+                // tab is, and a slot in a column places its field as one in the tab would.
+                let block_at = format!("{tab_at} > {}#{}", block.kind, n + 1);
+                c.no_label(block, &block_at);
+                c.columns(&block.body, &block_at, &mut |c, b, path| {
+                    if b.kind == "slot" {
+                        slot(c, b, fields, &mut placed, path);
+                    } else {
+                        c.content_item(b, path);
+                        check_field_refs(c, &b.body, fields, path);
+                    }
                 });
+                items.push(TabItem::Block(block.clone()));
             } else if CONTENT_KINDS.contains(&block.kind.as_str()) {
                 let block_at = format!("{tab_at} > {}#{}", block.kind, n + 1);
                 c.no_label(block, &block_at);
@@ -669,6 +668,35 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
         name,
         label: string(d, "label"),
         tabs,
+    })
+}
+
+/// A `slot "<field>"`, in a tab or in a column of one: it names `title` or a field of the type,
+/// and places that field once per template.
+fn slot(
+    c: &mut Check,
+    block: &DocBlock,
+    fields: &[FieldDef],
+    placed: &mut HashSet<String>,
+    at: &str,
+) -> Option<TabItem> {
+    let [field] = block.labels.as_slice() else {
+        c.fail(at, "needs exactly one label, the field name");
+        return None;
+    };
+    if field != "title" && !fields.iter().any(|f| &f.name == field) {
+        c.fail(at, format!("the type has no field {field:?}"));
+    } else if !placed.insert(field.clone()) {
+        c.fail(
+            at,
+            format!("places {field:?} a second time in this template"),
+        );
+    }
+    c.items(&block.body, &[opt("label", Form::Str)], &[], at);
+    c.only_blocks(&block.body, &[], at);
+    Some(TabItem::Slot {
+        field: field.clone(),
+        label: string(&block.body, "label"),
     })
 }
 

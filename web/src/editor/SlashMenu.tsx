@@ -17,6 +17,8 @@ export interface MenuItem {
   keywords?: string;
   hint?: string;
   run: () => void;
+  /** Choosing the item lists these instead of running it: a follow-up choice. */
+  submenu?: () => MenuItem[];
 }
 
 /**

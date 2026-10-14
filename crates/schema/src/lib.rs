@@ -20,7 +20,7 @@ use std::fmt;
 
 pub use blocks::{
     ARROWS, CANVAS_HEIGHT_DEFAULT, CANVAS_HEIGHT_MAX, CANVAS_HEIGHT_MIN, CARD_BLOCK_KINDS,
-    CONTENT_KINDS, NODE_KINDS, VIEW_KINDS,
+    COLUMNS_MAX, COLUMNS_MIN, CONTENT_KINDS, NODE_KINDS, VIEW_KINDS,
 };
 pub use change::{FieldChanges, NoteEdit};
 pub use doc::{Doc, DocBlock, Value};

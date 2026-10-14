@@ -70,6 +70,33 @@ content body {
     }
   }
 
+  columns {
+    column {
+      width = 2
+
+      heading {
+        level = 3
+        text  = "Risks"
+      }
+
+      paragraph {
+        text = "Rate limits on the export API; see [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZC]]."
+      }
+    }
+
+    column {
+      width = 1
+
+      list {
+        style = "bullet"
+
+        item {
+          text = "Retry with backoff"
+        }
+      }
+    }
+  }
+
   quote {
     text = "Make it work, make it right, make it fast."
   }

@@ -194,6 +194,7 @@ type CanvasNode {
   @children("mermaid")    mermaids:    list<Mermaid>
   @children("ink")        inks:        list<Ink>
   @children("query_view") query_views: list<QueryView>
+  @children("columns")    columns:     list<Columns>
 }
 
 @block("edge", required_fields = ["from", "to"])
@@ -233,6 +234,38 @@ type CanvasGroup {
 # one field per key. Both are labelled with the note field's name.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Column layouts. A column holds any content block but another columns block,
+# and in a template tab, slots too; `schema` rejects a slot in a note and
+# checks the column count and widths.
+# ---------------------------------------------------------------------------
+
+@block("slot") type Slot {
+  @inline(0) field: utf8
+  label: utf8?
+}
+
+@block("column") type Column {
+  width: f64?
+  @children("slot")       slots:       list<Slot>
+  @children("heading")    headings:    list<Heading>
+  @children("paragraph")  paragraphs:  list<Paragraph>
+  @children("list")       lists:       list<ListBlock>
+  @children("quote")      quotes:      list<Quote>
+  @children("image")      images:      list<Image>
+  @children("asset")      assets:      list<AssetBlock>
+  @children("code")       codes:       list<Code>
+  @children("terminal")   terminals:   list<Terminal>
+  @children("mermaid")    mermaids:    list<Mermaid>
+  @children("ink")        inks:        list<Ink>
+  @children("query_view") query_views: list<QueryView>
+  @children("canvas")     canvases:    list<Canvas>
+}
+
+@block("columns") type Columns {
+  @children("column", min = 2) columns: list<Column>
+}
+
 @block("content") type Content {
   @inline(0) field: identifier
   @children("heading")    headings:    list<Heading>
@@ -247,6 +280,7 @@ type CanvasGroup {
   @children("ink")        inks:        list<Ink>
   @children("query_view") query_views: list<QueryView>
   @children("canvas")     canvases:    list<Canvas>
+  @children("columns")    columns:     list<Columns>
 }
 
 @doc("A dict field value. Keys are identifiers; TheVault checks every value against the field's value kind.")

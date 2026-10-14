@@ -13,6 +13,7 @@ import { editorExtensions } from "./extensions";
 import { PALETTE } from "./markup";
 import { fresh } from "./BlockHolder";
 import { type DraggedBlock, matchesQuery } from "./blockTools";
+import { COLUMNS_MAX, COLUMNS_MIN, newColumns } from "../blocks/columns";
 import { type MenuItem, type MenuPos, SuggestMenu } from "./SlashMenu";
 import type { SlotContext } from "./SlotHolder";
 
@@ -87,9 +88,9 @@ interface MenuState {
 
 /**
  * The block editor for a content field (D29, D34) and for a template's tabs: TipTap on
- * ProseMirror. Typing `/` opens a menu of blocks to insert; every top-level block has a drag
- * handle and a "+" that opens the same menu, and Alt+ArrowUp / Alt+ArrowDown move the current
- * block. Selecting text shows a bubble with the inline marks of PRD Appendix A, a link and a
+ * ProseMirror. Typing `/` opens a menu of blocks to insert, column layouts among them; every
+ * block, at the top level or in a column, has a drag handle and a "+" that opens the same menu,
+ * and Alt+ArrowUp / Alt+ArrowDown move the current block within its column or the top level. Selecting text shows a bubble with the inline marks of PRD Appendix A, a link and a
  * mention. `onChange` receives the field's blocks
  * after every edit; with `doc`, the editor edits that document and `onDoc` receives it instead.
  */
@@ -120,6 +121,8 @@ export function ContentEditor(props: {
   const [slash, setSlash] = createSignal<MenuState | null>(null);
   const [fieldMenu, setFieldMenu] = createSignal<MenuState | null>(null);
   const [activeItem, setActiveItem] = createSignal(0);
+  // A follow-up list the `/` menu shows in place of its items, such as the column counts.
+  const [subMenu, setSubMenu] = createSignal<MenuItem[] | null>(null);
   // A menu closed with Escape stays closed until its trigger is typed again.
   const dismissed: Record<string, number | null> = { slash: null, field: null };
   // The file a menu item asked for goes into a block this builds.
@@ -145,7 +148,10 @@ export function ContentEditor(props: {
       if (!st || dismissed[kind] !== st.from) dismissed[kind] = null;
       const next = st && dismissed[kind] === null ? st : null;
       set(next);
-      if (!next) setActiveItem(0);
+      if (!next) {
+        setActiveItem(0);
+        if (kind === "slash") setSubMenu(null);
+      }
     };
   }
 
@@ -244,6 +250,30 @@ export function ContentEditor(props: {
         }),
       },
     ];
+    // Layouts go at the top level only: a column holds no columns.
+    const s = slash();
+    const inColumn = !!editor && !!s && editor.state.doc.resolve(s.from).depth > 1;
+    const columnItem = (n: number): MenuItem => ({
+      id: `columns-${n}`,
+      label: `${n} columns`,
+      section: "Layout",
+      keywords: "columns layout side by side split",
+      run: () => place(columnsJSON(n)),
+    });
+    const layoutItems: MenuItem[] = inColumn
+      ? []
+      : [
+          ...[2, 3, 4].map(columnItem),
+          {
+            id: "columns-pick",
+            label: "Columns…",
+            section: "Layout",
+            keywords: "columns layout side by side split custom count five six 5 6",
+            hint: `up to ${COLUMNS_MAX}`,
+            run: () => {},
+            submenu: () => Array.from({ length: COLUMNS_MAX - COLUMNS_MIN + 1 }, (_, i) => columnItem(i + COLUMNS_MIN)),
+          },
+        ];
     const properties: MenuItem[] = (props.template?.unplaced() ?? []).map((f) => ({
       id: `property-${f.name}`,
       label: f.label,
@@ -252,7 +282,7 @@ export function ContentEditor(props: {
       hint: f.name,
       run: () => place({ type: "templateSlot", attrs: { slot: f.name, label: null } }),
     }));
-    const all = [...textItems, ...blockItems, ...properties];
+    const all = [...textItems, ...blockItems, ...layoutItems, ...properties];
     const exclude = props.exclude ?? [];
     return exclude.length ? all.filter((i) => !exclude.includes(i.id)) : all;
   }
@@ -266,9 +296,10 @@ export function ContentEditor(props: {
     if (!editor || !s) return;
     const { schema, view } = editor;
     let tr = view.state.tr.delete(s.from, s.to);
+    // The paragraph the menu was typed in: at the top level, or in a column.
     const $pos = tr.doc.resolve(s.from);
-    const start = $pos.before(1);
-    const para = $pos.node(1);
+    const start = $pos.before();
+    const para = $pos.parent;
     const node = schema.nodeFromJSON(json);
     const from = para.content.size === 0 ? start : start + para.nodeSize;
     const to = para.content.size === 0 ? start + para.nodeSize : from;
@@ -276,9 +307,19 @@ export function ContentEditor(props: {
     // At the end, add an empty line to type on after the block. Elsewhere the caret goes to the
     // start of the block after it, and no empty paragraph is left in the middle of the content.
     tr = tr.replaceWith(from, to, next ? [node] : [node, schema.nodes.paragraph!.create()]);
-    tr.setSelection(Selection.near(tr.doc.resolve(from + node.nodeSize)));
+    // A new layout takes the caret into its first column.
+    if (node.type.name === "columns") tr.setSelection(TextSelection.create(tr.doc, from + 3));
+    else tr.setSelection(Selection.near(tr.doc.resolve(from + node.nodeSize)));
     view.dispatch(tr.scrollIntoView());
     view.focus();
+  }
+
+  /** The editor node for a new layout of `n` equal columns, each with a line to type on. */
+  function columnsJSON(n: number): JSONContent {
+    return {
+      type: "columns",
+      content: (newColumns(n).blocks ?? []).map(() => ({ type: "column", attrs: { width: 1 }, content: [{ type: "paragraph" }] })),
+    };
   }
 
   function fieldItems(): MenuItem[] {
@@ -298,6 +339,8 @@ export function ContentEditor(props: {
   const menuItems = createMemo(() => {
     const m = openMenu();
     if (!m) return [];
+    const sub = m.kind === "slash" ? subMenu() : null;
+    if (sub) return sub;
     const all = m.kind === "slash" ? slashItems() : fieldItems();
     return all.filter((i) => matchesQuery(`${i.label} ${i.section} ${i.keywords ?? ""}`, m.state.query));
   });
@@ -322,6 +365,13 @@ export function ContentEditor(props: {
   };
 
   function choose(item: MenuItem) {
+    if (item.submenu) {
+      // A follow-up choice: the menu lists it, and Escape goes back.
+      setSubMenu(item.submenu());
+      setActiveItem(0);
+      return;
+    }
+    setSubMenu(null);
     plusSlash = null;
     item.run();
     setSlash(null);
@@ -346,6 +396,11 @@ export function ContentEditor(props: {
     }
     if (e.key === "Escape") {
       menuEscape = e;
+      if (kind === "slash" && subMenu()) {
+        setSubMenu(null);
+        setActiveItem(0);
+        return true;
+      }
       if (kind === "slash" && plusSlash === m.state.from && editor) {
         // The `/` came from "+", not from typing: take it out again.
         plusSlash = null;
