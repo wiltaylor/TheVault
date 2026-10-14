@@ -66,7 +66,7 @@ describe("layout tree", () => {
     expect(M.activePane(again)).toBe(b);
   });
 
-  it("closing a tab's last pane closes the tab, and the last tab gives a fresh daily notes tab", () => {
+  it("closing a tab's last pane closes the tab, and closing the last tab leaves none open", () => {
     const { ws, p } = one();
     const two = M.openTab(ws, "/b");
     expect(two.tabs).toHaveLength(2);
@@ -74,10 +74,29 @@ describe("layout tree", () => {
     expect(back.tabs).toHaveLength(1);
     expect(M.activePane(back)).toBe(p);
 
-    const fresh = M.closePane(ws, p);
-    expect(fresh.tabs).toHaveLength(1);
-    expect(M.location(fresh, M.activePane(fresh))).toBe(M.HOME);
-    expect(fresh.panes[p]).toBeUndefined();
+    const none = M.closePane(ws, p);
+    expect(M.isEmpty(none)).toBe(true);
+    expect(none.tabs).toHaveLength(0);
+    expect(none.panes).toEqual({});
+    expect(M.activePane(none)).toBe("");
+    // Nothing to cycle, and the pane actions change nothing.
+    expect(M.cycleTab(none, 1)).toBe(none);
+    expect(M.go(none, "", -1)).toBe(none);
+    expect(M.navigate(none, "", "/x")).toBe(none);
+  });
+
+  it("an empty workspace stays empty through a reload, unless the address names a page", () => {
+    const start = M.emptyWorkspace("/a");
+    const none = M.closeTab(start, start.active);
+    const stored = M.restore(M.serialize(M.noTabs()));
+    expect(M.isEmpty(stored)).toBe(true);
+    expect(M.isEmpty(M.openAtLoad(stored, "/"))).toBe(true);
+    const opened = M.openAtLoad(stored, "/notes/abc");
+    expect(opened.tabs).toHaveLength(1);
+    expect(M.location(opened, M.activePane(opened))).toBe("/notes/abc");
+    expect(M.isEmpty(none)).toBe(true);
+    // Nothing stored, or nothing readable, is a first run: a daily notes tab.
+    expect(M.location(M.restore(null), M.activePane(M.restore(null)))).toBe(M.HOME);
   });
 
   it("docks a pane on each edge of another", () => {

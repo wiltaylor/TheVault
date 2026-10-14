@@ -81,10 +81,12 @@ function beside(target: Layout, moved: Layout, edge: Edge): Layout {
   return { split: newId("s"), dir, ratio: 0.5, a: first ? moved : target, b: first ? target : moved };
 }
 
+/** The tab showing. With no tabs open, a stand-in with no pane, so callers need no special case. */
 export function activeTab(ws: Workspace): TabState {
-  return ws.tabs.find((t) => t.id === ws.active) ?? ws.tabs[0]!;
+  return ws.tabs.find((t) => t.id === ws.active) ?? ws.tabs[0] ?? { id: "", layout: { pane: "" }, active: "" };
 }
 
+/** The active pane, or "" when no tab is open. */
 export function activePane(ws: Workspace): string {
   return activeTab(ws).active;
 }
@@ -108,6 +110,16 @@ export function canGo(ws: Workspace, pane: string, delta: number): boolean {
 
 function freshPane(url: string): PaneState {
   return { history: [url], index: 0 };
+}
+
+/** A workspace with no tabs open: the main area is empty until something opens one. */
+export function noTabs(): Workspace {
+  return { tabs: [], active: "", panes: {} };
+}
+
+/** Whether no tab is open. */
+export function isEmpty(ws: Workspace): boolean {
+  return ws.tabs.length === 0;
 }
 
 /** A workspace with one tab of one pane showing `url`. */
@@ -137,7 +149,7 @@ function neighbour(tabs: TabState[], index: number): string | undefined {
   return (tabs[index + 1] ?? tabs[index - 1])?.id;
 }
 
-/** Close tab `id` and its panes. Closing the last tab opens a fresh one on daily notes. */
+/** Close tab `id` and its panes. Closing the last tab leaves no tabs open. */
 export function closeTab(ws: Workspace, id: string): Workspace {
   const index = ws.tabs.findIndex((t) => t.id === id);
   if (index < 0) return ws;
@@ -145,7 +157,7 @@ export function closeTab(ws: Workspace, id: string): Workspace {
   const panes = { ...ws.panes };
   for (const p of panesOf(tab.layout)) delete panes[p];
   const tabs = ws.tabs.filter((t) => t.id !== id);
-  if (!tabs.length) return emptyWorkspace();
+  if (!tabs.length) return noTabs();
   const active = ws.active === id ? neighbour(ws.tabs, index)! : ws.active;
   return { tabs, active, panes };
 }
@@ -174,6 +186,7 @@ export function activatePane(ws: Workspace, pane: string): Workspace {
 /** Switch to the tab `delta` places along, wrapping round. */
 export function cycleTab(ws: Workspace, delta: number): Workspace {
   const n = ws.tabs.length;
+  if (!n) return ws;
   const i = ws.tabs.findIndex((t) => t.id === ws.active);
   return activateTab(ws, ws.tabs[(((i + delta) % n) + n) % n]!.id);
 }
@@ -405,6 +418,7 @@ export function isAppPath(url: unknown): url is string {
  */
 export function openAtLoad(ws: Workspace, url: string): Workspace {
   if (!isAppPath(url) || url === "/") return ws;
+  if (isEmpty(ws)) return openTab(ws, url);
   return navigate(ws, activePane(ws), url);
 }
 
@@ -473,7 +487,8 @@ export function restore(raw: unknown): Workspace {
     tabIds.add(t.id);
     tabs.push({ id: t.id, layout, active });
   }
-  if (!tabs.length) return emptyWorkspace();
+  // Every tab closed on purpose stays closed; tabs that were all unreadable give a fresh start.
+  if (!tabs.length) return data.tabs.length === 0 ? noTabs() : emptyWorkspace();
   const active = typeof data.active === "string" && tabIds.has(data.active) ? data.active : tabs[0]!.id;
   return { tabs, active, panes };
 }

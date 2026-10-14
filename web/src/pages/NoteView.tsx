@@ -32,6 +32,7 @@ import { activePane } from "../workspace/model";
 import { usePane } from "../workspace/pane";
 import { workspace } from "../workspace/store";
 import { ThisNote } from "../views/thisNote";
+import { TrashIcon } from "../components/Icon";
 
 /** How long after the last change a note saves itself. */
 export const AUTOSAVE_MS = 1500;
@@ -65,6 +66,27 @@ function draftNote(type: TypeDef): Note {
   const fields: Record<string, Json> = {};
   for (const f of type.fields) if (!f.compound && !f.computed && f.default !== undefined) fields[f.name] = f.default;
   return { id: "", type: type.name, version: "", wcl: "", note: { fields, blocks: [] } };
+}
+
+/** A pin, filled once the note is pinned. */
+function PinIcon(props: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill={props.filled ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+    </svg>
+  );
+}
+
+/** A clock turning back, for the note's history. */
+function HistoryIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M12 7v5l4 2" />
+    </svg>
+  );
 }
 
 /** The sliders icon of the properties button. */
@@ -472,6 +494,31 @@ export function NoteView(props: { newType?: string; id?: string }) {
                   >
                     <PropertiesIcon />
                   </button>
+                  <Show when={!props.newType}>
+                    <button
+                      type="button"
+                      class="icon-button pin-button"
+                      aria-label={isPinned(n().id) ? "Unpin" : "Pin"}
+                      aria-pressed={isPinned(n().id)}
+                      title={isPinned(n().id) ? "Unpin from the sidebar" : "Pin to the sidebar"}
+                      onClick={() => void togglePin(n().id, formatValue(doc().fields.title) || "Untitled", n().type)}
+                    >
+                      <PinIcon filled={isPinned(n().id)} />
+                    </button>
+                    <A href={`/notes/${n().id}/history`} class="icon-button" aria-label="History" title="History">
+                      <HistoryIcon />
+                    </A>
+                    <button
+                      type="button"
+                      class="icon-button danger"
+                      aria-label="Delete"
+                      title="Delete note"
+                      onClick={() => void remove()}
+                      disabled={busy()}
+                    >
+                      <TrashIcon />
+                    </button>
+                  </Show>
                 </div>
               </div>
               <div class="note-actions">
@@ -483,10 +530,8 @@ export function NoteView(props: { newType?: string; id?: string }) {
                 >
                   {status()}
                 </span>
-                <Show
-                  when={!props.newType}
-                  fallback={
-                    <div class="actions">
+                <Show when={props.newType}>
+                  <div class="actions">
                       <button type="button" onClick={() => navigate(`/types/${n().type}`)} disabled={busy()}>
                         Cancel
                       </button>
@@ -500,25 +545,6 @@ export function NoteView(props: { newType?: string; id?: string }) {
                         Create
                       </button>
                     </div>
-                  }
-                >
-                  <div class="actions">
-                    <button
-                      type="button"
-                      class="pin-button"
-                      aria-pressed={isPinned(n().id)}
-                      title={isPinned(n().id) ? "Unpin from the sidebar" : "Pin to the sidebar"}
-                      onClick={() => void togglePin(n().id, formatValue(doc().fields.title) || "Untitled", n().type)}
-                    >
-                      {isPinned(n().id) ? "Unpin" : "Pin"}
-                    </button>
-                    <A href={`/notes/${n().id}/history`} class="button">
-                      History
-                    </A>
-                    <button type="button" class="danger" onClick={() => void remove()} disabled={busy()}>
-                      Delete
-                    </button>
-                  </div>
                 </Show>
               </div>
             </header>

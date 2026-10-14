@@ -39,7 +39,8 @@ function browserState(w: M.Workspace) {
 
 function syncUrl(w: M.Workspace, how: UrlChange) {
   if (how === "none") return;
-  const url = M.location(w, M.activePane(w));
+  // With no tab open the address is the bare root, which reopens nothing.
+  const url = M.isEmpty(w) ? "/" : M.location(w, M.activePane(w));
   const here = window.location.pathname + window.location.search + window.location.hash;
   const state = browserState(w);
   if (how === "push" && url !== here) window.history.pushState(state, "", url);
@@ -94,6 +95,11 @@ export function resetWorkspace(next: M.Workspace) {
 // The actions panes, tabs and links call.
 
 export function navigatePane(pane: string, url: string, replace = false) {
+  // No pane to show it in (every tab closed): it gets a tab of its own.
+  if (!ws().panes[pane]) {
+    openTab(url);
+    return;
+  }
   const active = M.activePane(ws()) === pane;
   update((w) => M.navigate(w, pane, url, replace), active ? (replace ? "replace" : "push") : "none");
 }
@@ -170,7 +176,11 @@ export function onPopState(state: unknown, url: string) {
   }
   if (!M.isAppPath(url)) return;
   const pane = M.activePane(w);
-  const p = w.panes[pane]!;
+  const p = w.panes[pane];
+  if (!p) {
+    if (url !== "/") update((x) => M.openTab(x, url), "replace");
+    return;
+  }
   // A step the pane itself remembers is taken there, so its forward history survives.
   if (p.history[p.index - 1] === url) update((x) => M.go(x, pane, -1), "replace");
   else if (p.history[p.index + 1] === url) update((x) => M.go(x, pane, 1), "replace");

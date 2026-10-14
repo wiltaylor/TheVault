@@ -81,7 +81,8 @@ export function Workspace(props: { url: string }) {
   onMount(() => onCleanup(installWorkspaceEvents()));
   // The browser's tab names the active pane's page.
   createEffect(() => {
-    document.title = `${paneTitle(M.activePane(workspace())).title} · TheVault`;
+    const w = workspace();
+    document.title = M.isEmpty(w) ? "TheVault" : `${paneTitle(M.activePane(w)).title} · TheVault`;
   });
   onCleanup(() => (document.title = "TheVault"));
 
@@ -103,7 +104,7 @@ export function Workspace(props: { url: string }) {
   return (
     <div class="workspace" classList={{ "ws-phone": phone() }}>
       <TabBar phone={phone()} />
-      <div class="ws-area" ref={area}>
+      <div class="ws-area" classList={{ "ws-empty": M.isEmpty(workspace()) }} ref={area}>
         <For each={paneIds()}>{(id) => <Pane id={id} phone={phone()} rects={rects} />}</For>
         <Show when={!phone()}>
           <For each={splitIds()}>{(id) => <DividerView id={id} rects={rects} area={() => area} />}</For>

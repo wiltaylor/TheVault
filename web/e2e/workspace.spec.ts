@@ -277,7 +277,7 @@ test("the address follows the active pane, browser back works in it, and reload 
   await expect(panes(page)).toHaveCount(1);
 });
 
-test("tabs reorder by dragging, close with a middle-click, and the last one closed leaves daily notes", async ({ page }) => {
+test("tabs reorder by dragging, close with a middle-click or their ×, and closing the last leaves the area empty", async ({ page }) => {
   await logIn(page, "/settings");
   await page.getByRole("button", { name: "New tab" }).click();
   await page.getByRole("button", { name: "New tab" }).click();
@@ -288,8 +288,24 @@ test("tabs reorder by dragging, close with a middle-click, and the last one clos
   await expect.poll(() => tabNames(page)).toEqual(["Trash", "Settings", "Daily notes"]);
   await tabs(page).nth(1).click({ button: "middle" });
   await expect.poll(() => tabNames(page)).toEqual(["Trash", "Daily notes"]);
+  // Every tab shows its ×, not only the active one.
+  await expect(tabs(page).nth(1).getByRole("button", { name: "Close tab" })).toBeVisible();
+  expect(Number(await tabs(page).nth(1).getByRole("button", { name: "Close tab" }).evaluate((el) => getComputedStyle(el).opacity))).toBeGreaterThan(0.3);
+  await tabs(page).nth(1).getByRole("button", { name: "Close tab" }).click();
   await tabs(page).nth(0).getByRole("button", { name: "Close tab" }).click();
-  await tabs(page).nth(0).getByRole("button", { name: "Close tab" }).click();
+
+  // No tabs: an empty area, the bare root address, and it stays that way through a reload.
+  await expect(tabs(page)).toHaveCount(0);
+  await expect(page.locator("[data-pane-id]")).toHaveCount(0);
+  await expect(page.locator(".ws-area")).toHaveClass(/ws-empty/);
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("button", { name: "New tab" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "New tab" })).toBeVisible();
+  await expect(tabs(page)).toHaveCount(0);
+
+  // Opening something from the sidebar gives it a tab of its own.
+  await page.getByRole("link", { name: "Daily notes" }).click();
   await expect.poll(() => tabNames(page)).toEqual(["Daily notes"]);
   await expect(activePane(page).getByRole("navigation", { name: "Day" })).toBeVisible();
 });

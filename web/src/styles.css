@@ -4181,7 +4181,7 @@ input.canvas-caption-input {
 }
 
 .ws-tab-close {
-  opacity: 0;
+  opacity: 0.55;
 }
 
 .ws-tab:hover .ws-tab-close,
@@ -4235,7 +4235,13 @@ input.canvas-caption-input {
   position: relative;
   flex: 1;
   min-height: 0;
+  /* Shows through between panes as the divider lines. */
   background: var(--line);
+}
+
+/* No tab open: plain background, not the divider colour. */
+.ws-area.ws-empty {
+  background: var(--bg);
 }
 
 .pane {
@@ -4932,4 +4938,19 @@ span.filter-op {
     min-width: 0;
     text-align: left;
   }
+}
+
+/* Pin, history and delete sit by the title as icons, like the properties button. */
+a.icon-button {
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  text-decoration: none;
+}
+
+.icon-button.pin-button[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.icon-button.danger:hover {
+  color: var(--danger);
 }

@@ -6,6 +6,7 @@ import { workspace } from "./store";
 /** Reactive: the path the active pane shows, without its query or hash. */
 export function activeLocation(): string {
   const w = workspace();
+  if (M.isEmpty(w)) return "";
   return M.location(w, M.activePane(w)).split(/[?#]/)[0]!;
 }
 
