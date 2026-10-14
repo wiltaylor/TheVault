@@ -353,3 +353,58 @@ test.describe("in a phone-width pane", () => {
     await fitsInside(calendar.locator(".fc-toolbar-title"), calendar);
   });
 });
+
+test("the calendar follows its pane smoothly while the pane is resized", async ({ page, admin }) => {
+  const tag = unique("smooth");
+  await create(admin, "story", { title: `${tag} one`, tag, due: day(5) });
+  const cal = await viewPage(admin, tag, { due: { kind: "calendar", date: "due" } });
+  await open(page, cal.id, cal.title);
+  const id = await page.locator(".pane").filter({ has: page.getByTestId("query-view") }).first().getAttribute("data-pane-id");
+  const pane = page.locator(`[data-pane-id="${id}"]`);
+  await pane.getByRole("button", { name: "Pane actions" }).click();
+  await page.getByRole("menuitem", { name: "Split right" }).click();
+  const calendar = pane.getByTestId("query-view").locator(".fc");
+  const grid = calendar.locator(".fc-scrollgrid").first();
+  await expect(calendar).toBeVisible();
+
+  // Watch what is painted during a continuous drag of the divider: a resize observer registered
+  // after the calendar's own runs after it re-measures and before the frame is painted, so it sees
+  // the frame the user sees. The grid must track the calendar's width, not catch up later.
+  await calendar.evaluate((el) => {
+    const w = window as unknown as { worst: number; watching: boolean; samples: number };
+    w.worst = 0;
+    w.samples = 0;
+    w.watching = true;
+    const check = () => {
+      if (!w.watching) return;
+      w.samples++;
+      const outer = el.querySelector(".fc-scrollgrid") as HTMLElement | null;
+      for (const t of el.querySelectorAll<HTMLElement>(".fc-col-header, .fc-daygrid-body")) {
+        if (outer) w.worst = Math.max(w.worst, Math.abs(t.getBoundingClientRect().width - outer.clientWidth));
+      }
+    };
+    new ResizeObserver(check).observe(el);
+  });
+  const divider = page.getByRole("separator").first();
+  const box = (await divider.boundingBox())!;
+  const y = box.y + box.height / 2;
+  let x = box.x + box.width / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  for (const dx of [-260, 320, -180]) {
+    await page.mouse.move(x + dx, y, { steps: 30 });
+    x += dx;
+  }
+  await page.mouse.up();
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const { worst, samples } = await page.evaluate(() => {
+    const w = window as unknown as { worst: number; watching: boolean; samples: number };
+    w.watching = false;
+    return { worst: w.worst, samples: w.samples };
+  });
+  // The drag really resized the calendar many times while it was watched.
+  expect(samples).toBeGreaterThan(20);
+  // One frame of lag is fine; a stale width held through the drag is not.
+  expect(worst).toBeLessThanOrEqual(4);
+  await expect(grid).toBeVisible();
+});

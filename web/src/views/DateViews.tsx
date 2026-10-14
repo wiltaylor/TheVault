@@ -59,6 +59,25 @@ function CappedNote(props: { capped: boolean }) {
  * Notes on the days of a date, datetime or date range field, with FullCalendar's MIT core (D29).
  * Only the notes in the range on screen are loaded: the view's query is narrowed to it.
  */
+/**
+ * Run `fn` whenever `el` changes size, inside the resize observer's callback: that runs after
+ * layout and before the browser paints, so whatever `fn` re-measures is right in the same frame
+ * rather than one frame late. Returns a function that stops watching.
+ */
+export function followSize(el: HTMLElement, fn: () => void): () => void {
+  if (typeof ResizeObserver === "undefined") return () => {};
+  let last = -1;
+  const observer = new ResizeObserver(() => {
+    // Only width matters here; a height change caused by `fn` itself must not loop.
+    const width = el.clientWidth;
+    if (width === last) return;
+    last = width;
+    fn();
+  });
+  observer.observe(el);
+  return () => observer.disconnect();
+}
+
 /** Below this width of its own the calendar switches to its compact layout. */
 export const COMPACT_CALENDAR = 520;
 
@@ -132,22 +151,24 @@ export function CalendarView(props: { view: ViewDef; query: string; thisId: stri
           });
           calendar.render();
           // Follow the pane's width, not the window's: switch layouts as it crosses the threshold.
+          // FullCalendar gives its inner tables pixel widths and only re-measures on its own
+          // schedule, so between those moments a resized pane clips days or leaves a gap. Tell it
+          // to re-measure on every size change, at most once a frame.
           let compact = start.compact;
-          const observer =
-            typeof ResizeObserver === "undefined"
-              ? null
-              : new ResizeObserver(() => {
-                  const next = calendarLayout(box.clientWidth);
-                  if (next.compact === compact || !calendar || box.clientWidth === 0) return;
-                  compact = next.compact;
-                  box.classList.toggle("fc-compact", compact);
-                  calendar.setOption("headerToolbar", next.headerToolbar);
-                  calendar.setOption("footerToolbar", next.footerToolbar);
-                  calendar.setOption("dayHeaderFormat", next.dayHeaderFormat);
-                });
-          observer?.observe(box);
+          const stop = followSize(box, () => {
+            if (!calendar || box.clientWidth === 0) return;
+            const next = calendarLayout(box.clientWidth);
+            if (next.compact !== compact) {
+              compact = next.compact;
+              box.classList.toggle("fc-compact", compact);
+              calendar.setOption("headerToolbar", next.headerToolbar);
+              calendar.setOption("footerToolbar", next.footerToolbar);
+              calendar.setOption("dayHeaderFormat", next.dayHeaderFormat);
+            }
+            calendar.updateSize();
+          });
           onCleanup(() => {
-            observer?.disconnect();
+            stop();
             calendar?.destroy();
           });
         });
@@ -266,7 +287,12 @@ export function TimelineView(props: { view: ViewDef; query: string; thisId: stri
           timeline.on("click", (p: { item: string | null; what: string | null }) => {
             if (p.item && p.what === "item") navigate(`/notes/${p.item}`);
           });
+          // vis-timeline checks its size only on a once-a-second timer; redraw as the pane resizes.
+          const stopFollowing = followSize(box, () => {
+            if (box.clientWidth > 0) timeline?.redraw();
+          });
           onCleanup(() => {
+            stopFollowing();
             generation++;
             timeline?.destroy();
           });
