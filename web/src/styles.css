@@ -3659,6 +3659,29 @@ h1.note-title {
   padding: 0.2rem 0.4rem;
 }
 
+/* An asset field: its picker, then an Upload button. */
+.asset-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.asset-input > select {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+/* Chips stay as wide as they are, so Upload sits right after the +. */
+.asset-input > .chip-picker {
+  flex: 0 1 auto;
+}
+
+.asset-input > .error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 /* A title takes the row's full width before it wraps; the buttons move to the next line instead. */
 .note-title-row {
   flex-wrap: wrap;

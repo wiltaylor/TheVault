@@ -3,6 +3,7 @@
 
 import { For, Match, Show, Switch, createEffect, createResource, createSignal, on } from "solid-js";
 import { type FieldDef, type Json, type Row, type Term, api } from "../api";
+import { FilePicker, upload } from "../blocks/MediaBlocks";
 import { knowTitle, noteTitle } from "../editor/titles";
 import { MapCanvas } from "../map/MapCanvas";
 import { geoPoint, imagePoint, mapKind } from "../map/model";
@@ -453,8 +454,11 @@ function LocationInput(props: FieldInputProps) {
   );
 }
 
+/** An asset field: pick an uploaded file, or upload a new one into the field. */
 function AssetInput(props: FieldInputProps) {
-  const [assets] = createResource(() => api.assets());
+  const [assets, { refetch }] = createResource(() => api.assets());
+  const [uploading, setUploading] = createSignal(false);
+  const [uploadError, setUploadError] = createSignal<string | null>(null);
   const options = () => {
     const list = (assets() ?? []).map((a) => ({ value: a.id, text: a.filename }));
     // Keep a stored id the listing no longer has, so it is not silently dropped.
@@ -463,26 +467,53 @@ function AssetInput(props: FieldInputProps) {
     }
     return list;
   };
+  async function uploadInto(file: File) {
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const a = await upload(file);
+      await refetch();
+      props.onChange(props.field.multiple ? [...asStrings(props.value), a.id] : a.id);
+    } catch (e) {
+      setUploadError(`Could not upload ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setUploading(false);
+    }
+  }
   return (
-    <Show
-      when={!props.field.multiple}
-      fallback={
-        <Picker
-          {...props}
-          suggest={(text) => optionSuggestions(options(), text)}
-          chipText={(id) => options().find((o) => o.value === id)?.text ?? id}
+    <div class="asset-input">
+      <Show
+        when={!props.field.multiple}
+        fallback={
+          <Picker
+            {...props}
+            suggest={(text) => optionSuggestions(options(), text)}
+            chipText={(id) => options().find((o) => o.value === id)?.text ?? id}
+          />
+        }
+      >
+        <Choice
+          options={options()}
+          required={props.field.required}
+          value={props.value}
+          onChange={props.onChange}
+          label={props.label}
+          id={props.id}
         />
-      }
-    >
-      <Choice
-      options={options()}
-      required={props.field.required}
-      value={props.value}
-      onChange={props.onChange}
-      label={props.label}
-      id={props.id}
+      </Show>
+      <FilePicker
+        label={`Upload a file to ${props.label}`}
+        text={uploading() ? "Uploading…" : "Upload"}
+        onFile={(file) => void uploadInto(file)}
       />
-    </Show>
+      <Show when={uploadError()}>
+        {(e) => (
+          <p class="error" role="alert">
+            {e()}
+          </p>
+        )}
+      </Show>
+    </div>
   );
 }
 
