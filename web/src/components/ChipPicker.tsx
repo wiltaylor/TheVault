@@ -47,6 +47,17 @@ if (typeof window !== "undefined") {
   for (const end of ["pointerup", "pointercancel"]) window.addEventListener(end, () => (pointerDown = false), { capture: true });
 }
 
+const CHIP_COLOURS = ["blue", "green", "purple", "orange", "pink", "yellow", "red", "brown"] as const;
+
+/** A palette colour for a value, the same every time the value is shown. */
+export function chipColour(value: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) h = Math.imul(h ^ value.charCodeAt(i), 0x01000193);
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  h ^= h >>> 16;
+  return CHIP_COLOURS[(h >>> 0) % CHIP_COLOURS.length] ?? "blue";
+}
+
 /** A chip list with a + to add to it. */
 export function ChipPicker(props: ChipPickerProps) {
   const text = (v: string) => props.chipText?.(v) ?? v;
@@ -130,7 +141,7 @@ export function ChipPicker(props: ChipPickerProps) {
       <ul class="chips" aria-label={`${props.label} values`}>
         <For each={props.values}>
           {(v) => (
-            <li class="chip" data-value={v}>
+            <li class="chip" data-value={v} data-colour={chipColour(v)}>
               <Show when={props.chipIcon && props.chipIcon(v) !== undefined}>
                 <TypeIcon name={props.chipIcon!(v)} size={14} />
               </Show>

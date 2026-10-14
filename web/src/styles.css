@@ -5559,15 +5559,27 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   max-width: 100%;
   min-height: 1.8rem;
   border-radius: 999px;
-  padding: 0 0 0 0.6rem;
-  background: var(--accent-soft);
-  color: var(--ink);
+  padding: 0 0 0 0.8rem;
+  background: color-mix(in srgb, var(--chip-colour) 16%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--chip-colour) 35%, transparent);
+  color: color-mix(in srgb, var(--chip-colour) 55%, var(--ink));
   line-height: 1.25;
+  --chip-colour: var(--accent);
 }
+
+.chip-picker .chip[data-colour="blue"] { --chip-colour: var(--palette-blue); }
+.chip-picker .chip[data-colour="green"] { --chip-colour: var(--palette-green); }
+.chip-picker .chip[data-colour="purple"] { --chip-colour: var(--palette-purple); }
+.chip-picker .chip[data-colour="orange"] { --chip-colour: var(--palette-orange); }
+.chip-picker .chip[data-colour="pink"] { --chip-colour: var(--palette-pink); }
+.chip-picker .chip[data-colour="yellow"] { --chip-colour: var(--palette-yellow); }
+.chip-picker .chip[data-colour="red"] { --chip-colour: var(--palette-red); }
+.chip-picker .chip[data-colour="brown"] { --chip-colour: var(--palette-brown); }
 
 .chip-picker .chip .icon {
   flex: none;
-  color: var(--muted);
+  color: inherit;
+  opacity: 0.8;
 }
 
 .chip-picker .chip-text {
@@ -5592,9 +5604,10 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   min-width: 1.8rem;
   border: none;
   border-radius: 0 999px 999px 0;
-  padding: 0 0.5rem 0 0.2rem;
+  padding: 0 0.65rem 0 0.25rem;
   background: transparent;
-  color: var(--muted);
+  color: inherit;
+  opacity: 0.7;
   font-size: 1rem;
   line-height: 1;
 }
@@ -5602,6 +5615,11 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 .chip-picker .chip button:hover,
 .chip-picker .chip button:focus-visible {
   color: var(--danger);
+  opacity: 1;
+}
+
+.chip-picker .chip:not(:has(button)) {
+  padding-right: 0.8rem;
 }
 
 /* The + that opens the add box, sized like a chip. */

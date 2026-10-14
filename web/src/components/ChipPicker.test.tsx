@@ -2,7 +2,7 @@ import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { Term } from "../api";
-import { ChipPicker, type ChipPickerProps, termSuggestions, typeSuggestions } from "./ChipPicker";
+import { ChipPicker, type ChipPickerProps, chipColour, termSuggestions, typeSuggestions } from "./ChipPicker";
 
 const FRUIT = ["Apple", "Banana", "Cherry"].map((f) => ({ value: f.toLowerCase(), text: f }));
 const fruit = (q: string) => FRUIT.filter((f) => f.text.toLowerCase().includes(q.trim().toLowerCase()));
@@ -24,6 +24,14 @@ function mount(start: string[], extra: Partial<ChipPickerProps> = {}) {
 }
 
 describe("ChipPicker", () => {
+  it("colours each chip by its value, the same every time", () => {
+    const { container } = mount(["apple", "banana", "cherry"]);
+    const colours = [...container.querySelectorAll<HTMLElement>(".chip")].map((c) => c.dataset.colour);
+    expect(colours).toEqual(["apple", "banana", "cherry"].map(chipColour));
+    expect(new Set(colours).size).toBeGreaterThan(1);
+    expect(chipColour("apple")).toBe(chipColour("apple"));
+  });
+
   it("adds a picked suggestion and keeps the box open for the next", async () => {
     const m = mount([]);
     expect(m.queryByRole("combobox")).toBeNull();
