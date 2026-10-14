@@ -3,18 +3,13 @@
 // editor.
 
 import { indentLess, insertTab } from "@codemirror/commands";
-import {
-  LanguageDescription,
-  type LanguageSupport,
-  defaultHighlightStyle,
-  syntaxHighlighting,
-} from "@codemirror/language";
+import { HighlightStyle, LanguageDescription, type LanguageSupport, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
-import { classHighlighter } from "@lezer/highlight";
+import { classHighlighter, tags as t } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
-import { For, Show, createEffect, on, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import type { Block } from "../api";
 import { text, withItem, withText } from "./fields";
 
@@ -40,6 +35,48 @@ async function loadLanguage(name: string): Promise<LanguageSupport | []> {
   }
 }
 
+/**
+ * CodeMirror drawn from the app's CSS variables, so it follows the light and dark themes: the
+ * gutters, active line, selection and cursor, and (below) the syntax colours.
+ */
+const appTheme = EditorView.theme({
+  "&": { color: "var(--ink)", backgroundColor: "var(--panel)" },
+  ".cm-content": { caretColor: "var(--ink)" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--ink)" },
+  ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--muted)", borderRight: "1px solid var(--line)" },
+  ".cm-activeLine": { backgroundColor: "var(--code-active-line)" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--hover)", color: "var(--ink)" },
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, ::selection": {
+    backgroundColor: "var(--code-selection)",
+  },
+  ".cm-selectionMatch": { backgroundColor: "var(--accent-soft)" },
+  "&.cm-focused .cm-matchingBracket": { backgroundColor: "var(--accent-soft)", outline: "1px solid var(--line)" },
+  ".cm-foldPlaceholder": { backgroundColor: "var(--hover)", color: "var(--muted)", border: "1px solid var(--line)" },
+  ".cm-tooltip": { backgroundColor: "var(--panel)", color: "var(--ink)", border: "1px solid var(--line)" },
+  ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--accent-soft)", color: "var(--ink)" },
+  ".cm-panels": { backgroundColor: "var(--bg)", color: "var(--ink)" },
+  ".cm-searchMatch": { backgroundColor: "var(--highlight)" },
+});
+
+/** Syntax colours from CSS variables, readable on both themes' backgrounds. */
+const appHighlight = HighlightStyle.define([
+  { tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.operatorKeyword, t.modifier], color: "var(--code-keyword)" },
+  { tag: [t.string, t.special(t.string), t.regexp, t.character], color: "var(--code-string)" },
+  { tag: [t.number, t.bool, t.null, t.atom], color: "var(--code-number)" },
+  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: "var(--code-comment)", fontStyle: "italic" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.macroName], color: "var(--code-function)" },
+  { tag: [t.typeName, t.className, t.namespace, t.tagName], color: "var(--code-type)" },
+  { tag: [t.propertyName, t.attributeName, t.labelName], color: "var(--code-property)" },
+  { tag: [t.definition(t.variableName), t.variableName], color: "var(--ink)" },
+  { tag: [t.operator, t.punctuation, t.bracket], color: "var(--muted)" },
+  { tag: [t.meta, t.processingInstruction], color: "var(--code-comment)" },
+  { tag: t.heading, color: "var(--code-keyword)", fontWeight: "bold" },
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.strong, fontWeight: "bold" },
+  { tag: t.link, color: "var(--accent)", textDecoration: "underline" },
+  { tag: t.invalid, color: "var(--danger)" },
+]);
+
 /** A CodeMirror view of `source`, editable when `onChange` is given. */
 export function CodeMirror(props: { source: string; language: string; onChange?: (source: string) => void }) {
   let host!: HTMLDivElement;
@@ -50,7 +87,8 @@ export function CodeMirror(props: { source: string; language: string; onChange?:
     const editable = props.onChange !== undefined;
     const common = [
       language.of([]),
-      syntaxHighlighting(defaultHighlightStyle),
+      appTheme,
+      syntaxHighlighting(appHighlight),
       // tok-* classes as well, so a highlighted token can be found by what it is.
       syntaxHighlighting(classHighlighter),
       EditorView.contentAttributes.of({ "aria-label": "Code" }),
@@ -93,26 +131,42 @@ export function CodeMirror(props: { source: string; language: string; onChange?:
   return <div ref={host} class="code-mirror" />;
 }
 
-/** A code block: CodeMirror with a language selector and caption while editing. */
+/**
+ * A code block. Away from the cursor it reads like any code block: the file name and language in
+ * a slim header over the code. While the cursor is in it, the language selector and file name
+ * field show above the code, with line numbers.
+ */
 export function CodeBlock(props: { block: Block; onChange?: (block: Block) => void }) {
+  const [editing, setEditing] = createSignal(false);
   const known = () => findLanguage(text(props.block, "language"));
   const selected = () => {
     const lang = known();
     return lang ? lang.name : text(props.block, "language");
   };
+  const languageLabel = () => known()?.name ?? text(props.block, "language");
   const set = (item: string, value: string) => props.onChange?.(withText(props.block, item, value));
 
   return (
-    <figure class="block-code">
+    <figure
+      class="block-code"
+      classList={{ editing: editing() && !!props.onChange }}
+      onFocusIn={() => setEditing(true)}
+      onFocusOut={(e) => {
+        const to = e.relatedTarget;
+        if (!(to instanceof Node && e.currentTarget.contains(to))) setEditing(false);
+      }}
+    >
       <Show
-        when={props.onChange}
+        when={props.onChange && editing()}
         fallback={
-          <Show when={text(props.block, "caption")}>
-            <figcaption>{text(props.block, "caption")}</figcaption>
-          </Show>
+          <figcaption class="code-header">
+            <span class="code-filename">{text(props.block, "caption")}</span>
+            <span class="code-language">{languageLabel()}</span>
+            <CopyButton source={() => text(props.block, "source")} />
+          </figcaption>
         }
       >
-        <div class="block-fields">
+        <div class="block-fields code-fields">
           <select
             aria-label="Language"
             onChange={(e) => {
@@ -139,7 +193,7 @@ export function CodeBlock(props: { block: Block; onChange?: (block: Block) => vo
           </select>
           <input
             aria-label="Caption"
-            placeholder="Caption or file name"
+            placeholder="File name"
             value={text(props.block, "caption")}
             onInput={(e) => set("caption", e.currentTarget.value)}
           />
@@ -151,5 +205,59 @@ export function CodeBlock(props: { block: Block; onChange?: (block: Block) => vo
         onChange={props.onChange ? (source) => props.onChange?.(withItem(props.block, "source", source)) : undefined}
       />
     </figure>
+  );
+}
+
+/**
+ * Copy `text` to the clipboard. The Clipboard API needs a secure context (HTTPS or localhost), so
+ * over plain HTTP, such as a phone on the tailnet, this falls back to a hidden textarea and
+ * `execCommand("copy")`.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the older way.
+    }
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  area.remove();
+  return ok;
+}
+
+/** Copies the code block's source, then says so for a moment. */
+function CopyButton(props: { source: () => string }) {
+  const [state, setState] = createSignal<"idle" | "copied" | "failed">("idle");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(timer));
+  return (
+    <button
+      type="button"
+      class="code-copy"
+      aria-label="Copy code"
+      title="Copy code"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={async () => {
+        setState((await copyText(props.source())) ? "copied" : "failed");
+        clearTimeout(timer);
+        timer = setTimeout(() => setState("idle"), 1500);
+      }}
+    >
+      {state() === "copied" ? "Copied" : state() === "failed" ? "Copy failed" : "Copy"}
+    </button>
   );
 }

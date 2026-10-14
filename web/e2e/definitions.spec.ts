@@ -61,12 +61,12 @@ test("creating a type with one field of each kind through the UI produces a type
     "canvas",
   ];
 
-  await logIn(page, "/types/new");
+  await logIn(page, "/settings/types/new");
   await page.getByLabel("Name", { exact: true }).fill(name);
   await page.getByLabel("Label", { exact: true }).fill("Every kind");
   for (const [i, kind] of kinds.entries()) {
     await page.getByRole("button", { name: "Add field" }).click();
-    const card = page.getByTestId(`field-card-${i}`);
+    const card = page.getByTestId(`field-row-${i}`);
     await card.getByLabel("Name", { exact: true }).fill(`f_${kind}`);
     await card.getByLabel("Kind", { exact: true }).selectOption(kind);
     if (kind === "select") await card.getByLabel("Options, one per line").fill("low\nhigh");
@@ -107,9 +107,9 @@ test("adding a required field shows the preview listing affected notes and refus
   const a = await createNote(admin, name, { title: `Alpha ${t}` });
   const b = await createNote(admin, name, { title: `Beta ${t}` });
 
-  await logIn(page, `/types/${name}/edit`);
+  await logIn(page, `/settings/types/${name}/edit`);
   await page.getByRole("button", { name: "Add field" }).click();
-  const card = page.getByTestId("field-card-1");
+  const card = page.getByTestId("field-row-1");
   await card.getByLabel("Name", { exact: true }).fill("owner");
   await card.getByLabel("Required").check();
   await page.getByRole("button", { name: "Preview changes" }).click();
@@ -170,7 +170,7 @@ template default {
   await expect(page.getByTestId("field-estimate")).toBeVisible();
 
   // With the item's controls.
-  await page.goto(`/types/${name}/templates`);
+  await page.goto(`/settings/types/${name}/templates`);
   await details().click();
   await page.getByLabel("Move estimate to tab").selectOption({ label: "Overview" });
   await expect(page.getByTestId("template-item-estimate")).toHaveCount(0);
@@ -181,13 +181,22 @@ template default {
 
   await page.goto(`/notes/${note.id}`);
   await expect(overview()).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByTestId("field-estimate")).toContainText("3");
+  await expect(page.getByTestId("field-estimate").getByLabel("Estimate")).toHaveValue("3");
   await details().click();
   await expect(page.getByTestId("field-estimate")).toHaveCount(0);
 
-  // By dragging the field onto the other tab.
-  await page.goto(`/types/${name}/templates`);
-  await page.getByTestId("template-item-estimate").dragTo(details());
+  // By dragging the property block's handle onto the other tab.
+  await page.goto(`/settings/types/${name}/templates`);
+  await page.getByTestId("template-item-estimate").hover();
+  const handle = page.getByTestId("block-handle");
+  await expect(handle).toBeVisible();
+  const from = (await handle.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 20, from.y, { steps: 4 });
+  const to = (await details().boundingBox())!;
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 10 });
+  await page.mouse.up();
   await expect(details()).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("template-item-estimate")).toBeVisible();
   await page.getByRole("button", { name: "Save template" }).click();
@@ -196,7 +205,7 @@ template default {
   await page.goto(`/notes/${note.id}`);
   await expect(page.getByTestId("field-estimate")).toHaveCount(0);
   await details().click();
-  await expect(page.getByTestId("field-estimate")).toContainText("3");
+  await expect(page.getByTestId("field-estimate").getByLabel("Estimate")).toHaveValue("3");
 });
 
 /** A type with a field of every kind a note page edits, plus a computed one. */
@@ -246,7 +255,7 @@ test("editing every field kind on a note page saves a value that validates", asy
   const note = await createNote(admin, name, { title: `Every ${t}` });
 
   await logIn(page, `/notes/${note.id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
+  // Every field is edited in place, and the note saves itself.
   const field = (f: string) => page.getByTestId(`field-${f}`);
   await field("s").getByLabel("Text", { exact: true }).fill("hello");
   await field("i").getByLabel("Count", { exact: true }).fill("7");
@@ -280,8 +289,8 @@ test("editing every field kind on a note page saves a value that validates", asy
   await field("place").getByLabel("Longitude").fill("144.9631");
   await field("cover").getByLabel("Cover", { exact: true }).selectOption(asset);
 
-  await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+  await page.getByLabel("Title", { exact: true }).focus();
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
   await expect(page.getByRole("alert")).toHaveCount(0);
 
   const saved = await readNote(admin, note.id);
@@ -308,9 +317,11 @@ test("editing every field kind on a note page saves a value that validates", asy
   expect(saved.note.blocks).toContainEqual({ kind: "dict", labels: ["extra"], fields: { source: "capacities" } });
 
   // The saved values read back through the page, references by title.
+  await page.reload();
   await expect(field("owner")).toContainText(`Target ${t} first`);
-  await expect(field("status")).toContainText("Active/Blocked");
-  await expect(field("extra")).toContainText("source: capacities");
+  await expect(field("status").getByLabel("Status", { exact: true })).toHaveValue("Active/Blocked");
+  await expect(field("extra").getByLabel("Extra key 1", { exact: true })).toHaveValue("source");
+  await expect(field("extra").getByLabel("Extra value 1", { exact: true })).toHaveValue("capacities");
 });
 
 test("a computed field cannot be edited in the UI", async ({ page, admin }) => {
@@ -319,7 +330,6 @@ test("a computed field cannot be edited in the UI", async ({ page, admin }) => {
   const note = await createNote(admin, name, { title: `Computed ${t}` });
 
   await logIn(page, `/notes/${note.id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
   const words = page.getByTestId("field-words");
   await expect(words).toContainText("computed");
   await expect(words.locator("input, select, textarea, [contenteditable]")).toHaveCount(0);
@@ -392,7 +402,7 @@ test("the taxonomy editor builds a hierarchy and renaming a term rewrites the no
 
   // The note page offers the terms as a hierarchy.
   await page.goto(`/notes/${note.id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
+  await expect(page.getByTestId("field-stage")).toBeVisible();
   const options = page.getByTestId("field-stage").getByRole("combobox").locator("option");
   expect(await options.evaluateAll((os) => os.map((o) => o.textContent))).toEqual([
     "—",

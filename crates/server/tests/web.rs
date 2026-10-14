@@ -66,8 +66,11 @@ fn lists_every_type_with_its_fields_and_templates() {
     let (status, body) = get_json(&server, "/api/types");
     assert_eq!(status, 200, "{body}");
     let types = body["types"].as_array().unwrap();
-    assert_eq!(types.len(), 1);
-    let task = &types[0];
+    let mut names: Vec<&str> = types.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    names.sort();
+    // The seeded type, and the daily note type every vault has.
+    assert_eq!(names, ["dailynote", "task"]);
+    let task = types.iter().find(|t| t["name"] == "task").unwrap();
     assert_eq!(task["name"], "task");
     assert_eq!(task["plural"], "Tasks");
     assert_eq!(task["icon"], "check");

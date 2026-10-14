@@ -142,8 +142,8 @@ template default {
 `;
 
 /**
- * A crew's template holds one fixed canvas: a text node, and a query node listing the crew's own
- * boards through `this`.
+ * A crew's template holds one fixed canvas, 360 pixels high: a card of text, and a card whose
+ * query view lists the crew's own boards through `this`.
  */
 export const CREW_TYPE = `label  = "Crew"
 plural = "Crews"
@@ -153,6 +153,8 @@ template default {
     slot "title"
 
     canvas {
+      height = 360
+
       viewport {
         x    = 0.0
         y    = 0.0
@@ -160,22 +162,31 @@ template default {
       }
 
       node intro {
-        kind   = "text"
+        kind   = "card"
         x      = 20.0
         y      = 20.0
         width  = 240.0
         height = 100.0
-        text   = "This crew's **boards**"
+
+        paragraph {
+          text = "This crew's **boards**"
+        }
       }
 
       node boards {
-        kind   = "query"
+        kind   = "card"
         x      = 320.0
         y      = 20.0
         width  = 320.0
-        height = 400.0
-        view   = "list"
-        query  = "from board where crew == this sort title asc"
+        height = 300.0
+
+        query_view {
+          query = "from board where crew == this sort title asc"
+
+          view list {
+            kind = "list"
+          }
+        }
       }
 
       edge intro_to_boards {
@@ -296,3 +307,136 @@ template default {
   }
 }
 `;
+
+/** A taxonomy with nested terms, for the Search page's "is under" filter. */
+export const AREA_TAXONOMY = `label = "Area"
+
+term "Plant" {
+  term "Electrical"
+
+  term "Plumbing"
+}
+
+term "Structure"
+`;
+
+/** Findings: one field of each kind the Search page filters on, over fixed seeded notes. */
+export const FINDING_TYPE = `label  = "Finding"
+plural = "Findings"
+icon   = "bug"
+
+field category {
+  kind    = "select"
+  label   = "Category"
+  options = ["bug", "idea", "risk"]
+}
+
+field area {
+  kind     = "taxonomy"
+  label    = "Area"
+  taxonomy = "area"
+}
+
+field severity {
+  kind  = "int"
+  label = "Severity"
+}
+
+field verified {
+  kind  = "bool"
+  label = "Verified"
+}
+
+field owner {
+  kind   = "reference"
+  label  = "Owner"
+  target = "project"
+}
+
+field found {
+  kind  = "date"
+  label = "Found"
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "category"
+    slot "area"
+    slot "severity"
+    slot "verified"
+    slot "owner"
+    slot "found"
+    slot "body"
+  }
+}
+`;
+
+/** The project the seeded findings' owner field points at. */
+export const FINDING_OWNER = { id: "01JB8Z4K4P0000000000000001", title: "Seeded owner project" };
+
+/** The seeded findings, by id, with the WCL each is stored as. Search tests read them only. */
+export const FINDINGS: { id: string; title: string; wcl: string }[] = [
+  {
+    id: "01JB8Z4K4F0000000000000001",
+    title: "Leaky valve",
+    wcl: `title    = "Leaky valve"
+created  = "2026-03-01T10:00:00Z"
+updated  = "2026-03-10T10:00:00Z"
+category = "bug"
+area     = "Plant/Plumbing"
+severity = 3
+verified = true
+owner    = "${FINDING_OWNER.id}"
+found    = "2026-03-05"
+
+content body {
+  paragraph {
+    text = "The valve drips quietly behind the boiler."
+  }
+}
+`,
+  },
+  {
+    id: "01JB8Z4K4F0000000000000002",
+    title: "Brighter lamp",
+    wcl: `title    = "Brighter lamp"
+created  = "2026-04-01T10:00:00Z"
+updated  = "2026-06-01T10:00:00Z"
+category = "idea"
+area     = "Plant/Electrical"
+severity = 1
+verified = false
+found    = "2026-04-12"
+`,
+  },
+  {
+    id: "01JB8Z4K4F0000000000000003",
+    title: "Cracked beam",
+    wcl: `title    = "Cracked beam"
+created  = "2026-05-01T10:00:00Z"
+updated  = "2026-05-02T10:00:00Z"
+category = "risk"
+area     = "Structure"
+severity = 5
+verified = true
+owner    = "${FINDING_OWNER.id}"
+found    = "2026-05-20"
+`,
+  },
+  {
+    id: "01JB8Z4K4F0000000000000004",
+    title: "Loose tile",
+    wcl: `title    = "Loose tile"
+created  = "2026-06-01T10:00:00Z"
+updated  = "2026-07-01T10:00:00Z"
+category = "bug"
+verified = false
+`,
+  },
+];

@@ -1,4 +1,5 @@
 import { Show, createSignal } from "solid-js";
+import { logOut } from "../session";
 import { DEFAULT_TILES, isTileTemplate, setTileUrl, tileUrl, validTileUrl } from "../map/model";
 
 /** Settings kept in this browser. */
@@ -61,6 +62,15 @@ export function Settings() {
           </p>
         </Show>
       </form>
+      <div class="settings-form" role="group" aria-label="Session">
+        <h2>Session</h2>
+        <p class="muted">Log out of this browser. The workspace and its tabs stay here for next time.</p>
+        <div class="settings-actions">
+          <button type="button" onClick={() => void logOut()}>
+            Log out
+          </button>
+        </div>
+      </div>
     </section>
   );
 }

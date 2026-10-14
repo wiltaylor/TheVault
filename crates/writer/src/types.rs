@@ -186,6 +186,9 @@ impl Writer {
 
     /// Delete type `name`. A type that still has notes is not deleted.
     pub fn delete_type(&self, name: &str) -> Result<()> {
+        if name == crate::DAILY_TYPE {
+            return Err(Error::BuiltInType(name.to_owned()));
+        }
         let _w = self.write_lock();
         let mut inner = self.lock();
         if inner.schema.type_def(name).is_none() {
@@ -272,6 +275,7 @@ impl Writer {
             })
             .collect();
         let schema = rebuild_schema(current, types)?;
+        crate::daily::check_daily_type(&schema)?;
 
         let lookup = Lookup {
             writer: self,

@@ -46,6 +46,13 @@ pub struct Version {
     pub content: String,
 }
 
+/// Browser saves of one note this close together merge into one version.
+pub const MERGE_GAP_MS: i64 = 2 * 60 * 1000;
+
+/// A run of merged browser saves stops merging once it is this old, so a long session still
+/// leaves a version every so often.
+pub const MERGE_SPAN_MS: i64 = 10 * 60 * 1000;
+
 /// A deleted note waiting in the trash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrashEntry {
@@ -96,6 +103,12 @@ fn finish_version((mut version, kind, name): VersionRow) -> Result<Version> {
 impl State {
     /// Records `content` as a new version of the note and makes it the current one. A note
     /// in the trash leaves it, since it exists again.
+    /// Record `content` as the note's new version. A browser save merges into the current version
+    /// instead of adding one when that version is the same session's, saved within
+    /// [`MERGE_GAP_MS`], and its run of merged saves began within [`MERGE_SPAN_MS`]. Autosave
+    /// writes every few seconds while someone types, and this keeps that from filling the history.
+    /// A merged save still gets a new token, so a client holding the old one gets a conflict
+    /// (D12). Saves by tokens and handlers always add a version, so each one stays visible.
     pub fn record_version(
         &self,
         note_id: &str,
@@ -111,11 +124,46 @@ impl State {
 
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO versions (note_id, note_type, token, author_kind, author_name, at_ms, content)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![note_id, note_type, token, kind, name, at_ms, content],
-        )?;
+        let merge_into: Option<i64> = if matches!(author, Author::Session(_)) {
+            tx.query_row(
+                "SELECT v.seq FROM heads h JOIN versions v ON v.token = h.token
+                 WHERE h.note_id = ?1 AND v.note_type = ?2 AND v.author_kind = ?3
+                   AND v.author_name = ?4 AND ?5 - v.at_ms <= ?6
+                   AND ?5 - COALESCE(v.started_ms, v.at_ms) <= ?7",
+                params![
+                    note_id,
+                    note_type,
+                    kind,
+                    name,
+                    at_ms,
+                    MERGE_GAP_MS,
+                    MERGE_SPAN_MS
+                ],
+                |r| r.get(0),
+            )
+            .optional()?
+        } else {
+            None
+        };
+        match merge_into {
+            Some(seq) => {
+                tx.execute(
+                    "UPDATE versions
+                     SET token = ?1, at_ms = ?2, content = ?3,
+                         started_ms = COALESCE(started_ms, at_ms)
+                     WHERE seq = ?4",
+                    params![token, at_ms, content, seq],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO versions
+                       (note_id, note_type, token, author_kind, author_name, at_ms, content, started_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6)",
+                    params![note_id, note_type, token, kind, name, at_ms, content],
+                )?;
+            }
+        }
         tx.execute(
             "INSERT INTO heads (note_id, token) VALUES (?1, ?2)
              ON CONFLICT (note_id) DO UPDATE SET token = excluded.token",

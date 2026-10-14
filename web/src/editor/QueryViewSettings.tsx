@@ -95,12 +95,19 @@ export function QueryViewSettings(props: { block: Block; onChange: (block: Block
             <Show when={kindUses(view().kind, "template")}>
               <label>
                 Template
-                <input
-                  type="text"
-                  value={view().template ?? ""}
-                  placeholder={view().kind === "details" ? "detail" : "card"}
-                  onInput={(e) => set(setViewItem(props.block, i, "template", optional(e.currentTarget.value)))}
-                />
+                <select
+                  onChange={(e) => set(setViewItem(props.block, i, "template", optional(e.currentTarget.value)))}
+                >
+                  <option value="" selected={!view().template}>
+                    {view().kind === "details" ? "Default (default)" : "Default (card)"}
+                  </option>
+                  <option value="default" selected={view().template === "default"}>
+                    default
+                  </option>
+                  <option value="card" selected={view().template === "card"}>
+                    card
+                  </option>
+                </select>
               </label>
             </Show>
             <Show when={kindUses(view().kind, "location")}>

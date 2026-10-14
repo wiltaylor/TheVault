@@ -5,11 +5,38 @@ import { Dynamic } from "solid-js/web";
 
 type IconNode = [string, Record<string, string>][];
 
-let loading: Promise<Record<string, IconNode>> | undefined;
+interface IconSet {
+  /** Lucide's icons by export name, such as `FileText`. */
+  icons: Record<string, IconNode>;
+  /** Every icon's vault name, such as `file-text`, sorted. */
+  names: string[];
+  /** Export name by vault name. */
+  byName: Map<string, string>;
+}
 
-function iconSet(): Promise<Record<string, IconNode>> {
-  loading ??= import("lucide").then((m) => m.icons as unknown as Record<string, IconNode>);
+let loading: Promise<IconSet> | undefined;
+
+function iconSet(): Promise<IconSet> {
+  loading ??= import("lucide").then((m) => {
+    const icons = m.icons as unknown as Record<string, IconNode>;
+    const byName = new Map(Object.keys(icons).map((key) => [kebabName(key), key] as const));
+    return { icons, byName, names: [...byName.keys()].sort() };
+  });
   return loading;
+}
+
+/** Every icon name the picker offers, loading the icon set on first use. */
+export async function iconNames(): Promise<string[]> {
+  return (await iconSet()).names;
+}
+
+/** Lucide's export name `FileText` as the vault's icon name, `file-text`. */
+export function kebabName(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
+    .replace(/([a-zA-Z])([0-9])/g, "$1-$2")
+    .toLowerCase();
 }
 
 /** `file-text` as Lucide's export name, `FileText`. */
@@ -28,8 +55,8 @@ export function TypeIcon(props: { name: string | null | undefined; size?: number
   const [node] = createResource(
     () => props.name ?? "",
     async (name) => {
-      const set = await iconSet();
-      return set[pascalName(name)] ?? set[FALLBACK] ?? [];
+      const { icons, byName } = await iconSet();
+      return icons[byName.get(name) ?? pascalName(name)] ?? icons[FALLBACK] ?? [];
     },
   );
   return (
@@ -68,6 +95,45 @@ export function GearIcon() {
       <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
       <circle cx="12" cy="12" r="3" />
     </svg>
+  );
+}
+
+function Glyph(props: { children: unknown }) {
+  return (
+    <svg
+      class="icon"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      {props.children as never}
+    </svg>
+  );
+}
+
+/** A calendar, for the Daily notes link. */
+export function CalendarIcon() {
+  return (
+    <Glyph>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
+    </Glyph>
+  );
+}
+
+/** A magnifying glass, for the Search link and box. */
+export function SearchIcon() {
+  return (
+    <Glyph>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </Glyph>
   );
 }
 

@@ -38,14 +38,22 @@ function body(note: Stored): Block[] | undefined {
   return note.note.blocks.find((b) => b.kind === "content" && b.labels?.[0] === "body")?.blocks;
 }
 
+/** The note's body: always an editor. */
 async function startEditing(page: Page): Promise<Locator> {
-  await page.getByRole("button", { name: "Edit" }).click();
   return page.getByRole("textbox", { name: "Body" });
 }
 
+/** Leave the editor, which saves at once, and wait until the note is saved. */
 async function saveAndWait(page: Page) {
-  await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+  await page.getByLabel("Title", { exact: true }).focus();
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+}
+
+/** Leave the editor and give an autosave time to run, when nothing may need saving. */
+async function settle(page: Page) {
+  await page.getByLabel("Title", { exact: true }).focus();
+  await page.waitForTimeout(2000);
+  await expect(page.getByTestId("save-status")).not.toHaveText(/Saving|Unsaved/);
 }
 
 /** The text of a CodeMirror view: its lines joined with newlines. */
@@ -73,7 +81,8 @@ test("uploading an image shows it and stores it under assets/", async ({ page, a
 
   const filename = `pixel-${token()}.png`;
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("toolbar", { name: "Body formatting" }).getByRole("button", { name: "Insert image" }).click();
+  await page.keyboard.type("/image");
+  await page.keyboard.press("Enter");
   await (await chooser).setFiles({ name: filename, mimeType: "image/png", buffer: PNG });
 
   const img = doc.locator("figure.block-image img");
@@ -98,7 +107,7 @@ test("uploading an image shows it and stores it under assets/", async ({ page, a
   const shown = page.getByTestId("field-body").getByRole("img", { name: "A red square" });
   await expect(shown).toBeVisible();
   await expect.poll(() => imageLoaded(shown)).toBe(true);
-  await expect(page.getByTestId("field-body").locator("figcaption")).toHaveText("Two pixels wide");
+  await expect(page.getByTestId("field-body").getByLabel("Caption")).toHaveValue("Two pixels wide");
 });
 
 test("a file upload becomes an asset card that downloads the file", async ({ page, admin }) => {
@@ -109,7 +118,10 @@ test("a file upload becomes an asset card that downloads the file", async ({ pag
 
   const filename = `notes-${token()}.txt`;
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("toolbar", { name: "Body formatting" }).getByRole("button", { name: "Insert file" }).click();
+  // The "+" beside a block opens the same menu, for screens without a keyboard.
+  await doc.locator("p").first().hover();
+  await page.getByRole("button", { name: "Add block" }).click();
+  await page.getByRole("listbox", { name: "Insert block" }).getByRole("option", { name: "File" }).click();
   await (await chooser).setFiles({ name: filename, mimeType: "text/plain", buffer: Buffer.from("hello\n") });
   await expect(doc.getByRole("link", { name: filename })).toBeVisible();
   await saveAndWait(page);
@@ -158,12 +170,54 @@ test("a code block keeps tabs and trailing spaces through save and reload", asyn
   await expect(view).toBeVisible();
   expect(await codeMirrorText(view)).toBe(edited);
 
-  // Saving again without touching the code changes nothing in it.
-  await startEditing(page);
-  await saveAndWait(page);
+  // Visiting the code again without touching it changes nothing in it.
+  await (await startEditing(page)).getByRole("textbox", { name: "Code" }).click();
+  await settle(page);
   expect(body(await stored(admin, note.id))).toEqual([
     { kind: "code", fields: { language: "python", caption: "main.rs", source: edited } },
   ]);
+});
+
+test("a code block reads as numbered code with a copy button until the cursor is in it", async ({ page, admin }) => {
+  const note = await createTask(admin, `Plain code ${token()}`, [
+    { kind: "code", fields: { language: "rust", caption: "main.rs", source: "fn main() {}\n" } },
+    { kind: "paragraph", fields: { text: "After the code." } },
+  ]);
+  await logIn(page, `/notes/${note.id}`);
+  const block = page.getByTestId("field-body").locator(".block-code");
+
+  // At rest: a header with the file name, language and a copy button over numbered code, and no
+  // fields.
+  const header = block.locator(".code-header");
+  await expect(header.locator(".code-filename")).toHaveText("main.rs");
+  await expect(header.locator(".code-language")).toHaveText("Rust");
+  await expect(block.getByLabel("Language")).toHaveCount(0);
+  await expect(block.getByLabel("Caption")).toHaveCount(0);
+  await expect(block.locator(".cm-lineNumbers")).toBeVisible();
+  await expect(block.locator(".cm-foldGutter")).toBeHidden();
+
+  // Copy puts the source on the clipboard.
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await block.getByRole("button", { name: "Copy code" }).click();
+  await expect(block.getByRole("button", { name: "Copy code" })).toHaveText("Copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("fn main() {}\n");
+
+  // In the code: the language and file name fields show.
+  await block.getByRole("textbox", { name: "Code" }).click();
+  await expect(block.getByLabel("Language")).toBeVisible();
+  await expect(block.getByLabel("Caption")).toHaveValue("main.rs");
+  await expect(block.locator(".cm-foldGutter")).toBeVisible();
+  await expect(header).toHaveCount(0);
+
+  // Moving between its own fields keeps them open.
+  await block.getByLabel("Caption").fill("lib.rs");
+  await expect(block.getByLabel("Language")).toBeVisible();
+
+  // Leaving the block puts it back to plain code, with the new name.
+  await page.getByText("After the code.").click();
+  await expect(block.getByLabel("Language")).toHaveCount(0);
+  await expect(block.locator(".code-filename")).toHaveText("lib.rs");
+  await expect(block.locator(".cm-lineNumbers")).toBeVisible();
 });
 
 test("a terminal block with two commands saves, reloads identically and shows stderr apart", async ({
@@ -174,7 +228,8 @@ test("a terminal block with two commands saves, reloads identically and shows st
   await logIn(page, `/notes/${note.id}`);
   const doc = await startEditing(page);
   await doc.click();
-  await page.getByRole("toolbar", { name: "Body formatting" }).getByRole("button", { name: "Insert terminal" }).click();
+  await page.keyboard.type("/terminal");
+  await page.keyboard.press("Enter");
 
   const terminal = doc.locator(".block-terminal");
   await terminal.getByLabel("Terminal title").fill("Dry run");
@@ -206,22 +261,22 @@ test("a terminal block with two commands saves, reloads identically and shows st
   expect(body(first)).toEqual(expected);
 
   await page.reload();
+  // The note page edits the terminal in place: it reads back what it saved, stderr apart.
   const shown = page.getByTestId("field-body").locator(".block-terminal");
-  await expect(shown.locator(".terminal-title")).toHaveText("Dry run");
-  await expect(shown.locator(".terminal-line")).toHaveText(["$ vault import --dry-run export/", "$ vault import export/missing"]);
-  const stdout = shown.locator(".terminal-stdout");
-  const stderr = shown.locator(".terminal-stderr");
-  await expect(stdout).toHaveText("42 notes would be created\n3 skipped");
-  await expect(stderr).toHaveText("error: export/missing: no such directory");
-  await expect(shown.locator(".terminal-exit")).toHaveText("exit 1");
+  await expect(shown.getByLabel("Terminal title")).toHaveValue("Dry run");
+  await expect(shown.getByLabel("Command 1", { exact: true })).toHaveValue("vault import --dry-run export/");
+  const stdout = shown.getByLabel("Output of command 1");
+  const stderr = shown.getByLabel("Errors of command 2");
+  await expect(stdout).toHaveValue("42 notes would be created\n3 skipped");
+  await expect(stderr).toHaveValue("error: export/missing: no such directory");
+  await expect(shown.getByLabel("Exit code of command 2")).toHaveValue("1");
   const colour = (l: Locator) => l.evaluate((el) => getComputedStyle(el).color);
   expect(await colour(stderr)).not.toBe(await colour(stdout));
 
-  // The editor reads back what it saved, and saving it again changes nothing.
+  // Visiting it again without a change saves nothing new.
   const again = await startEditing(page);
-  await expect(again.getByLabel("Command 2", { exact: true })).toHaveValue("vault import export/missing");
-  await expect(again.getByLabel("Output of command 1")).toHaveValue("42 notes would be created\n3 skipped");
-  await saveAndWait(page);
+  await again.getByLabel("Command 2", { exact: true }).click();
+  await settle(page);
   const second = await stored(admin, note.id);
   expect(body(second)).toEqual(expected);
   const terminalWcl = (wcl: string) => wcl.slice(wcl.indexOf("terminal {"));
@@ -261,5 +316,5 @@ test("a valid Mermaid diagram renders an SVG; an invalid one shows the error and
 
   await page.reload();
   await expect(block.getByRole("alert")).toBeVisible();
-  await expect(block.locator("pre")).toHaveText(invalid);
+  await expect(block.getByLabel("Mermaid source")).toHaveValue(invalid);
 });

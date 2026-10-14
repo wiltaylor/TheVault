@@ -6,6 +6,7 @@ import { when } from "../admin/format";
 import { type TaskModel, emptyTask, lines, taskFromApi, taskProblems, taskWcl } from "../admin/taskModel";
 import { isName } from "../defs/typeModel";
 import { errorText } from "./TypeEditor";
+import { ScriptField } from "../components/ScriptField";
 
 /** A run's outcome as a badge: failed runs stand out. */
 function Outcome(props: { outcome: TaskRun["outcome"] }) {
@@ -128,7 +129,6 @@ export function TaskEditor() {
   const [busy, setBusy] = createSignal(false);
   // The run "Run now" started, whose log opens in the history.
   const [justRan, setJustRan] = createSignal<number | null>(null);
-  const [scripts] = createResource(() => api.scripts().catch(() => [] as string[]), { initialValue: [] });
   const [secrets] = createResource(
     () => api.secrets().then((s) => s.map((x) => x.name)).catch(() => [] as string[]),
     { initialValue: [] },
@@ -294,18 +294,7 @@ export function TaskEditor() {
           <label for="task-timezone">Time zone</label>
           <Text id="task-timezone" item="timezone" placeholder="UTC" />
           <label for="task-script">Script</label>
-          <select id="task-script" onChange={(e) => setModel("script", e.currentTarget.value)}>
-            <option value="" selected={!model.script}>
-              —
-            </option>
-            <For each={[...new Set([...scripts(), ...(model.script ? [model.script] : [])])].sort()}>
-              {(s) => (
-                <option value={s} selected={model.script === s}>
-                  {s}
-                </option>
-              )}
-            </For>
-          </select>
+          <ScriptField id="task-script" value={model.script} onChange={(name) => setModel("script", name)} />
           <label for="task-function">Function</label>
           <Text id="task-function" item="function" placeholder="run" />
           <label for="task-domains">Allowed hosts, one per line</label>

@@ -1,12 +1,15 @@
 import { A, useNavigate, useParams, useSearchParams } from "@solidjs/router";
-import { For, Show, createEffect, createSignal, on } from "solid-js";
-import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, api } from "../api";
+import { For, type JSX, Show, batch, createEffect, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { ApiError, type FieldDef, type Json, type Note, type NoteDoc, type Tab, type TypeDef, api } from "../api";
+import { type Autosave, type SaveState, createAutosave } from "../autosave";
+import { CanvasSurface } from "../canvas/CanvasSurface";
 import { ConflictView } from "../components/ConflictView";
 import { FieldInput, hasInput } from "../components/FieldInput";
+import { FieldRefs, type FieldRefValues } from "../components/fieldRefs";
+import { refText } from "../components/refText";
 import { BlockView, Blocks, formatValue } from "../components/Render";
 import { ContentEditor } from "../editor/ContentEditor";
 import { knowTitle, noteTitle } from "../editor/titles";
-import { CanvasSurface } from "../canvas/CanvasSurface";
 import { InkSurface } from "../ink/InkSurface";
 import {
   applyBlocks,
@@ -15,12 +18,23 @@ import {
   applyEdits,
   compoundBlock,
   fieldValue,
+  missingRequired,
   pageTemplate,
   slotField,
+  TITLE_FIELD,
+  unplacedFields,
 } from "../notes";
-import { typeDef } from "../session";
-import { ThisNote } from "../views/thisNote";
+import { changes } from "../changes";
 import { isPinned, togglePin } from "../pins";
+import { typeDef } from "../session";
+import { focusPanel, offerProperties, rightIsDrawer, sidebarShown, sidebars, toggleSidebar } from "../sidebars";
+import { activePane } from "../workspace/model";
+import { usePane } from "../workspace/pane";
+import { workspace } from "../workspace/store";
+import { ThisNote } from "../views/thisNote";
+
+/** How long after the last change a note saves itself. */
+export const AUTOSAVE_MS = 1500;
 
 interface Conflict {
   mine: NoteDoc;
@@ -35,7 +49,7 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** The form for a new note of the type named in `?type=`: its default template, empty (D14). */
+/** The page for a new note of the type named in `?type=`: its default template, empty (D14). */
 export function NewNote() {
   const [search] = useSearchParams();
   const type = () => (typeof search.type === "string" ? search.type : "");
@@ -46,54 +60,250 @@ export function NewNote() {
   );
 }
 
-/** A draft of a note of `type` that has not been created yet. */
-function draftNote(type: string): Note {
-  return { id: "", type, version: "", wcl: "", note: { fields: {}, blocks: [] } };
+/** A draft of a note of `type`, holding each plain field's default. */
+function draftNote(type: TypeDef): Note {
+  const fields: Record<string, Json> = {};
+  for (const f of type.fields) if (!f.compound && !f.computed && f.default !== undefined) fields[f.name] = f.default;
+  return { id: "", type: type.name, version: "", wcl: "", note: { fields, blocks: [] } };
+}
+
+/** The sliders icon of the properties button. */
+function PropertiesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="18" x2="20" y2="18" />
+      <circle cx="9" cy="6" r="2" fill="var(--bg-raised, Canvas)" />
+      <circle cx="15" cy="12" r="2" fill="var(--bg-raised, Canvas)" />
+      <circle cx="7" cy="18" r="2" fill="var(--bg-raised, Canvas)" />
+    </svg>
+  );
 }
 
 /**
- * A note laid out by its type's default template, a tab per template tab (D14). With `newType`,
- * an unsaved note of that type, open for editing, which Save creates.
+ * A note laid out by its type's default template, a tab per template tab (D14), and edited in
+ * place: every field the template places is edited where it shows, the rest in the properties
+ * sidebar, and changes save themselves (D12 versioning; a stale save shows the conflict view).
+ * With `newType`, an unsaved note of that type, which Create creates.
  */
-export function NoteView(props: { newType?: string }) {
+/**
+ * Fit the title box to its text where the browser cannot (no `field-sizing`): as tall as its
+ * wrapped lines. Where it can, CSS does this and this does nothing.
+ */
+function fitTitle(el: HTMLTextAreaElement) {
+  if (typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content")) return;
+  const fit = () => {
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  queueMicrotask(fit);
+  if (!el.dataset.fitted && typeof ResizeObserver !== "undefined") {
+    el.dataset.fitted = "1";
+    new ResizeObserver(fit).observe(el);
+  }
+}
+
+export function NoteView(props: { newType?: string; id?: string }) {
   const params = useParams();
   const navigate = useNavigate();
+  const pane = usePane();
+  // Element ids are per pane, so the same note open twice keeps its labels on its own fields.
+  const uid = pane ? `${pane.id}-` : "";
+  // The note as last stored, and the note as edited.
   const [note, setNote] = createSignal<Note | null>(null);
+  const [doc, setDoc] = createSignal<NoteDoc>({ fields: {}, blocks: [] });
+  // Bumped when the edited note is replaced from outside, so editors that keep their own state
+  // (the block editor) start again from it.
+  const [generation, setGeneration] = createSignal(0);
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const [tab, setTab] = createSignal(0);
-  const [editing, setEditing] = createSignal(false);
-  // Field values edited so far, by field name. `undefined` clears a field.
-  const [edits, setEdits] = createSignal<Record<string, Json | undefined>>({});
-  // Content fields edited in the block editor, by field name.
-  let blockEdits = new Map<string, { field: FieldDef; blocks: Block[] }>();
-  // Ink and canvas fields changed, by field name.
-  const [inkEdits, setInkEdits] = createSignal<Record<string, { field: FieldDef; block: Block }>>({});
-  const [saving, setSaving] = createSignal(false);
+  const [saveState, setSaveState] = createSignal<SaveState>("idle");
   const [saveError, setSaveError] = createSignal<string | null>(null);
+  const [busy, setBusy] = createSignal(false);
   const [conflict, setConflict] = createSignal<Conflict | null>(null);
+  let autosave: Autosave | null = null;
+  let loadedId = "";
+
+  /** Whether the right sidebar shows this note's properties now. */
+  const propertiesShown = () =>
+    sidebarShown("right", rightIsDrawer()) && sidebars().right.panel === "properties" && (!pane || activePane(workspace()) === pane.id);
+
+  /** The properties button: open the right sidebar on this note's properties, or close it. */
+  function toggleProperties() {
+    if (propertiesShown()) toggleSidebar("right", false);
+    else focusPanel("properties");
+  }
+
+  /** The autosave for the note `id`: each save sends what is edited now over the last version. */
+  function autosaveFor(id: string): Autosave {
+    const saver: Autosave = createAutosave({
+      delay: AUTOSAVE_MS,
+      onState: (s) => {
+        if (loadedId === id) setSaveState(s);
+      },
+      save: async () => {
+        const n = note();
+        if (!n || n.id !== id || conflict()) return;
+        const mine = doc();
+        setSaveError(null);
+        try {
+          const saved = await api.updateNote(id, mine, n.version);
+          const title = saved.note.fields.title;
+          if (typeof title === "string") knowTitle(saved.id, title, saved.type);
+          if (loadedId !== id) return;
+          setNote(saved);
+          // Take the server's form of the note (computed fields, defaults) unless it was edited since.
+          if (!saver.dirty()) setDoc(saved.note);
+        } catch (e) {
+          if (loadedId !== id) throw e;
+          if (e instanceof ApiError && e.isConflict) {
+            saver.cancel();
+            try {
+              // Everything edited so far is yours, including changes made while this save ran.
+              const stored = await api.note(id);
+              setConflict({ mine: doc(), stored });
+            } catch (e2) {
+              setSaveError(message(e2));
+            }
+            return;
+          }
+          setSaveError(message(e));
+          throw e;
+        }
+      },
+    });
+    return saver;
+  }
 
   createEffect(
     on(
-      () => params.id,
+      () => props.id ?? params.id,
       async (id) => {
+        // Whatever the last note had unsaved goes now, over that note.
+        void autosave?.flush();
+        autosave = null;
+        loadedId = props.newType ? "" : (id ?? "");
         setNote(null);
         setLoadError(null);
+        setSaveError(null);
+        setSaveState("idle");
         setTab(0);
-        setEditing(false);
         setConflict(null);
         if (props.newType) {
-          setNote(draftNote(props.newType));
-          startEditing();
+          const t = typeDef(props.newType);
+          if (!t) return;
+          const draft = draftNote(t);
+          setDoc(draft.note);
+          setNote(draft);
           return;
         }
         try {
-          setNote(await api.note(id ?? ""));
+          const loaded = await api.note(id ?? "");
+          if (loadedId !== (id ?? "")) return;
+          const loadedTitle = loaded.note.fields.title;
+          if (typeof loadedTitle === "string") knowTitle(loaded.id, loadedTitle, loaded.type);
+          batch(() => {
+            setDoc(loaded.note);
+            setNote(loaded);
+            setGeneration(generation() + 1);
+          });
+          autosave = autosaveFor(loaded.id);
         } catch (e) {
           setLoadError(e instanceof ApiError && e.status === 404 ? "This note does not exist." : message(e));
         }
       },
     ),
   );
+
+  // A write elsewhere in this client (another pane on the same note, a card, a script field) may
+  // have changed this note. Unless it has edits of its own, which will meet the conflict view on
+  // their next save, it takes the stored note.
+  let recheck: ReturnType<typeof setTimeout> | undefined;
+  const untouched = () => !props.newType && !conflict() && !autosave?.dirty() && saveState() !== "saving" && saveState() !== "dirty";
+  createEffect(
+    on(
+      changes,
+      () => {
+        clearTimeout(recheck);
+        recheck = setTimeout(async () => {
+          const n = note();
+          if (!n || !n.id || !untouched()) return;
+          try {
+            const stored = await api.note(n.id);
+            if (note()?.id !== stored.id || note()?.version === stored.version || !untouched()) return;
+            batch(() => {
+              setNote(stored);
+              setDoc(stored.note);
+              setGeneration(generation() + 1);
+            });
+          } catch {
+            // Deleted or unreachable: the next save says so.
+          }
+        }, 250);
+      },
+      { defer: true },
+    ),
+  );
+  onCleanup(() => clearTimeout(recheck));
+
+  // The pane header and tab name the note this page shows (not a daily note's, which names its day).
+  // Read once: a page given its note by a parent (a daily note) is named by that parent.
+  const routed = untrack(() => props.id === undefined);
+  createEffect(() => {
+    if (!pane || !routed) return;
+    const n = note();
+    if (!n) return;
+    const t = type();
+    const title = typeof doc().fields.title === "string" ? (doc().fields.title as string) : "";
+    pane.setTitle({ title: props.newType ? `New ${t?.label.toLowerCase() ?? n.type}` : title || "Untitled", icon: t?.icon ?? null });
+  });
+  onCleanup(() => {
+    if (pane && routed) pane.setTitle(null);
+  });
+
+  const flush = () => void autosave?.flush();
+  /** Leaving a field saves what it changed; moving within the block editor does not. */
+  const flushOnLeave = (e: FocusEvent) => {
+    const to = e.relatedTarget;
+    if (!(to instanceof Node && e.target instanceof Element && e.target.closest(".content-editor")?.contains(to))) flush();
+  };
+
+  // The right sidebar's Properties panel edits the fields the template places nowhere, through
+  // this page's own note and autosave, so the two never disagree.
+  const renderProperties = () => (
+    <div class="properties-fields" onFocusOut={flushOnLeave}>
+      <Show when={note()} fallback={<p class="muted">Loading…</p>}>
+        {(n) => (
+          <ThisNote.Provider value={n().id || undefined}>
+            <Show when={!conflict()} fallback={<p class="muted">Resolve the conflict in the pane first.</p>}>
+              <Show when={generation() + 1} keyed>
+                {(_) => (
+                  <For each={type() ? unplacedFields(type()!) : []} fallback={<p class="muted">Every property is on the page.</p>}>
+                    {(f) => <Property field={f} label={f.label} ns="properties-" />}
+                  </For>
+                )}
+              </Show>
+            </Show>
+          </ThisNote.Provider>
+        )}
+      </Show>
+    </div>
+  );
+  if (pane) onCleanup(offerProperties(pane.id, { noteId: () => note()?.id ?? "", render: renderProperties }));
+
+  const onHidden = () => {
+    if (document.visibilityState === "hidden") flush();
+  };
+  onMount(() => {
+    document.addEventListener("visibilitychange", onHidden);
+    window.addEventListener("beforeunload", flush);
+  });
+  onCleanup(() => {
+    document.removeEventListener("visibilitychange", onHidden);
+    window.removeEventListener("beforeunload", flush);
+    flush();
+  });
 
   const type = () => {
     const n = note();
@@ -104,83 +314,52 @@ export function NoteView(props: { newType?: string }) {
     return (t && pageTemplate(t)?.tabs) ?? [];
   };
 
-  function startEditing() {
-    setEdits({});
-    blockEdits = new Map();
-    setInkEdits({});
-    setSaveError(null);
-    setEditing(true);
+  /** Apply an edit to the note, and save it after a pause (a draft waits for Create). */
+  function edit(fn: (d: NoteDoc) => NoteDoc) {
+    setDoc(fn(doc()));
+    autosave?.schedule();
   }
 
-  function draftValue(f: FieldDef): Json | undefined {
-    const n = note();
-    if (f.name in edits()) return edits()[f.name];
-    // A new note shows each field's default, which the server fills in when the field is not sent.
-    if (props.newType) return f.default;
-    return n ? fieldValue(n.note, f) : undefined;
+  function setField(f: FieldDef, v: Json | undefined) {
+    edit((d) => (f.kind === "dict" ? applyDict(d, f, v) : applyEdits(d, { [f.name]: v })));
   }
 
-  async function save(doc: NoteDoc, base: string) {
+  const missing = () => {
+    const t = type();
+    return t ? missingRequired(t, doc()) : [];
+  };
+
+  async function create() {
     const n = note();
-    if (!n) return;
-    setSaving(true);
+    if (!n || missing().length) return;
+    setBusy(true);
     setSaveError(null);
     try {
-      const saved = props.newType ? await api.createNote(n.type, doc) : await api.updateNote(n.id, doc, base);
+      const saved = await api.createNote(n.type, doc());
       const title = saved.note.fields.title;
-      if (typeof title === "string") knowTitle(saved.id, title);
-      if (props.newType) {
-        navigate(`/notes/${saved.id}`);
-        return;
-      }
-      setNote(saved);
-      setConflict(null);
-      setEditing(false);
+      if (typeof title === "string") knowTitle(saved.id, title, saved.type);
+      navigate(`/notes/${saved.id}`);
     } catch (e) {
-      if (e instanceof ApiError && e.isConflict) {
-        try {
-          setConflict({ mine: doc, stored: await api.note(n.id) });
-        } catch (e2) {
-          setSaveError(message(e2));
-        }
-      } else {
-        setSaveError(message(e));
-      }
+      setSaveError(message(e));
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
-  }
-
-  function onSubmit(ev: SubmitEvent) {
-    ev.preventDefault();
-    const n = note();
-    if (!n) return;
-    const t = type();
-    const plain: Record<string, Json | undefined> = {};
-    let doc = n.note;
-    for (const [name, value] of Object.entries(edits())) {
-      const f = t?.fields.find((x) => x.name === name);
-      if (f?.kind === "dict") doc = applyDict(doc, f, value);
-      else plain[name] = value;
-    }
-    doc = applyEdits(doc, plain);
-    for (const { field, blocks } of blockEdits.values()) doc = applyBlocks(doc, field, blocks);
-    for (const { field, block } of Object.values(inkEdits())) doc = applyCompound(doc, field, block);
-    void save(doc, n.version);
   }
 
   async function remove() {
     const n = note();
     if (!n || !confirm("Move this note to the trash?")) return;
-    setSaving(true);
+    setBusy(true);
     setSaveError(null);
     try {
-      await api.deleteNote(n.id, n.version);
+      await autosave?.flush();
+      autosave?.cancel();
+      await api.deleteNote(n.id, note()?.version ?? n.version);
       navigate(`/types/${n.type}`);
     } catch (e) {
       setSaveError(message(e));
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   }
 
@@ -188,21 +367,245 @@ export function NoteView(props: { newType?: string }) {
     const c = conflict();
     if (!c) return;
     setNote(c.stored);
+    setDoc(c.stored.note);
+    setGeneration(generation() + 1);
     setConflict(null);
-    setEditing(false);
+    setSaveState("idle");
   }
 
-  function saveMine() {
+  async function saveMine() {
     const c = conflict();
-    if (c) void save(c.mine, c.stored.version);
+    if (!c) return;
+    setBusy(true);
+    setSaveError(null);
+    try {
+      const saved = await api.updateNote(c.stored.id, c.mine, c.stored.version);
+      setNote(saved);
+      setDoc(saved.note);
+      setGeneration(generation() + 1);
+      setConflict(null);
+      setSaveState("saved");
+    } catch (e) {
+      if (e instanceof ApiError && e.isConflict) {
+        setConflict({ mine: c.mine, stored: await api.note(c.stored.id) });
+      } else {
+        setSaveError(message(e));
+      }
+    } finally {
+      setBusy(false);
+    }
   }
+
+  /** `{{name}}` in the template's fixed blocks shows the note's values as edited. */
+  const refs: FieldRefValues = { text: (name) => refText(type(), doc(), name) };
+
+  const status = (): string => {
+    if (props.newType) return missing().length ? `Required: ${missing().join(", ")}` : "";
+    switch (saveState()) {
+      case "dirty":
+        return "Unsaved changes";
+      case "saving":
+        return "Saving…";
+      case "saved":
+        return "Saved";
+      case "error":
+        return saveError() ?? "Could not save";
+      default:
+        return "";
+    }
+  };
+
+  return (
+    <article
+      class="note-view"
+      data-save-state={saveState()}
+      onFocusOut={flushOnLeave}
+    >
+      <Show when={loadError()}>
+        <p class="error" role="alert">
+          {loadError()}
+        </p>
+      </Show>
+      <Show when={note()} fallback={<Show when={!loadError()}><p class="muted">Loading…</p></Show>}>
+        {(n) => (
+          <ThisNote.Provider value={n().id || undefined}>
+            <header class="note-header">
+              <div class="note-heading">
+                <p class="note-kind">{props.newType ? `New ${type()?.label ?? n().type}` : (type()?.label ?? n().type)}</p>
+                <div class="note-title-row">
+                  <h1 class="note-title">
+                    {/* A textarea, so a long title wraps in a narrow pane rather than scrolling out of sight. */}
+                    <textarea
+                      id={`${uid}note-title`}
+                      class="note-title-input"
+                      aria-label="Title"
+                      placeholder="Untitled"
+                      required
+                      rows={1}
+                      autocomplete="off"
+                      spellcheck={false}
+                      value={typeof doc().fields.title === "string" ? (doc().fields.title as string) : ""}
+                      ref={(el) => fitTitle(el)}
+                      onInput={(e) => {
+                        const el = e.currentTarget;
+                        // A title is one line: a pasted line break becomes a space.
+                        if (/[\r\n]/.test(el.value)) el.value = el.value.replace(/\s*[\r\n]+\s*/g, " ");
+                        setField(TITLE_FIELD, el.value === "" ? undefined : el.value);
+                        fitTitle(el);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          flush();
+                        }
+                      }}
+                    />
+                  </h1>
+                  <button
+                    type="button"
+                    class="icon-button properties-toggle"
+                    aria-label="Properties"
+                    title="Properties"
+                    aria-expanded={propertiesShown()}
+                    aria-controls="properties-panel"
+                    onClick={toggleProperties}
+                  >
+                    <PropertiesIcon />
+                  </button>
+                </div>
+              </div>
+              <div class="note-actions">
+                <span
+                  class="save-status"
+                  classList={{ error: saveState() === "error" }}
+                  role="status"
+                  data-testid="save-status"
+                >
+                  {status()}
+                </span>
+                <Show
+                  when={!props.newType}
+                  fallback={
+                    <div class="actions">
+                      <button type="button" onClick={() => navigate(`/types/${n().type}`)} disabled={busy()}>
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        class="primary"
+                        disabled={busy() || missing().length > 0}
+                        title={missing().length ? `Fill in ${missing().join(", ")} first` : undefined}
+                        onClick={() => void create()}
+                      >
+                        Create
+                      </button>
+                    </div>
+                  }
+                >
+                  <div class="actions">
+                    <button
+                      type="button"
+                      class="pin-button"
+                      aria-pressed={isPinned(n().id)}
+                      title={isPinned(n().id) ? "Unpin from the sidebar" : "Pin to the sidebar"}
+                      onClick={() => void togglePin(n().id, formatValue(doc().fields.title) || "Untitled", n().type)}
+                    >
+                      {isPinned(n().id) ? "Unpin" : "Pin"}
+                    </button>
+                    <A href={`/notes/${n().id}/history`} class="button">
+                      History
+                    </A>
+                    <button type="button" class="danger" onClick={() => void remove()} disabled={busy()}>
+                      Delete
+                    </button>
+                  </div>
+                </Show>
+              </div>
+            </header>
+            <Show when={saveError() && (props.newType || conflict())}>
+              <p class="error" role="alert">
+                {saveError()}
+              </p>
+            </Show>
+            <Show
+              when={conflict()}
+              fallback={
+                <div class="note-layout">
+                  <div class="note-main">
+                    <Show when={tabs().length > 1}>
+                      <div class="tabs" role="tablist">
+                        <For each={tabs()}>
+                          {(t, i) => (
+                            <button
+                              type="button"
+                              role="tab"
+                              id={`${uid}tab-${i()}`}
+                              aria-selected={tab() === i()}
+                              aria-controls={`${uid}tab-panel`}
+                              onClick={() => {
+                                flush();
+                                setTab(i());
+                              }}
+                            >
+                              {t.title}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                    {/* Keyed on the generation: a note replaced from outside remounts its editors. */}
+                    <Show when={generation() + 1} keyed>
+                      {(_) => (
+                        <div
+                          id={`${uid}tab-panel`}
+                          role={tabs().length > 1 ? "tabpanel" : undefined}
+                          aria-labelledby={tabs().length > 1 ? `${uid}tab-${tab()}` : undefined}
+                          class="tab-panel"
+                        >
+                          <For each={tabs()[tab()]?.items ?? []}>
+                            {(item) =>
+                              "slot" in item ? (
+                                // The heading is the title's editor; a title slot would repeat it.
+                                item.slot === "title" ? null : <Slot name={item.slot} label={item.label} />
+                              ) : (
+                                <FieldRefs.Provider value={refs}>
+                                  <div class="template-block" data-testid="template-block">
+                                    <BlockView block={item.block} />
+                                  </div>
+                                </FieldRefs.Provider>
+                              )
+                            }
+                          </For>
+                        </div>
+                      )}
+                    </Show>
+                  </div>
+                </div>
+              }
+            >
+              {(c) => (
+                <ConflictView
+                  type={type()}
+                  mine={c().mine}
+                  stored={c().stored.note}
+                  busy={busy()}
+                  onKeepStored={keepStored}
+                  onSaveMine={() => void saveMine()}
+                />
+              )}
+            </Show>
+          </ThisNote.Provider>
+        )}
+      </Show>
+    </article>
+  );
 
   /** A field's value as read-only text: references by their notes' titles. */
-  function Display(props: { field: FieldDef; value: Json | undefined }) {
-    const ids = () => (Array.isArray(props.value) ? props.value : [props.value]).filter((x) => typeof x === "string");
+  function Display(p: { field: FieldDef; value: Json | undefined }) {
+    const ids = () => (Array.isArray(p.value) ? p.value : [p.value]).filter((x) => typeof x === "string");
     return (
-      <Show when={props.value !== undefined} fallback={<span class="muted">—</span>}>
-        <Show when={props.field.kind === "reference"} fallback={formatValue(props.value)}>
+      <Show when={p.value !== undefined} fallback={<span class="muted">—</span>}>
+        <Show when={p.field.kind === "reference"} fallback={formatValue(p.value)}>
           <For each={ids()}>
             {(id, i) => (
               <>
@@ -216,202 +619,96 @@ export function NoteView(props: { newType?: string }) {
     );
   }
 
-  function Slot(props: { name: string; label: string | null }) {
-    const t = type();
-    const f = t ? slotField(t, props.name) : undefined;
+  /** The editor for one field, in place: chosen by the field's kind. */
+  function FieldEditor(p: { field: FieldDef; label: string; ns: string }): JSX.Element {
+    const f = p.field;
+    const id = `${p.ns}field-input-${f.name}`;
+    if (f.computed) {
+      return (
+        <Show when={f.compound && f.kind !== "dict"} fallback={<Display field={f} value={fieldValue(doc(), f)} />}>
+          <Blocks blocks={compoundBlock(doc(), f)?.blocks ?? []} />
+        </Show>
+      );
+    }
+    switch (f.kind) {
+      case "content":
+        return (
+          <ContentEditor
+            label={p.label}
+            blocks={compoundBlock(doc(), f)?.blocks ?? []}
+            onChange={(blocks) => edit((d) => applyBlocks(d, f, blocks))}
+          />
+        );
+      case "ink":
+        return (
+          <InkSurface
+            label={p.label}
+            block={compoundBlock(doc(), f)}
+            onChange={(block) => edit((d) => applyCompound(d, f, block))}
+          />
+        );
+      case "canvas":
+        return (
+          <CanvasSurface
+            label={p.label}
+            block={compoundBlock(doc(), f)}
+            onChange={(block) => edit((d) => applyCompound(d, f, block))}
+          />
+        );
+    }
+    if (hasInput(f)) {
+      return <FieldInput
+          field={f}
+          value={fieldValue(doc(), f)}
+          onChange={(v) => setField(f, v)}
+          label={p.label}
+          id={id}
+          placeholder="Empty"
+        />;
+    }
     return (
-      <Show when={f} fallback={<div class="field missing">Unknown field {props.name}</div>}>
-        {(field) => {
-          const label = props.label ?? field().label;
-          const n = () => note() as Note;
-          return (
-            <div class="field" data-field={field().name} data-testid={`field-${field().name}`}>
-              <div class="field-label">
-                <label for={`field-input-${field().name}`}>{label}</label>
-                <Show when={field().computed}>
-                  <span class="badge" title="Only handlers write this field">computed</span>
-                </Show>
-              </div>
-              <div class="field-value">
-                <Show when={field().kind !== "canvas"} fallback={
-                  <CanvasSurface
-                    label={label}
-                    block={(editing() && inkEdits()[field().name]?.block) || compoundBlock(n().note, field())}
-                    onChange={
-                      editing()
-                        ? (block) => setInkEdits({ ...inkEdits(), [field().name]: { field: field(), block } })
-                        : undefined
-                    }
-                  />
-                }>
-                <Show when={field().kind !== "ink"} fallback={
-                  <InkSurface
-                    label={label}
-                    block={(editing() && inkEdits()[field().name]?.block) || compoundBlock(n().note, field())}
-                    onChange={
-                      editing()
-                        ? (block) => setInkEdits({ ...inkEdits(), [field().name]: { field: field(), block } })
-                        : undefined
-                    }
-                  />
-                }>
-                <Show when={!(editing() && field().kind === "content")} fallback={
-                  <ContentEditor
-                    label={label}
-                    blocks={compoundBlock(n().note, field())?.blocks ?? []}
-                    onChange={(blocks) => blockEdits.set(field().name, { field: field(), blocks })}
-                  />
-                }>
-                <Show
-                  when={editing() && hasInput(field())}
-                  fallback={
-                    <Show
-                      when={field().compound && field().kind !== "dict"}
-                      fallback={<Display field={field()} value={fieldValue(n().note, field())} />}
-                    >
-                      <Blocks blocks={compoundBlock(n().note, field())?.blocks ?? []} />
-                    </Show>
-                  }
-                >
-                  <FieldInput
-                    field={field()}
-                    value={draftValue(field())}
-                    onChange={(v) => setEdits({ ...edits(), [field().name]: v })}
-                    label={label}
-                    id={`field-input-${field().name}`}
-                  />
-                </Show>
-                </Show>
-                </Show>
-                </Show>
-              </div>
-            </div>
-          );
-        }}
+      <Show when={f.compound && f.kind !== "dict"} fallback={<Display field={f} value={fieldValue(doc(), f)} />}>
+        <Blocks blocks={compoundBlock(doc(), f)?.blocks ?? []} />
       </Show>
     );
   }
 
-  return (
-    <article class="note-view">
-      <Show when={loadError()}>
-        <p class="error" role="alert">
-          {loadError()}
-        </p>
+  /** A property block: a field's label and its editor, in place. */
+  function Property(p: { field: FieldDef; label: string; ns?: string }) {
+    const ns = p.ns ?? uid;
+    const f = p.field;
+    const wide = f.kind === "content" || f.kind === "ink" || f.kind === "canvas" || f.kind === "location";
+    return (
+      <div
+        class="field property"
+        classList={{ wide, [`kind-${f.kind}`]: true }}
+        data-field={f.name}
+        data-testid={`field-${f.name}`}
+      >
+        <div class="field-label">
+          <Show when={hasInput(f)} fallback={<span>{p.label}</span>}>
+            <label for={`${ns}field-input-${f.name}`}>{p.label}</label>
+          </Show>
+          <Show when={f.computed}>
+            <span class="badge" title="Only handlers write this field">
+              computed
+            </span>
+          </Show>
+        </div>
+        <div class="field-value">
+          <FieldEditor field={f} label={p.label} ns={ns} />
+        </div>
+      </div>
+    );
+  }
+
+  function Slot(p: { name: string; label: string | null }) {
+    const t = type();
+    const f = t ? slotField(t, p.name) : undefined;
+    return (
+      <Show when={f} fallback={<div class="field missing">Unknown field {p.name}</div>}>
+        {(field) => <Property field={field()} label={p.label ?? field().label} />}
       </Show>
-      <Show when={note()} fallback={<Show when={!loadError()}><p class="muted">Loading…</p></Show>}>
-        {(n) => (
-          <ThisNote.Provider value={n().id}>
-            <header class="note-header">
-              <div>
-                <p class="note-kind">{type()?.label ?? n().type}</p>
-                <h1>{props.newType ? `New ${type()?.label ?? n().type}` : formatValue(n().note.fields.title) || "Untitled"}</h1>
-              </div>
-              <Show when={!conflict()}>
-                <Show
-                  when={editing()}
-                  fallback={
-                    <div class="actions">
-                      <button
-                        type="button"
-                        class="pin-button"
-                        aria-pressed={isPinned(n().id)}
-                        title={isPinned(n().id) ? "Unpin from the sidebar" : "Pin to the sidebar"}
-                        onClick={() =>
-                          void togglePin(n().id, formatValue(n().note.fields.title) || "Untitled", n().type)
-                        }
-                      >
-                        {isPinned(n().id) ? "Unpin" : "Pin"}
-                      </button>
-                      <A href={`/notes/${n().id}/history`} class="button">
-                        History
-                      </A>
-                      <button type="button" class="danger" onClick={() => void remove()} disabled={saving()}>
-                        Delete
-                      </button>
-                      <button type="button" onClick={startEditing}>
-                        Edit
-                      </button>
-                    </div>
-                  }
-                >
-                  <div class="actions">
-                    <button
-                      type="button"
-                      onClick={() => (props.newType ? navigate(`/types/${n().type}`) : setEditing(false))}
-                      disabled={saving()}
-                    >
-                      Cancel
-                    </button>
-                    <button type="submit" form="note-form" class="primary" disabled={saving()}>
-                      Save
-                    </button>
-                  </div>
-                </Show>
-              </Show>
-            </header>
-            <Show when={saveError()}>
-              <p class="error" role="alert">
-                {saveError()}
-              </p>
-            </Show>
-            <Show
-              when={conflict()}
-              fallback={
-                <form id="note-form" onSubmit={onSubmit}>
-                  <Show when={tabs().length > 1}>
-                    <div class="tabs" role="tablist">
-                      <For each={tabs()}>
-                        {(t, i) => (
-                          <button
-                            type="button"
-                            role="tab"
-                            id={`tab-${i()}`}
-                            aria-selected={tab() === i()}
-                            aria-controls="tab-panel"
-                            onClick={() => setTab(i())}
-                          >
-                            {t.title}
-                          </button>
-                        )}
-                      </For>
-                    </div>
-                  </Show>
-                  <div
-                    id="tab-panel"
-                    role={tabs().length > 1 ? "tabpanel" : undefined}
-                    aria-labelledby={tabs().length > 1 ? `tab-${tab()}` : undefined}
-                    class="tab-panel"
-                  >
-                    <For each={tabs()[tab()]?.items ?? []}>
-                      {(item) =>
-                        "slot" in item ? (
-                          <Slot name={item.slot} label={item.label} />
-                        ) : (
-                          <div class="template-block">
-                            <BlockView block={item.block} />
-                          </div>
-                        )
-                      }
-                    </For>
-                  </div>
-                </form>
-              }
-            >
-              {(c) => (
-                <ConflictView
-                  type={type()}
-                  mine={c().mine}
-                  stored={c().stored.note}
-                  busy={saving()}
-                  onKeepStored={keepStored}
-                  onSaveMine={saveMine}
-                />
-              )}
-            </Show>
-          </ThisNote.Provider>
-        )}
-      </Show>
-    </article>
-  );
+    );
+  }
 }

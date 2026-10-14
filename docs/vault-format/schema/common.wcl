@@ -180,14 +180,20 @@ type CanvasNode {
   height:   f64
   group:    utf8?
   colour:   utf8?
-  text:     utf8?
   note:     utf8?
   template: utf8?
-  query:    utf8?
-  view:     utf8?
-  asset:    utf8?
-  url:      utf8?
-  @children("stroke") strokes: list<Stroke>
+  # A card's content blocks: every content block kind but a canvas.
+  @children("heading")    headings:    list<Heading>
+  @children("paragraph")  paragraphs:  list<Paragraph>
+  @children("list")       lists:       list<ListBlock>
+  @children("quote")      quotes:      list<Quote>
+  @children("image")      images:      list<Image>
+  @children("asset")      assets:      list<AssetBlock>
+  @children("code")       codes:       list<Code>
+  @children("terminal")   terminals:   list<Terminal>
+  @children("mermaid")    mermaids:    list<Mermaid>
+  @children("ink")        inks:        list<Ink>
+  @children("query_view") query_views: list<QueryView>
 }
 
 @block("edge", required_fields = ["from", "to"])
@@ -215,6 +221,7 @@ type CanvasGroup {
 
 @block("canvas") type Canvas {
   @inline(0) field: identifier?
+  height: i64?
   @child("viewport") viewport: Viewport
   @children("group") groups: list<CanvasGroup>
   @children("node")  nodes:  list<CanvasNode>

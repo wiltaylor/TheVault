@@ -360,7 +360,6 @@ test("a pin placed on an image map saves pixel coordinates and reloads at the sa
 
   const seen = await standIn(page, baseURL!);
   await logIn(page, `/notes/${note.id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
   const map = page.getByRole("region", { name: "Desk map" });
   await expect(map).toHaveAttribute("data-map", "image");
   const f = await frame(map);
@@ -376,12 +375,11 @@ test("a pin placed on an image map saves pixel coordinates and reloads at the sa
   const [mx, my] = toMap(f, click);
   const expected = { x: Math.round(mx * 10) / 10, y: Math.round((IMAGE_HEIGHT - my) * 10) / 10 };
   await expect(page.getByRole("group", { name: "Desk" }).getByLabel("X")).toHaveValue(String(expected.x));
-  await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+  // The pin saves itself.
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
   expect((await fields(admin, note.id)).desk).toEqual(expected);
 
   await page.reload();
-  await page.getByRole("button", { name: "Edit" }).click();
   await expect(map.getByTestId("map-pin")).toHaveCount(1);
   expectNear(await centre(map.getByTestId("map-pin")), click);
   expect(seen).toEqual([]);

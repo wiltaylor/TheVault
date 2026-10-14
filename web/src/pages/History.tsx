@@ -60,7 +60,7 @@ export function NoteHistory() {
     try {
       const saved = await api.restoreVersion(n.id, c.version, n.version);
       const title = saved.note.fields.title;
-      if (typeof title === "string") knowTitle(saved.id, title);
+      if (typeof title === "string") knowTitle(saved.id, title, saved.type);
       navigate(`/notes/${n.id}`);
     } catch (e) {
       setError(errorText(e));
@@ -142,7 +142,7 @@ export function Trash() {
     try {
       const saved = await api.restoreFromTrash(t.id);
       const title = saved.note.fields.title;
-      if (typeof title === "string") knowTitle(saved.id, title);
+      if (typeof title === "string") knowTitle(saved.id, title, saved.type);
       navigate(`/notes/${saved.id}`);
     } catch (e) {
       setError(errorText(e));

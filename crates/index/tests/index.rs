@@ -486,7 +486,7 @@ fn a_full_text_search_finds_a_word_in_a_paragraph_block() {
     };
     assert_eq!(ids(&index, "zeppelin"), vec![TASK_A]);
     assert_eq!(ids(&index, "Zeppelin"), vec![TASK_A]);
-    // A nested list item, a code block, a canvas text node and a dict value.
+    // A nested list item, a code block, an old canvas text node (read as a card) and a dict value.
     assert_eq!(ids(&index, "quokka"), vec![TASK_A]);
     assert_eq!(ids(&index, "wombat"), vec![TASK_A]);
     assert_eq!(ids(&index, "canvas thought"), vec![TASK_A]);

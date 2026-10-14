@@ -126,6 +126,31 @@ export interface Pin {
   title: string;
 }
 
+/** A pinned note in the sidebar's tree, with the entries nested under it. */
+export interface PinNoteItem extends Pin {
+  kind: "note";
+  children: PinItem[];
+}
+
+/** A folder in the sidebar's pinned tree. */
+export interface PinFolderItem {
+  kind: "folder";
+  id: string;
+  name: string;
+  children: PinItem[];
+}
+
+export type PinItem = PinNoteItem | PinFolderItem;
+
+/** A stored pinned entry, as the folder and move endpoints return it. */
+export interface PinEntry {
+  kind: "note" | "folder";
+  id: string;
+  name?: string;
+  parent: string | null;
+  index: number;
+}
+
 export interface Page {
   rows: Row[];
   next: string | null;
@@ -292,6 +317,10 @@ export const api = {
   logout: () => request<void>("POST", "/api/logout"),
   types: async () => (await request<{ types: TypeDef[] }>("GET", "/api/types")).types,
   note: (id: string) => request<Note>("GET", `/api/notes/${enc(id)}`),
+  /** The daily note for a `YYYY-MM-DD` day; a day with no note is a 404 `ApiError`. */
+  daily: (date: string) => request<Note>("GET", `/api/daily/${enc(date)}`),
+  /** The daily note for a day, created when the day has none. Opening it twice gives one note. */
+  openDaily: (date: string) => request<Note>("POST", `/api/daily/${enc(date)}`),
   createNote: (type: string, note: NoteDoc) =>
     request<Note>("POST", `/api/notes?type=${enc(type)}`, { note }),
   /** Save `note` over version `base`. A stale base is an ApiError whose `isConflict` is true. */
@@ -359,10 +388,19 @@ export const api = {
   /** Make `version` the note's current content again, over current version `base`. */
   restoreVersion: (id: string, version: string, base: string) =>
     request<Note>("POST", `/api/notes/${enc(id)}/restore`, { version, base_version: base }),
-  /** The notes pinned to the sidebar, in order. Pins live on the server, shared by every device. */
-  pins: async () => (await request<{ pins: Pin[] }>("GET", "/api/pins")).pins,
+  /** The sidebar's pinned tree. Pins live on the server, shared by every device. */
+  pins: async () => (await request<{ pins: PinItem[] }>("GET", "/api/pins")).pins,
   pin: (id: string) => request<Pin & { added: boolean }>("PUT", `/api/pins/${enc(id)}`),
+  /** Unpin a note; the entries nested under it move up into its place. */
   unpin: (id: string) => request<unknown>("DELETE", `/api/pins/${enc(id)}`),
+  createPinFolder: (name: string, parent: string | null = null) =>
+    request<PinEntry>("POST", "/api/pins/folders", { name, parent }),
+  renamePinFolder: (id: string, name: string) => request<PinEntry>("PUT", `/api/pins/folders/${enc(id)}`, { name }),
+  /** Delete a folder; its entries move up into its place. */
+  deletePinFolder: (id: string) => request<unknown>("DELETE", `/api/pins/folders/${enc(id)}`),
+  /** Move a pinned entry under `parent` (null for the top level) to `index` among its children. */
+  movePin: (id: string, parent: string | null, index: number) =>
+    request<PinEntry>("POST", "/api/pins/move", { id, parent, index }),
   trash: async () => (await request<{ notes: TrashEntry[] }>("GET", "/api/trash")).notes,
   restoreFromTrash: (id: string) => request<Note>("POST", `/api/trash/${enc(id)}/restore`),
   scripts: async () => (await request<{ scripts: string[] }>("GET", "/api/scripts")).scripts,

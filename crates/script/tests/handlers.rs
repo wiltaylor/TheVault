@@ -136,12 +136,13 @@ fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
     let created = writer
         .create("report", &json_note(json!({ "title": "Q3" })), &user())
         .unwrap();
+    // A token save: two quick saves by one browser session would merge into one version.
     let saved = writer
         .update(
             &created.id,
             &json_note(json!({ "title": "Q3 final" })),
             Some(&created.version),
-            &user(),
+            &Author::Token("test".into()),
         )
         .unwrap();
     assert_eq!(writer.state().queued_jobs().unwrap().len(), 1);

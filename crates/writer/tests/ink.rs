@@ -1,6 +1,6 @@
 //! The writer rounds ink stroke coordinates to two decimal places and pressure to three, as
 //! `docs/vault-format.md` "Ink" says, wherever a stroke sits: an ink field, an ink content block
-//! or an ink canvas node.
+//! or an ink block inside a canvas card.
 
 use std::path::Path;
 
@@ -77,8 +77,8 @@ fn create_and_update_round_every_stroke() {
     let rounded = "[10.12, 20.01, 0.123, 15.0, 22.0, 0.667]";
     let canvas_node = serde_json::json!({
         "kind": "node", "labels": ["sketch"],
-        "fields": { "kind": "ink", "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0 },
-        "blocks": [stroke(raw.clone())]
+        "fields": { "kind": "card", "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0 },
+        "blocks": [ink(None, raw.clone())]
     });
     let json = serde_json::json!({
         "fields": { "title": "Drawn" },

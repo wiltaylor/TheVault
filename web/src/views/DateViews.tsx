@@ -8,6 +8,7 @@ import "vis-timeline/styles/vis-timeline-graph2d.min.css";
 import { type Row, api } from "../api";
 import { changes } from "../changes";
 import { types } from "../session";
+import { openInBackground, wantsNewTab } from "../workspace/events";
 import type { ViewDef } from "./model";
 import { type TimelineItem, calendarEvent, dateField, hasDate, narrow, timelineItem, visibleWindow } from "./narrow";
 
@@ -91,7 +92,9 @@ export function CalendarView(props: { view: ViewDef; query: string; thisId: stri
             },
             eventClick: (info) => {
               info.jsEvent.preventDefault();
-              navigate(`/notes/${info.event.id}`);
+              // FullCalendar renders an event as a link; Ctrl/Cmd+click opens it in a new tab.
+              if (wantsNewTab(info.jsEvent)) openInBackground(`/notes/${info.event.id}`);
+              else navigate(`/notes/${info.event.id}`);
             },
             eventDidMount: (info) => {
               info.el.dataset.testid = "calendar-event";

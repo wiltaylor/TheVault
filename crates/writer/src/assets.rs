@@ -217,7 +217,8 @@ impl Writer {
 }
 
 /// Take every reference to asset `id` out of a note: the values of its fields, and each block
-/// whose `asset` item names it, at any depth. A canvas node that goes takes its edges with it.
+/// whose `asset` item names it, at any depth. A canvas card left empty by that goes too, and
+/// takes its edges with it.
 /// Returns whether anything changed.
 fn unlink_asset(doc: &mut Doc, id: &str) -> bool {
     let is_id = |v: &Value| v.as_str() == Some(id);
@@ -240,28 +241,33 @@ fn unlink_asset(doc: &mut Doc, id: &str) -> bool {
 
 fn strip_blocks(body: &mut Doc, id: &str) -> bool {
     let names = |b: &schema::DocBlock| b.body.field("asset").and_then(Value::as_str) == Some(id);
-    let gone: Vec<String> = body
-        .blocks
-        .iter()
-        .filter(|b| b.kind == "node" && names(b))
-        .filter_map(|b| b.label().map(str::to_owned))
-        .collect();
     let before = body.blocks.len();
     body.blocks.retain(|b| !names(b));
-    if !gone.is_empty() {
-        body.blocks.retain(|b| {
-            b.kind != "edge"
-                || !["from", "to"].iter().any(|end| {
-                    b.body
-                        .field(end)
-                        .and_then(Value::as_str)
-                        .is_some_and(|n| gone.iter().any(|g| g == n))
-                })
-        });
-    }
     let mut changed = body.blocks.len() != before;
+    // Canvas cards the asset was all of: they go, with their edges, as a node showing only the
+    // asset did before cards.
+    let mut gone: Vec<String> = Vec::new();
     for b in &mut body.blocks {
-        changed |= strip_blocks(&mut b.body, id);
+        let had = !b.body.blocks.is_empty();
+        if strip_blocks(&mut b.body, id) {
+            changed = true;
+            if b.kind == "node" && had && b.body.blocks.is_empty() {
+                gone.extend(b.label().map(str::to_owned));
+            }
+        }
+    }
+    if !gone.is_empty() {
+        let is_gone = |n: &str| gone.iter().any(|g| g == n);
+        body.blocks.retain(|b| match b.kind.as_str() {
+            "node" => !b.label().is_some_and(is_gone),
+            "edge" => !["from", "to"].iter().any(|end| {
+                b.body
+                    .field(end)
+                    .and_then(Value::as_str)
+                    .is_some_and(is_gone)
+            }),
+            _ => true,
+        });
     }
     changed
 }

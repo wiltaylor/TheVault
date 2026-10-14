@@ -120,7 +120,7 @@ impl BinOp {
 }
 
 /// The host functions queries add to wscript, with their argument counts.
-pub const FUNCTIONS: [(&str, usize); 8] = [
+pub const FUNCTIONS: [(&str, usize); 10] = [
     ("today", 0),
     ("now", 0),
     ("days", 1),
@@ -129,6 +129,8 @@ pub const FUNCTIONS: [(&str, usize); 8] = [
     ("any", 2),
     ("all", 2),
     ("linked_from", 2),
+    ("contains", 2),
+    ("empty", 1),
 ];
 
 impl Expr {

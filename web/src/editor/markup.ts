@@ -18,7 +18,20 @@ export type Mark =
 export type InlineNode =
   | { type: "text"; text: string; marks?: Mark[] }
   | { type: "mention"; attrs: { id: string; label: string | null }; marks?: Mark[] }
-  | { type: "hardBreak"; marks?: Mark[] };
+  | { type: "hardBreak"; marks?: Mark[] }
+  | { type: "fieldRef"; attrs: { name: string }; marks?: Mark[] };
+
+/** Options for [`parseInline`]. */
+export interface ParseOptions {
+  /**
+   * Read `{{name}}` as a field reference. Only a template's fixed blocks have them
+   * (docs/vault-format.md, "Field references"); in a note `{{name}}` is text.
+   */
+  fieldRefs?: boolean;
+}
+
+/** `{{name}}` at the start of a string: a field reference, when parsing a template's text. */
+const FIELD_REF = /^\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/;
 
 /** Mark order: outermost first when opening. Code is always innermost. */
 const RANK = ["link", "colour", "bold", "italic", "underline", "strike", "highlight", "code"] as const;
@@ -92,6 +105,11 @@ class Builder {
   hardBreak(extra?: Mark) {
     const marks = this.marks(extra);
     this.nodes.push(marks ? { type: "hardBreak", marks } : { type: "hardBreak" });
+  }
+
+  fieldRef(name: string) {
+    const marks = this.marks();
+    this.nodes.push(marks ? { type: "fieldRef", attrs: { name }, marks } : { type: "fieldRef", attrs: { name } });
   }
 
   mention(id: string, label: string | null) {
@@ -200,7 +218,7 @@ function runLength(s: string, i: number, ch: string): number {
 }
 
 /** Parse inline markup into ProseMirror inline JSON. Any string parses; unmatched markup is text. */
-export function parseInline(s: string): InlineNode[] {
+export function parseInline(s: string, options: ParseOptions = {}): InlineNode[] {
   const b = new Builder();
   let link: { close: number; end: number } | null = null;
   let i = 0;
@@ -268,6 +286,12 @@ export function parseInline(s: string): InlineNode[] {
       continue;
     }
     if (c === "{") {
+      const ref = options.fieldRefs ? FIELD_REF.exec(s.slice(i, i + 80)) : null;
+      if (ref) {
+        b.fieldRef(ref[1]!);
+        i += ref[0].length;
+        continue;
+      }
       if (s.startsWith("{/}", i) && b.active.has("colour")) {
         b.active.delete("colour");
         i += 3;
@@ -393,7 +417,7 @@ export function serializeInline(
   };
   for (const node of nodes) {
     let marks = knownMarks(node.marks);
-    if (node.type === "mention") marks = marks.filter((m) => m.type !== "code");
+    if (node.type === "mention" || node.type === "fieldRef") marks = marks.filter((m) => m.type !== "code");
     step(marks);
     const inCode = marks.some((m) => m.type === "code");
     if (node.type === "text") {
@@ -401,6 +425,8 @@ export function serializeInline(
       out += inCode ? escapeCode(t) : escapeText(t);
     } else if (node.type === "hardBreak") {
       out += "\n";
+    } else if (node.type === "fieldRef") {
+      out += `{{${String(node.attrs?.name ?? "")}}}`;
     } else if (node.type === "mention") {
       const id = String(node.attrs?.id ?? "");
       const label = node.attrs?.label;
@@ -409,4 +435,28 @@ export function serializeInline(
   }
   step([]);
   return out;
+}
+
+/** The names `{{name}}` references in template text, in order. */
+export function fieldRefNames(text: string): string[] {
+  return parseInline(text, { fieldRefs: true }).flatMap((n) => (n.type === "fieldRef" ? [n.attrs.name] : []));
+}
+
+/**
+ * Template text with each `{{name}}` renamed by `rename`, which answers the new name, or null to
+ * leave the reference as escaped text. Text with nothing to change comes back as it was.
+ */
+export function renameFieldRefs(text: string, rename: (name: string) => string | null): string {
+  const nodes = parseInline(text, { fieldRefs: true });
+  let changed = false;
+  const next = nodes.map((n): InlineNode => {
+    if (n.type !== "fieldRef") return n;
+    const to = rename(n.attrs.name);
+    if (to === n.attrs.name) return n;
+    changed = true;
+    return to === null
+      ? { type: "text", text: `{{${n.attrs.name}}}`, ...(n.marks ? { marks: n.marks } : {}) }
+      : { ...n, attrs: { name: to } };
+  });
+  return changed ? serializeInline(next) : text;
 }

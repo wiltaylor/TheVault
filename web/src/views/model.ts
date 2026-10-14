@@ -173,10 +173,10 @@ export function setDefaultView(block: Block, name: string): Block {
 }
 
 /**
- * The template a view renders each note with (D14): the one the view names, else `card` or
- * `detail`, else `default`. A card shows only its template's first tab.
+ * The template a view renders each note with (D14): the one the view names, else `card` for card
+ * views or `default` for details, else `default`. A card shows only its template's first tab.
  */
-export function viewTemplate(type: TypeDef | undefined, name: string | null, use: "card" | "detail"): Template | undefined {
+export function viewTemplate(type: TypeDef | undefined, name: string | null, use: "card" | "default"): Template | undefined {
   if (!type) return undefined;
   const find = (n: string) => type.templates.find((t) => t.name === n);
   const t = (name ? find(name) : undefined) ?? find(use) ?? find("default") ?? type.templates[0];

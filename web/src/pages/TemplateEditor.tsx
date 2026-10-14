@@ -1,10 +1,12 @@
 import { A, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, on } from "solid-js";
-import { createStore, produce, reconcile } from "solid-js/store";
-import { type Block, api } from "../api";
-import { newCanvas } from "../canvas/canvas";
-import { BlockView } from "../components/Render";
-import { type TemplateItemModel, type TemplateModel, templateWcl, unplaced } from "../defs/typeModel";
+import { createStore, produce, reconcile, unwrap } from "solid-js/store";
+import { api } from "../api";
+import { type DraggedBlock } from "../editor/blockTools";
+import { ContentEditor, type EditorHandle, type TemplateEditing } from "../editor/ContentEditor";
+import { docToItems, itemsToDoc } from "../editor/doc";
+import type { SlotContext } from "../editor/SlotHolder";
+import { type TemplateModel, templateWcl, unplaced } from "../defs/typeModel";
 import { reloadDefinitions } from "../session";
 import { errorText } from "./TypeEditor";
 
@@ -14,17 +16,17 @@ interface FieldInfo {
   kind: string;
 }
 
-const STANDARD = ["default", "card", "detail"];
-const TEMPLATE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-function itemName(item: TemplateItemModel, index: number): string {
-  return "slot" in item ? item.slot : `${item.block.kind} block ${index + 1}`;
-}
+/** The only templates a type has: the note page, and cards. Both can have tabs. */
+const TEMPLATES: [string, string][] = [
+  ["default", "Default"],
+  ["card", "Card"],
+];
 
 /**
- * The template editor (D14): a type's templates laid out as the note page shows them, a tab at a
- * time. Fields and fixed blocks are placed, reordered and moved between tabs by dragging or with
- * each item's controls, and a template is saved on its own.
+ * The template editor (D14): a type's templates edited as the note page shows them, a tab at a
+ * time, with the same inline block editor notes use. Fixed blocks are typed in place; `/` inserts
+ * blocks and property blocks (a field's slot), `{{` a field's value inside text. Blocks are
+ * dragged by their handles, onto another tab too, and a template is saved on its own.
  */
 export function TemplateEditor() {
   const params = useParams();
@@ -39,13 +41,17 @@ export function TemplateEditor() {
   const [status, setStatus] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
-  const [newName, setNewName] = createSignal("");
-  const [toPlace, setToPlace] = createSignal("");
-  let dragging: { tab: number; index: number } | null = null;
+  // The type's templates have arrived; until then the picker would act on nothing.
+  const [loaded, setLoaded] = createSignal(false);
+  // Bumped when a tab's items change outside its editor, so the editor starts again from them.
+  const [revision, setRevision] = createSignal(0);
+  const [dragged, setDragged] = createSignal<DraggedBlock | null>(null);
+  let handle: EditorHandle | null = null;
 
   createEffect(
     on(typeName, async (name) => {
       setLoadError(null);
+      setLoaded(false);
       try {
         const schema = await api.schema();
         const t = schema.types.find((x) => x.name === name);
@@ -59,6 +65,8 @@ export function TemplateEditor() {
         setStored(new Set(t.templates.map((x) => x.name)));
         setSelected(t.templates.some((x) => x.name === "default") ? "default" : (t.templates[0]?.name ?? "default"));
         setTab(0);
+        setRevision(revision() + 1);
+        setLoaded(true);
       } catch (e) {
         setLoadError(errorText(e));
       }
@@ -76,74 +84,75 @@ export function TemplateEditor() {
     setError(null);
   }
 
+  /** Change the items of tabs other than through their editor, and show the result. */
+  function editTabs(fn: (t: TemplateModel) => void, show?: number) {
+    edit(fn);
+    if (show !== undefined) setTab(show);
+    setRevision(revision() + 1);
+  }
+
   function fieldOf(name: string): FieldInfo {
     if (name === "title") return { name, label: "Title", kind: "string" };
     return fields().find((f) => f.name === name) ?? { name, label: name, kind: "unknown" };
   }
 
-  function move(from: { tab: number; index: number }, toTab: number, toIndex: number) {
-    edit((t) => {
-      const source = t.tabs[from.tab];
-      const dest = t.tabs[toTab];
-      if (!source || !dest) return;
-      const [item] = source.items.splice(from.index, 1);
-      if (!item) return;
-      const at = Math.max(0, Math.min(toIndex, dest.items.length));
-      dest.items.splice(at, 0, item);
-    });
+  /** Move the block at `pos` in the open tab's editor to the end of tab `to`, and show that tab when `show`. */
+  function moveToTab(pos: number, to: number, show = false) {
+    const editor = handle?.editor;
+    const node = editor?.state.doc.nodeAt(pos);
+    if (!editor || !node || to === tab()) return;
+    const [item] = docToItems({ type: "doc", content: [node.toJSON()] });
+    // Deleting it updates this tab's items through the editor.
+    editor.view.dispatch(editor.state.tr.delete(pos, pos + node.nodeSize));
+    if (!item) return;
+    editTabs((t) => void t.tabs[to]?.items.push(item), show ? to : undefined);
   }
+
+  const slots: SlotContext = {
+    describe: (name) => {
+      const f = fieldOf(name);
+      return { label: f.label, kind: f.kind, known: f.kind !== "unknown" };
+    },
+    tabs: () => current()?.tabs.map((t) => t.title) ?? [],
+    tab,
+    moveToTab,
+  };
+
+  const templateEditing: TemplateEditing = {
+    slots,
+    unplaced: () => {
+      const t = current();
+      return t ? unplaced(t, fields()).map((n) => ({ name: n, label: fieldOf(n).label })) : [];
+    },
+    fields: () => ["title", ...fields().map((f) => f.name)].map((n) => ({ name: n, label: fieldOf(n).label })),
+  };
 
   function moveTab(by: number) {
     const i = tab();
     const j = i + by;
-    edit((t) => {
-      if (j < 0 || j >= t.tabs.length) return;
+    if (j < 0 || j >= (current()?.tabs.length ?? 0)) return;
+    editTabs((t) => {
       const [x] = t.tabs.splice(i, 1);
       t.tabs.splice(j, 0, x!);
-    });
-    if (j >= 0 && j < (current()?.tabs.length ?? 0)) setTab(j);
+    }, j);
   }
 
   function addTab() {
-    edit((t) => void t.tabs.push({ title: `Tab ${t.tabs.length + 1}`, items: [] }));
-    setTab((current()?.tabs.length ?? 1) - 1);
+    editTabs((t) => void t.tabs.push({ title: `Tab ${t.tabs.length + 1}`, items: [] }), current()?.tabs.length ?? 0);
   }
 
   function removeTab() {
     const i = tab();
-    edit((t) => {
+    editTabs((t) => {
       if (t.tabs.length > 1) t.tabs.splice(i, 1);
-    });
-    setTab(Math.max(0, i - 1));
+    }, Math.max(0, i - 1));
   }
 
-  function placeField() {
-    const name = toPlace();
-    if (!name) return;
-    edit((t) => void t.tabs[tab()]?.items.push({ slot: name, label: null }));
-    setToPlace("");
-  }
-
-  function addBlock(kind: string) {
-    const block: Block =
-      kind === "heading"
-        ? { kind: "heading", fields: { level: 2, text: "Heading" } }
-        : kind === "canvas"
-          ? newCanvas()
-          : { kind: "paragraph", fields: { text: "Text shown on every note" } };
-    edit((t) => void t.tabs[tab()]?.items.push({ block }));
-  }
-
-  function newTemplate() {
-    const name = newName().trim();
-    if (!TEMPLATE_NAME.test(name) || templates.some((t) => t.name === name)) {
-      setError(`${JSON.stringify(name)} is not a free template name.`);
-      return;
-    }
-    setTemplates(templates.length, { name, label: null, tabs: [{ title: "Main", items: [{ slot: "title", label: null }] }] });
-    setSelected(name);
-    setTab(0);
-    setNewName("");
+  /** Start the card template from the first tab of `default`, as cards show until it exists. */
+  function addCard() {
+    const first = templates.find((t) => t.name === "default")?.tabs[0];
+    const tabs = first ? [structuredClone(unwrap(first))] : [{ title: "Card", items: [{ slot: "title", label: null }] }];
+    setTemplates(templates.length, { name: "card", label: null, tabs });
     setError(null);
   }
 
@@ -175,6 +184,7 @@ export function TemplateEditor() {
       setTemplates((list) => list.filter((x) => x.name !== t.name));
       setSelected("default");
       setTab(0);
+      setRevision(revision() + 1);
       await reloadDefinitions();
       setStatus(`Deleted the ${t.name} template.`);
     } catch (e) {
@@ -182,135 +192,6 @@ export function TemplateEditor() {
     } finally {
       setBusy(false);
     }
-  }
-
-  function Item(props: { item: TemplateItemModel; index: number }) {
-    const name = () => itemName(props.item, props.index);
-    const tabs = () => current()?.tabs ?? [];
-    return (
-      <div
-        class="template-item"
-        // A canvas uses the pointer itself; it moves with the item's controls instead.
-        draggable={"block" in props.item && props.item.block.kind === "canvas" ? "false" : "true"}
-        data-testid={`template-item-${name()}`}
-        onDragStart={(e) => {
-          dragging = { tab: tab(), index: props.index };
-          e.dataTransfer?.setData("text/plain", name());
-        }}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (dragging) move(dragging, tab(), props.index);
-          dragging = null;
-        }}
-      >
-        <div class="template-item-body">
-          <Show
-            when={"slot" in props.item ? props.item : null}
-            fallback={
-              <Show when={"block" in props.item ? props.item.block : null}>
-                {(block) => (
-                  <>
-                    <BlockView
-                      block={block()}
-                      onChange={
-                        block().kind === "canvas"
-                          ? (next) =>
-                              edit((t) => {
-                                const it = t.tabs[tab()]?.items[props.index];
-                                if (it && "block" in it) it.block = next;
-                              })
-                          : undefined
-                      }
-                    />
-                    <Show when={block().kind === "paragraph" || block().kind === "heading"}>
-                      <input
-                        aria-label={`Text of ${name()}`}
-                        value={String(block().fields?.text ?? "")}
-                        onInput={(e) =>
-                          edit((t) => {
-                            const it = t.tabs[tab()]?.items[props.index];
-                            if (it && "block" in it) it.block.fields = { ...it.block.fields, text: e.currentTarget.value };
-                          })
-                        }
-                      />
-                    </Show>
-                  </>
-                )}
-              </Show>
-            }
-          >
-            {(slot) => {
-              const f = () => fieldOf(slot().slot);
-              return (
-                <div class="field">
-                  <div class="field-label">{slot().label ?? f().label}</div>
-                  <div class="field-value">
-                    <span class="slot-sample">{f().kind === "unknown" ? "Unknown field" : `${f().kind} field ${f().name}`}</span>
-                    <input
-                      aria-label={`Label for ${slot().slot}`}
-                      placeholder={f().label}
-                      value={slot().label ?? ""}
-                      onInput={(e) =>
-                        edit((t) => {
-                          const it = t.tabs[tab()]?.items[props.index];
-                          if (it && "slot" in it) it.label = e.currentTarget.value || null;
-                        })
-                      }
-                    />
-                  </div>
-                </div>
-              );
-            }}
-          </Show>
-        </div>
-        <div class="template-item-controls">
-          <span class="drag-handle" aria-hidden="true">
-            ⠿
-          </span>
-          <button
-            type="button"
-            aria-label={`Move ${name()} up`}
-            disabled={props.index === 0}
-            onClick={() => move({ tab: tab(), index: props.index }, tab(), props.index - 1)}
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            aria-label={`Move ${name()} down`}
-            onClick={() => move({ tab: tab(), index: props.index }, tab(), props.index + 1)}
-          >
-            ↓
-          </button>
-          <Show when={tabs().length > 1}>
-            <select
-              aria-label={`Move ${name()} to tab`}
-              onChange={(e) => {
-                const to = Number(e.currentTarget.value);
-                if (to !== tab()) move({ tab: tab(), index: props.index }, to, Number.MAX_SAFE_INTEGER);
-              }}
-            >
-              <For each={tabs()}>
-                {(t, i) => (
-                  <option value={i()} selected={i() === tab()}>
-                    {t.title}
-                  </option>
-                )}
-              </For>
-            </select>
-          </Show>
-          <button
-            type="button"
-            aria-label={`Remove ${name()}`}
-            onClick={() => edit((t) => void t.tabs[tab()]?.items.splice(props.index, 1))}
-          >
-            ×
-          </button>
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -326,39 +207,32 @@ export function TemplateEditor() {
           <h1>{label() || typeName()}</h1>
         </div>
         <div class="actions">
-          <A href={`/types/${typeName()}/edit`}>Edit fields</A>
+          <A href={`/settings/types/${typeName()}/edit`}>Edit fields</A>
         </div>
       </header>
 
       <div class="template-picker" role="group" aria-label="Templates">
-        <For each={templates}>
-          {(t) => (
+        <For each={TEMPLATES}>
+          {([name, label]) => (
             <button
               type="button"
-              aria-pressed={selected() === t.name}
+              disabled={!loaded()}
+              aria-pressed={selected() === name}
               onClick={() => {
-                setSelected(t.name);
+                if (!templates.some((t) => t.name === name)) addCard();
+                setSelected(name);
                 setTab(0);
+                setRevision(revision() + 1);
                 setStatus(null);
               }}
             >
-              {t.name}
+              {label}
             </button>
           )}
         </For>
-        <input
-          aria-label="New template name"
-          list="template-names"
-          placeholder="card"
-          value={newName()}
-          onInput={(e) => setNewName(e.currentTarget.value)}
-        />
-        <datalist id="template-names">
-          <For each={STANDARD.filter((n) => !templates.some((t) => t.name === n))}>{(n) => <option value={n} />}</For>
-        </datalist>
-        <button type="button" onClick={newTemplate}>
-          Add template
-        </button>
+        <Show when={!templates.some((t) => t.name === "card")}>
+          <span class="muted">Cards show the first tab of Default until you give them a card template.</span>
+        </Show>
       </div>
 
       <Show when={current()}>
@@ -406,13 +280,16 @@ export function TemplateEditor() {
                       type="button"
                       role="tab"
                       aria-selected={tab() === i()}
+                      classList={{ "drop-target": dragged() !== null && tab() !== i() }}
                       onClick={() => setTab(i())}
-                      onDragOver={(e) => e.preventDefault()}
+                      onDragOver={(e) => {
+                        if (dragged()) e.preventDefault();
+                      }}
                       onDrop={(e) => {
                         e.preventDefault();
-                        if (dragging) move(dragging, i(), Number.MAX_SAFE_INTEGER);
-                        dragging = null;
-                        setTab(i());
+                        const d = dragged();
+                        setDragged(null);
+                        if (d) moveToTab(d.pos, i(), true);
                       }}
                     >
                       {tb.title || "Untitled tab"}
@@ -420,47 +297,33 @@ export function TemplateEditor() {
                   )}
                 </For>
               </div>
-              <div
-                class="tab-panel"
-                role="tabpanel"
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (dragging) move(dragging, tab(), Number.MAX_SAFE_INTEGER);
-                  dragging = null;
-                }}
-              >
-                <For each={t().tabs[tab()]?.items ?? []} fallback={<p class="muted">Drop fields here.</p>}>
-                  {(item, i) => <Item item={item} index={i()} />}
-                </For>
-              </div>
-            </div>
-
-            <div class="actions">
-              <select aria-label="Field to place" onChange={(e) => setToPlace(e.currentTarget.value)}>
-                <option value="" selected={toPlace() === ""}>
-                  Choose a field…
-                </option>
-                <For each={unplaced(t(), fields())}>
-                  {(n) => (
-                    <option value={n} selected={toPlace() === n}>
-                      {fieldOf(n).label}
-                    </option>
-                  )}
-                </For>
-              </select>
-              <button type="button" onClick={placeField} disabled={!toPlace()}>
-                Place field
-              </button>
-              <button type="button" onClick={() => addBlock("heading")}>
-                Add heading
-              </button>
-              <button type="button" onClick={() => addBlock("paragraph")}>
-                Add paragraph
-              </button>
-              <button type="button" onClick={() => addBlock("canvas")}>
-                Add canvas
-              </button>
+              <p class="template-hint muted">
+                Type <kbd>/</kbd> to add a block or a property, and <kbd>{"{{"}</kbd> to show a field's value in text. Drag
+                a block by its handle, onto another tab too.
+              </p>
+              {/* A fresh editor per template, tab and outside change; its own edits keep it. */}
+              <Show when={`${t().name}:${tab()}:${revision()}`} keyed>
+                {(_) => (
+                  <div class="tab-panel" role="tabpanel">
+                    <ContentEditor
+                      label={`${t().tabs[tab()]?.title || "Tab"} content`}
+                      blocks={[]}
+                      onChange={() => {}}
+                      doc={itemsToDoc(unwrap(t().tabs[tab()]?.items ?? []))}
+                      onDoc={(d) => {
+                        const items = docToItems(d);
+                        edit((x) => {
+                          const tb = x.tabs[tab()];
+                          if (tb) tb.items = items;
+                        });
+                      }}
+                      template={templateEditing}
+                      onReady={(h) => (handle = h)}
+                      onDrag={setDragged}
+                    />
+                  </div>
+                )}
+              </Show>
             </div>
 
             <div class="save-bar">

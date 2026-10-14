@@ -109,11 +109,11 @@ describe("viewTemplate", () => {
     templates: names.map((name) => ({ name, label: null, tabs: [tab(`${name} 1`), tab(`${name} 2`)] })),
   });
 
-  it("uses the named template, then card or detail, then default", () => {
-    expect(viewTemplate(type(["default", "card", "wide"]), "wide", "detail")?.name).toBe("wide");
+  it("uses the named template, then card for cards or default for details", () => {
+    expect(viewTemplate(type(["default", "card"]), "card", "default")?.name).toBe("card");
     expect(viewTemplate(type(["default", "card"]), null, "card")?.name).toBe("card");
-    expect(viewTemplate(type(["default", "detail"]), "missing", "detail")?.name).toBe("detail");
-    expect(viewTemplate(type(["default"]), null, "detail")?.tabs).toHaveLength(2);
+    expect(viewTemplate(type(["default", "card"]), "missing", "default")?.name).toBe("default");
+    expect(viewTemplate(type(["default"]), null, "default")?.tabs).toHaveLength(2);
   });
 
   it("gives a card only the first tab", () => {

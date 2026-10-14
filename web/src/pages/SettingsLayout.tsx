@@ -3,8 +3,8 @@ import { For, type ParentProps } from "solid-js";
 
 const SECTIONS: [string, string][] = [
   ["/settings", "General"],
+  ["/settings/types", "Types"],
   ["/settings/taxonomies", "Taxonomies"],
-  ["/settings/scripts", "Scripts"],
   ["/settings/tasks", "Tasks"],
   ["/settings/secrets", "Secrets"],
   ["/settings/tokens", "API tokens"],

@@ -575,14 +575,12 @@ canvas board {
 
 ## Templates
 
-A type has one or more named templates (D14). Each template lays fields and content blocks out on tabs.
+A type has two templates at most, `default` and `card` (D14). Each lays fields and content blocks out on tabs, and either can have as many tabs as it needs. The schema rejects a template with any other name.
 
 | Name | Used by | When missing |
 |------|---------|--------------|
-| `default` | The note page | Required |
-| `card` | Cards, kanban and canvas views, and canvas note nodes | Falls back to the first tab of `default` |
-| `detail` | Details views | Falls back to `default` |
-| any other identifier | Views and canvas nodes that name it in `template` | Not applicable |
+| `default` | The note page and details views | Required |
+| `card` | Cards, kanban and canvas views, map pins, and canvas note nodes | Falls back to the first tab of `default` |
 
 A template takes these items:
 
@@ -599,7 +597,26 @@ A tab holds an ordered mix of slots and content blocks:
 | `label` inside a slot | string | Overrides the field's label in this template |
 | any [content block](#content-blocks) | block | Fixed content shown on every note. In a `query_view`, `this` is the note being shown |
 
-A field that no slot places is still stored and editable through the API. The template only controls the layout.
+A field that no slot places is still stored and editable through the API and in the note page's properties sidebar. The template only controls the layout.
+
+### Field references
+
+The text of a fixed content block in a template can show a field's value inline: `{{name}}` in any `text` item (a heading, paragraph, quote or list item, including one inside a canvas card) renders the current value of field `name` of the note being shown, read-only. `name` is `title` or a field of the type; the schema rejects any other name with "`{{name}}` names no field of the type". A reference is not a slot: it places nothing, so the field still has no entry on the page and stays editable in the properties sidebar.
+
+- `name` is an identifier written directly between the braces, with no spaces: `{{ due }}` is plain text.
+- `\{{name}}`, with the first brace escaped, and `{{name}}` inside a code span are plain text and are not checked.
+- `{{name}}` is template-only markup. In a note's own content it is plain text with no meaning.
+
+```wcl
+template default {
+  tab "Overview" {
+    paragraph {
+      text = "**{{title}}** is due {{due}}."
+    }
+    slot "body"
+  }
+}
+```
 
 ```wcl
 template default {
@@ -715,7 +732,7 @@ content body {
 }
 ```
 
-`vault/notes/specimen/01JB8Z4K2MQ7V3X9T5R6W8Y2ZA.wcl` uses every field kind and every content block kind. `vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` is a note that is mostly one canvas, using every canvas node kind.
+`vault/notes/specimen/01JB8Z4K2MQ7V3X9T5R6W8Y2ZA.wcl` uses every field kind and every content block kind. `vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` is a note that is mostly one canvas, using both canvas node kinds.
 
 ## Content blocks
 
@@ -914,7 +931,7 @@ A canvas inside the content. See [Canvas](#canvas). A canvas content block has n
 
 ## Inline markup
 
-These text items use the inline markup in PRD Appendix A (D41): `heading.text`, `paragraph.text`, `item.text`, `quote.text` and a canvas text node's `text`. No other string is parsed as markup.
+These text items use the inline markup in PRD Appendix A (D41): `heading.text`, `paragraph.text`, `item.text` and `quote.text`, wherever the block sits, a canvas card included. No other string is parsed as markup.
 
 | Markup | Renders as |
 |--------|------------|
@@ -929,6 +946,8 @@ These text items use the inline markup in PRD Appendix A (D41): `heading.text`, 
 | `[[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB]]` | Mention of a note, shown with its current title |
 | `[[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB\|label]]` | Mention of a note, shown with the label |
 | `\*` | A literal `*`. A backslash escapes any markup character |
+
+Inside a template's fixed blocks, `{{name}}` also renders a field's value; see [Field references](#field-references). Everywhere else it is plain text.
 
 A mention holds a ULID, and `index` records it like a reference, so `linked_from` and backlinks see it. Inside a WCL string a literal backslash is written `\\`, so the markup escape `\*` appears in the file as `\\*`.
 
@@ -955,7 +974,7 @@ Each `view` holds a `kind` and the items that kind uses:
 |------|------|---------|
 | `kind` | string | Required. One of the kinds below |
 | `title` | string | Tab label for the view. Default: the view name |
-| `template` | string | The template used to render each note |
+| `template` | string | The template used to render each note: `default` or `card` |
 | `columns` | list of strings | `table`: the fields shown as columns, in order. Default: `["title"]` |
 | `group` | string | `kanban`: required, a single-term `taxonomy` field. Its terms are the columns |
 | `date` | string | `calendar`, `timeline`: required, a `date`, `datetime` or `date_range` field |
@@ -968,7 +987,7 @@ Each `view` holds a `kind` and the items that kind uses:
 | `table` | Rows and columns | not used |
 | `cards` | A grid of cards | `card` |
 | `list` | One line per note, the title | not used |
-| `details` | Each note expanded | `detail` |
+| `details` | Each note expanded | `default` |
 | `kanban` | One column per term of `group`. Dropping a card writes that field | `card` |
 | `calendar` | Notes on the date of `date` | not used |
 | `timeline` | Notes as points or spans along `date` | not used |
@@ -1059,12 +1078,13 @@ A canvas is TheVault's own WCL format, not JSON Canvas (D15, D26). It is a `canv
 
 | Item | Form | Meaning |
 |------|------|---------|
+| `height` | integer | The height of the canvas on the page, in screen pixels, from 160 to 4000. Default 480. Its width always fills the page or pane it is in |
 | `viewport { ... }` | block | Required. The view saved with the canvas |
 | `group <id> { ... }` | block | Labelled frames that hold nodes |
 | `node <id> { ... }` | block | Items on the canvas, in z-order. Later nodes draw on top |
 | `edge <id> { ... }` | block | Connections between nodes |
 
-`<id>` is an identifier, unique across the groups, nodes and edges of one canvas. Coordinates are canvas units, floats, with `y` increasing downwards.
+`<id>` is an identifier, unique across the groups, nodes and edges of one canvas. Coordinates are canvas units, floats, with `y` increasing downwards. A canvas in a template's fixed content shows at the template's `height` on every note.
 
 ### `viewport`
 
@@ -1091,7 +1111,7 @@ Every node takes these items:
 
 | Item | Form | Meaning |
 |------|------|---------|
-| `kind` | string | Required. One of the node kinds below |
+| `kind` | string | Required. `card` or `note` |
 | `x`, `y`, `width`, `height` | float | Required. The node's box |
 | `group` | string | The id of the group the node belongs to |
 | `colour` | palette colour | Node colour |
@@ -1100,25 +1120,37 @@ Each node kind adds its own items:
 
 | Node kind | Items | Shows |
 |-----------|-------|-------|
-| `text` | `text`: string, markup, required | A card of formatted text |
-| `note` | `note`: note ULID, required. `template`: default `card` | A note rendered with a template |
-| `query` | `query`: query text, required. `view`: `cards`, `list` or `table`, default `cards`. `template`: default `card` | Live query results inside the node. `this` is the note that holds the canvas |
-| `asset` | `asset`: asset reference, required | An image, or a file card for other files |
-| `link` | `url`: URL, required | A link card |
-| `ink` | `stroke { ... }` blocks, as in [Ink](#ink) | A drawing in the node's box, with node-relative coordinates |
+| `card` | Content blocks, as in [Content blocks](#content-blocks): headings, paragraphs, lists, quotes, images, files, code, terminals, diagrams, drawings and query views. Not a `canvas` | The blocks, in order, as a content field shows them. A query view in a card shows live results; its `this` is the note that holds the canvas |
+| `note` | `note`: note ULID, required. `template`: default `card`. No blocks | A note rendered with a template |
+
+#### Reading older canvases
+
+Canvases written before cards had six node kinds: `text`, `note`, `query`, `asset`, `link` and `ink`. TheVault still reads them, and reads each node of the older kinds as the card that shows the same thing. The node keeps its id, box, group and colour, and edges are unchanged:
+
+| Older kind | Read as a card holding |
+|------------|------------------------|
+| `text` | One `paragraph` per run of lines between blank lines, with its inline markup |
+| `asset` | An `image` block naming the asset |
+| `link` | A `paragraph` holding `[url](url)` |
+| `query` | A `query_view` with the node's `query` and one view of the node's `view` kind (`cards` by default). A `cards` view keeps the node's `template` |
+| `ink` | An `ink` block the size of the node, holding the node's strokes |
+
+The file keeps the older form until its note is next saved, which writes the cards. A note sent to the server with nodes of the older kinds, in WCL or JSON, is converted the same way before it is checked and written. `vault reindex` reports no error for the older kinds, and TheVault never writes them. A type file is stored as it is given, so a template canvas in the older form stays in that form, read as cards, until the template is next saved.
 
 ### `edge`
 
 | Item | Form | Meaning |
 |------|------|---------|
-| `from`, `to` | string | Required. Node ids in the same canvas |
-| `from_side`, `to_side` | string | `top`, `right`, `bottom` or `left`. Default: the nearest side |
-| `label` | string | Text on the edge |
-| `colour` | palette colour | Edge colour |
-| `arrow` | string | `none`, `end` or `both`. Default `end` |
+| `from`, `to` | string | Required. Node ids in the same canvas. An edge is drawn from `from` to `to` |
+| `from_side`, `to_side` | string | `top`, `right`, `bottom` or `left`. Default: the nearest side. The web editor draws edges as right-angled elbows between the closest facing pair of sides, and rewrites both items to that pair whenever an edge is made or either node moves or resizes |
+| `label` | string | A caption, drawn at the middle of the edge |
+| `colour` | palette colour | Edge colour. The line and its arrowheads take it |
+| `arrow` | string | Where arrowheads go: `none`, `start` (at the `from` node), `end` (at the `to` node) or `both`. Default `end` |
 
 ```wcl
 canvas board {
+  height = 640
+
   viewport {
     x    = -120.0
     y    = -80.0
@@ -1135,34 +1167,50 @@ canvas board {
   }
 
   node goal {
-    kind   = "text"
+    kind   = "card"
     x      = 0.0
     y      = 0.0
     width  = 260.0
     height = 120.0
     group  = "plan"
-    text   = "Goal: **import Capacities**"
+
+    heading {
+      level = 2
+      text  = "Goal"
+    }
+
+    paragraph {
+      text = "**Import Capacities**"
+    }
   }
 
   node open_work {
-    kind   = "query"
+    kind   = "card"
     x      = 340.0
     y      = 0.0
     width  = 240.0
     height = 400.0
     group  = "plan"
-    query  = "from specimen where under(status, \"Active\") sort due asc limit 10"
+
+    query_view {
+      query = "from specimen where under(status, \"Active\") sort due asc limit 10"
+
+      view cards {
+        kind = "cards"
+      }
+    }
   }
 
   edge goal_to_work {
     from  = "goal"
     to    = "open_work"
     label = "tracks"
+    arrow = "end"
   }
 }
 ```
 
-`vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` uses every node kind.
+`vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` uses both node kinds, cards holding several kinds of block, and every arrow value.
 
 ## Taxonomy files
 

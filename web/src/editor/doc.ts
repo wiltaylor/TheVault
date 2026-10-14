@@ -3,7 +3,7 @@
 // parsed as inline markup (D41). Every other block kind rides along untouched in a `vaultBlock`.
 
 import type { JSONContent } from "@tiptap/core";
-import type { Block } from "../api";
+import type { Block, TemplateItem } from "../api";
 import { parseInline, serializeInline } from "./markup";
 
 const LIST_NODE: Record<string, string> = { bullet: "bulletList", numbered: "orderedList", todo: "taskList" };
@@ -14,8 +14,11 @@ function str(block: Block, item: string): string {
   return typeof v === "string" ? v : "";
 }
 
+/** True while converting a template's blocks, whose text may hold `{{name}}` field references. */
+let fieldRefs = false;
+
 function inline(text: string): JSONContent[] | undefined {
-  const nodes = parseInline(text) as JSONContent[];
+  const nodes = parseInline(text, { fieldRefs }) as JSONContent[];
   return nodes.length ? nodes : undefined;
 }
 
@@ -119,4 +122,38 @@ export function docToBlocks(doc: JSONContent): Block[] {
     blocks.pop();
   }
   return blocks;
+}
+
+/**
+ * The editor document for a template tab: its fixed blocks as editable blocks, with `{{name}}`
+ * as field references, and each slot as a property block.
+ */
+export function itemsToDoc(items: readonly TemplateItem[]): JSONContent {
+  fieldRefs = true;
+  try {
+    const content = items.map((item): JSONContent =>
+      "slot" in item ? { type: "templateSlot", attrs: { slot: item.slot, label: item.label } } : blockToDoc(item.block),
+    );
+    return { type: "doc", content: content.length ? content : [{ type: "paragraph" }] };
+  } finally {
+    fieldRefs = false;
+  }
+}
+
+/** A template tab's items from the editor document. Empty paragraphs at the end are dropped. */
+export function docToItems(doc: JSONContent): TemplateItem[] {
+  const items: TemplateItem[] = [];
+  for (const node of doc.content ?? []) {
+    if (node.type === "templateSlot") {
+      const label = node.attrs?.label;
+      items.push({ slot: String(node.attrs?.slot ?? ""), label: typeof label === "string" && label ? label : null });
+      continue;
+    }
+    const block = docToBlock(node);
+    if (block) items.push({ block });
+  }
+  for (let last = items.at(-1); last && "block" in last && last.block.kind === "paragraph" && last.block.fields?.text === ""; last = items.at(-1)) {
+    items.pop();
+  }
+  return items;
 }

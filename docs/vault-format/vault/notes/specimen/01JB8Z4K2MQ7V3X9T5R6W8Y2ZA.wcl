@@ -163,7 +163,7 @@ content body {
 
     view details {
       kind     = "details"
-      template = "detail"
+      template = "default"
     }
 
     view board {
@@ -219,12 +219,15 @@ content body {
     }
 
     node idea {
-      kind   = "text"
+      kind   = "card"
       x      = 0.0
       y      = 0.0
       width  = 240.0
       height = 120.0
-      text   = "Importer **v1**"
+
+      paragraph {
+        text = "Importer **v1**"
+      }
     }
 
     node parent {
@@ -265,11 +268,14 @@ canvas plan {
   }
 
   node start {
-    kind   = "text"
+    kind   = "card"
     x      = 0.0
     y      = 0.0
     width  = 200.0
     height = 80.0
-    text   = "Start here"
+
+    paragraph {
+      text = "Start here"
+    }
   }
 }

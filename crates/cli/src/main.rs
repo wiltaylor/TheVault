@@ -192,6 +192,9 @@ enum Command {
     /// The trash.
     #[command(subcommand)]
     Trash(Trash),
+    /// Daily notes: one note of the built-in `dailynote` type per day.
+    #[command(subcommand)]
+    Daily(Daily),
     /// Notes pinned to the web sidebar.
     #[command(subcommand)]
     Pin(Pin),
@@ -289,12 +292,48 @@ enum Trash {
 }
 
 #[derive(Subcommand)]
+enum Daily {
+    /// The daily note for a day (YYYY-MM-DD). A day with no note fails with 404.
+    Get { date: String },
+    /// The daily note for a day (YYYY-MM-DD), created when the day has none.
+    Open { date: String },
+}
+
+#[derive(Subcommand)]
 enum Pin {
-    /// The pinned notes, in sidebar order, with type and title.
+    /// The pinned tree: notes with type and title, and folders, each with its children.
     List,
-    /// Pin a note to the end of the sidebar list.
+    /// Pin a note to the end of the sidebar's root.
     Add { id: String },
-    /// Unpin a note.
+    /// Unpin a note. Its children move up into its place.
+    Remove { id: String },
+    /// Pinned folders.
+    #[command(subcommand)]
+    Folder(PinFolder),
+    /// Move a pinned note or folder under another entry, or to the root without --parent.
+    Move {
+        /// The note or folder id to move.
+        id: String,
+        /// The entry to move it into. Left out, it moves to the root.
+        #[arg(long)]
+        parent: Option<String>,
+        /// Its position among the new parent's children, from 0. Left out, it goes last.
+        #[arg(long)]
+        index: Option<usize>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PinFolder {
+    /// Create a folder at the end of the root, or of --parent.
+    Add {
+        name: String,
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// Rename a folder.
+    Rename { id: String, name: String },
+    /// Delete a folder. Its children move up into its place.
     Remove { id: String },
 }
 
@@ -631,6 +670,10 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
             &[],
             Body::None,
         ),
+        Command::Daily(Daily::Get { date }) => api.get(&["api", "daily", &date]),
+        Command::Daily(Daily::Open { date }) => {
+            api.call(Method::POST, &["api", "daily", &date], &[], Body::None)
+        }
         Command::Pin(Pin::List) => api.get(&["api", "pins"]),
         Command::Pin(Pin::Add { id }) => {
             api.call(Method::PUT, &["api", "pins", &id], &[], Body::None)
@@ -638,6 +681,32 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
         Command::Pin(Pin::Remove { id }) => {
             api.call(Method::DELETE, &["api", "pins", &id], &[], Body::None)
         }
+        Command::Pin(Pin::Folder(PinFolder::Add { name, parent })) => api.call(
+            Method::POST,
+            &["api", "pins", "folders"],
+            &[],
+            Body::Json(json!({ "name": name, "parent": parent })),
+        ),
+        Command::Pin(Pin::Folder(PinFolder::Rename { id, name })) => api.call(
+            Method::PUT,
+            &["api", "pins", "folders", &id],
+            &[],
+            Body::Json(json!({ "name": name })),
+        ),
+        Command::Pin(Pin::Folder(PinFolder::Remove { id })) => api
+            .call(
+                Method::DELETE,
+                &["api", "pins", "folders", &id],
+                &[],
+                Body::None,
+            )
+            .map(|_| json!({ "id": id, "removed": true })),
+        Command::Pin(Pin::Move { id, parent, index }) => api.call(
+            Method::POST,
+            &["api", "pins", "move"],
+            &[],
+            Body::Json(json!({ "id": id, "parent": parent, "index": index })),
+        ),
         Command::Asset(a) => asset(api, a),
         Command::Type(t) => type_cmd(api, t),
         Command::Template(t) => match t {

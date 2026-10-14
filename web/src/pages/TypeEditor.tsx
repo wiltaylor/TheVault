@@ -1,5 +1,5 @@
 import { A, useNavigate, useParams } from "@solidjs/router";
-import { For, Show, createEffect, createResource, createSignal, on } from "solid-js";
+import { For, Show, createEffect, createSignal, on } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 import { ApiError, type FieldDef, type Json, type Row, type TypePlan, api } from "../api";
 import { FieldInput } from "../components/FieldInput";
@@ -26,6 +26,8 @@ import {
   typeWcl,
 } from "../defs/typeModel";
 import { reloadDefinitions, taxonomies, types } from "../session";
+import { IconPicker } from "../components/IconPicker";
+import { ScriptField } from "../components/ScriptField";
 
 export function errorText(e: unknown): string {
   if (e instanceof ApiError) {
@@ -104,7 +106,6 @@ export function TypeEditor() {
   // The script and function a change runs over every note of the type, if any (D6).
   const [migrationScript, setMigrationScript] = createSignal("");
   const [migrationFunction, setMigrationFunction] = createSignal("");
-  const [scripts] = createResource(() => api.scripts().catch(() => [] as string[]), { initialValue: [] });
 
   createEffect(
     on(
@@ -252,7 +253,7 @@ export function TypeEditor() {
     try {
       await api.deleteType(name());
       await reloadDefinitions();
-      navigate("/");
+      navigate("/settings/types");
     } catch (e) {
       if (e instanceof ApiError && e.body.error === "type_in_use") {
         const n = Number(e.body.count ?? 0);
@@ -292,86 +293,106 @@ export function TypeEditor() {
     return e.op;
   }
 
-  function FieldCard(props: { field: FieldModel; index: number }) {
+  function FieldRow(props: { field: FieldModel; index: number }) {
     const f = () => props.field;
     const key = f().key;
     const set = (fn: (x: FieldModel) => void) => editField(key, fn);
     const [optionsText, setOptionsText] = createSignal(f().options.join("\n"));
+    // A field added in this session opens with its settings showing.
+    const [open, setOpen] = createSignal(f().original === null);
     const id = (part: string) => `f${key}-${part}`;
     const targetFields = () =>
       types()
         .find((t) => t.name === f().target)
         ?.fields.filter((x) => x.kind === "reference") ?? [];
     return (
-      <fieldset class="field-card" data-testid={`field-card-${props.index}`}>
-        <legend>
-          {f().name || "New field"}
-          <Show when={f().original !== null && f().original !== f().name}>
-            <span class="muted"> (was {f().original})</span>
-          </Show>
-          <Show when={f().original === null && !isNew()}>
-            <span class="badge">new</span>
-          </Show>
-        </legend>
-        <div class="form-grid">
-          <label for={id("name")}>Name</label>
-          <input id={id("name")} value={f().name} onInput={(e) => set((x) => (x.name = e.currentTarget.value))} />
-          <label for={id("kind")}>Kind</label>
-          <select
-            id={id("kind")}
-            onChange={(e) =>
-              set((x) => {
-                x.kind = e.currentTarget.value as FieldKind;
-                x.default = undefined;
-                if (!MULTIPLE_KINDS.has(x.kind)) x.multiple = false;
-              })
-            }
-          >
-            <For each={FIELD_KINDS}>
-              {(k) => (
-                <option value={k} selected={f().kind === k}>
-                  {KIND_LABELS[k]}
-                </option>
-              )}
-            </For>
-          </select>
-          <label for={id("label")}>Label</label>
-          <input
-            id={id("label")}
-            value={f().label}
-            placeholder={f().name}
-            onInput={(e) => set((x) => (x.label = e.currentTarget.value))}
-          />
-          <label for={id("description")}>Description</label>
-          <input
-            id={id("description")}
-            value={f().description}
-            onInput={(e) => set((x) => (x.description = e.currentTarget.value))}
-          />
-        </div>
-        <div class="flags">
-          <label>
+      <tbody class="field-row" classList={{ open: open() }} data-testid={`field-row-${props.index}`}>
+        <tr>
+          <td class="field-order">
+            <button
+              type="button"
+              aria-label={`Move ${f().name || "field"} up`}
+              onClick={() => moveField(key, -1)}
+              disabled={props.index === 0}
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              aria-label={`Move ${f().name || "field"} down`}
+              onClick={() => moveField(key, 1)}
+              disabled={props.index === model.fields.length - 1}
+            >
+              ↓
+            </button>
+          </td>
+          <td>
+            <input
+              id={id("name")}
+              aria-label="Name"
+              value={f().name}
+              onInput={(e) => set((x) => (x.name = e.currentTarget.value))}
+            />
+            <Show when={f().original !== null && f().original !== f().name}>
+              <span class="muted field-was"> was {f().original}</span>
+            </Show>
+            <Show when={f().original === null && !isNew()}>
+              <span class="badge">new</span>
+            </Show>
+          </td>
+          <td>
+            <select
+              id={id("kind")}
+              aria-label="Kind"
+              onChange={(e) =>
+                set((x) => {
+                  x.kind = e.currentTarget.value as FieldKind;
+                  x.default = undefined;
+                  if (!MULTIPLE_KINDS.has(x.kind)) x.multiple = false;
+                })
+              }
+            >
+              <For each={FIELD_KINDS}>
+                {(k) => (
+                  <option value={k} selected={f().kind === k}>
+                    {KIND_LABELS[k]}
+                  </option>
+                )}
+              </For>
+            </select>
+          </td>
+          <td>
+            <input
+              id={id("label")}
+              aria-label="Label"
+              value={f().label}
+              placeholder={f().name}
+              onInput={(e) => set((x) => (x.label = e.currentTarget.value))}
+            />
+          </td>
+          <td class="field-flag">
             <input
               type="checkbox"
+              aria-label="Required"
               checked={f().required}
               disabled={f().computed}
               onChange={(e) => set((x) => (x.required = e.currentTarget.checked))}
-            />{" "}
-            Required
-          </label>
-          <label>
+            />
+          </td>
+          <td class="field-flag">
             <input
               type="checkbox"
+              aria-label="Computed"
               checked={f().computed}
               disabled={f().required}
               onChange={(e) => set((x) => (x.computed = e.currentTarget.checked))}
-            />{" "}
-            Computed
-          </label>
-          <Show when={MULTIPLE_KINDS.has(f().kind)}>
-            <label>
+            />
+          </td>
+          <td class="field-flag">
+            <Show when={MULTIPLE_KINDS.has(f().kind)} fallback={<span class="muted">—</span>}>
               <input
                 type="checkbox"
+                aria-label="Several values"
                 checked={f().multiple}
                 onChange={(e) =>
                   set((x) => {
@@ -379,193 +400,213 @@ export function TypeEditor() {
                     x.default = undefined;
                   })
                 }
-              />{" "}
-              Several values
-            </label>
-          </Show>
-        </div>
-        <div class="form-grid">
-          <Show when={f().kind === "select"}>
-            <label for={id("options")}>Options, one per line</label>
-            <textarea
-              id={id("options")}
-              rows={3}
-              value={optionsText()}
-              onInput={(e) => {
-                setOptionsText(e.currentTarget.value);
-                const opts = e.currentTarget.value
-                  .split("\n")
-                  .map((o) => o.trim())
-                  .filter(Boolean);
-                set((x) => (x.options = opts));
-              }}
-            />
-          </Show>
-          <Show when={f().kind === "taxonomy"}>
-            <label for={id("taxonomy")}>Taxonomy</label>
-            <select id={id("taxonomy")} onChange={(e) => set((x) => (x.taxonomy = e.currentTarget.value))}>
-              <option value="" selected={!f().taxonomy}>
-                —
-              </option>
-              <For each={taxonomies()}>
-                {(t) => (
-                  <option value={t.name} selected={f().taxonomy === t.name}>
-                    {t.label}
-                  </option>
-                )}
-              </For>
-            </select>
-          </Show>
-          <Show when={f().kind === "reference"}>
-            <label for={id("target")}>Target type</label>
-            <select id={id("target")} onChange={(e) => set((x) => (x.target = e.currentTarget.value))}>
-              <option value="" selected={!f().target}>
-                —
-              </option>
-              <option value="*" selected={f().target === "*"}>
-                Any type
-              </option>
-              <For each={[...new Set([...types().map((t) => t.name), ...(name() ? [name()] : [])])].sort()}>
-                {(t) => (
-                  <option value={t} selected={f().target === t}>
-                    {t}
-                  </option>
-                )}
-              </For>
-            </select>
-            <label for={id("relation")}>Relation</label>
-            <select
-              id={id("relation")}
-              onChange={(e) =>
-                set((x) => {
-                  x.relation = e.currentTarget.value as FieldModel["relation"];
-                  if (x.relation === "peer") x.multiple = true;
-                })
-              }
-            >
-              <For each={RELATIONS}>
-                {(r) => (
-                  <option value={r} selected={f().relation === r}>
-                    {{ one_way: "One-way", two_way: "Two-way", peer: "Peer group" }[r]}
-                  </option>
-                )}
-              </For>
-            </select>
-            <Show when={f().relation === "two_way"}>
-              <label for={id("inverse")}>Inverse field</label>
-              <input
-                id={id("inverse")}
-                list={id("inverse-list")}
-                value={f().inverse}
-                onInput={(e) => set((x) => (x.inverse = e.currentTarget.value))}
-              />
-              <datalist id={id("inverse-list")}>
-                <For each={targetFields()}>{(t) => <option value={t.name} />}</For>
-              </datalist>
-            </Show>
-            <label for={id("on_delete")}>When the target is deleted</label>
-            <select
-              id={id("on_delete")}
-              onChange={(e) => set((x) => (x.on_delete = e.currentTarget.value as FieldModel["on_delete"]))}
-            >
-              <For each={ON_DELETE}>
-                {(o) => (
-                  <option value={o} selected={f().on_delete === o}>
-                    {{ unlink: "Unlink", restrict: "Refuse the delete", cascade: "Delete this note too" }[o]}
-                  </option>
-                )}
-              </For>
-            </select>
-          </Show>
-          <Show when={f().kind === "list" || f().kind === "dict"}>
-            <label for={id("scalar")}>{f().kind === "list" ? "Item kind" : "Value kind"}</label>
-            <select
-              id={id("scalar")}
-              onChange={(e) =>
-                set((x) => {
-                  const v = e.currentTarget.value as FieldModel["items"];
-                  if (x.kind === "list") x.items = v;
-                  else x.values = v;
-                  x.default = undefined;
-                })
-              }
-            >
-              <For each={SCALARS}>
-                {(s) => (
-                  <option value={s} selected={(f().kind === "list" ? f().items : f().values) === s}>
-                    {KIND_LABELS[s]}
-                  </option>
-                )}
-              </For>
-            </select>
-          </Show>
-          <Show when={f().kind === "date_range"}>
-            <label for={id("of")}>Ends are</label>
-            <select
-              id={id("of")}
-              onChange={(e) =>
-                set((x) => {
-                  x.of = e.currentTarget.value as FieldModel["of"];
-                  x.default = undefined;
-                })
-              }
-            >
-              <option value="date" selected={f().of === "date"}>
-                Dates
-              </option>
-              <option value="datetime" selected={f().of === "datetime"}>
-                Dates and times
-              </option>
-            </select>
-          </Show>
-          <Show when={f().kind === "location"}>
-            <label for={id("map")}>Map</label>
-            <select id={id("map")} onChange={(e) => set((x) => (x.map = e.currentTarget.value as FieldModel["map"]))}>
-              <option value="geo" selected={f().map === "geo"}>
-                Real-world map
-              </option>
-              <option value="image" selected={f().map === "image"}>
-                Image map
-              </option>
-            </select>
-            <Show when={f().map === "image"}>
-              <label for={id("image")}>Map image</label>
-              <FieldInput
-                field={{ ...defaultDef(f()), kind: "asset", multiple: false, label: "Map image" }}
-                value={f().image || undefined}
-                onChange={(v) => set((x) => (x.image = typeof v === "string" ? v : ""))}
-                label="Map image"
-                id={id("image")}
               />
             </Show>
-          </Show>
-          <Show when={DEFAULT_KINDS.has(f().kind)}>
-            <label for={id("default")}>Default</label>
-            <Show when={`${f().kind}/${f().multiple}/${f().items}/${f().of}/${f().taxonomy}`} keyed>
-              {(_kind) => (
-              <FieldInput
-                field={defaultDef(f())}
-                value={f().default}
-                onChange={(v) => set((x) => (x.default = v))}
-                label={`Default for ${f().name}`}
-                id={id("default")}
-              />
-              )}
-            </Show>
-          </Show>
-        </div>
-        <div class="actions">
-          <button type="button" onClick={() => moveField(key, -1)} disabled={props.index === 0}>
-            Move up
-          </button>
-          <button type="button" onClick={() => moveField(key, 1)} disabled={props.index === model.fields.length - 1}>
-            Move down
-          </button>
-          <button type="button" class="danger" onClick={() => edit((m) => void m.fields.splice(m.fields.findIndex((x) => x.key === key), 1))}>
-            Remove field
-          </button>
-        </div>
-      </fieldset>
+          </td>
+          <td class="field-actions">
+            <button
+              type="button"
+              aria-label={`Settings for ${f().name || "field"}`}
+              aria-expanded={open()}
+              title="More settings"
+              onClick={() => setOpen(!open())}
+            >
+              ⚙
+            </button>
+            <button
+              type="button"
+              class="danger"
+              aria-label={`Remove ${f().name || "field"}`}
+              title="Remove field"
+              onClick={() => edit((m) => void m.fields.splice(m.fields.findIndex((x) => x.key === key), 1))}
+            >
+              ✕
+            </button>
+          </td>
+        </tr>
+        <Show when={open()}>
+          <tr class="field-details">
+            <td colSpan={8}>
+              <div class="form-grid">
+                <label for={id("description")}>Description</label>
+                <input
+                  id={id("description")}
+                  value={f().description}
+                  onInput={(e) => set((x) => (x.description = e.currentTarget.value))}
+                />
+                <Show when={f().kind === "select"}>
+                  <label for={id("options")}>Options, one per line</label>
+                  <textarea
+                    id={id("options")}
+                    rows={3}
+                    value={optionsText()}
+                    onInput={(e) => {
+                      setOptionsText(e.currentTarget.value);
+                      const opts = e.currentTarget.value
+                        .split("\n")
+                        .map((o) => o.trim())
+                        .filter(Boolean);
+                      set((x) => (x.options = opts));
+                    }}
+                  />
+                </Show>
+                <Show when={f().kind === "taxonomy"}>
+                  <label for={id("taxonomy")}>Taxonomy</label>
+                  <select id={id("taxonomy")} onChange={(e) => set((x) => (x.taxonomy = e.currentTarget.value))}>
+                    <option value="" selected={!f().taxonomy}>
+                      —
+                    </option>
+                    <For each={taxonomies()}>
+                      {(t) => (
+                        <option value={t.name} selected={f().taxonomy === t.name}>
+                          {t.label}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                </Show>
+                <Show when={f().kind === "reference"}>
+                  <label for={id("target")}>Target type</label>
+                  <select id={id("target")} onChange={(e) => set((x) => (x.target = e.currentTarget.value))}>
+                    <option value="" selected={!f().target}>
+                      —
+                    </option>
+                    <option value="*" selected={f().target === "*"}>
+                      Any type
+                    </option>
+                    <For each={[...new Set([...types().map((t) => t.name), ...(name() ? [name()] : [])])].sort()}>
+                      {(t) => (
+                        <option value={t} selected={f().target === t}>
+                          {t}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                  <label for={id("relation")}>Relation</label>
+                  <select
+                    id={id("relation")}
+                    onChange={(e) =>
+                      set((x) => {
+                        x.relation = e.currentTarget.value as FieldModel["relation"];
+                        if (x.relation === "peer") x.multiple = true;
+                      })
+                    }
+                  >
+                    <For each={RELATIONS}>
+                      {(r) => (
+                        <option value={r} selected={f().relation === r}>
+                          {{ one_way: "One-way", two_way: "Two-way", peer: "Peer group" }[r]}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                  <Show when={f().relation === "two_way"}>
+                    <label for={id("inverse")}>Inverse field</label>
+                    <input
+                      id={id("inverse")}
+                      list={id("inverse-list")}
+                      value={f().inverse}
+                      onInput={(e) => set((x) => (x.inverse = e.currentTarget.value))}
+                    />
+                    <datalist id={id("inverse-list")}>
+                      <For each={targetFields()}>{(t) => <option value={t.name} />}</For>
+                    </datalist>
+                  </Show>
+                  <label for={id("on_delete")}>When the target is deleted</label>
+                  <select
+                    id={id("on_delete")}
+                    onChange={(e) => set((x) => (x.on_delete = e.currentTarget.value as FieldModel["on_delete"]))}
+                  >
+                    <For each={ON_DELETE}>
+                      {(o) => (
+                        <option value={o} selected={f().on_delete === o}>
+                          {{ unlink: "Unlink", restrict: "Refuse the delete", cascade: "Delete this note too" }[o]}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                </Show>
+                <Show when={f().kind === "list" || f().kind === "dict"}>
+                  <label for={id("scalar")}>{f().kind === "list" ? "Item kind" : "Value kind"}</label>
+                  <select
+                    id={id("scalar")}
+                    onChange={(e) =>
+                      set((x) => {
+                        const v = e.currentTarget.value as FieldModel["items"];
+                        if (x.kind === "list") x.items = v;
+                        else x.values = v;
+                        x.default = undefined;
+                      })
+                    }
+                  >
+                    <For each={SCALARS}>
+                      {(s) => (
+                        <option value={s} selected={(f().kind === "list" ? f().items : f().values) === s}>
+                          {KIND_LABELS[s]}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                </Show>
+                <Show when={f().kind === "date_range"}>
+                  <label for={id("of")}>Ends are</label>
+                  <select
+                    id={id("of")}
+                    onChange={(e) =>
+                      set((x) => {
+                        x.of = e.currentTarget.value as FieldModel["of"];
+                        x.default = undefined;
+                      })
+                    }
+                  >
+                    <option value="date" selected={f().of === "date"}>
+                      Dates
+                    </option>
+                    <option value="datetime" selected={f().of === "datetime"}>
+                      Dates and times
+                    </option>
+                  </select>
+                </Show>
+                <Show when={f().kind === "location"}>
+                  <label for={id("map")}>Map</label>
+                  <select id={id("map")} onChange={(e) => set((x) => (x.map = e.currentTarget.value as FieldModel["map"]))}>
+                    <option value="geo" selected={f().map === "geo"}>
+                      Real-world map
+                    </option>
+                    <option value="image" selected={f().map === "image"}>
+                      Image map
+                    </option>
+                  </select>
+                  <Show when={f().map === "image"}>
+                    <label for={id("image")}>Map image</label>
+                    <FieldInput
+                      field={{ ...defaultDef(f()), kind: "asset", multiple: false, label: "Map image" }}
+                      value={f().image || undefined}
+                      onChange={(v) => set((x) => (x.image = typeof v === "string" ? v : ""))}
+                      label="Map image"
+                      id={id("image")}
+                    />
+                  </Show>
+                </Show>
+                <Show when={DEFAULT_KINDS.has(f().kind)}>
+                  <label for={id("default")}>Default</label>
+                  <Show when={`${f().kind}/${f().multiple}/${f().items}/${f().of}/${f().taxonomy}`} keyed>
+                    {(_kind) => (
+                    <FieldInput
+                      field={defaultDef(f())}
+                      value={f().default}
+                      onChange={(v) => set((x) => (x.default = v))}
+                      label={`Default for ${f().name}`}
+                      id={id("default")}
+                    />
+                    )}
+                  </Show>
+                </Show>
+              </div>
+            </td>
+          </tr>
+        </Show>
+      </tbody>
     );
   }
 
@@ -596,18 +637,7 @@ export function TypeEditor() {
             </For>
           </select>
           <label for={id("script")}>Script</label>
-          <select id={id("script")} onChange={(e) => set((x) => (x.script = e.currentTarget.value))}>
-            <option value="" selected={!h().script}>
-              —
-            </option>
-            <For each={[...new Set([...scripts(), ...(h().script ? [h().script] : [])])].sort()}>
-              {(sc) => (
-                <option value={sc} selected={h().script === sc}>
-                  {sc}
-                </option>
-              )}
-            </For>
-          </select>
+          <ScriptField id={id("script")} value={h().script} onChange={(name) => set((x) => (x.script = name))} />
           <label for={id("function")}>Function</label>
           <input
             id={id("function")}
@@ -662,10 +692,15 @@ export function TypeEditor() {
           </div>
           <Show when={!isNew()}>
             <div class="actions">
-              <A href={`/types/${name()}/templates`}>Templates</A>
-              <button type="button" class="danger" disabled={busy()} onClick={() => void remove()}>
-                Delete type
-              </button>
+              <A href={`/settings/types/${name()}/templates`}>Templates</A>
+              <Show
+                when={name() !== "dailynote"}
+                fallback={<span class="muted">Built in: customise it freely, but it cannot be deleted.</span>}
+              >
+                <button type="button" class="danger" disabled={busy()} onClick={() => void remove()}>
+                  Delete type
+                </button>
+              </Show>
             </div>
           </Show>
         </header>
@@ -708,7 +743,7 @@ export function TypeEditor() {
             onInput={(e) => edit((m) => (m.description = e.currentTarget.value))}
           />
           <label for="type-icon">Icon</label>
-          <input id="type-icon" value={model.icon} onInput={(e) => edit((m) => (m.icon = e.currentTarget.value))} />
+          <IconPicker id="type-icon" value={model.icon} onChange={(name) => edit((m) => (m.icon = name))} />
           <label for="type-colour">Colour</label>
           <select id="type-colour" onChange={(e) => edit((m) => (m.colour = e.currentTarget.value))}>
             <option value="" selected={!model.colour}>
@@ -725,9 +760,29 @@ export function TypeEditor() {
         </div>
 
         <h2>Fields</h2>
-        <For each={model.fields} fallback={<p class="muted">No fields yet. Every note has a title.</p>}>
-          {(f, i) => <FieldCard field={f} index={i()} />}
-        </For>
+        <Show when={model.fields.length > 0} fallback={<p class="muted">No fields yet. Every note has a title.</p>}>
+          <div class="field-grid-wrap">
+            <table class="field-grid" aria-label="Fields">
+              <thead>
+                <tr>
+                  <th scope="col">
+                    <span class="visually-hidden">Order</span>
+                  </th>
+                  <th scope="col">Name</th>
+                  <th scope="col">Kind</th>
+                  <th scope="col">Label</th>
+                  <th scope="col">Required</th>
+                  <th scope="col">Computed</th>
+                  <th scope="col">Several</th>
+                  <th scope="col">
+                    <span class="visually-hidden">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <For each={model.fields}>{(f, i) => <FieldRow field={f} index={i()} />}</For>
+            </table>
+          </div>
+        </Show>
         <button type="button" onClick={addField}>
           Add field
         </button>
@@ -735,7 +790,7 @@ export function TypeEditor() {
         <h2>Handlers</h2>
         <p class="muted">
           Scripts that run when a note of this type is created, updated or deleted. Handlers for one event run in
-          this order. <A href="/settings/scripts">Edit scripts</A>
+          this order. Pick a script for each, or start a new one, and edit it right here.
         </p>
         <For each={model.handlers} fallback={<p class="muted">No handlers.</p>}>
           {(h, i) => <HandlerCard handler={h} index={i()} />}
@@ -758,24 +813,15 @@ export function TypeEditor() {
           </p>
           <div class="form-grid">
             <label for="migration-script">Migration script</label>
-            <select
+            <ScriptField
               id="migration-script"
-              onChange={(e) => {
-                setMigrationScript(e.currentTarget.value);
+              value={migrationScript()}
+              noneLabel="None"
+              onChange={(name) => {
+                setMigrationScript(name);
                 setPlan(null);
               }}
-            >
-              <option value="" selected={!migrationScript()}>
-                None
-              </option>
-              <For each={scripts()}>
-                {(sc) => (
-                  <option value={sc} selected={migrationScript() === sc}>
-                    {sc}
-                  </option>
-                )}
-              </For>
-            </select>
+            />
             <Show when={migrationScript()}>
               <label for="migration-function">Migration function</label>
               <input

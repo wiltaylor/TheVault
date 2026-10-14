@@ -205,9 +205,10 @@ test("views saved in the editor persist across reload", async ({ page: p, admin 
   const note = await page(admin, title, []);
 
   await openNote(p, note.id, title);
-  await p.getByRole("button", { name: "Edit" }).click();
   await p.getByRole("textbox", { name: "Body" }).click();
-  await p.getByRole("button", { name: "Insert query view" }).click();
+  await p.keyboard.type("/query");
+  await expect(p.getByRole("listbox", { name: "Insert block" }).getByRole("option")).toHaveText([/Query view/]);
+  await p.keyboard.press("Enter");
   const settings = p.getByRole("group", { name: "Query view settings" });
   await expect(settings).toBeVisible();
   await settings.getByLabel("Heading").fill("Persisted tasks");
@@ -221,8 +222,9 @@ test("views saved in the editor persist across reload", async ({ page: p, admin 
   await views.nth(1).getByLabel("Name").fill("grid");
   await views.nth(1).getByLabel("Kind").selectOption("cards");
   await settings.getByLabel("Show first").selectOption("grid");
-  await p.getByRole("button", { name: "Save" }).click();
-  await expect(p.getByRole("button", { name: "Edit" })).toBeVisible();
+  // Leaving the settings saves at once.
+  await p.getByLabel("Title", { exact: true }).focus();
+  await expect(p.getByTestId("save-status")).toHaveText("Saved");
 
   const stored = await (await admin.get(`/api/notes/${note.id}`)).json();
   expect(stored.wcl).toContain("view rows {");
@@ -239,6 +241,6 @@ test("views saved in the editor persist across reload", async ({ page: p, admin 
   expect(await titles(view.getByTestId("query-row"))).toEqual([`${tag} 1`, `${tag} 2`]);
 
   // Editing again starts from the saved views.
-  await p.getByRole("button", { name: "Edit" }).click();
+  await p.getByRole("button", { name: "Edit query view" }).click();
   await expect(p.getByRole("group", { name: "Query view settings" }).getByTestId("view-settings")).toHaveCount(2);
 });

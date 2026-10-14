@@ -6,10 +6,12 @@ import {
   createEffect,
   createMemo,
   createResource,
+  createContext,
   createSignal,
   on,
   onCleanup,
   onMount,
+  useContext,
 } from "solid-js";
 import { type Block, type Row, api } from "../api";
 import { CanvasSurface } from "../canvas/CanvasSurface";
@@ -176,7 +178,7 @@ function Detail(props: { row: Row; view: ViewDef }) {
       </h3>
       <TemplateBody
         row={props.row}
-        template={viewTemplate(typeDef(props.row.type), props.view.template, "detail")}
+        template={viewTemplate(typeDef(props.row.type), props.view.template, "default")}
         doc={note.error ? undefined : note.latest?.note}
         tabTitles
       />
@@ -184,7 +186,7 @@ function Detail(props: { row: Row; view: ViewDef }) {
   );
 }
 
-/** Each note expanded with its detail template, a page at a time. */
+/** Each note expanded with its default template, a page at a time. */
 function DetailsView(props: { view: ViewDef; data: PagedRows; total: number }) {
   const [page, setPage] = createSignal(0);
   const pages = () => Math.max(1, Math.ceil(props.total / DETAILS_PER_PAGE));
@@ -262,6 +264,31 @@ function CanvasResultsView(props: { view: ViewDef; data: PagedRows; total: numbe
 }
 
 /**
+ * How often, in milliseconds, query views inside this context run their query again, so notes
+ * made elsewhere appear without a reload. A canvas card sets it: a board is often left open.
+ */
+export const QueryPoll = createContext<number | undefined>(undefined);
+
+/** A tick every `ms` while the page is showing, and whenever the window regains focus. */
+function createPoll(ms: number | undefined) {
+  const [tick, setTick] = createSignal(0);
+  if (ms) {
+    onMount(() => {
+      const timer = setInterval(() => {
+        if (document.visibilityState !== "hidden") setTick((n) => n + 1);
+      }, ms);
+      const onFocus = () => setTick((n) => n + 1);
+      window.addEventListener("focus", onFocus);
+      onCleanup(() => {
+        clearInterval(timer);
+        window.removeEventListener("focus", onFocus);
+      });
+    });
+  }
+  return tick;
+}
+
+/**
  * A query view block: one query, shown through its saved views (D8, D33). `this` is the note
  * that holds the block. Every view keeps only what is on screen in the DOM: table, list and cards
  * virtualise, details, map and kanban columns page, calendar and timeline load the dates in view, and
@@ -273,11 +300,12 @@ export function QueryView(props: { block: Block }) {
   const def = createMemo(() => readQueryView(props.block));
   const [selected, setSelected] = createSignal<string | null>(null);
   const current = () => def().views.find((v) => v.name === selected()) ?? def().first;
+  const tick = createPoll(useContext(QueryPoll));
   const data = createPagedRows(
     (cursor, size) => api.query(def().query, cursor, size, thisId),
     () => `${def().query}\u0000${thisId ?? ""}`,
     PAGE_SIZE,
-    changes,
+    () => [changes(), tick()],
   );
 
   return (

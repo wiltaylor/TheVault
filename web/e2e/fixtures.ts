@@ -43,4 +43,9 @@ export async function logIn(page: Page, path = "/") {
   await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
 }
 
+/** The workspace's active pane, where a page opened from the sidebar, a link or the address shows. */
+export function activePane(page: Page) {
+  return page.locator(".pane[data-active]");
+}
+
 export { expect } from "@playwright/test";

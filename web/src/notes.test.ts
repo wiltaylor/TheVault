@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { TypeDef } from "./api";
-import { applyBlocks, applyDict, applyEdits, comparedFields, fieldValue, slotField, TITLE_FIELD } from "./notes";
+import {
+  TITLE_FIELD,
+  applyBlocks,
+  applyDict,
+  applyEdits,
+  comparedFields,
+  fieldValue,
+  missingRequired,
+  refValue,
+  slotField,
+  unplacedFields,
+} from "./notes";
 
 const task: TypeDef = {
   name: "task",
@@ -68,5 +79,47 @@ describe("notes", () => {
     const a = { fields: { title: "A", created: "x", legacy: 1 }, blocks: [] };
     const b = { fields: { title: "B", updated: "y" }, blocks: [] };
     expect(comparedFields(task, a, b).map((f) => f.name)).toEqual(["title", "estimate", "body", "legacy"]);
+  });
+});
+
+describe("the inline note page", () => {
+  const typed: TypeDef = {
+    ...task,
+    fields: [
+      ...task.fields,
+      { ...TITLE_FIELD, name: "due", label: "Due", kind: "date", required: false },
+      { ...TITLE_FIELD, name: "owner", label: "Owner", kind: "string", required: true },
+      { ...TITLE_FIELD, name: "size", label: "Size", kind: "int", required: true, default: 1 },
+    ],
+    templates: [
+      {
+        name: "default",
+        label: null,
+        tabs: [
+          { title: "A", items: [{ slot: "title", label: null }, { block: { kind: "paragraph", fields: { text: "{{due}}" } } }] },
+          { title: "B", items: [{ slot: "body", label: null }] },
+        ],
+      },
+      { name: "card", label: null, tabs: [{ title: "C", items: [{ slot: "estimate", label: null }] }] },
+    ],
+  };
+
+  it("puts every field the default template has no slot for in the sidebar", () => {
+    // A {{due}} reference and a card slot do not count; slots on any default tab do.
+    expect(unplacedFields(typed).map((f) => f.name)).toEqual(["estimate", "due", "owner", "size"]);
+  });
+
+  it("resolves {{name}} to the title, a field, or null for no such field", () => {
+    const doc = { fields: { title: "T", due: "2026-01-02" }, blocks: [] };
+    expect(refValue(typed, doc, "title")).toBe("T");
+    expect(refValue(typed, doc, "due")).toBe("2026-01-02");
+    expect(refValue(typed, doc, "owner")).toBeUndefined();
+    expect(refValue(typed, doc, "nope")).toBeNull();
+  });
+
+  it("lists the required fields a new note still lacks, skipping ones with defaults", () => {
+    expect(missingRequired(typed, { fields: {}, blocks: [] })).toEqual(["Title", "Owner"]);
+    expect(missingRequired(typed, { fields: { title: "x", owner: "" }, blocks: [] })).toEqual(["Owner"]);
+    expect(missingRequired(typed, { fields: { title: "x", owner: "me" }, blocks: [] })).toEqual([]);
   });
 });

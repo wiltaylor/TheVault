@@ -2,6 +2,7 @@
 // back as WCL in the order docs/vault-format.md gives.
 
 import type { Block, Json } from "../api";
+import { renameFieldRefs } from "../editor/markup";
 import { wclBlock, wclField, wclString } from "./wcl";
 
 export const FIELD_KINDS = [
@@ -341,12 +342,19 @@ function handlerWcl(h: HandlerModel): string {
 export function followFields(m: TypeModel): TemplateModel[] {
   const byOriginal = new Map(m.fields.filter((f) => f.original !== null).map((f) => [f.original!, f.name]));
   const known = new Set(m.fields.map((f) => f.name));
+  // `{{name}}` in fixed blocks follows too; a removed field's reference is left as plain text.
+  const rename = (name: string) => {
+    if (name === "title") return name;
+    const to = byOriginal.get(name) ?? (known.has(name) ? name : undefined);
+    return to !== undefined && known.has(to) ? to : null;
+  };
   return m.templates.map((t) => ({
     ...t,
     tabs: t.tabs.map((tab) => ({
       ...tab,
-      items: tab.items.flatMap((item) => {
-        if (!("slot" in item) || item.slot === "title") return [item];
+      items: tab.items.flatMap((item): TemplateItemModel[] => {
+        if (!("slot" in item)) return [{ block: followRefs(item.block, rename) }];
+        if (item.slot === "title") return [item];
         const name = byOriginal.get(item.slot) ?? (known.has(item.slot) ? item.slot : undefined);
         return name === undefined || !known.has(name) ? [] : [{ ...item, slot: name }];
       }),
@@ -354,7 +362,19 @@ export function followFields(m: TypeModel): TemplateModel[] {
   }));
 }
 
-/** The type file. Slots follow renamed and removed fields. */
+/** `block` with the `{{name}}` references in its text items, at any depth, renamed. */
+function followRefs(block: Block, rename: (name: string) => string | null): Block {
+  const text = block.fields?.text;
+  const fields =
+    typeof text === "string" && block.fields ? { ...block.fields, text: renameFieldRefs(text, rename) } : block.fields;
+  const blocks = block.blocks?.map((b) => followRefs(b, rename));
+  const out: Block = { ...block };
+  if (fields) out.fields = fields;
+  if (blocks) out.blocks = blocks;
+  return out;
+}
+
+/** The type file. Slots and `{{name}}` references follow renamed and removed fields. */
 export function typeWcl(m: TypeModel): string {
   let head = wclField("label", m.label.trim());
   if (m.plural.trim()) head += wclField("plural", m.plural.trim());

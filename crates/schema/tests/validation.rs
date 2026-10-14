@@ -59,7 +59,7 @@ fn the_example_vault_is_valid() {
         OnDelete::Unlink
     );
     assert_eq!(specimen.handlers[0].function, "count_words");
-    assert_eq!(specimen.templates.len(), 3);
+    assert_eq!(specimen.templates.len(), 2);
 
     let notes = lookup(&[
         ("01JB8Z4K2MQ7V3X9T5R6W8Y2ZA", "specimen"),
@@ -100,10 +100,7 @@ fn templates_fall_back_as_the_format_says() {
     let schema = example();
     let board = schema.type_def("board").unwrap();
     assert_eq!(board.resolve_template("card").unwrap().tabs.len(), 1);
-    assert_eq!(
-        board.resolve_template("detail").unwrap().tabs[0].title,
-        "Board"
-    );
+    assert!(board.resolve_template("detail").is_none());
     assert!(board.resolve_template("compact").is_none());
 }
 
@@ -244,7 +241,7 @@ fn every_field_kind_accepts_a_valid_value_and_rejects_an_invalid_one() {
     // at least one issue.
     let ink_ok = "ink sketch {\n width = 10\n height = 10\n stroke {\n tool = \"pen\"\n colour = \"#1f2937\"\n size = 2.0\n points = [1.0, 2.0, 0.5]\n }\n}";
     let ink_bad = "ink sketch {\n width = 10\n height = 10\n stroke {\n tool = \"pen\"\n colour = \"#1F29ZZ\"\n size = 2.0\n points = [1.0, 2.0, 0.5]\n }\n}";
-    let canvas_ok = "canvas plan {\n viewport {\n x = 0.0\n y = 0.0\n zoom = 1.0\n }\n node a {\n kind = \"text\"\n x = 0.0\n y = 0.0\n width = 10.0\n height = 10.0\n text = \"hi\"\n }\n edge e {\n from = \"a\"\n to = \"a\"\n }\n}";
+    let canvas_ok = "canvas plan {\n viewport {\n x = 0.0\n y = 0.0\n zoom = 1.0\n }\n node a {\n kind = \"card\"\n x = 0.0\n y = 0.0\n width = 10.0\n height = 10.0\n paragraph {\n text = \"hi\"\n }\n }\n edge e {\n from = \"a\"\n to = \"a\"\n }\n}";
     let canvas_bad = "canvas plan {\n viewport {\n x = 0.0\n y = 0.0\n zoom = 1.0\n }\n edge e {\n from = \"a\"\n to = \"b\"\n }\n}";
     let rows: Vec<(&str, &str, String, String)> = vec![
         ("string", "s", r#"s = "hi""#.into(), "s = 3".into()),
@@ -472,6 +469,22 @@ fn a_template_naming_a_field_the_type_lacks_fails() {
                 && i.contains("the type has no field \"missing\"")),
         "{issues:?}"
     );
+}
+
+#[test]
+fn a_field_reference_in_template_text_must_name_a_field() {
+    let ok = "label = \"T\"\nfield a {\n  kind = \"string\"\n}\ntemplate default {\n  tab \"Main\" {\n    paragraph {\n      text = \"{{title}} is {{a}}, not \\\\{{b}} or `{{c}}` or {{ d }}\"\n    }\n  }\n}\n";
+    TypeDef::parse("t", ok).expect("known names, escaped braces and code spans are fine");
+
+    let issues = type_issues(
+        "label = \"T\"\nfield a {\n  kind = \"string\"\n}\ntemplate default {\n  tab \"Main\" {\n    heading {\n      level = 2\n      text = \"About {{a}}\"\n    }\n    list {\n      style = \"bullet\"\n      item {\n        text = \"Due {{due}}\"\n      }\n    }\n  }\n}\n",
+    );
+    assert!(
+        issues.iter().any(|i| i.starts_with("template default")
+            && i.contains("`{{due}}` names no field of the type")),
+        "{issues:?}"
+    );
+    assert_eq!(issues.len(), 1, "{issues:?}");
 }
 
 #[test]
@@ -756,4 +769,179 @@ fn load_reads_a_vault() {
         err.contains("types/specimen.wcl") && err.contains("\"topic\""),
         "{err}"
     );
+}
+
+#[test]
+fn a_type_has_only_default_and_card_templates_and_both_can_have_tabs() {
+    let tabs = "label = \"T\"\nfield a {\n  kind = \"string\"\n}\ntemplate default {\n  tab \"One\" {\n    slot \"title\"\n  }\n  tab \"Two\" {\n    slot \"a\"\n  }\n}\ntemplate card {\n  tab \"Front\" {\n    slot \"title\"\n  }\n  tab \"Back\" {\n    slot \"a\"\n  }\n}\n";
+    let ty = TypeDef::parse("t", tabs).unwrap();
+    assert_eq!(ty.templates.len(), 2);
+    assert!(ty.templates.iter().all(|t| t.tabs.len() == 2));
+
+    for other in ["detail", "wide"] {
+        let issues = type_issues(&format!(
+            "label = \"T\"\ntemplate default {{\n  tab \"Main\" {{\n    slot \"title\"\n  }}\n}}\ntemplate {other} {{\n  tab \"Main\" {{\n    slot \"title\"\n  }}\n}}\n"
+        ));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("only `default` and `card`")),
+            "{other}: {issues:?}"
+        );
+    }
+}
+
+/// A canvas field `plan` holding `items` after its viewport.
+fn plan(items: &str) -> String {
+    format!(
+        "canvas plan {{\n  viewport {{\n    x = 0.0\n    y = 0.0\n    zoom = 1.0\n  }}\n{items}\n}}"
+    )
+}
+
+const CARD: &str = "  node c {\n    kind = \"card\"\n    x = 0.0\n    y = 0.0\n    width = 200.0\n    height = 100.0\n    colour = \"green\"\n    heading {\n      level = 2\n      text = \"Plan\"\n    }\n    paragraph {\n      text = \"Some **bold**\"\n    }\n    code {\n      language = \"rust\"\n      source = \"fn main() {}\"\n    }\n    image {\n      asset = \"01JB9A0C3D4E5F6G7H8J9K0M1N\"\n    }\n    query_view {\n      query = \"from box\"\n      view cards {\n        kind = \"cards\"\n      }\n    }\n  }\n";
+
+#[test]
+fn a_card_holds_content_blocks_and_is_checked_like_a_content_field() {
+    check_kinds(&plan(CARD)).unwrap();
+    // An empty card is fine.
+    check_kinds(&plan(
+        "  node c {\n    kind = \"card\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n  }\n",
+    ))
+    .unwrap();
+
+    // Its blocks are checked as content blocks are.
+    let bad = check_kinds(&plan(
+        "  node c {\n    kind = \"card\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    heading {\n      level = 9\n      text = \"x\"\n    }\n    stroke {\n      tool = \"pen\"\n    }\n  }\n",
+    ))
+    .unwrap_err();
+    assert!(
+        bad.iter()
+            .any(|i| i.contains("heading#1.level: must be from 1 to 3")),
+        "{bad:?}"
+    );
+    assert!(
+        bad.iter()
+            .any(|i| i.contains("\"stroke\" is not a content block kind")),
+        "{bad:?}"
+    );
+
+    // A card cannot hold a canvas, and a note node holds no blocks.
+    let nested = check_kinds(&plan(&format!(
+        "  node c {{\n    kind = \"card\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n{}\n  }}\n",
+        "    canvas {\n      viewport {\n        x = 0.0\n        y = 0.0\n        zoom = 1.0\n      }\n    }"
+    )))
+    .unwrap_err();
+    assert!(
+        nested
+            .iter()
+            .any(|i| i.contains("a card cannot hold a canvas")),
+        "{nested:?}"
+    );
+    let note_blocks = check_kinds(&plan(&format!(
+        "  node n {{\n    kind = \"note\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    note = \"{BOX_NOTE}\"\n    paragraph {{\n      text = \"x\"\n    }}\n  }}\n"
+    )))
+    .unwrap_err();
+    assert!(
+        note_blocks
+            .iter()
+            .any(|i| i.contains("is not allowed here")),
+        "{note_blocks:?}"
+    );
+
+    // The kinds cards replaced are not node kinds any more, and their items are not node items.
+    let old = check_kinds(&plan(
+        "  node c {\n    kind = \"card\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    text = \"hi\"\n  }\n  node g {\n    kind = \"group\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n  }\n",
+    ))
+    .unwrap_err();
+    assert!(
+        old.iter()
+            .any(|i| i.contains("c\".text: is not an item of this block")),
+        "{old:?}"
+    );
+    assert!(
+        old.iter()
+            .any(|i| i.contains("\"group\" is not one of card, note")),
+        "{old:?}"
+    );
+}
+
+#[test]
+fn edges_take_four_arrow_values_and_canvases_a_height() {
+    let edge = |arrow: &str| {
+        plan(&format!(
+            "{CARD}  edge e {{\n    from = \"c\"\n    to = \"c\"\n    arrow = \"{arrow}\"\n    label = \"caption\"\n    colour = \"red\"\n  }}\n"
+        ))
+    };
+    for arrow in ["none", "start", "end", "both"] {
+        check_kinds(&edge(arrow)).unwrap_or_else(|e| panic!("{arrow}: {e:?}"));
+    }
+    let bad = check_kinds(&edge("middle")).unwrap_err();
+    assert!(
+        bad.iter()
+            .any(|i| i.contains("\"middle\" is not one of none, start, end, both")),
+        "{bad:?}"
+    );
+
+    let height = |h: &str| {
+        format!(
+            "canvas plan {{\n  height = {h}\n  viewport {{\n    x = 0.0\n    y = 0.0\n    zoom = 1.0\n  }}\n}}"
+        )
+    };
+    check_kinds(&height("480")).unwrap();
+    check_kinds(&height("160")).unwrap();
+    check_kinds(&height("4000")).unwrap();
+    for bad in ["159", "4001", "-1"] {
+        let issues = check_kinds(&height(bad)).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("plan\".height: must be from 160 to 4000")),
+            "{bad}: {issues:?}"
+        );
+    }
+    let float = check_kinds(&height("300.5")).unwrap_err();
+    assert!(
+        float.iter().any(|i| i.contains("must be an integer")),
+        "{float:?}"
+    );
+}
+
+#[test]
+fn a_canvas_in_the_old_format_reads_as_cards_and_validates() {
+    let old = plan(&format!(
+        "  node t {{\n    kind = \"text\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    colour = \"blue\"\n    text = \"Hello **you**\"\n  }}\n  node a {{\n    kind = \"asset\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    asset = \"{ASSET}\"\n  }}\n  node l {{\n    kind = \"link\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    url = \"https://example.com\"\n  }}\n  node q {{\n    kind = \"query\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    query = \"from box\"\n    view = \"table\"\n  }}\n  node i {{\n    kind = \"ink\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n  }}\n  edge e {{\n    from = \"t\"\n    to = \"q\"\n    arrow = \"both\"\n  }}\n"
+    ));
+    check_kinds(&old).unwrap();
+    let doc = schema::Doc::parse(&format!("title = \"t\"\n{old}"), "n.wcl").unwrap();
+    let canvas = &doc.blocks[0].body;
+    let nodes: Vec<(String, Vec<&str>)> = canvas
+        .blocks_of("node")
+        .map(|n| {
+            (
+                n.body
+                    .field("kind")
+                    .and_then(schema::Value::as_str)
+                    .unwrap()
+                    .to_owned(),
+                n.body.blocks.iter().map(|b| b.kind.as_str()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        nodes,
+        [
+            ("card".to_owned(), vec!["paragraph"]),
+            ("card".to_owned(), vec!["image"]),
+            ("card".to_owned(), vec!["paragraph"]),
+            ("card".to_owned(), vec!["query_view"]),
+            ("card".to_owned(), vec!["ink"]),
+        ]
+    );
+    let t = canvas.blocks_of("node").next().unwrap();
+    assert_eq!(t.label(), Some("t"));
+    assert_eq!(
+        t.body.field("colour").and_then(schema::Value::as_str),
+        Some("blue")
+    );
+    assert_eq!(canvas.blocks_of("edge").count(), 1);
 }

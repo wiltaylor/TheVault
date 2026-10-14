@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use crate::Issue;
 use crate::doc::{Doc, DocBlock, Value};
-use crate::encoding::{is_ident, is_ink_colour, is_palette, is_ulid, is_url};
+use crate::encoding::{is_ident, is_ink_colour, is_palette, is_ulid};
 
 /// The closed set of content block kinds.
 pub const CONTENT_KINDS: [&str; 12] = [
@@ -25,6 +25,32 @@ pub const CONTENT_KINDS: [&str; 12] = [
     "query_view",
     "canvas",
 ];
+
+/// The content block kinds a canvas card holds: every content block kind but a canvas.
+pub const CARD_BLOCK_KINDS: [&str; 11] = [
+    "heading",
+    "paragraph",
+    "list",
+    "quote",
+    "image",
+    "asset",
+    "code",
+    "terminal",
+    "mermaid",
+    "ink",
+    "query_view",
+];
+
+/// The kinds of a canvas node. Groups are blocks of their own, not nodes.
+pub const NODE_KINDS: [&str; 2] = ["card", "note"];
+
+/// Where an edge draws its arrowheads: `start` is the end at the `from` node.
+pub const ARROWS: [&str; 4] = ["none", "start", "end", "both"];
+
+/// A canvas's `height`, in screen pixels: the default when it has none, and the bounds.
+pub const CANVAS_HEIGHT_DEFAULT: i64 = 480;
+pub const CANVAS_HEIGHT_MIN: i64 = 160;
+pub const CANVAS_HEIGHT_MAX: i64 = 4000;
 
 /// The kinds of a `query_view`'s `view`.
 pub const VIEW_KINDS: [&str; 9] = [
@@ -43,7 +69,6 @@ pub(crate) enum Form {
     /// A number greater than zero.
     Positive,
     Ulid,
-    Url,
     Palette,
     InkColour,
     Ident,
@@ -118,8 +143,6 @@ impl Check<'_> {
             (Form::Positive, v) if v.as_f64().is_some() => Some("must be greater than 0".into()),
             (Form::Ulid, Value::Str(s)) if is_ulid(s) => None,
             (Form::Ulid, Value::Str(s)) => Some(format!("{s:?} is not a ULID")),
-            (Form::Url, Value::Str(s)) if is_url(s) => None,
-            (Form::Url, Value::Str(s)) => Some(format!("{s:?} is not an absolute URL")),
             (Form::Palette, Value::Str(s)) if is_palette(s) => None,
             (Form::Palette, Value::Str(s)) => Some(format!("{s:?} is not a palette colour")),
             (Form::InkColour, Value::Str(s)) if is_ink_colour(s) => None,
@@ -137,7 +160,7 @@ impl Check<'_> {
                 "must be a list of strings, not {}",
                 value.describe()
             )),
-            (Form::Str | Form::Ulid | Form::Url | Form::Palette, _)
+            (Form::Str | Form::Ulid | Form::Palette, _)
             | (Form::InkColour | Form::Ident | Form::OneOf(_), _) => {
                 Some(format!("must be a string, not {}", value.describe()))
             }
@@ -392,7 +415,7 @@ impl Check<'_> {
         let items = [
             req("kind", Form::OneOf(&VIEW_KINDS)),
             opt("title", Form::Str),
-            opt("template", Form::Ident),
+            opt("template", Form::OneOf(&crate::types::TEMPLATE_NAMES)),
             opt("columns", Form::StrList),
             opt("group", Form::Str),
             opt("date", Form::Str),
@@ -455,7 +478,15 @@ impl Check<'_> {
 
     /// The body of a canvas block, whether a content block or a note's canvas field.
     pub fn canvas(&mut self, d: &Doc, at: &str) {
-        self.items(d, &[], &[], at);
+        self.items(
+            d,
+            &[opt(
+                "height",
+                Form::Int(CANVAS_HEIGHT_MIN, CANVAS_HEIGHT_MAX),
+            )],
+            &[],
+            at,
+        );
         self.only_blocks(d, &["viewport", "group", "node", "edge"], at);
         match d.blocks_of("viewport").count() {
             1 => {}
@@ -523,7 +554,7 @@ impl Check<'_> {
                 opt("to_side", Form::OneOf(SIDES)),
                 opt("label", Form::Str),
                 opt("colour", Form::Palette),
-                opt("arrow", Form::OneOf(&["none", "end", "both"])),
+                opt("arrow", Form::OneOf(&ARROWS)),
             ];
             self.items(&e.body, &items, &[], &path);
             self.only_blocks(&e.body, &[], &path);
@@ -538,32 +569,29 @@ impl Check<'_> {
     }
 
     fn node(&mut self, d: &Doc, frame: &[Item], groups: &HashSet<&str>, at: &str) {
-        const KINDS: &[&str] = &["text", "note", "query", "asset", "link", "ink"];
         let mut items = vec![
-            req("kind", Form::OneOf(KINDS)),
+            req("kind", Form::OneOf(&NODE_KINDS)),
             opt("group", Form::Str),
             opt("colour", Form::Palette),
         ];
         items.extend(frame.iter().map(|i| req(i.name, i.form)));
         let kind = d.field("kind").and_then(Value::as_str).unwrap_or("");
-        match kind {
-            "text" => items.push(req("text", Form::Str)),
-            "note" => {
-                items.push(req("note", Form::Ulid));
-                items.push(opt("template", Form::Ident));
-            }
-            "query" => {
-                items.push(req("query", Form::Str));
-                items.push(opt("view", Form::OneOf(&["cards", "list", "table"])));
-                items.push(opt("template", Form::Ident));
-            }
-            "asset" => items.push(req("asset", Form::Ulid)),
-            "link" => items.push(req("url", Form::Url)),
-            _ => {}
+        if kind == "note" {
+            items.push(req("note", Form::Ulid));
+            items.push(opt("template", Form::OneOf(&crate::types::TEMPLATE_NAMES)));
         }
         self.items(d, &items, &[], at);
-        if kind == "ink" {
-            self.strokes(d, at);
+        if kind == "card" {
+            for (n, b) in d.blocks.iter().enumerate() {
+                if b.kind == "canvas" {
+                    self.fail(
+                        &format!("{at} > canvas#{}", n + 1),
+                        "a card cannot hold a canvas",
+                    );
+                }
+            }
+            let blocks = d.blocks.iter().filter(|b| b.kind != "canvas");
+            self.content_blocks(blocks, at);
         } else {
             self.only_blocks(d, &[], at);
         }

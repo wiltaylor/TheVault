@@ -3,6 +3,8 @@
 import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import type { NoteDoc, Row, Template } from "../api";
+import { FieldRefs } from "../components/fieldRefs";
+import { refText } from "../components/refText";
 import { BlockView, Blocks, formatValue } from "../components/Render";
 import { compoundBlock, slotField } from "../notes";
 import { typeDef } from "../session";
@@ -22,6 +24,11 @@ export function NoteLink(props: { row: Row }) {
  */
 export function TemplateBody(props: { row: Row; template: Template | undefined; doc?: NoteDoc; tabTitles?: boolean }) {
   const type = () => typeDef(props.row.type);
+  // `{{name}}` in the template's fixed blocks shows this note's values.
+  const refs = {
+    text: (name: string) =>
+      refText(type(), props.doc ?? { fields: { ...props.row.fields, title: props.row.title }, blocks: [] }, name),
+  };
   return (
     <For each={props.template?.tabs ?? []}>
       {(tab) => (
@@ -34,9 +41,11 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
               if (!("slot" in item)) {
                 return (
                   <ThisNote.Provider value={props.row.id}>
-                    <div class="template-block">
-                      <BlockView block={item.block} />
-                    </div>
+                    <FieldRefs.Provider value={refs}>
+                      <div class="template-block">
+                        <BlockView block={item.block} />
+                      </div>
+                    </FieldRefs.Provider>
                   </ThisNote.Provider>
                 );
               }

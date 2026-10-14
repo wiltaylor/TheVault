@@ -569,6 +569,20 @@ impl Runner<'_> {
         if types.is_empty() {
             return Ok(Vec::new());
         }
+        // A search reads only the notes it hit, not every note of the types.
+        if let Some(hits) = hits {
+            let mut ids: Vec<&String> = hits.keys().collect();
+            ids.sort();
+            let mut out = Vec::new();
+            for id in ids {
+                if let Some(n) = self.note(id)?
+                    && types.contains(&n.type_name)
+                {
+                    out.push(n);
+                }
+            }
+            return Ok(out);
+        }
         let marks = vec!["?"; types.len()].join(", ");
         let sql = format!("SELECT {NOTE_COLUMNS} FROM notes WHERE type IN ({marks}) ORDER BY id");
         let mut stmt = self.conn.prepare(&sql)?;
@@ -771,6 +785,45 @@ impl Runner<'_> {
                     v => below(v),
                 })
             }
+            "contains" => {
+                let held = self.eval(&args[0], note, env)?;
+                let part = match self.eval(&args[1], note, env)? {
+                    V::Str(s) => s.to_lowercase(),
+                    v => {
+                        return Err(fail(format!(
+                            "contains() looks for text, found {}",
+                            v.kind()
+                        )));
+                    }
+                };
+                let within = |v: &V| -> Eval<bool> {
+                    match v {
+                        V::Null => Ok(false),
+                        V::Str(s) => Ok(s.to_lowercase().contains(&part)),
+                        v => Err(format!("contains() reads text, found {}", v.kind())),
+                    }
+                };
+                V::Bool(match &held {
+                    V::List(items) => {
+                        let mut found = false;
+                        for i in items {
+                            if within(i).map_err(fail)? {
+                                found = true;
+                                break;
+                            }
+                        }
+                        found
+                    }
+                    v => within(v).map_err(fail)?,
+                })
+            }
+            "empty" => V::Bool(match self.eval(&args[0], note, env)? {
+                V::Null => true,
+                V::Str(s) => s.trim().is_empty(),
+                V::List(items) => items.is_empty(),
+                V::Record(members) => members.iter().all(|(_, v)| matches!(v, V::Null)),
+                _ => false,
+            }),
             "any" | "all" => {
                 let items = match self.eval(&args[0], note, env)? {
                     V::Null => Vec::new(),

@@ -7,6 +7,19 @@ import Highlight from "@tiptap/extension-highlight";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import StarterKit from "@tiptap/starter-kit";
 import { BlockHolder } from "./BlockHolder";
+import {
+  type BlockHandleOptions,
+  MoveBlock,
+  SteadyFocus,
+  type SuggestOptions,
+  blockHandle,
+  matchFieldRef,
+  placeholder,
+  matchSlash,
+  suggestion,
+} from "./blockTools";
+import { FieldRefChip } from "./FieldRefChip";
+import { type SlotContext, SlotHolder } from "./SlotHolder";
 import { MentionChip } from "./MentionChip";
 import { MentionPicker } from "./MentionPicker";
 import { PALETTE } from "./markup";
@@ -144,8 +157,101 @@ export const VaultBlock = Node.create({
   },
 });
 
-export function editorExtensions(): AnyExtension[] {
+/**
+ * `slot "<field>"` in a template tab: a property block, which the note page renders as the
+ * field's label and its editor. Only the template editor has it.
+ */
+export function templateSlot(ctx: SlotContext) {
+  return Node.create({
+    name: "templateSlot",
+    group: "block",
+    atom: true,
+    selectable: true,
+    draggable: true,
+    addAttributes() {
+      return {
+        slot: { default: "title", parseHTML: (el) => el.getAttribute("data-template-slot") },
+        label: { default: null, parseHTML: (el) => el.getAttribute("data-label") },
+      };
+    },
+    parseHTML() {
+      return [{ tag: "div[data-template-slot]" }];
+    },
+    renderHTML({ node }) {
+      const attrs: Record<string, string> = { "data-template-slot": node.attrs.slot };
+      if (node.attrs.label) attrs["data-label"] = node.attrs.label;
+      return ["div", attrs];
+    },
+    addNodeView() {
+      return solidNodeView((props) => SlotHolder({ ...props, ctx }));
+    },
+  });
+}
+
+/** `{{name}}` in a template's text: the shown note's value of a field. Only templates have it. */
+export const FieldRef = Node.create({
+  name: "fieldRef",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return { name: { default: "title", parseHTML: (el) => el.getAttribute("data-field-ref") } };
+  },
+  parseHTML() {
+    return [{ tag: "span[data-field-ref]" }];
+  },
+  renderHTML({ node }) {
+    return ["span", { "data-field-ref": node.attrs.name }, `{{${node.attrs.name}}}`];
+  },
+  renderText({ node }) {
+    return `{{${node.attrs.name}}}`;
+  },
+  addInputRules() {
+    // `{{name}}` typed out in full becomes a reference, as choosing it from the menu does.
+    return [
+      nodeInputRule({
+        find: /\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}$/,
+        type: this.type,
+        getAttributes: (m) => ({ name: m[1] }),
+      }),
+    ];
+  },
+  addNodeView() {
+    return solidNodeView(FieldRefChip);
+  },
+});
+
+export interface EditorOptions {
+  /** The block menu, opened by `/`. */
+  slash?: Omit<SuggestOptions, "key" | "topLevelOnly" | "match">;
+  /** Template editing: property blocks, and `{{name}}` with its menu. */
+  template?: {
+    slots: SlotContext;
+    fieldMenu: Omit<SuggestOptions, "key" | "topLevelOnly" | "match">;
+  };
+  handle?: BlockHandleOptions;
+}
+
+export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
+  const tools: AnyExtension[] = [MoveBlock, SteadyFocus, blockHandle(options.handle)];
+  if (options.slash) tools.push(placeholder(options.template ? "Type / for blocks and properties, {{ for a field" : "Type / for blocks"));
+  if (options.slash) {
+    tools.push(suggestion({ key: "slashMenu", topLevelOnly: true, match: matchSlash, ...options.slash }));
+  }
+  if (options.template) {
+    tools.push(templateSlot(options.template.slots), FieldRef);
+    tools.push(
+      suggestion({
+        key: "fieldMenu",
+        topLevelOnly: false,
+        match: (before) => matchFieldRef(before),
+        ...options.template.fieldMenu,
+      }),
+    );
+  }
   return [
+    ...tools,
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
       code: false,

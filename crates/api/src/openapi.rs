@@ -177,15 +177,45 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/daily/{date}",
+        "The daily note for a YYYY-MM-DD day; 404 when the day has none",
+    ),
+    (
+        "POST",
+        "/api/daily/{date}",
+        "The daily note for a YYYY-MM-DD day, created when the day has none",
+    ),
+    (
+        "GET",
         "/api/pins",
-        "The notes pinned to the sidebar, in order, with type and title",
+        "The sidebar's pinned tree: notes with type and title, and folders, each with children",
     ),
     (
         "PUT",
         "/api/pins/{id}",
-        "Pin a note to the end of the sidebar list",
+        "Pin a note to the end of the sidebar's root",
     ),
-    ("DELETE", "/api/pins/{id}", "Unpin a note"),
+    (
+        "DELETE",
+        "/api/pins/{id}",
+        "Unpin a note; its children move up into its place",
+    ),
+    (
+        "POST",
+        "/api/pins/folders",
+        "Create a pinned folder from {name, parent?}",
+    ),
+    ("PUT", "/api/pins/folders/{id}", "Rename a pinned folder"),
+    (
+        "DELETE",
+        "/api/pins/folders/{id}",
+        "Delete a pinned folder; its children move up into its place",
+    ),
+    (
+        "POST",
+        "/api/pins/move",
+        "Move a pinned note or folder: {id, parent, index}; a move into itself is a 409",
+    ),
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),
     ("DELETE", "/api/tokens/{name}", "Revoke an API token"),

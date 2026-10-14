@@ -10,6 +10,7 @@ mod blocks;
 mod change;
 mod doc;
 mod encoding;
+pub mod migrate;
 mod note;
 mod taxonomy;
 mod types;
@@ -17,7 +18,10 @@ mod types;
 use std::collections::BTreeMap;
 use std::fmt;
 
-pub use blocks::{CONTENT_KINDS, VIEW_KINDS};
+pub use blocks::{
+    ARROWS, CANVAS_HEIGHT_DEFAULT, CANVAS_HEIGHT_MAX, CANVAS_HEIGHT_MIN, CARD_BLOCK_KINDS,
+    CONTENT_KINDS, NODE_KINDS, VIEW_KINDS,
+};
 pub use change::{FieldChanges, NoteEdit};
 pub use doc::{Doc, DocBlock, Value};
 pub use encoding::{

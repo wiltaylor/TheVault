@@ -38,9 +38,13 @@ impl ApiError {
         let message = e.to_string();
         let (status, code) = match &e {
             S::TokenExists(_) => (StatusCode::CONFLICT, "token_exists"),
-            S::UnknownToken(_) | S::UnknownSecret(_) | S::UnknownNote(_) | S::NotInTrash(_) => {
-                (StatusCode::NOT_FOUND, "not_found")
-            }
+            S::UnknownToken(_)
+            | S::UnknownSecret(_)
+            | S::UnknownNote(_)
+            | S::NotInTrash(_)
+            | S::UnknownPin(_) => (StatusCode::NOT_FOUND, "not_found"),
+            S::PinCycle { .. } => (StatusCode::CONFLICT, "pin_cycle"),
+            S::EmptyFolderName => (StatusCode::BAD_REQUEST, "bad_request"),
             S::UnknownScope(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             S::KeyMissing { .. } | S::WrongKey { .. } => {
                 (StatusCode::SERVICE_UNAVAILABLE, "secret_key")
@@ -146,6 +150,10 @@ impl From<Error> for ApiError {
                             .collect::<Vec<_>>(),
                     })).collect::<Vec<_>>(),
                 }),
+            ),
+            Error::BuiltInType(t) => (
+                StatusCode::CONFLICT,
+                json!({ "error": "built_in_type", "type": t }),
             ),
             Error::TypeInUse(t) => (
                 StatusCode::CONFLICT,

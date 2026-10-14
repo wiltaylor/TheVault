@@ -3,6 +3,8 @@ created = "2026-10-12T09:20:00Z"
 updated = "2026-10-12T11:03:44Z"
 
 canvas board {
+  height = 640
+
   viewport {
     x    = -120.0
     y    = -80.0
@@ -19,14 +21,35 @@ canvas board {
   }
 
   node goal {
-    kind   = "text"
+    kind   = "card"
     x      = 0.0
     y      = 0.0
     width  = 260.0
-    height = 120.0
+    height = 160.0
     group  = "plan"
     colour = "yellow"
-    text   = "Goal: **import Capacities** without losing [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZA]]"
+
+    heading {
+      level = 2
+      text  = "Goal"
+    }
+
+    paragraph {
+      text = "**Import Capacities** without losing [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZA]]"
+    }
+
+    list {
+      style = "todo"
+
+      item {
+        text    = "Read the export"
+        checked = true
+      }
+
+      item {
+        text = "Map the types"
+      }
+    }
   }
 
   node importer {
@@ -41,48 +64,71 @@ canvas board {
   }
 
   node open_work {
-    kind     = "query"
-    x        = 700.0
-    y        = 0.0
-    width    = 240.0
-    height   = 400.0
-    group    = "plan"
-    query    = "from specimen where under(status, \"Active\") sort due asc limit 10"
-    view     = "cards"
-    template = "card"
+    kind   = "card"
+    x      = 700.0
+    y      = 0.0
+    width  = 240.0
+    height = 400.0
+    group  = "plan"
+
+    query_view {
+      query = "from specimen where under(status, \"Active\") sort due asc limit 10"
+
+      view cards {
+        kind     = "cards"
+        template = "card"
+      }
+    }
   }
 
   node diagram {
-    kind   = "asset"
+    kind   = "card"
     x      = 0.0
     y      = 200.0
     width  = 300.0
-    height = 200.0
+    height = 220.0
     group  = "plan"
-    asset  = "01JB9A0C3D4E5F6G7H8J9K0M1N"
+
+    image {
+      asset   = "01JB9A0C3D4E5F6G7H8J9K0M1N"
+      caption = "The importer's stages"
+    }
   }
 
   node docs {
-    kind   = "link"
+    kind   = "card"
     x      = 0.0
     y      = 520.0
     width  = 260.0
-    height = 80.0
-    url    = "https://example.com/importer-docs"
+    height = 120.0
+
+    paragraph {
+      text = "[Importer docs](https://example.com/importer-docs)"
+    }
+
+    code {
+      language = "sh"
+      source   = "vault import capacities export.zip"
+    }
   }
 
   node scribble {
-    kind   = "ink"
+    kind   = "card"
     x      = 340.0
     y      = 520.0
     width  = 200.0
     height = 120.0
 
-    stroke {
-      tool   = "pen"
-      colour = "#dc2626"
-      size   = 3.0
-      points = [10.0, 60.0, 0.5, 100.0, 20.0, 0.7, 190.0, 60.0, 0.5]
+    ink {
+      width  = 200
+      height = 120
+
+      stroke {
+        tool   = "pen"
+        colour = "#dc2626"
+        size   = 3.0
+        points = [10.0, 60.0, 0.5, 100.0, 20.0, 0.7, 190.0, 60.0, 0.5]
+      }
     }
   }
 
@@ -92,6 +138,7 @@ canvas board {
     from_side = "right"
     to_side   = "left"
     label     = "delivers"
+    colour    = "green"
     arrow     = "end"
   }
 
@@ -100,5 +147,17 @@ canvas board {
     to     = "open_work"
     colour = "gray"
     arrow  = "none"
+  }
+
+  edge docs_to_goal {
+    from  = "docs"
+    to    = "goal"
+    arrow = "start"
+  }
+
+  edge scribble_to_importer {
+    from  = "scribble"
+    to    = "importer"
+    arrow = "both"
   }
 }

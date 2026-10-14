@@ -32,6 +32,7 @@
 
 mod assets;
 mod batch;
+mod daily;
 mod defs;
 mod note;
 mod refs;
@@ -49,6 +50,7 @@ use store::{Change, CommitStep, Vault};
 
 pub use assets::Asset;
 pub use batch::{Item, Op, Outcome, Report};
+pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
 pub use defs::ScriptProblem;
 pub use note::{Input, block_to_json, doc_to_json, value_to_json};
 pub use refs::Referrer;
@@ -122,6 +124,9 @@ pub enum Error {
     /// (D6).
     #[error("type {0:?} has notes, so changing it needs a planned schema change")]
     TypeInUse(String),
+    /// The built-in daily note type can be changed but not deleted.
+    #[error("{0:?} is built in: it can be customised but not deleted")]
+    BuiltInType(String),
     /// A request that is malformed in a way the other variants do not cover.
     #[error("{0}")]
     BadRequest(String),
@@ -512,6 +517,7 @@ impl Writer {
         let taxonomies = self.definitions("taxonomies")?;
         let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
             .map_err(Error::InvalidType)?;
+        daily::check_daily_type(&schema)?;
         let generation = self.vault.commit(vec![Change::write(path, text.clone())])?;
         inner.index.set_schema(&schema)?;
         inner.index.advance(generation)?;
@@ -1197,7 +1203,10 @@ impl Writer {
                 });
                 continue;
             };
-            let text = store::canonical(&note::print(doc), &path)?;
+            // A canvas node of a kind cards replaced is written as its card, never as it came.
+            let mut doc = doc.clone();
+            schema::migrate::canvases(&mut doc);
+            let text = store::canonical(&note::print(&doc), &path)?;
             let doc = Input::Wcl(text.clone()).parse(&path)?;
             let report = inner
                 .schema

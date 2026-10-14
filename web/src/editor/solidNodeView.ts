@@ -14,7 +14,7 @@
 import type { Editor, NodeViewRenderer } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import type { NodeView } from "@tiptap/pm/view";
-import { type Accessor, type JSX, createRoot, createSignal } from "solid-js";
+import { type Accessor, type JSX, createRoot, createSignal, untrack } from "solid-js";
 import { insert } from "solid-js/web";
 
 export interface SolidNodeViewProps {
@@ -77,7 +77,8 @@ export function solidNodeView(Component: (props: SolidNodeViewProps) => JSX.Elem
     let dispose = () => {};
     createRoot((d) => {
       dispose = d;
-      insert(dom, () => Component(viewProps));
+      // Untracked: whatever the component reads while it sets up must not re-create it.
+      insert(dom, () => untrack(() => Component(viewProps)));
     });
 
     const view: NodeView = {

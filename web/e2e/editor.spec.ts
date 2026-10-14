@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { expect, logIn, test } from "./fixtures";
 
 interface Stored {
@@ -35,20 +35,44 @@ function wclString(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+/** Open a note and put the caret in its body, which is always editable. */
 async function editBody(page: Page, id: string) {
   await logIn(page, `/notes/${id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
   const doc = page.getByRole("textbox", { name: "Body" });
   await doc.click();
   return doc;
 }
 
-async function saveAndWait(page: Page) {
-  await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+/** Select the first whole occurrence of `word` in the editor, as a drag across it would. */
+async function selectWord(doc: Locator, word: string) {
+  await doc.evaluate((root, w) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const at = (n.textContent ?? "").search(new RegExp(`\\b${w}\\b`));
+      if (at < 0) continue;
+      const range = document.createRange();
+      range.setStart(n, at);
+      range.setEnd(n, at + w.length);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      // The browser reports the change a moment later; report it now, so the editor has read
+      // the new selection before the next action, as it has by the time a person moves on.
+      document.dispatchEvent(new Event("selectionchange"));
+      return;
+    }
+    throw new Error(`no ${w}`);
+  }, word);
+  await expect(doc.page().getByRole("toolbar", { name: "Body formatting" })).toBeVisible();
 }
 
-test("typing each mark through shortcuts and the toolbar saves the expected WCL", async ({ page, admin }) => {
+/** Leave the editor, which saves at once, and wait until the note is saved. */
+async function saveAndWait(page: Page) {
+  await page.getByLabel("Title", { exact: true }).focus();
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+}
+
+test("typing each mark through shortcuts and the selection bubble saves the expected WCL", async ({ page, admin }) => {
   const word = `target${token()}`;
   const target = await createTask(admin, `Mention ${word}`);
   const note = await createTask(admin, `Marks ${token()}`);
@@ -69,27 +93,32 @@ test("typing each mark through shortcuts and the toolbar saves the expected WCL"
   await shortcut("ControlOrMeta+e", "code");
   await shortcut("ControlOrMeta+Shift+h", "mark");
 
-  const toolbar = page.getByRole("toolbar", { name: "Body formatting" });
-  // The toolbar's selects take focus; the editor takes it back once a colour is chosen.
-  await toolbar.getByLabel("Text colour").selectOption("red");
-  await expect(doc).toBeFocused();
-  await kb.type("red");
-  await toolbar.getByLabel("Text colour").selectOption("");
-  await expect(doc).toBeFocused();
-  await kb.type(" ");
+  // The rest is typed plain, then formatted through the bubble that a selection shows.
+  const bubble = page.getByRole("toolbar", { name: "Body formatting" });
+  await expect(bubble).toHaveCount(0);
+  await kb.type("red tool docs");
 
-  await toolbar.getByRole("button", { name: "Bold" }).click();
-  await kb.type("tool");
-  await toolbar.getByRole("button", { name: "Bold" }).click();
-  await kb.type(" ");
-
-  await kb.type("docs");
+  // "docs" becomes a link.
   for (let i = 0; i < 4; i++) await kb.press("Shift+ArrowLeft");
-  await toolbar.getByRole("button", { name: "Link" }).click();
+  await expect(bubble).toBeVisible();
+  await bubble.getByRole("button", { name: "Link" }).click();
   await page.getByLabel("Link address").fill("https://example.com/docs");
   await page.getByLabel("Link address").press("Enter");
   await expect(doc.getByRole("link", { name: "docs" })).toBeVisible();
   await expect(doc).toBeFocused();
+  await expect(bubble).toHaveCount(0);
+
+  // "tool" becomes bold.
+  await selectWord(doc, "tool");
+  await bubble.getByRole("button", { name: "Bold" }).click();
+  await expect(bubble.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
+
+  // "red" goes red. The bubble's select takes focus; the editor takes it back once a colour is chosen.
+  await selectWord(doc, "red");
+  await bubble.getByLabel("Text colour").selectOption("red");
+  await expect(doc).toBeFocused();
+
+  await kb.press("ControlOrMeta+End");
   await kb.type(" ");
 
   await kb.type("[[");
@@ -111,6 +140,7 @@ test("typing each mark through shortcuts and the toolbar saves the expected WCL"
   expect(after.wcl).toContain(`text = ${wclString(expected)}`);
 
   // The saved markup renders as marks, not as the characters that encode them.
+  await page.reload();
   const field = page.getByTestId("field-body");
   await expect(field.locator("strong").first()).toHaveText("bold");
   await expect(field.locator("em")).toHaveText("italic");
@@ -150,24 +180,29 @@ test("text typed straight after choosing a mention and saved at once is all in t
   expect(after.wcl).toContain(`text = ${wclString(expected)}`);
 });
 
-test("headings, lists and quotes made with the toolbar save as content blocks", async ({ page, admin }) => {
+test("headings, lists and quotes made with the / menu save as content blocks", async ({ page, admin }) => {
   const note = await createTask(admin, `Blocks ${token()}`);
   const doc = await editBody(page, note.id);
   const kb = page.keyboard;
-  const toolbar = page.getByRole("toolbar", { name: "Body formatting" });
+  const menu = page.getByRole("listbox", { name: "Insert block" });
+  const choose = async (query: string, option: string) => {
+    await kb.type(`/${query}`);
+    await expect(menu.getByRole("option").first()).toHaveText(new RegExp(option));
+    await kb.press("Enter");
+    await expect(menu).toHaveCount(0);
+    await expect(doc).toBeFocused();
+  };
 
-  await toolbar.getByLabel("Block type").selectOption("h2");
-  await expect(doc).toBeFocused();
+  await choose("h2", "Heading 2");
   await kb.type("Plan");
   await kb.press("Enter");
-  await toolbar.getByRole("button", { name: "Bullet list" }).click();
+  await choose("bullet", "Bullet list");
   await kb.type("one");
   await kb.press("Enter");
   await kb.type("two");
   await kb.press("Enter");
   await kb.press("Enter");
-  await toolbar.getByLabel("Block type").selectOption("quote");
-  await expect(doc).toBeFocused();
+  await choose("quote", "Quote");
   await kb.type("said");
   await saveAndWait(page);
 
@@ -207,8 +242,12 @@ test("renaming a mentioned note changes the rendered mention, not the mentioning
 
   await page.reload();
   await expect(mentions).toHaveText([renamed, "my label"]);
-  await page.getByRole("button", { name: "Edit" }).click();
+  // The body is the editor itself; opening the note saves nothing.
   await expect(page.getByRole("textbox", { name: "Body" }).getByTestId("mention")).toHaveText([renamed, "my label"]);
+  await page.getByRole("textbox", { name: "Body" }).click();
+  await page.getByLabel("Title", { exact: true }).focus();
+  await page.waitForTimeout(2000);
+  await expect(page.getByTestId("save-status")).toHaveText("");
 
   const after = await stored(admin, mentioning.id);
   expect(after.wcl).toBe(before.wcl);
@@ -251,4 +290,111 @@ test("a Solid component inside a node view keeps focus and input", async ({ page
   await saveAndWait(page);
 
   expect(body(await stored(admin, note.id))).toEqual([{ kind: "paragraph", fields: { text: "abcd" } }]);
+});
+
+test("the bubble shows only on a selection, and bolds the selected text", async ({ page, admin }) => {
+  const note = await createTask(admin, `Bubble ${token()}`, [{ kind: "paragraph", fields: { text: "make this strong" } }]);
+  const doc = await editBody(page, note.id);
+  const bubble = page.getByRole("toolbar", { name: "Body formatting" });
+  const kb = page.keyboard;
+
+  // A caret is not a selection: typing never has the bubble over it.
+  await kb.press("End");
+  await expect(bubble).toHaveCount(0);
+  await kb.type("!");
+  await expect(bubble).toHaveCount(0);
+
+  await kb.press("ArrowLeft");
+  for (let i = 0; i < 6; i++) await kb.press("Shift+ArrowLeft");
+  await expect(bubble).toBeVisible();
+  // It sits just above the selection, clear of the line.
+  const line = (await doc.locator("p").first().boundingBox())!;
+  const box = (await bubble.boundingBox())!;
+  expect(box.y + box.height).toBeLessThanOrEqual(line.y + 2);
+  await expect(bubble.getByRole("button")).toHaveText(["B", "I", "U", "S", "</>", "H", "Link", "@"]);
+
+  await bubble.getByRole("button", { name: "Bold" }).click();
+  await expect(doc.locator("strong")).toHaveText("strong");
+  await kb.press("ArrowRight");
+  await expect(bubble).toHaveCount(0);
+  await saveAndWait(page);
+  expect(body(await stored(admin, note.id))).toEqual([{ kind: "paragraph", fields: { text: "make this **strong**!" } }]);
+});
+
+test("+ beside a block opens the block menu and inserts after that block", async ({ page, admin }) => {
+  const note = await createTask(admin, `Plus ${token()}`, [
+    { kind: "paragraph", fields: { text: "first" } },
+    { kind: "paragraph", fields: { text: "second" } },
+  ]);
+  await logIn(page, `/notes/${note.id}`);
+  const doc = page.getByRole("textbox", { name: "Body" });
+  await doc.locator("p", { hasText: "first" }).hover();
+  const add = page.getByTestId("field-body").getByRole("button", { name: "Add block" });
+  await expect(add).toBeVisible();
+  await add.click();
+  const menu = page.getByRole("listbox", { name: "Insert block" });
+  await expect(menu).toBeVisible();
+  await page.keyboard.type("code");
+  await expect(menu.getByRole("option")).toHaveText([/Code/]);
+  await page.keyboard.press("Enter");
+  await expect(menu).toHaveCount(0);
+  await saveAndWait(page);
+  expect(body(await stored(admin, note.id))).toEqual([
+    { kind: "paragraph", fields: { text: "first" } },
+    { kind: "code", fields: { source: "" } },
+    { kind: "paragraph", fields: { text: "second" } },
+  ]);
+
+  // Escape after "+" leaves no stray "/" behind.
+  await doc.locator("p", { hasText: "second" }).hover();
+  await add.click();
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(doc).not.toContainText("/");
+});
+
+test("the / menu stays fully inside the window near the bottom of the page", async ({ page, admin }) => {
+  const lines = Array.from({ length: 40 }, (_, i) => ({ kind: "paragraph", fields: { text: `line ${i + 1}` } }));
+  const note = await createTask(admin, `Low ${token()}`, lines);
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await logIn(page, `/notes/${note.id}`);
+  const doc = page.getByRole("textbox", { name: "Body" });
+  const last = doc.locator("p", { hasText: "line 40" });
+  await last.scrollIntoViewIfNeeded();
+  await last.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" /");
+  const menu = page.getByRole("listbox", { name: "Insert block" });
+  await expect(menu).toBeVisible();
+  const box = (await menu.boundingBox())!;
+  const vp = page.viewportSize()!;
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(vp.height);
+  expect(box.x + box.width).toBeLessThanOrEqual(vp.width);
+  // Nothing else of the editor is drawn over it.
+  const centre = { x: box.x + box.width / 2, y: box.y + 20 };
+  expect(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest(".suggest-menu"), centre)).toBe(true);
+});
+
+test("on a phone the bubble wraps so every button is in view", async ({ page, admin }) => {
+  const note = await createTask(admin, `Phone ${token()}`, [{ kind: "paragraph", fields: { text: "make this strong" } }]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const doc = await editBody(page, note.id);
+  await page.keyboard.press("End");
+  for (let i = 0; i < 6; i++) await page.keyboard.press("Shift+ArrowLeft");
+  const bubble = page.getByRole("toolbar", { name: "Body formatting" });
+  await expect(bubble).toBeVisible();
+  const box = (await bubble.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(390);
+  for (const control of await bubble.locator("button, select").all()) {
+    const b = (await control.boundingBox())!;
+    expect(b.x).toBeGreaterThanOrEqual(box.x);
+    expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+    expect(b.y + b.height).toBeLessThanOrEqual(box.y + box.height + 0.5);
+  }
+  expect(await bubble.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await expect(doc).toBeFocused();
 });

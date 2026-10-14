@@ -94,6 +94,8 @@ A query is a `from` clause followed by optional clauses in this order: `where`, 
 |----------|-----------|
 | `under(status, "Active")` | A taxonomy field holds that term or a term below it |
 | `has(tags, "x")` | A list field contains the value |
+| `contains(title, "plan")` | A text field, or any item of a text list, holds the text, ignoring case |
+| `empty(due)` | A field has no value: missing, blank text or an empty list |
 | `today()`, `now()`, `days(n)` | Date arithmetic, as in `due < today() + days(7)` |
 
 Results come a page at a time. Pass the `next` cursor back with `--cursor`, or use `--all` to fetch every page.

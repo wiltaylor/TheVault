@@ -35,7 +35,7 @@ function TypeCard(props: { type: TypeDef }) {
       </A>
       <div class="type-card-actions">
         <A href={`/notes/new?type=${encodeURIComponent(props.type.name)}`}>New {props.type.label.toLowerCase()}</A>
-        <A href={`/types/${props.type.name}/edit`}>Edit type</A>
+        <A href={`/settings/types/${props.type.name}/edit`}>Edit type</A>
       </div>
     </li>
   );
@@ -75,7 +75,7 @@ export function TypeGallery() {
         <For each={types()}>{(t) => <TypeCard type={t} />}</For>
         <AssetsCard />
         <li class="type-card type-card-new">
-          <A href="/types/new" class="type-card-main">
+          <A href="/settings/types/new" class="type-card-main">
             <span class="type-card-icon" aria-hidden="true">
               +
             </span>

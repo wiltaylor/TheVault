@@ -133,6 +133,21 @@ handler "before_update" {
     expect(tabs[1]!.items).toEqual([{ block: { kind: "paragraph", fields: { text: "Hi" } } }]);
   });
 
+  it("makes {{name}} references in fixed blocks follow renamed and removed fields", () => {
+    const m = typeFromSchema(stored);
+    m.templates[0]!.tabs[1]!.items = [
+      { block: { kind: "paragraph", fields: { text: "{{title}} takes {{estimate}} hours, {{parent}}" } } },
+      { block: { kind: "list", fields: { style: "bullet" }, blocks: [{ kind: "item", fields: { text: "Was {{estimate}}" } }] } },
+    ];
+    m.fields[0]!.name = "hours";
+    m.fields = m.fields.filter((f) => f.name !== "parent");
+    const items = followFields(m)[0]!.tabs[1]!.items;
+    expect(items[0]).toEqual({ block: { kind: "paragraph", fields: { text: "{{title}} takes {{hours}} hours, \\{\\{parent}}" } } });
+    expect(items[1]).toEqual({
+      block: { kind: "list", fields: { style: "bullet" }, blocks: [{ kind: "item", fields: { text: "Was {{hours}}" } }] },
+    });
+  });
+
   it("names new required fields without a default", () => {
     const m = typeFromSchema(stored);
     const owner = newField("owner");

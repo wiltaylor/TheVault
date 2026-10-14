@@ -1,13 +1,20 @@
-import { Editor } from "@tiptap/core";
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { Editor, type JSONContent } from "@tiptap/core";
+import { Selection, TextSelection } from "@tiptap/pm/state";
+import type { Node as PMNode } from "@tiptap/pm/model";
+import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { Portal } from "solid-js/web";
 import type { Block } from "../api";
-import { FilePicker, upload } from "../blocks/MediaBlocks";
+import { upload } from "../blocks/MediaBlocks";
 import { newCanvas } from "../canvas/canvas";
 import { NEW_HEIGHT, NEW_WIDTH } from "../ink/ink";
 import { blocksToDoc, docToBlocks } from "./doc";
 import { newQueryView } from "../views/model";
 import { editorExtensions } from "./extensions";
 import { PALETTE } from "./markup";
+import { fresh } from "./BlockHolder";
+import { type DraggedBlock, matchesQuery } from "./blockTools";
+import { type MenuItem, type MenuPos, SuggestMenu } from "./SlashMenu";
+import type { SlotContext } from "./SlotHolder";
 
 type MarkName = "bold" | "italic" | "underline" | "strike" | "code" | "highlight";
 
@@ -20,55 +27,141 @@ const MARK_BUTTONS: { mark: MarkName; label: string; text: string; keys: string 
   { mark: "highlight", label: "Highlight", text: "H", keys: "Mod+Shift+H" },
 ];
 
-const BLOCK_TYPES = [
-  { value: "paragraph", label: "Paragraph" },
-  { value: "h1", label: "Heading 1" },
-  { value: "h2", label: "Heading 2" },
-  { value: "h3", label: "Heading 3" },
-  { value: "quote", label: "Quote" },
-];
 
-/** Blocks the toolbar inserts as they are, ready to fill in. */
-const INSERTS: { label: string; text: string; block: () => Block }[] = [
-  { label: "Insert code", text: "Code", block: () => ({ kind: "code", fields: { source: "" } }) },
+/** Blocks the toolbar and the `/` menu insert as they are, ready to fill in. */
+const INSERTS: { label: string; text: string; menu: string; keywords: string; block: () => Block }[] = [
+  { label: "Insert code", text: "Code", menu: "Code", keywords: "snippet source", block: () => ({ kind: "code", fields: { source: "" } }) },
   {
     label: "Insert terminal",
     text: "Terminal",
+    menu: "Terminal",
+    keywords: "shell command console",
     block: () => ({ kind: "terminal", blocks: [{ kind: "command", fields: { line: "" } }] }),
   },
   {
     label: "Insert diagram",
     text: "Diagram",
+    menu: "Mermaid diagram",
+    keywords: "mermaid chart flow",
     block: () => ({ kind: "mermaid", fields: { source: "graph LR\n  A --> B\n" } }),
   },
   {
     label: "Insert drawing",
     text: "Ink",
+    menu: "Ink drawing",
+    keywords: "ink sketch draw pen",
     block: () => ({ kind: "ink", fields: { width: NEW_WIDTH, height: NEW_HEIGHT }, blocks: [] }),
   },
-  { label: "Insert query view", text: "Query", block: newQueryView },
-  { label: "Insert canvas", text: "Canvas", block: newCanvas },
+  { label: "Insert query view", text: "Query", menu: "Query view", keywords: "query table list cards kanban", block: newQueryView },
+  { label: "Insert canvas", text: "Canvas", menu: "Canvas", keywords: "board whiteboard", block: newCanvas },
 ];
 
 /**
- * The block editor for a content field (D29, D34): TipTap on ProseMirror, with a toolbar for the
- * inline marks of PRD Appendix A and the text blocks. `onChange` receives the field's blocks
- * after every edit.
+ * `doc` ending in a paragraph, so there is always a line to type on after the last block. An
+ * empty paragraph at the end is not content: it is dropped when the document is read back.
  */
-export function ContentEditor(props: { blocks: Block[]; label: string; onChange: (blocks: Block[]) => void }) {
+function withTrailingParagraph(doc: JSONContent): JSONContent {
+  const content = doc.content ?? [];
+  return content.at(-1)?.type === "paragraph" ? doc : { ...doc, content: [...content, { type: "paragraph" }] };
+}
+
+/** A template being edited: its property blocks and the fields `{{` offers. */
+export interface TemplateEditing {
+  slots: SlotContext;
+  /** Fields the template does not place yet, `title` included: the `/` menu's Property section. */
+  unplaced: () => { name: string; label: string }[];
+  /** Every field a `{{name}}` reference can name, `title` first. */
+  fields: () => { name: string; label: string }[];
+}
+
+/** What the editor hands its owner once it exists. */
+export interface EditorHandle {
+  editor: Editor;
+}
+
+interface MenuState {
+  from: number;
+  to: number;
+  query: string;
+}
+
+/**
+ * The block editor for a content field (D29, D34) and for a template's tabs: TipTap on
+ * ProseMirror. Typing `/` opens a menu of blocks to insert; every top-level block has a drag
+ * handle and a "+" that opens the same menu, and Alt+ArrowUp / Alt+ArrowDown move the current
+ * block. Selecting text shows a bubble with the inline marks of PRD Appendix A, a link and a
+ * mention. `onChange` receives the field's blocks
+ * after every edit; with `doc`, the editor edits that document and `onDoc` receives it instead.
+ */
+export function ContentEditor(props: {
+  blocks: Block[];
+  label: string;
+  onChange: (blocks: Block[]) => void;
+  doc?: JSONContent;
+  onDoc?: (doc: JSONContent) => void;
+  template?: TemplateEditing;
+  onReady?: (handle: EditorHandle) => void;
+  onDrag?: (block: DraggedBlock | null) => void;
+  /** Ids of `/` menu items to leave out, such as "canvas" in a canvas card. */
+  exclude?: string[];
+  /** Escape pressed in the editor when no menu, picker or field inside it took it. */
+  onEscape?: () => void;
+}) {
   let host!: HTMLDivElement;
+  let wrap!: HTMLDivElement;
+  let fileInput!: HTMLInputElement;
   let editor: Editor | undefined;
   // Bumped on every transaction so the toolbar re-reads the editor's state.
   const [tick, setTick] = createSignal(0);
   const [linkOpen, setLinkOpen] = createSignal(false);
   const [href, setHref] = createSignal("");
   const [uploadError, setUploadError] = createSignal<string | null>(null);
+  // The open menu: which trigger, where its text is, and the highlighted item.
+  const [slash, setSlash] = createSignal<MenuState | null>(null);
+  const [fieldMenu, setFieldMenu] = createSignal<MenuState | null>(null);
+  const [activeItem, setActiveItem] = createSignal(0);
+  // A menu closed with Escape stays closed until its trigger is typed again.
+  const dismissed: Record<string, number | null> = { slash: null, field: null };
+  // The file a menu item asked for goes into a block this builds.
+  let onPicked: ((asset: string) => Block) | null = null;
+  // Where "+" typed a `/` for the menu; Escape takes it out again.
+  let plusSlash: number | null = null;
+  // The last Escape a menu took, which must not also reach `onEscape`.
+  let menuEscape: KeyboardEvent | null = null;
+  // Focus is inside the editor or its bubble, which shows only then.
+  const [focused, setFocused] = createSignal(false);
+  // Bumped on scroll and resize, so the floating menu and bubble follow their text.
+  const [layout, setLayout] = createSignal(0);
+  const relayout = () => setLayout(layout() + 1);
+  window.addEventListener("scroll", relayout, true);
+  window.addEventListener("resize", relayout);
+  onCleanup(() => {
+    window.removeEventListener("scroll", relayout, true);
+    window.removeEventListener("resize", relayout);
+  });
+
+  function track(kind: "slash" | "field", set: (s: MenuState | null) => void) {
+    return (st: MenuState | null) => {
+      if (!st || dismissed[kind] !== st.from) dismissed[kind] = null;
+      const next = st && dismissed[kind] === null ? st : null;
+      set(next);
+      if (!next) setActiveItem(0);
+    };
+  }
 
   onMount(() => {
+    const keys = (kind: "slash" | "field") => (e: KeyboardEvent) => onMenuKey(kind, e);
     editor = new Editor({
       element: host,
-      extensions: editorExtensions(),
-      content: blocksToDoc(props.blocks),
+      extensions: editorExtensions({
+        slash: { onChange: track("slash", setSlash), onKey: keys("slash") },
+        template: props.template && {
+          slots: props.template.slots,
+          fieldMenu: { onChange: track("field", setFieldMenu), onKey: keys("field") },
+        },
+        handle: { onDrag: (b) => props.onDrag?.(b), onAdd: addAfter },
+      }),
+      content: withTrailingParagraph(props.doc ?? blocksToDoc(props.blocks)),
       editorProps: {
         attributes: {
           class: "content-editor-doc",
@@ -77,11 +170,259 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
           "aria-label": props.label,
         },
       },
-      onUpdate: ({ editor }) => props.onChange(docToBlocks(editor.getJSON())),
+      onUpdate: ({ editor }) => {
+        if (props.onDoc) props.onDoc(editor.getJSON());
+        else props.onChange(docToBlocks(editor.getJSON()));
+      },
       onTransaction: () => setTick(tick() + 1),
     });
+    props.onReady?.({ editor });
   });
   onCleanup(() => editor?.destroy());
+
+  // ------------------------------------------------------------------------------------------
+  // The menus
+
+  const openMenu = (): { kind: "slash" | "field"; state: MenuState } | null => {
+    const f = fieldMenu();
+    if (f) return { kind: "field", state: f };
+    const s = slash();
+    return s ? { kind: "slash", state: s } : null;
+  };
+
+  function slashItems(): MenuItem[] {
+    const range = () => {
+      const s = slash();
+      return s ? { from: s.from, to: s.to } : null;
+    };
+    const run = (fn: (c: ReturnType<typeof chain>) => ReturnType<typeof chain>) => () => {
+      const r = range();
+      if (r) fn(chain().deleteRange(r)).run();
+    };
+    const textItems: MenuItem[] = [
+      { id: "paragraph", label: "Text", section: "Text", keywords: "paragraph plain", run: run((c) => c.setParagraph()) },
+      ...([1, 2, 3] as const).map((level) => ({
+        id: `h${level}`,
+        label: `Heading ${level}`,
+        section: "Text",
+        keywords: `h${level} title`,
+        hint: "#".repeat(level),
+        run: run((c) => c.setParagraph().setHeading({ level })),
+      })),
+      { id: "bullet", label: "Bullet list", section: "Text", keywords: "unordered ul", run: run((c) => c.toggleBulletList()) },
+      { id: "numbered", label: "Numbered list", section: "Text", keywords: "ordered ol", run: run((c) => c.toggleOrderedList()) },
+      { id: "todo", label: "To-do list", section: "Text", keywords: "task checkbox check", run: run((c) => c.toggleTaskList()) },
+      { id: "quote", label: "Quote", section: "Text", keywords: "blockquote", run: run((c) => c.setParagraph().setBlockquote()) },
+      { id: "mention", label: "Mention a note", section: "Text", keywords: "reference note @", run: run((c) => c.insertMentionPicker()) },
+    ];
+    const blockItems: MenuItem[] = [
+      ...INSERTS.map((b) => ({
+        id: b.text.toLowerCase(),
+        label: b.menu,
+        section: "Blocks",
+        keywords: b.keywords,
+        run: () => place({ type: "vaultBlock", attrs: { block: fresh(b.block()) } }),
+      })),
+      {
+        id: "image",
+        label: "Image",
+        section: "Blocks",
+        keywords: "picture photo upload",
+        run: run((c) => {
+          pickFile("image/*", (asset) => ({ kind: "image", fields: { asset } }));
+          return c;
+        }),
+      },
+      {
+        id: "file",
+        label: "File",
+        section: "Blocks",
+        keywords: "asset attachment upload",
+        run: run((c) => {
+          pickFile("", (asset) => ({ kind: "asset", fields: { asset } }));
+          return c;
+        }),
+      },
+    ];
+    const properties: MenuItem[] = (props.template?.unplaced() ?? []).map((f) => ({
+      id: `property-${f.name}`,
+      label: f.label,
+      section: "Property",
+      keywords: `${f.name} field property slot`,
+      hint: f.name,
+      run: () => place({ type: "templateSlot", attrs: { slot: f.name, label: null } }),
+    }));
+    const all = [...textItems, ...blockItems, ...properties];
+    const exclude = props.exclude ?? [];
+    return exclude.length ? all.filter((i) => !exclude.includes(i.id)) : all;
+  }
+
+  /**
+   * Put block `json` where the `/` menu was typed: in place of its paragraph when that is now
+   * empty, else after it. The caret goes to a paragraph after the block, ready to type on.
+   */
+  function place(json: JSONContent) {
+    const s = slash();
+    if (!editor || !s) return;
+    const { schema, view } = editor;
+    let tr = view.state.tr.delete(s.from, s.to);
+    const $pos = tr.doc.resolve(s.from);
+    const start = $pos.before(1);
+    const para = $pos.node(1);
+    const node = schema.nodeFromJSON(json);
+    const from = para.content.size === 0 ? start : start + para.nodeSize;
+    const to = para.content.size === 0 ? start + para.nodeSize : from;
+    const next = tr.doc.resolve(to).nodeAfter;
+    // At the end, add an empty line to type on after the block. Elsewhere the caret goes to the
+    // start of the block after it, and no empty paragraph is left in the middle of the content.
+    tr = tr.replaceWith(from, to, next ? [node] : [node, schema.nodes.paragraph!.create()]);
+    tr.setSelection(Selection.near(tr.doc.resolve(from + node.nodeSize)));
+    view.dispatch(tr.scrollIntoView());
+    view.focus();
+  }
+
+  function fieldItems(): MenuItem[] {
+    return (props.template?.fields() ?? []).map((f) => ({
+      id: `ref-${f.name}`,
+      label: f.label,
+      section: "Show a field",
+      keywords: f.name,
+      hint: `{{${f.name}}}`,
+      run: () => {
+        const s = fieldMenu();
+        if (s) chain().deleteRange({ from: s.from, to: s.to }).insertContent({ type: "fieldRef", attrs: { name: f.name } }).run();
+      },
+    }));
+  }
+
+  const menuItems = createMemo(() => {
+    const m = openMenu();
+    if (!m) return [];
+    const all = m.kind === "slash" ? slashItems() : fieldItems();
+    return all.filter((i) => matchesQuery(`${i.label} ${i.section} ${i.keywords ?? ""}`, m.state.query));
+  });
+
+  /**
+   * Where the menu goes, in the viewport: under the trigger, or over it when there is more room
+   * there, never past an edge, and never taller than the room it has.
+   */
+  const menuPos = (): MenuPos => {
+    tick();
+    layout();
+    const m = openMenu();
+    if (!m || !editor) return { top: 0, left: 0, maxHeight: 320 };
+    const at = editor.view.coordsAtPos(m.state.from);
+    const margin = 8;
+    const width = Math.min(352, window.innerWidth - 2 * margin);
+    const left = Math.max(margin, Math.min(at.left, window.innerWidth - width - margin));
+    const below = window.innerHeight - at.bottom - margin - 4;
+    const above = at.top - margin - 4;
+    if (below >= 240 || below >= above) return { top: at.bottom + 4, left, maxHeight: Math.min(320, below) };
+    return { bottom: window.innerHeight - at.top + 4, left, maxHeight: Math.min(320, above) };
+  };
+
+  function choose(item: MenuItem) {
+    plusSlash = null;
+    item.run();
+    setSlash(null);
+    setFieldMenu(null);
+    setActiveItem(0);
+  }
+
+  function onMenuKey(kind: "slash" | "field", e: KeyboardEvent): boolean {
+    const m = openMenu();
+    if (!m || m.kind !== kind) return false;
+    const items = menuItems();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const n = items.length;
+      if (n) setActiveItem((activeItem() + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
+      return true;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      const item = items[Math.min(activeItem(), items.length - 1)];
+      if (!item) return false;
+      choose(item);
+      return true;
+    }
+    if (e.key === "Escape") {
+      menuEscape = e;
+      if (kind === "slash" && plusSlash === m.state.from && editor) {
+        // The `/` came from "+", not from typing: take it out again.
+        plusSlash = null;
+        editor.view.dispatch(editor.state.tr.delete(m.state.from, m.state.to));
+        setSlash(null);
+        return true;
+      }
+      dismissed[kind] = m.state.from;
+      if (kind === "slash") setSlash(null);
+      else setFieldMenu(null);
+      return true;
+    }
+    return false;
+  }
+
+  function pickFile(accept: string, make: (asset: string) => Block) {
+    onPicked = make;
+    fileInput.accept = accept;
+    fileInput.click();
+  }
+
+  /**
+   * "+" beside block `node` at `pos`: open the block menu on an empty line after it (the block
+   * itself when it is an empty paragraph), by typing the `/` that opens it.
+   */
+  function addAfter(pos: number, node: PMNode) {
+    if (!editor) return;
+    const { state, view, schema } = editor;
+    let tr = state.tr;
+    let at: number;
+    if (node.type.name === "paragraph" && node.content.size === 0) {
+      at = pos + 1;
+    } else {
+      const end = pos + node.nodeSize;
+      const next = state.doc.resolve(end).nodeAfter;
+      if (next?.type.name === "paragraph" && next.content.size === 0) at = end + 1;
+      else {
+        tr = tr.insert(end, schema.nodes.paragraph!.create());
+        at = end + 1;
+      }
+    }
+    tr = tr.insertText("/", at);
+    tr.setSelection(TextSelection.create(tr.doc, at + 1));
+    dismissed.slash = null;
+    plusSlash = at;
+    view.dispatch(tr.scrollIntoView());
+    view.focus();
+    setSlash({ from: at, to: at + 1, query: "" });
+  }
+
+  /** A non-empty text selection, which the bubble formats. */
+  const textSelected = () => {
+    tick();
+    const sel = editor?.state.selection;
+    return !!sel && !sel.empty && sel instanceof TextSelection;
+  };
+
+  const bubbleOpen = () => focused() && (textSelected() || linkOpen()) && !openMenu();
+
+  /** The bubble sits just above the selection, or just below it when there is no room above. */
+  const bubblePos = (): { top?: number; bottom?: number; left: number } => {
+    tick();
+    layout();
+    if (!editor) return { top: 0, left: 0 };
+    const { from, to } = editor.state.selection;
+    const start = editor.view.coordsAtPos(from);
+    const end = editor.view.coordsAtPos(to);
+    const margin = 8;
+    const width = Math.min(bubble?.offsetWidth || 420, window.innerWidth - 2 * margin);
+    const left = Math.max(margin, Math.min(start.left, window.innerWidth - width - margin));
+    // The app's top bar covers the top of the window.
+    const topbar = document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0;
+    // Its own height: on a phone it wraps to two rows.
+    const height = (bubble?.offsetHeight || 44) + 8;
+    if (start.top - height > Math.max(margin, topbar)) return { bottom: window.innerHeight - start.top + 6, left };
+    return { top: end.bottom + 6, left };
+  };
 
   const active = (name: string, attrs?: Record<string, unknown>) => {
     tick();
@@ -90,24 +431,18 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
   // TipTap's focus() hands focus back a frame later, and keys typed before then are lost. Taking it
   // now also makes the focus() in the chain a no-op.
   const chain = () => {
+    readSelection();
     editor!.view.focus();
     return editor!.chain().focus();
   };
 
-  const blockType = () => {
-    tick();
-    for (const level of [1, 2, 3]) if (active("heading", { level })) return `h${level}`;
-    if (active("blockquote")) return "quote";
-    return "paragraph";
-  };
-
-  function setBlockType(v: string) {
-    if (!editor) return;
-    if (editor.isActive("blockquote") && v !== "quote") chain().lift("blockquote").run();
-    if (v === "paragraph") chain().setParagraph().run();
-    else if (v === "quote") chain().setParagraph().setBlockquote().run();
-    else chain().setHeading({ level: Number(v.slice(1)) as 1 | 2 | 3 }).run();
-  }
+  /**
+   * Take in the page's current selection before acting on it. ProseMirror reads a selection
+   * change a moment after the browser makes it, so a selection extended by keyboard and acted on
+   * at once (Shift+Arrow, then Bold) would otherwise format the selection as it was a key earlier.
+   */
+  const readSelection = () =>
+    (editor?.view as unknown as { domObserver?: { flush?: () => void } } | undefined)?.domObserver?.flush?.();
 
   const colour = () => {
     tick();
@@ -129,7 +464,7 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
   }
 
   function insertBlock(block: Block) {
-    chain().insertContent({ type: "vaultBlock", attrs: { block } }).run();
+    chain().insertContent({ type: "vaultBlock", attrs: { block: fresh(block) } }).run();
   }
 
   /** Upload `file` through the assets API, then insert the block `make` builds for it. */
@@ -143,135 +478,161 @@ export function ContentEditor(props: { blocks: Block[]; label: string; onChange:
     }
   }
 
-  // Toolbar buttons keep the editor's selection: pressing one must not move focus first.
-  const keep = (e: MouseEvent) => e.preventDefault();
+  let bubble: HTMLDivElement | undefined;
+  /** Focus leaving for somewhere outside both the editor and its bubble. */
+  function onFocusOut(e: FocusEvent) {
+    const to = e.relatedTarget;
+    if (to instanceof Node && (wrap.contains(to) || bubble?.contains(to))) return;
+    setFocused(false);
+    setLinkOpen(false);
+  }
+
+  // Bubble buttons keep the editor's selection: pressing one must not move focus first.
+  const keep = (e: MouseEvent) => {
+    e.preventDefault();
+    readSelection();
+  };
 
   return (
-    <div class="content-editor" data-testid="content-editor">
-      <div class="editor-toolbar" role="toolbar" aria-label={`${props.label} formatting`}>
-        <select
-          aria-label="Block type"
-          value={blockType()}
-          onChange={(e) => setBlockType(e.currentTarget.value)}
-        >
-          <For each={BLOCK_TYPES}>{(t) => <option value={t.value}>{t.label}</option>}</For>
-        </select>
-        <For each={MARK_BUTTONS}>
-          {(b) => (
-            <button
-              type="button"
-              class={`mark-button mark-${b.mark}`}
-              aria-label={b.label}
-              title={`${b.label} (${b.keys})`}
-              aria-pressed={active(b.mark)}
-              onMouseDown={keep}
-              onClick={() => chain().toggleMark(b.mark).run()}
-            >
-              {b.text}
-            </button>
-          )}
-        </For>
-        <select
-          aria-label="Text colour"
-          value={colour()}
-          onChange={(e) => {
-            const c = e.currentTarget.value;
-            if (c) chain().setColour(c).run();
-            else chain().unsetColour().run();
-          }}
-        >
-          <option value="">Default colour</option>
-          <For each={PALETTE}>{(c) => <option value={c}>{c}</option>}</For>
-        </select>
-        <button type="button" aria-label="Link" aria-pressed={active("link")} onMouseDown={keep} onClick={openLink}>
-          Link
-        </button>
-        <button
-          type="button"
-          aria-label="Mention a note"
-          onMouseDown={keep}
-          onClick={() => chain().insertMentionPicker().run()}
-        >
-          @
-        </button>
-        <button
-          type="button"
-          aria-label="Bullet list"
-          aria-pressed={active("bulletList")}
-          onMouseDown={keep}
-          onClick={() => chain().toggleBulletList().run()}
-        >
-          •
-        </button>
-        <button
-          type="button"
-          aria-label="Numbered list"
-          aria-pressed={active("orderedList")}
-          onMouseDown={keep}
-          onClick={() => chain().toggleOrderedList().run()}
-        >
-          1.
-        </button>
-        <button
-          type="button"
-          aria-label="To-do list"
-          aria-pressed={active("taskList")}
-          onMouseDown={keep}
-          onClick={() => chain().toggleTaskList().run()}
-        >
-          ☐
-        </button>
-        <FilePicker
-          label="Insert image"
-          text="Image"
-          accept="image/*"
-          onFile={(f) => void insertUpload(f, (asset) => ({ kind: "image", fields: { asset } }))}
-        />
-        <FilePicker
-          label="Insert file"
-          text="File"
-          onFile={(f) => void insertUpload(f, (asset) => ({ kind: "asset", fields: { asset } }))}
-        />
-        <For each={INSERTS}>
-          {(b) => (
-            <button type="button" aria-label={b.label} onMouseDown={keep} onClick={() => insertBlock(b.block())}>
-              {b.text}
-            </button>
-          )}
-        </For>
-      </div>
+    <div
+      class="content-editor"
+      data-testid="content-editor"
+      ref={wrap}
+      onFocusIn={() => setFocused(true)}
+      onFocusOut={onFocusOut}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || !props.onEscape || e === menuEscape) return;
+        // A field inside a block, or the mention picker, keeps its own Escape.
+        if (e.target instanceof Element && e.target.closest("input, textarea, select, .mention-picker")) return;
+        props.onEscape();
+      }}
+    >
       <Show when={uploadError()}>
         <p class="error" role="alert">
           {uploadError()}
         </p>
       </Show>
-      <Show when={linkOpen()}>
-        {/* Not a form: the editor sits inside the note's form, and forms do not nest. */}
-        <div class="link-form">
-          <input
-            type="url"
-            aria-label="Link address"
-            placeholder="https://"
-            value={href()}
-            onInput={(e) => setHref(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                applyLink();
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                setLinkOpen(false);
-                editor?.view.focus();
-              }
+      <Show when={bubbleOpen()}>
+        <Portal>
+          <div
+            class="editor-bubble"
+            role="toolbar"
+            aria-label={`${props.label} formatting`}
+            style={{
+              top: bubblePos().top === undefined ? undefined : `${bubblePos().top}px`,
+              bottom: bubblePos().bottom === undefined ? undefined : `${bubblePos().bottom}px`,
+              left: `${bubblePos().left}px`,
             }}
-            ref={(el) => queueMicrotask(() => el.focus())}
-          />
-          <button type="button" onClick={applyLink}>
-            Apply link
-          </button>
-        </div>
+            ref={bubble}
+            onFocusOut={onFocusOut}
+          >
+            <Show
+              when={linkOpen()}
+              fallback={
+                <>
+                  <For each={MARK_BUTTONS}>
+                    {(b) => (
+                      <button
+                        type="button"
+                        class={`mark-button mark-${b.mark}`}
+                        aria-label={b.label}
+                        title={`${b.label} (${b.keys})`}
+                        aria-pressed={active(b.mark)}
+                        onMouseDown={keep}
+                        onClick={() => chain().toggleMark(b.mark).run()}
+                      >
+                        {b.text}
+                      </button>
+                    )}
+                  </For>
+                  <select
+                    aria-label="Text colour"
+                    title="Text colour"
+                    value={colour()}
+                    onChange={(e) => {
+                      const c = e.currentTarget.value;
+                      if (c) chain().setColour(c).run();
+                      else chain().unsetColour().run();
+                    }}
+                  >
+                    <option value="">Colour</option>
+                    <For each={PALETTE}>{(c) => <option value={c}>{c}</option>}</For>
+                  </select>
+                  <button
+                    type="button"
+                    aria-label="Link"
+                    title="Link"
+                    aria-pressed={active("link")}
+                    onMouseDown={keep}
+                    onClick={openLink}
+                  >
+                    Link
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Mention a note"
+                    title="Mention a note"
+                    onMouseDown={keep}
+                    onClick={() => chain().insertMentionPicker().run()}
+                  >
+                    @
+                  </button>
+                </>
+              }
+            >
+              {/* Not a form: the editor sits inside the note's page, and forms do not nest. */}
+              <input
+                type="url"
+                aria-label="Link address"
+                placeholder="https://"
+                value={href()}
+                onInput={(e) => setHref(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    applyLink();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setLinkOpen(false);
+                    editor?.view.focus();
+                  }
+                }}
+                ref={(el) => queueMicrotask(() => el.focus())}
+              />
+              <button type="button" onClick={applyLink}>
+                Apply link
+              </button>
+            </Show>
+          </div>
+        </Portal>
       </Show>
       <div ref={host} class="content-editor-host" />
+      <input
+        ref={fileInput}
+        type="file"
+        hidden
+        onChange={(e) => {
+          const file = e.currentTarget.files?.[0];
+          e.currentTarget.value = "";
+          const make = onPicked;
+          onPicked = null;
+          if (file && make) void insertUpload(file, make);
+        }}
+      />
+      <Show when={openMenu()}>
+        {(m) => (
+          <Portal>
+          <SuggestMenu
+            label={m().kind === "slash" ? "Insert block" : "Insert field"}
+            items={menuItems()}
+            active={Math.min(activeItem(), Math.max(0, menuItems().length - 1))}
+            pos={menuPos()}
+            onHover={setActiveItem}
+            onChoose={choose}
+          />
+          </Portal>
+        )}
+      </Show>
     </div>
   );
 }

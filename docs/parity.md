@@ -45,9 +45,15 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Restore an earlier version | `History.tsx` | `POST /api/notes/{id}/restore` | `vault restore <id> <version> --base <version>` | |
 | List the trash | `History.tsx` (`Trash`) | `GET /api/trash` | `vault trash list` | |
 | Restore from the trash | `History.tsx` (`Trash`) | `POST /api/trash/{id}/restore` | `vault trash restore <id>` | |
-| List the pinned notes in the sidebar | `Shell.tsx`, `pins.ts` | `GET /api/pins` | `vault pin list` | |
+| Open today's daily note, or another day's | `DailyNotes.tsx` | `POST /api/daily/{date}` (today), `GET /api/daily/{date}` (other days) | `vault daily open <date>`, `vault daily get <date>` | |
+| Create the daily note for another day | `DailyNotes.tsx` (Create note for this day) | `POST /api/daily/{date}` | `vault daily open <date>` | |
+| Show the pinned tree in the sidebar | `Shell.tsx`, `pins.ts` | `GET /api/pins` | `vault pin list` | |
 | Pin a note to the sidebar | `NoteView.tsx` (Pin button) | `PUT /api/pins/{id}` | `vault pin add <id>` | |
-| Unpin a note | `NoteView.tsx` (Unpin button) | `DELETE /api/pins/{id}` | `vault pin remove <id>` | |
+| Unpin a note | `NoteView.tsx` (Unpin button), `Shell.tsx` (Pinned ⋯ menu, Unpin) | `DELETE /api/pins/{id}` | `vault pin remove <id>` | |
+| Create a pinned folder | `Shell.tsx` (Pinned, New folder) | `POST /api/pins/folders` | `vault pin folder add <name> [--parent <id>]` | |
+| Rename a pinned folder | `Shell.tsx` (double-click a folder, or ⋯ menu, Rename) | `PUT /api/pins/folders/{id}` | `vault pin folder rename <id> <name>` | |
+| Delete a pinned folder | `Shell.tsx` (⋯ menu, Delete folder) | `DELETE /api/pins/folders/{id}` | `vault pin folder remove <id>` | |
+| Move a pinned note or folder | `Shell.tsx` (drag and drop, or ⋯ menu, Move to…) | `POST /api/pins/move` | `vault pin move <id> [--parent <id>] [--index <n>]` | |
 | List flagged notes | None. The page was removed from the UI at the owner's request | `GET /api/flagged` | `vault flagged` | Owner decision: API and CLI only |
 
 ### Content blocks and assets
@@ -81,10 +87,10 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 
 | UI action | Where | API | CLI | Gap |
 |---|---|---|---|---|
-| Add, move, resize, connect or delete nodes, zoom | `canvas/CanvasSurface.tsx` | — then the note or template `PUT` | `vault canvas put <id> <name> --base <version>` or `vault put <id>` | |
+| Add, move, resize, connect, colour or delete nodes and groups; edge arrows and captions; canvas height; zoom | `canvas/CanvasSurface.tsx` | — then the note or template `PUT` | `vault canvas put <id> <name> --base <version>` or `vault put <id>` | |
+| Edit a card's content blocks in place | `CanvasSurface.tsx`, `editor/ContentEditor.tsx` | — then the note or template `PUT`; `POST /api/assets` for an image or file block | `vault canvas put` or `vault put`; `vault asset upload` | |
 | Add a note node | `CanvasSurface.tsx` | `GET /api/search` | `vault search` | |
-| Add a file node | `CanvasSurface.tsx` | `POST /api/assets` | `vault asset upload` | |
-| Note node and query node contents | `canvas/CanvasNodes.tsx` | `GET /api/notes/{id}`, `POST /api/query` | `vault get`, `vault query` | |
+| Note node and card contents, query views in cards | `canvas/CanvasNodes.tsx` | `GET /api/notes/{id}`, `POST /api/query` | `vault get`, `vault query` | |
 
 ### Types, templates and taxonomies
 
@@ -127,7 +133,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 
 ## 2. Every route in the endpoint listing
 
-The listing has 60 routes. `/api/test/clock` is left out of the listing on purpose: it exists only when a test build runs with `--test-clock` (S7).
+The listing has 69 routes. `/api/test/clock` is left out of the listing on purpose: it exists only when a test build runs with `--test-clock` (S7).
 
 | Route | CLI | UI | Note |
 |---|---|---|---|
@@ -155,9 +161,15 @@ The listing has 60 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/search` | `vault search` | Search and pickers | |
 | `GET /api/trash` | `vault trash list` | Trash | |
 | `POST /api/trash/{id}/restore` | `vault trash restore` | Trash | |
+| `GET /api/daily/{date}` | `vault daily get` | Daily notes | |
+| `POST /api/daily/{date}` | `vault daily open` | Daily notes | |
 | `GET /api/pins` | `vault pin list` | Sidebar, Pinned | |
 | `PUT /api/pins/{id}` | `vault pin add` | Note page, Pin | |
-| `DELETE /api/pins/{id}` | `vault pin remove` | Note page, Unpin | |
+| `DELETE /api/pins/{id}` | `vault pin remove` | Note page, Unpin; sidebar ⋯ menu, Unpin | |
+| `POST /api/pins/folders` | `vault pin folder add` | Sidebar, Pinned, New folder | |
+| `PUT /api/pins/folders/{id}` | `vault pin folder rename` | Sidebar, rename a folder | |
+| `DELETE /api/pins/folders/{id}` | `vault pin folder remove` | Sidebar, delete a folder | |
+| `POST /api/pins/move` | `vault pin move` | Sidebar, drag and drop and Move to… | |
 | `GET /api/types` | `vault type list` | Session load | |
 | `GET /api/types/{name}` | `vault type get` | not used | The UI reads the type from `GET /api/schema` |
 | `PUT /api/types/{name}` | `vault type put` | Create a type | |

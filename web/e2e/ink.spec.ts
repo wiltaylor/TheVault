@@ -42,9 +42,10 @@ function strokes(ink: Block | undefined): number[][] {
 
 const pressures = (points: number[]) => points.filter((_, i) => i % 3 === 2);
 
+/** Leave what was edited, which saves at once, and wait until the note is saved. */
 async function saveAndWait(page: Page) {
-  await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+  await page.getByLabel("Title", { exact: true }).focus();
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
 }
 
 /** Client coordinates of a point given in the surface's ink units. */
@@ -96,10 +97,11 @@ test("three mouse strokes on an ink block save as three strokes and reload as th
 }) => {
   const note = await create(admin, "task", `Ink ${token()}`);
   await logIn(page, `/notes/${note.id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
   const doc = page.getByRole("textbox", { name: "Body" });
   await doc.click();
-  await page.getByRole("toolbar", { name: "Body formatting" }).getByRole("button", { name: "Insert drawing" }).click();
+  // The / menu inserts blocks.
+  await page.keyboard.type("/ink");
+  await page.getByRole("listbox", { name: "Insert block" }).getByRole("option", { name: "Ink drawing" }).click();
 
   const surface = doc.getByRole("img", { name: "Drawing" });
   await expect(surface).toBeVisible();
@@ -134,7 +136,6 @@ test("erasing one stroke of three saves two", async ({ page, admin }) => {
     { kind: "content", labels: ["body"], blocks: [threeLines] },
   ]);
   await logIn(page, `/notes/${note.id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
   const surface = page.getByRole("textbox", { name: "Body" }).getByRole("img", { name: "Drawing" });
   await expect(surface.locator("path.ink-stroke")).toHaveCount(3);
 
@@ -155,7 +156,6 @@ test("stylus pressure from synthetic pointer events varies the stroke's width", 
     { kind: "content", labels: ["body"], blocks: [empty] },
   ]);
   await logIn(page, `/notes/${note.id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
   const surface = page.getByRole("textbox", { name: "Body" }).getByRole("img", { name: "Drawing" });
   await page.getByRole("toolbar", { name: "Drawing tools" }).getByLabel("Stroke size").selectOption("16");
 
@@ -202,7 +202,6 @@ test("an ink field renders its drawing surface on its tab and saves what is draw
   await page.getByRole("tab", { name: "Drawing" }).click();
   await expect(page.getByTestId("field-drawing").getByRole("img", { name: "Drawing" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Edit" }).click();
   await mouseLine(page, surface, 200, 100, 700);
   await expect(surface.locator("path.ink-stroke")).toHaveCount(1);
   await saveAndWait(page);

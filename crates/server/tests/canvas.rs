@@ -100,26 +100,39 @@ fn viewport(x: f64, y: f64, zoom: f64) -> Value {
     json!({ "kind": "viewport", "fields": { "x": x, "y": y, "zoom": zoom } })
 }
 
-/// Two text nodes joined by an edge, the shape the canvas editor saves.
+/// Two cards of content blocks joined by an edge, the shape the canvas editor saves.
 fn two_nodes_and_an_edge(label: Option<&str>) -> Value {
     let mut canvas = json!({
         "kind": "canvas",
+        "fields": { "height": 640 },
         "blocks": [
             viewport(-120.5, 40.25, 0.75),
             {
                 "kind": "node",
                 "labels": ["idea"],
-                "fields": { "kind": "text", "x": 0.0, "y": 0.0, "width": 240.0, "height": 120.0, "text": "An **idea**" }
+                "fields": { "kind": "card", "x": 0.0, "y": 0.0, "width": 240.0, "height": 120.0, "colour": "yellow" },
+                "blocks": [
+                    { "kind": "heading", "fields": { "level": 2, "text": "Idea" } },
+                    { "kind": "paragraph", "fields": { "text": "An **idea**" } },
+                    { "kind": "code", "fields": { "language": "sh", "source": "ls -la" } }
+                ]
             },
             {
                 "kind": "node",
                 "labels": ["site"],
-                "fields": { "kind": "link", "x": 320.5, "y": 10.25, "width": 240.0, "height": 120.0, "url": "https://example.com/" }
+                "fields": { "kind": "card", "x": 320.5, "y": 10.25, "width": 240.0, "height": 120.0 },
+                "blocks": [
+                    {
+                        "kind": "query_view",
+                        "fields": { "query": "from board" },
+                        "blocks": [{ "kind": "view", "labels": ["list"], "fields": { "kind": "list" } }]
+                    }
+                ]
             },
             {
                 "kind": "edge",
                 "labels": ["idea_to_site"],
-                "fields": { "from": "idea", "to": "site", "label": "see" }
+                "fields": { "from": "idea", "to": "site", "label": "see", "colour": "red", "arrow": "start" }
             }
         ]
     });
@@ -149,10 +162,14 @@ fn two_nodes_and_an_edge_save_validate_and_reload_identically() {
     let file = api.file(&format!("notes/board/{id}.wcl"));
     for line in [
         "canvas board {",
+        "height = 640",
         "node idea {",
+        "kind   = \"card\"",
+        "paragraph {",
+        "query_view {",
         "node site {",
         "edge idea_to_site {",
-        "from  = \"idea\"",
+        "arrow  = \"start\"",
         "zoom = 0.75",
         "x      = 320.5",
     ] {
@@ -195,7 +212,7 @@ fn a_canvas_that_breaks_the_format_is_refused_with_where() {
     let node =
         |id: &str, fields: Value| json!({ "kind": "node", "labels": [id], "fields": fields });
     let text = |extra: Value| {
-        let mut f = json!({ "kind": "text", "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0, "text": "t" });
+        let mut f = json!({ "kind": "card", "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 });
         for (k, v) in extra.as_object().unwrap() {
             f[k] = v.clone();
         }
@@ -239,19 +256,61 @@ fn a_canvas_that_breaks_the_format_is_refused_with_where() {
             r#"canvas "board" > node "a".group"#,
         ),
         (
-            "a query node without its query",
+            "a node of no kind",
             vec![
                 viewport(0.0, 0.0, 1.0),
                 node(
-                    "q",
-                    json!({ "kind": "query", "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 }),
+                    "g",
+                    json!({ "kind": "group", "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 }),
                 ),
             ],
-            r#"canvas "board" > node "q".query"#,
+            r#"canvas "board" > node "g".kind"#,
+        ),
+        (
+            "a card holding a canvas",
+            vec![
+                viewport(0.0, 0.0, 1.0),
+                json!({ "kind": "node", "labels": ["c"], "fields": text(json!({})),
+                        "blocks": [{ "kind": "canvas", "blocks": [viewport(0.0, 0.0, 1.0)] }] }),
+            ],
+            r#"canvas "board" > node "c" > canvas#1"#,
+        ),
+        (
+            "a card's query view without its query",
+            vec![
+                viewport(0.0, 0.0, 1.0),
+                json!({ "kind": "node", "labels": ["c"], "fields": text(json!({})),
+                        "blocks": [{ "kind": "query_view", "blocks": [
+                            { "kind": "view", "labels": ["list"], "fields": { "kind": "list" } }
+                        ] }] }),
+            ],
+            r#"canvas "board" > node "c" > query_view#1.query"#,
+        ),
+        (
+            "an arrow that is not one of the four",
+            vec![
+                viewport(0.0, 0.0, 1.0),
+                node("a", text(json!({}))),
+                json!({ "kind": "edge", "labels": ["e"], "fields": { "from": "a", "to": "a", "arrow": "sideways" } }),
+            ],
+            r#"canvas "board" > edge "e".arrow"#,
         ),
     ];
-    for (what, blocks, at) in cases {
-        let canvas = json!({ "kind": "canvas", "labels": ["board"], "blocks": blocks });
+    let mut cases: Vec<(&str, Vec<Value>, &str, Value)> = cases
+        .into_iter()
+        .map(|(what, blocks, at)| (what, blocks, at, json!({})))
+        .collect();
+    for (what, height) in [("a canvas too short", 80), ("a canvas too tall", 9000)] {
+        cases.push((
+            what,
+            vec![viewport(0.0, 0.0, 1.0)],
+            r#"canvas "board".height"#,
+            json!({ "height": height }),
+        ));
+    }
+    for (what, blocks, at, fields) in cases {
+        let canvas =
+            json!({ "kind": "canvas", "labels": ["board"], "fields": fields, "blocks": blocks });
         let res = api
             .put(&format!("/api/notes/{id}"))
             .json(&json!({
@@ -270,6 +329,26 @@ fn a_canvas_that_breaks_the_format_is_refused_with_where() {
     // Nothing was written.
     let read = expect(api.get(&format!("/api/notes/{id}")).send().unwrap(), 200);
     assert_eq!(read["version"], note["version"]);
+
+    // A node of a kind cards replaced is not refused: it is written as the card it reads as.
+    let old = json!({ "kind": "canvas", "labels": ["board"], "blocks": [
+        viewport(0.0, 0.0, 1.0),
+        node("q", json!({ "kind": "query", "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0,
+                          "query": "from board", "view": "list" })),
+    ] });
+    let res = api
+        .put(&format!("/api/notes/{id}"))
+        .json(&json!({
+            "note": { "fields": { "title": "Plan" }, "blocks": [old] },
+            "base_version": note["version"],
+        }))
+        .send()
+        .unwrap();
+    expect(res, 200);
+    let file = api.file(&format!("notes/board/{id}.wcl"));
+    assert!(file.contains("kind   = \"card\""), "{file}");
+    assert!(file.contains("query_view {"), "{file}");
+    assert!(!file.contains("kind   = \"query\""), "{file}");
 }
 
 #[test]
@@ -277,7 +356,7 @@ fn a_canvas_on_a_template_validates_like_one_in_a_note() {
     let api = Api::start();
     let template = |query: &str| {
         format!(
-            "template default {{\n  tab \"Board\" {{\n    slot \"title\"\n\n    canvas {{\n      viewport {{\n        x    = 0.0\n        y    = 0.0\n        zoom = 1.0\n      }}\n\n      node open {{\n        kind   = \"query\"\n        x      = 0.0\n        y      = 0.0\n        width  = 300.0\n        height = 200.0\n        query  = {query}\n      }}\n    }}\n  }}\n}}\n"
+            "template default {{\n  tab \"Board\" {{\n    slot \"title\"\n\n    canvas {{\n      height = 300\n\n      viewport {{\n        x    = 0.0\n        y    = 0.0\n        zoom = 1.0\n      }}\n\n      node open {{\n        kind   = \"card\"\n        x      = 0.0\n        y      = 0.0\n        width  = 300.0\n        height = 200.0\n\n        query_view {{\n          query = {query}\n\n          view cards {{\n            kind = \"cards\"\n          }}\n        }}\n      }}\n    }}\n  }}\n}}\n"
         )
     };
     let res = api
@@ -295,7 +374,12 @@ fn a_canvas_on_a_template_validates_like_one_in_a_note() {
         .unwrap();
     let items = &board["templates"][0]["tabs"][0]["items"];
     assert_eq!(items[1]["block"]["kind"], "canvas", "{items}");
-    assert_eq!(items[1]["block"]["blocks"][1]["fields"]["kind"], "query");
+    assert_eq!(items[1]["block"]["fields"]["height"], 300, "{items}");
+    assert_eq!(items[1]["block"]["blocks"][1]["fields"]["kind"], "card");
+    assert_eq!(
+        items[1]["block"]["blocks"][1]["blocks"][0]["kind"],
+        "query_view"
+    );
 
     let res = api
         .put("/api/types/board/templates/default")
@@ -306,7 +390,31 @@ fn a_canvas_on_a_template_validates_like_one_in_a_note() {
     assert!(
         issues(&err["failures"][0])
             .iter()
-            .any(|a| a.ends_with(r#"node "open".query"#)),
+            .any(|a| a.ends_with(r#"node "open" > query_view#1.query"#)),
         "{err}"
+    );
+
+    // A template written before cards still loads: its query node reads as a card.
+    let old = "template default {\n  tab \"Board\" {\n    slot \"title\"\n\n    canvas {\n      viewport {\n        x    = 0.0\n        y    = 0.0\n        zoom = 1.0\n      }\n\n      node open {\n        kind   = \"query\"\n        x      = 0.0\n        y      = 0.0\n        width  = 300.0\n        height = 200.0\n        view   = \"table\"\n        query  = \"from board\"\n      }\n    }\n  }\n}\n";
+    let res = api
+        .put("/api/types/board/templates/default")
+        .json(&json!({ "wcl": old }))
+        .send()
+        .unwrap();
+    expect(res, 200);
+    let types = expect(api.get("/api/types").send().unwrap(), 200);
+    let board = types["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "board")
+        .unwrap();
+    let node = &board["templates"][0]["tabs"][0]["items"][1]["block"]["blocks"][1];
+    assert_eq!(node["fields"]["kind"], "card", "{node}");
+    assert_eq!(node["blocks"][0]["kind"], "query_view", "{node}");
+    assert_eq!(node["blocks"][0]["fields"]["query"], "from board", "{node}");
+    assert_eq!(
+        node["blocks"][0]["blocks"][0]["labels"][0], "table",
+        "{node}"
     );
 }

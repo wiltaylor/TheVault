@@ -1,5 +1,5 @@
 import { type APIRequestContext, devices } from "@playwright/test";
-import { expect, logIn, password, test } from "./fixtures";
+import { activePane, expect, logIn, password, test } from "./fixtures";
 import { BULK_NOTES, bulkTitle } from "./vault";
 
 /** Create a task through the API, as an agent would, and return its id and version. */
@@ -22,8 +22,8 @@ test.describe("login", () => {
     await expect(page).toHaveURL(/\/login/);
     await page.getByLabel("Password").fill(password());
     await page.getByRole("button", { name: "Log in" }).click();
-    await expect(page.getByRole("heading", { name: "Your vault" })).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Types" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Day" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Daily notes" })).toBeVisible();
     await expect(page).not.toHaveURL(/\/login/);
   });
 
@@ -38,6 +38,9 @@ test.describe("login", () => {
 
   test("logging out returns to the login page", async ({ page }) => {
     await logIn(page);
+    // Log out lives in Settings > General.
+    await page.getByRole("link", { name: "Settings" }).click();
+    await expect(page.getByRole("heading", { name: "General settings" })).toBeVisible();
     await page.getByRole("button", { name: "Log out" }).click();
     await expect(page).toHaveURL(/\/login/);
     await page.goto("/types/task");
@@ -49,12 +52,16 @@ test("a note created through the API appears in its type list and opens with its
   page,
   admin,
 }) => {
-  const title = unique("Tabbed");
+  // Sorts ahead of the letters, so the row is in the first screen of the virtualised list
+  // however many tasks other tests have made.
+  const title = unique("0 Tabbed");
   const created = await createTask(admin, { title, status: "doing", estimate: 7 }, "Body text here");
 
   await logIn(page);
-  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Types" }).click();
+  await page.getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Types" }).click();
   await page.getByRole("list", { name: "Types" }).getByRole("link", { name: /^Tasks/ }).click();
+  await expect(page).toHaveURL(/\/types\/task$/);
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   const row = page.getByTestId("note-row").filter({ hasText: title });
   await expect(row).toBeVisible();
@@ -62,21 +69,24 @@ test("a note created through the API appears in its type list and opens with its
 
   await expect(page).toHaveURL(new RegExp(`/notes/${created.id}$`));
   await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
-  const tabs = page.getByRole("tab");
+  // Scoped to the pane: the workspace's own tab bar holds tabs too.
+  const tabs = activePane(page).getByRole("tab");
   await expect(tabs).toHaveText(["Overview", "Details"]);
   await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
 
   const panel = page.getByRole("tabpanel");
-  await expect(panel.getByTestId("field-title")).toContainText(title);
+  // The title is the page's heading, edited in place, not a field below it.
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue(title);
+  await expect(panel.getByTestId("field-title")).toHaveCount(0);
   await expect(panel.getByTestId("field-status")).toContainText("Status");
-  await expect(panel.getByTestId("field-status")).toContainText("doing");
+  await expect(panel.getByTestId("field-status").getByLabel("Status")).toHaveValue("doing");
   await expect(panel.getByTestId("field-body")).toContainText("Body text here");
   await expect(panel.getByTestId("field-estimate")).toHaveCount(0);
 
   await page.getByRole("tab", { name: "Details" }).click();
   await expect(page.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true");
   await expect(panel.getByTestId("field-estimate")).toContainText("Hours");
-  await expect(panel.getByTestId("field-estimate")).toContainText("7");
+  await expect(panel.getByTestId("field-estimate").getByLabel("Hours")).toHaveValue("7");
   await expect(panel.getByTestId("field-status")).toHaveCount(0);
   await expect(panel.getByTestId("field-title")).toHaveCount(0);
 });
@@ -84,7 +94,8 @@ test("a note created through the API appears in its type list and opens with its
 test("search finds a note and opens it", async ({ page, admin }) => {
   const word = `zebra${Date.now().toString(36)}`;
   const created = await createTask(admin, { title: unique("Searchable") }, `A note about the ${word}.`);
-  await logIn(page);
+  // The search page has its own box.
+  await logIn(page, "/search");
   await page.getByRole("searchbox", { name: "Search notes" }).fill(word);
   await page.getByRole("searchbox", { name: "Search notes" }).press("Enter");
   await expect(page).toHaveURL(/\/search\?q=/);
@@ -100,9 +111,6 @@ test("a concurrent API write then a save from the UI shows the conflict view", a
 
   await logIn(page, `/notes/${created.id}`);
   await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
-  await page.getByRole("button", { name: "Edit" }).click();
-  await page.getByLabel("Title").fill(`${title} (mine)`);
-  await page.getByLabel("Status").selectOption("done");
 
   // An agent saves the note while the page has it open.
   const theirs = await admin.put(`/api/notes/${created.id}`, {
@@ -113,7 +121,9 @@ test("a concurrent API write then a save from the UI shows the conflict view", a
   });
   expect(theirs.status(), await theirs.text()).toBe(200);
 
-  await page.getByRole("button", { name: "Save" }).click();
+  // The page saves its edits over the version it opened.
+  await page.getByLabel("Title").fill(`${title} (mine)`);
+  await page.getByLabel("Status").selectOption("done");
   const conflict = page.getByTestId("conflict-view");
   await expect(conflict).toBeVisible();
   await expect(conflict.getByRole("heading", { name: "This note changed while you were editing" })).toBeVisible();
@@ -138,13 +148,13 @@ test("keeping the stored version after a conflict discards the edit", async ({ p
   const title = unique("Kept");
   const created = await createTask(admin, { title });
   await logIn(page, `/notes/${created.id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
-  await page.getByLabel("Title").fill(`${title} (mine)`);
+  await expect(page.getByLabel("Title")).toHaveValue(title);
   const theirs = await admin.put(`/api/notes/${created.id}`, {
     data: { base_version: created.version, note: { fields: { title: `${title} (theirs)` }, blocks: [] } },
   });
   expect(theirs.status()).toBe(200);
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByLabel("Title").fill(`${title} (mine)`);
+  await page.getByLabel("Title").blur();
   await page.getByRole("button", { name: "Keep the stored version" }).click();
   await expect(page.getByTestId("conflict-view")).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1, name: `${title} (theirs)` })).toBeVisible();
@@ -211,12 +221,12 @@ test.describe("at tablet width", () => {
   test("the sidebar opens from the menu button", async ({ page }) => {
     await logIn(page);
     const nav = page.getByRole("navigation", { name: "Main" });
-    const types = nav.getByRole("link", { name: "Types" });
-    await expect(types).not.toBeInViewport();
+    const daily = nav.getByRole("link", { name: "Daily notes" });
+    await expect(daily).not.toBeInViewport();
     await page.getByRole("button", { name: "Menu" }).click();
-    await expect(types).toBeInViewport();
-    await types.click();
-    await expect(page.getByRole("heading", { name: "Types" })).toBeVisible();
-    await expect(types).not.toBeInViewport();
+    await expect(daily).toBeInViewport();
+    await daily.click();
+    await expect(page.getByRole("navigation", { name: "Day" })).toBeVisible();
+    await expect(daily).not.toBeInViewport();
   });
 });

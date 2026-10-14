@@ -31,10 +31,10 @@ test.describe("with a dark system preference", () => {
   });
 });
 
-test("the sidebar holds only Home and Types, with trash and settings beside the theme switch", async ({ page }) => {
+test("the sidebar holds only Daily notes and Search, with trash and settings beside the theme switch", async ({ page }) => {
   await logIn(page);
   const main = page.getByRole("navigation", { name: "Main" });
-  await expect(main.getByRole("link")).toHaveText(["Home", "Types"]);
+  await expect(main.getByRole("link")).toHaveText(["Daily notes", "Search"]);
 
   const trash = page.locator(".sidebar-footer").getByRole("link", { name: "Trash" });
   await trash.click();
@@ -43,10 +43,10 @@ test("the sidebar holds only Home and Types, with trash and settings beside the 
   await expect(trash).toHaveClass(/active/);
 });
 
-test("taxonomies, scripts, tasks, secrets and API tokens live under settings", async ({ page }) => {
+test("types, taxonomies, tasks, secrets and API tokens live under settings, and scripts are not a section", async ({ page }) => {
   await logIn(page);
   const main = page.getByRole("navigation", { name: "Main" });
-  for (const moved of ["Taxonomies", "Scripts", "Tasks", "Secrets", "API tokens"]) {
+  for (const moved of ["Types", "Taxonomies", "Tasks", "Secrets", "API tokens"]) {
     await expect(main.getByRole("link", { name: moved, exact: true })).toHaveCount(0);
   }
 
@@ -56,8 +56,8 @@ test("taxonomies, scripts, tasks, secrets and API tokens live under settings", a
   await expect(page.getByRole("heading", { name: "General settings" })).toBeVisible();
 
   for (const [tab, heading, path] of [
+    ["Types", "Types", "/settings/types"],
     ["Taxonomies", "Taxonomies", "/settings/taxonomies"],
-    ["Scripts", "Scripts", "/settings/scripts"],
     ["Tasks", "Tasks", "/settings/tasks"],
     ["Secrets", "Secrets", "/settings/secrets"],
     ["API tokens", "API tokens", "/settings/tokens"],
@@ -66,6 +66,7 @@ test("taxonomies, scripts, tasks, secrets and API tokens live under settings", a
     await expect(page).toHaveURL(new RegExp(`${path}$`));
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
+  await expect(tabs.getByRole("link")).toHaveText(["General", "Types", "Taxonomies", "Tasks", "Secrets", "API tokens"]);
 });
 
 test("old admin addresses go to their place under settings", async ({ page }) => {
@@ -73,12 +74,12 @@ test("old admin addresses go to their place under settings", async ({ page }) =>
   await expect(page).toHaveURL(/\/settings\/tokens$/);
   await expect(page.getByRole("heading", { name: "API tokens" })).toBeVisible();
   await page.goto("/scripts");
-  await expect(page).toHaveURL(/\/settings\/scripts$/);
+  await expect(page).toHaveURL(/\/settings\/types$/);
   await page.goto("/taxonomies");
   await expect(page).toHaveURL(/\/settings\/taxonomies$/);
 });
 
-test("the types button opens a gallery with a card for every type", async ({ page, admin }) => {
+test("the Types tab in settings is a gallery with a card for every type", async ({ page, admin }) => {
   // A type of this test's own, so notes other tests create in parallel cannot change its count.
   const name = `gallery_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const plural = `Gallery ${name.slice(8)}`;
@@ -90,13 +91,16 @@ test("the types button opens a gallery with a card for every type", async ({ pag
     expect(res.status(), await res.text()).toBe(201);
   }
 
-  await logIn(page);
-  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Types" }).click();
-  await expect(page).toHaveURL(/\/types$/);
+  // Read the types before the page does, so types other tests add meanwhile only add cards.
+  const types = ((await (await admin.get("/api/types")).json()) as { types: unknown[] }).types;
+  await logIn(page, "/settings");
+  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Types" }).click();
+  await expect(page).toHaveURL(/\/settings\/types$/);
   await expect(page.getByRole("heading", { name: "Types", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Types" })).toHaveClass(/active/);
 
   const gallery = page.getByRole("list", { name: "Types" });
-  const types = ((await (await admin.get("/api/types")).json()) as { types: unknown[] }).types;
+  await expect(gallery.getByRole("listitem").filter({ hasText: plural })).toBeVisible();
   // One card per type, plus the assets card and the card that creates a new type. Other tests may
   // add types meanwhile.
   expect(await gallery.getByRole("listitem").count()).toBeGreaterThanOrEqual(types.length + 2);
@@ -107,15 +111,54 @@ test("the types button opens a gallery with a card for every type", async ({ pag
   await expect(card.getByTestId("type-count")).toHaveText("2 notes");
   await expect(card).toContainText(/\d+ fields?/);
 
-  await expect(gallery.getByRole("link", { name: /New type/ })).toHaveAttribute("href", "/types/new");
+  await expect(gallery.getByRole("link", { name: /New type/ })).toHaveAttribute("href", "/settings/types/new");
+  await expect(card.getByRole("link", { name: "Edit type" })).toHaveAttribute("href", `/settings/types/${name}/edit`);
+  // The card's main area opens the type's note list, outside settings.
   await card.getByRole("link", { name: new RegExp(`^${plural}`) }).click();
   await expect(page).toHaveURL(new RegExp(`/types/${name}$`));
   await expect(page.getByRole("heading", { name: plural })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Settings sections" })).toHaveCount(0);
+});
+
+test("the type and template editors open under the settings tabs, and their old addresses redirect", async ({ page, admin }) => {
+  const name = `under_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const wcl = `label = "${name}"\n\ntemplate default {\n  tab "Main" {\n    slot "title"\n  }\n}\n`;
+  const put = await admin.put(`/api/types/${name}`, { data: { wcl } });
+  expect(put.status(), await put.text()).toBe(200);
+
+  await logIn(page, "/settings/types");
+  const tabs = page.getByRole("navigation", { name: "Settings sections" });
+  const card = page.getByRole("list", { name: "Types" }).getByRole("listitem").filter({ hasText: name });
+  await card.getByRole("link", { name: "Edit type" }).click();
+  await expect(page).toHaveURL(new RegExp(`/settings/types/${name}/edit$`));
+  await expect(tabs.getByRole("link", { name: "Types" })).toHaveClass(/active/);
+  await expect(page.getByRole("link", { name: "Templates" })).toHaveAttribute("href", `/settings/types/${name}/templates`);
+  await page.getByRole("link", { name: "Templates" }).click();
+  await expect(page).toHaveURL(new RegExp(`/settings/types/${name}/templates$`));
+  await expect(tabs).toBeVisible();
+  await expect(page.getByRole("link", { name: "Edit fields" })).toHaveAttribute("href", `/settings/types/${name}/edit`);
+
+  await page.goto(`/types/${name}/edit?from=old`);
+  await expect(page).toHaveURL(new RegExp(`/settings/types/${name}/edit\\?from=old$`));
+  await expect(tabs).toBeVisible();
+  await page.goto(`/types/${name}/templates`);
+  await expect(page).toHaveURL(new RegExp(`/settings/types/${name}/templates$`));
+  await page.goto("/types/new");
+  await expect(page).toHaveURL(/\/settings\/types\/new$/);
+  await expect(tabs.getByRole("link", { name: "Types" })).toHaveClass(/active/);
+  await page.goto("/types");
+  await expect(page).toHaveURL(/\/settings\/types$/);
+  await expect(page.getByRole("list", { name: "Types" })).toBeVisible();
+  // The note list keeps its address, outside settings.
+  await page.goto(`/types/${name}`);
+  await expect(page).toHaveURL(new RegExp(`/types/${name}$`));
+  await expect(tabs).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Edit type" })).toHaveAttribute("href", `/settings/types/${name}/edit`);
 });
 
 test("assets open from their card in the types gallery", async ({ page, admin }) => {
   const assets = ((await (await admin.get("/api/assets")).json()) as { assets: unknown[] }).assets;
-  await logIn(page, "/types");
+  await logIn(page, "/settings/types");
   const card = page.getByRole("list", { name: "Types" }).getByRole("listitem").filter({ hasText: "Images and files" });
   await expect(card.getByTestId("asset-count")).toHaveText(/^\d+ files?$/);
   const shown = Number((await card.getByTestId("asset-count").textContent())!.split(" ")[0]);

@@ -1,0 +1,29 @@
+label       = "Daily note"
+plural      = "Daily notes"
+description = "One note for each day."
+icon        = "calendar-days"
+colour      = "orange"
+
+field date {
+  kind     = "date"
+  label    = "Date"
+  required = true
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+template default {
+  tab "Day" {
+    slot "body"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "date"
+  }
+}

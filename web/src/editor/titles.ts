@@ -6,6 +6,8 @@ import { ApiError, api } from "../api";
 
 /** `undefined` while loading, `null` when the note does not exist or could not be read. */
 const [titles, setTitles] = createStore<Record<string, string | null>>({});
+/** Each loaded note's type, for the icon beside its title in tabs. */
+const [types, setTypes] = createStore<Record<string, string>>({});
 const requested = new Set<string>();
 
 /** The current title of note `id`, loading it on first use. Reactive. */
@@ -16,6 +18,7 @@ export function noteTitle(id: string): string | null | undefined {
       (n) => {
         const t = n.note.fields.title;
         setTitles(id, typeof t === "string" ? t : null);
+        setTypes(id, n.type);
       },
       (e) => {
         setTitles(id, null);
@@ -26,10 +29,17 @@ export function noteTitle(id: string): string | null | undefined {
   return titles[id];
 }
 
+/** The type of note `id`, once its title has loaded. Reactive. */
+export function noteType(id: string): string | undefined {
+  noteTitle(id);
+  return types[id];
+}
+
 /** Record a title this client already knows, after a save or a search. */
-export function knowTitle(id: string, title: string) {
+export function knowTitle(id: string, title: string, type?: string) {
   requested.add(id);
   setTitles(id, title);
+  if (type) setTypes(id, type);
 }
 
 /** Text for a mention: its label, else its target's title, else a placeholder. */

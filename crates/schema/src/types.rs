@@ -339,15 +339,14 @@ impl TypeDef {
         self.templates.iter().find(|t| t.name == name)
     }
 
-    /// The template a view asks for by name, with the fallbacks of `docs/vault-format.md`:
-    /// `detail` falls back to `default`, and `card` to the first tab of `default`.
+    /// The template a view asks for by name, with the fallback of `docs/vault-format.md`: `card`
+    /// falls back to the first tab of `default`.
     pub fn resolve_template(&self, name: &str) -> Option<Template> {
         if let Some(t) = self.template(name) {
             return Some(t.clone());
         }
         let default = self.template("default")?;
         match name {
-            "detail" => Some(default.clone()),
             "card" => Some(Template {
                 name: "card".to_owned(),
                 label: None,
@@ -598,8 +597,19 @@ fn reference(
     })
 }
 
+/// The only templates a type may have: `default` for the note page, `card` for cards, kanban,
+/// map pins and canvas nodes. Both may have tabs.
+pub const TEMPLATE_NAMES: [&str; 2] = ["default", "card"];
+
 fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Option<Template> {
     let name = c.ident_label(b, at)?.to_owned();
+    if !TEMPLATE_NAMES.contains(&name.as_str()) {
+        c.fail(
+            at,
+            format!("{name:?} is not a template a type can have: only `default` and `card`"),
+        );
+        return None;
+    }
     let d = &b.body;
     c.items(d, &[opt("label", Form::Str)], &[], at);
     c.only_blocks(d, &["tab"], at);
@@ -644,6 +654,7 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
                 let block_at = format!("{tab_at} > {}#{}", block.kind, n + 1);
                 c.no_label(block, &block_at);
                 c.content_block(block, &block_at);
+                check_field_refs(c, &block.body, fields, &block_at);
                 items.push(TabItem::Block(block.clone()));
             } else {
                 c.fail(
@@ -659,6 +670,61 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
         label: string(d, "label"),
         tabs,
     })
+}
+
+/// Every `{{name}}` in the `text` items of a fixed template block, at any depth, must name
+/// `title` or a field of the type. `{{name}}` is template-only markup: in a note it is text.
+fn check_field_refs(c: &mut Check, d: &Doc, fields: &[FieldDef], at: &str) {
+    if let Some(text) = string(d, "text") {
+        for name in field_refs(&text) {
+            if name != "title" && !fields.iter().any(|f| f.name == name) {
+                c.fail(
+                    &format!("{at}.text"),
+                    format!("`{{{{{name}}}}}` names no field of the type"),
+                );
+            }
+        }
+    }
+    for b in &d.blocks {
+        check_field_refs(c, &b.body, fields, &format!("{at} > {}", b.name()));
+    }
+}
+
+/// The names of the `{{name}}` references in inline markup, in order. A backslash-escaped `{`
+/// starts no reference, and a code span holds none. `name` is an identifier.
+pub fn field_refs(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 2,
+            '`' => match chars[i + 1..].iter().position(|&c| c == '`') {
+                Some(k) => i += k + 2,
+                None => i += 1,
+            },
+            '{' if chars.get(i + 1) == Some(&'{') => {
+                let start = i + 2;
+                let mut j = start;
+                while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                    j += 1;
+                }
+                let name: String = chars[start..j].iter().collect();
+                if j > start
+                    && !chars[start].is_ascii_digit()
+                    && chars.get(j) == Some(&'}')
+                    && chars.get(j + 1) == Some(&'}')
+                {
+                    out.push(name);
+                    i = j + 2;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    out
 }
 
 fn handler(c: &mut Check, b: &DocBlock) -> Option<Handler> {

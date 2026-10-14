@@ -17,8 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 
 pub use auth::{Scope, TokenInfo};
-pub use history::{Author, PrunePolicy, TrashEntry, Version};
+pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, Version};
 pub use jobs::{HandlerJob, JobStatus};
+pub use pins::{PinEntry, PinKind, PinNode};
 pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{SecretInfo, SecretKey, key_file_path};
 
@@ -56,6 +57,12 @@ pub enum Error {
     RunFinished(RunId),
     #[error("password hashing failed: {0}")]
     PasswordHash(String),
+    #[error("nothing pinned with id {0}")]
+    UnknownPin(String),
+    #[error("cannot move pin {id} into {target}: it is {id} itself or inside it")]
+    PinCycle { id: String, target: String },
+    #[error("a folder name cannot be empty")]
+    EmptyFolderName,
     #[error("state.db is corrupt: {0}")]
     Corrupt(String),
 }
@@ -86,7 +93,7 @@ pub struct State {
     clock: Arc<dyn Clock>,
 }
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -182,6 +189,31 @@ CREATE TABLE IF NOT EXISTS pins (
 );
 ";
 
+/// What version 5 adds: when a version's run of merged browser saves began.
+const SCHEMA_V5: &str = "
+ALTER TABLE versions ADD COLUMN started_ms INTEGER;
+";
+
+/// What version 6 adds: pins become a tree. An entry is a pinned note (its id is the note's id) or
+/// a folder (its id is made up, and it has a name). Every entry has a parent, `NULL` for the root,
+/// and a position among its siblings. The flat version 4 pins move to the root in their order.
+const SCHEMA_V6: &str = "
+CREATE TABLE IF NOT EXISTS pin_entries (
+    id         TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL CHECK (kind IN ('note', 'folder')),
+    name       TEXT,
+    parent     TEXT,
+    position   INTEGER NOT NULL,
+    created_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pin_entries_parent ON pin_entries (parent, position);
+INSERT OR IGNORE INTO pin_entries (id, kind, name, parent, position, created_ms)
+    SELECT note_id, 'note', NULL, NULL,
+           ROW_NUMBER() OVER (ORDER BY position, pinned_ms) - 1, pinned_ms
+    FROM pins;
+DROP TABLE IF EXISTS pins;
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -255,7 +287,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=3 => {
+        0..=5 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -266,7 +298,20 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             if version <= 2 {
                 tx.execute_batch(SCHEMA_V3)?;
             }
-            tx.execute_batch(SCHEMA_V4)?;
+            if version <= 3 {
+                tx.execute_batch(SCHEMA_V4)?;
+            }
+            let has_started: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM pragma_table_info('versions') WHERE name = 'started_ms')",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_started {
+                tx.execute_batch(SCHEMA_V5)?;
+            }
+            if version <= 5 {
+                tx.execute_batch(SCHEMA_V6)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

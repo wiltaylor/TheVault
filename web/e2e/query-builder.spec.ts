@@ -46,13 +46,16 @@ async function storedQuery(admin: APIRequestContext, id: string): Promise<string
 async function editNote(p: Page, id: string, title: string) {
   await logIn(p, `/notes/${id}`);
   await expect(p.getByRole("heading", { level: 1, name: title })).toBeVisible();
-  await p.getByRole("button", { name: "Edit" }).click();
+  // The query view shows its results; its settings open in place.
+  await p.getByRole("button", { name: "Edit query view" }).click();
   return p.getByRole("group", { name: "Query view settings" });
 }
 
+/** Leave the settings, which saves any change at once, and wait for the save to settle. */
 async function save(p: Page) {
-  await p.getByRole("button", { name: "Save" }).click();
-  await expect(p.getByRole("button", { name: "Edit" })).toBeVisible();
+  await p.getByLabel("Title", { exact: true }).focus();
+  await p.waitForTimeout(1800);
+  await expect(p.getByTestId("save-status")).not.toHaveText(/Saving|Unsaved/);
 }
 
 test("building a query with a type, two conditions, a sort and a limit produces the expected text", async ({

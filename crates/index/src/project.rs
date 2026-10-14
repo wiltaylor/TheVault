@@ -283,8 +283,7 @@ fn block_text(body: &Doc, text: &mut Vec<String>, mentioned: &mut Vec<String>) {
 }
 
 fn visit(b: &DocBlock, text: &mut Vec<String>, mentioned: &mut Vec<String>) {
-    let markup = MARKUP_BLOCKS.contains(&b.kind.as_str())
-        || (b.kind == "node" && b.body.field("kind").and_then(Value::as_str) == Some("text"));
+    let markup = MARKUP_BLOCKS.contains(&b.kind.as_str());
     for (name, v) in &b.body.fields {
         let Some(s) = v.as_str() else { continue };
         if !TEXT_ITEMS.contains(&name.as_str()) {

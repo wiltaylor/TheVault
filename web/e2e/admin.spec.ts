@@ -71,26 +71,24 @@ template default {
   );
   const note = await createNote(admin, type, "Hello");
 
-  // Write the script in the script editor. A broken draft shows why it does not compile.
-  await logIn(page, "/scripts");
-  await page.getByLabel("New script").fill(script);
-  await page.getByRole("button", { name: "Create script" }).click();
-  await expect(page).toHaveURL(new RegExp(`/scripts/${script}$`));
-  await replaceCode(page, "fn count_words( {\n");
-  await page.getByRole("button", { name: "Save script" }).click();
-  await expect(page.getByRole("alert", { name: "Script problems" })).toContainText("does not compile");
-  await replaceCode(page, COUNT);
-  await page.getByRole("button", { name: "Save script" }).click();
-  await expect(page.getByRole("status")).toHaveText("Saved.");
-  await expect(page.getByRole("alert", { name: "Script problems" })).toHaveCount(0);
-  expect(((await (await admin.get(`/api/scripts/${script}`)).json()) as { source: string }).source).toBe(COUNT);
-
-  // Register it as the type's before_update handler.
-  await page.goto(`/types/${type}/edit`);
+  // Add a before_update handler, and write its script right there in the handler. A broken draft
+  // shows why it does not compile.
+  await logIn(page, `/settings/types/${type}/edit`);
   await page.getByRole("button", { name: "Add handler" }).click();
   const card = page.getByTestId("handler-card-0");
   await card.getByLabel("Event").selectOption("before_update");
-  await card.getByLabel("Script").selectOption(script);
+  await card.getByLabel("Script", { exact: true }).selectOption({ label: "New script…" });
+  await card.getByLabel("New script name").fill(script);
+  await card.getByRole("button", { name: "Create script" }).click();
+  await expect(card.getByLabel("Script", { exact: true })).toHaveValue(script);
+  await replaceCode(page, "fn count_words( {\n");
+  await card.getByRole("button", { name: "Save script" }).click();
+  await expect(card.getByRole("alert", { name: "Script problems" })).toContainText("does not compile");
+  await replaceCode(page, COUNT);
+  await card.getByRole("button", { name: "Save script" }).click();
+  await expect(card.getByRole("status")).toHaveText("Saved.");
+  await expect(card.getByRole("alert", { name: "Script problems" })).toHaveCount(0);
+  expect(((await (await admin.get(`/api/scripts/${script}`)).json()) as { source: string }).source).toBe(COUNT);
   await card.getByLabel("Function").fill("count_words");
   await page.getByRole("button", { name: "Preview changes" }).click();
   await page.getByRole("button", { name: "Apply changes" }).click();
@@ -100,10 +98,8 @@ template default {
 
   // Saving the note runs it.
   await page.goto(`/notes/${note.id}`);
-  await page.getByRole("button", { name: "Edit" }).click();
   await page.getByLabel("Title").fill("Hello brave new world");
-  await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
   await expect(page.getByTestId("field-words")).toContainText("4");
   expect((await readNote(admin, note.id)).body.note.fields.words).toBe(4);
 });
@@ -164,7 +160,7 @@ test("a note is restored from its history and from the trash in the UI", async (
   await expect(page.getByRole("region", { name: "Chosen version" })).toContainText(`First ${t}`);
   await page.getByRole("button", { name: "Restore this version" }).click();
   await expect(page).toHaveURL(new RegExp(`/notes/${note.id}$`));
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(`First ${t}`);
+  await expect(page.getByRole("heading", { level: 1, name: `First ${t}`, exact: true })).toBeVisible();
   expect((await readNote(admin, note.id)).body.note.fields.title).toBe(`First ${t}`);
 
   // Delete it from the note page, then bring it back from the trash.
@@ -178,7 +174,7 @@ test("a note is restored from its history and from the trash in the UI", async (
   await expect(row).toContainText(`First ${t}`);
   await row.getByRole("button", { name: "Restore" }).click();
   await expect(page).toHaveURL(new RegExp(`/notes/${note.id}$`));
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(`First ${t}`);
+  await expect(page.getByRole("heading", { level: 1, name: `First ${t}`, exact: true })).toBeVisible();
   expect((await readNote(admin, note.id)).status).toBe(200);
   await page.goto("/trash");
   await expect(page.locator(`tr[data-note="${note.id}"]`)).toHaveCount(0);

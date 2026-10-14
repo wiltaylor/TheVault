@@ -619,6 +619,26 @@ fn templates_are_read_replaced_and_deleted_inside_the_type_file() {
         .send()
         .unwrap();
     assert_eq!(expect(res, 400)["error"], "invalid_type");
+    // `{{name}}` in a fixed block's text must name `title` or a field of the type.
+    let res = api
+        .put("/api/types/task/templates/card")
+        .json(&json!({ "wcl": "template card {\n  tab \"C\" {\n    paragraph {\n      text = \"Due {{nope}}\"\n    }\n  }\n}\n" }))
+        .send()
+        .unwrap();
+    let refused = expect(res, 400);
+    assert_eq!(refused["error"], "invalid_type");
+    assert!(
+        refused
+            .to_string()
+            .contains("`{{nope}}` names no field of the type"),
+        "{refused}"
+    );
+    let res = api
+        .put("/api/types/task/templates/card")
+        .json(&json!({ "wcl": "template card {\n  tab \"C\" {\n    paragraph {\n      text = \"{{title}}: {{estimate}} hours\"\n    }\n  }\n}\n" }))
+        .send()
+        .unwrap();
+    expect(res, 200);
     // The label must match the path.
     let res = api
         .put("/api/types/task/templates/card")

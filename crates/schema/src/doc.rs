@@ -90,9 +90,12 @@ impl Doc {
     }
 
     /// The view of a syntax tree that `store::parse_data_only` accepted. Items outside the
-    /// data-only subset are skipped.
+    /// data-only subset are skipped. Canvas nodes of the kinds older vaults used are read as the
+    /// cards that replace them (see [`crate::migrate`]).
     pub fn from_source(ast: &Source) -> Doc {
-        body(&ast.items)
+        let mut doc = body(&ast.items);
+        crate::migrate::canvases(&mut doc);
+        doc
     }
 
     /// The first field called `name`.

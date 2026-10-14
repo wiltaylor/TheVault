@@ -14,6 +14,8 @@ export interface FieldInputProps {
   onChange: (value: Json | undefined) => void;
   label: string;
   id: string;
+  /** Shown in an empty text-like input. */
+  placeholder?: string;
 }
 
 const SCALAR_INPUT: Record<string, string> = {
@@ -72,6 +74,7 @@ export function ScalarInput(props: {
   label: string;
   id?: string;
   required?: boolean;
+  placeholder?: string;
 }) {
   return (
     <Show
@@ -83,6 +86,7 @@ export function ScalarInput(props: {
           step={props.kind === "float" ? "any" : props.kind === "datetime" ? "1" : undefined}
           value={scalarText(props.kind, props.value)}
           required={props.required}
+          placeholder={props.placeholder}
           aria-label={props.label}
           onInput={(e) => props.onChange(scalarValue(props.kind, e.currentTarget.value, props.value))}
         />
@@ -495,6 +499,7 @@ export function FieldInput(props: FieldInputProps) {
           label={props.label}
           id={props.id}
           required={f().required}
+          placeholder={props.placeholder}
         />
       }
     >

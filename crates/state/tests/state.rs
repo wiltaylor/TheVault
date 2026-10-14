@@ -207,7 +207,7 @@ fn trashing_a_note_without_history_fails() {
 fn pruning_by_count_keeps_exactly_n_versions() {
     let dir = TempDir::new().unwrap();
     let state = open(&dir);
-    let author = Author::Session("s".into());
+    let author = Author::Token("agent".into());
     for i in 0..7 {
         state
             .record_version(NOTE_A, "task", &author, &format!("a{i}"))
@@ -240,7 +240,7 @@ fn pruning_by_count_keeps_exactly_n_versions() {
 fn pruning_is_off_by_default() {
     let dir = TempDir::new().unwrap();
     let state = open(&dir);
-    let author = Author::Session("s".into());
+    let author = Author::Token("agent".into());
     for i in 0..5 {
         state
             .record_version(NOTE_A, "task", &author, &format!("{i}"))
@@ -268,7 +268,7 @@ fn pruning_by_age_keeps_the_current_version() {
     let dir = TempDir::new().unwrap();
     let clock = TestClock::new(0);
     let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
-    let author = Author::Session("s".into());
+    let author = Author::Token("agent".into());
     state
         .record_version(NOTE_A, "task", &author, "old1")
         .unwrap();
@@ -704,4 +704,76 @@ fn a_backup_copy_holds_the_history_and_the_vault_id() {
     let restored = State::open(&copy, None).unwrap();
     assert_eq!(restored.vault_id().unwrap(), id);
     assert_eq!(restored.history(NOTE_A).unwrap().len(), 1);
+}
+
+#[test]
+fn rapid_browser_saves_merge_into_one_version_with_a_new_token() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(0);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+    let me = Author::Session("browser".into());
+
+    let first = state.record_version(NOTE_A, "task", &me, "t").unwrap();
+    clock.advance(1_500);
+    let second = state.record_version(NOTE_A, "task", &me, "ty").unwrap();
+    clock.advance(1_500);
+    let third = state.record_version(NOTE_A, "task", &me, "typed").unwrap();
+
+    let history = state.history(NOTE_A).unwrap();
+    assert_eq!(history.len(), 1, "{history:?}");
+    assert_eq!(history[0].content, "typed");
+    assert_eq!(history[0].at_ms, 3_000);
+    // Every save still moves the token, so a stale writer gets a conflict (D12).
+    assert_ne!(first.token, second.token);
+    assert_ne!(second.token, third.token);
+    assert_eq!(state.current_version(NOTE_A).unwrap(), Some(third.token));
+}
+
+#[test]
+fn a_pause_another_author_or_a_long_run_starts_a_new_version() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(0);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+    let me = Author::Session("browser".into());
+
+    state.record_version(NOTE_A, "task", &me, "a").unwrap();
+    clock.advance(state::MERGE_GAP_MS + 1);
+    state.record_version(NOTE_A, "task", &me, "b").unwrap();
+    assert_eq!(state.history(NOTE_A).unwrap().len(), 2, "a pause");
+
+    clock.advance(1_000);
+    state
+        .record_version(NOTE_A, "task", &Author::Handler("count".into()), "c")
+        .unwrap();
+    clock.advance(1_000);
+    state.record_version(NOTE_A, "task", &me, "d").unwrap();
+    assert_eq!(
+        state.history(NOTE_A).unwrap().len(),
+        4,
+        "another author in between"
+    );
+
+    // Saving every minute keeps merging until the run is MERGE_SPAN_MS old.
+    let mut saves = 0;
+    while saves * 60_000 <= state::MERGE_SPAN_MS {
+        clock.advance(60_000);
+        state
+            .record_version(NOTE_A, "task", &me, &format!("e{saves}"))
+            .unwrap();
+        saves += 1;
+    }
+    assert_eq!(state.history(NOTE_A).unwrap().len(), 5, "a long run");
+}
+
+#[test]
+fn saves_by_tokens_never_merge() {
+    let dir = TempDir::new().unwrap();
+    let state = open(&dir);
+    let agent = Author::Token("agent".into());
+    for i in 0..3 {
+        state
+            .record_version(NOTE_A, "task", &agent, &format!("{i}"))
+            .unwrap();
+    }
+    assert_eq!(state.history(NOTE_A).unwrap().len(), 3);
 }

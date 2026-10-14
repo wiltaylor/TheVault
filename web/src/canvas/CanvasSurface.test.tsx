@@ -1,6 +1,6 @@
 import { fireEvent, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { Block } from "../api";
 import { canvasOf } from "./canvas";
 import { CanvasSurface } from "./CanvasSurface";
@@ -19,30 +19,55 @@ const twoNodes = (): Block => ({
   labels: ["board"],
   blocks: [
     { kind: "viewport", fields: { x: 0, y: 0, zoom: 1 } },
-    { kind: "node", labels: ["a"], fields: { kind: "text", x: 0, y: 0, width: 100, height: 50, text: "**A**" } },
-    { kind: "node", labels: ["b"], fields: { kind: "link", x: 300, y: 0, width: 100, height: 50, url: "https://example.com/x" } },
+    {
+      kind: "node",
+      labels: ["a"],
+      fields: { kind: "card", x: 0, y: 0, width: 100, height: 50 },
+      blocks: [{ kind: "paragraph", fields: { text: "**A**" } }],
+    },
+    {
+      kind: "node",
+      labels: ["b"],
+      fields: { kind: "card", x: 300, y: 0, width: 100, height: 50 },
+      blocks: [{ kind: "paragraph", fields: { text: "[x](https://example.com/x)" } }],
+    },
   ],
 });
 
 describe("CanvasSurface", () => {
+  // The zoom controls' open state lasts the browser session; each test starts with them shut.
+  beforeEach(() => sessionStorage.clear());
+
   it("adds nodes, joins two with an edge, moves one, and keeps its label", () => {
     const [block, setBlock] = createSignal<Block>(twoNodes());
-    const { getByRole, getAllByTestId, container } = render(() => (
+    const { getByRole, getAllByTestId, getByTestId, container } = render(() => (
       <CanvasSurface block={block()} label="Board" onChange={setBlock} />
     ));
     expect(getAllByTestId("canvas-node")).toHaveLength(2);
     expect(container.querySelector("strong")?.textContent).toBe("A");
 
-    fireEvent.click(getByRole("button", { name: "Add text" }));
-    expect(canvasOf(block()).nodes.map((n) => n.id)).toEqual(["a", "b", "text"]);
+    // No toolbar: "+" in the corner opens the popup, whose Card adds an empty card.
+    expect(container.querySelector(".canvas-toolbar")).toBeNull();
+    fireEvent.click(getByRole("button", { name: "Add to canvas" }));
+    expect(
+      [...container.querySelectorAll(".canvas-popup button")].map((b) => b.querySelector("strong")?.textContent ?? b.textContent?.trim()),
+    ).toEqual(["Card", "Note", "Group"]);
+    fireEvent.click(getByRole("button", { name: /Card/ }));
+    expect(canvasOf(block()).nodes.map((n) => [n.id, n.kind])).toEqual([
+      ["a", "card"],
+      ["b", "card"],
+      ["card", "card"],
+    ]);
 
-    fireEvent.click(getByRole("button", { name: "Connect" }));
-    const [a, b] = getAllByTestId("canvas-node");
-    fireEvent.pointerDown(a!, at(10, 10));
-    fireEvent.pointerDown(b!, at(310, 10));
-    expect(canvasOf(block()).edges).toMatchObject([{ id: "a_to_b", from: "a", to: "b" }]);
+    // Dragging from a's right port and dropping on b joins them, with the closest sides saved.
+    fireEvent.pointerEnter(getAllByTestId("canvas-node")[0]!);
+    const port = container.querySelector('[data-testid="canvas-port"][data-node="a"][data-side="right"]')!;
+    fireEvent.pointerDown(port, at(100, 25));
+    fireEvent.pointerMove(getByTestId("canvas-view"), at(200, 25));
+    expect(getByTestId("canvas-edge-preview")).toBeTruthy();
+    fireEvent.pointerUp(getByTestId("canvas-view"), at(310, 10));
+    expect(canvasOf(block()).edges).toMatchObject([{ id: "a_to_b", from: "a", to: "b", fromSide: "right", toSide: "left" }]);
     expect(getAllByTestId("canvas-edge")).toHaveLength(1);
-    fireEvent.click(getByRole("button", { name: "Connect" }));
 
     drag(getAllByTestId("canvas-node")[0]!, [10, 10], [50, 30]);
     expect(canvasOf(block()).nodes[0]).toMatchObject({ id: "a", x: 40, y: 20 });
@@ -53,18 +78,62 @@ describe("CanvasSurface", () => {
     const start = twoNodes();
     start.blocks!.push({ kind: "edge", labels: ["e"], fields: { from: "a", to: "b" } });
     const [block, setBlock] = createSignal<Block>(start);
-    const { getByRole, getAllByTestId } = render(() => <CanvasSurface block={block()} label="Board" onChange={setBlock} />);
+    const { getByRole, getAllByTestId, container } = render(() => <CanvasSurface block={block()} label="Board" onChange={setBlock} />);
     fireEvent.pointerDown(getAllByTestId("canvas-node")[0]!, at(5, 5));
     fireEvent.pointerUp(getAllByTestId("canvas-node")[0]!, at(5, 5));
-    fireEvent.click(getByRole("button", { name: "Delete" }));
+    // No inspector: the selected node's own cluster holds its delete button.
+    expect(container.querySelector(".canvas-inspector")).toBeNull();
+    fireEvent.click(getByRole("toolbar", { name: "Card actions" }).querySelector('[aria-label="Delete"]')!);
     const c = canvasOf(block());
     expect(c.nodes.map((n) => n.id)).toEqual(["b"]);
     expect(c.edges).toEqual([]);
   });
 
+  it("sets a selected item's colour from its palette, and clears it with No colour", () => {
+    const [block, setBlock] = createSignal<Block>(twoNodes());
+    const { getByRole, container } = render(() => <CanvasSurface block={block()} label="Board" onChange={setBlock} />);
+    fireEvent.pointerDown(container.querySelector('[data-testid="canvas-node"][data-id="b"]')!, at(305, 5));
+    fireEvent.pointerUp(container.querySelector('[data-testid="canvas-view"]')!, at(305, 5));
+    fireEvent.click(getByRole("button", { name: "Colour" }));
+    fireEvent.click(getByRole("button", { name: "Purple" }));
+    expect(canvasOf(block()).nodes[1]?.colour).toBe("purple");
+    fireEvent.click(getByRole("button", { name: "Colour" }));
+    expect(getByRole("button", { name: "Purple" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(getByRole("button", { name: "No colour" }));
+    expect(block().blocks?.find((b) => b.labels?.[0] === "b")?.fields).not.toHaveProperty("colour");
+  });
+
+  it("sets a selected edge's arrows, and its caption", () => {
+    const start = twoNodes();
+    start.blocks!.push({ kind: "edge", labels: ["e"], fields: { from: "a", to: "b" } });
+    const [block, setBlock] = createSignal<Block>(start);
+    const { getByRole, getByLabelText, container } = render(() => <CanvasSurface block={block()} label="Board" onChange={setBlock} />);
+    fireEvent.pointerDown(container.querySelector('[data-testid="canvas-edge"]')!, at(200, 25));
+    fireEvent.pointerUp(container.querySelector('[data-testid="canvas-view"]')!, at(200, 25));
+    const cluster = getByRole("toolbar", { name: "Connection actions" });
+    for (const [name, arrow, heads] of [
+      ["Arrow at start", "start", ["start"]],
+      ["Arrows at both ends", "both", ["start", "end"]],
+      ["No arrows", "none", []],
+      ["Arrow at end", "end", ["end"]],
+    ] as const) {
+      fireEvent.click(cluster.querySelector(`[aria-label="${name}"]`)!);
+      expect(canvasOf(block()).edges[0]?.arrow).toBe(arrow);
+      expect([...container.querySelectorAll('[data-testid="canvas-arrowhead"]')].map((h) => h.getAttribute("data-end"))).toEqual(heads);
+    }
+    expect(block().blocks?.at(-1)?.fields).not.toHaveProperty("arrow");
+    fireEvent.click(getByRole("button", { name: "Edit caption" }));
+    const input = getByLabelText("Caption") as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "leads to" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(canvasOf(block()).edges[0]?.label).toBe("leads to");
+    expect(container.querySelector('[data-testid="canvas-edge-label"]')?.textContent).toBe("leads to");
+  });
+
   it("pans and zooms, saving the view while editing", () => {
     const [block, setBlock] = createSignal<Block>(twoNodes());
     const { getByRole, getByTestId } = render(() => <CanvasSurface block={block()} label="Board" onChange={setBlock} />);
+    fireEvent.click(getByRole("button", { name: "Zoom controls" }));
     fireEvent.click(getByRole("button", { name: "Zoom in" }));
     expect(canvasOf(block()).viewport.zoom).toBe(1.25);
     expect(getByTestId("canvas-zoom").textContent).toBe("125%");
@@ -78,7 +147,8 @@ describe("CanvasSurface", () => {
   it("moves the view without saving it, and edits nothing, when read-only", () => {
     const block = twoNodes();
     const { queryByRole, getByRole, getByTestId } = render(() => <CanvasSurface block={block} label="Board" />);
-    expect(queryByRole("button", { name: "Add text" })).toBeNull();
+    expect(queryByRole("button", { name: "Add to canvas" })).toBeNull();
+    if (!queryByRole("button", { name: "Zoom in" })) fireEvent.click(getByRole("button", { name: "Zoom controls" }));
     fireEvent.click(getByRole("button", { name: "Zoom in" }));
     expect(getByTestId("canvas-zoom").textContent).toBe("125%");
     expect(block).toEqual(twoNodes());

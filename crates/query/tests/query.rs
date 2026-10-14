@@ -559,6 +559,46 @@ fn table() -> Vec<(&'static str, Option<&'static str>, Vec<&'static str>, B)> {
             vec![T2, T3, T1, T4, T5],
             Model,
         ),
+        // contains and empty
+        (
+            "from * where contains(title, \"THE\")",
+            None,
+            vec![T1, T2, T3],
+            Text,
+        ),
+        (
+            "from task where contains(tags, \"od\")",
+            None,
+            vec![T1, T3],
+            Text,
+        ),
+        (
+            "from book where contains(author, \"klepp\")",
+            None,
+            vec![B1],
+            Text,
+        ),
+        ("from task where empty(estimate)", None, vec![T4, T5], Text),
+        ("from task where !empty(tags)", None, vec![T1, T2, T3], Text),
+        ("from task where empty(project)", None, vec![T5], Text),
+        (
+            "from task where empty(span)",
+            None,
+            vec![T2, T3, T4, T5],
+            Text,
+        ),
+        (
+            "from task where empty(topics)",
+            None,
+            vec![T2, T3, T5],
+            Text,
+        ),
+        (
+            "from task where !empty(status) && contains(title, \"i\") sort title",
+            None,
+            vec![T3, T1, T2],
+            Text,
+        ),
         // group by
         (
             "from task where !done group by status",
@@ -746,6 +786,61 @@ fn unknown_names_fail_before_any_note_is_read() {
         let err = ids(&f, text, None).unwrap_err().to_string();
         assert!(err.contains(want), "{text}: {err}");
     }
+}
+
+/// The shapes of query the web Search page writes from its filters (web/src/search).
+#[test]
+fn the_search_page_query_shapes_run() {
+    let f = fixture();
+    let cases: Vec<(&str, Vec<&str>)> = vec![
+        (
+            "from task where span.start <= \"2026-10-14\" && span.end >= \"2026-10-14\"",
+            vec![T1],
+        ),
+        ("from task where span.end > \"2026-10-19\"", vec![T1]),
+        ("from task where span.start < \"2026-10-13\"", vec![]),
+        (
+            "from task where starts_at >= \"2026-10-13T00:00:00+11:00\" && starts_at < \"2026-10-14T00:00:00+11:00\"",
+            vec![T1],
+        ),
+        (
+            "from task where created >= now() - days(30) sort updated desc",
+            vec![T1, T2, T3, T4, T5],
+        ),
+        (
+            "from * where created >= \"2026-10-01T00:00:00Z\" && created < \"2026-10-02T00:00:00Z\" && type == \"book\"",
+            vec![B1],
+        ),
+        (
+            "from task where due >= today() - days(7) && due <= today()",
+            vec![T4],
+        ),
+        (
+            "from task, project where type == \"task\" && done && type == \"project\"",
+            vec![],
+        ),
+        ("from task where any(tags, |v| v == \"docs\")", vec![T2]),
+        (
+            "from task where (status == \"Done\" || status == \"Inbox\") && !empty(project)",
+            vec![T2, T4],
+        ),
+        ("from * search \"compost\" sort title asc", vec![A2, T4]),
+    ];
+    for (text, want) in cases {
+        assert_eq!(ids(&f, text, None).unwrap(), want, "{text}");
+    }
+}
+
+#[test]
+fn contains_reads_only_text() {
+    let f = fixture();
+    let err = ids(&f, "from task where contains(estimate, \"3\")", None).unwrap_err();
+    assert!(err.to_string().contains("contains() reads text"), "{err}");
+    let err = ids(&f, "from task where contains(title, 3)", None).unwrap_err();
+    assert!(
+        err.to_string().contains("contains() looks for text"),
+        "{err}"
+    );
 }
 
 #[test]

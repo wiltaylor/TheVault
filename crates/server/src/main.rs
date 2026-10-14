@@ -65,6 +65,9 @@ fn main() -> anyhow::Result<()> {
             .with_clock(clock.clone())
             .with_hooks(handlers.hooks()),
     );
+    writer
+        .ensure_daily_type()
+        .context("adding the built-in daily note type")?;
     handlers.start(&writer);
     // The script hosts' HTTP clients block, so they are made outside the async runtime. Tasks
     // change notes through the writer, so a task's changes run handlers too.

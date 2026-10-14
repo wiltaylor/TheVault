@@ -108,3 +108,43 @@ export function comparedFields(type: TypeDef | undefined, a: NoteDoc, b: NoteDoc
 export function sameValue(a: Json | undefined, b: Json | undefined): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
+
+/** The fields the type's default template places with a slot, on any tab. */
+export function slottedFields(type: TypeDef): Set<string> {
+  const t = pageTemplate(type);
+  return new Set((t?.tabs ?? []).flatMap((tab) => tab.items.flatMap((i) => ("slot" in i ? [i.slot] : []))));
+}
+
+/**
+ * The type's fields the note page has no slot for, in type order: the properties sidebar edits
+ * these. A `{{name}}` reference is read-only, so it does not count as a place.
+ */
+export function unplacedFields(type: TypeDef): FieldDef[] {
+  const placed = slottedFields(type);
+  return type.fields.filter((f) => !placed.has(f.name));
+}
+
+/**
+ * The value `{{name}}` shows for a note: the title, a field's value, or `null` when the type has
+ * no field `name`. A compound field other than a dict shows nothing.
+ */
+export function refValue(type: TypeDef | undefined, doc: NoteDoc, name: string): Json | undefined | null {
+  const f = name === "title" ? TITLE_FIELD : type?.fields.find((x) => x.name === name);
+  if (!f) return null;
+  if (f.compound && f.kind !== "dict") return undefined;
+  return fieldValue(doc, f);
+}
+
+/** True when `v` is no value at all: missing, empty text or an empty list. */
+export function isBlank(v: Json | undefined): boolean {
+  return v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
+}
+
+/**
+ * The required fields a new note still lacks, by label: the title, then each required field
+ * that is not computed and has no default for the server to fill in.
+ */
+export function missingRequired(type: TypeDef, doc: NoteDoc): string[] {
+  const fields = [TITLE_FIELD, ...type.fields].filter((f) => f.required && !f.computed && f.default === undefined);
+  return fields.filter((f) => isBlank(fieldValue(doc, f))).map((f) => f.label);
+}

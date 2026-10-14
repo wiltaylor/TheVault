@@ -1,9 +1,9 @@
 import { Editor } from "@tiptap/core";
 import { afterAll, describe, expect, it } from "vitest";
-import type { Block } from "../api";
-import { blocksToDoc, docToBlocks } from "./doc";
+import type { Block, TemplateItem } from "../api";
+import { blocksToDoc, docToBlocks, docToItems, itemsToDoc } from "./doc";
 import { editorExtensions } from "./extensions";
-import { type InlineNode, parseInline, serializeInline } from "./markup";
+import { type InlineNode, fieldRefNames, parseInline, renameFieldRefs, serializeInline } from "./markup";
 import { knowTitle } from "./titles";
 
 const ID = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
@@ -163,5 +163,46 @@ describe("text to editor to text", () => {
     editor.commands.focus("end");
     editor.commands.enter();
     expect(docToBlocks(editor.getJSON())).toEqual([{ kind: "paragraph", fields: { text: "x" } }]);
+  });
+});
+
+describe("field references", () => {
+  it("reads {{name}} as a reference only in template text", () => {
+    expect(parseInline("Due {{due}}.", { fieldRefs: true })).toEqual([
+      { type: "text", text: "Due " },
+      { type: "fieldRef", attrs: { name: "due" } },
+      { type: "text", text: "." },
+    ]);
+    expect(parseInline("Due {{due}}.")).toEqual([{ type: "text", text: "Due {{due}}." }]);
+  });
+
+  it("leaves escaped braces, code spans, spaces and non-identifiers as text", () => {
+    for (const text of ["\\{{due}}", "`{{due}}`", "{{ due }}", "{{9lives}}", "{{due}", "{{}}"]) {
+      expect(fieldRefNames(text), text).toEqual([]);
+    }
+    expect(fieldRefNames("**{{title}}** and {{red}} and {{a_b2}}")).toEqual(["title", "red", "a_b2"]);
+  });
+
+  it("writes a reference back as {{name}}, keeping its marks", () => {
+    const nodes = parseInline("**{{title}}** is {{status}}", { fieldRefs: true });
+    expect(serializeInline(nodes)).toBe("**{{title}}** is {{status}}");
+  });
+
+  it("renames references and turns a removed one into escaped text", () => {
+    expect(renameFieldRefs("{{a}} and {{b}}", (n) => (n === "a" ? "x" : null))).toBe("{{x}} and \\{\\{b}}");
+    const untouched = "Keeps   *odd* spacing {{a}}";
+    expect(renameFieldRefs(untouched, (n) => n)).toBe(untouched);
+  });
+
+  it("round-trips template blocks with references and slots through the editor", () => {
+    const items: TemplateItem[] = [
+      { slot: "title", label: null },
+      { block: { kind: "paragraph", fields: { text: "Due {{due}}, see **{{title}}**" } } },
+      { slot: "due", label: "When" },
+      { block: { kind: "heading", fields: { level: 2, text: "About {{title}}" } } },
+    ];
+    const doc = itemsToDoc(items);
+    expect(doc.content?.[0]).toEqual({ type: "templateSlot", attrs: { slot: "title", label: null } });
+    expect(docToItems(doc)).toEqual(items);
   });
 });

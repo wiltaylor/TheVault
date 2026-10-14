@@ -371,3 +371,53 @@ pub async fn restore_from_trash(
     let saved = blocking(w, move |w| w.restore_from_trash(&id, &author)).await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
+
+/// `GET /api/daily/{date}`: the daily note for a day, given as `YYYY-MM-DD`. A day with no note is
+/// a 404; `POST` creates it.
+pub async fn daily(
+    State(w): Shared,
+    Path(date): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let day = date.clone();
+    let Some(note) = blocking(w, move |w| w.find_daily_note(&day)).await? else {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("there is no daily note for {date}"),
+        ));
+    };
+    Ok(note_response(
+        StatusCode::OK,
+        &headers,
+        &note.id,
+        &note.type_name,
+        &note.version,
+        note.wcl,
+        json!({ "created": false }),
+    ))
+}
+
+/// `POST /api/daily/{date}`: the daily note for a day, created when the day has none. Calling it
+/// again for the same day returns the same note.
+pub async fn open_daily(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(date): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let (note, created) = blocking(w, move |w| w.daily_note(&date, &author)).await?;
+    Ok(note_response(
+        if created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        &headers,
+        &note.id,
+        &note.type_name,
+        &note.version,
+        note.wcl,
+        json!({ "created": created }),
+    ))
+}

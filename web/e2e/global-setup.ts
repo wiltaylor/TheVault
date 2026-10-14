@@ -6,10 +6,14 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
+  AREA_TAXONOMY,
   BOARD_TYPE,
   BULK_NOTES,
   BULK_TYPE,
   CREW_TYPE,
+  FINDING_OWNER,
+  FINDING_TYPE,
+  FINDINGS,
   MASS_NOTES,
   MASS_TYPE,
   PAGE_TYPE,
@@ -51,6 +55,15 @@ function seedVault(): string {
   copyFileSync(join(repo, "crates/cli/starter/types/note.wcl"), join(vault, "types/note.wcl"));
   mkdirSync(join(vault, "taxonomies"));
   writeFileSync(join(vault, "taxonomies/stage.wcl"), STAGE_TAXONOMY);
+  writeFileSync(join(vault, "taxonomies/area.wcl"), AREA_TAXONOMY);
+  writeFileSync(join(vault, "types/finding.wcl"), FINDING_TYPE);
+  mkdirSync(join(vault, "notes/finding"), { recursive: true });
+  for (const f of FINDINGS) writeFileSync(join(vault, "notes/finding", `${f.id}.wcl`), f.wcl);
+  mkdirSync(join(vault, "notes/project"), { recursive: true });
+  writeFileSync(
+    join(vault, "notes/project", `${FINDING_OWNER.id}.wcl`),
+    `title   = "${FINDING_OWNER.title}"\ncreated = "2026-02-01T10:00:00Z"\nupdated = "2026-02-01T10:00:00Z"\n`,
+  );
   const note = (title: string) =>
     `title   = "${title}"\ncreated = "2026-10-12T09:15:00Z"\nupdated = "2026-10-12T09:15:00Z"\n`;
   mkdirSync(join(vault, "notes/bulk"), { recursive: true });

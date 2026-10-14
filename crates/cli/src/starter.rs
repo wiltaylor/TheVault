@@ -76,6 +76,9 @@ pub fn install(vault: Vault, state: State) -> Result<Value, Fail> {
     vault.commit(changes).map_err(Fail::from_display("store"))?;
 
     let writer = Writer::open(vault, state).map_err(Fail::from_display("starter"))?;
+    writer
+        .ensure_daily_type()
+        .map_err(Fail::from_display("starter"))?;
     let author = Author::Session(writer::ADOPTED_BY.to_owned());
     let today = days_since_epoch();
     let mut ids: BTreeMap<&str, String> = BTreeMap::new();

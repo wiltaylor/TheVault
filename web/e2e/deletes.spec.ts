@@ -39,7 +39,7 @@ test("a type with notes is refused with their count, and deleted once they are g
   const one = await createNote(admin, name, { title: "First" });
   const two = await createNote(admin, name, { title: "Second" });
 
-  await logIn(page, `/types/${name}/edit`);
+  await logIn(page, `/settings/types/${name}/edit`);
   page.once("dialog", (d) => void d.accept());
   await page.getByRole("button", { name: "Delete type" }).click();
   await expect(page.getByText(`${name} still has 2 notes.`)).toBeVisible();
@@ -50,8 +50,8 @@ test("a type with notes is refused with their count, and deleted once they are g
   await deleteNote(admin, two);
   page.once("dialog", (d) => void d.accept());
   await page.getByRole("button", { name: "Delete type" }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await page.goto("/types");
+  await expect(page).toHaveURL(/\/settings\/types$/);
+  await page.goto("/settings/types");
   await expect(page.getByRole("list", { name: "Types" }).getByRole("link", { name })).toHaveCount(0);
   expect(existsSync(join(vaultDir(), "types", `${name}.wcl`))).toBe(false);
 });
