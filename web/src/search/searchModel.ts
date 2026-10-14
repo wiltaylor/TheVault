@@ -462,8 +462,10 @@ export function toQuery(s: SearchState, types: TypeDef[], offset: OffsetAt = bro
   }
   let q = `from ${from.length ? from.join(", ") : "*"}`;
   if (conds.length) q += ` where ${all(conds)}`;
+  // The last word matches as a prefix while it is being typed; a space after it says it is
+  // complete, so one trailing space is kept.
   const text = s.text.trim();
-  if (text) q += ` search ${lit(text)}`;
+  if (text) q += ` search ${lit(/\s$/.test(s.text) ? `${text} ` : text)}`;
   const { key, dir } = effectiveSort(s);
   if (key !== "relevance") q += ` sort ${key} ${dir}`;
   return q;

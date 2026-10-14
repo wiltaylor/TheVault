@@ -181,7 +181,8 @@ enum Command {
         #[arg(long, short)]
         file: Option<PathBuf>,
     },
-    /// Full-text search, a page at a time.
+    /// Full-text search, a page at a time. The last word also matches as a prefix unless the
+    /// text ends in a space.
     Search {
         text: String,
         #[command(flatten)]

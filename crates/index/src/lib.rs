@@ -23,6 +23,11 @@
 //! | `term_ancestors` | Pair of a term and itself or a term above it, for `under()` |
 //! | `failures` | Vault file the last rebuild could not index, with its diagnostic |
 //! | `meta` | Fact about the index itself: `generation` |
+//!
+//! The connection also has two SQL functions for `query`: `vault_contains(text, part)`, true
+//! when `text` lowercased holds `part`, which the caller lowercases, and `vault_blank(text)`, true
+//! when `text` is empty or only white space. Both follow Rust's Unicode rules, as the note by
+//! note evaluator does.
 
 mod project;
 mod rebuild;
@@ -98,6 +103,7 @@ impl Index {
     pub fn open_at(db: &Path, search_dir: &Path) -> Result<Index> {
         let conn = Connection::open(db)?;
         sql::init(&conn)?;
+        sql::functions(&conn)?;
         let missing = !search_dir.join("meta.json").is_file();
         let (search, reset) = search::Search::open(search_dir)?;
         if missing || reset {
@@ -179,9 +185,18 @@ impl Index {
     }
 
     /// Full-text search over titles, field values and content text (D16). Hits are ordered by
-    /// score, then by id. `limit` of `None` returns every hit.
+    /// score, then by id. `limit` of `None` returns every hit. Every word matches whole words
+    /// except the last, which also matches as a prefix: `meet` finds `meeting`. A last word
+    /// followed by a space, or of one character, matches whole words only. A prefix stands for
+    /// at most the 50 most frequent words it starts in each of the title and the body.
     pub fn search(&self, text: &str, limit: Option<usize>) -> Result<Vec<Hit>> {
         self.search.search(text, limit)
+    }
+
+    /// Every hit of a full-text search among notes of `types`, or of every type when `None`, in
+    /// no order. A hit's score is the one [`Index::search`] gives it.
+    pub fn search_hits(&self, text: &str, types: Option<&[String]>) -> Result<Vec<Hit>> {
+        self.search.hits(text, types)
     }
 
     /// One page of a full-text search: the best `size` hits strictly after `after`, the score
@@ -193,7 +208,18 @@ impl Index {
         after: Option<(f32, &str)>,
         size: usize,
     ) -> Result<SearchPage> {
-        self.search.page(text, after, size)
+        self.search.page(text, None, after, size)
+    }
+
+    /// [`Index::search_page`] among notes of `types` only.
+    pub fn search_page_in(
+        &self,
+        text: &str,
+        types: &[String],
+        after: Option<(f32, &str)>,
+        size: usize,
+    ) -> Result<SearchPage> {
+        self.search.page(text, Some(types), after, size)
     }
 
     /// The files the last rebuild could not index.

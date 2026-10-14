@@ -192,7 +192,8 @@ pub fn run(q: &Query, ctx: &Context<'_>, page: &PageRequest) -> Result<Page> {
     let types = check(q, ctx)?;
     let r = Runner::new(ctx)?;
     if let Some(text) = plain_search(q) {
-        return r.search_page(text, &types, &q.select, page);
+        let only = matches!(q.from, From::Types(_)).then_some(types.as_slice());
+        return r.search_page(text, only, &types, &q.select, page);
     }
     match plan::run(q, &types, &r, page)? {
         Some(p) => Ok(p),
@@ -239,7 +240,7 @@ impl<'a> Runner<'a> {
         let scores: Option<HashMap<String, f32>> = match &q.search {
             Some(text) => Some(
                 ctx.index
-                    .search(text, None)?
+                    .search_hits(text, Some(types))?
                     .into_iter()
                     .map(|h| (h.id, h.score))
                     .collect(),
@@ -339,12 +340,11 @@ impl<'a> Runner<'a> {
     }
 }
 
-/// The search text of a query that only searches: every type, no filter, sort, grouping or
-/// limit. Its order is tantivy's ranking, so it pages without reading every hit.
+/// The search text of a query that only searches: no filter, sort, grouping or limit. Its order
+/// is tantivy's ranking, so it pages without reading every hit.
 fn plain_search(q: &Query) -> Option<&str> {
     match q {
         Query {
-            from: From::All,
             filter: None,
             search: Some(text),
             group_by: None,
@@ -514,11 +514,13 @@ fn name_arg(e: &Expr) -> Result<String> {
 }
 
 impl Runner<'_> {
-    /// A [`plain_search`] page: the page's hits from tantivy, by score then id as `run` orders
-    /// them, and only those notes read from `index.db`. The cursor is the one `run` writes.
+    /// A [`plain_search`] page: the page's hits from tantivy, among notes of `only` when given,
+    /// by score then id as `run` orders them, and only those notes read from `index.db`. The
+    /// cursor is the one `run` writes.
     fn search_page(
         &self,
         text: &str,
+        only: Option<&[String]>,
         types: &[String],
         select: &[Path],
         page: &PageRequest,
@@ -542,7 +544,13 @@ impl Runner<'_> {
         let size = page_size(page);
         let after = after.as_ref().map(|(s, id)| (*s, id.as_str()));
         // One more than the page, to know whether another page follows.
-        let found = self.ctx.index.search_page(text, after, size + 1)?;
+        let found = match only {
+            Some(types) => self
+                .ctx
+                .index
+                .search_page_in(text, types, after, size + 1)?,
+            None => self.ctx.index.search_page(text, after, size + 1)?,
+        };
         out.total = found.total;
         let page_hits = &found.hits[..found.hits.len().min(size)];
         for h in page_hits {

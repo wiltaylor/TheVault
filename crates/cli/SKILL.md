@@ -98,6 +98,8 @@ A query is a `from` clause followed by optional clauses in this order: `where`, 
 | `empty(due)` | A field has no value: missing, blank text or an empty list |
 | `today()`, `now()`, `days(n)` | Date arithmetic, as in `due < today() + days(7)` |
 
+`search "<text>"` keeps the notes whose title or text holds every word, ignoring case, and ranks them by relevance unless `sort` is given. Earlier words match whole words. The last word also matches as a prefix, so `search "meet"` finds `meeting`, while `search "meet "` with a trailing space, or a last word of one character, matches whole words only. A prefix stands for at most the 50 most frequent words it starts. `vault search` follows the same rule.
+
 Results come a page at a time. Pass the `next` cursor back with `--cursor`, or use `--all` to fetch every page.
 
 ## 3. Write one note

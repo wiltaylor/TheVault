@@ -293,3 +293,55 @@ pub(crate) fn dump(conn: &Connection) -> Result<String> {
     }
     Ok(out)
 }
+
+/// Register the SQL functions `query` uses: `vault_contains(text, part)` and `vault_blank(text)`.
+/// A value that is not text is never blank and holds nothing.
+pub(crate) fn functions(conn: &Connection) -> Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    let flags = FunctionFlags::SQLITE_UTF8
+        | FunctionFlags::SQLITE_DETERMINISTIC
+        | FunctionFlags::SQLITE_INNOCUOUS;
+    conn.create_scalar_function("vault_contains", 2, flags, |ctx| {
+        let text = match ctx.get_raw(0) {
+            ValueRef::Text(t) => t,
+            _ => return Ok(false),
+        };
+        let part = match ctx.get_raw(1) {
+            ValueRef::Text(t) => t,
+            _ => return Ok(false),
+        };
+        Ok(contains_folded(
+            &String::from_utf8_lossy(text),
+            &String::from_utf8_lossy(part),
+        ))
+    })?;
+    conn.create_scalar_function("vault_blank", 1, flags, |ctx| {
+        Ok(match ctx.get_raw(0) {
+            ValueRef::Text(t) => String::from_utf8_lossy(t).trim().is_empty(),
+            _ => false,
+        })
+    })?;
+    Ok(())
+}
+
+/// Whether `text` lowercased holds `part`, which is already lowercase: what
+/// `text.to_lowercase().contains(part)` says, without lowercasing ASCII text into a new string.
+pub(crate) fn contains_folded(text: &str, part: &str) -> bool {
+    if part.is_empty() {
+        return true;
+    }
+    if !text.is_ascii() {
+        return text.to_lowercase().contains(part);
+    }
+    // ASCII lowercases to ASCII, so a part with anything else is not in it.
+    if !part.is_ascii() {
+        return false;
+    }
+    let (text, part) = (text.as_bytes(), part.as_bytes());
+    text.len() >= part.len()
+        && text.windows(part.len()).any(|w| {
+            w.iter()
+                .zip(part)
+                .all(|(a, b)| a.to_ascii_lowercase() == *b)
+        })
+}

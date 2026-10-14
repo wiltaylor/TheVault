@@ -89,6 +89,20 @@ test("full text finds a note by a word in its content, as you type", async ({ pa
   await expect(page).toHaveURL(new RegExp(`/notes/${note.id}$`));
 });
 
+test("a partial word finds the note as you type, and a space after it asks for the whole word", async ({ page, admin }) => {
+  const stem = `wombat${token()}`;
+  const title = `Prefix match ${token()}`;
+  await createTask(admin, title, `Out past the ${stem}warren, nothing else.`);
+  await logIn(page, "/search");
+  // Only the start of the word is typed.
+  await box(page).pressSequentially(stem, { delay: 10 });
+  await expectTitles(page, [title]);
+  // With a space after it, the word is complete, and no note holds that whole word.
+  await box(page).press("Space");
+  await expectTitles(page, []);
+  await expect(activePane(page).getByText("No notes match.")).toBeVisible();
+});
+
 test("the type filter narrows the results", async ({ page }) => {
   await logIn(page, "/search?q=valve");
   // "valve" is in a finding; adding a task-only filter leaves nothing.

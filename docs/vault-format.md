@@ -968,6 +968,8 @@ A `query_view` block runs one query and shows its results through one or more sa
 | `default_view` | string | The view shown first. Default: the first view |
 | `view <name> { ... }` | block | At least one. `<name>` is unique within the block |
 
+In the query's `search "<text>"` clause every word must appear in the note's title or text, ignoring case. Earlier words match whole words, and the last word also matches as a prefix: `search "meet"` finds `meeting`. A trailing space, as in `search "meet "`, or a last word of one character, makes the last word whole. A prefix stands for at most the 50 most frequent words it starts.
+
 Each `view` holds a `kind` and the items that kind uses:
 
 | Item | Form | Meaning |

@@ -27,6 +27,8 @@ mod value;
 pub use ast::{BinOp, Dir, Expr, FUNCTIONS, From, Lit, Path, Query, SortKey, UnOp};
 pub use model::{Condition, Group, Item, Join, Model, ModelError, Op, Operand, Order, Sort};
 pub use parser::{ParseError, parse};
+#[doc(hidden)]
+pub use plan::set_hits_drive;
 pub use run::{
     Context, Error, GroupCount, MAX_PAGE, Page, PageRequest, Result, Row, is_planned, run, run_scan,
 };

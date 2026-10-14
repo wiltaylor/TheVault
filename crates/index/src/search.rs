@@ -1,16 +1,18 @@
 //! The tantivy full-text index in `.vault/search/` (D16).
 
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::path::Path;
 
 use tantivy::collector::{Collector, SegmentCollector};
 use tantivy::columnar::{StrColumn, TermOrdHit};
 use tantivy::directory::MmapDirectory;
-use tantivy::query::QueryParser;
-use tantivy::schema::{FAST, Field, STORED, STRING, Schema, TEXT};
+use tantivy::query::{
+    BooleanQuery, ConstScoreQuery, EmptyQuery, Occur, Query, QueryParser, TermQuery, TermSetQuery,
+};
+use tantivy::schema::{FAST, Field, IndexRecordOption, STORED, STRING, Schema, TEXT};
 use tantivy::{
-    DocId, IndexReader, IndexWriter, ReloadPolicy, Score, SegmentOrdinal, SegmentReader,
+    DocId, IndexReader, IndexWriter, ReloadPolicy, Score, Searcher, SegmentOrdinal, SegmentReader,
     TantivyError, Term, doc,
 };
 
@@ -19,6 +21,17 @@ use crate::{Result, io_err};
 
 /// Memory the writer may buffer before it flushes a segment.
 const WRITER_HEAP: usize = 50_000_000;
+
+/// The fewest characters a last word needs to match as a prefix. A shorter one matches as a
+/// whole word, since a one-letter prefix would match most of the index.
+pub const MIN_PREFIX: usize = 2;
+
+/// The most words of each field a prefix stands for: the most frequent, and the word itself
+/// when it is one.
+pub const MAX_EXPANSIONS: usize = 50;
+
+/// Words the query syntax reads as operators, never as a prefix.
+const OPERATORS: [&str; 3] = ["AND", "OR", "NOT"];
 
 /// One full-text match.
 #[derive(Debug, Clone, PartialEq)]
@@ -131,22 +144,29 @@ impl Search {
     /// Every match, or the best `limit`, ordered by score and then by id.
     pub fn search(&self, text: &str, limit: Option<usize>) -> Result<Vec<Hit>> {
         let limit = limit.unwrap_or(usize::MAX);
-        Ok(self.page(text, None, limit)?.hits)
+        Ok(self.page(text, None, None, limit)?.hits)
+    }
+
+    /// Every match among notes of `types`, or of every type when `None`, in no order.
+    pub fn hits(&self, text: &str, types: Option<&[String]>) -> Result<Vec<Hit>> {
+        let searcher = self.reader.searcher();
+        let query = self.query(&searcher, text, types)?;
+        Ok(searcher.search(&query, &AllHits { id: "id" })?)
     }
 
     /// The best `size` matches strictly after `after`, a `(score, id)` from an earlier page,
-    /// ordered by score and then by id, and the count of every match. Only the page's hits are
-    /// kept, and no stored document is read.
+    /// ordered by score and then by id, and the count of every match. Only notes of `types`
+    /// match, or of every type when `None`. Only the page's hits are kept, and no stored
+    /// document is read.
     pub fn page(
         &self,
         text: &str,
+        types: Option<&[String]>,
         after: Option<(Score, &str)>,
         size: usize,
     ) -> Result<SearchPage> {
         let searcher = self.reader.searcher();
-        let mut parser = QueryParser::for_index(&self.index, vec![self.title, self.body]);
-        parser.set_conjunction_by_default();
-        let (query, _) = parser.parse_query_lenient(text);
+        let query = self.query(&searcher, text, types)?;
         let collector = TopHits {
             id: "id",
             size,
@@ -154,6 +174,178 @@ impl Search {
         };
         let (hits, total) = searcher.search(&query, &collector)?;
         Ok(SearchPage { hits, total })
+    }
+
+    /// The query `text` stands for. Words match whole words in the title or the body, and every
+    /// word must match. The last word also matches as a prefix, for search as you type, unless
+    /// the text ends in a space or the word is shorter than [`MIN_PREFIX`]; it then stands for
+    /// the [`MAX_EXPANSIONS`] most frequent words it starts. A restriction to `types` scores
+    /// nothing, so scores are the same with it or without it.
+    fn query(
+        &self,
+        searcher: &Searcher,
+        text: &str,
+        types: Option<&[String]>,
+    ) -> Result<Box<dyn Query>> {
+        let mut parser = QueryParser::for_index(&self.index, vec![self.title, self.body]);
+        parser.set_conjunction_by_default();
+        let words: Box<dyn Query> = match split_prefix(text) {
+            None => parser.parse_query_lenient(text).0,
+            Some((head, prefix)) => {
+                let prefix = self.expand(searcher, &prefix)?;
+                if head.trim().is_empty() {
+                    prefix
+                } else {
+                    let (head, _) = parser.parse_query_lenient(head);
+                    Box::new(BooleanQuery::intersection(vec![head, prefix]))
+                }
+            }
+        };
+        let Some(types) = types else {
+            return Ok(words);
+        };
+        let terms = types
+            .iter()
+            .map(|t| Term::from_field_text(self.type_name, t));
+        let only = ConstScoreQuery::new(Box::new(TermSetQuery::new(terms)), 0.0);
+        Ok(Box::new(BooleanQuery::new(vec![
+            (Occur::Must, words),
+            (Occur::Must, Box::new(only)),
+        ])))
+    }
+
+    /// A query for the words `prefix` starts, in the title or the body, scored as those words.
+    fn expand(&self, searcher: &Searcher, prefix: &str) -> Result<Box<dyn Query>> {
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+        for field in [self.title, self.body] {
+            // Each word's documents, summed over the segments.
+            let mut words: HashMap<Vec<u8>, u64> = HashMap::new();
+            for segment in searcher.segment_readers() {
+                let inverted = segment.inverted_index(field)?;
+                let mut stream = inverted
+                    .terms()
+                    .range()
+                    .ge(prefix.as_bytes())
+                    .into_stream()
+                    .map_err(TantivyError::from)?;
+                while stream.advance() {
+                    if !stream.key().starts_with(prefix.as_bytes()) {
+                        break;
+                    }
+                    let n = u64::from(stream.value().doc_freq);
+                    *words.entry(stream.key().to_vec()).or_default() += n;
+                }
+            }
+            let mut words: Vec<(Vec<u8>, u64)> = words.into_iter().collect();
+            // The word itself first, then the most frequent, then in word order.
+            words.sort_by(|(a, x), (b, y)| {
+                let exact = |w: &[u8]| w != prefix.as_bytes();
+                exact(a).cmp(&exact(b)).then(y.cmp(x)).then(a.cmp(b))
+            });
+            words.truncate(MAX_EXPANSIONS);
+            for (word, _) in words {
+                let Ok(word) = std::str::from_utf8(&word) else {
+                    continue;
+                };
+                let term = Term::from_field_text(field, word);
+                clauses.push((
+                    Occur::Should,
+                    Box::new(TermQuery::new(term, IndexRecordOption::WithFreqs)),
+                ));
+            }
+        }
+        if clauses.is_empty() {
+            return Ok(Box::new(EmptyQuery));
+        }
+        Ok(Box::new(BooleanQuery::new(clauses)))
+    }
+}
+
+/// The text before the last word and the last word lowercased, when the last word matches as a
+/// prefix: the text does not end in a space, and the word is letters and digits only, at least
+/// [`MIN_PREFIX`] of them, outside a quoted phrase and not an operator.
+fn split_prefix(text: &str) -> Option<(&str, String)> {
+    if text.ends_with(char::is_whitespace) {
+        return None;
+    }
+    let start = text
+        .char_indices()
+        .rev()
+        .find(|(_, c)| c.is_whitespace())
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let (head, last) = text.split_at(start);
+    let usable = last.chars().all(char::is_alphanumeric)
+        && last.chars().count() >= MIN_PREFIX
+        && !OPERATORS.contains(&last)
+        && head.matches('"').count() % 2 == 0;
+    // The index drops words longer than 40 bytes, so a longer prefix could match nothing.
+    let lower = last.to_lowercase();
+    (usable && lower.len() <= 40).then_some((head, lower))
+}
+
+/// Collects every hit with its score, in no order.
+struct AllHits {
+    id: &'static str,
+}
+
+struct SegmentAll {
+    ids: StrColumn,
+    hits: Vec<(u64, Score)>,
+}
+
+impl Collector for AllHits {
+    type Fruit = Vec<Hit>;
+    type Child = SegmentAll;
+
+    fn for_segment(
+        &self,
+        _: SegmentOrdinal,
+        segment: &SegmentReader,
+    ) -> tantivy::Result<SegmentAll> {
+        let ids = segment.fast_fields().str(self.id)?.ok_or_else(|| {
+            TantivyError::SchemaError(format!("`{}` is not a fast field", self.id))
+        })?;
+        Ok(SegmentAll {
+            ids,
+            hits: Vec::new(),
+        })
+    }
+
+    fn requires_scoring(&self) -> bool {
+        true
+    }
+
+    fn merge_fruits(&self, fruits: Vec<Vec<Hit>>) -> tantivy::Result<Vec<Hit>> {
+        Ok(fruits.into_iter().flatten().collect())
+    }
+}
+
+impl SegmentCollector for SegmentAll {
+    type Fruit = Vec<Hit>;
+
+    fn collect(&mut self, doc: DocId, score: Score) {
+        if let Some(ord) = self.ids.ords().first(doc) {
+            self.hits.push((ord, score));
+        }
+    }
+
+    fn harvest(mut self) -> Vec<Hit> {
+        // Ids in ordinal order read the dictionary once, block by block, rather than seeking
+        // for every hit.
+        self.hits.sort_unstable_by_key(|(ord, _)| *ord);
+        let mut out = Vec::with_capacity(self.hits.len());
+        let mut scores = self.hits.iter().map(|(_, s)| *s);
+        let ords = self.hits.iter().map(|(o, _)| *o);
+        let _ = self.ids.dictionary().sorted_ords_to_term_cb(ords, |bytes| {
+            if let (Ok(id), Some(score)) = (std::str::from_utf8(bytes), scores.next()) {
+                out.push(Hit {
+                    id: id.to_owned(),
+                    score,
+                });
+            }
+            Ok(())
+        });
+        out
     }
 }
 

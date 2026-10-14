@@ -209,7 +209,7 @@ describe("search to query text", () => {
   });
 
   it("text searches by relevance unless another sort is chosen", () => {
-    expect(toQuery({ ...EMPTY, text: " event sourcing " }, TYPES)).toBe('from * search "event sourcing"');
+    expect(toQuery({ ...EMPTY, text: " event sourcing" }, TYPES)).toBe('from * search "event sourcing"');
     expect(toQuery({ ...EMPTY, text: "x", sort: "title" }, TYPES)).toBe('from * search "x" sort title asc');
     expect(toQuery({ ...EMPTY, text: "x", sort: "created", dir: "asc" }, TYPES)).toBe(
       'from * search "x" sort created asc',
@@ -217,6 +217,13 @@ describe("search to query text", () => {
     // Relevance with no text falls back to updated.
     expect(toQuery({ ...EMPTY, sort: "relevance" }, TYPES)).toBe("from * sort updated desc");
     expect(effectiveSort({ ...EMPTY, sort: "relevance" })).toEqual({ key: "updated", dir: "desc" });
+  });
+
+  it("keeps one trailing space, which makes the last word whole rather than a prefix", () => {
+    expect(toQuery({ ...EMPTY, text: "meet" }, TYPES)).toBe('from * search "meet"');
+    expect(toQuery({ ...EMPTY, text: " event sourcing  " }, TYPES)).toBe('from * search "event sourcing "');
+    expect(toQuery({ ...EMPTY, text: "meet\t" }, TYPES)).toBe('from * search "meet "');
+    expect(toQuery({ ...EMPTY, text: "   " }, TYPES)).toBe("from * sort updated desc");
   });
 
   it("types, filters, text and sort come in the grammar's order", () => {

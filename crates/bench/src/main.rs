@@ -87,6 +87,24 @@ const SEARCH: Target = Target {
     limit_ms: 1_000.0,
     target: "under 1 s",
 };
+const CONTAINS: Target = Target {
+    key: "contains_p95",
+    name: "Query with a `contains()` filter, p95",
+    limit_ms: 500.0,
+    target: "under 500 ms",
+};
+const EMPTY: Target = Target {
+    key: "empty_p95",
+    name: "Query with an `empty()` filter, p95",
+    limit_ms: 500.0,
+    target: "under 500 ms",
+};
+const SEARCH_FILTER: Target = Target {
+    key: "search_filter_p95",
+    name: "Full-text search with a filter and a sort, p95",
+    limit_ms: 1_000.0,
+    target: "under 1 s",
+};
 const SAVE: Target = Target {
     key: "save_p95",
     name: "Save, excluding handlers, p95",
@@ -192,6 +210,12 @@ fn run(args: Args) -> Result<bool> {
     let query = bench.queries()?;
     progress("timing full-text search");
     let search = bench.searches()?;
+    progress("timing contains() filters");
+    let contains = bench.query_group(Bench::contains_text, 6)?;
+    progress("timing empty() filters");
+    let empty = bench.query_group(Bench::empty_text, 6)?;
+    progress("timing full-text search with a filter and a sort");
+    let search_filter = bench.query_group(Bench::search_filter_text, 8)?;
     progress("timing note opens");
     let open = bench.opens()?;
     progress("timing saves");
@@ -201,6 +225,9 @@ fn run(args: Args) -> Result<bool> {
     let rows = [
         (&QUERY, query.0.p95, Some(&query.0)),
         (&SEARCH, search.0.p95, Some(&search.0)),
+        (&CONTAINS, contains.0.p95, Some(&contains.0)),
+        (&EMPTY, empty.0.p95, Some(&empty.0)),
+        (&SEARCH_FILTER, search_filter.0.p95, Some(&search_filter.0)),
         (&SAVE, save.p95, Some(&save)),
         (&OPEN, open.p95, Some(&open)),
         (&REINDEX, reindex_time.as_secs_f64() * 1000.0, None),
@@ -217,6 +244,9 @@ fn run(args: Args) -> Result<bool> {
         machine: &machine,
         queries: &query.1,
         searches: &search.1,
+        contains: &contains.1,
+        empty: &empty.1,
+        search_filter: &search_filter.1,
     };
     let markdown = markdown(&rows, &context);
     let json = report_json(&rows, &context, all_met);
@@ -460,6 +490,112 @@ impl Bench<'_> {
         Ok((all, shapes))
     }
 
+    /// Time the query texts `text` gives through `/api/query`, `shapes` of them in turn, and
+    /// each shape's p95 for the report.
+    fn query_group(
+        &self,
+        text: fn(&Self, usize) -> String,
+        shapes: usize,
+    ) -> Result<(Summary, Vec<(String, Summary)>)> {
+        let all = self.measure(|i| {
+            let q = text(self, i);
+            self.get("/api/query", &[("q", &q)]).map(|(t, _)| t)
+        })?;
+        let per = self.per_shape(shapes, |i| text(self, i), "/api/query")?;
+        Ok((all, per))
+    }
+
+    /// Part of a word of the content vocabulary, as someone types into a text filter: its first
+    /// three or four letters.
+    fn fragment(&self, rank: usize, len: usize) -> String {
+        self.plan.word(rank).chars().take(len).collect()
+    }
+
+    /// `contains()` filters on text and text lists, from common fragments to rare ones.
+    fn contains_text(&self, i: usize) -> String {
+        let f = |rank, len| self.fragment(rank, len);
+        let queries = [
+            format!("from task where contains(title, \"{}\")", f(0, 4)),
+            format!(
+                "from task where contains(title, \"{}\") && !done sort due asc",
+                f(50, 4)
+            ),
+            format!(
+                "from * where contains(title, \"{}\") sort updated desc",
+                f(500, 4)
+            ),
+            format!(
+                "from article where contains(tags, \"{}\") sort published desc",
+                f(5, 3)
+            ),
+            format!(
+                "from person where contains(organisation, \"{}\") sort title asc",
+                f(5_000, 4)
+            ),
+            format!(
+                "from project where contains(title, \"{}\") && under(status, \"Active\")",
+                f(3, 3)
+            ),
+        ];
+        queries[i % queries.len()].clone()
+    }
+
+    /// `empty()` and `!empty()` filters on missing values, lists and references.
+    fn empty_text(&self, i: usize) -> String {
+        let queries = [
+            "from task where empty(due)",
+            "from task where empty(estimate) && !done sort updated desc",
+            "from task where !empty(assignee) && priority == \"high\" sort due asc",
+            "from article where empty(tags) sort published desc",
+            "from person where empty(homepage) sort title asc",
+            "from project where !empty(due) group by status",
+        ];
+        queries[i % queries.len()].to_owned()
+    }
+
+    /// Whole-word and prefix searches, from common words to rare ones, with a field condition and
+    /// a sort, as the Search page writes them.
+    fn search_filter_text(&self, i: usize) -> String {
+        let p = self.plan;
+        let queries = [
+            format!(
+                "from task where priority == \"high\" search \"{}\" sort due asc",
+                p.word(0)
+            ),
+            format!(
+                "from task where priority == \"high\" search \"{}\" sort due asc",
+                p.word(50)
+            ),
+            format!(
+                "from task where !done search \"{}\" sort updated desc",
+                p.word(5)
+            ),
+            format!(
+                "from article where rating >= 3.0 search \"{}\" sort published desc",
+                p.word(500)
+            ),
+            format!(
+                "from * where !empty(topics) search \"{} {}\" sort updated desc",
+                p.word(1),
+                self.fragment(2, 4)
+            ),
+            format!(
+                "from task where under(status, \"Active\") search \"{}\" sort title asc",
+                self.fragment(100, 3)
+            ),
+            format!(
+                "from project where contains(title, \"{}\") search \"{}\"",
+                self.fragment(7, 3),
+                p.word(3)
+            ),
+            format!(
+                "from task where estimate > 8 search \"{}\" sort estimate desc",
+                p.word(5_000)
+            ),
+        ];
+        queries[i % queries.len()].clone()
+    }
+
     /// Time each of `shapes` request texts on its own, a fifth of `samples` times, so the report
     /// can show which is slow.
     fn per_shape(
@@ -568,6 +704,9 @@ struct RunInfo<'a> {
     machine: &'a Machine,
     queries: &'a [(String, Summary)],
     searches: &'a [(String, Summary)],
+    contains: &'a [(String, Summary)],
+    empty: &'a [(String, Summary)],
+    search_filter: &'a [(String, Summary)],
 }
 
 struct Machine {
@@ -678,7 +817,13 @@ fn markdown(rows: &[Row], c: &RunInfo) -> String {
         c.threads,
         secs(c.startup_time),
     ));
-    for (title, shapes) in [("Queries", c.queries), ("Searches", c.searches)] {
+    for (title, shapes) in [
+        ("Queries", c.queries),
+        ("Searches", c.searches),
+        ("Queries with contains()", c.contains),
+        ("Queries with empty()", c.empty),
+        ("Searches with a filter and a sort", c.search_filter),
+    ] {
         out.push_str(&format!(
             "\n## {title}\n\n| Text | p50 | p95 | max |\n|------|-----|-----|-----|\n"
         ));
@@ -740,5 +885,8 @@ fn report_json(rows: &[Row], c: &RunInfo, all_met: bool) -> Value {
         },
         "queries": shapes(c.queries),
         "searches": shapes(c.searches),
+        "contains": shapes(c.contains),
+        "empty": shapes(c.empty),
+        "search_filter": shapes(c.search_filter),
     })
 }

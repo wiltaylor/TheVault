@@ -1210,6 +1210,54 @@ fn edge_queries() -> Vec<(&'static str, Option<&'static str>)> {
         ),
         ("from task where estimate > 0", None),
         ("from * where updated > \"2026-10-01\"", None),
+        // contains() and empty() in SQL
+        ("from * where contains(title, \"\")", None),
+        ("from task where contains(status, \"PROG\")", None),
+        (
+            "from * where contains(topics, \"rust\") sort title desc",
+            None,
+        ),
+        ("from task where !contains(tags, \"co\")", None),
+        ("from * where contains(type, \"as\")", None),
+        (
+            "from task where contains(title, \"the\") || empty(due) sort due desc",
+            None,
+        ),
+        ("from task where empty(due) && !empty(status)", None),
+        ("from task where empty(title) || !empty(title)", None),
+        ("from * where empty(type) || empty(id)", None),
+        ("from task where !empty(type) && !empty(done)", None),
+        ("from project where empty(tasks)", None),
+        ("from project where !empty(tasks) sort title", None),
+        ("from task where !empty(span) sort due", None),
+        ("from task where !empty(estimate) group by status", None),
+        (
+            "from task where !empty(topics) && contains(title, \"t\")",
+            None,
+        ),
+        ("from task where empty(created)", None),
+        ("from task where contains(estimate, \"3\")", None),
+        ("from task where contains(title, 3)", None),
+        // Date range ends
+        ("from task where span.end > \"2026-10-19\"", None),
+        ("from task where span.start != \"2026-10-13\"", None),
+        ("from task where !(span.start < \"2026-10-14\")", None),
+        ("from task where \"2026-10-14\" > span.start", None),
+        ("from task where span.foo == \"2026-10-13\"", None),
+        // search with a filter, a sort, a group or a limit
+        ("from task search \"the\"", None),
+        ("from task where !done search \"the\"", None),
+        ("from * where !done search \"the\" sort due desc", None),
+        (
+            "from * where contains(title, \"o\") search \"compost tomatoes\" sort updated desc",
+            None,
+        ),
+        ("from book, article search \"event\" group by type", None),
+        ("from * search \"event\" limit 1", None),
+        ("from * where !empty(topics) search \"ev\" sort title", None),
+        ("from task search \"im\"", None),
+        ("from * search \"e\"", None),
+        ("from * where done search \"nothing at all\"", None),
     ]
 }
 
@@ -1321,6 +1369,17 @@ fn the_benchmarked_query_shapes_run_as_sql() {
         "from * sort updated desc",
         "from task where estimate > 8 && !done group by status",
         "from task where project == this && due < today() + days(7)",
+        // contains(), empty(), date range ends and search with a filter or a sort.
+        "from task where contains(title, \"ship\")",
+        "from task where contains(tags, \"od\") && !done sort due asc",
+        "from * where contains(title, \"the\") && type == \"task\"",
+        "from task where empty(estimate)",
+        "from task where !empty(tags) sort title",
+        "from task where empty(span) || empty(topics)",
+        "from task where span.start <= \"2026-10-14\" && span.end >= \"2026-10-14\"",
+        "from task search \"importer\"",
+        "from * where !done search \"tomatoes\" sort updated desc",
+        "from book, article where !empty(topics) search \"event\" group by type",
     ] {
         let q = query::parse(text).unwrap();
         let ctx = f.ctx().with_this(P1);
@@ -1329,12 +1388,16 @@ fn the_benchmarked_query_shapes_run_as_sql() {
             "{text} runs note by note"
         );
     }
-    // Searches, paths through a reference and closures still run note by note.
+    // Paths through a reference, closures, empty() on a builtin date and contains() on a field
+    // that is not text, which is an error, still run note by note.
     for text in [
-        "from task search \"importer\"",
         "from task where project.status == \"Inbox\"",
         "from task sort project.title",
         "from task where any(tags, |t| t == \"docs\")",
+        "from task where empty(created)",
+        "from task where contains(project.title, \"imp\")",
+        "from task where contains(estimate, \"3\")",
+        "from task where !done search \"importer\" sort project.title",
     ] {
         let q = query::parse(text).unwrap();
         assert!(
@@ -1443,4 +1506,132 @@ fn a_plain_search_pages_in_the_order_the_general_runner_gives() {
         },
     );
     assert!(matches!(r, Err(Error::BadCursor)), "{r:?}");
+}
+
+/// Text fields whose values need Unicode case folding and white space rules: a Kelvin sign
+/// lowercases to `k`, `İ` to two characters, and an em space is blank.
+fn unicode_fixture() -> Fixture {
+    let ty = "label = \"Item\"\n\nfield label {\n  kind = \"string\"\n}\n\n\
+              field aliases {\n  kind  = \"list\"\n  items = \"string\"\n}\n\n\
+              field size {\n  kind    = \"select\"\n  options = [\"Small\", \"LARGE\"]\n}\n\n\
+              field site {\n  kind = \"url\"\n}\n\n\
+              field count {\n  kind = \"int\"\n}\n";
+    let mut files = vec![("types/item.wcl".to_owned(), with_template(ty))];
+    let items = [
+        "label = \"\u{212A}elvin\"\naliases = [\"Straße\", \"ΣΑΣ\"]\nsize = \"LARGE\"\n",
+        "label = \"İstanbul\"\naliases = []\ncount = 0\n",
+        "label = \"\u{2003}\"\naliases = [\"  \"]\nsite = \"https://example.com/A\"\n",
+        "label = \"  \"\nsize = \"Small\"\n",
+        "label = \"kelvin\"\naliases = [\"\"]\n",
+        "",
+    ];
+    for (i, fields) in items.iter().enumerate() {
+        let id = format!("01JB8Z4K2MQ7V3X9T5R6W8Y2V{i}");
+        files.push((
+            format!("notes/item/{id}.wcl"),
+            note(&format!("Item {i}"), "2026-10-02T09:00:00Z", fields),
+        ));
+    }
+    build(&files, items.len())
+}
+
+#[test]
+fn contains_and_empty_in_sql_return_what_the_evaluator_returns() {
+    let f = unicode_fixture();
+    let u = |i: usize| format!("01JB8Z4K2MQ7V3X9T5R6W8Y2V{i}");
+    let cases = [
+        "from item where contains(label, \"k\")",
+        "from item where contains(label, \"KELVIN\")",
+        "from item where contains(label, \"i̇st\")",
+        "from item where contains(label, \"İST\")",
+        "from item where contains(label, \"\")",
+        "from item where contains(aliases, \"STRASSE\")",
+        "from item where contains(aliases, \"straße\")",
+        "from item where contains(aliases, \"σας\")",
+        "from item where contains(aliases, \"\")",
+        "from item where !contains(aliases, \"a\")",
+        "from item where contains(size, \"arg\")",
+        "from item where contains(site, \"/a\")",
+        "from item where contains(title, \"ITEM 3\")",
+        "from item where empty(label)",
+        "from item where !empty(label) sort label",
+        "from item where empty(aliases)",
+        "from item where !empty(aliases)",
+        "from item where empty(size) || empty(site)",
+        "from item where empty(count)",
+        "from item where !empty(count) || contains(label, \"\u{212A}\")",
+    ];
+    let mut failures = Vec::new();
+    for text in cases {
+        let q = query::parse(text).unwrap();
+        assert!(query::is_planned(&q, &f.ctx()).unwrap(), "{text}");
+        for size in [0, 1, 2] {
+            let a = every_page(&f, text, None, size, false);
+            let b = every_page(&f, text, None, size, true);
+            match (a, b) {
+                (Ok(a), Ok(b)) if same_pages(&a, &b) => {}
+                (a, b) => failures.push(format!(
+                    "{text} (pages of {size})\n  sql  {a:?}\n  scan {b:?}"
+                )),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n\n"));
+    // The Kelvin sign is a `k` once lowercased, which SQLite's own LIKE and lower() miss.
+    assert_eq!(
+        ids(&f, "from item where contains(label, \"kel\")", None).unwrap(),
+        vec![u(0), u(4)]
+    );
+    // An em space is blank; an empty list is empty, and a list of a blank item is not.
+    assert_eq!(
+        ids(&f, "from item where empty(label)", None).unwrap(),
+        vec![u(2), u(3), u(5)]
+    );
+    assert_eq!(
+        ids(&f, "from item where empty(aliases)", None).unwrap(),
+        vec![u(1), u(3), u(5)]
+    );
+}
+
+/// Every page of a search with a filter and a sort, read by id and read through the driving
+/// condition, holds each match once, in the order the evaluator gives.
+#[test]
+fn search_with_a_filter_and_a_sort_pages_each_match_exactly_once() {
+    let f = searchable(300);
+    let cases = [
+        "from item where n >= 2 search \"apple\" sort n desc",
+        "from item where n >= 2 search \"apple\"",
+        "from item where n != 3 search \"apple\"",
+        "from item where n == 1 search \"apple pear\" sort title",
+        "from item where n < 5 search \"apple\" sort n group by n limit 40",
+        "from item where n > 0 && contains(title, \"pear\") search \"app\" sort updated desc",
+        "from item search \"apple\" sort n",
+    ];
+    for drive in [usize::MAX, 0] {
+        query::set_hits_drive(drive);
+        for text in cases {
+            let q = query::parse(text).unwrap();
+            assert!(query::is_planned(&q, &f.ctx()).unwrap(), "{text}");
+            let whole = query::run(&q, &f.ctx(), &PageRequest::default()).unwrap();
+            assert!(whole.total > 0, "{text}");
+            for size in [3, 7, 50] {
+                let a = every_page(&f, text, None, size, false).unwrap();
+                let b = every_page(&f, text, None, size, true).unwrap();
+                assert!(
+                    same_pages(&a, &b),
+                    "{text} (pages of {size}, drive {drive})"
+                );
+                let seen: Vec<String> = a
+                    .iter()
+                    .flat_map(|p| p.rows.iter().map(|r| r.id.clone()))
+                    .collect();
+                let unique: HashSet<&String> = seen.iter().collect();
+                assert_eq!(seen.len(), whole.total, "{text} (pages of {size})");
+                assert_eq!(unique.len(), seen.len(), "{text}: a note came back twice");
+                let all: Vec<String> = whole.rows.iter().map(|r| r.id.clone()).collect();
+                assert_eq!(seen, all, "{text} (pages of {size})");
+            }
+        }
+    }
+    query::set_hits_drive(50_000);
 }

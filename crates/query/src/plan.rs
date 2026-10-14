@@ -2,12 +2,15 @@
 //! the indexes on `field_values` and `notes`. Only the notes of the page are read in full.
 //!
 //! [`run`] returns `None` for a query it cannot translate exactly, and [`crate::run`] then
-//! evaluates that query note by note. The translation covers what the builder writes: a field
-//! compared with a value that does not depend on the note, `has()`, `under()`, a bool field on
-//! its own, `&&`, `||` and `!`, and sorting or grouping by a field of the note itself. It never
-//! covers a comparison that would fail on a value of the field's kind, so a query that is an
-//! error note by note is still an error. It assumes each stored value has its field's kind,
-//! which validation ensures.
+//! evaluates that query note by note. The translation covers what the builder and the Search
+//! page write: a field compared with a value that does not depend on the note, `has()`,
+//! `under()`, `contains()` on text, `empty()` on a field held in the note's own fields, `start`
+//! and `end` of a date range compared with such a value, a bool field on its own, `&&`, `||` and
+//! `!`, and sorting or grouping by a field of the note itself. It never covers a comparison that
+//! would fail on a value of the field's kind, so a query that is an error note by note is still
+//! an error. It assumes each stored value has its field's kind, which validation ensures.
+//! `contains()` and `empty()` call `vault_contains` and `vault_blank`, which [`index`] defines
+//! with the evaluator's Unicode case folding and white space.
 //!
 //! One field condition that every result meets drives the statement: SQLite reads its rows
 //! from `field_values_by_str` or `field_values_by_num`, and checks every other condition on
@@ -16,9 +19,14 @@
 //! page are cut from those keys. A query sorted newest first by `updated` or `created`, or not
 //! sorted at all, instead walks `notes_by_updated`, `notes_by_created` or the ids in order and
 //! stops after the page, when enough notes match that the page comes early in that order.
+//!
+//! A query with `search` asks tantivy for every note the text hits, then reads the order keys of
+//! the hits that meet the filter: by id when there are few hits, or through the driving
+//! condition or `notes_by_type` when there are many. The score orders the result when nothing
+//! else does.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::types::{Value as Sql, ValueRef};
 use rusqlite::{Connection, params_from_iter};
@@ -127,6 +135,24 @@ enum Read {
     Field,
     /// `notes` in the order of the first sort key.
     InOrder,
+    /// The notes a full-text search hit, named by a JSON array of ids.
+    Hits,
+}
+
+/// The most full-text hits whose notes are always read one by one by id. With more, the
+/// statement may instead read the notes that meet its driving condition, or every note of the
+/// types, and keep those that were hit; see [`search`].
+const HITS_DRIVE: usize = 50_000;
+
+thread_local! {
+    /// [`HITS_DRIVE`], which tests lower to reach the other way of reading with few notes.
+    static HITS_DRIVE_NOW: std::cell::Cell<usize> = const { std::cell::Cell::new(HITS_DRIVE) };
+}
+
+/// Set how many full-text hits are read one by one on this thread. Tests only.
+#[doc(hidden)]
+pub fn set_hits_drive(n: usize) {
+    HITS_DRIVE_NOW.with(|c| c.set(n));
 }
 
 /// One term of the order: its SQL expression and whether it is descending.
@@ -226,10 +252,10 @@ pub(crate) fn run(
     r: &Runner<'_>,
     page: &PageRequest,
 ) -> Result<Option<Page>> {
-    if q.search.is_some() {
-        return Ok(None);
+    if let Some(text) = &q.search {
+        return search(q, text, types, r, page);
     }
-    let Some(main) = source(q, types, r, Read::Field) else {
+    let Some(main) = source(q, types, r, Read::Field, None) else {
         return Ok(None);
     };
     let cursor = match &page.cursor {
@@ -266,12 +292,96 @@ struct Want<'c> {
 /// them. Only the notes of the page are read.
 fn stream(q: &Query, r: &Runner<'_>, s: &Source, want: &Want<'_>) -> Result<Page> {
     let sql = format!("SELECT {} {}", s.keys(), s.from);
-    let mut all = rows_of(r.conn, &sql, &s.params, s.order.len())?;
+    let all = rows_of(r.conn, &sql, &s.params, s.order.len())?;
     let dirs: Vec<bool> = s.order.iter().map(|o| o.desc).collect();
+    cut(q, r, all, &dirs, want)
+}
+
+/// A query with `search`: tantivy finds the notes the text hits, and SQL applies the filter and
+/// reads the order keys of those notes. Without a sort the order is the search score, highest
+/// first, then the id, as note by note. With few hits the statement reads the hit notes by id.
+/// With many it reads the notes that meet the driving condition, or every note of the types when
+/// there is none and a third of them or more were hit, and keeps those that were hit. `None`
+/// when the filter or the order cannot be translated.
+fn search(
+    q: &Query,
+    text: &str,
+    types: &[String],
+    r: &Runner<'_>,
+    page: &PageRequest,
+) -> Result<Option<Page>> {
+    // Translate before searching, so a query that runs note by note does not search twice.
+    let Some(main) = source(q, types, r, Read::Field, None) else {
+        return Ok(None);
+    };
+    let by_score = q.sort.is_empty();
+    let mut dirs: Vec<bool> = main.order.iter().map(|o| o.desc).collect();
+    if by_score {
+        // The score goes before the id, highest first.
+        dirs.insert(dirs.len() - 1, true);
+    }
+    let cursor = match &page.cursor {
+        Some(c) => Some(decode_cursor(c, dirs.len())?),
+        None => None,
+    };
+    let want = Want {
+        limit: q.limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
+        size: match page.size {
+            0 => MAX_PAGE,
+            n => n.min(MAX_PAGE),
+        },
+        cursor: cursor.as_deref(),
+    };
+    let hits = if types.is_empty() {
+        Vec::new()
+    } else {
+        r.ctx.index.search_hits(text, Some(types))?
+    };
+    let scores: HashMap<&str, f32> = hits.iter().map(|h| (h.id.as_str(), h.score)).collect();
+    // Reading the hits by id costs a lookup each. With many hits, reading the notes the driving
+    // condition names, or every note of the types when a large part of them was hit, is less.
+    let few = hits.len() <= HITS_DRIVE_NOW.with(std::cell::Cell::get);
+    let by_id = few || (!main.driven && hits.len().saturating_mul(3) < notes_of(r.conn, types)?);
+    let s = if by_id {
+        let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+        let ids = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_owned());
+        match source(q, types, r, Read::Hits, Some(ids)) {
+            Some(s) => s,
+            None => return Ok(None),
+        }
+    } else {
+        main
+    };
+    let mut all = Vec::new();
+    if !hits.is_empty() {
+        let sql = format!("SELECT {} {}", s.keys(), s.from);
+        for mut keys in rows_of(r.conn, &sql, &s.params, s.order.len())? {
+            let Some(score) = scores.get(id_of(&keys)) else {
+                continue;
+            };
+            if by_score {
+                let at = keys.len() - 1;
+                keys.insert(at, Key::Float(f64::from(*score)));
+            }
+            all.push(keys);
+        }
+    }
+    cut(q, r, all, &dirs, &want).map(Some)
+}
+
+/// Count, group and cut the page from the order keys of every match, ordered by `dirs`. Only the
+/// notes of the page are read.
+fn cut(
+    q: &Query,
+    r: &Runner<'_>,
+    mut all: Vec<Vec<Key>>,
+    dirs: &[bool],
+    want: &Want<'_>,
+) -> Result<Page> {
     let order = |a: &Vec<Key>, b: &Vec<Key>| {
         a.iter()
             .zip(b)
-            .zip(&dirs)
+            .zip(dirs)
             .map(|((x, y), desc)| x.ordered(y, *desc))
             .find(|o| *o != Ordering::Equal)
             .unwrap_or(Ordering::Equal)
@@ -347,22 +457,12 @@ fn walk(
         &format!("SELECT {counted} {}", main.from),
         &main.params,
     )?;
-    let of_types = count(
-        conn,
-        &format!(
-            "SELECT count(*) FROM notes WHERE type IN ({})",
-            vec!["?"; types.len()].join(", ")
-        ),
-        &types
-            .iter()
-            .map(|t| Sql::Text(t.clone()))
-            .collect::<Vec<_>>(),
-    )?;
+    let of_types = notes_of(conn, types)?;
     let read = if main.driven { matched } else { of_types };
     if matched > 0 && (want.size + 1).saturating_mul(of_types) / matched >= read {
         return Ok(None);
     }
-    let Some(mut s) = source(q, types, r, Read::InOrder) else {
+    let Some(mut s) = source(q, types, r, Read::InOrder, None) else {
         return Ok(None);
     };
     let total = want.limit.map_or(matched, |l| matched.min(l));
@@ -371,7 +471,7 @@ fn walk(
     let mut start = 0;
     if let Some(keys) = want.cursor {
         if want.limit.is_some() {
-            let mut before = source(q, types, r, Read::InOrder).ok_or(Error::BadCursor)?;
+            let mut before = source(q, types, r, Read::InOrder, None).ok_or(Error::BadCursor)?;
             let cond = before.after(keys)?;
             let sql = format!(
                 "SELECT count(*) FROM (SELECT {} {} AND NOT ({cond}))",
@@ -475,6 +575,16 @@ impl Ord for GroupKey {
     }
 }
 
+/// The number of notes of `types`.
+fn notes_of(conn: &Connection, types: &[String]) -> Result<usize> {
+    let sql = format!(
+        "SELECT count(*) FROM notes WHERE type IN ({})",
+        vec!["?"; types.len()].join(", ")
+    );
+    let types: Vec<Sql> = types.iter().map(|t| Sql::Text(t.clone())).collect();
+    count(conn, &sql, &types)
+}
+
 fn count(conn: &Connection, sql: &str, params: &[Sql]) -> Result<usize> {
     let n: i64 = conn
         .prepare_cached(sql)?
@@ -492,8 +602,14 @@ fn key_of(v: ValueRef<'_>) -> rusqlite::Result<Key> {
 }
 
 /// `q` as the parts of a statement that reads as `read` says, or `None` when it cannot be
-/// translated exactly.
-fn source(q: &Query, types: &[String], r: &Runner<'_>, read: Read) -> Option<Source> {
+/// translated exactly. `hits` is the JSON array of ids [`Read::Hits`] reads.
+fn source(
+    q: &Query,
+    types: &[String],
+    r: &Runner<'_>,
+    read: Read,
+    hits: Option<String>,
+) -> Option<Source> {
     let driver = match (read, &q.filter) {
         (Read::Field, Some(e)) => driver(e),
         _ => None,
@@ -531,6 +647,7 @@ fn source(q: &Query, types: &[String], r: &Runner<'_>, read: Read) -> Option<Sou
     });
     let marks: Vec<String> = types.iter().map(|t| p.bind(Sql::Text(t.clone()))).collect();
     let marks = marks.join(", ");
+    let hits = hits.map(|ids| p.bind(Sql::Text(ids)));
     let joins = std::mem::take(&mut p.joins);
     let (from, distinct, driven) = match p.driven.take() {
         Some((field, cond, list)) => {
@@ -547,9 +664,14 @@ fn source(q: &Query, types: &[String], r: &Runner<'_>, read: Read) -> Option<Sou
         }
         None => {
             // `+` keeps SQLite from reading the notes through notes_by_type, so that it walks
-            // the index the order needs.
-            let plus = if read == Read::InOrder { "+" } else { "" };
-            let from = format!("FROM notes n{joins} WHERE {plus}n.type IN ({marks}) AND {filter}");
+            // the index the order needs, or reads the hits by id.
+            let plus = if read == Read::Field { "" } else { "+" };
+            let ids = match hits {
+                Some(ids) => format!("n.id IN (SELECT value FROM json_each({ids})) AND "),
+                None => String::new(),
+            };
+            let from =
+                format!("FROM notes n{joins} WHERE {ids}{plus}n.type IN ({marks}) AND {filter}");
             (from, false, false)
         }
     };
@@ -584,6 +706,23 @@ fn driver(filter: &Expr) -> Option<&Expr> {
                 2
             }
             Expr::Name(_) if field(e) => 3,
+            // Every row of the field is read, and the empty ones skipped.
+            Expr::Unary(UnOp::Not, inner) => match inner.as_ref() {
+                Expr::Call(f, args) if f == "empty" && args.first().is_some_and(field) => {
+                    out.push((3, inner));
+                    return;
+                }
+                _ => return,
+            },
+            // Every row of the field is read and its text searched. `title` is a field row too.
+            Expr::Call(f, args)
+                if f == "contains"
+                    && args.first().is_some_and(|a| {
+                        field(a) || matches!(a, Expr::Name(n) if n == "title")
+                    }) =>
+            {
+                4
+            }
             _ => return,
         };
         out.push((rank, e));
@@ -773,8 +912,65 @@ impl Planner<'_, '_> {
                     (v, Expr::Name(n)) if constant(v) => {
                         self.compare(e, n, c.flip(), v, false, neg)
                     }
+                    (Expr::Field(base, m), v) if constant(v) => self.member(e, base, m, c, v, neg),
+                    (v, Expr::Field(base, m)) if constant(v) => {
+                        self.member(e, base, m, c.flip(), v, neg)
+                    }
                     _ => None,
                 }
+            }
+            Expr::Call(f, args) if f == "contains" => {
+                let [Expr::Name(n), part] = args.as_slice() else {
+                    return None;
+                };
+                let Some(V::Str(part)) = self.value(part) else {
+                    return None;
+                };
+                let part = part.to_lowercase();
+                let (field, list) = match n.as_str() {
+                    // Every note has its title in `field_values`, which the index reads faster
+                    // than `notes`.
+                    "title" => ("title".to_owned(), false),
+                    "type" => {
+                        self.notes = true;
+                        let p = self.bind(Sql::Text(part));
+                        let not = if neg { "NOT " } else { "" };
+                        return Some(format!("{not}vault_contains(n.type, {p})"));
+                    }
+                    _ => match self.col(n)? {
+                        Col::Field(field, Class::Text | Class::Tax(_), list) => (field, list),
+                        _ => return None,
+                    },
+                };
+                let p = self.bind(Sql::Text(part));
+                let cond = |t: &str| format!("vault_contains({t}str, {p})");
+                Some(self.field_rows(e, &field, list, cond, neg))
+            }
+            Expr::Call(f, args) if f == "empty" => {
+                let [Expr::Name(n)] = args.as_slice() else {
+                    return None;
+                };
+                let not = if neg { "NOT " } else { "" };
+                match n.as_str() {
+                    "title" => {
+                        self.notes = true;
+                        return Some(format!("{not}vault_blank(n.title)"));
+                    }
+                    // Never empty.
+                    "id" | "type" => return Some(if neg { "1" } else { "0" }.to_owned()),
+                    "created" | "updated" => return None,
+                    _ => {}
+                }
+                let (blank, rows) = self.emptiness(n)?;
+                // The field is empty when no row holds a value: for text, one that is not blank.
+                let cond = |t: &str| {
+                    if blank {
+                        format!("NOT vault_blank({t}str)")
+                    } else {
+                        "1".to_owned()
+                    }
+                };
+                Some(self.field_rows(e, n, rows, cond, !neg))
             }
             Expr::Name(n) => match self.col(n)? {
                 Col::Field(field, Class::Bool, false) => {
@@ -812,6 +1008,84 @@ impl Planner<'_, '_> {
             Expr::Lit(Lit::Bool(b)) => Some(if *b != neg { "1" } else { "0" }.to_owned()),
             _ => None,
         }
+    }
+
+    /// How `empty(name)` reads the rows of a field, when every queried type that has it agrees:
+    /// whether a blank text row counts as empty, and whether a note may have several rows. A
+    /// field held in a block, which a note's stored fields never hold, is left to the
+    /// evaluator.
+    fn emptiness(&self, name: &str) -> Option<(bool, bool)> {
+        let schema = self.r.ctx.schema;
+        let mut found = None;
+        for t in self.types {
+            let Some(def) = schema.type_def(t).and_then(|t| t.field(name)) else {
+                continue;
+            };
+            let several = def.multiple
+                || matches!(
+                    def.kind,
+                    FieldKind::List { .. }
+                        | FieldKind::DateRange { .. }
+                        | FieldKind::Location { .. }
+                );
+            let this = match &def.kind {
+                k if k.is_compound() => return None,
+                // A value read as text is empty when blank. A list is empty only with no items.
+                FieldKind::String
+                | FieldKind::Url
+                | FieldKind::Select { .. }
+                | FieldKind::Taxonomy { .. }
+                | FieldKind::Asset
+                    if !def.multiple =>
+                {
+                    (true, false)
+                }
+                _ => (false, several),
+            };
+            match &found {
+                Some(seen) if *seen != this => return None,
+                _ => found = Some(this),
+            }
+        }
+        found
+    }
+
+    /// `base.member cmp v` for `start` or `end` of a date range field that holds one range.
+    fn member(
+        &mut self,
+        e: &Expr,
+        base: &Expr,
+        member: &str,
+        cmp: Cmp,
+        v: &Expr,
+        neg: bool,
+    ) -> Option<String> {
+        let Expr::Name(name) = base else {
+            return None;
+        };
+        if !matches!(member, "start" | "end") {
+            return None;
+        }
+        let schema = self.r.ctx.schema;
+        let mut any = false;
+        for t in self.types {
+            let Some(def) = schema.type_def(t).and_then(|t| t.field(name)) else {
+                continue;
+            };
+            if def.multiple || !matches!(def.kind, FieldKind::DateRange { .. }) {
+                return None;
+            }
+            any = true;
+        }
+        if !any {
+            return None;
+        }
+        let v = self.value(v)?;
+        let (col, p) = self.operand(&Class::Time, cmp, &v)?;
+        let part = self.bind(Sql::Text(member.to_owned()));
+        let op = cmp.sql();
+        let cond = |t: &str| format!("{t}part = {part} AND {t}{col} {op} {p}");
+        Some(self.field_rows(e, name, false, cond, neg))
     }
 
     /// The sort key of a path as an SQL expression. Joins what it reads into `joins`.
