@@ -403,3 +403,19 @@ test("property blocks on the note show only their editor; the Properties panel k
   await expect(estimate).toBeVisible();
   await expect(estimate).toHaveText(/Estimate/);
 });
+
+test("a long title takes the full width on a phone, and the title buttons move under it", async ({ page, admin }) => {
+  const title = "Replace the main switchboard in the east wing now";
+  const res = await admin.post("/api/notes?type=task", { data: { note: { fields: { title }, blocks: [] } } });
+  expect(res.status(), await res.text()).toBe(201);
+  const { id } = (await res.json()) as { id: string };
+  await page.setViewportSize({ width: 390, height: 800 });
+  await logIn(page, `/notes/${id}`);
+  const box = page.getByLabel("Title", { exact: true });
+  await expect(box).toHaveValue(title);
+  const row = (await page.locator(".note-title-row").boundingBox())!;
+  const input = (await box.boundingBox())!;
+  const props = (await page.getByRole("button", { name: "Properties" }).boundingBox())!;
+  expect(input.width).toBeGreaterThan(row.width * 0.95);
+  expect(props.y).toBeGreaterThanOrEqual(input.y + input.height - 1);
+});

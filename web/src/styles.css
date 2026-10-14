@@ -3581,8 +3581,14 @@ h1.note-title {
   padding: 0.2rem 0.4rem;
 }
 
+/* A title takes the row's full width before it wraps; the buttons move to the next line instead. */
+.note-title-row {
+  flex-wrap: wrap;
+}
+
 h1.note-title {
   flex: 0 1 auto;
+  max-width: 100%;
 }
 
 .note-title-input {
