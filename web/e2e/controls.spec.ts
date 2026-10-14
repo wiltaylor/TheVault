@@ -346,7 +346,16 @@ test("every control writes its field, and a {{field}} and a slot of the same fie
 
   // Chips: free text for a list, options for a select, terms for a taxonomy, notes for references.
   const tags = control(layout, "tags", "chips");
+  // No box around the chips; a + opens the add box, and Escape puts the + back.
+  expect(await tags.locator(".control-chips").evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe("none");
+  await expect(tags.getByRole("combobox", { name: "Add to Tags" })).toHaveCount(0);
+  await tags.getByRole("button", { name: "Add to Tags" }).click();
   const addTag = tags.getByRole("combobox", { name: "Add to Tags" });
+  await expect(addTag).toBeFocused();
+  await addTag.press("Escape");
+  await expect(addTag).toHaveCount(0);
+  await expect(tags.getByRole("button", { name: "Add to Tags" })).toBeFocused();
+  await tags.getByRole("button", { name: "Add to Tags" }).click();
   await addTag.fill("alpha");
   await addTag.press("Enter");
   await addTag.fill("beta");
@@ -357,13 +366,16 @@ test("every control writes its field, and a {{field}} and a slot of the same fie
   await expect(refs).toContainText("Tags=beta");
   await expect(page.getByTestId("field-tags").getByLabel("Tags item 1", { exact: true })).toHaveValue("beta");
   const sizes = control(layout, "sizes", "chips");
+  await sizes.getByRole("button", { name: "Add to Sizes" }).click();
   await sizes.getByRole("combobox", { name: "Add to Sizes" }).fill("sm");
   await sizes.getByRole("option", { name: "small" }).click();
   await expect(sizes.locator(".chip")).toHaveText(["small×"]);
   const areas = control(layout, "areas", "chips");
+  await areas.getByRole("button", { name: "Add to Areas" }).click();
   await areas.getByRole("combobox", { name: "Add to Areas" }).fill("Elec");
   await areas.getByRole("option", { name: "Electrical" }).click();
   const links = control(layout, "links", "chips");
+  await links.getByRole("button", { name: "Add to Links" }).click();
   await links.getByRole("combobox", { name: "Add to Links" }).fill("Target");
   await links.getByRole("option", { name: "Target note" }).click();
   await expect(links.locator(".chip")).toHaveText(["Target note×"]);

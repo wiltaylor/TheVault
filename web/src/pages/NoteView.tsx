@@ -803,7 +803,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
   }
 
   /** The editor for one field, in place: chosen by the field's kind. */
-  function FieldEditor(p: { field: FieldDef; label: string; ns: string }): JSX.Element {
+  function FieldEditor(p: { field: FieldDef; label: string; ns: string; bare?: boolean }): JSX.Element {
     const f = p.field;
     const id = `${p.ns}field-input-${f.name}`;
     if (f.computed) {
@@ -858,7 +858,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
           onChange={(v) => setField(f, v)}
           label={p.label}
           id={id}
-          placeholder="Empty"
+          placeholder={p.bare ? p.label : "Empty"}
         />;
     }
     return (
@@ -868,19 +868,24 @@ export function NoteView(props: { newType?: string; id?: string }) {
     );
   }
 
-  /** A property block: a field's label and its editor, in place. */
-  function Property(p: { field: FieldDef; label: string; ns?: string }) {
+  /**
+   * A property block: a field's editor in place. On the note page (`bare`) the label is hidden,
+   * kept for screen readers and shown as the empty placeholder and a tooltip; the Properties
+   * panel shows it.
+   */
+  function Property(p: { field: FieldDef; label: string; ns?: string; bare?: boolean }) {
     const ns = p.ns ?? uid;
     const f = p.field;
     const wide = f.kind === "content" || f.kind === "ink" || f.kind === "canvas" || f.kind === "location";
     return (
       <div
         class="field property"
-        classList={{ wide, [`kind-${f.kind}`]: true }}
+        classList={{ wide, bare: !!p.bare, [`kind-${f.kind}`]: true }}
         data-field={f.name}
         data-testid={`field-${f.name}`}
+        title={p.bare ? p.label : undefined}
       >
-        <div class="field-label">
+        <div class="field-label" classList={{ "visually-hidden": !!p.bare }}>
           <Show when={hasInput(f)} fallback={<span>{p.label}</span>}>
             <label for={`${ns}field-input-${f.name}`}>{p.label}</label>
           </Show>
@@ -891,7 +896,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
           </Show>
         </div>
         <div class="field-value">
-          <FieldEditor field={f} label={p.label} ns={ns} />
+          <FieldEditor field={f} label={p.label} ns={ns} bare={p.bare} />
         </div>
       </div>
     );
@@ -917,7 +922,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
     const f = t ? slotField(t, p.name) : undefined;
     return (
       <Show when={f} fallback={<div class="field missing">Unknown field {p.name}</div>}>
-        {(field) => <Property field={field()} label={p.label ?? field().label} />}
+        {(field) => <Property field={field()} label={p.label ?? field().label} bare />}
       </Show>
     );
   }

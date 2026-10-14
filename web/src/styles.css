@@ -5619,14 +5619,7 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
-  border: 1px solid var(--line);
-  border-radius: 0.4rem;
-  padding: 0.3rem;
-  background: var(--panel);
-}
-
-.control-chips:focus-within {
-  border-color: var(--accent);
+  min-height: 1.8rem;
 }
 
 .control-chips .chips {
@@ -5642,23 +5635,43 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   min-height: 1.8rem;
 }
 
+/* The + that opens the add box, sized like a chip. */
+.control-chips .chip-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.control-chips .chip-add:hover,
+.control-chips .chip-add:focus-visible {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .control-chips .control-combo {
-  min-width: 7rem;
+  min-width: 8rem;
 }
 
 .control-chips .control-combo input {
   border: none;
+  border-bottom: 1px solid var(--accent);
+  border-radius: 0;
   padding: 0.25rem 0.3rem;
   background: transparent;
 }
 
 .control-chips .control-combo input:focus-visible {
   outline: none;
-}
-
-.control-readonly .control-chips {
-  background: var(--hover);
-  border-style: dashed;
 }
 
 /* Calendar: a month in place */
@@ -5998,4 +6011,13 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 
 .query-calendar .fc-compact .fc-daygrid-event {
   font-size: 0.7rem;
+}
+
+/* Property blocks on the note page show only their editor; the label is visually hidden. */
+.field.property.bare {
+  display: block;
+}
+
+.field.property.bare > .field-value {
+  width: 100%;
 }

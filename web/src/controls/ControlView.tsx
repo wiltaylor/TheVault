@@ -2,7 +2,7 @@
 // through the note's own edit path (docs/vault-format.md, "control"). Every kind is keyboard
 // accessible and labelled; a computed field, or a control with no note to edit, is read-only.
 
-import { For, type JSX, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
+import { For, type JSX, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { type Block, type FieldDef, type Json, type Row, api } from "../api";
 import { datetimeInput, datetimeValue, findNotes, termOptions } from "../components/FieldInput";
 import { noteTitle } from "../editor/titles";
@@ -523,6 +523,10 @@ function Combobox(props: {
   suggest: (text: string) => Promise<Suggestion[]> | Suggestion[];
   choose: (s: Suggestion | null, text: string) => void;
   onBackspaceEmpty?: () => void;
+  /** Focus the box as soon as it shows. */
+  autoFocus?: boolean;
+  /** The box is done with: Escape with no list open, or focus leaving it empty. */
+  onDone?: () => void;
 }) {
   const [open, setOpen] = createSignal(false);
   const [items, setItems] = createSignal<Suggestion[]>([]);
@@ -556,6 +560,9 @@ function Combobox(props: {
     const t = props.shown?.() ?? "";
     if (document.activeElement !== input) input.value = t;
   });
+  onMount(() => {
+    if (props.autoFocus) input.focus();
+  });
   return (
     <div class="control-combo">
       <input
@@ -583,6 +590,7 @@ function Combobox(props: {
         onBlur={() => {
           setOpen(false);
           input.value = props.shown?.() ?? input.value;
+          if (props.onDone && input.value.trim() === "") props.onDone();
         }}
         onKeyDown={(e) => {
           const n = items().length;
@@ -594,10 +602,15 @@ function Combobox(props: {
             e.preventDefault();
             pick(open() && active() >= 0 ? (items()[active()] ?? null) : null);
           } else if (e.key === "Escape") {
-            if (open()) {
+            // Only a list that is showing takes the Escape; otherwise the box is done with.
+            if (open() && items().length > 0) {
               e.preventDefault();
               e.stopPropagation();
               setOpen(false);
+            } else if (props.onDone) {
+              e.preventDefault();
+              e.stopPropagation();
+              props.onDone();
             }
           } else if (e.key === "Backspace" && input.value === "" && props.onBackspaceEmpty) {
             props.onBackspaceEmpty();
@@ -709,6 +722,9 @@ function ChipsInput(props: Part) {
     if (hit) props.commit(chipsAdd(props.value(), hit.value));
     else props.complain(f().kind === "reference" ? "Choose a note from the list." : `${t} is not one of the choices.`);
   }
+  // The add box shows only after + is pressed, and goes back to + when done with.
+  const [adding, setAdding] = createSignal(false);
+  let plus: HTMLButtonElement | undefined;
   return (
     <div class="control-chips" role="group" aria-labelledby={props.labelId} aria-describedby={props.describedBy || undefined}>
       <ul class="chips" aria-label={`${props.label} values`}>
@@ -729,18 +745,41 @@ function ChipsInput(props: Part) {
         </Show>
       </ul>
       <Show when={!props.disabled}>
-        <Combobox
-          id={props.id}
-          label={`Add to ${props.label}`}
-          placeholder={props.placeholder ?? "Add…"}
-          disabled={props.disabled}
-          suggest={suggest}
-          choose={choose}
-          onBackspaceEmpty={() => {
-            const last = chips().at(-1);
-            if (last !== undefined) props.commit(chipsRemove(props.value(), last));
-          }}
-        />
+        <Show
+          when={adding()}
+          fallback={
+            <button
+              type="button"
+              ref={plus}
+              id={props.id}
+              class="chip-add"
+              aria-label={`Add to ${props.label}`}
+              title={`Add to ${props.label}`}
+              onClick={() => setAdding(true)}
+            >
+              +
+            </button>
+          }
+        >
+          <Combobox
+            id={props.id}
+            label={`Add to ${props.label}`}
+            placeholder={props.placeholder ?? "Add…"}
+            disabled={props.disabled}
+            suggest={suggest}
+            choose={choose}
+            autoFocus
+            onDone={() => {
+              const hadFocus = document.activeElement?.closest(".control-chips") !== null;
+              setAdding(false);
+              if (hadFocus) queueMicrotask(() => plus?.focus());
+            }}
+            onBackspaceEmpty={() => {
+              const last = chips().at(-1);
+              if (last !== undefined) props.commit(chipsRemove(props.value(), last));
+            }}
+          />
+        </Show>
       </Show>
     </div>
   );

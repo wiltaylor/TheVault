@@ -379,3 +379,26 @@ test("cards render {{field}} from the card template, read-only", async ({ page, 
   await expect(cards.first().locator("[data-field-ref]")).toHaveText(["doing", "—"]);
   await expect(cards.first()).toContainText("Now doing, owned by —");
 });
+
+test("property blocks on the note show only their editor; the Properties panel keeps labels", async ({ page, admin }) => {
+  const { note } = await setup(admin);
+  await logIn(page, `/notes/${note.id}`);
+  const status = page.getByTestId("field-status");
+  await expect(status).toBeVisible();
+
+  // The label is not shown on the page, but still names the input, and a hover shows it.
+  const label = status.locator(".field-label");
+  await expect(label).toHaveClass(/visually-hidden/);
+  expect(await label.evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(1);
+  await expect(status.getByLabel("Status")).toBeVisible();
+  await expect(status).toHaveAttribute("title", "Status");
+  // An empty field names itself with its placeholder.
+  await expect(page.getByTestId("field-due").getByLabel("Due")).toBeVisible();
+
+  // The Properties panel keeps its labels visible.
+  await page.getByRole("button", { name: "Properties", exact: true }).click();
+  const sidebar = page.getByRole("complementary", { name: "Properties" });
+  const estimate = sidebar.getByTestId("field-estimate").locator(".field-label");
+  await expect(estimate).toBeVisible();
+  await expect(estimate).toHaveText(/Estimate/);
+});
