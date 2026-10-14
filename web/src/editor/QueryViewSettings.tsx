@@ -1,6 +1,5 @@
 import { Index, Show } from "solid-js";
 import type { Block } from "../api";
-import { types } from "../session";
 import {
   CALENDAR_MODES,
   IDENT,
@@ -46,7 +45,6 @@ export function QueryViewSettings(props: { block: Block; onChange: (block: Block
       <QueryEditor
         value={def().query}
         onChange={(text) => set(withItem(props.block, "query", text))}
-        types={types()}
       />
       <Index each={views()}>
         {(view, i) => (

@@ -1,8 +1,8 @@
 import type { APIRequestContext, APIResponse, Locator, Page } from "@playwright/test";
 import { expect, logIn, test } from "./fixtures";
 
-// Multi-value fields are picked as chips with a + after them: on a note page, in the Properties
-// panel, and for the types of a query in the builder.
+// Multi-value fields are picked as chips with a + after them: on a note page and in the
+// Properties panel.
 
 function token(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -124,39 +124,4 @@ test("in the Properties panel, the same pickers edit the fields the page does no
     side_tags: ["red", "green"],
     side_topics: ["Plant/Electrical/Wiring"],
   });
-});
-
-test("the query builder picks types by typing part of their names, and the text follows", async ({ page, admin }) => {
-  const title = `Typed ${token()}`;
-  const blocks = [
-    {
-      kind: "content",
-      labels: ["body"],
-      blocks: [{ kind: "query_view", fields: { query: "from *" }, blocks: [{ kind: "view", labels: ["table"], fields: { kind: "table" } }] }],
-    },
-  ];
-  const res = await ok(admin.post("/api/notes?type=page", { data: { note: { fields: { title }, blocks } } }), 201);
-  const { id } = (await res.json()) as { id: string };
-  await logIn(page, `/notes/${id}`);
-  await page.getByRole("button", { name: "Edit query view" }).click();
-  const settings = page.getByRole("group", { name: "Query view settings" });
-  const builder = settings.getByRole("group", { name: "Query builder" });
-  await expect(builder).toBeVisible();
-
-  // Part of a label, then part of a plural, without case; each option shows the type's icon.
-  await builder.getByRole("button", { name: "Add to Types" }).click();
-  await builder.getByRole("combobox", { name: "Add to Types" }).fill("tas");
-  await expect(builder.getByRole("option", { name: /^Task$/ }).locator("svg.icon")).toHaveCount(1);
-  await builder.getByRole("option", { name: /^Task$/ }).click();
-  await pick(builder, "Types", "PAGES", /^Page$/);
-  await expect(builder.locator(".query-builder-from .chip")).toHaveText(["Task×", "Page×"]);
-  await builder.getByRole("combobox", { name: "Add to Types" }).press("Escape");
-  await settings.getByRole("button", { name: "Text" }).click();
-  await expect(settings.getByLabel("Query", { exact: true })).toHaveValue("from task, page");
-
-  await settings.getByRole("button", { name: "Builder" }).click();
-  await builder.getByRole("button", { name: "Remove Task" }).click();
-  await expect(builder.locator(".query-builder-from .chip")).toHaveText(["Page×"]);
-  await settings.getByRole("button", { name: "Text" }).click();
-  await expect(settings.getByLabel("Query", { exact: true })).toHaveValue("from page");
 });
