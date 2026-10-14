@@ -35,7 +35,6 @@ type FieldDef {
   @children("image")      images:      list<Image>
   @children("asset")      assets:      list<AssetBlock>
   @children("code")       codes:       list<Code>
-  @children("terminal")   terminals:   list<Terminal>
   @children("mermaid")    mermaids:    list<Mermaid>
   @children("ink")        inks:        list<Ink>
   @children("query_view") query_views: list<QueryView>

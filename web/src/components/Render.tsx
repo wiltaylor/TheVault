@@ -7,7 +7,6 @@ import { columnWidth, columnsOf } from "../blocks/columns";
 import { text } from "../blocks/fields";
 import { AssetBlock, ImageBlock } from "../blocks/MediaBlocks";
 import { MermaidBlock } from "../blocks/MermaidBlock";
-import { TerminalBlock } from "../blocks/TerminalBlock";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { ControlBlock } from "../controls/ControlView";
 import { InkSurface } from "../ink/InkSurface";
@@ -79,9 +78,6 @@ export function BlockView(props: { block: Block; onChange?: (block: Block) => vo
       </Match>
       <Match when={b().kind === "query_view"}>
         <QueryView block={b()} />
-      </Match>
-      <Match when={b().kind === "terminal"}>
-        <TerminalBlock block={b()} onChange={props.onChange} />
       </Match>
       <Match when={b().kind === "mermaid"}>
         <MermaidBlock block={b()} onChange={props.onChange} />

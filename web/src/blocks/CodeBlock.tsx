@@ -1,6 +1,7 @@
 // The code block on CodeMirror 6 (D29). The source is kept verbatim: CodeMirror holds it as typed,
 // tabs and trailing spaces included, and Tab inserts a tab character rather than leaving the
-// editor.
+// editor. A shell session is two code blocks: a `bash` one for the command and a `stdout` one for
+// what it printed, which shows as plain program output.
 
 import { indentLess, insertTab } from "@codemirror/commands";
 import { HighlightStyle, LanguageDescription, type LanguageSupport, syntaxHighlighting } from "@codemirror/language";
@@ -8,22 +9,39 @@ import { languages } from "@codemirror/language-data";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { classHighlighter, tags as t } from "@lezer/highlight";
-import { basicSetup } from "codemirror";
+import { basicSetup, minimalSetup } from "codemirror";
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import type { Block } from "../api";
 import { text, withItem, withText } from "./fields";
 
+/** The `language` of a code block that holds program output rather than code. */
+export const OUTPUT = "stdout";
+
+/** Whether a block's `language` item marks program output: no highlighting, no line numbers. */
+export function isOutput(language: string): boolean {
+  return language.trim().toLowerCase() === OUTPUT;
+}
+
 /** The CodeMirror language a block's `language` item names, by name or alias, any case. */
 export function findLanguage(name: string): LanguageDescription | null {
-  return name.trim() ? LanguageDescription.matchLanguageName(languages, name.trim(), false) : null;
+  if (!name.trim() || isOutput(name)) return null;
+  return LanguageDescription.matchLanguageName(languages, name.trim(), false);
 }
 
-/** The value a block stores for a language: its CodeMirror name in lower case. */
+/**
+ * The value a block stores for a language: its CodeMirror name in lower case, except the shell,
+ * which is stored as `bash`, the name a shell command block is inserted with.
+ */
 export function languageValue(lang: LanguageDescription): string {
-  return lang.name.toLowerCase();
+  return lang.name === "Shell" ? "bash" : lang.name.toLowerCase();
 }
 
-const LANGUAGES = [...languages].sort((a, b) => a.name.localeCompare(b.name));
+/** A language as the picker and the header name it: the shell as Bash. */
+export function languageName(lang: LanguageDescription): string {
+  return lang.name === "Shell" ? "Bash" : lang.name;
+}
+
+const LANGUAGES = [...languages].sort((a, b) => languageName(a).localeCompare(languageName(b)));
 
 async function loadLanguage(name: string): Promise<LanguageSupport | []> {
   const lang = findLanguage(name);
@@ -77,26 +95,36 @@ const appHighlight = HighlightStyle.define([
   { tag: t.invalid, color: "var(--danger)" },
 ]);
 
-/** A CodeMirror view of `source`, editable when `onChange` is given. */
-export function CodeMirror(props: { source: string; language: string; onChange?: (source: string) => void }) {
+/**
+ * A CodeMirror view of `source`, editable when `onChange` is given. As `output`, it is program
+ * output: no language, no gutters, and long lines wrap.
+ */
+export function CodeMirror(props: {
+  source: string;
+  language: string;
+  output?: boolean;
+  onChange?: (source: string) => void;
+}) {
   let host!: HTMLDivElement;
   let view: EditorView | undefined;
   const language = new Compartment();
 
   onMount(() => {
     const editable = props.onChange !== undefined;
+    const output = props.output === true;
     const common = [
       language.of([]),
       appTheme,
       syntaxHighlighting(appHighlight),
       // tok-* classes as well, so a highlighted token can be found by what it is.
       syntaxHighlighting(classHighlighter),
-      EditorView.contentAttributes.of({ "aria-label": "Code" }),
+      EditorView.contentAttributes.of({ "aria-label": output ? "Output" : "Code" }),
+      ...(output ? [EditorView.lineWrapping] : []),
     ];
     const extensions = editable
       ? [
           Prec.high(keymap.of([{ key: "Tab", run: insertTab, shift: indentLess }])),
-          basicSetup,
+          output ? minimalSetup : basicSetup,
           ...common,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) props.onChange?.(u.state.doc.toString());
@@ -120,7 +148,7 @@ export function CodeMirror(props: { source: string; language: string; onChange?:
       on(
         () => props.language,
         async (name) => {
-          const support = await loadLanguage(name);
+          const support = output ? [] : await loadLanguage(name);
           if (view && name === props.language) view.dispatch({ effects: language.reconfigure(support) });
         },
       ),
@@ -128,7 +156,7 @@ export function CodeMirror(props: { source: string; language: string; onChange?:
   });
   onCleanup(() => view?.destroy());
 
-  return <div ref={host} class="code-mirror" />;
+  return <div ref={host} class="code-mirror" classList={{ "code-output": props.output === true }} />;
 }
 
 /**
@@ -138,18 +166,32 @@ export function CodeMirror(props: { source: string; language: string; onChange?:
  */
 export function CodeBlock(props: { block: Block; onChange?: (block: Block) => void }) {
   const [editing, setEditing] = createSignal(false);
+  const output = () => isOutput(text(props.block, "language"));
   const known = () => findLanguage(text(props.block, "language"));
   const selected = () => {
+    if (output()) return OUTPUT;
     const lang = known();
     return lang ? lang.name : text(props.block, "language");
   };
-  const languageLabel = () => known()?.name ?? text(props.block, "language");
+  const languageLabel = () => {
+    if (output()) return "Output";
+    const lang = known();
+    return lang ? languageName(lang) : text(props.block, "language");
+  };
   const set = (item: string, value: string) => props.onChange?.(withText(props.block, item, value));
+  const mirror = (asOutput: boolean) => (
+    <CodeMirror
+      source={text(props.block, "source")}
+      language={text(props.block, "language")}
+      output={asOutput}
+      onChange={props.onChange ? (source) => props.onChange?.(withItem(props.block, "source", source)) : undefined}
+    />
+  );
 
   return (
     <figure
       class="block-code"
-      classList={{ editing: editing() && !!props.onChange }}
+      classList={{ editing: editing() && !!props.onChange, "block-output": output() }}
       onFocusIn={() => setEditing(true)}
       onFocusOut={(e) => {
         const to = e.relatedTarget;
@@ -170,15 +212,19 @@ export function CodeBlock(props: { block: Block; onChange?: (block: Block) => vo
           <select
             aria-label="Language"
             onChange={(e) => {
-              const lang = LANGUAGES.find((l) => l.name === e.currentTarget.value);
-              set("language", lang ? languageValue(lang) : "");
+              const value = e.currentTarget.value;
+              const lang = LANGUAGES.find((l) => l.name === value);
+              set("language", value === OUTPUT ? OUTPUT : lang ? languageValue(lang) : "");
             }}
           >
             <option value="" selected={selected() === ""}>
               Plain text
             </option>
+            <option value={OUTPUT} selected={selected() === OUTPUT}>
+              Output
+            </option>
             {/* A language CodeMirror does not know stays as written, unhighlighted. */}
-            <Show when={!known() && text(props.block, "language")}>
+            <Show when={!known() && !output() && text(props.block, "language")}>
               <option value={text(props.block, "language")} selected>
                 {text(props.block, "language")}
               </option>
@@ -186,7 +232,7 @@ export function CodeBlock(props: { block: Block; onChange?: (block: Block) => vo
             <For each={LANGUAGES}>
               {(l) => (
                 <option value={l.name} selected={selected() === l.name}>
-                  {l.name}
+                  {languageName(l)}
                 </option>
               )}
             </For>
@@ -199,11 +245,10 @@ export function CodeBlock(props: { block: Block; onChange?: (block: Block) => vo
           />
         </div>
       </Show>
-      <CodeMirror
-        source={text(props.block, "source")}
-        language={text(props.block, "language")}
-        onChange={props.onChange ? (source) => props.onChange?.(withItem(props.block, "source", source)) : undefined}
-      />
+      {/* Output and code are set up differently, so switching between them remounts the view. */}
+      <Show when={output()} fallback={mirror(false)}>
+        {mirror(true)}
+      </Show>
     </figure>
   );
 }

@@ -60,10 +60,12 @@ test("a note created through the API appears in its type list and opens with its
   await logIn(page);
   await page.getByRole("link", { name: "Settings" }).click();
   await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Types" }).click();
-  await page.getByRole("list", { name: "Types" }).getByRole("link", { name: /^Tasks/ }).click();
+  // The card itself opens the type's editor; its Notes link opens the note list.
+  const card = page.getByRole("list", { name: "Types" }).getByRole("listitem").filter({ has: page.getByRole("link", { name: /^Tasks/ }) });
+  await card.getByRole("link", { name: "Notes", exact: true }).click();
   await expect(page).toHaveURL(/\/types\/task$/);
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
-  const row = page.getByTestId("note-row").filter({ hasText: title });
+  const row = page.getByTestId("note-card").filter({ hasText: title });
   await expect(row).toBeVisible();
   await row.click();
 
@@ -191,28 +193,13 @@ test("the manifest and the service worker register", async ({ page, request }) =
   expect(cached.filter((u) => u.startsWith("/api"))).toEqual([]);
 });
 
-test(`a list of ${BULK_NOTES} notes scrolls with fewer than 200 rows in the DOM`, async ({ page }) => {
-  // Each scroll fetches another page of the list. Under a full parallel run that can take longer
-  // than the default 5 s, so the waits get more room. The row-count limits stay as they are.
-  test.slow();
-  const load = { timeout: 20_000 };
+test(`a type of ${BULK_NOTES} notes lists none until a search finds one`, async ({ page }) => {
   await logIn(page, "/types/bulk");
-  await expect(page.getByRole("heading", { name: "Bulk notes" })).toBeVisible(load);
-  await expect(page.getByText(`${BULK_NOTES} notes`)).toBeVisible(load);
-  const list = page.getByTestId("note-list");
-  const items = list.getByRole("listitem");
-  await expect(page.getByTestId("note-row").filter({ hasText: bulkTitle(1) })).toBeVisible(load);
-  expect(await items.count()).toBeLessThan(200);
-
-  for (const fraction of [0.25, 0.5, 1]) {
-    await list.evaluate((el, f) => {
-      el.scrollTop = (el.scrollHeight - el.clientHeight) * f;
-    }, fraction);
-    await expect(list.getByTestId("note-row").first()).toBeVisible(load);
-    expect(await items.count()).toBeLessThan(200);
-  }
-  await expect(page.getByTestId("note-row").filter({ hasText: bulkTitle(BULK_NOTES) })).toBeVisible(load);
-  expect(await items.count()).toBeLessThan(200);
+  await expect(page.getByRole("heading", { name: "Bulk notes" })).toBeVisible();
+  await expect(page.getByTestId("type-list-status")).toHaveText(`${BULK_NOTES.toLocaleString("en-US")} notes. Search to find one.`);
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+  await page.getByRole("searchbox", { name: "Search bulk notes" }).fill(bulkTitle(BULK_NOTES).split(" ")[1]!);
+  await expect(page.getByTestId("note-card").filter({ hasText: bulkTitle(BULK_NOTES) })).toBeVisible();
 });
 
 test.describe("at tablet width", () => {

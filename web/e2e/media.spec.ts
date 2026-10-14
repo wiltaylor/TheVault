@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { expect, logIn, test, vaultDir } from "./fixtures";
@@ -220,67 +220,95 @@ test("a code block reads as numbered code with a copy button until the cursor is
   await expect(block.locator(".cm-lineNumbers")).toBeVisible();
 });
 
-test("a terminal block with two commands saves, reloads identically and shows stderr apart", async ({
+/**
+ * With E2E_SHOTS set to a folder, save light and dark screenshots of `what` there. Without it,
+ * nothing is written.
+ */
+async function shots(page: Page, name: string, what: Locator) {
+  const dir = process.env.E2E_SHOTS;
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+    await what.screenshot({ path: join(dir, `${name}-${theme}.png`) });
+  }
+  await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+}
+
+test("a shell command and its output are a bash and a stdout code block, inserted from the / menu", async ({
   page,
   admin,
 }) => {
-  const note = await createTask(admin, `Terminal ${token()}`);
+  const note = await createTask(admin, `Shell ${token()}`, [{ kind: "paragraph", fields: { text: "Try it first:" } }]);
   await logIn(page, `/notes/${note.id}`);
   const doc = await startEditing(page);
-  await doc.click();
-  await page.keyboard.type("/terminal");
+  await doc.locator("p", { hasText: "Try it first:" }).click();
+  await page.keyboard.press("End");
   await page.keyboard.press("Enter");
 
-  const terminal = doc.locator(".block-terminal");
-  await terminal.getByLabel("Terminal title").fill("Dry run");
-  await terminal.getByLabel("Command 1", { exact: true }).fill("vault import --dry-run export/");
-  await terminal.getByLabel("Output of command 1").fill("42 notes would be created\n3 skipped");
-  await terminal.getByRole("button", { name: "Add command" }).click();
-  await terminal.getByLabel("Command 2", { exact: true }).fill("vault import export/missing");
-  await terminal.getByLabel("Errors of command 2").fill("error: export/missing: no such directory");
-  await terminal.getByLabel("Exit code of command 2").fill("1");
+  const menu = page.getByRole("listbox", { name: "Insert block" });
+  await page.keyboard.type("/shell");
+  await expect(menu.getByRole("option")).toHaveText([/Shell command/]);
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/output");
+  await expect(menu.getByRole("option")).toHaveText([/Output/]);
+  await page.keyboard.press("Enter");
+  await expect(menu).toHaveCount(0);
+
+  const command = "vault import --dry-run export/";
+  const output = "42 notes would be created\n3 skipped";
+  await doc.getByRole("textbox", { name: "Code" }).click();
+  await page.keyboard.type(command);
+  await doc.getByRole("textbox", { name: "Output" }).click();
+  await page.keyboard.type(output);
   await saveAndWait(page);
 
   const expected: Block[] = [
-    {
-      kind: "terminal",
-      fields: { title: "Dry run" },
-      blocks: [
-        {
-          kind: "command",
-          fields: { line: "vault import --dry-run export/", stdout: "42 notes would be created\n3 skipped" },
-        },
-        {
-          kind: "command",
-          fields: { line: "vault import export/missing", stderr: "error: export/missing: no such directory", exit_code: 1 },
-        },
-      ],
-    },
+    { kind: "paragraph", fields: { text: "Try it first:" } },
+    { kind: "code", fields: { language: "bash", source: command } },
+    { kind: "code", fields: { language: "stdout", source: output } },
   ];
   const first = await stored(admin, note.id);
   expect(body(first)).toEqual(expected);
+  expect(first.wcl).toContain('language = "stdout"');
 
   await page.reload();
-  // The note page edits the terminal in place: it reads back what it saved, stderr apart.
-  const shown = page.getByTestId("field-body").locator(".block-terminal");
-  await expect(shown.getByLabel("Terminal title")).toHaveValue("Dry run");
-  await expect(shown.getByLabel("Command 1", { exact: true })).toHaveValue("vault import --dry-run export/");
-  const stdout = shown.getByLabel("Output of command 1");
-  const stderr = shown.getByLabel("Errors of command 2");
-  await expect(stdout).toHaveValue("42 notes would be created\n3 skipped");
-  await expect(stderr).toHaveValue("error: export/missing: no such directory");
-  await expect(shown.getByLabel("Exit code of command 2")).toHaveValue("1");
-  const colour = (l: Locator) => l.evaluate((el) => getComputedStyle(el).color);
-  expect(await colour(stderr)).not.toBe(await colour(stdout));
+  const blocks = page.getByTestId("field-body").locator(".block-code");
+  await expect(blocks).toHaveCount(2);
+  const shell = blocks.nth(0);
+  const out = blocks.nth(1);
 
-  // Visiting it again without a change saves nothing new.
-  const again = await startEditing(page);
-  await again.getByLabel("Command 2", { exact: true }).click();
+  // The command: highlighted as shell, labelled Bash, with line numbers.
+  await expect(shell.locator(".code-language")).toHaveText("Bash");
+  expect(await codeMirrorText(shell.locator(".cm-editor"))).toBe(command);
+  await expect(shell.locator(".cm-content [class*='tok-']").first()).toBeVisible();
+  await expect(shell.locator(".cm-lineNumbers")).toBeVisible();
+
+  // The output: labelled Output, plain text, no gutter, on its own muted background, copyable.
+  await expect(out).toHaveClass(/block-output/);
+  await expect(out.locator(".code-language")).toHaveText("Output");
+  expect(await codeMirrorText(out.locator(".cm-editor"))).toBe(output);
+  await expect(out.locator(".cm-gutters")).toHaveCount(0);
+  await expect(out.locator(".cm-content [class*='tok-']")).toHaveCount(0);
+  await expect(out.getByRole("button", { name: "Copy code" })).toBeVisible();
+  const background = (l: Locator) => l.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(await background(out.locator(".cm-editor"))).not.toBe(await background(shell.locator(".cm-editor")));
+
+  // In the output block, the picker shows Output; the shell block's shows Bash.
+  await out.getByRole("textbox", { name: "Output" }).click();
+  await expect(out.getByLabel("Language")).toHaveValue("stdout");
+  await shell.getByRole("textbox", { name: "Code" }).click();
+  await expect(shell.getByLabel("Language").locator("option:checked")).toHaveText("Bash");
+
+  // Visiting them again without a change saves nothing new.
   await settle(page);
   const second = await stored(admin, note.id);
   expect(body(second)).toEqual(expected);
-  const terminalWcl = (wcl: string) => wcl.slice(wcl.indexOf("terminal {"));
-  expect(terminalWcl(second.wcl)).toBe(terminalWcl(first.wcl));
+  expect(second.wcl).toBe(first.wcl);
+
+  await page.reload();
+  await expect(blocks).toHaveCount(2);
+  await shots(page, "stdout", page.getByTestId("field-body"));
 });
 
 test("a valid Mermaid diagram renders an SVG; an invalid one shows the error and keeps the source", async ({

@@ -81,7 +81,7 @@ test("a link opens in the pane it is in; Ctrl+click and middle-click open backgr
   await expect(left.getByRole("navigation", { name: "Day" })).toBeVisible();
 
   // A row in the right pane opens there; the left pane keeps its page.
-  const rowA = right.getByTestId("note-row").filter({ hasText: "Alpha" });
+  const rowA = right.getByTestId("note-card").filter({ hasText: "Alpha" });
   await rowA.click();
   await expect(right.getByLabel("Title", { exact: true })).toHaveValue(/^Alpha /);
   await expect(left.getByRole("navigation", { name: "Day" })).toBeVisible();
@@ -89,10 +89,10 @@ test("a link opens in the pane it is in; Ctrl+click and middle-click open backgr
 
   // Back in the right pane, Ctrl+click and middle-click open background tabs.
   await right.getByRole("button", { name: "Back" }).click();
-  await expect(right.getByTestId("note-row").first()).toBeVisible();
-  await right.getByTestId("note-row").filter({ hasText: "Beta" }).click({ modifiers: ["ControlOrMeta"] });
+  await expect(right.getByTestId("note-card").first()).toBeVisible();
+  await right.getByTestId("note-card").filter({ hasText: "Beta" }).click({ modifiers: ["ControlOrMeta"] });
   await expect(tabs(page)).toHaveCount(2);
-  await right.getByTestId("note-row").filter({ hasText: "Alpha" }).click({ button: "middle" });
+  await right.getByTestId("note-card").filter({ hasText: "Alpha" }).click({ button: "middle" });
   await expect(tabs(page)).toHaveCount(3);
   // Neither left the current tab or pane.
   await expect(tabs(page).nth(0)).toHaveAttribute("aria-selected", "true");

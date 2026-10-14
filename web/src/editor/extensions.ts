@@ -139,7 +139,7 @@ export const MentionPickerNode = Node.create({
   },
 });
 
-/** A content block this editor keeps but does not edit: an image, code, terminal and so on. */
+/** A content block this editor keeps but does not edit: an image, code, a diagram and so on. */
 export const VaultBlock = Node.create({
   name: "vaultBlock",
   group: "block",

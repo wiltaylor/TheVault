@@ -81,21 +81,6 @@ type Code {
   source:   utf8
 }
 
-@block("command", required_fields = ["line"])
-type Command {
-  line:      utf8
-  stdout:    utf8?
-  stderr:    utf8?
-  exit_code: i64?
-}
-
-@block("terminal") type Terminal {
-  title:  utf8?
-  shell:  utf8?
-  prompt: utf8?
-  @children("command", min = 1) commands: list<Command>
-}
-
 @block("mermaid", required_fields = ["source"])
 type Mermaid {
   source: utf8
@@ -190,7 +175,6 @@ type CanvasNode {
   @children("image")      images:      list<Image>
   @children("asset")      assets:      list<AssetBlock>
   @children("code")       codes:       list<Code>
-  @children("terminal")   terminals:   list<Terminal>
   @children("mermaid")    mermaids:    list<Mermaid>
   @children("ink")        inks:        list<Ink>
   @children("query_view") query_views: list<QueryView>
@@ -272,7 +256,6 @@ type Control {
   @children("image")      images:      list<Image>
   @children("asset")      assets:      list<AssetBlock>
   @children("code")       codes:       list<Code>
-  @children("terminal")   terminals:   list<Terminal>
   @children("mermaid")    mermaids:    list<Mermaid>
   @children("ink")        inks:        list<Ink>
   @children("query_view") query_views: list<QueryView>
@@ -293,7 +276,6 @@ type Control {
   @children("image")      images:      list<Image>
   @children("asset")      assets:      list<AssetBlock>
   @children("code")       codes:       list<Code>
-  @children("terminal")   terminals:   list<Terminal>
   @children("mermaid")    mermaids:    list<Mermaid>
   @children("ink")        inks:        list<Ink>
   @children("query_view") query_views: list<QueryView>

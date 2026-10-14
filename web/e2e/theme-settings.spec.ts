@@ -112,12 +112,32 @@ test("the Types tab in settings is a gallery with a card for every type", async 
   await expect(card).toContainText(/\d+ fields?/);
 
   await expect(gallery.getByRole("link", { name: /New type/ })).toHaveAttribute("href", "/settings/types/new");
-  await expect(card.getByRole("link", { name: "Edit type" })).toHaveAttribute("href", `/settings/types/${name}/edit`);
-  // The card's main area opens the type's note list, outside settings.
+  await expect(card.getByRole("link", { name: "Templates" })).toHaveAttribute("href", `/settings/types/${name}/templates`);
+  await expect(card.getByRole("link", { name: "Notes", exact: true })).toHaveAttribute("href", `/types/${name}`);
+  // Clicking the card opens the type's editor, under the settings tabs.
   await card.getByRole("link", { name: new RegExp(`^${plural}`) }).click();
+  await expect(page).toHaveURL(new RegExp(`/settings/types/${name}/edit$`));
+  await expect(page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Types" })).toHaveClass(/active/);
+
+  // The card's Notes link opens the type's note list, outside settings.
+  await page.goto("/settings/types");
+  await gallery.getByRole("listitem").filter({ hasText: plural }).getByRole("link", { name: "Notes", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/types/${name}$`));
   await expect(page.getByRole("heading", { name: plural })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Settings sections" })).toHaveCount(0);
+});
+
+test("a type card's keyboard focus opens the editor on Enter", async ({ page, admin }) => {
+  const name = `cardkey_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const plural = `Cardkey ${name.slice(8)}`;
+  const wcl = `label = "${name}"\nplural = "${plural}"\n\ntemplate default {\n  tab "Main" {\n    slot "title"\n  }\n}\n`;
+  const put = await admin.put(`/api/types/${name}`, { data: { wcl } });
+  expect(put.status(), await put.text()).toBe(200);
+  await logIn(page, "/settings/types");
+  const card = page.getByRole("list", { name: "Types" }).getByRole("listitem").filter({ hasText: plural });
+  await card.getByRole("link", { name: new RegExp(`^${plural}`) }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`/settings/types/${name}/edit$`));
 });
 
 test("the type and template editors open under the settings tabs, and their old addresses redirect", async ({ page, admin }) => {
@@ -129,7 +149,7 @@ test("the type and template editors open under the settings tabs, and their old 
   await logIn(page, "/settings/types");
   const tabs = page.getByRole("navigation", { name: "Settings sections" });
   const card = page.getByRole("list", { name: "Types" }).getByRole("listitem").filter({ hasText: name });
-  await card.getByRole("link", { name: "Edit type" }).click();
+  await card.getByRole("link", { name: new RegExp(`^${name}`) }).click();
   await expect(page).toHaveURL(new RegExp(`/settings/types/${name}/edit$`));
   await expect(tabs.getByRole("link", { name: "Types" })).toHaveClass(/active/);
   await expect(page.getByRole("link", { name: "Templates" })).toHaveAttribute("href", `/settings/types/${name}/templates`);

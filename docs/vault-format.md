@@ -106,7 +106,7 @@ Every write emits the canonical form (D21). `wcl_lang`'s formatter fixes indenta
 - An optional definition flag that is `false` (`required`, `computed`, `multiple`, `paused`) is left out. A note's `bool` field is always written, `false` included.
 - A field that holds its definition's default is still written.
 - A `float` is written with a decimal point (`3.0`). An `int` is written without one.
-- Block order is significant and is kept: content blocks, list items, terminal commands, ink strokes, canvas nodes, terms, tabs and slots are all stored in display order.
+- Block order is significant and is kept: content blocks, list items, ink strokes, canvas nodes, terms, tabs and slots are all stored in display order.
 
 ## Value encodings
 
@@ -889,7 +889,7 @@ asset {
 
 | Item | Form | Meaning |
 |------|------|---------|
-| `language` | string | CodeMirror language name for highlighting. Default: plain text |
+| `language` | string | CodeMirror language name or alias for highlighting, in lower case, such as `rust` or `bash`. `stdout` is special: see below. Default: plain text |
 | `caption` | string | Caption or file name |
 | `source` | string or heredoc | Required. The code, verbatim. Markup is not interpreted |
 
@@ -905,41 +905,19 @@ code {
 }
 ```
 
-### `terminal`
+A shell session is two code blocks: the command as a `bash` code block, then what it printed as a `stdout` code block.
 
-A recorded shell session.
-
-| Item | Form | Meaning |
-|------|------|---------|
-| `title` | string | Shown in the terminal's title bar |
-| `shell` | string | Display only, for example `bash` |
-| `prompt` | string | The prompt shown before each command. Default `$` |
-| `command { ... }` | block | At least one, in order |
-
-Each `command` holds:
-
-| Item | Form | Meaning |
-|------|------|---------|
-| `line` | string | Required. The command as typed |
-| `stdout` | string or heredoc | Standard output |
-| `stderr` | string or heredoc | Standard error, shown after `stdout` and styled as an error |
-| `exit_code` | int | Shown when it is not 0 |
+`language = "stdout"` marks program output. It is not a CodeMirror language: the block is shown as plain, unhighlighted text without line numbers, in a muted output style and labelled "Output". Standard error has no separate form; put it in the same `stdout` block.
 
 ```wcl
-terminal {
-  title = "Dry run"
-  shell = "bash"
+code {
+  language = "bash"
+  source   = "vault import --dry-run export/"
+}
 
-  command {
-    line   = "vault import --dry-run export/"
-    stdout = "42 notes would be created"
-  }
-
-  command {
-    line      = "vault import export/missing"
-    stderr    = "error: export/missing: no such directory"
-    exit_code = 1
-  }
+code {
+  language = "stdout"
+  source   = "42 notes would be created"
 }
 ```
 
@@ -1296,7 +1274,7 @@ Each node kind adds its own items:
 
 | Node kind | Items | Shows |
 |-----------|-------|-------|
-| `card` | Content blocks, as in [Content blocks](#content-blocks): headings, paragraphs, lists, quotes, images, files, code, terminals, diagrams, drawings, query views, column layouts and controls. Not a `canvas`, in the card or in its columns | The blocks, in order, as a content field shows them. A query view in a card shows live results; its `this` is the note that holds the canvas |
+| `card` | Content blocks, as in [Content blocks](#content-blocks): headings, paragraphs, lists, quotes, images, files, code, diagrams, drawings, query views, column layouts and controls. Not a `canvas`, in the card or in its columns | The blocks, in order, as a content field shows them. A query view in a card shows live results; its `this` is the note that holds the canvas |
 | `note` | `note`: note ULID, required. `template`: default `card`. No blocks | A note rendered with a template |
 
 #### Reading older canvases

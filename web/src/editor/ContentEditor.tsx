@@ -34,14 +34,21 @@ const MARK_BUTTONS: { mark: MarkName; label: string; text: string; keys: string 
 
 
 /** Blocks the toolbar and the `/` menu insert as they are, ready to fill in. */
-const INSERTS: { label: string; text: string; menu: string; keywords: string; block: () => Block }[] = [
+export const INSERTS: { label: string; text: string; menu: string; keywords: string; block: () => Block }[] = [
   { label: "Insert code", text: "Code", menu: "Code", keywords: "snippet source", block: () => ({ kind: "code", fields: { source: "" } }) },
   {
-    label: "Insert terminal",
-    text: "Terminal",
-    menu: "Terminal",
-    keywords: "shell command console",
-    block: () => ({ kind: "terminal", blocks: [{ kind: "command", fields: { line: "" } }] }),
+    label: "Insert shell command",
+    text: "Shell",
+    menu: "Shell command",
+    keywords: "bash sh terminal console command",
+    block: () => ({ kind: "code", fields: { language: "bash", source: "" } }),
+  },
+  {
+    label: "Insert output",
+    text: "Output",
+    menu: "Output",
+    keywords: "stdout terminal console result",
+    block: () => ({ kind: "code", fields: { language: "stdout", source: "" } }),
   },
   {
     label: "Insert diagram",

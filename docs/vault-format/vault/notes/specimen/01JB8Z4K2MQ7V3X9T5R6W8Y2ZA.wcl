@@ -129,22 +129,14 @@ content body {
     END
   }
 
-  terminal {
-    title  = "Dry run"
-    shell  = "bash"
-    prompt = "$"
+  code {
+    language = "bash"
+    source   = "vault import --dry-run export/"
+  }
 
-    command {
-      line      = "vault import --dry-run export/"
-      stdout    = "42 notes would be created"
-      exit_code = 0
-    }
-
-    command {
-      line      = "vault import export/missing"
-      stderr    = "error: export/missing: no such directory"
-      exit_code = 1
-    }
+  code {
+    language = "stdout"
+    source   = "42 notes would be created"
   }
 
   mermaid {

@@ -240,15 +240,16 @@ test("the / menu inserts a block, filters as you type and closes on Escape", asy
   await expect(body(page).locator("h2")).toHaveText("Second part");
 
   await page.keyboard.press("Enter");
-  await page.keyboard.type("/terminal");
-  await expect(menu.getByRole("option")).toHaveText([/Terminal/]);
+  await page.keyboard.type("/shell");
+  await expect(menu.getByRole("option")).toHaveText([/Shell command/]);
   await page.keyboard.press("Enter");
   await expect(menu).toHaveCount(0);
   await saved(page);
   const n = await stored(admin, note.id);
   const blocks = n.note.blocks.find((b) => b.labels?.[0] === "body")?.blocks ?? [];
-  expect(blocks.map((b) => b.kind)).toEqual(["paragraph", "heading", "terminal"]);
+  expect(blocks.map((b) => b.kind)).toEqual(["paragraph", "heading", "code"]);
   expect(blocks[1]?.fields).toEqual({ level: 2, text: "Second part" });
+  expect(blocks[2]?.fields).toEqual({ language: "bash", source: "" });
 });
 
 test("blocks move by dragging their handle and with Alt+Arrow, and the order is saved", async ({ page, admin }) => {

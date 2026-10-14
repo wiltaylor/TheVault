@@ -25,6 +25,7 @@ import { workspace } from "../workspace/store";
 import { Workspace } from "../workspace/Workspace";
 import { CalendarIcon, GearIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
 import { PinnedTree } from "./PinnedTree";
+import { TypesNav } from "./TypesNav";
 
 /** The sidebar's main links. Each opens in the active pane; a middle-click opens a background tab. */
 const NAV = [
@@ -296,6 +297,7 @@ export function Shell() {
             </ul>
           </nav>
           <PinnedTree onNavigate={() => setLeftDrawer(false)} />
+          <TypesNav onNavigate={() => setLeftDrawer(false)} />
           <div class="sidebar-footer">
             <button
               type="button"

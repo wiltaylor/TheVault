@@ -151,7 +151,8 @@ describe("text to editor to text", () => {
       { kind: "list", fields: { style: "bullet" }, blocks: [{ kind: "item", fields: { text: "*dot*" } }] },
       { kind: "quote", fields: { text: "Make it work,\nmake it ==right==." } },
       { kind: "code", fields: { language: "rust", source: "fn main() {}\n" } },
-      { kind: "terminal", fields: { title: "Dry run" }, blocks: [{ kind: "command", fields: { line: "ls" } }] },
+      { kind: "code", fields: { language: "bash", source: "ls" } },
+      { kind: "code", fields: { language: "stdout", source: "a\nb\n" } },
       { kind: "heading", fields: { level: 1, text: "End" } },
     ];
     expect(roundTrip(blocks)).toEqual(blocks);

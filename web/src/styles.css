@@ -21,6 +21,8 @@
   --code-property: #9f1239;
   --code-active-line: rgb(100 116 139 / 0.08);
   --code-selection: rgb(37 99 235 / 0.2);
+  --code-output-bg: #f1f5f9;
+  --code-output-ink: #334155;
   color-scheme: light;
   --palette-gray: #6b7280;
   --palette-brown: #92400e;
@@ -62,6 +64,8 @@
   --code-property: #fda4af;
   --code-active-line: rgb(148 163 184 / 0.08);
   --code-selection: rgb(96 165 250 / 0.3);
+  --code-output-bg: #0b1120;
+  --code-output-ink: #cbd5e1;
   color-scheme: dark;
   --palette-gray: #9ca3af;
   --palette-brown: #d6a35c;
@@ -641,137 +645,6 @@ a {
   border: 1px solid var(--line);
   border-radius: 0.4rem;
   background: var(--panel);
-}
-
-.block-terminal {
-  --term-bg: #0f172a;
-  --term-ink: #e2e8f0;
-  margin: 0.6rem 0;
-  background: var(--term-bg);
-  color: var(--term-ink);
-  border-radius: 0.4rem;
-  overflow-x: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.85rem;
-}
-
-.terminal-bar {
-  display: flex;
-  gap: 0.75rem;
-  padding: 0.35rem 0.75rem;
-  background: #1e293b;
-  color: #94a3b8;
-}
-
-.terminal-title {
-  flex: 1;
-  color: var(--term-ink);
-}
-
-.terminal-body {
-  padding: 0.6rem 0.75rem;
-}
-
-.terminal-command + .terminal-command {
-  margin-top: 0.4rem;
-}
-
-.terminal-line,
-.terminal-stdout,
-.terminal-stderr {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.terminal-prompt {
-  color: #4ade80;
-  user-select: none;
-}
-
-.terminal-stdout {
-  color: var(--term-ink);
-}
-
-.terminal-stderr {
-  color: #fca5a5;
-}
-
-.terminal-exit {
-  color: #fbbf24;
-}
-
-/* Editing happens in the terminal itself: borderless fields in its colours. */
-.block-terminal.editing input,
-.block-terminal.editing textarea {
-  background: transparent;
-  border: 0;
-  border-left: 2px solid transparent;
-  border-radius: 0;
-  font: inherit;
-  padding: 0 0.25rem;
-  width: 100%;
-  resize: vertical;
-}
-
-.block-terminal.editing input:focus,
-.block-terminal.editing textarea:focus {
-  outline: none;
-  border-left-color: #60a5fa;
-}
-
-.block-terminal.editing .terminal-bar input {
-  color: inherit;
-  flex: 0 0 6rem;
-}
-
-.block-terminal.editing .terminal-bar input.terminal-title {
-  flex: 1 1 auto;
-  color: var(--term-ink);
-}
-
-.block-terminal.editing .terminal-line {
-  display: flex;
-  gap: 0.25rem;
-}
-
-.block-terminal.editing .terminal-line input {
-  color: var(--term-ink);
-}
-
-.block-terminal.editing textarea.terminal-stdout {
-  color: var(--term-ink);
-}
-
-.block-terminal.editing textarea.terminal-stderr {
-  color: #fca5a5;
-}
-
-.block-terminal.editing ::placeholder {
-  color: #475569;
-}
-
-.terminal-command-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  color: #94a3b8;
-}
-
-.terminal-command-actions input[type="number"] {
-  width: 4rem;
-  color: #fbbf24;
-}
-
-.block-terminal.editing button {
-  background: #1e293b;
-  border-color: #334155;
-  color: var(--term-ink);
-  font-size: 0.8rem;
-  padding: 0.1rem 0.5rem;
-}
-
-.terminal-add {
-  margin-top: 0.5rem;
 }
 
 .mermaid-source {
@@ -2590,6 +2463,57 @@ button.link {
   font-size: 0.85rem;
 }
 
+/* Types: a disclosure below Pinned listing every type; it grows with the sidebar, which scrolls */
+.types-nav-heading {
+  margin: 1rem 0 0.25rem;
+}
+
+.types-nav-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  min-height: 2rem;
+  padding: 0.15rem 0.5rem 0.15rem 0;
+  border: none;
+  border-radius: 0.4rem;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+
+.types-nav-toggle .pin-chevron {
+  width: 1.25rem;
+  justify-content: center;
+}
+
+.types-nav-toggle:hover {
+  background: var(--hover);
+  color: var(--accent);
+}
+
+.types-nav-toggle:hover .pin-chevron {
+  color: inherit;
+}
+
+.sidebar .types-nav-list a.nav-link {
+  gap: 0.45rem;
+  padding: 0.3rem 0.4rem 0.3rem 1.45rem;
+}
+
+.types-nav-list a.nav-link span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pin-entry {
   position: relative;
 }
@@ -3976,6 +3900,31 @@ h1.note-title {
 
 .block-code:not(.editing) .cm-activeLine {
   background: transparent;
+}
+
+/* A `stdout` code block is program output: a sunken, muted panel with no gutters, labelled
+   "Output" where the language shows. */
+.block-code .code-output,
+.block-code .code-output .cm-editor {
+  background: var(--code-output-bg);
+}
+
+.block-code .code-output .cm-content {
+  color: var(--code-output-ink);
+  padding: 0.5rem 0.25rem;
+}
+
+.block-code .code-output .cm-activeLine {
+  background: transparent;
+}
+
+.block-output .code-header {
+  background: var(--code-output-bg);
+}
+
+.block-output .code-language {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
 }
 
 .block-code .code-fields {
@@ -6142,4 +6091,237 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 
 .control-options li.disabled:hover {
   background: transparent;
+}
+
+/* A type's note list (/types/:type): search, a Cards or List view, and its notes. */
+.type-list-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.type-list-title > .icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.type-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.type-list-search {
+  flex: 1 1 18rem;
+}
+
+.segmented {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.45rem 0.8rem;
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--line);
+}
+
+.segmented button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.type-list-empty {
+  margin: 1rem 0;
+}
+
+.type-note-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.75rem;
+}
+
+.type-note-card {
+  position: relative;
+  background: var(--panel);
+  transition: border-color 0.1s;
+}
+
+.type-note-card:hover,
+.type-note-card:focus-within {
+  border-color: var(--accent);
+}
+
+.type-note-link {
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+/* The title link covers the card, so a click, Ctrl+click or middle-click anywhere on it opens the note. */
+.type-note-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.type-note-link:focus-visible {
+  outline: none;
+}
+
+.type-note-link:focus-visible::after {
+  border-radius: 0.5rem;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.type-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+  margin-bottom: 1rem;
+}
+
+.type-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.925rem;
+}
+
+.type-table th {
+  padding: 0;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.type-table-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+}
+
+.type-table-sort:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.type-table th[aria-sort="ascending"] .type-table-sort,
+.type-table th[aria-sort="descending"] .type-table-sort {
+  color: var(--ink);
+}
+
+.type-table-arrow {
+  min-width: 0.75rem;
+}
+
+.type-table tbody tr {
+  cursor: pointer;
+}
+
+.type-table tbody tr:hover td {
+  background: var(--hover);
+}
+
+.type-table td {
+  vertical-align: middle;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  max-width: 20rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.type-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.type-table-title {
+  min-width: 12rem;
+}
+
+.type-table-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  color: var(--ink);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.type-table-link > .icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.type-table-link > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.type-table-updated {
+  color: var(--muted);
+  width: 1%;
+}
+
+@container pane (max-width: 600px) {
+  .type-list-search {
+    flex-basis: 100%;
+  }
+
+  /* The title stays in view while the other columns scroll sideways. */
+  .type-table th:first-child,
+  .type-table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--panel);
+    box-shadow: 1px 0 0 var(--line);
+  }
+
+  .type-table-title {
+    min-width: 0;
+    max-width: 11rem;
+  }
+
+  .type-note-grid {
+    grid-template-columns: 1fr;
+  }
 }

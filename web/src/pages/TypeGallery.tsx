@@ -14,7 +14,7 @@ function TypeCard(props: { type: TypeDef }) {
   const fields = () => props.type.fields.length;
   return (
     <li class="type-card" data-colour={props.type.colour ?? undefined}>
-      <A href={`/types/${props.type.name}`} class="type-card-main">
+      <A href={`/settings/types/${props.type.name}/edit`} class="type-card-main">
         <span class="type-card-icon" aria-hidden="true">
           <TypeIcon name={props.type.icon} />
         </span>
@@ -35,7 +35,8 @@ function TypeCard(props: { type: TypeDef }) {
       </A>
       <div class="type-card-actions">
         <A href={`/notes/new?type=${encodeURIComponent(props.type.name)}`}>New {props.type.label.toLowerCase()}</A>
-        <A href={`/settings/types/${props.type.name}/edit`}>Edit type</A>
+        <A href={`/types/${props.type.name}`}>Notes</A>
+        <A href={`/settings/types/${props.type.name}/templates`}>Templates</A>
       </div>
     </li>
   );
@@ -64,7 +65,7 @@ function AssetsCard() {
   );
 }
 
-/** Every type in the vault as a card, then the assets card and a card to create a new type. */
+/** Every type in the vault as a card that opens its editor, then the assets card and a card to create a new type. */
 export function TypeGallery() {
   return (
     <section class="type-gallery-page">

@@ -271,9 +271,7 @@ fn scalars(out: &mut Vec<FieldValue>, field: &str, pos: i64, part: &str, kind: K
 
 /// Items of content and canvas blocks whose text is searched. `text` items in the blocks named
 /// by [`MARKUP_BLOCKS`] are inline markup and may hold mentions.
-const TEXT_ITEMS: [&str; 9] = [
-    "text", "source", "line", "stdout", "stderr", "alt", "caption", "title", "label",
-];
+const TEXT_ITEMS: [&str; 6] = ["text", "source", "alt", "caption", "title", "label"];
 const MARKUP_BLOCKS: [&str; 4] = ["heading", "paragraph", "item", "quote"];
 
 fn block_text(body: &Doc, text: &mut Vec<String>, mentioned: &mut Vec<String>) {

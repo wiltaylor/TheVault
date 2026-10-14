@@ -60,7 +60,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 
 | UI action | Where | API | CLI | Gap |
 |---|---|---|---|---|
-| Edit text, headings, lists, quotes, code, terminal, Mermaid, ink and query-view blocks | `editor/ContentEditor.tsx`, `blocks/` | — then `PUT /api/notes/{id}` | `vault put <id>` (as WCL or `--json`) | |
+| Edit text, headings, lists, quotes, code (shell commands and output included), Mermaid, ink and query-view blocks | `editor/ContentEditor.tsx`, `blocks/` | — then `PUT /api/notes/{id}` | `vault put <id>` (as WCL or `--json`) | |
 | Insert or replace an image or file | `blocks/MediaBlocks.tsx` | `POST /api/assets?filename=` | `vault asset upload <path> [--filename]` | |
 | Show an image or download an asset | `MediaBlocks.tsx`, `canvas/CanvasNodes.tsx` | `GET /api/assets/{id}` | `vault asset get <id> --out <file>` | |
 | Show an asset block's name and size | `MediaBlocks.tsx` | `GET /api/assets` | `vault asset list` | |

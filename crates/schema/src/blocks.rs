@@ -12,7 +12,7 @@ use crate::encoding::{PALETTE, is_ident, is_ink_colour, is_palette, is_ulid};
 use crate::types::{FieldDef, FieldKind, Scalar};
 
 /// The closed set of content block kinds.
-pub const CONTENT_KINDS: [&str; 14] = [
+pub const CONTENT_KINDS: [&str; 13] = [
     "heading",
     "paragraph",
     "list",
@@ -20,7 +20,6 @@ pub const CONTENT_KINDS: [&str; 14] = [
     "image",
     "asset",
     "code",
-    "terminal",
     "mermaid",
     "ink",
     "query_view",
@@ -30,7 +29,7 @@ pub const CONTENT_KINDS: [&str; 14] = [
 ];
 
 /// The content block kinds a canvas card holds: every content block kind but a canvas.
-pub const CARD_BLOCK_KINDS: [&str; 13] = [
+pub const CARD_BLOCK_KINDS: [&str; 12] = [
     "heading",
     "paragraph",
     "list",
@@ -38,7 +37,6 @@ pub const CARD_BLOCK_KINDS: [&str; 13] = [
     "image",
     "asset",
     "code",
-    "terminal",
     "mermaid",
     "ink",
     "query_view",
@@ -192,8 +190,6 @@ pub(crate) const fn opt(name: &'static str, form: Form) -> Item {
         required: false,
     }
 }
-
-const ANY_INT: Form = Form::Int(i64::MIN, i64::MAX);
 
 /// Collects issues under a path.
 pub(crate) struct Check<'a> {
@@ -403,7 +399,6 @@ impl Check<'_> {
                 self.items(d, &items, &[], at);
                 self.only_blocks(d, &[], at);
             }
-            "terminal" => self.terminal(d, at),
             "mermaid" => {
                 self.items(d, &[req("source", Form::Str)], &[], at);
                 self.only_blocks(d, &[], at);
@@ -548,31 +543,6 @@ impl Check<'_> {
             }
             self.only_blocks(&item.body, &["item"], &path);
             self.list_items(&item.body, todo, &path);
-        }
-    }
-
-    fn terminal(&mut self, d: &Doc, at: &str) {
-        let items = [
-            opt("title", Form::Str),
-            opt("shell", Form::Str),
-            opt("prompt", Form::Str),
-        ];
-        self.items(d, &items, &[], at);
-        self.only_blocks(d, &["command"], at);
-        if d.blocks_of("command").next().is_none() {
-            self.fail(at, "needs at least one command");
-        }
-        for (n, c) in d.blocks_of("command").enumerate() {
-            let path = format!("{at} > command#{}", n + 1);
-            self.no_label(c, &path);
-            let items = [
-                req("line", Form::Str),
-                opt("stdout", Form::Str),
-                opt("stderr", Form::Str),
-                opt("exit_code", ANY_INT),
-            ];
-            self.items(&c.body, &items, &[], &path);
-            self.only_blocks(&c.body, &[], &path);
         }
     }
 

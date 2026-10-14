@@ -15,7 +15,7 @@ export function fresh(block: Block): Block {
 }
 
 /**
- * A content block the editor holds as one node: an image, an asset, code, a terminal, a
+ * A content block the editor holds as one node: an image, an asset, code, a
  * diagram, a drawing or a canvas is edited in place by its own component. A query view shows its
  * results, and its settings on demand; any other kind is shown read-only.
  */
