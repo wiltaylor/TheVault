@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { newTerm, problems as taxonomyProblems, taxonomyFromSchema, taxonomyWcl, termRenames } from "./taxonomyModel";
+import {
+  newTerm,
+  problems as taxonomyProblems,
+  taxonomyFromSchema,
+  taxonomyWcl,
+  termColour,
+  termColours,
+  termRenames,
+} from "./taxonomyModel";
 import {
   type SchemaType,
   emptyType,
@@ -249,6 +257,47 @@ term "Active" {
   }
 }
 `);
+  });
+
+  it("gives a term without a colour its nearest coloured ancestor's, and leaves the rest out", () => {
+    const tree = taxonomyFromSchema({
+      name: "area",
+      label: "Area",
+      description: null,
+      terms: [
+        {
+          name: "Plant",
+          path: "Plant",
+          colour: "green",
+          description: null,
+          children: [
+            {
+              name: "Electrical",
+              path: "Plant/Electrical",
+              colour: null,
+              description: null,
+              children: [
+                { name: "Wiring", path: "Plant/Electrical/Wiring", colour: null, description: null, children: [] },
+                { name: "Lights", path: "Plant/Electrical/Lights", colour: "yellow", description: null, children: [] },
+              ],
+            },
+          ],
+        },
+        { name: "Office", path: "Office", colour: null, description: null, children: [] },
+      ],
+    });
+    // The edited tree, with "" for no colour, resolves as the saved one does.
+    expect(Object.fromEntries(termColours(tree.terms))).toEqual({
+      Plant: "green",
+      "Plant/Electrical": "green",
+      "Plant/Electrical/Wiring": "green",
+      "Plant/Electrical/Lights": "yellow",
+    });
+    // An edit shows at once: clearing Plant's colour leaves only Lights coloured.
+    tree.terms[0]!.colour = "";
+    expect([...termColours(tree.terms).keys()]).toEqual(["Plant/Electrical/Lights"]);
+    expect(termColour(status.terms, "Active/Blocked")).toBe("red");
+    expect(termColour(status.terms, "Active")).toBeUndefined();
   });
 
   it("records a rename for every stored term whose path changed", () => {

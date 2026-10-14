@@ -2,6 +2,7 @@
 // one column or one date window, the field the view is built on, and each row as an item.
 
 import type { FieldDef, Json, Row, Term, TypeDef } from "../api";
+import { termColour } from "../defs/taxonomyModel";
 
 /** The clauses that may follow `from`, in grammar order (PRD Appendix B). */
 const CLAUSES = new Set(["where", "search", "sort", "group", "select", "limit"]);
@@ -150,7 +151,7 @@ export function kanbanColumns(terms: Term[], field: string, label: string): Kanb
   const cols: KanbanColumn[] = flat.map((t) => ({
     key: t.path,
     label: t.path.split("/").join(" / "),
-    colour: t.colour,
+    colour: termColour(terms, t.path) ?? null,
     value: t.path,
     where: test(t),
   }));

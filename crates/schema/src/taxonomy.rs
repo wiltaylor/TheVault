@@ -165,6 +165,33 @@ mod tests {
     }
 
     #[test]
+    fn reads_term_colours_and_leaves_an_uncoloured_term_without_one() {
+        let t = Taxonomy::parse("status", STATUS).unwrap();
+        let colour = |p: &str| t.term(p).unwrap().colour.as_deref();
+        assert_eq!(colour("Inbox"), Some("gray"));
+        assert_eq!(colour("Active"), Some("blue"));
+        // Inheritance is the client's to resolve; the file holds only what was written.
+        assert_eq!(colour("Active/In progress"), None);
+        assert_eq!(colour("Active/Blocked"), Some("red"));
+    }
+
+    #[test]
+    fn every_palette_colour_is_a_term_colour_and_others_are_named_in_the_error() {
+        for c in crate::encoding::PALETTE {
+            let src = format!("label = \"X\"\nterm \"A\" {{\n  colour = \"{c}\"\n}}\n");
+            let t = Taxonomy::parse("x", &src).unwrap();
+            assert_eq!(t.terms[0].colour.as_deref(), Some(c));
+        }
+        let src = "label = \"X\"\nterm \"A\" {\n  term \"B\" {\n    colour = \"teal\"\n  }\n}\n";
+        let issues = Taxonomy::parse("x", src).unwrap_err().issues;
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        let text = issues[0].to_string();
+        assert!(text.contains("term \"A\" > term \"B\""), "{text}");
+        assert!(text.contains("\"teal\" is not a palette colour"), "{text}");
+        assert!(text.contains("gray, brown, orange"), "{text}");
+    }
+
+    #[test]
     fn rejects_bad_terms() {
         let src = "label = \"X\"\nterm \"A/B\"\nterm \"C\"\nterm \"C\"\nterm \"D\" {\n  colour = \"cyan\"\n}\n";
         let issues = Taxonomy::parse("x", src).unwrap_err().issues;

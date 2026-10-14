@@ -153,6 +153,11 @@ describe("kanbanColumns", () => {
     expect(cols[4]?.where).toBe('!(stage == "Inbox" || stage == "Active" || stage == "Active/Blocked" || stage == "Done")');
   });
 
+  it("colours a term's column by its nearest coloured ancestor when it has no colour", () => {
+    const terms = [term("Active", "Active", [term("Blocked", "Active/Blocked"), term("Late", "Active/Late", [], "red")], "blue")];
+    expect(kanbanColumns(terms, "stage", "Stage").map((c) => c.colour)).toEqual(["blue", "blue", "red", null]);
+  });
+
   it("quotes term names with quotes and backslashes", () => {
     expect(quote('a "b" \\ c')).toBe('"a \\"b\\" \\\\ c"');
   });

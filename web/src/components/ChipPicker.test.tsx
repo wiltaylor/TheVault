@@ -2,7 +2,7 @@ import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { Term } from "../api";
-import { ChipPicker, type ChipPickerProps, chipColour, termSuggestions, typeSuggestions } from "./ChipPicker";
+import { ChipPicker, type ChipPickerProps, chipColour, termChipColour, termSuggestions, typeSuggestions } from "./ChipPicker";
 
 const FRUIT = ["Apple", "Banana", "Cherry"].map((f) => ({ value: f.toLowerCase(), text: f }));
 const fruit = (q: string) => FRUIT.filter((f) => f.text.toLowerCase().includes(q.trim().toLowerCase()));
@@ -30,6 +30,40 @@ describe("ChipPicker", () => {
     expect(colours).toEqual(["apple", "banana", "cherry"].map(chipColour));
     expect(new Set(colours).size).toBeGreaterThan(1);
     expect(chipColour("apple")).toBe(chipColour("apple"));
+  });
+
+  it("takes a chip's colour from chipColour, and hashes a value it gives none", () => {
+    const { container } = mount(["apple", "banana"], { chipColour: (v) => (v === "apple" ? "gray" : undefined) });
+    const colours = [...container.querySelectorAll<HTMLElement>(".chip")].map((c) => c.dataset.colour);
+    expect(colours).toEqual(["gray", chipColour("banana")]);
+  });
+
+  it("colours a term's chip and suggestion dot by its own or inherited colour", async () => {
+    const term = (name: string, path: string, colour: string | null, children: Term[] = []): Term => ({
+      name,
+      path,
+      colour,
+      description: null,
+      children,
+    });
+    const terms: Term[] = [
+      term("Plant", "Plant", "green", [term("Electrical", "Plant/Electrical", null, [term("Wiring", "Plant/Electrical/Wiring", "red")])]),
+      term("Office", "Office", null),
+    ];
+    expect(termChipColour(terms, "Plant/Electrical")).toBe("green");
+    expect(termChipColour(terms, "Plant/Electrical/Wiring")).toBe("red");
+    expect(termChipColour(terms, "Office")).toBe(chipColour("Office"));
+
+    const values = ["Plant/Electrical", "Office"];
+    const m = mount(values, { chipColour: (v) => termChipColour(terms, v), suggest: (q) => termSuggestions(terms, q) });
+    const colours = [...m.container.querySelectorAll<HTMLElement>(".chip")].map((c) => c.dataset.colour);
+    expect(colours).toEqual(["green", chipColour("Office")]);
+    fireEvent.click(m.plus());
+    m.type("");
+    const wiring = await m.findByRole("option", { name: "Wiring" });
+    expect(wiring.querySelector(".combo-dot")).toHaveAttribute("data-colour", "red");
+    const plant = await m.findByRole("option", { name: "Plant" });
+    expect(plant.querySelector(".combo-dot")).toHaveAttribute("data-colour", "green");
   });
 
   it("adds a picked suggestion and keeps the box open for the next", async () => {
@@ -136,7 +170,7 @@ describe("ChipPicker", () => {
     ]);
     // Matched by name or path; a nested match keeps its depth and says what it is under.
     expect(termSuggestions(terms, "wir")).toEqual([
-      { value: "Plant/Electrical/Wiring", text: "Wiring", depth: 2, hint: "Plant/Electrical" },
+      { value: "Plant/Electrical/Wiring", text: "Wiring", depth: 2, hint: "Plant/Electrical", colour: chipColour("Plant/Electrical/Wiring") },
     ]);
     expect(termSuggestions(terms, "electrical/").map((s) => s.value)).toEqual(["Plant/Electrical/Wiring"]);
 

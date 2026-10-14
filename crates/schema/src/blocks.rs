@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use crate::Issue;
 use crate::doc::{Doc, DocBlock, Value};
-use crate::encoding::{is_ident, is_ink_colour, is_palette, is_ulid};
+use crate::encoding::{PALETTE, is_ident, is_ink_colour, is_palette, is_ulid};
 use crate::types::{FieldDef, FieldKind, Scalar};
 
 /// The closed set of content block kinds.
@@ -241,7 +241,10 @@ impl Check<'_> {
             (Form::Ulid, Value::Str(s)) if is_ulid(s) => None,
             (Form::Ulid, Value::Str(s)) => Some(format!("{s:?} is not a ULID")),
             (Form::Palette, Value::Str(s)) if is_palette(s) => None,
-            (Form::Palette, Value::Str(s)) => Some(format!("{s:?} is not a palette colour")),
+            (Form::Palette, Value::Str(s)) => Some(format!(
+                "{s:?} is not a palette colour; use one of {}",
+                PALETTE.join(", ")
+            )),
             (Form::InkColour, Value::Str(s)) if is_ink_colour(s) => None,
             (Form::InkColour, Value::Str(s)) => {
                 Some(format!("{s:?} is not a lower-case #rrggbb colour"))

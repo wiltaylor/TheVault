@@ -65,6 +65,44 @@ export function walk(terms: TermModel[], prefix = ""): { term: TermModel; path: 
   });
 }
 
+/** A term as far as colour goes: the one it names, if any, and its children. */
+interface ColouredTerm<T> {
+  name: string;
+  colour: string | null;
+  children: T[];
+}
+
+/**
+ * Every term's colour by path, parents before children: its own when it names one, else its
+ * nearest ancestor's. A term with no coloured ancestor is left out, so its chip falls back to
+ * the hashed colour. This is the one place inheritance is resolved, for saved terms and edited ones.
+ */
+export function termColours<T extends ColouredTerm<T>>(terms: T[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const visit = (list: T[], prefix: string, inherited: string | undefined) => {
+    for (const t of list) {
+      const path = prefix ? `${prefix}/${t.name}` : t.name;
+      const colour = t.colour || inherited;
+      if (colour) out.set(path, colour);
+      visit(t.children, path, colour);
+    }
+  };
+  visit(terms, "", undefined);
+  return out;
+}
+
+const resolved = new WeakMap<object, Map<string, string>>();
+
+/** The colour of the term at `path` in a saved term tree, resolved once per tree. */
+export function termColour<T extends ColouredTerm<T>>(terms: T[], path: string): string | undefined {
+  let colours = resolved.get(terms);
+  if (!colours) {
+    colours = termColours(terms);
+    resolved.set(terms, colours);
+  }
+  return colours.get(path);
+}
+
 /** Old path to new path for every stored term that was renamed or moved. */
 export function termRenames(m: TaxonomyModel): Record<string, string> {
   const out: Record<string, string> = {};

@@ -7,7 +7,7 @@ import { knowTitle, noteTitle } from "../editor/titles";
 import { MapCanvas } from "../map/MapCanvas";
 import { geoPoint, imagePoint, mapKind } from "../map/model";
 import { taxonomyDef, typeDef } from "../session";
-import { ChipPicker, matches, termSuggestions } from "./ChipPicker";
+import { ChipPicker, matches, termChipColour, termSuggestions } from "./ChipPicker";
 import type { Suggestion } from "./Combobox";
 
 export interface FieldInputProps {
@@ -149,6 +149,7 @@ function Picker(
     freeText?: boolean;
     chipText?: (v: string) => string;
     chipHref?: (v: string) => string | undefined;
+    chipColour?: (v: string) => string | undefined;
     /** What the add box shows before anything is typed. */
     boxPlaceholder?: string;
   },
@@ -164,6 +165,7 @@ function Picker(
       freeText={props.freeText}
       chipText={props.chipText}
       chipHref={props.chipHref}
+      chipColour={props.chipColour}
       placeholder={props.boxPlaceholder}
       emptyText={props.placeholder}
       onChange={(values) => props.onChange(values.length === 0 ? undefined : single() ? values[0] : values)}
@@ -497,7 +499,11 @@ export function FieldInput(props: FieldInputProps) {
         />
       </Match>
       <Match when={f().kind === "taxonomy" && f().multiple}>
-        <Picker {...props} suggest={(text) => termSuggestions(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], text)} />
+        <Picker
+          {...props}
+          suggest={(text) => termSuggestions(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], text)}
+          chipColour={(v) => termChipColour(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], v)}
+        />
       </Match>
       <Match when={f().kind === "taxonomy"}>
         <Choice

@@ -4,7 +4,7 @@
 
 import { For, type JSX, Match, Show, Switch, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import { type Block, type FieldDef, type Json, type Row, api } from "../api";
-import { ChipPicker, matches, termSuggestions } from "../components/ChipPicker";
+import { ChipPicker, matches, termChipColour, termSuggestions } from "../components/ChipPicker";
 import { Combobox, type Suggestion } from "../components/Combobox";
 import { datetimeInput, datetimeValue, findNotes, termOptions } from "../components/FieldInput";
 import { noteTitle } from "../editor/titles";
@@ -574,6 +574,7 @@ function ChipsInput(props: Part) {
       describedBy={props.describedBy}
       values={chipsOf(props.value())}
       chipText={text}
+      chipColour={f().kind === "taxonomy" ? (v) => termChipColour(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], v) : undefined}
       suggest={suggest}
       freeText={f().kind === "list"}
       disabled={props.disabled}

@@ -12,6 +12,8 @@ export interface Suggestion {
   depth?: number;
   /** A type icon's name, shown before the text; `null` shows the default icon. */
   icon?: string | null;
+  /** A palette colour, shown as a dot before the text, such as the colour a term's chip takes. */
+  colour?: string;
   /** Muted text after the text, such as a term's parent path. */
   hint?: string;
   /** Shown for context, such as a term already picked under which others sit, but not choosable. */
@@ -152,6 +154,9 @@ export function Combobox(props: {
               >
                 <Show when={s.icon !== undefined}>
                   <TypeIcon name={s.icon} size={14} />
+                </Show>
+                <Show when={s.colour}>
+                  <span class="combo-dot" data-colour={s.colour} aria-hidden="true" />
                 </Show>
                 <span class="combo-text">{s.text}</span>
                 <Show when={s.hint}>

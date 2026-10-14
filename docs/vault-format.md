@@ -1388,11 +1388,13 @@ Each `term` holds:
 | Item | Form | Meaning |
 |------|------|---------|
 | label | string | Required. The term name. Not empty, contains no `/`, unique among its siblings |
-| `colour` | palette colour | Badge and kanban column colour |
+| `colour` | palette colour | Chip, badge and kanban column colour. One of `gray`, `brown`, `orange`, `yellow`, `green`, `blue`, `purple`, `pink` and `red` (OQ-S4); any other value is a validation error |
 | `description` | string | Help text |
 | `term "<name>" { ... }` | block | Child terms |
 
 A term's path is its name and its ancestors' names, root first, joined by `/`. Notes store paths, and `under(field, "Active")` matches `Active` and every term below it.
+
+A term without a `colour` takes the colour of its nearest ancestor that has one. A term with no coloured ancestor has no colour, and the client colours its chip from a hash of its path. The file holds only the colours written in it: the API returns each term's own `colour`, or `null`, and the client resolves inheritance. In the example below, `Active/In progress` is blue.
 
 ```wcl
 label       = "Status"

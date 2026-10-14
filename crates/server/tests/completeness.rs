@@ -725,6 +725,48 @@ fn a_taxonomy_edit_renames_and_moves_terms_in_every_note() {
 }
 
 #[test]
+fn term_colours_round_trip_and_an_unknown_colour_is_refused() {
+    let api = Api::start();
+    let wcl = "label = \"Area\"\n\nterm \"Plant\" {\n  colour = \"green\"\n\n  term \"Electrical\" {\n    term \"Wiring\" {\n      colour = \"gray\"\n    }\n  }\n}\n\nterm \"Office\"\n";
+    let res = api
+        .put("/api/taxonomies/area")
+        .header(CONTENT_TYPE, "text/plain")
+        .body(wcl)
+        .send()
+        .unwrap();
+    expect(res, 200);
+    assert_eq!(api.file("taxonomies/area.wcl"), wcl);
+    let read = expect(api.get("/api/taxonomies/area").send().unwrap(), 200);
+    let plant = &read["terms"][0];
+    assert_eq!(plant["colour"], "green");
+    assert_eq!(plant["children"][0]["colour"], Value::Null);
+    assert_eq!(plant["children"][0]["children"][0]["colour"], "gray");
+    assert_eq!(read["terms"][1]["colour"], Value::Null);
+    let schema = expect(api.get("/api/schema").send().unwrap(), 200);
+    let area = schema["taxonomies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "area")
+        .unwrap();
+    assert_eq!(area["terms"][0]["colour"], "green");
+
+    // An unknown colour is a validation error naming the term and the palette, and writes nothing.
+    let before = api.files();
+    let res = api
+        .put("/api/taxonomies/area")
+        .header(CONTENT_TYPE, "text/plain")
+        .body("label = \"Area\"\n\nterm \"Plant\" {\n  colour = \"teal\"\n}\n")
+        .send()
+        .unwrap();
+    let err = expect(res, 400);
+    let text = err.to_string();
+    assert!(text.contains("term \\\"Plant\\\""), "{text}");
+    assert!(text.contains("is not a palette colour"), "{text}");
+    assert_eq!(api.files(), before);
+}
+
+#[test]
 fn scripts_are_stored_as_sent_and_kept_while_a_handler_names_them() {
     let api = Api::start();
     let source = "fn run() {\n    // digest\n}\n";

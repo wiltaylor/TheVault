@@ -376,7 +376,8 @@ test("the taxonomy editor builds a hierarchy and renaming a term rewrites the no
   await page.getByLabel("Name of New term").fill("Waiting");
   // Nest Waiting under Active, after Blocked, then give it a colour.
   await page.getByRole("button", { name: "Nest Waiting under the term above" }).click();
-  await page.getByLabel("Colour of Active/Waiting").selectOption("red");
+  await page.getByRole("button", { name: "Colour of Active/Waiting" }).click();
+  await page.getByRole("group", { name: "Colours for Active/Waiting" }).getByRole("button", { name: "Red" }).click();
   await page.getByRole("button", { name: "Add term" }).click();
   await page.getByLabel("Name of New term").fill("Done");
   await page.getByRole("button", { name: "Create taxonomy" }).click();

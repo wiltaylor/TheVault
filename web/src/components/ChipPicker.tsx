@@ -4,6 +4,7 @@
 
 import { For, Show, createSignal } from "solid-js";
 import type { Term, TypeDef } from "../api";
+import { termColour } from "../defs/taxonomyModel";
 import { Combobox, type Suggestion } from "./Combobox";
 import { TypeIcon } from "./Icon";
 
@@ -17,6 +18,8 @@ export interface ChipPickerProps {
   chipText?: (value: string) => string;
   /** A type icon for a value's chip; `undefined` shows none. */
   chipIcon?: (value: string) => string | null | undefined;
+  /** A palette colour for a value's chip, such as its term's; `undefined` uses the hashed colour. */
+  chipColour?: (value: string) => string | undefined;
   /** Where a value's chip links to, if anywhere. */
   chipHref?: (value: string) => string | undefined;
   /** Suggestions for the typed text. Values already picked are left out of what it returns. */
@@ -49,7 +52,7 @@ if (typeof window !== "undefined") {
 
 const CHIP_COLOURS = ["blue", "green", "purple", "orange", "pink", "yellow", "red", "brown"] as const;
 
-/** A palette colour for a value, the same every time the value is shown. */
+/** A palette colour for a value, the same every time the value is shown. Gray is left out, as too dull. */
 export function chipColour(value: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < value.length; i++) h = Math.imul(h ^ value.charCodeAt(i), 0x01000193);
@@ -141,7 +144,7 @@ export function ChipPicker(props: ChipPickerProps) {
       <ul class="chips" aria-label={`${props.label} values`}>
         <For each={props.values}>
           {(v) => (
-            <li class="chip" data-value={v} data-colour={chipColour(v)}>
+            <li class="chip" data-value={v} data-colour={props.chipColour?.(v) ?? chipColour(v)}>
               <Show when={props.chipIcon && props.chipIcon(v) !== undefined}>
                 <TypeIcon name={props.chipIcon!(v)} size={14} />
               </Show>
@@ -216,7 +219,8 @@ export function matches(text: string, ...parts: (string | null | undefined)[]): 
 
 /**
  * A taxonomy's terms as suggestions: parents first, indented by depth, matched by name or path.
- * While filtering, a nested term says which parent it is under.
+ * While filtering, a nested term says which parent it is under. Each carries the colour its chip
+ * will have: the term's own or inherited colour, else the hashed one.
  */
 export function termSuggestions(terms: Term[], text: string): Suggestion[] {
   const out: Suggestion[] = [];
@@ -224,13 +228,24 @@ export function termSuggestions(terms: Term[], text: string): Suggestion[] {
     for (const t of list) {
       if (matches(text, t.name, t.path)) {
         const parent = t.path.includes("/") ? t.path.slice(0, t.path.lastIndexOf("/")) : undefined;
-        out.push({ value: t.path, text: t.name, depth, hint: text.trim() && parent ? parent : undefined });
+        out.push({
+          value: t.path,
+          text: t.name,
+          depth,
+          hint: text.trim() && parent ? parent : undefined,
+          colour: termChipColour(terms, t.path),
+        });
       }
       walk(t.children, depth + 1);
     }
   };
   walk(terms, 0);
   return out;
+}
+
+/** The colour of a term's chip: its own or inherited colour, else the hashed colour of its path. */
+export function termChipColour(terms: Term[], path: string): string {
+  return termColour(terms, path) ?? chipColour(path);
 }
 
 /** Every type as a suggestion with its icon, matched by name, label or plural. */

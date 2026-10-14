@@ -1,7 +1,8 @@
 import { A, useNavigate, useParams } from "@solidjs/router";
-import { For, Show, createEffect, createSignal, on } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { ApiError, type UsingNote, api, usingNotes } from "../api";
+import { colourLabel, paletteCss } from "../canvas/palette";
 import { UsingNotes } from "../components/UsingNotes";
 import {
   type TaxonomyModel,
@@ -11,6 +12,7 @@ import {
   problems,
   taxonomyFromSchema,
   taxonomyWcl,
+  termColours,
   termRenames,
 } from "../defs/taxonomyModel";
 import { isName, PALETTE } from "../defs/typeModel";
@@ -133,6 +135,16 @@ export function TaxonomyEditor() {
       parentList.splice(parentList.indexOf(parent) + 1, 0, t!);
     });
 
+  // Every term's colour, own or inherited, as edited so far.
+  const colours = createMemo(() => termColours(model.terms));
+  // The term whose palette is open, by key.
+  const [palette, setPalette] = createSignal<number | null>(null);
+  const closeOutside = (e: PointerEvent) => {
+    if (!(e.target instanceof Element) || !e.target.closest(".term-colour")) setPalette(null);
+  };
+  window.addEventListener("pointerdown", closeOutside, true);
+  onCleanup(() => window.removeEventListener("pointerdown", closeOutside, true));
+
   const issues = () => [...(isNew() && !isName(name()) ? ["The taxonomy needs a name: a-z, 0-9 and _."] : []), ...problems(model)];
 
   async function save() {
@@ -195,38 +207,110 @@ export function TaxonomyEditor() {
     }
   }
 
+  /**
+   * A term's colour: a swatch that opens the palette. A term with no colour of its own shows the
+   * colour it inherits, as a ring, and "Inherit" in the palette clears its own.
+   */
+  function TermColour(props: { term: TermModel; path: string }) {
+    const key = props.term.key;
+    const own = () => props.term.colour;
+    const inherited = () => (own() ? undefined : parentColour(props.path));
+    const open = () => palette() === key;
+    let button!: HTMLButtonElement;
+    const choose = (c: string) => {
+      at(key, ({ list, index }) => (list[index]!.colour = c));
+      setPalette(null);
+      button.focus();
+    };
+    const title = () =>
+      own() ? colourLabel(own()) : inherited() ? `Inherits ${colourLabel(inherited()).toLowerCase()}` : "No colour";
+    return (
+      <span class="term-colour">
+        <button
+          type="button"
+          ref={button}
+          class="term-colour-button"
+          aria-label={`Colour of ${props.path}`}
+          title={title()}
+          aria-haspopup="true"
+          aria-expanded={open()}
+          data-colour={own() || inherited() || undefined}
+          data-inherited={inherited() ? "" : undefined}
+          onClick={() => setPalette(open() ? null : key)}
+        >
+          <span
+            class="term-dot"
+            classList={{ none: !own() && !inherited(), inherited: !!inherited() }}
+            style={{ "--dot": paletteCss(own() || inherited()) }}
+          />
+        </button>
+        <Show when={open()}>
+          <div
+            class="term-palette"
+            role="group"
+            aria-label={`Colours for ${props.path}`}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setPalette(null);
+                button.focus();
+              }
+            }}
+          >
+            <button
+              type="button"
+              class="term-palette-item"
+              aria-label={parentColour(props.path) ? "Inherit" : "No colour"}
+              title={parentColour(props.path) ? `Inherit ${parentColour(props.path)}` : "No colour"}
+              aria-pressed={!own()}
+              onClick={() => choose("")}
+              ref={(el) => queueMicrotask(() => el.focus({ preventScroll: true }))}
+            >
+              <span class="term-dot none" />
+            </button>
+            <For each={PALETTE}>
+              {(c) => (
+                <button
+                  type="button"
+                  class="term-palette-item"
+                  aria-label={colourLabel(c)}
+                  title={colourLabel(c)}
+                  aria-pressed={own() === c}
+                  data-colour={c}
+                  onClick={() => choose(c)}
+                >
+                  <span class="term-dot" style={{ "--dot": paletteCss(c) }} />
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+      </span>
+    );
+  }
+
+  /** The colour a term takes with none of its own: its parent's, own or inherited. */
+  const parentColour = (path: string) => (path.includes("/") ? colours().get(path.slice(0, path.lastIndexOf("/"))) : undefined);
+
   function TermRow(props: { term: TermModel; path: string; first: boolean; last: boolean; nested: boolean }) {
     const t = () => props.term;
     const key = t().key;
     return (
       <li class="term" data-testid={`term-${props.path}`}>
         <div class="term-row">
-          <span class={`term-swatch colour-${t().colour || "none"}`} aria-hidden="true">
-            ●
-          </span>
+          <TermColour term={t()} path={props.path} />
           <input
             aria-label={`Name of ${props.path}`}
             value={t().name}
             onInput={(e) => at(key, ({ list, index }) => (list[index]!.name = e.currentTarget.value))}
           />
+          <Show when={!t().colour && parentColour(props.path)}>
+            {(c) => <span class="term-inherits muted">inherits {c()}</span>}
+          </Show>
           <Show when={t().original !== null && t().original !== props.path}>
             <span class="muted">was {t().original}</span>
           </Show>
-          <select
-            aria-label={`Colour of ${props.path}`}
-            onChange={(e) => at(key, ({ list, index }) => (list[index]!.colour = e.currentTarget.value))}
-          >
-            <option value="" selected={!t().colour}>
-              No colour
-            </option>
-            <For each={PALETTE}>
-              {(c) => (
-                <option value={c} selected={t().colour === c}>
-                  {c}
-                </option>
-              )}
-            </For>
-          </select>
           <button type="button" aria-label={`Add a term under ${props.path}`} onClick={() => at(key, ({ list, index }) => void list[index]!.children.push(newTerm("New term")))}>
             + child
           </button>
