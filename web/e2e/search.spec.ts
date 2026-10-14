@@ -346,7 +346,7 @@ test("a result opens in the same pane; a middle-click opens it in a background t
 
   await rows(page).filter({ hasText: "Leaky valve" }).click();
   await expect(page).toHaveURL(new RegExp(`/notes/${ID["Leaky valve"]}$`));
-  await expect(activePane(page).getByLabel("Title", { exact: true })).toHaveValue("Leaky valve");
+  await expect(activePane(page).getByLabel("Title", { exact: true })).toHaveText("Leaky valve");
   await expect(tabs(page)).toHaveCount(3);
 });
 

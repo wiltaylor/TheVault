@@ -159,7 +159,7 @@ test("a note is restored from its history and from the trash in the UI", async (
   await versions.last().getByRole("button").first().click();
   const preview = page.getByRole("region", { name: "Version preview" });
   await expect(preview).toBeVisible();
-  await expect(page.getByLabel("Title", { exact: true })).toHaveValue(`First ${t}`);
+  await expect(page.getByLabel("Title", { exact: true })).toHaveText(`First ${t}`);
   page.once("dialog", (d) => void d.accept());
   await preview.getByRole("button", { name: "Restore this version" }).click();
   await expect(preview).toHaveCount(0);

@@ -83,7 +83,7 @@ test("a link opens in the pane it is in; Ctrl+click and middle-click open backgr
   // A row in the right pane opens there; the left pane keeps its page.
   const rowA = right.getByTestId("note-card").filter({ hasText: "Alpha" });
   await rowA.click();
-  await expect(right.getByLabel("Title", { exact: true })).toHaveValue(/^Alpha /);
+  await expect(right.getByLabel("Title", { exact: true })).toHaveText(/^Alpha /);
   await expect(left.getByRole("navigation", { name: "Day" })).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/notes/${a.id}$`));
 
@@ -102,7 +102,7 @@ test("a link opens in the pane it is in; Ctrl+click and middle-click open backgr
 
   await tabs(page).nth(1).click();
   await expect(page).toHaveURL(new RegExp(`/notes/${b.id}$`));
-  await expect(activePane(page).getByLabel("Title", { exact: true })).toHaveValue(/^Beta /);
+  await expect(activePane(page).getByLabel("Title", { exact: true })).toHaveText(/^Beta /);
 });
 
 test("split right and down give panes that navigate on their own, and closing collapses the splits", async ({ page }) => {
@@ -326,18 +326,18 @@ test("the same note in two panes: an edit in one shows in the other", async ({ p
   await logIn(page, `/notes/${n.id}`);
   await paneAction(page, activePane(page), "Split right");
   const [p1, p2] = [panes(page).nth(0), panes(page).nth(1)];
-  await expect(p2.getByLabel("Title", { exact: true })).toHaveValue(/^Twice /);
+  await expect(p2.getByLabel("Title", { exact: true })).toHaveText(/^Twice /);
   const renamed = `Renamed ${token()}`;
   await p1.getByLabel("Title", { exact: true }).fill(renamed);
   await expect(p1.getByTestId("save-status")).toHaveText("Saved");
-  await expect(p2.getByLabel("Title", { exact: true })).toHaveValue(renamed);
+  await expect(p2.getByLabel("Title", { exact: true })).toHaveText(renamed);
   // The tab and both pane headers follow the title.
   await expect(title(p2)).toHaveText(renamed);
   await expect(tabs(page).nth(0)).toHaveAccessibleName(renamed);
   // And the other pane saves over the new version without a conflict.
   await p2.getByLabel("Title", { exact: true }).fill(`${renamed} again`);
   await expect(p2.getByTestId("save-status")).toHaveText("Saved");
-  await expect(p1.getByLabel("Title", { exact: true })).toHaveValue(`${renamed} again`);
+  await expect(p1.getByLabel("Title", { exact: true })).toHaveText(`${renamed} again`);
 });
 
 test.describe("on a phone", () => {
@@ -447,7 +447,7 @@ test.describe("sidebars", () => {
     await page.waitForTimeout(300);
     await page.goto(`/notes/${two.id}`);
     await expect(panes(page)).toHaveCount(2);
-    await expect(panes(page).nth(1).getByLabel("Title", { exact: true })).toHaveValue(/^Second /);
+    await expect(panes(page).nth(1).getByLabel("Title", { exact: true })).toHaveText(/^Second /);
     await expect(props.getByLabel("Owner")).toHaveValue("Lee");
     await panes(page).nth(0).locator(".pane-header").click();
     await expect(props.getByLabel("Owner")).toHaveValue("Ana");

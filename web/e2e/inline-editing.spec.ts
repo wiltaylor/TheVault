@@ -118,7 +118,7 @@ test("a field edited in place saves itself and survives a reload", async ({ page
   await expect.poll(async () => (await stored(admin, note.id)).note.fields.title).toBe(`${title} renamed`);
 
   await page.reload();
-  await expect(page.getByLabel("Title")).toHaveValue(`${title} renamed`);
+  await expect(page.getByLabel("Title")).toHaveText(`${title} renamed`);
   await expect(page.getByTestId("field-status").getByLabel("Status")).toHaveValue("doing");
   await expect(page.getByTestId("field-due").getByLabel("Due")).toHaveValue("2026-11-05");
 });
@@ -138,7 +138,7 @@ test("a content block edited inline saves itself", async ({ page, admin }) => {
 test("an autosave over a stale version shows the conflict view instead of overwriting", async ({ page, admin }) => {
   const { note, title } = await setup(admin);
   await logIn(page, `/notes/${note.id}`);
-  await expect(page.getByLabel("Title")).toHaveValue(title);
+  await expect(page.getByLabel("Title")).toHaveText(title);
 
   // Someone else saves first.
   const other = await admin.put(`/api/notes/${note.id}`, {
@@ -154,7 +154,7 @@ test("an autosave over a stale version shows the conflict view instead of overwr
   expect((await stored(admin, note.id)).note.fields.status).toBe("done");
 
   await conflict.getByRole("button", { name: "Keep the stored version" }).click();
-  await expect(page.getByLabel("Title")).toHaveValue(`${title} elsewhere`);
+  await expect(page.getByLabel("Title")).toHaveText(`${title} elsewhere`);
   await expect(page.getByTestId("field-status").getByLabel("Status")).toHaveValue("done");
 });
 
@@ -404,7 +404,7 @@ test("property blocks on the note show only their editor; the Properties panel k
   await expect(estimate).toHaveText(/Estimate/);
 });
 
-test("a long title takes the full width on a phone, and the title buttons move under it", async ({ page, admin }) => {
+test("a long title runs the full width, and the chip and buttons follow its last word", async ({ page, admin }) => {
   const title = "Replace the main switchboard in the east wing now";
   const res = await admin.post("/api/notes?type=task", { data: { note: { fields: { title }, blocks: [] } } });
   expect(res.status(), await res.text()).toBe(201);
@@ -412,16 +412,39 @@ test("a long title takes the full width on a phone, and the title buttons move u
   await page.setViewportSize({ width: 390, height: 800 });
   await logIn(page, `/notes/${id}`);
   const box = page.getByLabel("Title", { exact: true });
-  await expect(box).toHaveValue(title);
-  const row = (await page.locator(".note-title-row").boundingBox())!;
-  const input = (await box.boundingBox())!;
-  const props = (await page.getByRole("button", { name: "Properties" }).boundingBox())!;
-  expect(input.width).toBeGreaterThan(row.width * 0.95);
-  expect(props.y).toBeGreaterThanOrEqual(input.y + input.height - 1);
-  // The type chip and every button stay on one line together.
+  await expect(box).toHaveText(title);
+  const flow = (await page.locator(".note-title-flow").boundingBox())!;
+  const text = (await box.boundingBox())!;
+  const lines = await box.evaluate((el) => {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    return [...r.getClientRects()].map((c) => ({ top: c.top, right: c.right, bottom: c.bottom }));
+  });
+  // The text wraps across the full width, not a column squeezed beside the buttons.
+  expect(lines.length).toBeGreaterThan(1);
+  expect(Math.max(...lines.map((l) => l.right))).toBeGreaterThan(flow.x + flow.width * 0.85);
+  // The chip and every button sit together, after the text's first line.
   const chip = (await page.getByRole("link", { name: "Type: Task" }).boundingBox())!;
   const del = (await page.getByRole("button", { name: "Delete" }).boundingBox())!;
   expect(Math.abs(del.y + del.height / 2 - (chip.y + chip.height / 2))).toBeLessThan(4);
+  expect(chip.y).toBeGreaterThan(text.y + 10);
+
+  // Where the whole title fits, the chip sits on its line.
+  await page.setViewportSize({ width: 1900, height: 800 });
+  await expect
+    .poll(async () => {
+      const last = await box.evaluate((el) => {
+        const r = document.createRange();
+        r.selectNodeContents(el);
+        const rects = [...r.getClientRects()];
+        const l = rects[rects.length - 1]!;
+        return { top: l.top, bottom: l.bottom };
+      });
+      const c = (await page.getByRole("link", { name: "Type: Task" }).boundingBox())!;
+      const mid = c.y + c.height / 2;
+      return mid > last.top && mid < last.bottom;
+    })
+    .toBe(true);
 });
 
 test("a chip beside the title names the note's type and opens the type's notes", async ({ page, admin }) => {
@@ -429,7 +452,7 @@ test("a chip beside the title names the note's type and opens the type's notes",
   expect(res.status(), await res.text()).toBe(201);
   const { id } = (await res.json()) as { id: string };
   await logIn(page, `/notes/${id}`);
-  const chip = page.locator(".note-title-row").getByRole("link", { name: "Type: Task" });
+  const chip = page.locator(".note-title-flow").getByRole("link", { name: "Type: Task" });
   await expect(chip).toHaveText("Task");
   await expect(chip.locator("svg.icon")).toHaveCount(1);
   await chip.click();

@@ -363,7 +363,7 @@ test("a note node opens its note: Open in a new tab, middle-click and Ctrl+click
   await expect(tabs).toHaveCount(4);
   await expect(tabs.nth(3)).toHaveAttribute("aria-selected", "true");
   await expect(p).toHaveURL(new RegExp(`/notes/${target.id}$`));
-  await expect(activePane(p).getByLabel("Title", { exact: true })).toHaveValue(targetTitle);
+  await expect(activePane(p).getByLabel("Title", { exact: true })).toHaveText(targetTitle);
 });
 
 test("a connection's colour, all four arrows and its caption change and save, and its arrowheads take the colour", async ({

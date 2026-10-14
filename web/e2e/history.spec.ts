@@ -94,7 +94,7 @@ test("the History icon opens the panel, which lists versions with authors and wh
   await expect(versions(page).nth(1).getByTestId("change-summary")).toHaveText("changed: status, body");
   await expect(versions(page).nth(2).getByTestId("change-summary")).toHaveText("created");
   await expect(versions(page).nth(0)).toContainText("just now");
-  await expect(title(page)).toHaveValue(`Gamma ${t}`);
+  await expect(title(page)).toHaveText(`Gamma ${t}`);
 
   // The icon closes it again.
   await button.click();
@@ -120,7 +120,7 @@ test("a chosen version shows read-only in the pane, Arrow Down steps to an older
   await expect(banner(page)).toContainText("Viewing the version from");
   await expect(banner(page)).toContainText("by token admin");
   const pane = activePane(page);
-  await expect(title(page)).toHaveValue(`Alpha ${t}`);
+  await expect(title(page)).toHaveText(`Alpha ${t}`);
   await expect(pane.getByText("Status is active.")).toBeVisible();
   await expect(pane.getByTestId("field-status").getByLabel("Status")).toHaveValue("active");
   await expect(pane.getByTestId("field-body")).toContainText("Second body");
@@ -131,7 +131,7 @@ test("a chosen version shows read-only in the pane, Arrow Down steps to an older
   await expect(pane.getByTestId("field-body").locator("[contenteditable='true']")).toHaveCount(0);
   await title(page).press("End");
   await page.keyboard.type("typed");
-  await expect(title(page)).toHaveValue(`Alpha ${t}`);
+  await expect(title(page)).toHaveText(`Alpha ${t}`);
 
   // Arrow Down in the list shows the next older version.
   await versions(page).nth(2).getByRole("button").first().focus();
@@ -146,7 +146,7 @@ test("a chosen version shows read-only in the pane, Arrow Down steps to an older
   // Back to current: the live note, editable, saving again.
   await banner(page).getByRole("button", { name: "Back to current" }).click();
   await expect(banner(page)).toHaveCount(0);
-  await expect(title(page)).toHaveValue(`Gamma edited ${t}`);
+  await expect(title(page)).toHaveText(`Gamma edited ${t}`);
   await expect(title(page)).toBeEditable();
   await expect(pane.getByText("Status is done.")).toBeVisible();
   await title(page).fill(`Gamma again ${t}`);
@@ -191,7 +191,7 @@ test("restoring a version makes its content current and ends the preview", async
   page.once("dialog", (d) => void d.accept());
   await banner(page).getByRole("button", { name: "Restore this version" }).click();
   await expect(banner(page)).toHaveCount(0);
-  await expect(title(page)).toHaveValue(`Alpha ${t}`);
+  await expect(title(page)).toHaveText(`Alpha ${t}`);
   await expect(title(page)).toBeEditable();
   await expect(activePane(page).getByText("Status is idea.")).toBeVisible();
   const now = await stored(admin, id);
@@ -210,7 +210,7 @@ test("restoring a version makes its content current and ends the preview", async
   page.once("dialog", (d) => void d.accept());
   await versions(page).nth(1).getByRole("button", { name: "Restore", exact: true }).click();
   await expect(banner(page)).toHaveCount(0);
-  await expect(title(page)).toHaveValue(`Gamma ${t}`);
+  await expect(title(page)).toHaveText(`Gamma ${t}`);
   expect((await stored(admin, id)).note.fields.status).toBe("done");
 });
 
@@ -218,7 +218,7 @@ test("the old history address opens the note with the History panel", async ({ p
   const { id, t } = await threeVersions(admin);
   await logIn(page, `/notes/${id}/history`);
   await expect(page).toHaveURL(new RegExp(`/notes/${id}$`));
-  await expect(title(page)).toHaveValue(`Gamma ${t}`);
+  await expect(title(page)).toHaveText(`Gamma ${t}`);
   await expect(historyPanel(page)).toBeVisible();
   await expect(versions(page)).toHaveCount(3);
 });
@@ -238,7 +238,7 @@ test("the History panel follows the active pane", async ({ page, admin }) => {
   await panes.nth(1).locator(".pane-body").click();
   await page.waitForTimeout(300);
   await page.goto(`/notes/${two.id}`);
-  await expect(panes.nth(1).getByLabel("Title", { exact: true })).toHaveValue(`Gamma ${two.t}`);
+  await expect(panes.nth(1).getByLabel("Title", { exact: true })).toHaveText(`Gamma ${two.t}`);
   await expect(versions(page)).toHaveCount(3);
   await expect(versions(page).first()).not.toHaveAttribute("data-version", first!);
 
@@ -248,7 +248,7 @@ test("the History panel follows the active pane", async ({ page, admin }) => {
   await panes.nth(0).locator(".pane-header").click();
   await expect(versions(page).first()).toHaveAttribute("data-version", first!);
   await expect(page.getByRole("region", { name: "Version preview" })).toHaveCount(0);
-  await expect(panes.nth(1).getByLabel("Title", { exact: true })).toHaveValue(`Gamma ${two.t}`);
+  await expect(panes.nth(1).getByLabel("Title", { exact: true })).toHaveText(`Gamma ${two.t}`);
 
   // A pane that shows no note.
   await page.getByRole("link", { name: "Settings" }).click();
@@ -265,7 +265,7 @@ test("on a phone, choosing a version closes the drawer, and the banner reopens i
   await versions(page).nth(1).getByRole("button").first().click();
   await expect(historyPanel(page)).toBeHidden();
   await expect(banner(page)).toBeVisible();
-  await expect(title(page)).toHaveValue(`Alpha ${t}`);
+  await expect(title(page)).toHaveText(`Alpha ${t}`);
   await banner(page).getByRole("button", { name: "Versions" }).click();
   await expect(historyPanel(page)).toBeInViewport();
   await expect(versions(page).nth(1)).toHaveClass(/selected/);

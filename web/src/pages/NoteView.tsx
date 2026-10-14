@@ -114,23 +114,6 @@ function PropertiesIcon() {
  * sidebar, and changes save themselves (D12 versioning; a stale save shows the conflict view).
  * With `newType`, an unsaved note of that type, which Create creates.
  */
-/**
- * Fit the title box to its text where the browser cannot (no `field-sizing`): as tall as its
- * wrapped lines. Where it can, CSS does this and this does nothing.
- */
-function fitTitle(el: HTMLTextAreaElement) {
-  if (typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content")) return;
-  const fit = () => {
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  };
-  queueMicrotask(fit);
-  if (!el.dataset.fitted && typeof ResizeObserver !== "undefined") {
-    el.dataset.fitted = "1";
-    new ResizeObserver(fit).observe(el);
-  }
-}
-
 export function NoteView(props: { newType?: string; id?: string }) {
   const params = useParams();
   const navigate = useNavigate();
@@ -177,6 +160,15 @@ export function NoteView(props: { newType?: string; id?: string }) {
   };
   /** The note as the page shows it: the previewed version, or the note as edited. */
   const shown = (): NoteDoc => preview()?.note.note ?? doc();
+
+  // The title is editable text, not an input, so its text is set here: from the note as shown,
+  // except while someone is typing in it, so the caret never jumps.
+  let titleEl: HTMLSpanElement | undefined;
+  createEffect(() => {
+    const t = shown().fields.title;
+    const text = typeof t === "string" ? t : "";
+    if (titleEl && (titleEl.textContent ?? "") !== text && document.activeElement !== titleEl) titleEl.textContent = text;
+  });
   const endPreview = () => {
     if (pane) setPreview(pane.id, null);
   };
@@ -589,28 +581,30 @@ export function NoteView(props: { newType?: string; id?: string }) {
                 <Show when={props.newType}>
                   <p class="note-kind">New {type()?.label ?? n().type}</p>
                 </Show>
-                <div class="note-title-row">
+                {/* The title is inline text, so it runs the full width before it wraps and the chip and
+                    buttons follow its last word, moving to the next line only when they reach the edge. */}
+                <div class="note-title-flow">
                   <h1 class="note-title">
-                    {/* A textarea, so a long title wraps in a narrow pane rather than scrolling out of sight. */}
-                    <textarea
+                    <span
+                      ref={(el) => (titleEl = el)}
                       id={`${uid}note-title`}
                       class="note-title-input"
+                      role="textbox"
                       aria-label="Title"
-                      placeholder="Untitled"
-                      required
-                      rows={1}
-                      autocomplete="off"
-                      spellcheck={false}
-                      readOnly={!!preview()}
+                      aria-required="true"
                       aria-readonly={preview() ? "true" : undefined}
-                      value={typeof shown().fields.title === "string" ? (shown().fields.title as string) : ""}
-                      ref={(el) => fitTitle(el)}
+                      contentEditable={preview() ? false : "plaintext-only"}
+                      spellcheck={false}
+                      data-placeholder="Untitled"
                       onInput={(e) => {
                         const el = e.currentTarget;
+                        const raw = el.textContent ?? "";
                         // A title is one line: a pasted line break becomes a space.
-                        if (/[\r\n]/.test(el.value)) el.value = el.value.replace(/\s*[\r\n]+\s*/g, " ");
-                        setField(TITLE_FIELD, el.value === "" ? undefined : el.value);
-                        fitTitle(el);
+                        const text = raw.replace(/\s*[\r\n]+\s*/g, " ");
+                        if (text !== raw) el.textContent = text;
+                        // An emptied box keeps no stray node, so its placeholder shows.
+                        if (text === "" && el.firstChild) el.replaceChildren();
+                        setField(TITLE_FIELD, text === "" ? undefined : text);
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
@@ -619,8 +613,9 @@ export function NoteView(props: { newType?: string; id?: string }) {
                         }
                       }}
                     />
+                    {" "}
                   </h1>
-                  <div class="note-title-tools">
+                  <span class="note-title-tools">
                     <a
                       class="type-chip"
                       href={`/types/${n().type}`}
@@ -675,7 +670,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
                         <TrashIcon />
                       </button>
                     </Show>
-                  </div>
+                  </span>
                 </div>
               </div>
               <div class="note-actions">

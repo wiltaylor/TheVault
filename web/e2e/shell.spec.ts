@@ -78,7 +78,7 @@ test("a note created through the API appears in its type list and opens with its
 
   const panel = page.getByRole("tabpanel");
   // The title is the page's heading, edited in place, not a field below it.
-  await expect(page.getByLabel("Title", { exact: true })).toHaveValue(title);
+  await expect(page.getByLabel("Title", { exact: true })).toHaveText(title);
   await expect(panel.getByTestId("field-title")).toHaveCount(0);
   await expect(panel.getByTestId("field-status")).toContainText("Status");
   await expect(panel.getByTestId("field-status").getByLabel("Status")).toHaveValue("doing");
@@ -150,7 +150,7 @@ test("keeping the stored version after a conflict discards the edit", async ({ p
   const title = unique("Kept");
   const created = await createTask(admin, { title });
   await logIn(page, `/notes/${created.id}`);
-  await expect(page.getByLabel("Title")).toHaveValue(title);
+  await expect(page.getByLabel("Title")).toHaveText(title);
   const theirs = await admin.put(`/api/notes/${created.id}`, {
     data: { base_version: created.version, note: { fields: { title: `${title} (theirs)` }, blocks: [] } },
   });

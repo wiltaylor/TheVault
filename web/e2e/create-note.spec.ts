@@ -131,7 +131,8 @@ test("a new note without its required title is not created, and Cancel goes back
   await expect(create).toBeDisabled();
   await expect(page.getByTestId("save-status")).toHaveText("Required: Title");
   await create.click({ force: true });
-  expect(await page.getByLabel("Title").evaluate((el) => (el as HTMLInputElement).validity.valueMissing)).toBe(true);
+  await expect(page.getByLabel("Title")).toHaveAttribute("aria-required", "true");
+  await expect(page.getByLabel("Title")).toHaveText("");
   await expect(page).toHaveURL(/\/notes\/new\?type=note$/);
   expect(created).toEqual([]);
   await page.getByLabel("Title").fill("Now named");
@@ -156,31 +157,27 @@ test("a long title wraps onto more lines in a narrow pane and stays editable in 
   await page.setViewportSize({ width: 390, height: 844 });
   await logIn(page, `/notes/${id}`);
   const input = page.getByLabel("Title", { exact: true });
-  await expect(input).toHaveValue(title);
+  await expect(input).toHaveText(title);
   await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
 
-  // Nothing is cut off: the box is as wide as the pane allows, and as tall as its lines.
-  const size = () =>
-    input.evaluate((el) => ({
-      scrollWidth: el.scrollWidth,
-      clientWidth: el.clientWidth,
-      scrollHeight: el.scrollHeight,
-      clientHeight: el.clientHeight,
-      lineHeight: Number.parseFloat(getComputedStyle(el).lineHeight),
-      right: el.getBoundingClientRect().right,
-    }));
-  const s = await size();
-  expect(s.scrollWidth).toBeLessThanOrEqual(s.clientWidth + 1);
-  expect(s.scrollHeight).toBeLessThanOrEqual(s.clientHeight + 1);
-  expect(s.clientHeight).toBeGreaterThan(s.lineHeight * 1.5);
-  expect(s.right).toBeLessThanOrEqual(390);
+  // Nothing is cut off: the text wraps onto more lines, each inside the pane.
+  const lines = await input.evaluate((el) => {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    return [...r.getClientRects()].map((c) => ({ left: c.left, right: c.right }));
+  });
+  expect(lines.length).toBeGreaterThan(1);
+  for (const l of lines) {
+    expect(l.left).toBeGreaterThanOrEqual(0);
+    expect(l.right).toBeLessThanOrEqual(390);
+  }
 
   // Still the title, edited in place: Enter saves rather than adding a line.
   await input.click();
   await page.keyboard.press("ControlOrMeta+End");
   await page.keyboard.type(" again");
   await page.keyboard.press("Enter");
-  await expect(input).toHaveValue(`${title} again`);
+  await expect(input).toHaveText(`${title} again`);
   await expect(page.getByTestId("save-status")).toHaveText("Saved");
   expect((await stored(admin, id)).note.fields.title).toBe(`${title} again`);
 });

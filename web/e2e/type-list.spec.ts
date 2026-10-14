@@ -130,7 +130,7 @@ test("a type's notes show as cards by default, a remembered List view per type, 
   await expect(page).toHaveURL(new RegExp(`/types/${books}$`));
   await activePane(page).getByTestId("note-row").filter({ hasText: "Emma" }).click();
   await expect(page).toHaveURL(/\/notes\/[0-9A-Z]+$/);
-  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Emma");
+  await expect(page.getByLabel("Title", { exact: true })).toHaveText("Emma");
 });
 
 test("a type with more than 200 notes lists none until a search narrows it", async ({ page, admin }) => {
