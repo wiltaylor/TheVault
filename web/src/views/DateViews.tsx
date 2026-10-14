@@ -59,6 +59,31 @@ function CappedNote(props: { capped: boolean }) {
  * Notes on the days of a date, datetime or date range field, with FullCalendar's MIT core (D29).
  * Only the notes in the range on screen are loaded: the view's query is narrowed to it.
  */
+/** Below this width of its own the calendar switches to its compact layout. */
+export const COMPACT_CALENDAR = 520;
+
+/**
+ * The toolbar and header options for a calendar `width` pixels wide. A narrow one keeps the
+ * arrows, title and today on top and moves the view buttons to a row underneath, with one-letter
+ * weekday headers, so nothing runs past its edge.
+ */
+export function calendarLayout(width: number) {
+  const views = "dayGridMonth,timeGridWeek,timeGridDay";
+  return width < COMPACT_CALENDAR
+    ? {
+        compact: true,
+        headerToolbar: { left: "prev,next", center: "title", right: "today" },
+        footerToolbar: { center: views },
+        dayHeaderFormat: { weekday: "narrow" as const },
+      }
+    : {
+        compact: false,
+        headerToolbar: { left: "prev,next today", center: "title", right: views },
+        footerToolbar: false as const,
+        dayHeaderFormat: { weekday: "short" as const },
+      };
+}
+
 export function CalendarView(props: { view: ViewDef; query: string; thisId: string | undefined }) {
   const check = createMemo(() => dateField(types(), props.query, props.view.date));
   return (
@@ -70,10 +95,14 @@ export function CalendarView(props: { view: ViewDef; query: string; thisId: stri
         const [capped, setCapped] = createSignal(false);
         let calendar: Calendar | undefined;
         onMount(() => {
+          const start = calendarLayout(box.clientWidth || COMPACT_CALENDAR);
+          box.classList.toggle("fc-compact", start.compact);
           calendar = new Calendar(box, {
             plugins: [dayGridPlugin, timeGridPlugin],
             initialView: CALENDAR_VIEWS[props.view.mode] ?? "dayGridMonth",
-            headerToolbar: { left: "prev,next today", center: "title", right: "dayGridMonth,timeGridWeek,timeGridDay" },
+            headerToolbar: start.headerToolbar,
+            footerToolbar: start.footerToolbar,
+            dayHeaderFormat: start.dayHeaderFormat,
             height: "auto",
             dayMaxEvents: true,
             events: (info, success, failure) => {
@@ -102,7 +131,25 @@ export function CalendarView(props: { view: ViewDef; query: string; thisId: stri
             },
           });
           calendar.render();
-          onCleanup(() => calendar?.destroy());
+          // Follow the pane's width, not the window's: switch layouts as it crosses the threshold.
+          let compact = start.compact;
+          const observer =
+            typeof ResizeObserver === "undefined"
+              ? null
+              : new ResizeObserver(() => {
+                  const next = calendarLayout(box.clientWidth);
+                  if (next.compact === compact || !calendar || box.clientWidth === 0) return;
+                  compact = next.compact;
+                  box.classList.toggle("fc-compact", compact);
+                  calendar.setOption("headerToolbar", next.headerToolbar);
+                  calendar.setOption("footerToolbar", next.footerToolbar);
+                  calendar.setOption("dayHeaderFormat", next.dayHeaderFormat);
+                });
+          observer?.observe(box);
+          onCleanup(() => {
+            observer?.disconnect();
+            calendar?.destroy();
+          });
         });
         createEffect(
           on(

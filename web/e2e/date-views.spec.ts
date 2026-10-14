@@ -263,3 +263,93 @@ test("a 409 on drag shows the conflict view instead of losing the move", async (
   await expect(column(view, "Done").getByTestId("kanban-card")).toHaveCount(1);
   await expect(column(view, "Todo").getByTestId("kanban-card")).toHaveCount(0);
 });
+
+/** The widest of `inner`'s boxes must sit inside `outer`'s, give or take a pixel. */
+async function fitsInside(inner: Locator, outer: Locator) {
+  await expect
+    .poll(async () => {
+      const i = await inner.boundingBox();
+      const o = await outer.boundingBox();
+      if (!i || !o) return "unmeasured";
+      return i.x >= o.x - 1 && i.x + i.width <= o.x + o.width + 1 ? "fits" : `${i.width} wide in ${o.width}`;
+    })
+    .toBe("fits");
+}
+
+test("the calendar and timeline resize with their pane instead of being cut off", async ({ page, admin }) => {
+  const tag = unique("resize");
+  await create(admin, "story", { title: `${tag} one`, tag, due: day(5), span: { start: day(3), end: day(9) } });
+  const cal = await viewPage(admin, tag, { due: { kind: "calendar", date: "due" } });
+  await open(page, cal.id, cal.title);
+  // Pin the pane by id: after a split, both panes show this page.
+  const id = await page.locator(".pane").filter({ has: page.getByTestId("query-view") }).first().getAttribute("data-pane-id");
+  const pane = page.locator(`[data-pane-id="${id}"]`);
+  const calendar = pane.getByTestId("query-view").locator(".fc");
+  await expect(calendar).toBeVisible();
+  const wide = (await calendar.boundingBox())!.width;
+
+  // Splitting halves the pane: the calendar must shrink with it.
+  await pane.getByRole("button", { name: "Pane actions" }).click();
+  await page.getByRole("menuitem", { name: "Split right" }).click();
+  await fitsInside(calendar, pane);
+  expect((await calendar.boundingBox())!.width).toBeLessThan(wide * 0.75);
+
+  // Hiding the left sidebar widens the pane again: the calendar grows to fill it.
+  const narrow = (await calendar.boundingBox())!.width;
+  await page.keyboard.press("ControlOrMeta+Backslash");
+  await expect.poll(async () => (await calendar.boundingBox())!.width).toBeGreaterThan(narrow + 50);
+  await fitsInside(calendar, pane);
+
+  // A timeline in a split pane fits too.
+  const tl = await viewPage(admin, tag, { span: { kind: "timeline", date: "span" } });
+  await page.goto(`/notes/${tl.id}`);
+  const tlPane = page.locator(".pane").filter({ has: page.locator(".vis-timeline") }).first();
+  const timeline = tlPane.locator(".vis-timeline").first();
+  await expect(timeline).toBeVisible();
+  await fitsInside(timeline, tlPane);
+});
+
+test("a calendar opened in a background tab fits when the tab is shown", async ({ page, admin }) => {
+  const tag = unique("bgtab");
+  await create(admin, "story", { title: `${tag} one`, tag, due: day(5) });
+  const cal = await viewPage(admin, tag, { due: { kind: "calendar", date: "due" } });
+  await logIn(page, "/daily");
+  // Open the calendar page behind the current tab, as a middle-click would, then show it.
+  await page.evaluate((url) => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.textContent = "calendar";
+    document.querySelector("[data-pane-id]")!.appendChild(a);
+    a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ctrlKey: true }));
+  }, `/notes/${cal.id}`);
+  await page.getByRole("tab", { name: new RegExp(cal.title) }).click();
+  const view = page.getByTestId("query-view").filter({ visible: true });
+  const calendar = view.locator(".fc");
+  await expect(calendar).toBeVisible();
+  await fitsInside(calendar, page.locator(".pane").filter({ has: calendar }));
+  await expect.poll(async () => (await calendar.boundingBox())!.width).toBeGreaterThan(400);
+});
+
+test.describe("in a phone-width pane", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("the calendar's toolbar and headers fit instead of being cut off", async ({ page, admin }) => {
+    const tag = unique("narrowcal");
+    await create(admin, "story", { title: `${tag} one`, tag, due: day(5) });
+    const cal = await viewPage(admin, tag, { due: { kind: "calendar", date: "due" } });
+    await open(page, cal.id, cal.title);
+    const calendar = page.getByTestId("query-view").locator(".fc").first();
+    await expect(calendar).toBeVisible();
+    // Nothing inside the calendar is wider than the calendar itself.
+    await expect
+      .poll(() => calendar.evaluate((el) => el.scrollWidth - el.clientWidth))
+      .toBeLessThanOrEqual(1);
+    // Every view button sits fully inside the calendar's width, none cut off at the edge.
+    for (const name of ["month", "week", "day"]) {
+      const button = calendar.getByRole("button", { name, exact: true });
+      await button.scrollIntoViewIfNeeded();
+      await fitsInside(button, calendar);
+    }
+    await fitsInside(calendar.locator(".fc-toolbar-title"), calendar);
+  });
+});

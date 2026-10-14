@@ -5975,3 +5975,27 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   order: 3;
   flex-basis: 100%;
 }
+
+/* A narrow calendar: a smaller title, and toolbars that wrap rather than run past the edge. */
+.query-calendar .fc-compact .fc-toolbar-title {
+  font-size: 1.05rem;
+}
+
+.query-calendar .fc-compact .fc-header-toolbar,
+.query-calendar .fc-compact .fc-footer-toolbar {
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
+.query-calendar .fc-compact .fc-footer-toolbar {
+  margin-top: 0.5rem;
+}
+
+.query-calendar .fc-compact .fc-button {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.query-calendar .fc-compact .fc-daygrid-event {
+  font-size: 0.7rem;
+}
