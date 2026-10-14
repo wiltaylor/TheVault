@@ -597,8 +597,9 @@ A tab holds an ordered mix of slots and content blocks:
 | `label` inside a slot | string | Overrides the field's label in this template |
 | any [content block](#content-blocks) | block | Fixed content shown on every note. In a `query_view`, `this` is the note being shown |
 | `columns { ... }` | block | A [columns](#columns) layout whose columns hold slots and fixed blocks, so fields sit side by side |
+| `control { ... }` | block | A [control](#control) that edits a field in place, in the tab or in a column. A field may have a slot and any number of controls |
 
-A slot inside a column counts as placing its field, as one directly in the tab does, and the rule of one slot per field covers the whole template, columns included. `{{name}}` references in fixed blocks inside columns are checked as anywhere else. Inside a tab, the canonical form writes a `columns` block and its columns compactly, with no blank lines between their blocks.
+A slot inside a column counts as placing its field, as one directly in the tab does, and the rule of one slot per field covers the whole template, columns included. Controls in columns are checked as anywhere else. `{{name}}` references in fixed blocks inside columns are checked as anywhere else. Inside a tab, the canonical form writes a `columns` block and its columns compactly, with no blank lines between their blocks.
 
 ```wcl
 template default {
@@ -1007,6 +1008,86 @@ columns {
 }
 ```
 
+### `control`
+
+A form control bound to one field of the note it is shown on: a text box, a slider, a toggle, a calendar and so on. It shows the field's current value and editing it writes the field, so the field stays the only place the value lives. A control, a slot, a `{{name}}` reference and the properties sidebar showing one field always agree, and two controls may bind the same field. Controls are mostly placed in [templates](#templates), to lay a type out as a form, but a note's own content and a canvas card may hold them too.
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `field` | string | Required. The field the control edits: `title` or a field of the note's type |
+| `kind` | string | Required. The control kind, one of the table below |
+| `label` | string | Optional. Shown beside the control in place of the field's label |
+| `placeholder` | string | Optional. Text shown while the field is empty. Only `text`, `textarea`, `number`, `dropdown` and `chips` take it |
+| `min`, `max` | int or float | `number` and `slider` only. The lowest and highest value the control offers; a slider needs both. `min` is below `max` |
+| `step` | int or float | `number` and `slider` only. Greater than 0. The amount one step moves the value; default `1` |
+| `max` | int | `rating` only. The number of stars, from 1 to 10; default `5` |
+
+The control kinds, and the fields each fits:
+
+| Kind | Shows | Fits |
+|------|-------|------|
+| `text` | A one-line text box | `string`, `url`, `int`, `float` |
+| `textarea` | A text box of several lines | `string` |
+| `number` | A number box with step buttons | `int`, `float` |
+| `slider` | A slider from `min` to `max` | `int`, `float` |
+| `toggle` | An on/off switch | `bool` |
+| `checkbox` | A checkbox | `bool` |
+| `dropdown` | A list to choose one value from: a taxonomy's terms with their hierarchy, or a note search for a reference | single `select`, `taxonomy` or `reference` |
+| `radio` | One radio button per option | single `select` |
+| `chips` | The values as chips, removed one at a time, with a box that adds one and suggests values | `list` of strings, multiple `select`, `taxonomy` or `reference` |
+| `calendar` | A month calendar in place. For a range, the first click picks the start and the second the end | `date`, `date_range` of dates |
+| `datetime` | A date and time box | `datetime` |
+| `time` | The time of day of a datetime. A new time keeps the date the field has, or takes today's when it is empty | `datetime` |
+| `rating` | Stars from 1 to `max` | `int` |
+
+Rules:
+
+- `schema` checks a control where it knows the note's type: in a template, against the type the template belongs to, and in a note's content field or canvas field, including inside columns and canvas cards, against the note's type when the note is written. The field must exist, the control must fit its kind and whether it holds one value or several, and the kind-specific items must be valid. Each error names the control block and the reason, such as `content "body" > columns#1 > column#2 > control#1.field: a toggle control fits a bool field, and "due" is a date field`.
+- On an `int` field, `min`, `max` and `step` are whole numbers.
+- A control may bind a computed field. It shows the value and cannot change it.
+- A control cannot clear a required field: the control keeps the value and says why.
+- A field bound by a control in the `default` template, or in the note's own content, counts as placed: the properties sidebar does not list it again. A control on a computed field places nothing.
+- In a canvas card, a control binds the note that holds the canvas. Where there is no such note, the control is shown disabled.
+- A field rename in a type change renames the `field` of every control bound to it, in templates and in notes. A control that names a removed field makes its note invalid, so the type change is refused until the control is removed.
+
+```wcl
+columns {
+  column {
+    width = 1
+
+    control {
+      field       = "subtitle"
+      kind        = "text"
+      label       = "Subtitle"
+      placeholder = "One line under the title"
+    }
+
+    control {
+      field = "score"
+      kind  = "slider"
+      min   = 0
+      max   = 10
+      step  = 0.5
+    }
+  }
+
+  column {
+    width = 1
+
+    control {
+      field = "due"
+      kind  = "calendar"
+    }
+
+    control {
+      field = "estimate"
+      kind  = "rating"
+      max   = 5
+    }
+  }
+}
+```
+
 ## Inline markup
 
 These text items use the inline markup in PRD Appendix A (D41): `heading.text`, `paragraph.text`, `item.text` and `quote.text`, wherever the block sits, a canvas card included. No other string is parsed as markup.
@@ -1200,7 +1281,7 @@ Each node kind adds its own items:
 
 | Node kind | Items | Shows |
 |-----------|-------|-------|
-| `card` | Content blocks, as in [Content blocks](#content-blocks): headings, paragraphs, lists, quotes, images, files, code, terminals, diagrams, drawings, query views and column layouts. Not a `canvas`, in the card or in its columns | The blocks, in order, as a content field shows them. A query view in a card shows live results; its `this` is the note that holds the canvas |
+| `card` | Content blocks, as in [Content blocks](#content-blocks): headings, paragraphs, lists, quotes, images, files, code, terminals, diagrams, drawings, query views, column layouts and controls. Not a `canvas`, in the card or in its columns | The blocks, in order, as a content field shows them. A query view in a card shows live results; its `this` is the note that holds the canvas |
 | `note` | `note`: note ULID, required. `template`: default `card`. No blocks | A note rendered with a template |
 
 #### Reading older canvases
@@ -1380,7 +1461,7 @@ A vault file is checked in three layers. Each catches what the one before cannot
 
 | File | Declares |
 |------|----------|
-| `common.wcl` | Date range and location records, every content block, ink, query view, canvas, `columns`, `slot`, `content` and `dict`. No `@document` |
+| `common.wcl` | Date range and location records, every content block, ink, query view, canvas, `columns`, `control`, `slot`, `content` and `dict`. No `@document` |
 | `type.wcl` | The `@document` of a type file, with `field`, `template`, `tab` and `handler` |
 | `taxonomy.wcl` | The `@document` of a taxonomy file |
 | `task.wcl` | The `@document` of a task file |

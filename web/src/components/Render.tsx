@@ -9,6 +9,7 @@ import { AssetBlock, ImageBlock } from "../blocks/MediaBlocks";
 import { MermaidBlock } from "../blocks/MermaidBlock";
 import { TerminalBlock } from "../blocks/TerminalBlock";
 import { CanvasSurface } from "../canvas/CanvasSurface";
+import { ControlBlock } from "../controls/ControlView";
 import { InkSurface } from "../ink/InkSurface";
 import { Inline } from "./Inline";
 
@@ -99,6 +100,9 @@ export function BlockView(props: { block: Block; onChange?: (block: Block) => vo
       </Match>
       <Match when={b().kind === "columns"}>
         <ColumnsView block={b()} />
+      </Match>
+      <Match when={b().kind === "control"}>
+        <ControlBlock block={b()} />
       </Match>
     </Switch>
   );

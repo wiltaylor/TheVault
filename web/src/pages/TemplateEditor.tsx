@@ -1,13 +1,14 @@
 import { A, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, on } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
-import { api } from "../api";
+import { type Json, api } from "../api";
+import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { type DraggedBlock } from "../editor/blockTools";
 import { ContentEditor, type EditorHandle, type TemplateEditing } from "../editor/ContentEditor";
 import { docToItems, itemsToDoc } from "../editor/doc";
 import type { SlotContext } from "../editor/SlotHolder";
 import { type TemplateModel, templateWcl, unplaced } from "../defs/typeModel";
-import { reloadDefinitions } from "../session";
+import { reloadDefinitions, typeDef } from "../session";
 import { errorText } from "./TypeEditor";
 
 interface FieldInfo {
@@ -194,7 +195,22 @@ export function TemplateEditor() {
     }
   }
 
+  // Controls in the template are tried out on sample values kept here, never saved.
+  const [sample, setSample] = createSignal<Record<string, Json>>({});
+  const controls: ControlBinding = {
+    type: () => typeDef(typeName()),
+    value: (f) => sample()[f.name],
+    set: (f, v) => {
+      const next = { ...sample() };
+      if (v === undefined) delete next[f.name];
+      else next[f.name] = v;
+      setSample(next);
+    },
+    preview: true,
+  };
+
   return (
+    <ControlBindingContext.Provider value={controls}>
     <section class="def-editor template-editor">
       <Show when={loadError()}>
         <p class="error" role="alert">
@@ -298,7 +314,7 @@ export function TemplateEditor() {
                 </For>
               </div>
               <p class="template-hint muted">
-                Type <kbd>/</kbd> to add a block or a property, and <kbd>{"{{"}</kbd> to show a field's value in text. Drag
+                Type <kbd>/</kbd> to add a block, a property or a control, and <kbd>{"{{"}</kbd> to show a field's value in text. Drag
                 a block by its handle, onto another tab too.
               </p>
               {/* A fresh editor per template, tab and outside change; its own edits keep it. */}
@@ -350,5 +366,6 @@ export function TemplateEditor() {
         )}
       </Show>
     </section>
+    </ControlBindingContext.Provider>
   );
 }

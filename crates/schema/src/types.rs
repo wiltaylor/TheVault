@@ -188,6 +188,21 @@ pub struct FieldDef {
     pub default: Option<Value>,
 }
 
+/// The built-in title, as a required string field, for what may name it as a field: a slot or
+/// a control.
+pub(crate) fn title_field() -> FieldDef {
+    FieldDef {
+        name: "title".to_owned(),
+        label: "Title".to_owned(),
+        description: None,
+        kind: FieldKind::String,
+        required: true,
+        computed: false,
+        multiple: false,
+        default: None,
+    }
+}
+
 impl FieldDef {
     /// A single-term taxonomy field, the only kind a kanban view may group by (D7).
     pub fn is_kanban_group(&self) -> bool {
@@ -268,6 +283,7 @@ impl TypeDef {
         }
         let mut c = Check {
             issues: &mut issues,
+            fields: None,
         };
         let items = [
             req("label", Form::Str),
@@ -291,6 +307,8 @@ impl TypeDef {
             }
         }
 
+        // A control in a template binds a field of this type.
+        c.fields = Some(&fields);
         let mut templates: Vec<Template> = Vec::new();
         for b in doc.blocks_of("template") {
             let at = format!("template {}", b.label().unwrap_or("?"));

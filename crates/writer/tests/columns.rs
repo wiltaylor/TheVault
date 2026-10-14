@@ -67,12 +67,24 @@ const CANONICAL: &str = r#"content body {
 }
 "#;
 
+/// A clock that never moves, so a write and its rewrite share `created` and `updated` and a
+/// byte comparison between them cannot depend on a second ticking over in between.
+struct FixedClock;
+
+impl state::Clock for FixedClock {
+    fn now_ms(&self) -> i64 {
+        1_790_000_000_000
+    }
+}
+
 fn open(root: &Path) -> Writer {
     std::fs::create_dir_all(root.join("types")).unwrap();
     std::fs::write(root.join("types/page.wcl"), PAGE).unwrap();
     let vault = Vault::init(root).unwrap();
     let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
-    Writer::open(vault, state).unwrap()
+    Writer::open(vault, state)
+        .unwrap()
+        .with_clock(std::sync::Arc::new(FixedClock))
 }
 
 fn body() -> serde_json::Value {

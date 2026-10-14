@@ -91,7 +91,7 @@ const CARD_EXCLUDES = ["canvas"];
 const EDITOR_POPUPS = ".suggest-menu, .editor-bubble, .mention-picker";
 
 /** Elements inside a node that take their own presses rather than moving it. */
-const INTERACTIVE = "a, button, input, textarea, select, [contenteditable='true'], summary, [role='tab']";
+const INTERACTIVE = "a, button, input, textarea, select, [contenteditable='true'], summary, [role='tab'], [role='option'], [data-node-view-interactive]";
 
 const ARROW_LABELS: Record<Arrow, string> = {
   none: "No arrows",

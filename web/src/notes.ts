@@ -2,6 +2,7 @@
 
 import type { Block, FieldDef, Json, NoteDoc, Template, TypeDef } from "./api";
 import { slotsOf } from "./blocks/columns";
+import { controlledFields } from "./controls/model";
 
 /** The built-in title, treated as a string field wherever a template places it. */
 export const TITLE_FIELD: FieldDef = {
@@ -117,11 +118,14 @@ export function slottedFields(type: TypeDef): Set<string> {
 }
 
 /**
- * The type's fields the note page has no slot for, in type order: the properties sidebar edits
- * these. A `{{name}}` reference is read-only, so it does not count as a place.
+ * The type's fields the note page has no slot or editable control for, in type order: the
+ * properties sidebar edits these. A control in the template or in the note's own content places
+ * its field as a slot does; a read-only control on a computed field and a `{{name}}` reference
+ * do not count as a place.
  */
-export function unplacedFields(type: TypeDef): FieldDef[] {
+export function unplacedFields(type: TypeDef, doc?: NoteDoc): FieldDef[] {
   const placed = slottedFields(type);
+  for (const name of controlledFields(type, doc)) placed.add(name);
   return type.fields.filter((f) => !placed.has(f.name));
 }
 

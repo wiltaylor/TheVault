@@ -4,6 +4,7 @@ import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc
 import { type Autosave, type SaveState, createAutosave } from "../autosave";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { ConflictView } from "../components/ConflictView";
+import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { FieldInput, hasInput } from "../components/FieldInput";
 import { FieldRefs, type FieldRefValues } from "../components/fieldRefs";
 import { refText } from "../components/refText";
@@ -302,7 +303,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
             <Show when={!conflict()} fallback={<p class="muted">Resolve the conflict in the pane first.</p>}>
               <Show when={generation() + 1} keyed>
                 {(_) => (
-                  <For each={type() ? unplacedFields(type()!) : []} fallback={<p class="muted">Every property is on the page.</p>}>
+                  <For each={type() ? unplacedFields(type()!, doc()) : []} fallback={<p class="muted">Every property is on the page.</p>}>
                     {(f) => <Property field={f} label={f.label} ns="properties-" />}
                   </For>
                 )}
@@ -438,7 +439,17 @@ export function NoteView(props: { newType?: string; id?: string }) {
     }
   };
 
+  // Controls anywhere on the page (the template, the note's content, a canvas card) edit this
+  // note's fields through the same edit path as the field editors.
+  const controls: ControlBinding = {
+    type: () => type(),
+    value: (f) => fieldValue(doc(), f),
+    set: (f, v) => setField(f, v),
+    noteId: () => note()?.id || undefined,
+  };
+
   return (
+    <ControlBindingContext.Provider value={controls}>
     <article
       class="note-view"
       data-save-state={saveState()}
@@ -635,6 +646,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
         )}
       </Show>
     </article>
+    </ControlBindingContext.Provider>
   );
 
   /** A field's value as read-only text: references by their notes' titles. */

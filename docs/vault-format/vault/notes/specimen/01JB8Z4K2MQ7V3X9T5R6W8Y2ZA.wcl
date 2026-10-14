@@ -97,6 +97,12 @@ content body {
     }
   }
 
+  control {
+    field = "done"
+    kind  = "checkbox"
+    label = "Shipped"
+  }
+
   quote {
     text = "Make it work, make it right, make it fast."
   }

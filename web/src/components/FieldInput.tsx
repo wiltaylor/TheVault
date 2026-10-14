@@ -1,7 +1,7 @@
 // Editors for every field kind a note page edits in place (D3, D7). Content, ink and canvas fields
 // have editors of their own; a computed field is never given one.
 
-import { For, Match, Show, Switch, createResource, createSignal, onCleanup } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
 import { type FieldDef, type Json, type Row, type Term, api } from "../api";
 import { knowTitle, noteTitle } from "../editor/titles";
 import { MapCanvas } from "../map/MapCanvas";
@@ -181,6 +181,23 @@ function queryString(s: string): string {
   return JSON.stringify(s);
 }
 
+/**
+ * Up to 20 notes of type `target` (`*` for any type) whose text matches `text`, by title; with no
+ * text, the first notes of the type by title (none for any type). Their titles are remembered.
+ */
+export async function findNotes(target: string, text: string): Promise<Row[]> {
+  const t = text.trim();
+  let page;
+  if (target === "*") {
+    page = t ? await api.search(t, null, SEARCH_RESULTS) : { rows: [] as Row[] };
+  } else {
+    const search = t ? ` search ${queryString(t)}` : "";
+    page = await api.query(`from ${target}${search} sort title asc select title`, null, SEARCH_RESULTS);
+  }
+  for (const r of page.rows) knowTitle(r.id, r.title);
+  return page.rows;
+}
+
 /** Notes of the field's target type, found by title text, to link to. */
 function ReferencePicker(props: FieldInputProps) {
   const [q, setQ] = createSignal("");
@@ -201,17 +218,9 @@ function ReferencePicker(props: FieldInputProps) {
     const mine = ++seq;
     timer = setTimeout(async () => {
       try {
-        const t = text.trim();
-        let page;
-        if (target() === "*") {
-          page = t ? await api.search(t, null, SEARCH_RESULTS) : { rows: [] as Row[] };
-        } else {
-          const search = t ? ` search ${queryString(t)}` : "";
-          page = await api.query(`from ${target()}${search} sort title asc select title`, null, SEARCH_RESULTS);
-        }
+        const rows = await findNotes(target(), text);
         if (mine !== seq) return;
-        for (const r of page.rows) knowTitle(r.id, r.title);
-        setResults(page.rows);
+        setResults(rows);
         setError(null);
       } catch (e) {
         if (mine === seq) setError(e instanceof Error ? e.message : String(e));
@@ -279,10 +288,24 @@ function ReferencePicker(props: FieldInputProps) {
 function ListInput(props: FieldInputProps & { kind: string }) {
   // Blank rows are kept while editing and left out of the value.
   const [rows, setRows] = createSignal<(Json | undefined)[]>(asList(props.value));
+  // What this editor last wrote. A different value came from elsewhere (a control bound to the
+  // same field), and the rows start again from it.
+  let written: Json | undefined = props.value;
+  createEffect(
+    on(
+      () => props.value,
+      (v) => {
+        if (JSON.stringify(v ?? null) !== JSON.stringify(written ?? null)) setRows(asList(v));
+        written = v;
+      },
+      { defer: true },
+    ),
+  );
   function update(next: (Json | undefined)[]) {
     setRows(next);
     const values = next.filter((v): v is Json => v !== undefined);
-    props.onChange(values.length ? values : undefined);
+    written = values.length ? values : undefined;
+    props.onChange(written);
   }
   return (
     <div class="list-input" role="group" aria-label={props.label} id={props.id}>
@@ -370,13 +393,26 @@ function PairInput(props: FieldInputProps & { kind: string; parts: [string, stri
     props.value && typeof props.value === "object" && !Array.isArray(props.value) ? props.value : {};
   // A half-filled pair is kept here until both parts have a value.
   const [draft, setDraft] = createSignal<Record<string, Json | undefined>>({ ...rec() });
+  // A value written elsewhere (a calendar control on the same field) replaces the draft.
+  let written: Json | undefined = props.value;
+  createEffect(
+    on(
+      () => props.value,
+      (v) => {
+        if (JSON.stringify(v ?? null) !== JSON.stringify(written ?? null)) setDraft({ ...rec() });
+        written = v;
+      },
+      { defer: true },
+    ),
+  );
   function set(part: string, v: Json | undefined) {
     const next = { ...draft(), [part]: v };
     setDraft(next);
     const [a, b] = props.parts;
     const va = next[a];
     const vb = next[b];
-    props.onChange(va === undefined || vb === undefined ? undefined : { [a]: va, [b]: vb });
+    written = va === undefined || vb === undefined ? undefined : { [a]: va, [b]: vb };
+    props.onChange(written);
   }
   return (
     <div class="pair-input" role="group" aria-label={props.label} id={props.id}>

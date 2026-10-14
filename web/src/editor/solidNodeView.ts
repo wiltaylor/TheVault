@@ -14,7 +14,7 @@
 import type { Editor, NodeViewRenderer } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import type { NodeView } from "@tiptap/pm/view";
-import { type Accessor, type JSX, createRoot, createSignal, untrack } from "solid-js";
+import { type Accessor, type JSX, type Owner, createRoot, createSignal, getOwner, untrack } from "solid-js";
 import { insert } from "solid-js/web";
 
 export interface SolidNodeViewProps {
@@ -37,6 +37,18 @@ export function isInteractive(dom: HTMLElement, target: EventTarget | null): boo
   if (!(target instanceof Element) || !dom.contains(target)) return false;
   const hit = target.closest(INTERACTIVE);
   return hit !== null && dom.contains(hit);
+}
+
+/** The Solid owner of the component that made each editor, whose context node views see. */
+const owners = new WeakMap<Editor, Owner>();
+
+/**
+ * Give the node views of `editor` the context of `owner`: the note, the bound fields and the pane
+ * the editor sits in. Node views made while the editor is being built see the context they are
+ * built in anyway; those made later, from a transaction, have no owner of their own.
+ */
+export function adoptOwner(editor: Editor, owner: Owner | null) {
+  if (owner) owners.set(editor, owner);
 }
 
 export function solidNodeView(Component: (props: SolidNodeViewProps) => JSX.Element): NodeViewRenderer {
@@ -79,7 +91,7 @@ export function solidNodeView(Component: (props: SolidNodeViewProps) => JSX.Elem
       dispose = d;
       // Untracked: whatever the component reads while it sets up must not re-create it.
       insert(dom, () => untrack(() => Component(viewProps)));
-    });
+    }, owners.get(props.editor) ?? getOwner() ?? undefined);
 
     const view: NodeView = {
       dom,

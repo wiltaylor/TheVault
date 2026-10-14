@@ -148,6 +148,22 @@ handler "before_update" {
     });
   });
 
+  it("makes controls follow renamed fields and drops those of removed fields, in columns too", () => {
+    const m = typeFromSchema(stored);
+    const ctl = (field: string) => ({ kind: "control", fields: { field, kind: "number" } });
+    m.templates[0]!.tabs[1]!.items = [
+      { block: ctl("estimate") },
+      { block: ctl("parent") },
+      { block: { kind: "columns", blocks: [{ kind: "column", blocks: [ctl("estimate"), ctl("parent")] }, { kind: "column" }] } },
+    ];
+    m.fields[0]!.name = "hours";
+    m.fields = m.fields.filter((f) => f.name !== "parent");
+    expect(followFields(m)[0]!.tabs[1]!.items).toEqual([
+      { block: ctl("hours") },
+      { block: { kind: "columns", blocks: [{ kind: "column", blocks: [ctl("hours")] }, { kind: "column", blocks: [] }] } },
+    ]);
+  });
+
   it("names new required fields without a default", () => {
     const m = typeFromSchema(stored);
     const owner = newField("owner");

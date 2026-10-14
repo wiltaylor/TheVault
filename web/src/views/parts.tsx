@@ -7,7 +7,8 @@ import { FieldRefs } from "../components/fieldRefs";
 import { refText } from "../components/refText";
 import { BlockView, Blocks, ColumnsView, formatValue } from "../components/Render";
 import { slotOfBlock } from "../blocks/columns";
-import { compoundBlock, slotField } from "../notes";
+import { compoundBlock, fieldValue, slotField } from "../notes";
+import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { typeDef } from "../session";
 import { ThisNote } from "./thisNote";
 
@@ -49,7 +50,14 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
     text: (name: string) =>
       refText(type(), props.doc ?? { fields: { ...props.row.fields, title: props.row.title }, blocks: [] }, name),
   };
+  // Controls in the template show this note's values, read-only: a result is edited on its page.
+  const controls: ControlBinding = {
+    type,
+    value: (f) => (props.doc ? fieldValue(props.doc, f) : f.name === "title" ? props.row.title : props.row.fields[f.name]),
+    reason: "Open the note to change this.",
+  };
   return (
+    <ControlBindingContext.Provider value={controls}>
     <For each={props.template?.tabs ?? []}>
       {(tab) => (
         <section class="template-tab">
@@ -85,5 +93,6 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
         </section>
       )}
     </For>
+    </ControlBindingContext.Provider>
   );
 }

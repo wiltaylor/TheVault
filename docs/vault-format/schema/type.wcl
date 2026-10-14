@@ -41,6 +41,7 @@ type FieldDef {
   @children("query_view") query_views: list<QueryView>
   @children("canvas")     canvases:    list<Canvas>
   @children("columns")    columns:     list<Columns>
+  @children("control")    controls:    list<Control>
 }
 
 @block("template") type Template {

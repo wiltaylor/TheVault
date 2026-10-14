@@ -9,9 +9,10 @@ use std::collections::HashSet;
 use crate::Issue;
 use crate::doc::{Doc, DocBlock, Value};
 use crate::encoding::{is_ident, is_ink_colour, is_palette, is_ulid};
+use crate::types::{FieldDef, FieldKind, Scalar};
 
 /// The closed set of content block kinds.
-pub const CONTENT_KINDS: [&str; 13] = [
+pub const CONTENT_KINDS: [&str; 14] = [
     "heading",
     "paragraph",
     "list",
@@ -25,10 +26,11 @@ pub const CONTENT_KINDS: [&str; 13] = [
     "query_view",
     "canvas",
     "columns",
+    "control",
 ];
 
 /// The content block kinds a canvas card holds: every content block kind but a canvas.
-pub const CARD_BLOCK_KINDS: [&str; 12] = [
+pub const CARD_BLOCK_KINDS: [&str; 13] = [
     "heading",
     "paragraph",
     "list",
@@ -41,7 +43,93 @@ pub const CARD_BLOCK_KINDS: [&str; 12] = [
     "ink",
     "query_view",
     "columns",
+    "control",
 ];
+
+/// The kinds of a `control` block: the form controls a note field can be edited with.
+pub const CONTROL_KINDS: [&str; 13] = [
+    "text", "textarea", "number", "slider", "toggle", "checkbox", "dropdown", "radio", "chips",
+    "calendar", "datetime", "time", "rating",
+];
+
+/// A rating control's `max` when it has none, and the largest it may have.
+pub const RATING_MAX_DEFAULT: i64 = 5;
+pub const RATING_MAX_LIMIT: i64 = 10;
+
+/// The fields a control of `kind` fits, in words, for diagnostics.
+pub fn control_fits_text(kind: &str) -> &'static str {
+    match kind {
+        "text" => "a string, url, int or float field",
+        "textarea" => "a string field",
+        "number" | "slider" => "an int or float field",
+        "toggle" | "checkbox" => "a bool field",
+        "dropdown" => "a single select, taxonomy or reference field",
+        "radio" => "a single select field",
+        "chips" => "a list of strings, or a multiple select, taxonomy or reference field",
+        "calendar" => "a date field or a date range of dates",
+        "datetime" | "time" => "a datetime field",
+        "rating" => "an int field",
+        _ => "no field",
+    }
+}
+
+/// Whether a control of `kind` can show and edit field `f` (docs/vault-format.md, "control").
+pub fn control_fits(kind: &str, f: &FieldDef) -> bool {
+    use FieldKind as K;
+    let choice = matches!(
+        f.kind,
+        K::Select { .. } | K::Taxonomy { .. } | K::Reference(_)
+    );
+    match kind {
+        "text" => matches!(f.kind, K::String | K::Url | K::Int | K::Float),
+        "textarea" => matches!(f.kind, K::String),
+        "number" | "slider" => matches!(f.kind, K::Int | K::Float),
+        "toggle" | "checkbox" => matches!(f.kind, K::Bool),
+        "dropdown" => choice && !f.multiple,
+        "radio" => matches!(f.kind, K::Select { .. }) && !f.multiple,
+        "chips" => {
+            (choice && f.multiple)
+                || matches!(
+                    f.kind,
+                    K::List {
+                        items: Scalar::String
+                    }
+                )
+        }
+        "calendar" => matches!(f.kind, K::Date | K::DateRange { datetime: false }),
+        "datetime" | "time" => matches!(f.kind, K::Datetime),
+        "rating" => matches!(f.kind, K::Int),
+        _ => false,
+    }
+}
+
+/// A field's kind in words: `a multiple select field`, `a list of int field`.
+fn field_kind_text(f: &FieldDef) -> String {
+    let what = match &f.kind {
+        FieldKind::List { items } => format!("list of {} ", scalar_name(*items)),
+        FieldKind::DateRange { datetime: true } => "date range of datetimes ".to_owned(),
+        k if f.multiple => format!("multiple {} ", k.name()),
+        k => format!("{} ", k.name()),
+    };
+    let article = if what.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
+    format!("{article} {what}field")
+}
+
+fn scalar_name(s: Scalar) -> &'static str {
+    match s {
+        Scalar::String => "string",
+        Scalar::Int => "int",
+        Scalar::Float => "float",
+        Scalar::Bool => "bool",
+        Scalar::Date => "date",
+        Scalar::Datetime => "datetime",
+        Scalar::Url => "url",
+    }
+}
 
 /// How many `column` blocks a `columns` block holds, at least and at most.
 pub const COLUMNS_MIN: usize = 2;
@@ -109,6 +197,9 @@ const ANY_INT: Form = Form::Int(i64::MIN, i64::MAX);
 /// Collects issues under a path.
 pub(crate) struct Check<'a> {
     pub issues: &'a mut Vec<Issue>,
+    /// The fields of the type whose content is checked, when known: a `control` block must
+    /// name one of them that it fits.
+    pub fields: Option<&'a [FieldDef]>,
 }
 
 impl Check<'_> {
@@ -317,7 +408,113 @@ impl Check<'_> {
             "query_view" => self.query_view(d, at),
             "canvas" => self.canvas(d, at),
             "columns" => self.columns(d, at, &mut |c, b, path| c.content_item(b, path)),
+            "control" => self.control(d, at),
             _ => {}
+        }
+    }
+
+    /// A `control` block: a form control bound to a field of the note. Its items are checked on
+    /// their own; with the type's fields known, the field must exist and the control fit it.
+    fn control(&mut self, d: &Doc, at: &str) {
+        let items = [
+            req("field", Form::Str),
+            req("kind", Form::OneOf(&CONTROL_KINDS)),
+            opt("label", Form::Str),
+            opt("placeholder", Form::Str),
+            opt("min", Form::Num),
+            opt("max", Form::Num),
+            opt("step", Form::Positive),
+        ];
+        self.items(d, &items, &[], at);
+        self.only_blocks(d, &[], at);
+        let Some(Value::Str(kind)) = d.field("kind") else {
+            return;
+        };
+        let kind = kind.as_str();
+        if !CONTROL_KINDS.contains(&kind) {
+            return;
+        }
+        // The items each control kind uses beyond field, kind and label, and those it needs.
+        let (uses, needs): (&[&str], &[&str]) = match kind {
+            "text" | "textarea" | "dropdown" | "chips" => (&["placeholder"], &[]),
+            "number" => (&["placeholder", "min", "max", "step"], &[]),
+            "slider" => (&["min", "max", "step"], &["min", "max"]),
+            "rating" => (&["max"], &[]),
+            _ => (&[], &[]),
+        };
+        for (name, _) in &d.fields {
+            if !matches!(name.as_str(), "field" | "kind" | "label")
+                && !uses.contains(&name.as_str())
+            {
+                self.fail(
+                    &format!("{at}.{name}"),
+                    format!("is not used by a {kind} control"),
+                );
+            }
+        }
+        for n in needs {
+            if d.field(n).is_none() {
+                self.fail(
+                    &format!("{at}.{n}"),
+                    format!("is required by a {kind} control"),
+                );
+            }
+        }
+        if kind == "rating" {
+            match d.field("max") {
+                None | Some(Value::Int(1..=RATING_MAX_LIMIT)) => {}
+                Some(Value::Int(_)) => self.fail(
+                    &format!("{at}.max"),
+                    format!("must be from 1 to {RATING_MAX_LIMIT} stars"),
+                ),
+                Some(_) => self.fail(&format!("{at}.max"), "must be a whole number of stars"),
+            }
+        } else if let (Some(lo), Some(hi)) = (
+            d.field("min").and_then(Value::as_f64),
+            d.field("max").and_then(Value::as_f64),
+        ) && lo >= hi
+        {
+            self.fail(&format!("{at}.max"), "must be greater than min");
+        }
+
+        let Some(fields) = self.fields else { return };
+        let Some(Value::Str(name)) = d.field("field") else {
+            return;
+        };
+        let title;
+        let f = if name == "title" {
+            title = crate::types::title_field();
+            Some(&title)
+        } else {
+            fields.iter().find(|f| &f.name == name)
+        };
+        let Some(f) = f else {
+            return self.fail(
+                &format!("{at}.field"),
+                format!("the type has no field {name:?}"),
+            );
+        };
+        if !control_fits(kind, f) {
+            return self.fail(
+                &format!("{at}.field"),
+                format!(
+                    "a {kind} control fits {}, and {name:?} is {}",
+                    control_fits_text(kind),
+                    field_kind_text(f)
+                ),
+            );
+        }
+        if matches!(f.kind, FieldKind::Int) {
+            for n in ["min", "max", "step"] {
+                if kind != "rating"
+                    && let Some(Value::Float(_)) = d.field(n)
+                {
+                    self.fail(
+                        &format!("{at}.{n}"),
+                        format!("must be a whole number, as {name:?} is an int field"),
+                    );
+                }
+            }
         }
     }
 

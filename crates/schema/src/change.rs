@@ -185,6 +185,10 @@ impl FieldChanges {
             *label = to.to_owned();
             b.kind = new_kind.clone();
         }
+        // A control in the note's content follows the field it binds.
+        for b in &mut doc.blocks {
+            rename_controls(&mut b.body, &renames, &mut moved);
+        }
         for (from, to) in &self.renamed {
             if moved.contains(&(from.clone(), to.clone())) {
                 edits.push(NoteEdit::Rename {
@@ -203,6 +207,28 @@ impl FieldChanges {
             }
         }
         (doc, edits)
+    }
+}
+
+/// Rename the `field` of every `control` block in `d`, at any depth.
+fn rename_controls(
+    d: &mut Doc,
+    renames: &BTreeMap<&str, &str>,
+    moved: &mut HashSet<(String, String)>,
+) {
+    for b in &mut d.blocks {
+        if b.kind == "control" {
+            for (name, value) in &mut b.body.fields {
+                if name == "field"
+                    && let Value::Str(f) = value
+                    && let Some(to) = renames.get(f.as_str())
+                {
+                    moved.insert((f.clone(), (*to).to_owned()));
+                    *f = (*to).to_owned();
+                }
+            }
+        }
+        rename_controls(&mut b.body, renames, moved);
     }
 }
 

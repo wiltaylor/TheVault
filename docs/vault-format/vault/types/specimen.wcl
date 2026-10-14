@@ -222,6 +222,76 @@ template default {
     slot "place"
     slot "desk"
   }
+
+  tab "Form" {
+    columns {
+      column {
+        width = 1
+        control {
+          field       = "subtitle"
+          kind        = "text"
+          label       = "Subtitle"
+          placeholder = "One line under the title"
+        }
+        control {
+          field = "estimate"
+          kind  = "number"
+          min   = 0
+          step  = 1
+        }
+        control {
+          field = "score"
+          kind  = "slider"
+          min   = 0
+          max   = 10
+          step  = 0.5
+        }
+        control {
+          field = "done"
+          kind  = "toggle"
+        }
+        control {
+          field = "priority"
+          kind  = "radio"
+        }
+        control {
+          field = "status"
+          kind  = "dropdown"
+        }
+        control {
+          field = "topics"
+          kind  = "chips"
+        }
+      }
+      column {
+        width = 1
+        control {
+          field = "due"
+          kind  = "calendar"
+        }
+        control {
+          field = "span"
+          kind  = "calendar"
+        }
+        control {
+          field = "starts_at"
+          kind  = "time"
+          label = "Start time"
+        }
+        control {
+          field = "estimate"
+          kind  = "rating"
+          label = "Effort"
+          max   = 5
+        }
+      }
+    }
+    control {
+      field = "word_count"
+      kind  = "number"
+      label = "Words, counted on save"
+    }
+  }
 }
 
 template card {

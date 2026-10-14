@@ -195,6 +195,7 @@ type CanvasNode {
   @children("ink")        inks:        list<Ink>
   @children("query_view") query_views: list<QueryView>
   @children("columns")    columns:     list<Columns>
+  @children("control")    controls:    list<Control>
 }
 
 @block("edge", required_fields = ["from", "to"])
@@ -235,6 +236,22 @@ type CanvasGroup {
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
+# Form controls. A control edits one field of the note it is shown on;
+# `schema` checks the kind, that the field exists and that the control fits it.
+# ---------------------------------------------------------------------------
+
+@block("control", required_fields = ["field", "kind"])
+type Control {
+  field:       utf8
+  kind:        utf8
+  label:       utf8?
+  placeholder: utf8?
+  min:         f64?
+  max:         f64?
+  step:        f64?
+}
+
+# ---------------------------------------------------------------------------
 # Column layouts. A column holds any content block but another columns block,
 # and in a template tab, slots too; `schema` rejects a slot in a note and
 # checks the column count and widths.
@@ -260,6 +277,7 @@ type CanvasGroup {
   @children("ink")        inks:        list<Ink>
   @children("query_view") query_views: list<QueryView>
   @children("canvas")     canvases:    list<Canvas>
+  @children("control")    controls:    list<Control>
 }
 
 @block("columns") type Columns {
@@ -281,6 +299,7 @@ type CanvasGroup {
   @children("query_view") query_views: list<QueryView>
   @children("canvas")     canvases:    list<Canvas>
   @children("columns")    columns:     list<Columns>
+  @children("control")    controls:    list<Control>
 }
 
 @doc("A dict field value. Keys are identifiers; TheVault checks every value against the field's value kind.")

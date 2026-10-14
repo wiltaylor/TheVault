@@ -360,7 +360,10 @@ export function followFields(m: TypeModel): TemplateModel[] {
     tabs: t.tabs.map((tab) => ({
       ...tab,
       items: tab.items.flatMap((item): TemplateItemModel[] => {
-        if (!("slot" in item)) return [{ block: followSlots(followRefs(item.block, rename), slotName) }];
+        if (!("slot" in item)) {
+          const block = followControls(followSlots(followRefs(item.block, rename), slotName), slotName);
+          return block ? [{ block }] : [];
+        }
         const name = slotName(item.slot);
         return name === null ? [] : [{ ...item, slot: name }];
       }),
@@ -383,6 +386,21 @@ function followSlots(block: Block, slotName: (slot: string) => string | null): B
       }),
     })),
   };
+}
+
+/**
+ * `block` with every control in it, at any depth, bound to its field's new name; a control whose
+ * field is gone goes too, and so does `block` itself when it is one (null).
+ */
+function followControls(block: Block, fieldName: (name: string) => string | null): Block | null {
+  if (block.kind === "control") {
+    const field = block.fields?.field;
+    if (typeof field !== "string") return block;
+    const to = fieldName(field);
+    return to === null ? null : { ...block, fields: { ...block.fields, field: to } };
+  }
+  if (!block.blocks) return block;
+  return { ...block, blocks: block.blocks.flatMap((b) => followControls(b, fieldName) ?? []) };
 }
 
 /** `block` with the `{{name}}` references in its text items, at any depth, renamed. */

@@ -2,6 +2,7 @@ import { Show, createSignal, untrack } from "solid-js";
 import type { Block } from "../api";
 import { BlockView } from "../components/Render";
 import { QueryViewSettings } from "./QueryViewSettings";
+import { ControlHolder } from "../controls/ControlHolder";
 import type { SolidNodeViewProps } from "./solidNodeView";
 
 /** Blocks inserted in this session, which open ready to set up. */
@@ -30,7 +31,20 @@ export function BlockHolder(props: SolidNodeViewProps) {
       {/* Not keyed: an edit replaces the block, and its component must stay mounted. */}
       <Show when={block()}>
         {(b) => (
-          <Show when={b().kind === "query_view" && onChange()} fallback={<BlockView block={b()} onChange={onChange()} />}>
+          <Show
+            when={b().kind === "query_view" && onChange()}
+            fallback={
+              <Show when={b().kind === "control"} fallback={<BlockView block={b()} onChange={onChange()} />}>
+                <ControlHolder
+                  block={b()}
+                  selected={props.selected()}
+                  fresh={first !== null && inserted.has(first)}
+                  onChange={onChange()}
+                  onRemove={editable() ? () => props.replaceWith() : undefined}
+                />
+              </Show>
+            }
+          >
             {(change) => (
               <div class="query-view-holder">
                 <div class="block-holder-bar">

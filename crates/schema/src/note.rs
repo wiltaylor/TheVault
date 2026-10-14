@@ -55,6 +55,8 @@ pub(crate) fn validate(
     let ctx = Context { schema, lookup };
     let mut c = Check {
         issues: &mut issues,
+        // A control in the note's own content binds a field of the note's type.
+        fields: Some(&ty.fields),
     };
     let mut report = NoteReport::default();
     let mut seen = HashSet::new();

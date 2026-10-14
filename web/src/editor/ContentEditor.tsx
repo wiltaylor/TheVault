@@ -1,7 +1,7 @@
 import { Editor, type JSONContent } from "@tiptap/core";
 import { Selection, TextSelection } from "@tiptap/pm/state";
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createMemo, createSignal, getOwner, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { Block } from "../api";
 import { upload } from "../blocks/MediaBlocks";
@@ -16,6 +16,10 @@ import { type DraggedBlock, matchesQuery } from "./blockTools";
 import { COLUMNS_MAX, COLUMNS_MIN, newColumns } from "../blocks/columns";
 import { type MenuItem, type MenuPos, SuggestMenu } from "./SlashMenu";
 import type { SlotContext } from "./SlotHolder";
+import { adoptOwner } from "./solidNodeView";
+import { useControlBinding } from "../controls/binding";
+import { CONTROL_INFO, CONTROL_KINDS, fieldKindText, fittingFields, newControl } from "../controls/model";
+import { TITLE_FIELD } from "../notes";
 
 type MarkName = "bold" | "italic" | "underline" | "strike" | "code" | "highlight";
 
@@ -108,6 +112,8 @@ export function ContentEditor(props: {
   /** Escape pressed in the editor when no menu, picker or field inside it took it. */
   onEscape?: () => void;
 }) {
+  // The fields a control inserted here can bind: the note's, or the template's type's.
+  const binding = useControlBinding();
   let host!: HTMLDivElement;
   let wrap!: HTMLDivElement;
   let fileInput!: HTMLInputElement;
@@ -155,6 +161,7 @@ export function ContentEditor(props: {
     };
   }
 
+  const owner = getOwner();
   onMount(() => {
     const keys = (kind: "slash" | "field") => (e: KeyboardEvent) => onMenuKey(kind, e);
     editor = new Editor({
@@ -182,6 +189,7 @@ export function ContentEditor(props: {
       },
       onTransaction: () => setTick(tick() + 1),
     });
+    adoptOwner(editor, owner);
     props.onReady?.({ editor });
   });
   onCleanup(() => editor?.destroy());
@@ -282,9 +290,42 @@ export function ContentEditor(props: {
       hint: f.name,
       run: () => place({ type: "templateSlot", attrs: { slot: f.name, label: null } }),
     }));
-    const all = [...textItems, ...blockItems, ...layoutItems, ...properties];
+    const all = [...textItems, ...blockItems, ...layoutItems, ...controlItems(), ...properties];
     const exclude = props.exclude ?? [];
     return exclude.length ? all.filter((i) => !exclude.includes(i.id)) : all;
+  }
+
+  /**
+   * The Controls section: a form control of each kind. Choosing one asks which field it binds,
+   * from the fields of the note's type (or the template's) that it fits.
+   */
+  function controlItems(): MenuItem[] {
+    const type = binding?.type();
+    if (!type) return [];
+    const fields = [TITLE_FIELD, ...type.fields];
+    return CONTROL_KINDS.map((kind) => {
+      const info = CONTROL_INFO[kind];
+      return {
+        id: `control-${kind}`,
+        label: info.label,
+        section: "Controls",
+        keywords: `control form ${kind} ${info.keywords}`,
+        run: () => {},
+        submenu: () => {
+          const fitting = fittingFields(kind, fields);
+          const section = `${info.label}: choose a field`;
+          if (!fitting.length) return [{ id: `control-${kind}-none`, label: `No field fits a ${info.label.toLowerCase()}`, section, run: () => {} }];
+          return fitting.map((f) => ({
+            id: `control-${kind}-${f.name}`,
+            label: f.label,
+            section,
+            keywords: f.name,
+            hint: fieldKindText(f),
+            run: () => place({ type: "vaultBlock", attrs: { block: fresh(newControl(kind, f.name)) } }),
+          }));
+        },
+      };
+    });
   }
 
   /**
