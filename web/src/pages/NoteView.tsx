@@ -37,7 +37,7 @@ import { activePane } from "../workspace/model";
 import { usePane } from "../workspace/pane";
 import { workspace } from "../workspace/store";
 import { ThisNote } from "../views/thisNote";
-import { TrashIcon } from "../components/Icon";
+import { TrashIcon, TypeIcon } from "../components/Icon";
 
 /** How long after the last change a note saves itself. */
 export const AUTOSAVE_MS = 1500;
@@ -586,7 +586,9 @@ export function NoteView(props: { newType?: string; id?: string }) {
           <ThisNote.Provider value={n().id || undefined}>
             <header class="note-header">
               <div class="note-heading">
-                <p class="note-kind">{props.newType ? `New ${type()?.label ?? n().type}` : (type()?.label ?? n().type)}</p>
+                <Show when={props.newType}>
+                  <p class="note-kind">New {type()?.label ?? n().type}</p>
+                </Show>
                 <div class="note-title-row">
                   <h1 class="note-title">
                     {/* A textarea, so a long title wraps in a narrow pane rather than scrolling out of sight. */}
@@ -618,6 +620,16 @@ export function NoteView(props: { newType?: string; id?: string }) {
                       }}
                     />
                   </h1>
+                  <a
+                    class="type-chip"
+                    href={`/types/${n().type}`}
+                    data-colour={type()?.colour ?? undefined}
+                    title={`All ${type()?.plural ?? type()?.label ?? n().type}`}
+                    aria-label={`Type: ${type()?.label ?? n().type}`}
+                  >
+                    <TypeIcon name={type()?.icon} size={14} />
+                    <span>{type()?.label ?? n().type}</span>
+                  </a>
                   <button
                     type="button"
                     class="icon-button properties-toggle"

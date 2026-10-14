@@ -419,3 +419,16 @@ test("a long title takes the full width on a phone, and the title buttons move u
   expect(input.width).toBeGreaterThan(row.width * 0.95);
   expect(props.y).toBeGreaterThanOrEqual(input.y + input.height - 1);
 });
+
+test("a chip beside the title names the note's type and opens the type's notes", async ({ page, admin }) => {
+  const res = await admin.post("/api/notes?type=task", { data: { note: { fields: { title: "Typed chip note" }, blocks: [] } } });
+  expect(res.status(), await res.text()).toBe(201);
+  const { id } = (await res.json()) as { id: string };
+  await logIn(page, `/notes/${id}`);
+  const chip = page.locator(".note-title-row").getByRole("link", { name: "Type: Task" });
+  await expect(chip).toHaveText("Task");
+  await expect(chip.locator("svg.icon")).toHaveCount(1);
+  await chip.click();
+  await expect(page).toHaveURL(/\/types\/task$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Tasks" })).toBeVisible();
+});

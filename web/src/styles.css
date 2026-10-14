@@ -3659,6 +3659,40 @@ h1.note-title {
   padding: 0.2rem 0.4rem;
 }
 
+/* The note's type beside its title, linking to the type's notes. */
+.type-chip {
+  --chip-colour: var(--accent);
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.3rem;
+  height: 1.7rem;
+  padding: 0 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--chip-colour) 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chip-colour) 14%, var(--panel));
+  color: color-mix(in srgb, var(--chip-colour) 55%, var(--ink));
+  font-size: 0.85rem;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.type-chip:hover,
+.type-chip:focus-visible {
+  background: color-mix(in srgb, var(--chip-colour) 24%, var(--panel));
+}
+
+.type-chip[data-colour="gray"] { --chip-colour: var(--palette-gray); }
+.type-chip[data-colour="brown"] { --chip-colour: var(--palette-brown); }
+.type-chip[data-colour="orange"] { --chip-colour: var(--palette-orange); }
+.type-chip[data-colour="yellow"] { --chip-colour: var(--palette-yellow); }
+.type-chip[data-colour="green"] { --chip-colour: var(--palette-green); }
+.type-chip[data-colour="blue"] { --chip-colour: var(--palette-blue); }
+.type-chip[data-colour="purple"] { --chip-colour: var(--palette-purple); }
+.type-chip[data-colour="pink"] { --chip-colour: var(--palette-pink); }
+.type-chip[data-colour="red"] { --chip-colour: var(--palette-red); }
+
 /* An asset field: its picker, then an Upload button. */
 .asset-input {
   display: flex;
