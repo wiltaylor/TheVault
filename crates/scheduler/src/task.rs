@@ -8,8 +8,10 @@ use chrono_tz::Tz;
 use croner::Cron;
 use schema::{Doc, Invalid, Issue, Value};
 
+use crate::describe::describe;
+
 /// The fields a task file may hold.
-const FIELDS: [&str; 12] = [
+const FIELDS: [&str; 14] = [
     "label",
     "description",
     "schedule",
@@ -18,6 +20,8 @@ const FIELDS: [&str; 12] = [
     "function",
     "allow_domains",
     "secrets",
+    "read_paths",
+    "write_paths",
     "retries",
     "retry_delay",
     "timeout",
@@ -39,8 +43,13 @@ pub struct TaskDef {
     pub timezone: Tz,
     pub script: String,
     pub function: String,
+    /// Hosts the `http` module may reach. `"*"` is any host.
     pub allow_domains: Vec<String>,
     pub secrets: Vec<String>,
+    /// Absolute directories the `fs` module may read.
+    pub read_paths: Vec<String>,
+    /// Absolute directories the `fs` module may read and write.
+    pub write_paths: Vec<String>,
     pub retries: u32,
     pub retry_delay: Duration,
     pub timeout: Duration,
@@ -59,6 +68,8 @@ impl PartialEq for TaskDef {
             && self.function == other.function
             && self.allow_domains == other.allow_domains
             && self.secrets == other.secrets
+            && self.read_paths == other.read_paths
+            && self.write_paths == other.write_paths
             && self.retries == other.retries
             && self.retry_delay == other.retry_delay
             && self.timeout == other.timeout
@@ -121,7 +132,10 @@ impl TaskDef {
         let allow_domains = r.strings("allow_domains");
         for d in &allow_domains {
             if !is_host(d) {
-                r.issue("allow_domains", format!("{d:?} is not a host name"));
+                r.issue(
+                    "allow_domains",
+                    format!("{d:?} is not a host name, or \"*\" for any host"),
+                );
             }
         }
         let secrets = r.strings("secrets");
@@ -130,6 +144,8 @@ impl TaskDef {
                 r.issue("secrets", format!("{s:?} is not a secret name"));
             }
         }
+        let read_paths = r.paths("read_paths");
+        let write_paths = r.paths("write_paths");
         let retries = match doc.field("retries") {
             None => 3,
             Some(Value::Int(n)) if (0..=MAX_RETRIES).contains(n) => *n as u32,
@@ -168,6 +184,8 @@ impl TaskDef {
                     function,
                     allow_domains,
                     secrets,
+                    read_paths,
+                    write_paths,
                     retries,
                     retry_delay,
                     timeout,
@@ -188,11 +206,72 @@ impl TaskDef {
             .map(|t| t.timestamp_millis())
     }
 
+    /// The first `count` times the schedule fires strictly after `after_ms`.
+    pub fn next_runs(&self, after_ms: i64, count: usize) -> Vec<i64> {
+        let mut out = Vec::with_capacity(count);
+        let mut at = after_ms;
+        while out.len() < count {
+            match self.next_after(at) {
+                Some(next) => {
+                    out.push(next);
+                    at = next;
+                }
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// The schedule in words, with its time zone: "Weekdays at 07:00 (Australia/Melbourne)".
+    pub fn schedule_text(&self) -> String {
+        format!("{} ({})", describe(&self.schedule), self.timezone.name())
+    }
+
     /// The delay before retry `retry`, counting from 1: `retry_delay`, doubling each time.
     pub fn backoff(&self, retry: u32) -> Duration {
         self.retry_delay
             .saturating_mul(2u32.saturating_pow(retry.saturating_sub(1)))
     }
+}
+
+/// A schedule checked as a task file's `schedule` and `timezone` are: its description in words and
+/// the first `count` times it fires after `after_ms`, read by the cron parser the scheduler uses.
+pub fn preview(
+    schedule: &str,
+    timezone: &str,
+    after_ms: i64,
+    count: usize,
+) -> Result<(String, Vec<i64>), Vec<Issue>> {
+    let mut issues = Vec::new();
+    let cron = parse_cron(schedule)
+        .map_err(|e| issues.push(Issue::new("schedule", e)))
+        .ok();
+    let tz = Tz::from_str(timezone)
+        .map_err(|_| {
+            issues.push(Issue::new(
+                "timezone",
+                format!("{timezone:?} is not an IANA time zone"),
+            ))
+        })
+        .ok();
+    let (Some(cron), Some(tz)) = (cron, tz) else {
+        return Err(issues);
+    };
+    let mut out = Vec::with_capacity(count);
+    let mut at = after_ms;
+    while out.len() < count {
+        let Some(from) = tz.timestamp_millis_opt(at).single() else {
+            break;
+        };
+        match cron.find_next_occurrence(&from, false) {
+            Ok(t) => {
+                at = t.timestamp_millis();
+                out.push(at);
+            }
+            Err(_) => break,
+        }
+    }
+    Ok((format!("{} ({})", describe(schedule), tz.name()), out))
 }
 
 fn parse_cron(s: &str) -> Result<Cron, String> {
@@ -206,13 +285,14 @@ fn parse_cron(s: &str) -> Result<Cron, String> {
         .map_err(|e| format!("{s:?} is not a valid cron expression: {e}"))
 }
 
-/// A DNS name or an IP address, without a scheme, port or path.
+/// A DNS name or an IP address, without a scheme, port or path, or `*` for any host.
 fn is_host(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 253
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
-        && !s.starts_with(['.', '-'])
+    s == "*"
+        || !s.is_empty()
+            && s.len() <= 253
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
+            && !s.starts_with(['.', '-'])
 }
 
 /// An ISO 8601 duration of weeks, days, hours, minutes and seconds. Years and months have no
@@ -306,6 +386,17 @@ impl Reader<'_> {
         }
     }
 
+    /// A list of absolute directory paths.
+    fn paths(&mut self, field: &str) -> Vec<String> {
+        let paths = self.strings(field);
+        for p in &paths {
+            if !std::path::Path::new(p).is_absolute() {
+                self.issue(field, format!("{p:?} is not an absolute path"));
+            }
+        }
+        paths
+    }
+
     fn duration(&mut self, field: &str, default: Duration) -> Duration {
         let Some(s) = self.string(field) else {
             return default;
@@ -397,6 +488,35 @@ colour = "red"
             ],
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn file_access_and_any_host() {
+        let src = "schedule = \"0 * * * *\"\nscript = \"s\"\nallow_domains = [\"*\"]\nread_paths = [\"/data/in\"]\nwrite_paths = [\"/data/out\"]\n";
+        let t = TaskDef::parse("t", src).unwrap();
+        assert_eq!(t.allow_domains, ["*"]);
+        assert_eq!(t.read_paths, ["/data/in"]);
+        assert_eq!(t.write_paths, ["/data/out"]);
+        let bad = "schedule = \"0 * * * *\"\nscript = \"s\"\nallow_domains = [\"*.example.com\"]\nwrite_paths = [\"out\"]\n";
+        let err = TaskDef::parse("t", bad).unwrap_err();
+        let at: Vec<&str> = err.issues.iter().map(|i| i.at.as_str()).collect();
+        assert_eq!(at, ["allow_domains", "write_paths"], "{err:?}");
+    }
+
+    #[test]
+    fn preview_matches_next_after() {
+        let t = TaskDef::parse("daily_digest", DIGEST).unwrap();
+        let monday = chrono::Utc
+            .with_ymd_and_hms(2026, 10, 12, 0, 0, 0)
+            .unwrap()
+            .timestamp_millis();
+        let (text, next) = preview(&t.schedule, "Australia/Melbourne", monday, 5).unwrap();
+        assert_eq!(text, "Weekdays at 07:00 (Australia/Melbourne)");
+        assert_eq!(next, t.next_runs(monday, 5));
+        assert_eq!(next[0], t.next_after(monday).unwrap());
+        assert_eq!(text, t.schedule_text());
+        let issues = preview("0 7 * *", "UTC", monday, 5).unwrap_err();
+        assert_eq!(issues[0].at, "schedule");
     }
 
     #[test]

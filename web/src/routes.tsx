@@ -4,12 +4,13 @@ import { Navigate, Route } from "@solidjs/router";
 import { Secrets, Tokens } from "./pages/Access";
 import { Assets } from "./pages/Assets";
 import { DailyNotes } from "./pages/DailyNotes";
+import { Inbox } from "./pages/Inbox";
 import { NoteHistoryRedirect } from "./history/redirect";
 import { NewNote, NoteView } from "./pages/NoteView";
 import { Search } from "./pages/Search";
 import { Settings } from "./pages/Settings";
-import { MovedToSettings, SettingsLayout } from "./pages/SettingsLayout";
-import { TaskEditor, TaskList } from "./pages/Tasks";
+import { MovedToScheduled, MovedToSettings, SettingsLayout } from "./pages/SettingsLayout";
+import { ScheduledEditor, ScheduledList } from "./pages/Scheduled";
 import { Trash } from "./pages/Trash";
 import { TaxonomyEditor, TaxonomyList } from "./pages/TaxonomyEditor";
 import { TemplateEditor } from "./pages/TemplateEditor";
@@ -42,9 +43,10 @@ export function paneRoutes() {
         <Route path="/types/new" component={TypeEditor} />
         <Route path="/types/:type/edit" component={TypeEditor} />
         <Route path="/types/:type/templates" component={TemplateEditor} />
-        <Route path="/tasks" component={TaskList} />
-        <Route path="/tasks/new" component={TaskEditor} />
-        <Route path="/tasks/:name" component={TaskEditor} />
+        <Route path="/scheduled" component={ScheduledList} />
+        <Route path="/scheduled/new" component={ScheduledEditor} />
+        <Route path="/scheduled/:name" component={ScheduledEditor} />
+        <Route path={["/tasks", "/tasks/new", "/tasks/:name"]} component={MovedToScheduled} />
         <Route path="/taxonomies" component={TaxonomyList} />
         <Route path="/taxonomies/new" component={TaxonomyEditor} />
         <Route path="/taxonomies/:name" component={TaxonomyEditor} />
@@ -53,6 +55,7 @@ export function paneRoutes() {
       </Route>
       <Route path="/trash" component={Trash} />
       <Route path="/search" component={Search} />
+      <Route path="/inbox" component={Inbox} />
       <Route path="*" component={() => <p class="error">There is no page here.</p>} />
     </>
   );

@@ -27,7 +27,7 @@ import {
   typeFromSchema,
   typeWcl,
 } from "../defs/typeModel";
-import { reloadDefinitions, taxonomies, types } from "../session";
+import { reloadDefinitions, taxonomies, typeDef, types } from "../session";
 import { IconPicker } from "../components/IconPicker";
 import { TemplateIcon, TrashIcon } from "../components/Icon";
 import { ScriptField } from "../components/ScriptField";
@@ -717,7 +717,7 @@ export function TypeEditor() {
                 >
                   <TemplateIcon />
                 </A>
-                <Show when={name() !== "dailynote"}>
+                <Show when={!typeDef(name())?.builtin}>
                   <button
                     type="button"
                     class="icon-button danger"

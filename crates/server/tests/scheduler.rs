@@ -540,3 +540,183 @@ fn the_test_clock_endpoint_exists_only_with_the_flag() {
     );
     assert_eq!(out["now"], json!(1_769_904_000_000_i64));
 }
+
+#[test]
+fn the_cron_preview_describes_a_schedule_and_lists_the_times_the_scheduler_uses() {
+    let api = Api::start();
+    let res = api
+        .get("/api/cron")
+        .query(&[
+            ("schedule", "0 7 * * 1-5"),
+            ("timezone", "Australia/Melbourne"),
+            ("count", "5"),
+        ])
+        .send()
+        .unwrap();
+    let preview = expect(res, 200);
+    assert_eq!(
+        preview["text"],
+        json!("Weekdays at 07:00 (Australia/Melbourne)")
+    );
+    let next = preview["next"].as_array().unwrap();
+    assert_eq!(next.len(), 5);
+    // Monday 2026-01-05 00:30 UTC is 11:30 in Melbourne (AEDT, +11), so the first run is
+    // Tuesday 07:00 there: Monday 20:00 UTC. Then each weekday, skipping the weekend.
+    assert_eq!(next[0], json!(1_767_643_200_000_i64));
+    assert_eq!(next[3], json!(1_767_643_200_000_i64 + 3 * 24 * 60 * MINUTE));
+    assert_eq!(next[4], json!(1_767_643_200_000_i64 + 6 * 24 * 60 * MINUTE));
+
+    // The task with the same schedule fires first at the same time.
+    api.script("digest", "fn run() { }\n");
+    let task = api.task(
+        "digest",
+        "schedule = \"0 7 * * 1-5\"\ntimezone = \"Australia/Melbourne\"\nscript = \"digest\"\n",
+    );
+    assert_eq!(task["next_run"], next[0]);
+    assert_eq!(
+        task["schedule_text"],
+        json!("Weekdays at 07:00 (Australia/Melbourne)")
+    );
+
+    // What the scheduler refuses, the preview refuses with the same issues.
+    let res = api
+        .get("/api/cron")
+        .query(&[("schedule", "61 * * * *"), ("timezone", "Mars/Olympus")])
+        .send()
+        .unwrap();
+    let err = expect(res, 400);
+    let at: Vec<&Value> = err["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| &i["at"])
+        .collect();
+    assert_eq!(at, [&json!("schedule"), &json!("timezone")], "{err}");
+}
+
+#[test]
+fn a_scheduled_run_fetches_from_any_host_writes_a_file_and_changes_notes() {
+    let api = Api::start();
+    let stand_in = StandIn::start();
+    stand_in.route("/weather", Reply::text(200, "Sunny"));
+    let out = tempfile::tempdir().unwrap();
+    let out_dir = std::fs::canonicalize(out.path()).unwrap();
+
+    let note = expect(
+        api.post("/api/notes")
+            .json(&json!({ "type": "item", "note": { "fields": { "title": "Counter", "estimate": 1 } } }))
+            .send()
+            .unwrap(),
+        201,
+    );
+    let id = note["id"].as_str().unwrap();
+    api.script(
+        "weather",
+        &r#"use vault
+use http
+use fs
+fn run() -> Result[string, string] {
+    let r = http::get("$URL", #{})?
+    fs::write_text(fs::join("$OUT", "weather.txt"), r.body)?
+    let made = vault::create("item", Value::Map(#{
+        "fields": Value::Map(#{ "title": Value::String("Weather: " + r.body) }),
+    }))?
+    vault::patch("$ID", Value::Map(#{ "estimate": Value::Int(2) }), "")?
+    vault::log("made " + made.get("id").unwrap().as_string().unwrap())
+    Ok("done")
+}
+"#
+        .replace("$URL", &stand_in.url("/weather"))
+        .replace("$OUT", &out_dir.to_string_lossy())
+        .replace("$ID", id),
+    );
+    let task = api.task(
+        "weather",
+        &format!(
+            "schedule = \"0 * * * *\"\nscript = \"weather\"\nallow_domains = [\"*\"]\nwrite_paths = [\"{}\"]\nretries = 0\n",
+            out_dir.display()
+        ),
+    );
+    assert_eq!(task["allow_domains"], json!(["*"]));
+    assert_eq!(task["write_paths"], json!([out_dir.to_string_lossy()]));
+    // The file is stored canonical, and putting it back changes nothing.
+    let wcl = task["wcl"].as_str().unwrap().to_owned();
+    let on_disk =
+        std::fs::read_to_string(api.server.vault_path().join("tasks/weather.wcl")).unwrap();
+    assert_eq!(on_disk, wcl);
+    assert_eq!(api.task("weather", &wcl)["wcl"], json!(wcl));
+
+    // 01:00: the schedule fires.
+    let ran = api.advance("PT30M");
+    assert_eq!(ran.len(), 1, "{ran:?}");
+    assert_eq!(ran[0]["outcome"], json!("succeeded"), "{}", ran[0]);
+    assert_eq!(
+        std::fs::read_to_string(out_dir.join("weather.txt")).unwrap(),
+        "Sunny"
+    );
+    let rows = expect(
+        api.get("/api/query")
+            .query(&[("q", "from item where title == \"Weather: Sunny\"")])
+            .send()
+            .unwrap(),
+        200,
+    );
+    let made = rows["rows"][0]["id"].as_str().unwrap().to_owned();
+    let counter = expect(api.get(&format!("/api/notes/{id}")).send().unwrap(), 200);
+    assert_eq!(counter["note"]["fields"]["estimate"], json!(2));
+    assert_eq!(counter["note"]["fields"]["title"], json!("Counter"));
+
+    // The changes are recorded as the task's.
+    let history = expect(
+        api.get(&format!("/api/notes/{made}/history"))
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(
+        history["versions"][0]["author"],
+        json!({ "kind": "task", "name": "weather" })
+    );
+
+    // The run history keeps the run with its log.
+    let runs = api.runs("weather");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["log"], json!(format!("made {made}\n")));
+    assert!(runs[0]["ended"].as_i64().unwrap() >= runs[0]["started"].as_i64().unwrap());
+}
+
+#[test]
+fn a_task_cannot_be_given_file_access_to_the_vault() {
+    let api = Api::start();
+    api.script("noop", "fn run() { }\n");
+    let vault = std::fs::canonicalize(api.server.vault_path()).unwrap();
+    for (field, path) in [
+        ("write_paths", vault.join("notes")),
+        ("read_paths", vault.clone()),
+    ] {
+        let res = api
+            .put("/api/tasks/noop")
+            .body(format!(
+                "schedule = \"0 * * * *\"\nscript = \"noop\"\n{field} = [\"{}\"]\n",
+                path.display()
+            ))
+            .send()
+            .unwrap();
+        let err = expect(res, 400);
+        assert_eq!(err["issues"][0]["at"], json!(field), "{err}");
+        assert!(
+            err["issues"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("inside the vault"),
+            "{err}"
+        );
+    }
+    let res = api
+        .put("/api/tasks/noop")
+        .body("schedule = \"0 * * * *\"\nscript = \"noop\"\nread_paths = [\"relative/dir\"]\n")
+        .send()
+        .unwrap();
+    let err = expect(res, 400);
+    assert_eq!(err["issues"][0]["at"], json!("read_paths"), "{err}");
+}

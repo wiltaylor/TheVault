@@ -50,7 +50,7 @@ fn invalid(message: impl Into<String>) -> Error {
 }
 
 /// Refuse a schema whose `dailynote` type has lost its `date` field, or changed it so it no longer
-/// holds one required date. A schema without the type passes; [`Writer::ensure_daily_type`] adds it.
+/// holds one required date. A schema without the type passes; [`Writer::ensure_built_in_types`] adds it.
 pub(crate) fn check_daily_type(schema: &Schema) -> Result<()> {
     let Some(ty) = schema.type_def(DAILY_TYPE) else {
         return Ok(());
@@ -107,14 +107,6 @@ pub fn day_title(y: i32, m: u32, d: u32) -> String {
 }
 
 impl Writer {
-    /// Add the built-in `dailynote` type when the vault does not have it.
-    pub fn ensure_daily_type(&self) -> Result<()> {
-        if self.lock().schema.type_def(DAILY_TYPE).is_some() {
-            return Ok(());
-        }
-        self.put_type(DAILY_TYPE, DEFAULT_DAILY_TYPE).map(|_| ())
-    }
-
     /// The daily note for `date` (`YYYY-MM-DD`), without creating one.
     pub fn find_daily_note(&self, date: &str) -> Result<Option<Note>> {
         if parse_day(date).is_none() {

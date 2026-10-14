@@ -111,6 +111,7 @@ fn author_json(a: &Author) -> Value {
         Author::Session(n) => ("session", n),
         Author::Token(n) => ("token", n),
         Author::Handler(n) => ("handler", n),
+        Author::Task(n) => ("task", n),
     };
     json!({ "kind": kind, "name": name })
 }

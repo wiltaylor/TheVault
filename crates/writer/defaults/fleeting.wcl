@@ -1,0 +1,40 @@
+label       = "Fleeting note"
+plural      = "Fleeting notes"
+description = "A quick capture of text or images, waiting in the inbox to be processed."
+icon        = "inbox"
+colour      = "yellow"
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+field image {
+  kind     = "asset"
+  label    = "Images"
+  multiple = true
+}
+
+field processed {
+  kind    = "bool"
+  label   = "Processed"
+  default = false
+}
+
+template default {
+  tab "Capture" {
+    image {
+      field = "image"
+    }
+    slot "body"
+  }
+}
+
+template card {
+  tab "Card" {
+    image {
+      field = "image"
+    }
+    slot "title"
+  }
+}

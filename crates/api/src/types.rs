@@ -59,6 +59,7 @@ fn type_json(t: &TypeDef) -> Value {
         "description": t.description,
         "icon": t.icon,
         "colour": t.colour,
+        "builtin": writer::is_built_in_type(&t.name),
         "fields": t.fields.iter().map(field_json).collect::<Vec<_>>(),
         "templates": t.templates.iter().map(template_json).collect::<Vec<_>>(),
     })

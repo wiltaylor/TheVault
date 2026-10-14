@@ -137,6 +137,26 @@ export function SearchIcon() {
   );
 }
 
+/** An inbox tray, for the Inbox link. */
+export function InboxIcon() {
+  return (
+    <Glyph>
+      <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+      <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+    </Glyph>
+  );
+}
+
+/** A plus in a circle, for the Capture button. */
+export function CaptureIcon() {
+  return (
+    <Glyph>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v8M8 12h8" />
+    </Glyph>
+  );
+}
+
 /** A page layout, for the link to a type's templates. */
 export function TemplateIcon() {
   return (

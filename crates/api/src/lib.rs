@@ -188,6 +188,7 @@ fn build() -> Built {
         .get("/api/tasks/{name}", tasks::read)
         .put("/api/tasks/{name}", tasks::put)
         .delete("/api/tasks/{name}", tasks::delete)
+        .get("/api/cron", tasks::cron)
         .get("/api/tasks/{name}/runs", tasks::runs)
         .get("/api/tasks/{name}/runs/{id}", tasks::run)
         .post("/api/tasks/{name}/run", tasks::trigger);

@@ -1,5 +1,7 @@
 import { Navigate, useLocation } from "@solidjs/router";
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { For, type JSX, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { CaptureModal } from "../capture/CaptureModal";
+import { captureOpen, inboxCount, isCaptureKey, openCapture, refreshInboxCount } from "../capture/store";
 import { HistoryPanel } from "../history/HistoryPanel";
 import { endPreviews } from "../history/preview";
 import { sessionState } from "../session";
@@ -23,14 +25,16 @@ import { isActiveLink } from "../workspace/links";
 import { activePane } from "../workspace/model";
 import { workspace } from "../workspace/store";
 import { Workspace } from "../workspace/Workspace";
-import { CalendarIcon, GearIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
+import { CalendarIcon, CaptureIcon, GearIcon, InboxIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
 import { PinnedTree } from "./PinnedTree";
+import { Toasts } from "./Toasts";
 import { TypesNav } from "./TypesNav";
 
 /** The sidebar's main links. Each opens in the active pane; a middle-click opens a background tab. */
-const NAV = [
+const NAV: { href: string; label: string; icon: () => JSX.Element; badge?: () => number | null }[] = [
   { href: "/daily", label: "Daily notes", icon: CalendarIcon },
   { href: "/search", label: "Search", icon: SearchIcon },
+  { href: "/inbox", label: "Inbox", icon: InboxIcon, badge: inboxCount },
 ];
 
 /** Below these widths the sidebars are drawers over the app rather than columns beside it. */
@@ -216,6 +220,21 @@ export function Shell() {
     };
     document.addEventListener("keydown", onKey);
     onCleanup(() => document.removeEventListener("keydown", onKey));
+    // Ctrl/Cmd+Shift+K opens the capture dialog from anywhere.
+    const onCaptureKey = (e: KeyboardEvent) => {
+      if (!isCaptureKey(e) || e.defaultPrevented) return;
+      e.preventDefault();
+      openCapture();
+    };
+    document.addEventListener("keydown", onCaptureKey);
+    onCleanup(() => document.removeEventListener("keydown", onCaptureKey));
+    // The inbox's count, now and whenever the window comes back, for captures made elsewhere.
+    void refreshInboxCount();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshInboxCount();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    onCleanup(() => document.removeEventListener("visibilitychange", onVisible));
   });
 
   return (
@@ -290,10 +309,31 @@ export function Shell() {
                     >
                       {item.icon()}
                       <span>{item.label}</span>
+                      <Show when={item.badge?.()}>
+                        {(n) => (
+                          <span class="nav-badge" title={`${n()} waiting`}>
+                            {n()}
+                          </span>
+                        )}
+                      </Show>
                     </a>
                   </li>
                 )}
               </For>
+              <li>
+                <button
+                  type="button"
+                  class="nav-link nav-button"
+                  title="Capture a fleeting note (Ctrl+Shift+K)"
+                  onClick={() => {
+                    setLeftDrawer(false);
+                    openCapture();
+                  }}
+                >
+                  <CaptureIcon />
+                  <span>Capture</span>
+                </button>
+              </li>
             </ul>
           </nav>
           <PinnedTree onNavigate={() => setLeftDrawer(false)} />
@@ -364,6 +404,22 @@ export function Shell() {
           </Show>
         </main>
         <RightSidebar shown={rightShown()} />
+        <button
+          type="button"
+          class="capture-fab"
+          hidden={captureOpen()}
+          aria-label="Quick capture"
+          title="Capture a fleeting note (Ctrl+Shift+K)"
+          onClick={openCapture}
+        >
+          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+        <Show when={captureOpen()}>
+          <CaptureModal />
+        </Show>
+        <Toasts />
       </div>
     </Show>
   );

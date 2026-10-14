@@ -69,6 +69,8 @@ Every note also has `title`, which is required. The server sets `created` and `u
 
 Write every field you care about. Do not rely on a field's `default` being filled in for you.
 
+Every vault has two built-in types, marked `"builtin": true` in `vault type list`: `dailynote`, one note per day, and `fleeting`, quick captures waiting in the inbox (see step 8). They can be customised but not deleted.
+
 ### Two-way references
 
 A `reference` field with `relation = "two_way"` names its `inverse`, a field on the target type that holds the other side. In the starter types, a task's `project` and a project's `tasks` are the two sides of one link. Set one side only. The server writes the other side in the same commit: give a task a `project` and the task's id is added to that project's `tasks`. A write reports the other notes it changed this way under `also`.
@@ -300,6 +302,36 @@ vault asset list
 `asset upload` prints the asset's `id`. Put that id in an `asset` field, or in an `image` or `asset` content block.
 
 `vault asset delete <id>` is refused with `asset_in_use` while notes name the asset, and the error lists them under `notes`. Add `--unlink` to take the asset out of those notes and delete it in one commit.
+
+## 8. Fleeting notes and the inbox
+
+A fleeting note is a quick capture of text or images, of the built-in `fleeting` type. The app's Inbox lists the fleeting notes not yet processed; processing one means marking it done, turning it into a note of another type, or deleting it. Fleeting notes are ordinary notes, so the usual commands work on them. The type's fields are `body` (content), `image` (assets, a list) and `processed` (bool, `false` by default).
+
+Capture one. Give it a short title, such as the first line of the text:
+
+```sh
+vault put --type fleeting <<'EOF'
+title     = "Ask the landlord about the leak"
+processed = false
+
+content body {
+  paragraph {
+    text = "Ask the landlord about the leak under the sink."
+  }
+}
+EOF
+```
+
+To capture an image, upload it with `vault asset upload` (step 7) and list the asset ids it prints in `image`, such as `image = ["01JB9A0C3D4E5F6G7H8J9K0M1N"]`.
+
+List the inbox, newest first, and read a capture's body with `get`:
+
+```sh
+vault query 'from fleeting where !processed sort created desc'
+vault get "$ID"
+```
+
+Mark one processed by sending the whole note back with `processed = true` and the version you read, as in step 3. To turn one into another kind of note, `put` the new note (copy the title and body), then `vault delete` the fleeting note. Only process captures when the user asks you to.
 
 ## Setting up a vault
 

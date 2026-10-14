@@ -191,7 +191,7 @@ impl Writer {
 
     /// Delete type `name`. A type that still has notes is not deleted.
     pub fn delete_type(&self, name: &str) -> Result<()> {
-        if name == crate::DAILY_TYPE {
+        if crate::is_built_in_type(name) {
             return Err(Error::BuiltInType(name.to_owned()));
         }
         let _w = self.write_lock();
@@ -280,7 +280,7 @@ impl Writer {
             })
             .collect();
         let mut schema = rebuild_schema(current, types)?;
-        crate::daily::check_daily_type(&schema)?;
+        crate::builtin::check_built_in_types(&schema)?;
         // A term a note holds that an open taxonomy lacks is added with the change, so a list of
         // strings can become a list of terms of an open taxonomy.
         let base = schema.clone();

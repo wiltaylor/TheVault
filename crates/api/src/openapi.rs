@@ -253,6 +253,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/tasks/{name}", "Delete a scheduled task"),
     (
         "GET",
+        "/api/cron",
+        "A cron schedule in words and the next times it fires",
+    ),
+    (
+        "GET",
         "/api/tasks/{name}/runs",
         "A task's runs, newest first, with their logs",
     ),

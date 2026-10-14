@@ -47,6 +47,12 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Restore from the trash | `History.tsx` (`Trash`) | `POST /api/trash/{id}/restore` | `vault trash restore <id>` | |
 | Open today's daily note, or another day's | `DailyNotes.tsx` | `POST /api/daily/{date}` (today), `GET /api/daily/{date}` (other days) | `vault daily open <date>`, `vault daily get <date>` | |
 | Create the daily note for another day | `DailyNotes.tsx` (Create note for this day) | `POST /api/daily/{date}` | `vault daily open <date>` | |
+| Capture a fleeting note (text, pasted, dropped or attached images) | `capture/CaptureModal.tsx` (+ button, sidebar Capture, Ctrl+Shift+K) | `POST /api/assets`, then `POST /api/notes?type=fleeting` | `vault asset upload <file>`, then `vault put --type fleeting` | |
+| Count the inbox in the sidebar | `capture/store.ts` | `POST /api/query` (`from fleeting where !processed`) | `vault query 'from fleeting where !processed'` | |
+| List the inbox | `Inbox.tsx` | `POST /api/query`, `GET /api/notes/{id}` per item | `vault query 'from fleeting where !processed sort created desc'` | |
+| Mark a fleeting note done, or undo it | `Inbox.tsx` (Done, toast Undo, Back to inbox) | `GET /api/notes/{id}`, `PUT /api/notes/{id}` | `vault get <id>`, `vault put <id> --base <version>` | |
+| Convert a fleeting note to another type | `Inbox.tsx` (Convert to…) | `POST /api/notes?type=<type>`, `DELETE /api/notes/{id}` | `vault put --type <type>`, `vault delete <id> --base <version>` | |
+| Delete a fleeting note, or undo it | `Inbox.tsx` (Delete, toast Undo) | `DELETE /api/notes/{id}`, `POST /api/trash/{id}/restore` | `vault delete <id> --base <version>`, `vault trash restore <id>` | |
 | Show the pinned tree in the sidebar | `Shell.tsx`, `pins.ts` | `GET /api/pins` | `vault pin list` | |
 | Pin a note to the sidebar | `NoteView.tsx` (Pin button) | `PUT /api/pins/{id}` | `vault pin add <id>` | |
 | Unpin a note | `NoteView.tsx` (Unpin button), `Shell.tsx` (Pinned ⋯ menu, Unpin) | `DELETE /api/pins/{id}` | `vault pin remove <id>` | |

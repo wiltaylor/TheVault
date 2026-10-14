@@ -13,11 +13,6 @@ async function putType(admin: APIRequestContext, name: string, wcl: string) {
   expect(res.status(), await res.text()).toBe(200);
 }
 
-async function putScript(admin: APIRequestContext, name: string, source: string) {
-  const res = await admin.put(`/api/scripts/${name}`, { data: { source } });
-  expect(res.status(), await res.text()).toBe(200);
-}
-
 async function createNote(admin: APIRequestContext, type: string, title: string) {
   const res = await admin.post(`/api/notes?type=${type}`, { data: { note: { fields: { title }, blocks: [] } } });
   expect(res.status(), await res.text()).toBe(201);
@@ -104,40 +99,37 @@ template default {
   expect((await readNote(admin, note.id)).body.note.fields.words).toBe(4);
 });
 
-test("a failing task shows as failed with its log, on its page and in the task list", async ({ page, admin }) => {
+test("a failing scheduled script shows as failed with its log, on its page and in the list", async ({ page, admin }) => {
   const t = token();
-  const script = `flaky_${t}`;
   const task = `flaky_${t}`;
-  await putScript(
-    admin,
-    script,
+
+  await logIn(page, "/settings/scheduled/new");
+  await page.getByLabel("Name", { exact: true }).fill(task);
+  await page.getByLabel("Cron schedule").fill("0 3 * * *");
+  await replaceCode(
+    page,
     `use vault\nfn run() -> Result[int, string] {\n    vault::log("checking upstream ${t}")\n    Err("the upstream is down")\n}\n`,
   );
-
-  await logIn(page, "/tasks/new");
-  await page.getByLabel("Name").fill(task);
-  await page.getByLabel("Schedule (cron)").fill("0 3 * * *");
-  await page.getByLabel("Script", { exact: true }).selectOption(script);
   await page.getByLabel("Retries").fill("0");
-  await page.getByRole("button", { name: "Create task" }).click();
-  await expect(page).toHaveURL(new RegExp(`/tasks/${task}$`));
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/settings/scheduled/${task}$`));
   const file = await (await admin.get(`/api/tasks/${task}`, { headers: { Accept: "text/plain" } })).text();
-  expect(file).toContain(`script   = "${script}"`);
+  expect(file).toContain(`script   = "${task}"`);
 
   await page.getByRole("button", { name: "Run now" }).click();
-  await expect(page.getByRole("status")).toHaveText(/The run failed: .*the upstream is down/);
+  await expect(page.locator(".save-bar").getByRole("status")).toHaveText(/The run failed: .*the upstream is down/);
   const runs = page.getByRole("list", { name: "Runs" });
   await expect(runs.locator("[data-outcome=failed]")).toHaveCount(1);
   await expect(runs.getByText(`checking upstream ${t}`)).toBeVisible();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("failing");
 
-  await page.goto("/tasks");
+  await page.goto("/settings/scheduled");
   const row = page.locator(`tr[data-task="${task}"]`);
   await expect(row).toContainText("failing");
   await expect(row.locator("[data-outcome=failed]")).toBeVisible();
 
   // The log is still there after a reload.
-  await page.goto(`/tasks/${task}`);
+  await page.goto(`/settings/scheduled/${task}`);
   await page.getByRole("list", { name: "Runs" }).locator("summary").first().click();
   await expect(page.getByRole("list", { name: "Runs" }).getByText(`checking upstream ${t}`)).toBeVisible();
 });

@@ -635,8 +635,89 @@ impl Vault for HandlerVault {
         }
     }
 
+    fn query_page(&self, text: &str, size: usize, cursor: Option<String>) -> Result<Json, String> {
+        Vault::query_page(&*bound(&self.binding)?, text, size, cursor)
+    }
+
+    fn search(&self, text: &str, limit: usize) -> Result<Vec<Json>, String> {
+        Vault::search(&*bound(&self.binding)?, text, limit)
+    }
+
+    fn restore(&self, id: &str, author: &Author) -> Result<Json, String> {
+        self.side_write("vault::restore", |w| Vault::restore(w, id, author))
+    }
+
+    fn links(&self, id: &str) -> Result<Vec<Json>, String> {
+        Vault::links(&*bound(&self.binding)?, id)
+    }
+
+    fn backlinks(&self, id: &str) -> Result<Vec<Json>, String> {
+        Vault::backlinks(&*bound(&self.binding)?, id)
+    }
+
+    fn assets(&self) -> Result<Vec<Json>, String> {
+        Vault::assets(&*bound(&self.binding)?)
+    }
+
+    fn asset(&self, id: &str) -> Result<(Json, Vec<u8>), String> {
+        Vault::asset(&*bound(&self.binding)?, id)
+    }
+
+    fn upload_asset(&self, filename: &str, bytes: Vec<u8>) -> Result<Json, String> {
+        self.side_write("vault::upload_asset", |w| {
+            Vault::upload_asset(w, filename, bytes)
+        })
+    }
+
+    fn types(&self) -> Result<Vec<Json>, String> {
+        Vault::types(&*bound(&self.binding)?)
+    }
+
+    fn taxonomies(&self) -> Result<Vec<Json>, String> {
+        Vault::taxonomies(&*bound(&self.binding)?)
+    }
+
+    fn add_term(&self, taxonomy: &str, path: &str, author: &Author) -> Result<Json, String> {
+        self.side_write("vault::add_term", |w| {
+            Vault::add_term(w, taxonomy, path, author)
+        })
+    }
+
+    fn daily(&self, date: &str, author: &Author) -> Result<Json, String> {
+        self.side_write("vault::daily", |w| Vault::daily(w, date, author))
+    }
+
     fn secret(&self, name: &str) -> Result<Option<String>, String> {
         Vault::secret(&*bound(&self.binding)?, name)
+    }
+
+    fn protected(&self) -> Vec<std::path::PathBuf> {
+        bound(&self.binding)
+            .map(|w| Vault::protected(&*w))
+            .unwrap_or_default()
+    }
+
+    fn now_ms(&self) -> i64 {
+        bound(&self.binding).map_or(0, |w| w.now_ms())
+    }
+}
+
+impl HandlerVault {
+    /// A write that is not a note change a `before_*` handler can stage: refused inside the write
+    /// path and in a migration, a write of its own continuing the chain otherwise.
+    fn side_write<T>(
+        &self,
+        what: &str,
+        f: impl FnOnce(&Writer) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let w = bound(&self.binding)?;
+        match route() {
+            Route::Stage => Err(format!(
+                "{what} cannot run in a before_* handler; use an after_* handler"
+            )),
+            Route::Refuse => Err(MIGRATION_WRITE.into()),
+            Route::Write(chain) => with_chain(chain, || f(&w)),
+        }
     }
 }
 

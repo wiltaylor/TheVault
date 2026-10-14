@@ -5,7 +5,7 @@ const SECTIONS: [string, string][] = [
   ["/settings", "General"],
   ["/settings/types", "Types"],
   ["/settings/taxonomies", "Taxonomies"],
-  ["/settings/tasks", "Tasks"],
+  ["/settings/scheduled", "Scheduled"],
   ["/settings/secrets", "Secrets"],
   ["/settings/tokens", "API tokens"],
 ];
@@ -32,4 +32,11 @@ export function SettingsLayout(props: ParentProps) {
 export function MovedToSettings() {
   const location = useLocation();
   return <Navigate href={`/settings${location.pathname}${location.search}`} />;
+}
+
+/** Send a link to the old tasks section, `/settings/tasks/x`, to `/settings/scheduled/x`. */
+export function MovedToScheduled() {
+  const location = useLocation();
+  const rest = location.pathname.replace(/^\/settings\/tasks/, "");
+  return <Navigate href={`/settings/scheduled${rest}${location.search}`} />;
 }

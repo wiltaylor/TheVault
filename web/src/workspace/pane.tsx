@@ -40,6 +40,7 @@ const NAMES: [RegExp, string][] = [
   [/^\/daily/, "Daily notes"],
   [/^\/settings/, "Settings"],
   [/^\/search/, "Search"],
+  [/^\/inbox/, "Inbox"],
   [/^\/assets/, "Assets"],
   [/^\/trash/, "Trash"],
 ];

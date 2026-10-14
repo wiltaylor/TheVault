@@ -13,28 +13,33 @@
 //!
 //! What a script can reach depends on the [`Kind`] of run:
 //!
-//! | Module | Functions | `before_*` handlers | `after_*` handlers, tasks, migrations |
-//! |--------|-----------|---------------------|---------------------------------------|
-//! | `vault` | `get(id)`, `query(text)`, `create(type, note)`, `update(id, note, version)`, `delete(id, version)`, `log(message)` | yes | yes |
-//! | `http` | `get(url, headers)`, `post(url, headers, body)`, `request(method, url, headers, body)` | no | `after_*` and tasks |
-//! | `secrets` | `get(name)` | no | `after_*` and tasks |
-//! | `value`, `json`, `math`, `regex` | wscript's standard modules | yes | yes |
+//! | Module | `before_*` handlers, migrations | `after_*` handlers | tasks |
+//! |--------|---------------------------------|--------------------|-------|
+//! | `vault` | yes | yes | yes |
+//! | `http` | no | yes | yes |
+//! | `secrets` | no | yes | yes |
+//! | `fs` | no | no | yes |
+//! | `value`, `json`, `math`, `regex` | yes | yes | yes |
 //!
-//! wscript's `fs`, `process` and `time` modules are never registered, so a script that uses them
-//! does not compile (notes/01). A module a kind of run lacks fails the same way: HTTP in a
-//! `before_*` handler is a compile error, not a runtime one (D30).
+//! `docs/scripts.md` lists every host function. wscript's own `fs`, `process` and `time` modules
+//! are never registered: this host's `fs` replaces wscript's, checked against the task's
+//! `read_paths` and `write_paths`. A module a kind of run lacks is a compile error, not a runtime
+//! one: HTTP in a `before_*` handler does not compile (D30).
 //!
 //! Notes cross the boundary as `Value`s in the JSON form of the notes API: `{ id, type, version,
 //! note }`, where `note` is `{ fields, blocks }` (D32). Changes go through `writer` and are
 //! recorded as made by the handler named in the [`Job`] (D13, D30). HTTP calls reach only the
-//! hosts on the job's allowlist and never follow redirects (D10). A script reads only the secrets
-//! its job names, and cannot list them (D10).
+//! hosts on the job's allowlist, or any host when it holds `"*"`, and never follow redirects
+//! (D10). A script reads only the secrets its job names, and cannot list them (D10). File access
+//! reaches only the job's directories, never the vault itself.
 
 mod convert;
+mod fs;
 mod handlers;
 mod http;
 mod run;
 mod vault;
+mod vault_module;
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -93,9 +98,21 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn side_effects(self) -> bool {
-        matches!(self, Kind::After | Kind::Task)
+    /// Which registration runs this kind.
+    fn registration(self) -> Registration {
+        match self {
+            Kind::Before | Kind::Migration => Registration::Contained,
+            Kind::After => Registration::SideEffects,
+            Kind::Task => Registration::Task,
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Registration {
+    Contained,
+    SideEffects,
+    Task,
 }
 
 /// Bounds on one run (notes/01).
@@ -111,6 +128,8 @@ pub struct Limits {
     pub max_http_response: usize,
     /// Rows one `vault::query` may return.
     pub max_query_rows: usize,
+    /// Bytes of one file or asset a script reads.
+    pub max_file: usize,
     /// Bytes of log a run keeps.
     pub max_log: usize,
 }
@@ -123,6 +142,7 @@ impl Default for Limits {
             timeout: Duration::from_secs(30),
             max_http_response: 1 << 20,
             max_query_rows: 10_000,
+            max_file: 16 << 20,
             max_log: 64 << 10,
         }
     }
@@ -145,6 +165,14 @@ pub struct Job {
     pub allow_domains: Vec<String>,
     /// Secrets the `secrets` module may read. Ignored for kinds without secrets.
     pub secrets: Vec<String>,
+    /// Directories the `fs` module may read. Ignored for kinds without `fs`.
+    pub read_paths: Vec<String>,
+    /// Directories the `fs` module may read and write. Ignored for kinds without `fs`.
+    pub write_paths: Vec<String>,
+    /// Who the run's changes are recorded as made by. `None` is handler `<name>`.
+    pub author: Option<Author>,
+    /// The IANA time zone `vault::today` reads the date in. `None` is UTC.
+    pub timezone: Option<String>,
     /// A wall-clock limit replacing [`Limits::timeout`], such as a task's `timeout`.
     pub timeout: Option<Duration>,
     /// What the caller needs to know about the run from inside a host call, through
@@ -163,6 +191,10 @@ impl Job {
             kind,
             allow_domains: Vec::new(),
             secrets: Vec::new(),
+            read_paths: Vec::new(),
+            write_paths: Vec::new(),
+            author: None,
+            timezone: None,
             timeout: None,
             context: Json::Null,
         }
@@ -207,18 +239,19 @@ struct Request {
     reply: Sender<Outcome>,
 }
 
-/// The two registrations: without and with HTTP and secrets.
+/// The three registrations: without HTTP and secrets, with them, and with them and files.
 struct Contexts {
     contained: Context,
     side_effects: Context,
+    task: Context,
 }
 
 impl Contexts {
     fn for_kind(&self, kind: Kind) -> &Context {
-        if kind.side_effects() {
-            &self.side_effects
-        } else {
-            &self.contained
+        match kind.registration() {
+            Registration::Contained => &self.contained,
+            Registration::SideEffects => &self.side_effects,
+            Registration::Task => &self.task,
         }
     }
 }
@@ -233,13 +266,17 @@ impl Host {
                 .module(wscript::std_modules::json())
                 .module(wscript::std_modules::math())
                 .module(wscript::std_modules::regex())
-                .module(vault_module(vault.clone()))
+                .module(vault_module::vault_module(vault.clone()))
+        };
+        let side_effects = || {
+            common()
+                .module(http::module(http.clone()))
+                .module(secrets_module(vault.clone()))
         };
         let contexts = Arc::new(Contexts {
             contained: common(),
-            side_effects: common()
-                .module(http::module(http))
-                .module(secrets_module(vault.clone())),
+            side_effects: side_effects(),
+            task: side_effects().module(fs::module(vault.clone())),
         });
         let (tx, rx) = mpsc::channel::<Request>();
         let rx = Arc::new(Mutex::new(rx));
@@ -323,15 +360,14 @@ fn failed(e: Error) -> Outcome {
 }
 
 fn worker(rx: &Mutex<Receiver<Request>>, contexts: &Contexts) {
-    let mut engines: HashMap<bool, Engine> = HashMap::new();
+    let mut engines: HashMap<Registration, Engine> = HashMap::new();
     loop {
         let next = rx.lock().unwrap_or_else(|e| e.into_inner()).recv();
         let Ok(Request { job, limits, reply }) = next else {
             return;
         };
-        let side = job.kind.side_effects();
         let engine = engines
-            .entry(side)
+            .entry(job.kind.registration())
             .or_insert_with(|| Engine::new(contexts.for_kind(job.kind).clone()));
         let outcome = engine.execute(job, limits);
         let _ = reply.send(outcome);
@@ -407,7 +443,10 @@ impl Engine {
         self.vm.set_fuel(Some(limits.instructions));
         self.vm.set_call_depth_limit(limits.call_depth);
         run::start(run::Run {
-            author: Author::Handler(job.name.clone()),
+            author: job
+                .author
+                .clone()
+                .unwrap_or_else(|| Author::Handler(job.name.clone())),
             deadline: Instant::now() + limits.timeout,
             job,
             limits: limits.clone(),
@@ -508,65 +547,6 @@ fn note_body(v: DynValue) -> Json {
         }
         other => other,
     }
-}
-
-fn vault_module(v: Arc<dyn Vault>) -> Module {
-    let mut m = Module::new("vault");
-    m.doc("Read, query and change notes. Changes go through the write path (D30)");
-    let vv = v.clone();
-    m.fn_named("get", ["id"], move |id: String| -> Reply<DynValue> {
-        Fault(host_call(|_, _| vv.get(&id).map(convert::to_dyn)))
-    });
-    let vv = v.clone();
-    m.fn_named(
-        "query",
-        ["text"],
-        move |text: String| -> Reply<Vec<DynValue>> {
-            Fault(host_call(|_, l| {
-                vv.query(&text, l.max_query_rows)
-                    .map(|rows| rows.into_iter().map(convert::to_dyn).collect())
-            }))
-        },
-    );
-    let vv = v.clone();
-    m.fn_named(
-        "create",
-        ["type_name", "note"],
-        move |type_name: String, note: DynValue| -> Reply<DynValue> {
-            Fault(host_call(|a, _| {
-                vv.create(&type_name, note_body(note), a)
-                    .map(convert::to_dyn)
-            }))
-        },
-    );
-    let vv = v.clone();
-    m.fn_named(
-        "update",
-        ["id", "note", "version"],
-        move |id: String, note: DynValue, version: String| -> Reply<DynValue> {
-            Fault(host_call(|a, _| {
-                vv.update(&id, note_body(note), &version, a)
-                    .map(convert::to_dyn)
-            }))
-        },
-    );
-    m.fn_named(
-        "delete",
-        ["id", "version"],
-        move |id: String, version: String| -> Reply<DynValue> {
-            Fault(host_call(|a, _| {
-                v.delete(&id, &version, a).map(convert::to_dyn)
-            }))
-        },
-    );
-    m.fn_named("log", ["message"], |message: String| -> Fault<()> {
-        Fault(run::with(|r| {
-            r.remaining()?;
-            r.log(&message, true);
-            Ok(())
-        }))
-    });
-    m
 }
 
 fn secrets_module(v: Arc<dyn Vault>) -> Module {

@@ -32,8 +32,10 @@
 
 mod assets;
 mod batch;
+mod builtin;
 mod daily;
 mod defs;
+mod fleeting;
 mod note;
 mod refs;
 mod terms;
@@ -51,8 +53,10 @@ use store::{Change, CommitStep, Vault};
 
 pub use assets::Asset;
 pub use batch::{Item, Op, Outcome, Report};
+pub use builtin::{BUILT_IN_TYPES, is_built_in_type};
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
 pub use defs::ScriptProblem;
+pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
 pub use note::{Input, block_to_json, doc_to_json, value_to_json};
 pub use refs::Referrer;
 pub use schema::NoteEdit;
@@ -125,7 +129,7 @@ pub enum Error {
     /// (D6).
     #[error("type {0:?} has notes, so changing it needs a planned schema change")]
     TypeInUse(String),
-    /// The built-in daily note type can be changed but not deleted.
+    /// A built-in type (`dailynote`, `fleeting`) can be changed but not deleted.
     #[error("{0:?} is built in: it can be customised but not deleted")]
     BuiltInType(String),
     /// A request that is malformed in a way the other variants do not cover.
@@ -431,6 +435,11 @@ impl Writer {
         self
     }
 
+    /// The time on the writer's clock, in milliseconds since the Unix epoch.
+    pub fn now_ms(&self) -> i64 {
+        self.clock.now_ms()
+    }
+
     /// Run `hooks` at steps 5, 6 and 10.
     pub fn with_hooks(mut self, hooks: Box<dyn Hooks>) -> Writer {
         self.hooks = hooks;
@@ -518,7 +527,7 @@ impl Writer {
         let taxonomies = self.definitions("taxonomies")?;
         let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
             .map_err(Error::InvalidType)?;
-        daily::check_daily_type(&schema)?;
+        builtin::check_built_in_types(&schema)?;
         let generation = self.vault.commit(vec![Change::write(path, text.clone())])?;
         inner.index.set_schema(&schema)?;
         inner.index.advance(generation)?;
@@ -927,7 +936,7 @@ impl Writer {
             .as_ref()
             .and_then(created_of)
             .unwrap_or_else(|| now.clone());
-        if !matches!(author, Author::Handler(_)) {
+        if !matches!(author, Author::Handler(_) | Author::Task(_)) {
             let issues = computed_writes(ty, &doc, old_doc.as_ref());
             if !issues.is_empty() {
                 return Err(Error::Invalid(Invalid { file: path, issues }));

@@ -1955,8 +1955,13 @@ dependencies = [
 name = "script"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
  "query",
  "reqwest",
+ "rusqlite",
+ "rustix",
  "schema",
  "serde_json",
  "state",

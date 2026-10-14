@@ -30,6 +30,7 @@ import { MentionChip } from "./MentionChip";
 import { MentionPicker } from "./MentionPicker";
 import { PALETTE, placeholderMarkup } from "./markup";
 import { PlaceholderChip, placeholderActions } from "./PlaceholderChip";
+import { ImageUpload, type ImageUploadOptions } from "./pasteImages";
 import { AT_TRIGGER } from "./trigger";
 import { solidNodeView } from "./solidNodeView";
 
@@ -353,6 +354,8 @@ export interface EditorOptions {
     fieldMenu: Omit<SuggestOptions, "key" | "topLevelOnly" | "match">;
   };
   handle?: BlockHandleOptions;
+  /** Pasted and dropped images: how to upload one, and what to do when that fails. */
+  images?: Omit<ImageUploadOptions, "upload"> & { upload: (file: File) => Promise<string> };
 }
 
 export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
@@ -399,5 +402,6 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
     MentionPickerNode,
     FollowLinks,
     VaultBlock,
+    ImageUpload.configure(options.images ?? {}),
   ];
 }

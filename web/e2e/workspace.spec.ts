@@ -233,13 +233,13 @@ test("the address follows the active pane, browser back works in it, and reload 
   const [p1, p2] = [panes(page).nth(0), panes(page).nth(1)];
   await p2.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Types" }).click();
   await expect(page).toHaveURL(/\/settings\/types$/);
-  await p2.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Tasks" }).click();
-  await expect(page).toHaveURL(/\/settings\/tasks$/);
+  await p2.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Scheduled" }).click();
+  await expect(page).toHaveURL(/\/settings\/scheduled$/);
 
   await p1.locator(".pane-header").click();
   await expect(page).toHaveURL(/\/settings$/);
   await p2.locator(".pane-header").click();
-  await expect(page).toHaveURL(/\/settings\/tasks$/);
+  await expect(page).toHaveURL(/\/settings\/scheduled$/);
 
   // The browser's back button steps the active pane back; the other pane stays.
   await page.goBack();
@@ -266,7 +266,7 @@ test("the address follows the active pane, browser back works in it, and reload 
   await expect(panes(page).nth(1)).toHaveAttribute("data-active", "true");
   // Its history came back too.
   await panes(page).nth(1).getByRole("button", { name: "Forward" }).click();
-  await expect(panes(page).nth(1).getByRole("heading", { name: "Tasks" })).toBeVisible();
+  await expect(panes(page).nth(1).getByRole("heading", { name: "Scheduled" })).toBeVisible();
   await tabs(page).nth(1).click();
   await expect(panes(page).nth(0).getByRole("navigation", { name: "Day" })).toBeVisible();
 

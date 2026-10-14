@@ -3,7 +3,8 @@
 //! A [`Scheduler`] reads the task files in `tasks/` through `writer` and keeps, for each task,
 //! when it next fires and whether a retry is waiting. [`Scheduler::tick`] runs everything due at
 //! the clock's current time and returns when those runs end. A task runs its script as a
-//! [`script::Kind::Task`] job, with the domain allowlist, secrets and timeout its file names.
+//! [`script::Kind::Task`] job, with the domain allowlist, secrets, directories and timeout its
+//! file names. Its changes are recorded as made by `task <name>`.
 //!
 //! - A schedule fires once however far the clock moved past it: missed firings are not replayed,
 //!   and the next firing is the first one after the current time.
@@ -18,6 +19,7 @@
 //! [`Scheduler::start`] to tick in the background; tests use a [`TestClock`] they move by hand and
 //! call [`Scheduler::tick`] after each move (S7).
 
+mod describe;
 mod task;
 
 use std::collections::BTreeMap;
@@ -30,7 +32,8 @@ use script::{Host, Job, Kind};
 use state::{Clock, RunOutcome, TaskRun};
 use writer::Writer;
 
-pub use task::{MAX_RETRIES, TaskDef, parse_duration};
+pub use describe::describe;
+pub use task::{MAX_RETRIES, TaskDef, parse_duration, preview};
 
 /// Errors from the scheduler.
 #[derive(Debug, thiserror::Error)]
@@ -197,9 +200,11 @@ impl Scheduler {
 
     /// Check `source` as task `name`, write it to `tasks/<name>.wcl` and reload.
     pub fn put_task(&self, name: &str, source: &str) -> Result<String> {
-        let text = self
-            .writer
-            .put_task(name, source, |text| TaskDef::parse(name, text).map(|_| ()))?;
+        let vault = self.writer.vault().root().to_path_buf();
+        let text = self.writer.put_task(name, source, |text| {
+            let def = TaskDef::parse(name, text)?;
+            check_paths(&def, &vault)
+        })?;
         self.reload()?;
         Ok(text)
     }
@@ -392,6 +397,10 @@ impl Scheduler {
                 let mut job = Job::new(Kind::Task, &def.script, &source, &def.function);
                 job.allow_domains = def.allow_domains.clone();
                 job.secrets = def.secrets.clone();
+                job.read_paths = def.read_paths.clone();
+                job.write_paths = def.write_paths.clone();
+                job.author = Some(state::Author::Task(def.name.clone()));
+                job.timezone = Some(def.timezone.name().to_owned());
                 job.timeout = Some(def.timeout);
                 let out = self.host.run(job);
                 let log = out.log.trim_end_matches('\n');
@@ -409,6 +418,39 @@ impl Scheduler {
         state
             .run(id)?
             .ok_or(Error::State(state::Error::UnknownRun(id)))
+    }
+}
+
+/// Refuse a task whose file access reaches into the vault: scripts change notes through `vault`,
+/// never by editing vault files. The `fs` module checks again at every call, after resolving
+/// symbolic links, since a directory can change after the task is saved.
+fn check_paths(def: &TaskDef, vault: &std::path::Path) -> std::result::Result<(), schema::Invalid> {
+    let vault = std::fs::canonicalize(vault).unwrap_or_else(|_| vault.to_path_buf());
+    let mut issues = Vec::new();
+    for (field, paths) in [
+        ("read_paths", &def.read_paths),
+        ("write_paths", &def.write_paths),
+    ] {
+        for p in paths {
+            let path = std::path::Path::new(p);
+            let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            if real.starts_with(&vault) {
+                issues.push(schema::Issue::new(
+                    field,
+                    format!(
+                        "{p:?} is inside the vault; scripts change notes through the vault module"
+                    ),
+                ));
+            }
+        }
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(schema::Invalid {
+            file: format!("tasks/{}.wcl", def.name),
+            issues,
+        })
     }
 }
 

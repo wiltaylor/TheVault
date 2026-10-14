@@ -77,6 +77,8 @@ function withTrailingParagraph(doc: JSONContent): JSONContent {
   return content.at(-1)?.type === "paragraph" ? doc : { ...doc, content: [...content, { type: "paragraph" }] };
 }
 
+const uploadFailed = (file: File, e: unknown) => `Could not upload ${file.name}: ${e instanceof Error ? e.message : String(e)}`;
+
 /** A template being edited: its property blocks and the fields `{{` offers. */
 export interface TemplateEditing {
   slots: SlotContext;
@@ -180,6 +182,12 @@ export function ContentEditor(props: {
           fieldMenu: { onChange: track("field", setFieldMenu), onKey: keys("field") },
         },
         handle: { onDrag: (b) => props.onDrag?.(b), onAdd: addAfter },
+        // A pasted or dropped image is uploaded and goes in where the caret or the drop was.
+        images: {
+          upload: async (file) => (await upload(file)).id,
+          onStart: () => setUploadError(null),
+          onError: (file, e) => setUploadError(uploadFailed(file, e)),
+        },
       }),
       content: withTrailingParagraph(props.doc ?? blocksToDoc(props.blocks)),
       editorProps: {
@@ -611,7 +619,7 @@ export function ContentEditor(props: {
       const asset = await upload(file);
       insertBlock(make(asset.id));
     } catch (e) {
-      setUploadError(`Could not upload ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+      setUploadError(uploadFailed(file, e));
     }
   }
 

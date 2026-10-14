@@ -4,6 +4,8 @@
 //!   checked against `docs/vault-format.md` "Task files", and the script it names must exist.
 //! - `POST /api/tasks/{name}/run` runs the task now, paused or not, and answers with the run once
 //!   it ends. A failure schedules retries as a scheduled run's does.
+//! - `GET /api/cron?schedule=..&timezone=..&count=..` describes a cron schedule in words and lists
+//!   the next times it fires, so the editor previews exactly what the scheduler will do.
 //! - `PUT /api/secrets/{name}` takes `{ "value": "..." }`, or the value as a text body. No response
 //!   ever carries a secret's value: scripts read secrets, clients only write them.
 //! - `/api/test/clock` exists only when the server runs with `--test-clock` (S7). `GET` reads the
@@ -103,11 +105,14 @@ fn task_json(s: &TaskStatus) -> Value {
                 "label": d.label,
                 "description": d.description,
                 "schedule": d.schedule,
+                "schedule_text": d.schedule_text(),
                 "timezone": d.timezone.name(),
                 "script": d.script,
                 "function": d.function,
                 "allow_domains": d.allow_domains,
                 "secrets": d.secrets,
+                "read_paths": d.read_paths,
+                "write_paths": d.write_paths,
                 "retries": d.retries,
                 "retry_delay_ms": d.retry_delay.as_millis() as u64,
                 "timeout_ms": d.timeout.as_millis() as u64,
@@ -218,6 +223,37 @@ pub async fn run(
 pub async fn trigger(State(s): Tasks, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
     let run = on_scheduler(s, move |s| s.trigger(&name)).await?;
     Ok(Json(run_json(&run)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CronQuery {
+    schedule: String,
+    timezone: Option<String>,
+    count: Option<usize>,
+}
+
+/// The most firings one preview lists.
+const MAX_PREVIEW: usize = 50;
+
+/// `GET /api/cron?schedule=&timezone=&count=`: a schedule in words and the next times it fires
+/// after now, read by the scheduler's own cron parser. A schedule or time zone the scheduler
+/// would refuse is a 400 with the same issues a task file with it gets.
+pub async fn cron(State(s): Tasks, Query(q): Query<CronQuery>) -> Result<Json<Value>, ApiError> {
+    let timezone = q.timezone.unwrap_or_else(|| "UTC".to_owned());
+    let count = q.count.unwrap_or(5).clamp(1, MAX_PREVIEW);
+    match scheduler::preview(&q.schedule, &timezone, s.now_ms(), count) {
+        Ok((text, next)) => Ok(Json(json!({
+            "schedule": q.schedule,
+            "timezone": timezone,
+            "text": text,
+            "next": next,
+        }))),
+        Err(issues) => Err(ApiError::from(writer::Error::Invalid(schema::Invalid {
+            file: "schedule".to_owned(),
+            issues,
+        }))),
+    }
 }
 
 // ---- secrets --------------------------------------------------------------------------------

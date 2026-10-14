@@ -167,6 +167,64 @@ template default {
 }
 ```
 
+### Built-in types
+
+Every vault has two types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it. `vault init --starter` writes both too. The files it writes are `crates/writer/defaults/dailynote.wcl` and `crates/writer/defaults/fleeting.wcl`. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks both with `"builtin": true`.
+
+| Type | Label | For | Must keep |
+|------|-------|-----|-----------|
+| `dailynote` | Daily note | One note for each day. The app opens today's note and finds a day's note by its date | `date`, one required `date` field |
+| `fleeting` | Fleeting note | A quick capture of text or images, made from the app's capture dialog. Unprocessed ones wait in the Inbox (`from fleeting where !processed`) until they are marked done, converted into a note of another type, or deleted | `processed`, one `bool` field that handlers do not compute |
+
+A change that removes a "must keep" field, or changes its kind, is refused with `invalid_type`.
+
+The `fleeting` type as a new vault gets it. Its page shows the images and the body; `processed` is set from the Properties panel or the Inbox:
+
+```wcl
+label       = "Fleeting note"
+plural      = "Fleeting notes"
+description = "A quick capture of text or images, waiting in the inbox to be processed."
+icon        = "inbox"
+colour      = "yellow"
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+field image {
+  kind     = "asset"
+  label    = "Images"
+  multiple = true
+}
+
+field processed {
+  kind    = "bool"
+  label   = "Processed"
+  default = false
+}
+
+template default {
+  tab "Capture" {
+    image {
+      field = "image"
+    }
+    slot "body"
+  }
+}
+
+template card {
+  tab "Card" {
+    image {
+      field = "image"
+    }
+    slot "title"
+  }
+}
+```
+
+The capture dialog titles a fleeting note with the first line of its text, cut at a word to at most 80 characters, or `Image <local date and time>` when it holds only images. It writes the text into the type's `body` field (else its first `content` field) and the images into `image` (else its first `asset` field). Converting a fleeting note into another type copies the title, puts the body in the target's first `content` field and the images in its first `asset` field (only the first image when that field is not `multiple`), and moves the fleeting note to the trash.
+
 ### Field definitions
 
 Every `field` block takes these items. The next section lists the extra items each kind takes.
@@ -729,7 +787,7 @@ A `handler` block registers a wscript function to run on an event for notes of t
 |------|------|---------|---------|
 | `script` | string | required | The script name, the stem of `scripts/<script>.ws` |
 | `function` | string | the event name | The function in that script to call |
-| `allow_domains` | list of strings | `[]` | Host names that HTTP host functions may reach. `after_*` handlers only |
+| `allow_domains` | list of strings | `[]` | Host names that HTTP host functions may reach. `["*"]` allows any http or https host. `after_*` handlers only |
 | `secrets` | list of strings | `[]` | Secret names the handler may read. `after_*` handlers only |
 
 Several handlers may name the same event. They run in file order, and the first rejection stops the chain.
@@ -1482,8 +1540,10 @@ allow_new   = true
 | `timezone` | string | `"UTC"` | IANA time zone the schedule is read in |
 | `script` | string | required | The script name, the stem of `scripts/<script>.ws` |
 | `function` | string | `"run"` | The function in that script to call |
-| `allow_domains` | list of strings | `[]` | Host names that HTTP host functions may reach |
+| `allow_domains` | list of strings | `[]` | Host names that HTTP host functions may reach. `["*"]` allows any http or https host, including hosts on the local network |
 | `secrets` | list of strings | `[]` | Secret names the task may read |
+| `read_paths` | list of strings | `[]` | Absolute directories the `fs` host functions may read |
+| `write_paths` | list of strings | `[]` | Absolute directories the `fs` host functions may read and write |
 | `retries` | int | `3` | Retries after a failed run. `0` disables retries |
 | `retry_delay` | duration | `"PT1M"` | Delay before the first retry. Each later retry doubles it |
 | `timeout` | duration | `"PT30S"` | Wall-clock limit for one run |
@@ -1498,6 +1558,19 @@ allow_domains = ["hooks.example.com"]
 secrets       = ["digest_webhook"]
 retries       = 3
 retry_delay   = "PT1M"
+```
+
+A task's script runs with the `vault`, `http`, `secrets` and `fs` modules. `docs/scripts.md` lists every host function. The script's note changes go through the write path like an API write, are recorded in history as made by `task <task>`, and run the notes' handlers.
+
+`read_paths` and `write_paths` hold absolute paths. A path inside the vault folder is refused when the task is saved, and the `fs` functions refuse the vault at every call, after resolving symbolic links: scripts change notes through `vault`, never by editing vault files.
+
+```wcl
+label         = "Weather log"
+schedule      = "0 * * * *"
+script        = "weather"
+allow_domains = ["*"]
+read_paths    = ["/srv/inbox"]
+write_paths   = ["/srv/exports"]
 ```
 
 ## Validating vault files

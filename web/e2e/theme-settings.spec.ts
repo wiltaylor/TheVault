@@ -31,10 +31,12 @@ test.describe("with a dark system preference", () => {
   });
 });
 
-test("the sidebar holds only Daily notes and Search, with trash and settings beside the theme switch", async ({ page }) => {
+test("the sidebar holds Daily notes, Search, Inbox and Capture, with trash and settings beside the theme switch", async ({ page }) => {
   await logIn(page);
   const main = page.getByRole("navigation", { name: "Main" });
-  await expect(main.getByRole("link")).toHaveText(["Daily notes", "Search"]);
+  // The Inbox link counts the fleeting notes waiting in it, when there are any.
+  await expect(main.getByRole("link")).toHaveText(["Daily notes", "Search", /^Inbox\d*$/]);
+  await expect(main.getByRole("button")).toHaveText(["Capture"]);
 
   const trash = page.locator(".sidebar-footer").getByRole("link", { name: "Trash" });
   await trash.click();
@@ -43,10 +45,10 @@ test("the sidebar holds only Daily notes and Search, with trash and settings bes
   await expect(trash).toHaveClass(/active/);
 });
 
-test("types, taxonomies, tasks, secrets and API tokens live under settings, and scripts are not a section", async ({ page }) => {
+test("types, taxonomies, scheduled scripts, secrets and API tokens live under settings, and scripts are not a section", async ({ page }) => {
   await logIn(page);
   const main = page.getByRole("navigation", { name: "Main" });
-  for (const moved of ["Types", "Taxonomies", "Tasks", "Secrets", "API tokens"]) {
+  for (const moved of ["Types", "Taxonomies", "Tasks", "Scheduled", "Secrets", "API tokens"]) {
     await expect(main.getByRole("link", { name: moved, exact: true })).toHaveCount(0);
   }
 
@@ -58,7 +60,7 @@ test("types, taxonomies, tasks, secrets and API tokens live under settings, and 
   for (const [tab, heading, path] of [
     ["Types", "Types", "/settings/types"],
     ["Taxonomies", "Taxonomies", "/settings/taxonomies"],
-    ["Tasks", "Tasks", "/settings/tasks"],
+    ["Scheduled", "Scheduled", "/settings/scheduled"],
     ["Secrets", "Secrets", "/settings/secrets"],
     ["API tokens", "API tokens", "/settings/tokens"],
   ] as const) {
@@ -66,7 +68,7 @@ test("types, taxonomies, tasks, secrets and API tokens live under settings, and 
     await expect(page).toHaveURL(new RegExp(`${path}$`));
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
-  await expect(tabs.getByRole("link")).toHaveText(["General", "Types", "Taxonomies", "Tasks", "Secrets", "API tokens"]);
+  await expect(tabs.getByRole("link")).toHaveText(["General", "Types", "Taxonomies", "Scheduled", "Secrets", "API tokens"]);
 });
 
 test("old admin addresses go to their place under settings", async ({ page }) => {

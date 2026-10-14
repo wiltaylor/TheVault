@@ -1,9 +1,12 @@
 //! The `http` host module: blocking HTTP for `after_*` handlers and scheduled tasks only, checked
-//! against the run's domain allowlist (D10, D30). wscript has no HTTP of its own (notes/01).
+//! against the run's domain allowlist (D10, D30). An allowlist holding `"*"` reaches any http or
+//! https host. wscript has no HTTP of its own (notes/01).
 
 use std::collections::HashMap;
 use std::io::Read;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use reqwest::blocking::Client;
 use reqwest::{Method, Url};
 use wscript::{Fault, HostError, Module, Script};
@@ -16,7 +19,10 @@ use crate::run;
 pub struct Response {
     pub status: i64,
     pub headers: HashMap<String, String>,
+    /// The body as text. Bytes that are not UTF-8 are replaced.
     pub body: String,
+    /// The body's bytes exactly, in base64, for binary responses such as images.
+    pub body_base64: String,
 }
 
 type Reply = Fault<Result<Response, String>>;
@@ -91,7 +97,7 @@ fn call(
         .to_ascii_lowercase();
     if !allow
         .iter()
-        .any(|d| d.trim_end_matches('.').eq_ignore_ascii_case(&host))
+        .any(|d| d == "*" || d.trim_end_matches('.').eq_ignore_ascii_case(&host))
     {
         return Ok(Err(format!(
             "host {host:?} is not on this script's allowlist"
@@ -140,6 +146,7 @@ fn call(
         status,
         headers,
         body: String::from_utf8_lossy(&bytes).into_owned(),
+        body_base64: BASE64.encode(&bytes),
     }))
 }
 

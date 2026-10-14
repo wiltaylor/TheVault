@@ -72,6 +72,8 @@ export interface TypeDef {
   description: string | null;
   icon: string | null;
   colour: string | null;
+  /** A built-in type (`dailynote`, `fleeting`): it can be customised but not deleted. */
+  builtin?: boolean;
   fields: FieldDef[];
   templates: Template[];
 }
@@ -161,7 +163,7 @@ export interface Page {
 
 /** Who wrote a version or deleted a note: the owner's session, a token, or a handler's script. */
 export interface Author {
-  kind: "session" | "token" | "handler";
+  kind: "session" | "token" | "handler" | "task";
   name: string;
 }
 
@@ -221,16 +223,28 @@ export interface Task {
   label?: string;
   description?: string | null;
   schedule?: string;
+  /** The schedule in words, with its time zone: "Weekdays at 07:00 (Australia/Melbourne)". */
+  schedule_text?: string;
   timezone?: string;
   script?: string;
   function?: string;
   allow_domains?: string[];
   secrets?: string[];
+  read_paths?: string[];
+  write_paths?: string[];
   retries?: number;
   retry_delay_ms?: number;
   timeout_ms?: number;
   paused?: boolean;
   wcl?: string;
+}
+
+/** A cron schedule in words and the next times it fires, as the scheduler reads it. */
+export interface CronPreview {
+  schedule: string;
+  timezone: string;
+  text: string;
+  next: number[];
 }
 
 /** A secret's name and times. No response ever carries its value (D10). */
@@ -415,6 +429,12 @@ export const api = {
     (await request<{ runs: TaskRun[] }>("GET", `/api/tasks/${enc(name)}/runs?limit=${limit}`)).runs,
   /** Run a task now, paused or not. Answers once the run ends. */
   runTask: (name: string) => request<TaskRun>("POST", `/api/tasks/${enc(name)}/run`),
+  /** Describe a cron schedule and list the next `count` times it fires after now. */
+  cron: (schedule: string, timezone: string, count = 5) =>
+    request<CronPreview>(
+      "GET",
+      `/api/cron?schedule=${enc(schedule)}&timezone=${enc(timezone)}&count=${count}`,
+    ),
   secrets: async () => (await request<{ secrets: Secret[] }>("GET", "/api/secrets")).secrets,
   /** Store or replace a secret's value. It is never read back. */
   putSecret: (name: string, value: string) => request<Secret>("PUT", `/api/secrets/${enc(name)}`, { value }),

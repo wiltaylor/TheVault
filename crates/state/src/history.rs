@@ -13,6 +13,8 @@ pub enum Author {
     Token(String),
     /// A named wscript handler.
     Handler(String),
+    /// A named scheduled task (D10).
+    Task(String),
 }
 
 impl Author {
@@ -21,6 +23,7 @@ impl Author {
             Author::Session(n) => ("session", n),
             Author::Token(n) => ("token", n),
             Author::Handler(n) => ("handler", n),
+            Author::Task(n) => ("task", n),
         }
     }
 
@@ -29,6 +32,7 @@ impl Author {
             "session" => Ok(Author::Session(name)),
             "token" => Ok(Author::Token(name)),
             "handler" => Ok(Author::Handler(name)),
+            "task" => Ok(Author::Task(name)),
             other => Err(Error::Corrupt(format!("unknown author kind {other:?}"))),
         }
     }

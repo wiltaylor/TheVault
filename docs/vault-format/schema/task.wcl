@@ -10,6 +10,8 @@
   function:      utf8?
   allow_domains: list<utf8>?
   secrets:       list<utf8>?
+  read_paths:    list<utf8>?
+  write_paths:   list<utf8>?
   @min(0) retries: i64?
   retry_delay:   utf8?
   timeout:       utf8?
