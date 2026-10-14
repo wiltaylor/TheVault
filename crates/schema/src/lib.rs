@@ -175,6 +175,12 @@ impl Schema {
         self.taxonomies.values()
     }
 
+    /// Put `taxonomy` in place of the one of its name. Only for a change that keeps every term,
+    /// such as adding one, which cannot break the checks between definitions.
+    pub fn grow_taxonomy(&mut self, taxonomy: Taxonomy) {
+        self.taxonomies.insert(taxonomy.name.clone(), taxonomy);
+    }
+
     /// Whether a kanban view may group notes of `type_name` by `field`: a single-term taxonomy
     /// field (D7).
     pub fn is_kanban_group(&self, type_name: &str, field: &str) -> bool {

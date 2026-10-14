@@ -107,6 +107,7 @@ pub fn control_fits(kind: &str, f: &FieldDef) -> bool {
 fn field_kind_text(f: &FieldDef) -> String {
     let what = match &f.kind {
         FieldKind::List { items } => format!("list of {} ", scalar_name(*items)),
+        _ if f.term_list => "list of taxonomy terms ".to_owned(),
         FieldKind::DateRange { datetime: true } => "date range of datetimes ".to_owned(),
         k if f.multiple => format!("multiple {} ", k.name()),
         k => format!("{} ", k.name()),

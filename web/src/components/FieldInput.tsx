@@ -7,8 +7,9 @@ import { knowTitle, noteTitle } from "../editor/titles";
 import { MapCanvas } from "../map/MapCanvas";
 import { geoPoint, imagePoint, mapKind } from "../map/model";
 import { taxonomyDef, typeDef } from "../session";
-import { ChipPicker, matches, termChipColour, termSuggestions } from "./ChipPicker";
+import { ChipPicker, matches } from "./ChipPicker";
 import type { Suggestion } from "./Combobox";
+import { termPicker } from "./termPicker";
 
 export interface FieldInputProps {
   field: FieldDef;
@@ -18,6 +19,8 @@ export interface FieldInputProps {
   id: string;
   /** Shown in an empty text-like input. */
   placeholder?: string;
+  /** Offer no new terms, even for a field on an open taxonomy, as for a field's default. */
+  fixedTerms?: boolean;
 }
 
 const SCALAR_INPUT: Record<string, string> = {
@@ -152,24 +155,39 @@ function Picker(
     chipColour?: (v: string) => string | undefined;
     /** What the add box shows before anything is typed. */
     boxPlaceholder?: string;
+    create?: (text: string) => { value: string } | { error: string };
   },
 ) {
   const single = () => !props.field.multiple && props.field.kind !== "list";
+  const [problem, setProblem] = createSignal<string | null>(null);
   return (
-    <ChipPicker
-      id={props.id}
-      label={props.label}
-      values={asStrings(props.value)}
-      single={single()}
-      suggest={props.suggest}
-      freeText={props.freeText}
-      chipText={props.chipText}
-      chipHref={props.chipHref}
-      chipColour={props.chipColour}
-      placeholder={props.boxPlaceholder}
-      emptyText={props.placeholder}
-      onChange={(values) => props.onChange(values.length === 0 ? undefined : single() ? values[0] : values)}
-    />
+    <>
+      <ChipPicker
+        id={props.id}
+        label={props.label}
+        values={asStrings(props.value)}
+        single={single()}
+        suggest={props.suggest}
+        freeText={props.freeText}
+        create={props.create}
+        chipText={props.chipText}
+        chipHref={props.chipHref}
+        chipColour={props.chipColour}
+        placeholder={props.boxPlaceholder}
+        emptyText={props.placeholder}
+        describedBy={problem() ? `${props.id}-problem` : undefined}
+        onReject={props.create ? (t, reason) => setProblem(reason ?? `${t} is not one of the choices.`) : undefined}
+        onChange={(values) => {
+          setProblem(null);
+          props.onChange(values.length === 0 ? undefined : single() ? values[0] : values);
+        }}
+      />
+      <Show when={problem()}>
+        <p class="field-problem error" id={`${props.id}-problem`} role="alert">
+          {problem()}
+        </p>
+      </Show>
+    </>
   );
 }
 
@@ -468,6 +486,20 @@ function AssetInput(props: FieldInputProps) {
   );
 }
 
+/** Several terms of a taxonomy as chips. An open taxonomy takes new terms typed into the box. */
+function TermsPicker(props: FieldInputProps) {
+  const terms = termPicker(() => props.field.taxonomy ?? "", props.fixedTerms);
+  return (
+    <Picker
+      {...props}
+      suggest={terms.suggest}
+      chipColour={terms.chipColour}
+      create={terms.create()}
+      onChange={(v) => props.onChange(terms.picked(v))}
+    />
+  );
+}
+
 /** The editor for one field of a note, chosen by the field's kind. */
 export function FieldInput(props: FieldInputProps) {
   const f = () => props.field;
@@ -499,11 +531,7 @@ export function FieldInput(props: FieldInputProps) {
         />
       </Match>
       <Match when={f().kind === "taxonomy" && f().multiple}>
-        <Picker
-          {...props}
-          suggest={(text) => termSuggestions(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], text)}
-          chipColour={(v) => termChipColour(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], v)}
-        />
+        <TermsPicker {...props} />
       </Match>
       <Match when={f().kind === "taxonomy"}>
         <Choice

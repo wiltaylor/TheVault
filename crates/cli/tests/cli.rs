@@ -622,6 +622,7 @@ fn init_starter_writes_files_that_all_validate() {
         "types/person.wcl",
         "types/note.wcl",
         "taxonomies/status.wcl",
+        "taxonomies/tags.wcl",
     ] {
         assert!(dir.join(path).is_file(), "no {path}");
     }
@@ -655,6 +656,77 @@ fn init_starter_writes_files_that_all_validate() {
     assert_eq!(out["ok"], true, "{out}");
     assert_eq!(out["failures"], json!([]));
     assert_eq!(out["indexed"], json!(ids.len()));
+}
+
+#[test]
+fn a_starter_note_saved_with_a_new_tag_adds_it_to_the_open_tags_taxonomy() {
+    let starter = Starter::new();
+    // The Tags taxonomy is open, and the starter notes' own tag is already in it.
+    let tags = std::fs::read_to_string(starter.dir.join("taxonomies/tags.wcl")).unwrap();
+    assert!(
+        tags.lines()
+            .any(|l| l.starts_with("allow_new") && l.ends_with("= true")),
+        "{tags}"
+    );
+    assert!(tags.contains("term \"starter\""), "{tags}");
+    let (server, vault, _) = starter.serve();
+
+    let tax = vault.ok(&["taxonomy", "get", "tags"], "");
+    assert_eq!(tax["allow_new"], true, "{tax}");
+    // "Starter" is the existing "starter" in another case; "Gardening" is new.
+    let put = vault.ok(
+        &["put", "--type", "note"],
+        "title = \"Tagged\"\ntags  = [\"Starter\", \"Gardening\"]\n",
+    );
+    let note = vault.ok(&["get", s(&put["id"])], "");
+    assert_eq!(
+        note["note"]["fields"]["tags"],
+        json!(["starter", "Gardening"]),
+        "{note}"
+    );
+    let tags = std::fs::read_to_string(server.vault_path().join("taxonomies/tags.wcl")).unwrap();
+    assert!(tags.contains("term \"Gardening\""), "{tags}");
+    let tax = vault.ok(&["taxonomy", "get", "tags"], "");
+    let paths: Vec<&str> = tax["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| s(&t["path"]))
+        .collect();
+    assert_eq!(paths, ["starter", "Gardening"], "{tax}");
+
+    // A tag under the new one, then queries over both: the new tags are terms like any other.
+    vault.ok(
+        &["put", "--type", "note"],
+        "title = \"Roses\"\ntags  = [\"Gardening/Roses\"]\n",
+    );
+    let titles = |q: &str| -> BTreeSet<String> {
+        let out = vault.ok(&["query", q, "--all"], "");
+        out["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| s(&r["title"]).to_owned())
+            .collect()
+    };
+    assert_eq!(
+        titles("from note where has(tags, \"Gardening\")"),
+        BTreeSet::from(["Tagged".to_owned()])
+    );
+    assert_eq!(
+        titles("from note where under(tags, \"Gardening\")"),
+        BTreeSet::from(["Tagged".to_owned(), "Roses".to_owned()])
+    );
+    // A tag under a tag that does not exist is refused, and adds nothing.
+    let refused = vault.fails(
+        &["put", "--type", "note"],
+        "title = \"Lost\"\ntags  = [\"Nowhere/Roses\"]\n",
+    );
+    assert!(
+        refused.to_string().contains("no term \\\"Nowhere\\\""),
+        "{refused}"
+    );
+    assert!(titles("from note where title == \"Lost\"").is_empty());
 }
 
 #[test]

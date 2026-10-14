@@ -131,6 +131,37 @@ handler "before_update" {
 `);
   });
 
+  it("reads a list of terms back as a list whose items are a taxonomy, and writes it so", () => {
+    const tagged: SchemaType = {
+      ...stored,
+      fields: [
+        { name: "tags", kind: "taxonomy", label: "Tags", required: false, computed: false, multiple: true, taxonomy: "tags", items: "taxonomy" },
+        { name: "topics", kind: "taxonomy", label: "topics", required: false, computed: false, multiple: true, taxonomy: "tags" },
+      ],
+      templates: [],
+      handlers: [],
+    };
+    const m = typeFromSchema(tagged);
+    expect(m.fields.map((f) => [f.kind, f.items, f.multiple, f.taxonomy])).toEqual([
+      ["list", "taxonomy", false, "tags"],
+      ["taxonomy", "string", true, "tags"],
+    ]);
+    const text = typeWcl(m);
+    expect(text).toContain(`field tags {
+  kind = "list"
+  label = "Tags"
+  items = "taxonomy"
+  taxonomy = "tags"
+}`);
+    expect(text).toContain(`field topics {
+  kind = "taxonomy"
+  multiple = true
+  taxonomy = "tags"
+}`);
+    m.fields[0]!.taxonomy = "";
+    expect(problems(m)).toContain("tags: choose a taxonomy.");
+  });
+
   it("tracks renames and makes slots follow renamed and removed fields", () => {
     const m = typeFromSchema(stored);
     m.fields[0]!.name = "hours";
@@ -298,6 +329,15 @@ term "Active" {
     expect([...termColours(tree.terms).keys()]).toEqual(["Plant/Electrical/Lights"]);
     expect(termColour(status.terms, "Active/Blocked")).toBe("red");
     expect(termColour(status.terms, "Active")).toBeUndefined();
+  });
+
+  it("writes allow_new for an open taxonomy, which may have no terms", () => {
+    const open = taxonomyFromSchema({ name: "tags", label: "Tags", description: null, allow_new: true, terms: [] });
+    expect(open.allow_new).toBe(true);
+    expect(taxonomyProblems(open)).toEqual([]);
+    expect(taxonomyWcl(open)).toBe(`label = "Tags"\nallow_new = true\n`);
+    expect(status.allow_new).toBe(false);
+    expect(taxonomyProblems({ ...open, allow_new: false })).toEqual(["A taxonomy needs at least one term."]);
   });
 
   it("records a rename for every stored term whose path changed", () => {

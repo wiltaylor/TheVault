@@ -8,8 +8,11 @@
   @children("term") terms: list<Term>
 }
 
+# A closed taxonomy needs at least one term. An open one (allow_new = true) may
+# have none; the schema crate checks that rule.
 @document type TaxonomyFile {
   label:       utf8
   description: utf8?
-  @children("term", min = 1) terms: list<Term>
+  allow_new:   bool?
+  @children("term") terms: list<Term>
 }

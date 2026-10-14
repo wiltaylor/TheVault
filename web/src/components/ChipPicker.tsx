@@ -30,8 +30,13 @@ export interface ChipPickerProps {
   single?: boolean;
   disabled?: boolean;
   onChange: (values: string[]) => void;
-  /** Typed text that is not free text and matches no suggestion. */
-  onReject?: (text: string) => void;
+  /**
+   * Typed text that matches no suggestion may become a new value, offered as an "Add “text”"
+   * suggestion after the others: the value it adds, or why it cannot be one.
+   */
+  create?: (text: string) => { value: string } | { error: string };
+  /** Typed text that is not free text and matches no suggestion, with why when `create` said. */
+  onReject?: (text: string, reason?: string) => void;
   /** The id of the + and of the box that replaces it, so a label can point at them. */
   id?: string;
   /** Label the group by this element rather than by `label`. */
@@ -49,6 +54,9 @@ if (typeof window !== "undefined") {
   window.addEventListener("pointerdown", () => (pointerDown = true), { capture: true });
   for (const end of ["pointerup", "pointercancel"]) window.addEventListener(end, () => (pointerDown = false), { capture: true });
 }
+
+/** Marks the suggestion that adds the typed text as a new value. No real value starts with it. */
+const ADD = "\u0000add:";
 
 const CHIP_COLOURS = ["blue", "green", "purple", "orange", "pink", "yellow", "red", "brown"] as const;
 
@@ -81,34 +89,54 @@ export function ChipPicker(props: ChipPickerProps) {
   function remove(v: string) {
     props.onChange(props.values.filter((x) => x !== v));
   }
+  /** Whether a value or its text is `typed`, without case. */
+  const same = (typed: string, value: string, shown: string) => {
+    const lower = typed.trim().toLowerCase();
+    return value.toLowerCase() === lower || shown.toLowerCase() === lower;
+  };
   async function suggest(q: string): Promise<Suggestion[]> {
     const have = new Set(props.values);
     const list = await props.suggest(q);
     // A value already picked is not offered again. In a hierarchy it still shows, for the
     // terms under it, when any follow it.
-    return list.flatMap((s, i) => {
+    const out = list.flatMap((s, i) => {
       if (!have.has(s.value)) return [s];
       const next = list[i + 1];
       const parent = s.depth !== undefined && next?.depth !== undefined && next.depth > s.depth;
       return parent ? [{ ...s, disabled: true }] : [];
     });
+    // Text that names nothing offered or picked can be added, last.
+    const t = q.trim();
+    if (props.create && t && !list.some((s) => same(t, s.value, s.text)) && !props.values.some((v) => same(t, v, text(v)))) {
+      // It shows the colour its chip will have, once it is a value.
+      const made = props.create(t);
+      const value = "value" in made ? made.value : undefined;
+      out.push({ value: ADD + t, text: `Add “${t}”`, colour: value && (props.chipColour?.(value) ?? chipColour(value)) });
+    }
+    return out;
+  }
+  function create(t: string) {
+    const made = props.create?.(t);
+    if (!made) return props.onReject?.(t);
+    if ("error" in made) return props.onReject?.(t, made.error);
+    add(made.value);
   }
   async function choose(s: Suggestion | null, typed: string) {
+    if (s?.value.startsWith(ADD)) return create(s.value.slice(ADD.length));
     if (s) return add(s.value);
     const t = typed.trim();
     if (!t) return;
     if (props.freeText) return add(t);
     // Only a suggestion's value or text, matched without case, is taken.
-    const lower = t.toLowerCase();
-    const same = (value: string, shown: string) => value.toLowerCase() === lower || shown.toLowerCase() === lower;
-    if (props.values.some((v) => same(v, text(v)))) return;
+    if (props.values.some((v) => same(t, v, text(v)))) return;
     let hit: Suggestion | undefined;
     try {
-      hit = (await suggest(t)).find((x) => !x.disabled && same(x.value, x.text));
+      hit = (await suggest(t)).find((x) => !x.disabled && !x.value.startsWith(ADD) && same(t, x.value, x.text));
     } catch {
       hit = undefined;
     }
     if (hit) add(hit.value);
+    else if (props.create) create(t);
     else props.onReject?.(t);
   }
   function done(how: "escape" | "blur") {
@@ -243,9 +271,39 @@ export function termSuggestions(terms: Term[], text: string): Suggestion[] {
   return out;
 }
 
-/** The colour of a term's chip: its own or inherited colour, else the hashed colour of its path. */
+/**
+ * The colour of a term's chip: its own or inherited colour, else the hashed colour of its path.
+ * A term not saved yet inherits from its nearest saved ancestor.
+ */
 export function termChipColour(terms: Term[], path: string): string {
-  return termColour(terms, path) ?? chipColour(path);
+  for (let p = path; ; p = p.slice(0, p.lastIndexOf("/"))) {
+    const colour = termColour(terms, p);
+    if (colour) return colour;
+    if (!p.includes("/")) return chipColour(path);
+  }
+}
+
+/**
+ * The term path typed text names, for an open taxonomy: an existing term's, matched name by name
+ * without case, or a new term's under an existing parent. `Plant/Solar` adds Solar under Plant.
+ */
+export function newTermPath(terms: Term[], text: string): { value: string } | { error: string } {
+  const names = text.split("/").map((n) => n.trim());
+  if (names.some((n) => !n)) return { error: "A term name cannot be empty." };
+  let level = terms;
+  const path: string[] = [];
+  for (const [i, name] of names.entries()) {
+    const lower = name.toLowerCase();
+    const t = level.find((x) => x.name === name) ?? level.find((x) => x.name.toLowerCase() === lower);
+    if (!t) {
+      if (i === names.length - 1) return { value: [...path, name].join("/") };
+      const parent = [...path, name].join("/");
+      return { error: `There is no term “${parent}” to add “${names.at(-1)}” under.` };
+    }
+    path.push(t.name);
+    level = t.children;
+  }
+  return { value: path.join("/") };
 }
 
 /** Every type as a suggestion with its icon, matched by name, label or plural. */

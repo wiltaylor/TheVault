@@ -36,6 +36,7 @@ mod daily;
 mod defs;
 mod note;
 mod refs;
+mod terms;
 mod time;
 mod types;
 
@@ -979,8 +980,13 @@ impl Writer {
         extra_files: Vec<Change>,
         dry_run: bool,
     ) -> Result<Vec<Saved>> {
-        // Validate what was submitted before any handler sees it.
-        self.render(&inner, &changes)?;
+        // Validate what was submitted before any handler sees it. A term new to an open
+        // taxonomy is checked as the taxonomy will be once the write adds it.
+        let mut changes = changes;
+        match terms::Growth::changes(&inner.schema, &mut changes)?.finish(&inner.schema)? {
+            Some((grown, _)) => self.render(&grown, &changes)?,
+            None => self.render(&inner.schema, &changes)?,
+        };
         check_base()?;
         drop(inner);
 
@@ -1012,8 +1018,13 @@ impl Writer {
         let extra = self.hooks.side_effects(&changes)?;
         changes.extend(extra);
 
-        // Handlers may have changed the notes, so what is written is rendered and checked again.
-        let rendered = self.render(&inner, &changes)?;
+        // Handlers may have changed the notes, so what is written is rendered and checked again,
+        // and the terms the notes add to open taxonomies are worked out from what they hold now.
+        let grown = terms::Growth::changes(&inner.schema, &mut changes)?.finish(&inner.schema)?;
+        let rendered = self.render(
+            grown.as_ref().map_or(&inner.schema, |(schema, _)| schema),
+            &changes,
+        )?;
 
         if dry_run {
             return rendered
@@ -1044,7 +1055,10 @@ impl Writer {
                 .collect();
         }
 
-        let mut files = extra_files;
+        let (grown, mut files) = match grown {
+            Some((schema, taxonomies)) => (Some(schema), [extra_files, taxonomies].concat()),
+            None => (None, extra_files),
+        };
         files.reserve(rendered.len());
         for r in &rendered {
             let path = note_path(&r.change.type_name, &r.change.id);
@@ -1101,6 +1115,10 @@ impl Writer {
             }
         }
         let inner = &mut *inner;
+        if let Some(schema) = grown {
+            inner.index.set_schema(&schema)?;
+            inner.schema = schema;
+        }
         inner.index.update(&inner.schema, &updates)?;
         inner.index.advance(generation)?;
         self.hooks.after(&saved, author, &inner.schema);
@@ -1172,7 +1190,7 @@ impl Writer {
 
     /// The canonical text of every put and the validation of the note it holds. A delete renders
     /// to nothing, after making sure `state.db` holds the content it will trash.
-    fn render(&self, inner: &Inner, changes: &[NoteChange]) -> Result<Vec<Rendered>> {
+    fn render(&self, schema: &Schema, changes: &[NoteChange]) -> Result<Vec<Rendered>> {
         let mut pending = HashMap::new();
         let mut deleted = HashSet::new();
         for c in changes {
@@ -1208,8 +1226,7 @@ impl Writer {
             schema::migrate::canvases(&mut doc);
             let text = store::canonical(&note::print(&doc), &path)?;
             let doc = Input::Wcl(text.clone()).parse(&path)?;
-            let report = inner
-                .schema
+            let report = schema
                 .validate_note(&c.type_name, &doc, &lookup)
                 .map_err(|issues| {
                     Error::Invalid(Invalid {

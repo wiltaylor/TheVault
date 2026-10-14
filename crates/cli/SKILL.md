@@ -45,7 +45,7 @@ vault taxonomy get status
 - `required`: a note must have a value.
 - `computed`: only the server's handlers write it. Never send it.
 - `multiple`: the value is a list.
-- `options` for `select`, `taxonomy` for `taxonomy`, `target` for `reference`.
+- `options` for `select`, `taxonomy` for `taxonomy`, `target` for `reference`. A field declared as a list of terms (`items = "taxonomy"` in the type file) shows as a `multiple` taxonomy field with `items` set to `"taxonomy"`, and takes the same values.
 - `relation` and `inverse` for `reference`: see "Two-way references" below.
 
 Every note also has `title`, which is required. The server sets `created` and `updated` itself and ignores yours.
@@ -60,7 +60,7 @@ Every note also has `title`, which is required. The server sets `created` and `u
 | `date_range` | `{ start: "2026-10-20", end: "2026-11-01" }` |
 | `url` | An absolute URL, such as `"https://example.com"` |
 | `select` | One of the field's `options` |
-| `taxonomy` | A term path from the taxonomy, names joined by `/`, such as `"Active/Blocked"` |
+| `taxonomy` | A term path from the taxonomy, names joined by `/`, such as `"Active/Blocked"`. When the taxonomy has `allow_new` set, a path it does not hold yet adds that term: `"Rust"` adds a top-level term, and `"Software/Rust"` adds `Rust` under the existing `Software`. A name that differs from an existing term only in case is that term |
 | `reference` | The 26-character id of a note of the `target` type |
 | `asset` | The id of an uploaded asset |
 | `list` | A list of the field's `items` kind |
@@ -273,7 +273,7 @@ A refused note prints the file and every problem, one per field, under `issues`:
 `at` names the field. To fix it:
 
 1. Look the field up in `vault type get <type>` and the table in step 1.
-2. For a `taxonomy` field, list the allowed term paths with `vault taxonomy get <name>`. For a `select` field, use one of its `options`. For a `reference` field, find the target note's id with `vault query`.
+2. For a `taxonomy` field, list the allowed term paths with `vault taxonomy get <name>`. If the taxonomy has `allow_new`, a new term is fine, but its parent path must already exist. For a `select` field, use one of its `options`. For a `reference` field, find the target note's id with `vault query`.
 3. Send the corrected note. Nothing was written while it was refused.
 
 ```sh
@@ -301,7 +301,7 @@ vault asset list
 
 ## Setting up a vault
 
-Only when the user asks for a new vault. `init --starter` adds Task, Project, Person and Note types, a Status taxonomy, a few example notes, and a dashboard note. `reindex` rebuilds the search index from the files and lists every file that fails validation; stop the server first.
+Only when the user asks for a new vault. `init --starter` adds Task, Project, Person and Note types, a Status taxonomy, an open Tags taxonomy for the Note type's `tags`, a few example notes, and a dashboard note. `reindex` rebuilds the search index from the files and lists every file that fails validation; stop the server first.
 
 ```sh
 printf '%s\n' "$VAULT_PASSWORD" | vault init ./my-vault --starter --password-stdin

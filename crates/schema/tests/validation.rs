@@ -945,3 +945,126 @@ fn a_canvas_in_the_old_format_reads_as_cards_and_validates() {
     );
     assert_eq!(canvas.blocks_of("edge").count(), 1);
 }
+
+const TAG_TYPE: &str = "label = \"Post\"\nfield tags {\n  kind     = \"list\"\n  items    = \"taxonomy\"\n  taxonomy = \"status\"\n}\nfield topics {\n  kind     = \"taxonomy\"\n  taxonomy = \"status\"\n  multiple = true\n}\ntemplate default {\n  tab \"T\" {\n    slot \"tags\"\n  }\n}\n";
+
+#[test]
+fn a_list_of_terms_reads_as_a_multiple_taxonomy_field() {
+    let schema = Schema::from_sources(&[("post", TAG_TYPE)], &[("status", STATUS)]).unwrap();
+    let post = schema.type_def("post").unwrap();
+    let tags = post.field("tags").unwrap();
+    let topics = post.field("topics").unwrap();
+    assert_eq!(
+        tags.kind,
+        FieldKind::Taxonomy {
+            taxonomy: "status".into()
+        }
+    );
+    assert!(tags.multiple && tags.term_list);
+    // Apart from how it was declared, it is the same field as a multiple taxonomy field.
+    assert_eq!(tags.kind, topics.kind);
+    assert!(topics.multiple && !topics.term_list);
+    assert!(!tags.is_kanban_group());
+
+    // Its values are term paths, validated as a multiple taxonomy field's are.
+    let none = lookup(&[]);
+    let check = |body: &str| {
+        schema
+            .validate_note_source("post", &format!("title = \"t\"\n{body}\n"), "n", &none)
+            .map(|_| ())
+            .map_err(|e| text(&e.issues))
+    };
+    check(r#"tags = ["Inbox", "Active/In progress"]"#).unwrap();
+    for (body, says) in [
+        (
+            r#"tags = ["Inbox", "Nope"]"#,
+            "tags[1]: \"Nope\" is not a term of taxonomy \"status\"",
+        ),
+        (
+            r#"tags = ["Inbox", "Inbox"]"#,
+            "tags: lists \"Inbox\" twice",
+        ),
+        (
+            r#"tags = "Inbox""#,
+            "tags: holds several values and must be a list",
+        ),
+        (r#"tags = [1]"#, "tags[0]: must be a term path string"),
+    ] {
+        let issues = check(body).unwrap_err();
+        assert!(
+            issues.iter().any(|i| i.starts_with(says)),
+            "{body}: {issues:?}"
+        );
+    }
+}
+
+#[test]
+fn a_list_of_terms_names_its_taxonomy_and_takes_no_multiple() {
+    let tpl = "template default {\n  tab \"T\" {\n    slot \"title\"\n  }\n}\n";
+    let field = |body: &str| format!("label = \"A\"\nfield f {{\n{body}\n}}\n{tpl}");
+
+    let issues = type_issues(&field("  kind = \"list\"\n  items = \"taxonomy\""));
+    assert!(
+        issues.iter().any(|i| i == "field f.taxonomy: is required"),
+        "{issues:?}"
+    );
+    let issues = type_issues(&field(
+        "  kind = \"list\"\n  items = \"string\"\n  taxonomy = \"status\"",
+    ));
+    assert!(
+        issues
+            .iter()
+            .any(|i| i == "field f.taxonomy: is not an item of this block"),
+        "{issues:?}"
+    );
+    let issues = type_issues(&field(
+        "  kind = \"list\"\n  items = \"taxonomy\"\n  taxonomy = \"status\"\n  multiple = true",
+    ));
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.contains("multiple: is not allowed on a list field")),
+        "{issues:?}"
+    );
+    let issues = type_issues(&field("  kind = \"list\"\n  items = \"term\""));
+    assert!(
+        issues.iter().any(|i| i.starts_with("field f.items")),
+        "{issues:?}"
+    );
+
+    // The taxonomy must exist, and a default must hold its terms.
+    let missing = field("  kind = \"list\"\n  items = \"taxonomy\"\n  taxonomy = \"nope\"");
+    let e = Schema::from_sources(&[("a", &missing)], &[])
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("there is no taxonomy \"nope\""), "{e}");
+    let bad_default = field(
+        "  kind = \"list\"\n  items = \"taxonomy\"\n  taxonomy = \"status\"\n  default = [\"Inbox\", \"Nope\"]",
+    );
+    let e = Schema::from_sources(&[("a", &bad_default)], &[("status", STATUS)])
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("\"Nope\" is not a term"), "{e}");
+    let good_default = bad_default.replace("\"Nope\"", "\"Done\"");
+    Schema::from_sources(&[("a", &good_default)], &[("status", STATUS)]).unwrap();
+}
+
+#[test]
+fn an_open_taxonomy_may_start_empty_and_a_closed_one_may_not() {
+    use schema::Taxonomy;
+    let open = Taxonomy::parse("tags", "label = \"Tags\"\nallow_new = true\n").unwrap();
+    assert!(open.allow_new);
+    assert!(open.terms.is_empty());
+    let closed = Taxonomy::parse("tags", "label = \"Tags\"\nallow_new = false\n").unwrap_err();
+    assert!(
+        closed.to_string().contains("needs at least one term"),
+        "{closed}"
+    );
+    let wrong = Taxonomy::parse(
+        "tags",
+        "label = \"Tags\"\nallow_new = \"yes\"\nterm \"A\"\n",
+    )
+    .unwrap_err();
+    assert!(wrong.to_string().contains("allow_new"), "{wrong}");
+    assert!(!Taxonomy::parse("status", STATUS).unwrap().allow_new);
+}

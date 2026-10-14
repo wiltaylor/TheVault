@@ -4,7 +4,8 @@
 
 import { For, type JSX, Match, Show, Switch, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import { type Block, type FieldDef, type Json, type Row, api } from "../api";
-import { ChipPicker, matches, termChipColour, termSuggestions } from "../components/ChipPicker";
+import { ChipPicker, matches } from "../components/ChipPicker";
+import { termPicker } from "../components/termPicker";
 import { Combobox, type Suggestion } from "../components/Combobox";
 import { datetimeInput, datetimeValue, findNotes, termOptions } from "../components/FieldInput";
 import { noteTitle } from "../editor/titles";
@@ -550,12 +551,13 @@ function ChipsInput(props: Part) {
       .catch(() => []);
     return known;
   }
+  const terms = termPicker(() => f().taxonomy ?? "");
   async function suggest(q: string): Promise<Suggestion[]> {
     switch (f().kind) {
       case "select":
         return (f().options ?? []).filter((o) => matches(q, o)).map((o) => ({ value: o, text: o }));
       case "taxonomy":
-        return termSuggestions(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], q);
+        return terms.suggest(q);
       case "reference":
         return (await findNotes(f().target ?? "*", q)).map((r) => ({ value: r.id, text: r.title || "Untitled" }));
       default:
@@ -574,13 +576,16 @@ function ChipsInput(props: Part) {
       describedBy={props.describedBy}
       values={chipsOf(props.value())}
       chipText={text}
-      chipColour={f().kind === "taxonomy" ? (v) => termChipColour(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], v) : undefined}
+      chipColour={f().kind === "taxonomy" ? terms.chipColour : undefined}
       suggest={suggest}
       freeText={f().kind === "list"}
+      create={f().kind === "taxonomy" ? terms.create() : undefined}
       disabled={props.disabled}
       placeholder={props.placeholder ?? "Add…"}
-      onChange={(values) => props.commit(values.length ? values : undefined)}
-      onReject={(t) => props.complain(f().kind === "reference" ? "Choose a note from the list." : `${t} is not one of the choices.`)}
+      onChange={(values) => props.commit(values.length ? (f().kind === "taxonomy" ? terms.picked(values) : values) : undefined)}
+      onReject={(t, reason) =>
+        props.complain(reason ?? (f().kind === "reference" ? "Choose a note from the list." : `${t} is not one of the choices.`))
+      }
     />
   );
 }

@@ -231,7 +231,7 @@ enum Command {
         /// The folder to create.
         #[arg(default_value = ".")]
         dir: PathBuf,
-        /// Add the starter types, the Status taxonomy and the dashboard note.
+        /// Add the starter types, the Status and Tags taxonomies and the dashboard note.
         #[arg(long)]
         starter: bool,
         /// Read the password from stdin instead of asking for it.

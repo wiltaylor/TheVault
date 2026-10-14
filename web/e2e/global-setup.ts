@@ -54,6 +54,8 @@ function seedVault(): string {
   // The starter pack's note type, as `vault init --starter` writes it.
   copyFileSync(join(repo, "crates/cli/starter/types/note.wcl"), join(vault, "types/note.wcl"));
   mkdirSync(join(vault, "taxonomies"));
+  // ...with the open Tags taxonomy its tags field picks from.
+  copyFileSync(join(repo, "crates/cli/starter/taxonomies/tags.wcl"), join(vault, "taxonomies/tags.wcl"));
   writeFileSync(join(vault, "taxonomies/stage.wcl"), STAGE_TAXONOMY);
   writeFileSync(join(vault, "taxonomies/area.wcl"), AREA_TAXONOMY);
   writeFileSync(join(vault, "types/finding.wcl"), FINDING_TYPE);

@@ -30,6 +30,8 @@ export const FIELD_KINDS = [
 export type FieldKind = (typeof FIELD_KINDS)[number];
 
 export const SCALARS = ["string", "int", "float", "bool", "date", "datetime", "url"] as const;
+/** What a list may hold: a scalar kind, or terms of a taxonomy. */
+export const ITEM_KINDS = [...SCALARS, "taxonomy"] as const;
 export const RELATIONS = ["one_way", "two_way", "peer"] as const;
 export const ON_DELETE = ["unlink", "restrict", "cascade"] as const;
 export const PALETTE = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"] as const;
@@ -60,6 +62,11 @@ export const DEFAULT_KINDS = new Set<string>([
 /** Kinds written as a block in the note. */
 export const COMPOUND_KINDS = new Set<string>(["content", "dict", "ink", "canvas"]);
 
+/** A list whose items are terms of a taxonomy, which reads as a multiple taxonomy field. */
+export function isTermList(f: Pick<FieldModel, "kind" | "items">): boolean {
+  return f.kind === "list" && f.items === "taxonomy";
+}
+
 const NAME = /^[a-z][a-z0-9_]*$/;
 const RESERVED = new Set(["title", "created", "updated"]);
 
@@ -86,7 +93,7 @@ export interface FieldModel {
   relation: (typeof RELATIONS)[number];
   inverse: string;
   on_delete: (typeof ON_DELETE)[number];
-  items: (typeof SCALARS)[number];
+  items: (typeof ITEM_KINDS)[number];
   values: (typeof SCALARS)[number];
   of: "date" | "datetime";
   map: "geo" | "image";
@@ -188,6 +195,14 @@ function fieldFromSchema(f: Record<string, Json>): FieldModel {
   if (f.of) m.of = f.of as FieldModel["of"];
   m.image = str(f.image);
   m.map = f.map === "image" || m.image ? "image" : "geo";
+  // A list of terms is described as the multiple taxonomy field it reads as.
+  if (m.kind === "taxonomy" && f.items === "taxonomy") {
+    m.kind = "list";
+    m.items = "taxonomy";
+    m.multiple = false;
+  } else if (m.kind === "taxonomy") {
+    m.items = "string";
+  }
   return m;
 }
 
@@ -238,7 +253,7 @@ export function problems(m: TypeModel): string[] {
     seen.add(f.name);
     if (f.required && f.computed) out.push(`${who}: a computed field cannot be required.`);
     if (f.kind === "select" && f.options.length === 0) out.push(`${who}: a select field needs options.`);
-    if (f.kind === "taxonomy" && !f.taxonomy) out.push(`${who}: choose a taxonomy.`);
+    if ((f.kind === "taxonomy" || isTermList(f)) && !f.taxonomy) out.push(`${who}: choose a taxonomy.`);
     if (f.kind === "reference") {
       if (!f.target) out.push(`${who}: choose a target type.`);
       if (f.relation === "two_way" && !f.inverse) out.push(`${who}: a two-way reference needs an inverse field.`);
@@ -299,6 +314,7 @@ function fieldWcl(f: FieldModel): string {
       break;
     case "list":
       out += wclField("items", f.items, i);
+      if (f.items === "taxonomy") out += wclField("taxonomy", f.taxonomy, i);
       break;
     case "dict":
       out += wclField("values", f.values, i);

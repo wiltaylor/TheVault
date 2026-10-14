@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 use state::Author;
 use store::Change;
 
+use crate::terms::{Growth, Match};
 use crate::{
     Error, Event, Inner, Input, Lookup, Result, Saved, Writer, note, note_path, time, type_path,
 };
@@ -92,6 +93,8 @@ pub struct Flagged {
 struct Worked {
     plan: TypePlan,
     schema: Schema,
+    /// The files of the open taxonomies the change adds terms to.
+    taxonomies: Vec<Change>,
     /// Every note of the type: its id, the doc after the change, and whether the change edits it.
     notes: Vec<(String, Doc, bool)>,
 }
@@ -122,6 +125,7 @@ impl Writer {
         let Worked {
             plan,
             schema,
+            taxonomies,
             notes,
         } = worked;
         let ty = schema
@@ -135,6 +139,7 @@ impl Writer {
         };
 
         let mut files = vec![Change::write(type_path(name), plan.wcl.as_bytes())];
+        files.extend(taxonomies);
         let mut staged = Vec::with_capacity(notes.len());
         for (id, doc, edited) in notes {
             let path = note_path(name, &id);
@@ -274,8 +279,15 @@ impl Writer {
                 }
             })
             .collect();
-        let schema = rebuild_schema(current, types)?;
+        let mut schema = rebuild_schema(current, types)?;
         crate::daily::check_daily_type(&schema)?;
+        // A term a note holds that an open taxonomy lacks is added with the change, so a list of
+        // strings can become a list of terms of an open taxonomy.
+        let base = schema.clone();
+        let new_ty = base
+            .type_def(name)
+            .expect("the rebuilt schema holds the type");
+        let mut growth = Growth::default();
 
         let lookup = Lookup {
             writer: self,
@@ -325,6 +337,14 @@ impl Writer {
                 hasher.update(note::print(&after).as_bytes());
                 hasher.update([0]);
             }
+            let added = growth.added;
+            // A term that cannot be added stays invalid, and validation says so.
+            growth.note(&base, new_ty, &mut after, Match::Exact);
+            if growth.added != added {
+                for t in growth.taxonomies() {
+                    schema.grow_taxonomy(t.clone());
+                }
+            }
             match schema.validate_note(name, &after, &lookup) {
                 Ok(report) => {
                     if report.is_flagged() {
@@ -362,7 +382,12 @@ impl Writer {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
+        let taxonomies = growth
+            .finish(&base)?
+            .map(|(_, files)| files)
+            .unwrap_or_default();
         Ok(Worked {
+            taxonomies,
             plan: TypePlan {
                 type_name: name.to_owned(),
                 token,

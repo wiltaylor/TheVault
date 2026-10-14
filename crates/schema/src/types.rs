@@ -34,6 +34,11 @@ pub enum Scalar {
     Url,
 }
 
+/// The `items` of a `list` field: a scalar kind, or `taxonomy` for a list of taxonomy terms.
+const ITEM_NAMES: [&str; 8] = [
+    "string", "int", "float", "bool", "date", "datetime", "url", "taxonomy",
+];
+
 impl Scalar {
     const NAMES: [&str; 7] = ["string", "int", "float", "bool", "date", "datetime", "url"];
 
@@ -185,6 +190,9 @@ pub struct FieldDef {
     pub computed: bool,
     /// The note holds a list.
     pub multiple: bool,
+    /// Written as `kind = "list"` with `items = "taxonomy"`. Such a field is read as a `taxonomy`
+    /// field with `multiple = true` everywhere else: in notes, queries and the index.
+    pub term_list: bool,
     pub default: Option<Value>,
 }
 
@@ -199,6 +207,7 @@ pub(crate) fn title_field() -> FieldDef {
         required: true,
         computed: false,
         multiple: false,
+        term_list: false,
         default: None,
     }
 }
@@ -418,7 +427,12 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
             opt("inverse", Form::Str),
             opt("on_delete", Form::OneOf(&["unlink", "restrict", "cascade"])),
         ]),
-        "list" => items.push(req("items", Form::OneOf(&Scalar::NAMES))),
+        "list" => {
+            items.push(req("items", Form::OneOf(&ITEM_NAMES)));
+            if d.field("items").and_then(Value::as_str) == Some("taxonomy") {
+                items.push(req("taxonomy", Form::Str));
+            }
+        }
         "dict" => items.push(req("values", Form::OneOf(&Scalar::NAMES))),
         "location" => items.extend([
             req("map", Form::OneOf(&["geo", "image"])),
@@ -435,6 +449,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
     let flag = |n: &str| d.field(n) == Some(&Value::Bool(true));
     let s = |n: &str| string(d, n);
     let (required, computed, multiple) = (flag("required"), flag("computed"), flag("multiple"));
+    let term_list = kind_name == "list" && s("items").as_deref() == Some("taxonomy");
 
     let kind = match kind_name {
         "string" => FieldKind::String,
@@ -466,7 +481,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
             }
             FieldKind::Select { options }
         }
-        "taxonomy" => {
+        "taxonomy" | "list" if kind_name == "taxonomy" || term_list => {
             let taxonomy = s("taxonomy").unwrap_or_default();
             if !is_name(&taxonomy) {
                 c.fail(
@@ -522,7 +537,9 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         kind,
         required,
         computed,
-        multiple,
+        // A list of terms holds several terms, as a multiple taxonomy field does.
+        multiple: multiple || term_list,
+        term_list,
         default: d.field("default").cloned(),
     };
     if let Some(v) = &def.default {

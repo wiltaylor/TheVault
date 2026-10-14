@@ -2,6 +2,7 @@
 
 import { createSignal } from "solid-js";
 import { ApiError, api, type Taxonomy, type TypeDef } from "./api";
+import { onNoteWritten } from "./changes";
 
 export type SessionState = "checking" | "in" | "out";
 
@@ -41,6 +42,24 @@ export async function reloadDefinitions(): Promise<void> {
   setTypes(t);
   setTaxonomies([...x].sort((a, b) => a.name.localeCompare(b.name)));
 }
+
+// Terms picked for an open taxonomy that it did not hold. The save that holds them adds them on
+// the server, so the next note write loads the taxonomies again to show them everywhere.
+let termsPicked = false;
+
+/** A new term was picked for an open taxonomy: load the taxonomies after the next note write. */
+export function newTermPicked() {
+  termsPicked = true;
+}
+
+onNoteWritten(() => {
+  if (!termsPicked) return;
+  termsPicked = false;
+  api
+    .taxonomies()
+    .then((x) => setTaxonomies([...x].sort((a, b) => a.name.localeCompare(b.name))))
+    .catch(() => undefined);
+});
 
 /** Log in. A wrong password rejects with the API's error. */
 export async function logIn(password: string): Promise<void> {

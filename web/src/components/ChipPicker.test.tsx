@@ -2,7 +2,15 @@ import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { Term } from "../api";
-import { ChipPicker, type ChipPickerProps, chipColour, termChipColour, termSuggestions, typeSuggestions } from "./ChipPicker";
+import {
+  ChipPicker,
+  type ChipPickerProps,
+  chipColour,
+  newTermPath,
+  termChipColour,
+  termSuggestions,
+  typeSuggestions,
+} from "./ChipPicker";
 
 const FRUIT = ["Apple", "Banana", "Cherry"].map((f) => ({ value: f.toLowerCase(), text: f }));
 const fruit = (q: string) => FRUIT.filter((f) => f.text.toLowerCase().includes(q.trim().toLowerCase()));
@@ -194,6 +202,95 @@ describe("ChipPicker", () => {
     fireEvent.keyDown(held.box(), { key: "ArrowDown" });
     fireEvent.keyDown(held.box(), { key: "Enter" });
     expect(held.values()).toEqual(["Plant/Electrical", "Plant/Electrical/Wiring"]);
+  });
+
+  describe("an open taxonomy", () => {
+    const term = (name: string, path: string, colour: string | null, children: Term[] = []): Term => ({
+      name,
+      path,
+      colour,
+      description: null,
+      children,
+    });
+    const terms: Term[] = [
+      term("Plant", "Plant", "green", [term("Electrical", "Plant/Electrical", null)]),
+      term("Office", "Office", null),
+    ];
+    const open = (extra: Partial<ChipPickerProps> = {}) =>
+      mount([], {
+        suggest: (q) => termSuggestions(terms, q),
+        chipColour: (v) => termChipColour(terms, v),
+        create: (t) => newTermPath(terms, t),
+        ...extra,
+      });
+    const options = (m: ReturnType<typeof mount>) => m.getAllByRole("option").map((o) => o.textContent);
+
+    it("offers typed text that names no term as the last suggestion, and adds it", async () => {
+      const m = open();
+      fireEvent.click(m.plus());
+      m.type("Solar");
+      await waitFor(() => expect(options(m)).toEqual(["Add “Solar”"]));
+      m.type("o");
+      await waitFor(() => expect(options(m)).toEqual(["Office", "Add “o”"]));
+      m.type("Plant/Solar");
+      const add = await m.findByRole("option", { name: "Add “Plant/Solar”" });
+      // It shows the colour its chip will have: Plant's, which it inherits.
+      expect(add.querySelector(".combo-dot")).toHaveAttribute("data-colour", "green");
+      fireEvent.click(add);
+      expect(m.values()).toEqual(["Plant/Solar"]);
+      expect(m.container.querySelector(".chip")).toHaveAttribute("data-colour", "green");
+      // Enter on typed text with nothing highlighted adds it too, a parent matched without case.
+      m.type("plant/Wind");
+      fireEvent.keyDown(m.box(), { key: "Enter" });
+      await waitFor(() => expect(m.values()).toEqual(["Plant/Solar", "Plant/Wind"]));
+    });
+
+    it("takes an existing term typed in another case rather than adding a second", async () => {
+      const m = open();
+      fireEvent.click(m.plus());
+      m.type("office");
+      await waitFor(() => expect(options(m)).toEqual(["Office"]));
+      fireEvent.keyDown(m.box(), { key: "Enter" });
+      await waitFor(() => expect(m.values()).toEqual(["Office"]));
+      // The option's text is the term's name and its parent, as a hint.
+      m.type("PLANT/electrical");
+      await waitFor(() => expect(options(m)).toEqual(["ElectricalPlant"]));
+      fireEvent.keyDown(m.box(), { key: "Enter" });
+      await waitFor(() => expect(m.values()).toEqual(["Office", "Plant/Electrical"]));
+      expect(m.onReject).not.toHaveBeenCalled();
+    });
+
+    it("refuses a new term under a parent that does not exist", async () => {
+      const m = open();
+      fireEvent.click(m.plus());
+      m.type("Yard/Shed");
+      fireEvent.click(await m.findByRole("option", { name: "Add “Yard/Shed”" }));
+      expect(m.values()).toEqual([]);
+      expect(m.onReject).toHaveBeenCalledWith("Yard/Shed", "There is no term “Yard” to add “Shed” under.");
+    });
+
+    it("a closed taxonomy offers no Add and rejects text that names no term", async () => {
+      const m = open({ create: undefined });
+      fireEvent.click(m.plus());
+      m.type("o");
+      await waitFor(() => expect(options(m)).toEqual(["Office"]));
+      m.type("Solar");
+      fireEvent.keyDown(m.box(), { key: "Enter" });
+      await waitFor(() => expect(m.onReject).toHaveBeenCalledWith("Solar"));
+      expect(m.queryAllByRole("option")).toEqual([]);
+      expect(m.values()).toEqual([]);
+    });
+
+    it("works out the path typed text names", () => {
+      expect(newTermPath(terms, "Solar")).toEqual({ value: "Solar" });
+      expect(newTermPath(terms, " plant / Solar ")).toEqual({ value: "Plant/Solar" });
+      expect(newTermPath(terms, "PLANT/ELECTRICAL")).toEqual({ value: "Plant/Electrical" });
+      expect(newTermPath(terms, "Plant/Electrical/Wiring")).toEqual({ value: "Plant/Electrical/Wiring" });
+      expect(newTermPath(terms, "Plant//x")).toEqual({ error: "A term name cannot be empty." });
+      expect(newTermPath(terms, "Plant/Wires/Copper")).toEqual({
+        error: "There is no term “Plant/Wires” to add “Copper” under.",
+      });
+    });
   });
 
   it("matches types by name, label or plural, without case", () => {

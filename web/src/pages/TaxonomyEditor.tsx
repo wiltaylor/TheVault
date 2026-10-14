@@ -56,7 +56,7 @@ export function TaxonomyEditor() {
   const navigate = useNavigate();
   const isNew = () => params.name === undefined;
   const [name, setName] = createSignal("");
-  const [model, setModel] = createStore<TaxonomyModel>({ label: "", description: "", terms: [] });
+  const [model, setModel] = createStore<TaxonomyModel>({ label: "", description: "", allow_new: false, terms: [] });
   const [loaded, setLoaded] = createSignal(false);
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
@@ -76,7 +76,7 @@ export function TaxonomyEditor() {
         setUsing([]);
         if (n === undefined) {
           setName("");
-          setModel(reconcile({ label: "", description: "", terms: [newTerm("First term")] }));
+          setModel(reconcile({ label: "", description: "", allow_new: false, terms: [newTerm("First term")] }));
           setLoaded(true);
           return;
         }
@@ -389,6 +389,15 @@ export function TaxonomyEditor() {
             value={model.description}
             onInput={(e) => edit((m) => (m.description = e.currentTarget.value))}
           />
+          <span />
+          <label title="A term typed on a note that this taxonomy lacks is added to it when the note is saved.">
+            <input
+              type="checkbox"
+              checked={model.allow_new}
+              onChange={(e) => edit((m) => (m.allow_new = e.currentTarget.checked))}
+            />{" "}
+            Let fields add new terms
+          </label>
         </div>
         <h2>Terms</h2>
         <Terms terms={model.terms} prefix="" />

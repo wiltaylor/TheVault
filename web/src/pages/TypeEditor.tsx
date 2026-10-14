@@ -8,6 +8,7 @@ import {
   EVENTS,
   FIELD_KINDS,
   type FieldKind,
+  ITEM_KINDS,
   type FieldModel,
   type HandlerModel,
   MULTIPLE_KINDS,
@@ -18,6 +19,7 @@ import {
   type TypeModel,
   emptyType,
   isName,
+  isTermList,
   needsDefault,
   newField,
   problems,
@@ -43,6 +45,8 @@ export function errorText(e: unknown): string {
 
 /** The field as a note page would edit it, so a default is entered with the field's own editor. */
 function defaultDef(f: FieldModel): FieldDef {
+  // A list of terms is edited as the multiple taxonomy field it reads as.
+  if (isTermList(f)) return { ...defaultDef({ ...f, kind: "taxonomy", multiple: true }), items: "taxonomy" };
   return {
     name: "default",
     label: "Default",
@@ -301,6 +305,31 @@ export function TypeEditor() {
     // A field added in this session opens with its settings showing.
     const [open, setOpen] = createSignal(f().original === null);
     const id = (part: string) => `f${key}-${part}`;
+    const taxonomySelect = () => (
+      <>
+        <label for={id("taxonomy")}>Taxonomy</label>
+        <select
+          id={id("taxonomy")}
+          onChange={(e) =>
+            set((x) => {
+              x.taxonomy = e.currentTarget.value;
+              x.default = undefined;
+            })
+          }
+        >
+          <option value="" selected={!f().taxonomy}>
+            —
+          </option>
+          <For each={taxonomies()}>
+            {(t) => (
+              <option value={t.name} selected={f().taxonomy === t.name}>
+                {t.label}
+              </option>
+            )}
+          </For>
+        </select>
+      </>
+    );
     const targetFields = () =>
       types()
         .find((t) => t.name === f().target)
@@ -450,21 +479,7 @@ export function TypeEditor() {
                     }}
                   />
                 </Show>
-                <Show when={f().kind === "taxonomy"}>
-                  <label for={id("taxonomy")}>Taxonomy</label>
-                  <select id={id("taxonomy")} onChange={(e) => set((x) => (x.taxonomy = e.currentTarget.value))}>
-                    <option value="" selected={!f().taxonomy}>
-                      —
-                    </option>
-                    <For each={taxonomies()}>
-                      {(t) => (
-                        <option value={t.name} selected={f().taxonomy === t.name}>
-                          {t.label}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                </Show>
+                <Show when={f().kind === "taxonomy"}>{taxonomySelect()}</Show>
                 <Show when={f().kind === "reference"}>
                   <label for={id("target")}>Target type</label>
                   <select id={id("target")} onChange={(e) => set((x) => (x.target = e.currentTarget.value))}>
@@ -534,20 +549,21 @@ export function TypeEditor() {
                       set((x) => {
                         const v = e.currentTarget.value as FieldModel["items"];
                         if (x.kind === "list") x.items = v;
-                        else x.values = v;
+                        else if (v !== "taxonomy") x.values = v;
                         x.default = undefined;
                       })
                     }
                   >
-                    <For each={SCALARS}>
+                    <For each={f().kind === "list" ? ITEM_KINDS : SCALARS}>
                       {(s) => (
                         <option value={s} selected={(f().kind === "list" ? f().items : f().values) === s}>
-                          {KIND_LABELS[s]}
+                          {s === "taxonomy" ? "Taxonomy terms" : KIND_LABELS[s]}
                         </option>
                       )}
                     </For>
                   </select>
                 </Show>
+                <Show when={isTermList(f())}>{taxonomySelect()}</Show>
                 <Show when={f().kind === "date_range"}>
                   <label for={id("of")}>Ends are</label>
                   <select
@@ -594,6 +610,7 @@ export function TypeEditor() {
                     {(_kind) => (
                     <FieldInput
                       field={defaultDef(f())}
+                      fixedTerms
                       value={f().default}
                       onChange={(v) => set((x) => (x.default = v))}
                       label={`Default for ${f().name}`}

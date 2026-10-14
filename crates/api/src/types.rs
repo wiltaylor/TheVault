@@ -99,6 +99,10 @@ fn field_json(f: &FieldDef) -> Value {
             json!({ "of": if *datetime { "datetime" } else { "date" } })
         }
         FieldKind::Select { options } => json!({ "options": options }),
+        // A list of terms reads as a multiple taxonomy field; `items` says how it was declared.
+        FieldKind::Taxonomy { taxonomy } if f.term_list => {
+            json!({ "taxonomy": taxonomy, "items": "taxonomy" })
+        }
         FieldKind::Taxonomy { taxonomy } => json!({ "taxonomy": taxonomy }),
         FieldKind::Reference(r) => json!({
             "target": r.target.as_deref().unwrap_or("*"),

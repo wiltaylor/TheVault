@@ -65,6 +65,10 @@ fn field_json(f: &FieldDef) -> Value {
         }
         FieldKind::Taxonomy { taxonomy } => {
             out.insert("taxonomy".into(), json!(taxonomy));
+            if f.term_list {
+                // Declared as a list of terms; it reads as a multiple taxonomy field.
+                out.insert("items".into(), json!("taxonomy"));
+            }
         }
         FieldKind::Reference(r) => {
             out.insert("target".into(), json!(r.target.as_deref().unwrap_or("*")));
@@ -154,6 +158,7 @@ pub(crate) fn taxonomy_json(t: &Taxonomy) -> Value {
         "name": t.name,
         "label": t.label,
         "description": t.description,
+        "allow_new": t.allow_new,
         "terms": terms(&t.terms, ""),
     })
 }

@@ -128,11 +128,17 @@ impl Writer {
         let mut prepared: Vec<Result<Prepared>> = ops
             .into_iter()
             .map(|op| {
-                let p = self.prepare_op(&inner, op, author)?;
+                let mut p = self.prepare_op(&inner, op, author)?;
                 // Validate each item on its own first, so every invalid item is reported, not
                 // only the first the combined write meets.
-                if let Some(change) = &p.change {
-                    self.render(&inner, std::slice::from_ref(change))?;
+                if let Some(change) = &mut p.change {
+                    let one = std::slice::from_mut(change);
+                    match crate::terms::Growth::changes(&inner.schema, one)?
+                        .finish(&inner.schema)?
+                    {
+                        Some((grown, _)) => self.render(&grown, one)?,
+                        None => self.render(&inner.schema, one)?,
+                    };
                 }
                 Ok(p)
             })

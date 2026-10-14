@@ -46,6 +46,7 @@ export interface FieldDef {
   target?: string;
   relation?: "one_way" | "two_way" | "peer";
   inverse?: string | null;
+  /** `list`: the item kind. On a multiple `taxonomy` field, `"taxonomy"` says it was declared as a list of terms. */
   items?: string;
   values?: string;
   /** `location`: the image an image map's pins sit on, null on a real-world map. */
@@ -88,6 +89,8 @@ export interface Taxonomy {
   name: string;
   label: string;
   description: string | null;
+  /** Open: a note saved with a term the taxonomy lacks adds it. */
+  allow_new?: boolean;
   terms: Term[];
 }
 

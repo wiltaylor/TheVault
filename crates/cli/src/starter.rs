@@ -1,5 +1,6 @@
 //! The starter pack `vault init --starter` adds: the Task, Project, Person and Note types, the
-//! Status taxonomy, a few example notes and a dashboard note with kanban and calendar views (D37).
+//! Status and Tags taxonomies, a few example notes and a dashboard note with kanban and calendar
+//! views (D37). Tags is open, so a note's new tag adds itself to it.
 //!
 //! Definitions are written as they are. Notes go through `writer`, so they are validated, stamped
 //! and recorded in `state.db` like any other write. A note file may hold `{{id:<key>}}`, the id
@@ -15,7 +16,10 @@ use writer::{Input, Writer};
 
 use crate::Fail;
 
-const TAXONOMIES: &[(&str, &str)] = &[("status", include_str!("../starter/taxonomies/status.wcl"))];
+const TAXONOMIES: &[(&str, &str)] = &[
+    ("status", include_str!("../starter/taxonomies/status.wcl")),
+    ("tags", include_str!("../starter/taxonomies/tags.wcl")),
+];
 
 const TYPES: &[(&str, &str)] = &[
     ("person", include_str!("../starter/types/person.wcl")),

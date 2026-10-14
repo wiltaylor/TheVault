@@ -1,0 +1,3 @@
+label       = "Tags"
+description = "Free-form tags. Type a new tag on a note to add it here."
+allow_new   = true

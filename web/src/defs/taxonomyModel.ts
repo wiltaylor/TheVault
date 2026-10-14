@@ -16,6 +16,8 @@ export interface TermModel {
 export interface TaxonomyModel {
   label: string;
   description: string;
+  /** Open: fields may add new terms, as a note is saved with one. */
+  allow_new: boolean;
   terms: TermModel[];
 }
 
@@ -24,6 +26,7 @@ export interface SchemaTaxonomy {
   name: string;
   label: string;
   description: string | null;
+  allow_new?: boolean;
   terms: SchemaTerm[];
 }
 
@@ -53,7 +56,12 @@ function termFromSchema(t: SchemaTerm): TermModel {
 }
 
 export function taxonomyFromSchema(t: SchemaTaxonomy): TaxonomyModel {
-  return { label: t.label, description: t.description ?? "", terms: t.terms.map(termFromSchema) };
+  return {
+    label: t.label,
+    description: t.description ?? "",
+    allow_new: t.allow_new === true,
+    terms: t.terms.map(termFromSchema),
+  };
 }
 
 /** Every term with its path in the edited tree, parents before children. */
@@ -115,7 +123,8 @@ export function termRenames(m: TaxonomyModel): Record<string, string> {
 export function problems(m: TaxonomyModel): string[] {
   const out: string[] = [];
   if (!m.label.trim()) out.push("The taxonomy needs a label.");
-  if (m.terms.length === 0) out.push("A taxonomy needs at least one term.");
+  // An open taxonomy may start empty: its fields add its terms.
+  if (m.terms.length === 0 && !m.allow_new) out.push("A taxonomy needs at least one term.");
   const check = (list: TermModel[], where: string) => {
     const seen = new Set<string>();
     for (const t of list) {
@@ -140,7 +149,10 @@ function termWcl(t: TermModel, indent: string): string {
 }
 
 export function taxonomyWcl(m: TaxonomyModel): string {
-  const head = wclField("label", m.label.trim()) + wclField("description", m.description.trim() || undefined);
+  const head =
+    wclField("label", m.label.trim()) +
+    wclField("description", m.description.trim() || undefined) +
+    wclField("allow_new", m.allow_new || undefined);
   return [head, ...m.terms.map((t) => termWcl(t, ""))].join("\n");
 }
 

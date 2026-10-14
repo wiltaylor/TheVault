@@ -420,11 +420,12 @@ related  = ["01JB8Z4K2MQ7V3X9T5R6W8Y2ZD", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZE"]
 
 ### `list`
 
-An ordered list of scalar values of one kind.
+An ordered list of scalar values of one kind, or of taxonomy terms.
 
 | Item | Form | Meaning |
 |------|------|---------|
-| `items` | string | Required. One of `string`, `int`, `float`, `bool`, `date`, `datetime`, `url` |
+| `items` | string | Required. One of `string`, `int`, `float`, `bool`, `date`, `datetime`, `url` and `taxonomy` |
+| `taxonomy` | string | Required with `items = "taxonomy"`, and allowed only with it. The taxonomy name, a file stem in `taxonomies/` |
 
 ```wcl
 field aliases {
@@ -435,6 +436,20 @@ field aliases {
 
 ```wcl
 aliases = ["importer", "capacities import"]
+```
+
+A list with `items = "taxonomy"` holds term paths. It is a `taxonomy` field with `multiple = true` in every respect but how it is declared: a note writes the same list, values are checked against the taxonomy the same way, a term can appear once, queries such as `has()` and `under()` treat it the same, and a kanban view cannot group by it. A `default` must hold terms the taxonomy already has. `multiple` is not allowed on a list.
+
+```wcl
+field tags {
+  kind     = "list"
+  items    = "taxonomy"
+  taxonomy = "tags"
+}
+```
+
+```wcl
+tags = ["Gardening", "Gardening/Roses"]
 ```
 
 ### `dict`
@@ -1034,7 +1049,7 @@ The control kinds, and the fields each fits:
 | `checkbox` | A checkbox | `bool` |
 | `dropdown` | A list to choose one value from: a taxonomy's terms with their hierarchy, or a note search for a reference | single `select`, `taxonomy` or `reference` |
 | `radio` | One radio button per option | single `select` |
-| `chips` | The values as chips, removed one at a time, with a box that adds one and suggests values | `list` of strings, multiple `select`, `taxonomy` or `reference` |
+| `chips` | The values as chips, removed one at a time, with a box that adds one and suggests values. On an open taxonomy the box can add a new term | `list` of strings or terms, multiple `select`, `taxonomy` or `reference` |
 | `calendar` | A month calendar in place. For a range, the first click picks the start and the second the end | `date`, `date_range` of dates |
 | `datetime` | A date and time box | `datetime` |
 | `time` | The time of day of a datetime. A new time keeps the date the field has, or takes today's when it is empty | `datetime` |
@@ -1381,7 +1396,8 @@ canvas board {
 |------|------|---------|
 | `label` | string | Required. Display name |
 | `description` | string | Help text |
-| `term "<name>" { ... }` | block | At least one top-level term. Order is display order, which is also kanban column order |
+| `allow_new` | bool | Default `false`. `true` makes the taxonomy open: notes may add terms to it. See [Open taxonomies](#open-taxonomies) |
+| `term "<name>" { ... }` | block | At least one top-level term, unless `allow_new` is `true`. Order is display order, which is also kanban column order |
 
 Each `term` holds:
 
@@ -1417,6 +1433,25 @@ term "Active" {
 term "Done" {
   colour = "green"
 }
+```
+
+### Open taxonomies
+
+A taxonomy with `allow_new = true` is open. When a note is saved, through the API, the CLI or the web client, with a term path an open taxonomy does not hold, the server adds the term to `taxonomies/<taxonomy>.wcl` in the same commit as the note. This holds for every `taxonomy` field and list of terms on the taxonomy. A closed taxonomy, the default, refuses a path it does not hold, as validation always has.
+
+- Each name in the path is matched to an existing term exactly, or else without case. A note saved with `["gardening"]` when `Gardening` exists holds `Gardening`, and no second term is added.
+- Only the last name in the path may be new. It is added as the last child of its parent, with no colour, so it takes its parent's colour. `Gardening/Roses` adds `Roses` under `Gardening`. A path whose parent does not exist, such as `Nowhere/Roses`, is a validation error at the field, and nothing is written. A write may add a term and a term under it together.
+- A name may not be empty or contain `/`.
+- A write that fails, for any reason, adds no term.
+- A planned type change that makes a field a list of terms of an open taxonomy adds the values its notes hold, matched exactly, in the same commit as the type file.
+- A field's `default` must still name terms the taxonomy has.
+
+The web client offers a typed name that matches no term as an "Add" suggestion in a multi-term field's chip picker. Single-term fields keep their dropdown and add no terms there.
+
+```wcl
+label       = "Tags"
+description = "Free-form tags."
+allow_new   = true
 ```
 
 ## Task files

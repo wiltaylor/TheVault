@@ -5,9 +5,10 @@ icon        = "file-text"
 colour      = "gray"
 
 field tags {
-  kind  = "list"
-  label = "Tags"
-  items = "string"
+  kind     = "list"
+  label    = "Tags"
+  items    = "taxonomy"
+  taxonomy = "tags"
 }
 
 field body {
