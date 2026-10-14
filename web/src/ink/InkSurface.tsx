@@ -3,7 +3,7 @@
 // device without pressure stores 0.5. Erasing removes whole strokes, and undo steps back through
 // this session's changes.
 
-import { For, Show, createSignal } from "solid-js";
+import { For, type JSX, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import type { Block } from "../api";
 import {
   BACKGROUNDS,
@@ -19,14 +19,38 @@ import {
   storedPoint,
   strokePath,
 } from "./ink";
+import { EraserIcon, HighlighterIcon, PaperIcon, PenIcon, SizeIcon, UndoIcon } from "./InkIcons";
 
 type Mode = Tool | "eraser";
 
-const MODES: { mode: Mode; label: string }[] = [
-  { mode: "pen", label: "Pen" },
-  { mode: "highlighter", label: "Highlighter" },
-  { mode: "eraser", label: "Eraser" },
+const MODES: { mode: Mode; label: string; Icon: () => JSX.Element }[] = [
+  { mode: "pen", label: "Pen", Icon: PenIcon },
+  { mode: "highlighter", label: "Highlighter", Icon: HighlighterIcon },
+  { mode: "eraser", label: "Eraser", Icon: EraserIcon },
 ];
+
+type Popover = "colour" | "size" | "paper";
+
+/**
+ * The ink colours offered as swatches: the default ink and the inline palette's hues (OQ-S4).
+ * Strokes store the hex, and the paper is light in both themes, so the hues are the light ones.
+ */
+const COLOURS: { name: string; hex: string }[] = [
+  { name: "Ink", hex: "#1f2937" },
+  { name: "Gray", hex: "#6b7280" },
+  { name: "Brown", hex: "#92400e" },
+  { name: "Orange", hex: "#ea580c" },
+  { name: "Yellow", hex: "#ca8a04" },
+  { name: "Green", hex: "#16a34a" },
+  { name: "Blue", hex: "#2563eb" },
+  { name: "Purple", hex: "#9333ea" },
+  { name: "Pink", hex: "#db2777" },
+  { name: "Red", hex: "#dc2626" },
+];
+
+const colourName = (hex: string) => COLOURS.find((c) => c.hex === hex)?.name ?? hex;
+
+const BACKGROUND_NAMES: Record<Background, string> = { blank: "Blank", lines: "Lines", grid: "Grid", dots: "Dots" };
 
 const SIZES = [2, 4, 8, 16];
 
@@ -144,36 +168,185 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
     }
   }
 
+  // The open popover of the controls, if any, closes on Escape or a press anywhere else.
+  const [open, setOpen] = createSignal<Popover | null>(null);
+  let controls: HTMLDivElement | undefined;
+  const triggers: Partial<Record<Popover, HTMLButtonElement>> = {};
+
+  function toggle(p: Popover) {
+    setOpen(open() === p ? null : p);
+  }
+
+  function close(refocus: boolean) {
+    const p = open();
+    setOpen(null);
+    if (refocus && p) triggers[p]?.focus({ preventScroll: true });
+  }
+
+  createEffect(() => {
+    if (!open()) return;
+    const outside = (e: PointerEvent) => {
+      if (!(e.target instanceof Node && controls?.contains(e.target))) close(false);
+    };
+    document.addEventListener("pointerdown", outside, true);
+    onCleanup(() => document.removeEventListener("pointerdown", outside, true));
+  });
+
+  function onPopoverKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      close(true);
+    }
+  }
+
+  /** Focus a popover's chosen item, or its first, once it shows. */
+  const focusChosen = (pop: HTMLElement) =>
+    queueMicrotask(() =>
+      (pop.querySelector<HTMLElement>("[aria-pressed='true']") ?? pop.querySelector<HTMLElement>("button, input"))?.focus({
+        preventScroll: true,
+      }),
+    );
+
+  function Trigger(p: { popover: Popover; label: string; title: string; children: JSX.Element }) {
+    return (
+      <button
+        type="button"
+        class="ink-action"
+        aria-label={p.label}
+        title={p.title}
+        aria-haspopup="true"
+        aria-expanded={open() === p.popover}
+        ref={(el) => (triggers[p.popover] = el)}
+        onClick={() => toggle(p.popover)}
+      >
+        {p.children}
+      </button>
+    );
+  }
+
   return (
     <div class="ink" data-testid="ink">
+      <div class="ink-stage">
       <Show when={props.onChange}>
-        <div class="ink-toolbar" role="toolbar" aria-label={`${props.label} tools`}>
-          <For each={MODES}>
-            {(m) => (
-              <button type="button" aria-pressed={mode() === m.mode} onClick={() => setMode(m.mode)}>
-                {m.label}
-              </button>
-            )}
-          </For>
-          <input
-            type="color"
-            aria-label="Ink colour"
-            value={colour()}
-            onInput={(e) => setColour(e.currentTarget.value.toLowerCase())}
-          />
-          <select aria-label="Stroke size" value={size()} onChange={(e) => setSize(Number(e.currentTarget.value))}>
-            <For each={SIZES}>{(s) => <option value={s}>{s}</option>}</For>
-          </select>
-          <select
-            aria-label="Background"
-            value={ink().background}
-            onChange={(e) => commit({ ...ink(), background: e.currentTarget.value as Background })}
-          >
-            <For each={BACKGROUNDS}>{(b) => <option value={b}>{b}</option>}</For>
-          </select>
-          <button type="button" disabled={history().length === 0} onClick={undo}>
-            Undo
-          </button>
+        <div class="ink-controls" ref={controls} data-node-view-interactive="" data-testid="ink-controls">
+          <div class="ink-cluster" role="toolbar" aria-label={`${props.label} tools`}>
+            <For each={MODES}>
+              {(m) => (
+                <button
+                  type="button"
+                  class="ink-action"
+                  aria-label={m.label}
+                  title={m.label}
+                  aria-pressed={mode() === m.mode}
+                  onClick={() => setMode(m.mode)}
+                >
+                  <m.Icon />
+                </button>
+              )}
+            </For>
+            <span class="ink-divider" aria-hidden="true" />
+            <span class="ink-popover-wrap">
+              <Trigger popover="colour" label="Colour" title={`Colour: ${colourName(colour())}`}>
+                <span class="ink-swatch" style={{ background: colour() }} />
+              </Trigger>
+              <Show when={open() === "colour"}>
+                <div class="ink-popover ink-palette" role="group" aria-label="Ink colours" onKeyDown={onPopoverKey} ref={focusChosen}>
+                  <For each={COLOURS}>
+                    {(c) => (
+                      <button
+                        type="button"
+                        class="ink-palette-item"
+                        aria-label={c.name}
+                        title={c.name}
+                        aria-pressed={colour() === c.hex}
+                        data-colour={c.hex}
+                        onClick={() => {
+                          setColour(c.hex);
+                          close(true);
+                        }}
+                      >
+                        <span class="ink-swatch" style={{ background: c.hex }} />
+                      </button>
+                    )}
+                  </For>
+                  <label class="ink-custom-colour" title="Any colour">
+                    <input
+                      type="color"
+                      aria-label="Ink colour"
+                      value={colour()}
+                      onInput={(e) => setColour(e.currentTarget.value.toLowerCase())}
+                    />
+                    <span>Custom</span>
+                  </label>
+                </div>
+              </Show>
+            </span>
+            <span class="ink-popover-wrap">
+              <Trigger popover="size" label="Stroke size" title={`Stroke size: ${size()}`}>
+                <SizeIcon size={size()} />
+              </Trigger>
+              <Show when={open() === "size"}>
+                <div class="ink-popover ink-menu" role="group" aria-label="Stroke sizes" onKeyDown={onPopoverKey} ref={focusChosen}>
+                  <For each={SIZES}>
+                    {(s) => (
+                      <button
+                        type="button"
+                        class="ink-menu-item"
+                        aria-label={`Size ${s}`}
+                        title={`Stroke size ${s}`}
+                        aria-pressed={size() === s}
+                        onClick={() => {
+                          setSize(s);
+                          close(true);
+                        }}
+                      >
+                        <SizeIcon size={s} />
+                        <span>{s}</span>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </span>
+          </div>
+          <div class="ink-cluster" role="toolbar" aria-label={`${props.label} actions`}>
+            <span class="ink-popover-wrap">
+              <Trigger popover="paper" label="Background" title={`Background: ${BACKGROUND_NAMES[ink().background]}`}>
+                <PaperIcon background={ink().background} />
+              </Trigger>
+              <Show when={open() === "paper"}>
+                <div class="ink-popover ink-menu end" role="group" aria-label="Backgrounds" onKeyDown={onPopoverKey} ref={focusChosen}>
+                  <For each={BACKGROUNDS}>
+                    {(b) => (
+                      <button
+                        type="button"
+                        class="ink-menu-item"
+                        aria-pressed={ink().background === b}
+                        onClick={() => {
+                          if (ink().background !== b) commit({ ...ink(), background: b });
+                          close(true);
+                        }}
+                      >
+                        <PaperIcon background={b} />
+                        <span>{BACKGROUND_NAMES[b]}</span>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </span>
+            <button
+              type="button"
+              class="ink-action"
+              aria-label="Undo"
+              title="Undo (Ctrl+Z)"
+              disabled={history().length === 0}
+              onClick={undo}
+            >
+              <UndoIcon />
+            </button>
+          </div>
         </div>
       </Show>
       <svg
@@ -226,6 +399,7 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
           {(s) => <path class={`ink-stroke ink-live ink-${s().tool}`} d={strokePath(s(), false)} fill={s().colour} />}
         </Show>
       </svg>
+      </div>
     </div>
   );
 }

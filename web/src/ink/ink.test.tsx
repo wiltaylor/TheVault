@@ -92,11 +92,82 @@ describe("InkSurface", () => {
     expect(block().blocks).toHaveLength(3);
   });
 
-  it("only shows the drawing without onChange", () => {
+  it("floats its controls on the surface: tools, colour swatches, sizes, background and undo", () => {
+    const [block, setBlock] = createSignal<Block>({ kind: "ink", fields: { width: 200, height: 100 }, blocks: [] });
+    const { getByRole, getByTestId, queryByRole } = render(() => (
+      <InkSurface block={block()} label="Drawing" onChange={setBlock} />
+    ));
+    const svg = getByRole("img", { name: "Drawing" });
+    const stage = svg.parentElement!;
+    expect(stage.classList.contains("ink-stage")).toBe(true);
+    // Both clusters sit inside the stage, over the drawing, not in a row above it.
+    const tools = getByRole("toolbar", { name: "Drawing tools" });
+    const actions = getByRole("toolbar", { name: "Drawing actions" });
+    expect(stage.contains(tools)).toBe(true);
+    expect(stage.contains(actions)).toBe(true);
+    expect(getByTestId("ink-controls").parentElement).toBe(stage);
+    for (const name of ["Pen", "Highlighter", "Eraser", "Colour", "Stroke size"]) {
+      const b = getByRole("button", { name });
+      expect(tools.contains(b)).toBe(true);
+      expect(b.getAttribute("title")).toBeTruthy();
+    }
+    expect(actions.contains(getByRole("button", { name: "Background" }))).toBe(true);
+    expect(actions.contains(getByRole("button", { name: "Undo" }))).toBe(true);
+
+    // Colour: a swatch from the popover, which then closes.
+    const colour = getByRole("button", { name: "Colour" });
+    expect(colour.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(colour);
+    expect(colour.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(getByRole("button", { name: "Blue" }));
+    expect(queryByRole("group", { name: "Ink colours" })).toBeNull();
+    // Size: a choice from its popover.
+    fireEvent.click(getByRole("button", { name: "Stroke size" }));
+    fireEvent.click(getByRole("button", { name: "Size 16" }));
+    fireEvent.click(getByRole("button", { name: "Highlighter" }));
+    expect(getByRole("button", { name: "Highlighter" }).getAttribute("aria-pressed")).toBe("true");
+    draw(svg, [10, 10], [190, 10]);
+    expect(block().blocks?.[0]?.fields).toMatchObject({ tool: "highlighter", colour: "#2563eb", size: 16 });
+
+    // Any colour still comes from the custom picker in the popover; Escape closes it.
+    fireEvent.click(getByRole("button", { name: "Colour" }));
+    fireEvent.input(getByRole("group", { name: "Ink colours" }).querySelector("input[type=color]")!, {
+      target: { value: "#ABCDEF" },
+    });
+    fireEvent.keyDown(getByRole("group", { name: "Ink colours" }), { key: "Escape" });
+    expect(queryByRole("group", { name: "Ink colours" })).toBeNull();
+    fireEvent.click(getByRole("button", { name: "Pen" }));
+    draw(svg, [10, 50], [190, 50]);
+    expect(block().blocks?.[1]?.fields).toMatchObject({ tool: "pen", colour: "#abcdef", size: 16 });
+
+    // Background: a choice from its popover, stored on the block and undoable.
+    fireEvent.click(getByRole("button", { name: "Background" }));
+    fireEvent.click(getByRole("button", { name: "Dots" }));
+    expect(block().fields?.background).toBe("dots");
+    fireEvent.click(getByRole("button", { name: "Undo" }));
+    expect(block().fields?.background).toBeUndefined();
+    expect(block().blocks).toHaveLength(2);
+  });
+
+  it("undoes with Ctrl+Z on the surface", () => {
+    const [block, setBlock] = createSignal<Block>({ kind: "ink", fields: { width: 200, height: 100 }, blocks: [] });
+    const { getByRole } = render(() => <InkSurface block={block()} label="Drawing" onChange={setBlock} />);
+    const svg = getByRole("img", { name: "Drawing" });
+    expect((getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+    draw(svg, [10, 10], [190, 10]);
+    expect((getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.keyDown(svg, { key: "z", ctrlKey: true });
+    expect(block().blocks).toHaveLength(0);
+  });
+
+  it("only shows the drawing without onChange, with no controls", () => {
     const b: Block = { kind: "ink", fields: { width: 200, height: 100 }, blocks: [] };
-    const { getByRole, queryByRole } = render(() => <InkSurface block={b} label="Drawing" />);
+    const { getByRole, getByTestId, queryByRole, queryByTestId } = render(() => <InkSurface block={b} label="Drawing" />);
     draw(getByRole("img", { name: "Drawing" }), [10, 10], [50, 10]);
     expect(queryByRole("toolbar")).toBeNull();
+    expect(queryByRole("button")).toBeNull();
+    expect(queryByTestId("ink-controls")).toBeNull();
+    expect(getByTestId("ink").querySelector(".ink-cluster, .ink-action")).toBeNull();
     expect(getByRole("img").querySelectorAll(".ink-stroke")).toHaveLength(0);
   });
 });

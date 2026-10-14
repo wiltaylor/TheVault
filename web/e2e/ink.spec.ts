@@ -157,7 +157,10 @@ test("stylus pressure from synthetic pointer events varies the stroke's width", 
   ]);
   await logIn(page, `/notes/${note.id}`);
   const surface = page.getByRole("textbox", { name: "Body" }).getByRole("img", { name: "Drawing" });
-  await page.getByRole("toolbar", { name: "Drawing tools" }).getByLabel("Stroke size").selectOption("16");
+  const tools = page.getByRole("toolbar", { name: "Drawing tools" });
+  await tools.getByRole("button", { name: "Stroke size" }).click();
+  await tools.getByRole("button", { name: "Size 16" }).click();
+  await expect(tools.getByRole("button", { name: "Stroke size" })).toHaveAttribute("title", "Stroke size: 16");
 
   const ramp = Array.from({ length: 10 }, (_, i) => 0.1 + i * 0.1);
   await penLine(surface, 100, 100, 700, ramp, 11);
@@ -214,4 +217,81 @@ test("an ink field renders its drawing surface on its tab and saves what is draw
   await page.reload();
   await page.getByRole("tab", { name: "Drawing" }).click();
   await expect(surface.locator("path.ink-stroke")).toHaveCount(1);
+});
+
+test("the drawing's controls float over its surface, and a read-only drawing has none", async ({ page, admin }) => {
+  const note = await create(admin, "task", `Controls ${token()}`, [
+    { kind: "content", labels: ["body"], blocks: [threeLines] },
+  ]);
+  await logIn(page, `/notes/${note.id}`);
+  const ink = page.getByRole("textbox", { name: "Body" }).getByTestId("ink");
+  const surface = ink.getByRole("img", { name: "Drawing" });
+  await expect(surface.locator("path.ink-stroke")).toHaveCount(3);
+  const area = (await surface.boundingBox())!;
+  const tools = ink.getByRole("toolbar", { name: "Drawing tools" });
+  const actions = ink.getByRole("toolbar", { name: "Drawing actions" });
+  // Both clusters lie within the surface's box: tools at its top left, actions at its top right.
+  for (const [cluster, side] of [
+    [tools, "left"],
+    [actions, "right"],
+  ] as const) {
+    const b = (await cluster.boundingBox())!;
+    expect(b.x).toBeGreaterThanOrEqual(area.x);
+    expect(b.y).toBeGreaterThanOrEqual(area.y);
+    expect(b.x + b.width).toBeLessThanOrEqual(area.x + area.width);
+    expect(b.y + b.height).toBeLessThan(area.y + area.height / 4);
+    if (side === "left") expect(b.x - area.x).toBeLessThan(16);
+    else expect(area.x + area.width - (b.x + b.width)).toBeLessThan(16);
+  }
+
+  // A colour from the swatch popover draws the next stroke; Escape closes the popover, back on its button.
+  await tools.getByRole("button", { name: "Colour" }).click();
+  const palette = ink.getByRole("group", { name: "Ink colours" });
+  await expect(palette).toBeVisible();
+  await palette.getByRole("button", { name: "Red" }).click();
+  await expect(palette).toHaveCount(0);
+  await tools.getByRole("button", { name: "Colour" }).click();
+  await expect(palette.getByRole("button", { name: "Red" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(palette).toHaveCount(0);
+  await expect(tools.getByRole("button", { name: "Colour" })).toBeFocused();
+  // The background, from its popover by keyboard.
+  await actions.getByRole("button", { name: "Background" }).focus();
+  await page.keyboard.press("Enter");
+  await ink.getByRole("group", { name: "Backgrounds" }).getByRole("button", { name: "Lines" }).click();
+  await mouseLine(page, surface, 350, 100, 700);
+  await expect(surface.locator("path.ink-stroke")).toHaveCount(4);
+  await saveAndWait(page);
+  const saved = bodyInk(await stored(admin, note.id))[0]!;
+  expect(saved.fields).toEqual({ width: 800, height: 400, background: "lines" });
+  expect(saved.blocks?.[3]?.fields?.colour).toBe("#dc2626");
+
+  // Undo from the actions cluster takes the stroke back off.
+  await actions.getByRole("button", { name: "Undo" }).click();
+  await expect(surface.locator("path.ink-stroke")).toHaveCount(3);
+
+  // A version previewed from the history panel shows the drawing alone, with no controls on it.
+  const drawing = { ...threeLines, labels: ["drawing"] };
+  const sketch = await create(admin, "sketch", `Preview ${token()}`, [drawing]);
+  const { version } = (await stored(admin, sketch.id)) as Stored & { version: string };
+  const put = await admin.put(`/api/notes/${sketch.id}`, {
+    data: { note: { fields: { title: `Preview later ${token()}` }, blocks: [drawing] }, base_version: version },
+  });
+  expect(put.status(), await put.text()).toBe(200);
+  await page.goto(`/notes/${sketch.id}`);
+  await page.getByRole("tab", { name: "Drawing" }).click();
+  const live = page.getByTestId("field-drawing").getByTestId("ink");
+  await expect(live.getByRole("toolbar", { name: "Drawing tools" })).toBeVisible();
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  const list = page.getByRole("complementary", { name: "History" }).getByRole("list", { name: "Versions" });
+  await expect(list.getByRole("listitem")).toHaveCount(2);
+  // The older version, which has the same drawing.
+  await list.getByRole("listitem").nth(1).getByRole("button").first().click();
+  await expect(page.getByRole("region", { name: "Version preview" })).toBeVisible();
+  await page.getByRole("tab", { name: "Drawing" }).click();
+  const shown = page.getByTestId("field-drawing").getByTestId("ink");
+  await expect(shown.locator("path.ink-stroke")).toHaveCount(3);
+  await expect(shown.getByRole("toolbar")).toHaveCount(0);
+  await expect(shown.getByRole("button")).toHaveCount(0);
+  await expect(shown.getByTestId("ink-controls")).toHaveCount(0);
 });
