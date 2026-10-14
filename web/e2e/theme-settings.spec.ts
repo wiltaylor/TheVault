@@ -173,7 +173,10 @@ test("the type and template editors open under the settings tabs, and their old 
   await page.goto(`/types/${name}`);
   await expect(page).toHaveURL(new RegExp(`/types/${name}$`));
   await expect(tabs).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Edit type" })).toHaveAttribute("href", `/settings/types/${name}/edit`);
+  await expect(page.getByRole("button", { name: "New " + name.toLowerCase() }).or(page.getByRole("link", { name: "New " + name.toLowerCase() }))).toBeVisible();
+  // Editing the type and its templates lives in settings only.
+  await expect(page.getByRole("link", { name: "Edit type" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Templates" })).toHaveCount(0);
 });
 
 test("assets open from their card in the types gallery", async ({ page, admin }) => {

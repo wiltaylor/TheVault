@@ -132,8 +132,6 @@ function TypeNotes(props: { type: TypeDef }) {
           <A href={`/notes/new?type=${encodeURIComponent(name())}`} class="button primary">
             New {props.type.label.toLowerCase()}
           </A>
-          <A href={`/settings/types/${name()}/edit`}>Edit type</A>
-          <A href={`/settings/types/${name()}/templates`}>Templates</A>
         </div>
       </header>
 
