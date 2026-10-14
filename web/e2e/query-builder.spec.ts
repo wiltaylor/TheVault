@@ -69,7 +69,9 @@ test("building a query with a type, two conditions, a sort and a limit produces 
   await expect(builder).toBeVisible();
   await expect(builder.getByLabel("Sort field")).toHaveValue("title");
 
-  await builder.getByRole("checkbox", { name: "Task" }).check();
+  await builder.getByRole("button", { name: "Add to Types" }).click();
+  await builder.getByRole("combobox", { name: "Add to Types" }).fill("tas");
+  await builder.getByRole("option", { name: "Task", exact: true }).click();
   await builder.getByRole("button", { name: "Add condition" }).click();
   const conditions = builder.getByTestId("condition");
   await conditions.nth(0).getByLabel("Field").fill("status");
@@ -102,7 +104,7 @@ test("agent-written query text opened in the builder and saved unchanged stays b
   const settings = await editNote(p, note.id, title);
   const builder = settings.getByRole("group", { name: "Query builder" });
   await expect(builder).toBeVisible();
-  await expect(builder.getByRole("checkbox", { name: "Task" })).toBeChecked();
+  await expect(builder.locator(".query-builder-from .chip")).toHaveText(["Task×"]);
   await expect(builder.getByTestId("condition")).toHaveCount(2);
   await expect(builder.getByTestId("condition").nth(1).getByLabel("Field")).toHaveValue("estimate");
   await expect(builder.getByLabel("Limit")).toHaveValue("10");

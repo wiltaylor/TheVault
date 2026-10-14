@@ -1,5 +1,6 @@
 import { Index, Show, createEffect, createMemo, createSignal, createUniqueId, onMount } from "solid-js";
 import { type TypeDef, api } from "../api";
+import { ChipPicker, typeSuggestions } from "../components/ChipPicker";
 import {
   type Condition,
   type Group,
@@ -147,19 +148,13 @@ export function QueryEditor(props: { value: string; onChange: (text: string) => 
 function Builder(props: { model: QueryModel; onChange: (m: QueryModel) => void; types: TypeDef[] }) {
   const fieldList = createUniqueId();
   const set = <K extends keyof QueryModel>(key: K, value: QueryModel[K]) => props.onChange({ ...props.model, [key]: value });
-  // Type names in the model that the vault does not define still show, so they can be unticked.
-  const typeNames = createMemo(() => {
-    const known = props.types.map((t) => t.name);
-    return [...known, ...props.model.from.filter((n) => !known.includes(n))];
-  });
+  const typesLabel = createUniqueId();
   const label = (name: string) => props.types.find((t) => t.name === name)?.label ?? name;
   const fieldNames = createMemo(() => {
     const from = props.model.from;
     const types = from.length ? props.types.filter((t) => from.includes(t.name)) : props.types;
     return [...new Set(types.flatMap((t) => t.fields.map((f) => f.name)))].sort();
   });
-  const toggleType = (name: string, on: boolean) =>
-    set("from", on ? [...props.model.from, name] : props.model.from.filter((n) => n !== name));
   const setSort = (i: number, next: Sort | null) => {
     const sort = props.model.sort.slice();
     if (next) sort[i] = next;
@@ -173,19 +168,17 @@ function Builder(props: { model: QueryModel; onChange: (m: QueryModel) => void; 
         <Index each={fieldNames()}>{(f) => <option value={f()} />}</Index>
       </datalist>
       <fieldset class="query-builder-from">
-        <legend>Types</legend>
-        <Index each={typeNames()}>
-          {(name) => (
-            <label class="query-builder-check">
-              <input
-                type="checkbox"
-                checked={props.model.from.includes(name())}
-                onChange={(e) => toggleType(name(), e.currentTarget.checked)}
-              />
-              {label(name())}
-            </label>
-          )}
-        </Index>
+        <legend id={typesLabel}>Types</legend>
+        <ChipPicker
+          label="Types"
+          labelledBy={typesLabel}
+          values={props.model.from}
+          chipText={label}
+          chipIcon={(name) => props.types.find((t) => t.name === name)?.icon ?? null}
+          suggest={(text) => typeSuggestions(props.types, text)}
+          placeholder="Find a type"
+          onChange={(from) => set("from", from)}
+        />
         <Show when={props.model.from.length === 0}>
           <span class="query-builder-hint">Every type</span>
         </Show>

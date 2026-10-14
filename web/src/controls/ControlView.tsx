@@ -2,8 +2,10 @@
 // through the note's own edit path (docs/vault-format.md, "control"). Every kind is keyboard
 // accessible and labelled; a computed field, or a control with no note to edit, is read-only.
 
-import { For, type JSX, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, type JSX, Match, Show, Switch, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import { type Block, type FieldDef, type Json, type Row, api } from "../api";
+import { ChipPicker, matches, termSuggestions } from "../components/ChipPicker";
+import { Combobox, type Suggestion } from "../components/Combobox";
 import { datetimeInput, datetimeValue, findNotes, termOptions } from "../components/FieldInput";
 import { noteTitle } from "../editor/titles";
 import { TITLE_FIELD } from "../notes";
@@ -14,9 +16,7 @@ import {
   type ControlSpec,
   addMonths,
   calendarPick,
-  chipsAdd,
   chipsOf,
-  chipsRemove,
   clampNumber,
   controlFits,
   controlOf,
@@ -500,146 +500,6 @@ function RadioInput(props: Part) {
   );
 }
 
-/** A suggestion a combobox offers: the value it writes and the text it shows. */
-interface Suggestion {
-  value: string;
-  text: string;
-  depth?: number;
-}
-
-/**
- * A text box with a list of suggestions under it, driven from the box with the arrow keys, Enter
- * and Escape (the ARIA combobox pattern). `choose` takes a suggestion, or the typed text when
- * none is highlighted.
- */
-function Combobox(props: {
-  id: string;
-  label: string;
-  placeholder?: string;
-  disabled: boolean;
-  describedBy?: string;
-  /** What the box shows when it is not being typed in. */
-  shown?: () => string;
-  suggest: (text: string) => Promise<Suggestion[]> | Suggestion[];
-  choose: (s: Suggestion | null, text: string) => void;
-  onBackspaceEmpty?: () => void;
-  /** Focus the box as soon as it shows. */
-  autoFocus?: boolean;
-  /** The box is done with: Escape with no list open, or focus leaving it empty. */
-  onDone?: () => void;
-}) {
-  const [open, setOpen] = createSignal(false);
-  const [items, setItems] = createSignal<Suggestion[]>([]);
-  const [active, setActive] = createSignal(-1);
-  const listId = `${props.id}-list`;
-  let input!: HTMLInputElement;
-  let run = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  onCleanup(() => clearTimeout(timer));
-  function refresh(text: string) {
-    const mine = ++run;
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
-      try {
-        const list = await props.suggest(text);
-        if (mine !== run) return;
-        setItems(list);
-        setActive(-1);
-      } catch {
-        if (mine === run) setItems([]);
-      }
-    }, 120);
-  }
-  function pick(s: Suggestion | null) {
-    props.choose(s, input.value);
-    input.value = props.shown?.() ?? "";
-    setOpen(false);
-    setItems([]);
-  }
-  createEffect(() => {
-    const t = props.shown?.() ?? "";
-    if (document.activeElement !== input) input.value = t;
-  });
-  onMount(() => {
-    if (props.autoFocus) input.focus();
-  });
-  return (
-    <div class="control-combo">
-      <input
-        ref={input}
-        id={props.id}
-        role="combobox"
-        aria-label={props.label}
-        aria-autocomplete="list"
-        aria-expanded={open() && items().length > 0}
-        aria-controls={listId}
-        aria-activedescendant={active() >= 0 ? `${listId}-${active()}` : undefined}
-        aria-describedby={props.describedBy || undefined}
-        placeholder={props.placeholder}
-        disabled={props.disabled}
-        autocomplete="off"
-        onFocus={(e) => {
-          if (props.shown) e.currentTarget.select();
-          setOpen(true);
-          refresh(props.shown ? "" : e.currentTarget.value);
-        }}
-        onInput={(e) => {
-          setOpen(true);
-          refresh(e.currentTarget.value);
-        }}
-        onBlur={() => {
-          setOpen(false);
-          input.value = props.shown?.() ?? input.value;
-          if (props.onDone && input.value.trim() === "") props.onDone();
-        }}
-        onKeyDown={(e) => {
-          const n = items().length;
-          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-            e.preventDefault();
-            setOpen(true);
-            if (n) setActive((active() + (e.key === "ArrowDown" ? 1 : n - 1 + (active() < 0 ? 1 : 0))) % n);
-          } else if (e.key === "Enter") {
-            e.preventDefault();
-            pick(open() && active() >= 0 ? (items()[active()] ?? null) : null);
-          } else if (e.key === "Escape") {
-            // Only a list that is showing takes the Escape; otherwise the box is done with.
-            if (open() && items().length > 0) {
-              e.preventDefault();
-              e.stopPropagation();
-              setOpen(false);
-            } else if (props.onDone) {
-              e.preventDefault();
-              e.stopPropagation();
-              props.onDone();
-            }
-          } else if (e.key === "Backspace" && input.value === "" && props.onBackspaceEmpty) {
-            props.onBackspaceEmpty();
-          }
-        }}
-      />
-      <Show when={open() && items().length > 0}>
-        <ul class="control-options" role="listbox" id={listId} aria-label={`${props.label} suggestions`} data-node-view-interactive>
-          <For each={items()}>
-            {(s, i) => (
-              <li
-                role="option"
-                id={`${listId}-${i()}`}
-                aria-selected={i() === active()}
-                style={{ "padding-left": `${0.6 + (s.depth ?? 0) * 0.9}rem` }}
-                onMouseDown={(e) => e.preventDefault()}
-                onMouseMove={() => setActive(i())}
-                onClick={() => pick(s)}
-              >
-                {s.text}
-              </li>
-            )}
-          </For>
-        </ul>
-      </Show>
-    </div>
-  );
-}
-
 const titleOf = (id: string) => noteTitle(id) ?? id;
 
 function ReferenceDropdown(props: Part) {
@@ -674,7 +534,6 @@ function ReferenceDropdown(props: Part) {
 
 function ChipsInput(props: Part) {
   const f = () => props.field;
-  const chips = () => chipsOf(props.value());
   const text = (v: string) => {
     if (f().kind === "reference") return titleOf(v);
     return v;
@@ -692,96 +551,36 @@ function ChipsInput(props: Part) {
     return known;
   }
   async function suggest(q: string): Promise<Suggestion[]> {
-    const t = q.trim().toLowerCase();
-    const have = new Set(chips());
-    const match = (s: Suggestion) => !have.has(s.value) && (t === "" || s.text.toLowerCase().includes(t) || s.value.toLowerCase().includes(t));
     switch (f().kind) {
       case "select":
-        return (f().options ?? []).map((o) => ({ value: o, text: o })).filter(match);
+        return (f().options ?? []).filter((o) => matches(q, o)).map((o) => ({ value: o, text: o }));
       case "taxonomy":
-        return termOptions(taxonomyDef(f().taxonomy ?? "")?.terms ?? []).filter(match);
+        return termSuggestions(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], q);
       case "reference":
-        return (await findNotes(f().target ?? "*", q)).filter((r) => !have.has(r.id)).map((r) => ({ value: r.id, text: r.title || "Untitled" }));
+        return (await findNotes(f().target ?? "*", q)).map((r) => ({ value: r.id, text: r.title || "Untitled" }));
       default:
-        return (await listValues()).map((v) => ({ value: v, text: v })).filter(match).slice(0, 20);
+        return (await listValues())
+          .filter((v) => matches(q, v))
+          .slice(0, 20)
+          .map((v) => ({ value: v, text: v }));
     }
   }
-  function choose(s: Suggestion | null, typed: string) {
-    if (s) return props.commit(chipsAdd(props.value(), s.value));
-    const t = typed.trim();
-    if (!t) return;
-    if (f().kind === "list") return props.commit(chipsAdd(props.value(), t));
-    // A choice field takes only its options or terms, matched without case.
-    const options: Suggestion[] =
-      f().kind === "select"
-        ? (f().options ?? []).map((o) => ({ value: o, text: o }))
-        : f().kind === "taxonomy"
-          ? termOptions(taxonomyDef(f().taxonomy ?? "")?.terms ?? [])
-          : [];
-    const hit = options.find((o) => o.value.toLowerCase() === t.toLowerCase() || o.text.toLowerCase() === t.toLowerCase());
-    if (hit) props.commit(chipsAdd(props.value(), hit.value));
-    else props.complain(f().kind === "reference" ? "Choose a note from the list." : `${t} is not one of the choices.`);
-  }
-  // The add box shows only after + is pressed, and goes back to + when done with.
-  const [adding, setAdding] = createSignal(false);
-  let plus: HTMLButtonElement | undefined;
   return (
-    <div class="control-chips" role="group" aria-labelledby={props.labelId} aria-describedby={props.describedBy || undefined}>
-      <ul class="chips" aria-label={`${props.label} values`}>
-        <For each={chips()}>
-          {(c) => (
-            <li class="chip" data-value={c}>
-              <span>{text(c)}</span>
-              <Show when={!props.disabled}>
-                <button type="button" aria-label={`Remove ${text(c)}`} onClick={() => props.commit(chipsRemove(props.value(), c))}>
-                  ×
-                </button>
-              </Show>
-            </li>
-          )}
-        </For>
-        <Show when={chips().length === 0 && props.disabled}>
-          <li class="muted">—</li>
-        </Show>
-      </ul>
-      <Show when={!props.disabled}>
-        <Show
-          when={adding()}
-          fallback={
-            <button
-              type="button"
-              ref={plus}
-              id={props.id}
-              class="chip-add"
-              aria-label={`Add to ${props.label}`}
-              title={`Add to ${props.label}`}
-              onClick={() => setAdding(true)}
-            >
-              +
-            </button>
-          }
-        >
-          <Combobox
-            id={props.id}
-            label={`Add to ${props.label}`}
-            placeholder={props.placeholder ?? "Add…"}
-            disabled={props.disabled}
-            suggest={suggest}
-            choose={choose}
-            autoFocus
-            onDone={() => {
-              const hadFocus = document.activeElement?.closest(".control-chips") !== null;
-              setAdding(false);
-              if (hadFocus) queueMicrotask(() => plus?.focus());
-            }}
-            onBackspaceEmpty={() => {
-              const last = chips().at(-1);
-              if (last !== undefined) props.commit(chipsRemove(props.value(), last));
-            }}
-          />
-        </Show>
-      </Show>
-    </div>
+    <ChipPicker
+      class="control-chips"
+      id={props.id}
+      label={props.label}
+      labelledBy={props.labelId}
+      describedBy={props.describedBy}
+      values={chipsOf(props.value())}
+      chipText={text}
+      suggest={suggest}
+      freeText={f().kind === "list"}
+      disabled={props.disabled}
+      placeholder={props.placeholder ?? "Add…"}
+      onChange={(values) => props.commit(values.length ? values : undefined)}
+      onReject={(t) => props.complain(f().kind === "reference" ? "Choose a note from the list." : `${t} is not one of the choices.`)}
+    />
   );
 }
 

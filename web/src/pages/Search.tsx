@@ -6,6 +6,7 @@ import { A, useLocation, useNavigate } from "@solidjs/router";
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { type FieldDef, type Row, type TypeDef, api } from "../api";
 import { copyText } from "../blocks/CodeBlock";
+import { ChipPicker, typeSuggestions } from "../components/ChipPicker";
 import { FieldInput, termOptions } from "../components/FieldInput";
 import { SearchIcon, TypeIcon } from "../components/Icon";
 import { createPagedRows } from "../components/pagedRows";
@@ -133,11 +134,6 @@ export function Search() {
     copiedTimer = setTimeout(() => setCopied(null), 2000);
   }
 
-  function addType(name: string) {
-    if (!name || draft().types.includes(name)) return;
-    update({ ...draft(), types: [...draft().types, name] });
-  }
-
   function addFilter(section: Filter["section"], value: string) {
     if (!value) return;
     const [owner, name] = value.split(".") as [string, string];
@@ -182,27 +178,22 @@ export function Search() {
       </div>
 
       <div id="search-filters" class="search-filters" classList={{ open: filtersOpen() }}>
-        <Show when={draft().types.length}>
-          <div class="filter-row" role="group" aria-label="Type filter" data-filter="type">
-            <span class="filter-field">Type</span>
-            <span class="filter-op">is</span>
-            <ul class="chips type-chips">
-              <For each={draft().types}>
-                {(name) => (
-                  <li class="chip">
-                    <TypeIcon name={typeDef(name)?.icon} size={14} />
-                    {typeDef(name)?.label ?? name}
-                    <button
-                      type="button"
-                      aria-label={`Remove type ${typeDef(name)?.label ?? name}`}
-                      onClick={() => update({ ...draft(), types: draft().types.filter((t) => t !== name) })}
-                    >
-                      ×
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
+        <div class="filter-row filter-types" role="group" aria-label="Type filter" data-filter="type">
+          <span class="filter-field" id="search-types-label">
+            Type
+          </span>
+          <ChipPicker
+            label="Types"
+            labelledBy="search-types-label"
+            values={draft().types}
+            chipText={(name) => typeDef(name)?.label ?? name}
+            chipIcon={(name) => typeDef(name)?.icon ?? null}
+            suggest={(text) => typeSuggestions(types(), text)}
+            placeholder="Find a type"
+            emptyText="Any"
+            onChange={(next) => update({ ...draft(), types: next })}
+          />
+          <Show when={draft().types.length}>
             <button
               type="button"
               class="filter-remove"
@@ -212,19 +203,14 @@ export function Search() {
             >
               ×
             </button>
-          </div>
-        </Show>
+          </Show>
+        </div>
 
         <Index each={draft().filters}>
           {(f, i) => <FilterRow filter={f()} chosen={draft().types} onChange={(next, key) => setFilter(i, next, key)} />}
         </Index>
 
         <div class="search-add">
-          <AddSelect label="Add type filter" text="Type" onPick={addType}>
-            <For each={types().filter((t) => !draft().types.includes(t.name))}>
-              {(t) => <option value={t.name}>{t.label}</option>}
-            </For>
-          </AddSelect>
           <AddSelect label="Add date filter" text="Date" onPick={(v) => addFilter("date", v)}>
             <For each={BUILTIN_DATES}>{(d) => <option value={`.${d.name}`}>{d.label}</option>}</For>
             <FieldOptions groups={fieldGroups(types(), draft().types, (f) => isDateField(f) && !f.computed)} />

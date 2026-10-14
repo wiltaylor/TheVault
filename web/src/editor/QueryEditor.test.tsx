@@ -58,6 +58,16 @@ function editor(start: string) {
 
 afterEach(() => vi.unstubAllGlobals());
 
+/** Add a type in the builder's type picker by typing part of its name and picking it. */
+async function addType(builder: HTMLElement, typed: string, label: string) {
+  const b = within(builder);
+  fireEvent.click(b.getByRole("button", { name: "Add to Types" }));
+  const box = b.getByRole("combobox", { name: "Add to Types" }) as HTMLInputElement;
+  box.value = typed;
+  fireEvent.input(box);
+  fireEvent.click(await b.findByRole("option", { name: label }));
+}
+
 describe("QueryEditor", () => {
   it("opens a query the builder can show in the builder, and never rewrites it unedited", async () => {
     // Written by an agent: not the canonical spacing, which the builder must not impose.
@@ -74,7 +84,7 @@ describe("QueryEditor", () => {
     const builder = await findByRole("group", { name: "Query builder" });
     expect(within(builder).getByLabelText("Field")).toHaveValue("status");
     expect(within(builder).getByLabelText("Value")).toHaveValue("todo");
-    expect(within(builder).getByRole("checkbox", { name: "Task" })).toBeChecked();
+    expect(within(builder).getByRole("button", { name: "Remove Task" })).toBeInTheDocument();
     expect(queryByLabelText("Query")).toBeNull();
 
     fireEvent.click(getByRole("button", { name: "Text" }));
@@ -108,7 +118,7 @@ describe("QueryEditor", () => {
     const builder = await findByRole("group", { name: "Query builder" });
     const b = within(builder);
 
-    fireEvent.change(b.getByRole("checkbox", { name: "Task" }), { target: { checked: true } });
+    await addType(builder, "tas", "Task");
     fireEvent.click(b.getByRole("button", { name: "Add condition" }));
     let rows = getAllByTestId("condition");
     fireEvent.input(within(rows[0]!).getByLabelText("Field"), { target: { value: "status" } });
@@ -148,7 +158,7 @@ describe("QueryEditor", () => {
     server({ "from *": EMPTY });
     const { findByRole, getByRole, getByLabelText, value } = editor("from *");
     const builder = await findByRole("group", { name: "Query builder" });
-    fireEvent.change(within(builder).getByRole("checkbox", { name: "Task" }), { target: { checked: true } });
+    await addType(builder, "TASKS", "Task");
     fireEvent.click(getByRole("button", { name: "Text" }));
     await waitFor(() => expect(value()).toBe("text 1"));
     expect(getByLabelText("Query")).toHaveValue("text 1");
@@ -158,7 +168,7 @@ describe("QueryEditor", () => {
     const { fetch } = server({ "from *": EMPTY });
     const { findByRole, getByRole, getByLabelText, value } = editor("from *");
     const builder = await findByRole("group", { name: "Query builder" });
-    fireEvent.change(within(builder).getByRole("checkbox", { name: "Task" }), { target: { checked: true } });
+    await addType(builder, "TASKS", "Task");
     fireEvent.click(getByRole("button", { name: "Text" }));
     fireEvent.input(getByLabelText("Query"), { target: { value: "from page" } });
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === "/api/query/text")).toBe(true));

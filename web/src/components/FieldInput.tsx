@@ -1,12 +1,14 @@
 // Editors for every field kind a note page edits in place (D3, D7). Content, ink and canvas fields
 // have editors of their own; a computed field is never given one.
 
-import { For, Match, Show, Switch, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createResource, createSignal, on } from "solid-js";
 import { type FieldDef, type Json, type Row, type Term, api } from "../api";
 import { knowTitle, noteTitle } from "../editor/titles";
 import { MapCanvas } from "../map/MapCanvas";
 import { geoPoint, imagePoint, mapKind } from "../map/model";
-import { taxonomyDef } from "../session";
+import { taxonomyDef, typeDef } from "../session";
+import { ChipPicker, matches, termSuggestions } from "./ChipPicker";
+import type { Suggestion } from "./Combobox";
 
 export interface FieldInputProps {
   field: FieldDef;
@@ -106,10 +108,9 @@ export function ScalarInput(props: {
 const asList = (v: Json | undefined): Json[] => (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]);
 const asStrings = (v: Json | undefined): string[] => asList(v).filter((x): x is string => typeof x === "string");
 
-/** A set of choices from `options`: one in a select, or several as checkboxes. */
+/** One choice from `options`, in a select. */
 function Choice(props: {
   options: { value: string; text: string; depth?: number }[];
-  multiple: boolean;
   required: boolean;
   value: Json | undefined;
   onChange: (v: Json | undefined) => void;
@@ -117,56 +118,62 @@ function Choice(props: {
   id: string;
 }) {
   return (
-    <Show
-      when={props.multiple}
-      fallback={
-        <select
-          id={props.id}
-          aria-label={props.label}
-          onChange={(e) => props.onChange(e.currentTarget.value === "" ? undefined : e.currentTarget.value)}
-        >
-          <Show when={!props.required || props.value === undefined}>
-            <option value="" selected={props.value === undefined}>
-              —
-            </option>
-          </Show>
-          <For each={props.options}>
-            {(o) => (
-              <option value={o.value} selected={props.value === o.value}>
-                {"\u00a0\u00a0".repeat(o.depth ?? 0) + o.text}
-              </option>
-            )}
-          </For>
-        </select>
-      }
+    <select
+      id={props.id}
+      aria-label={props.label}
+      onChange={(e) => props.onChange(e.currentTarget.value === "" ? undefined : e.currentTarget.value)}
     >
-      <div id={props.id} role="group" aria-label={props.label} class="choice-group">
-        <For each={props.options}>
-          {(o) => (
-            <label class="choice" style={{ "padding-left": `${(o.depth ?? 0) * 1.25}rem` }}>
-              <input
-                type="checkbox"
-                aria-label={o.value}
-                checked={asStrings(props.value).includes(o.value)}
-                onChange={(e) => {
-                  const now = asStrings(props.value).filter((x) => x !== o.value);
-                  if (e.currentTarget.checked) {
-                    // Keep the options' order, which is display order.
-                    const want = new Set([...now, o.value]);
-                    props.onChange(props.options.map((x) => x.value).filter((x) => want.has(x)));
-                  } else {
-                    props.onChange(now.length ? now : undefined);
-                  }
-                }}
-              />{" "}
-              {o.text}
-            </label>
-          )}
-        </For>
-      </div>
-    </Show>
+      <Show when={!props.required || props.value === undefined}>
+        <option value="" selected={props.value === undefined}>
+          —
+        </option>
+      </Show>
+      <For each={props.options}>
+        {(o) => (
+          <option value={o.value} selected={props.value === o.value}>
+            {"\u00a0\u00a0".repeat(o.depth ?? 0) + o.text}
+          </option>
+        )}
+      </For>
+    </select>
   );
 }
+
+/**
+ * A field's values as chips with a + to add to them: several, or one when the field is not
+ * `multiple`. An empty list is no value.
+ */
+function Picker(
+  props: FieldInputProps & {
+    suggest: (text: string) => Promise<Suggestion[]> | Suggestion[];
+    freeText?: boolean;
+    chipText?: (v: string) => string;
+    chipHref?: (v: string) => string | undefined;
+    /** What the add box shows before anything is typed. */
+    boxPlaceholder?: string;
+  },
+) {
+  const single = () => !props.field.multiple && props.field.kind !== "list";
+  return (
+    <ChipPicker
+      id={props.id}
+      label={props.label}
+      values={asStrings(props.value)}
+      single={single()}
+      suggest={props.suggest}
+      freeText={props.freeText}
+      chipText={props.chipText}
+      chipHref={props.chipHref}
+      placeholder={props.boxPlaceholder}
+      emptyText={props.placeholder}
+      onChange={(values) => props.onChange(values.length === 0 ? undefined : single() ? values[0] : values)}
+    />
+  );
+}
+
+/** Options as suggestions, matched by their text. */
+const optionSuggestions = (options: { value: string; text: string }[], text: string): Suggestion[] =>
+  options.filter((o) => matches(text, o.text, o.value));
 
 /** Every term of a taxonomy, parents first, with its depth. */
 export function termOptions(terms: Term[], depth = 0): { value: string; text: string; depth: number }[] {
@@ -174,7 +181,6 @@ export function termOptions(terms: Term[], depth = 0): { value: string; text: st
 }
 
 const SEARCH_RESULTS = 20;
-const DEBOUNCE_MS = 150;
 
 /** A query-language string literal. */
 function queryString(s: string): string {
@@ -200,87 +206,15 @@ export async function findNotes(target: string, text: string): Promise<Row[]> {
 
 /** Notes of the field's target type, found by title text, to link to. */
 function ReferencePicker(props: FieldInputProps) {
-  const [q, setQ] = createSignal("");
-  const [results, setResults] = createSignal<Row[]>([]);
-  const [open, setOpen] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let seq = 0;
-  onCleanup(() => clearTimeout(timer));
-
-  const ids = () => asStrings(props.value);
   const target = () => props.field.target ?? "*";
-
-  function find(text: string) {
-    setQ(text);
-    setOpen(true);
-    clearTimeout(timer);
-    const mine = ++seq;
-    timer = setTimeout(async () => {
-      try {
-        const rows = await findNotes(target(), text);
-        if (mine !== seq) return;
-        setResults(rows);
-        setError(null);
-      } catch (e) {
-        if (mine === seq) setError(e instanceof Error ? e.message : String(e));
-      }
-    }, DEBOUNCE_MS);
-  }
-
-  function choose(r: Row) {
-    if (props.field.multiple) {
-      if (!ids().includes(r.id)) props.onChange([...ids(), r.id]);
-    } else {
-      props.onChange(r.id);
-      setOpen(false);
-    }
-    setQ("");
-  }
-
-  function remove(id: string) {
-    const rest = ids().filter((x) => x !== id);
-    props.onChange(props.field.multiple && rest.length ? rest : undefined);
-  }
-
   return (
-    <div class="reference-picker" role="group" aria-label={props.label} id={props.id}>
-      <ul class="chips">
-        <For each={ids()}>
-          {(id) => (
-            <li class="chip">
-              <a href={`/notes/${id}`}>{noteTitle(id) ?? id}</a>
-              <button type="button" aria-label={`Remove ${noteTitle(id) ?? id}`} onClick={() => remove(id)}>
-                ×
-              </button>
-            </li>
-          )}
-        </For>
-      </ul>
-      <input
-        type="search"
-        placeholder={target() === "*" ? "Search notes" : `Find a ${target()}`}
-        aria-label={`Find ${props.label}`}
-        value={q()}
-        onFocus={() => find(q())}
-        onInput={(e) => find(e.currentTarget.value)}
-        onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
-      />
-      <Show when={error()}>
-        <p class="error">{error()}</p>
-      </Show>
-      <Show when={open() && results().length > 0}>
-        <ul class="reference-results" role="listbox" aria-label={`${props.label} results`}>
-          <For each={results().filter((r) => !ids().includes(r.id))}>
-            {(r) => (
-              <li role="option" aria-selected="false" onMouseDown={(e) => e.preventDefault()} onClick={() => choose(r)}>
-                {r.title || "Untitled"}
-              </li>
-            )}
-          </For>
-        </ul>
-      </Show>
-    </div>
+    <Picker
+      {...props}
+      boxPlaceholder={target() === "*" ? "Search notes" : `Find a ${(typeDef(target())?.label ?? target()).toLowerCase()}`}
+      suggest={async (text) => (await findNotes(target(), text)).map((r) => ({ value: r.id, text: r.title || "Untitled" }))}
+      chipText={(id) => noteTitle(id) ?? id}
+      chipHref={(id) => `/notes/${id}`}
+    />
   );
 }
 
@@ -510,15 +444,25 @@ function AssetInput(props: FieldInputProps) {
     return list;
   };
   return (
-    <Choice
+    <Show
+      when={!props.field.multiple}
+      fallback={
+        <Picker
+          {...props}
+          suggest={(text) => optionSuggestions(options(), text)}
+          chipText={(id) => options().find((o) => o.value === id)?.text ?? id}
+        />
+      }
+    >
+      <Choice
       options={options()}
-      multiple={props.field.multiple}
       required={props.field.required}
       value={props.value}
       onChange={props.onChange}
       label={props.label}
       id={props.id}
-    />
+      />
+    </Show>
   );
 }
 
@@ -539,10 +483,12 @@ export function FieldInput(props: FieldInputProps) {
         />
       }
     >
+      <Match when={f().kind === "select" && f().multiple}>
+        <Picker {...props} suggest={(text) => optionSuggestions((f().options ?? []).map((o) => ({ value: o, text: o })), text)} />
+      </Match>
       <Match when={f().kind === "select"}>
         <Choice
           options={(f().options ?? []).map((o) => ({ value: o, text: o }))}
-          multiple={f().multiple}
           required={f().required}
           value={props.value}
           onChange={props.onChange}
@@ -550,10 +496,12 @@ export function FieldInput(props: FieldInputProps) {
           id={props.id}
         />
       </Match>
+      <Match when={f().kind === "taxonomy" && f().multiple}>
+        <Picker {...props} suggest={(text) => termSuggestions(taxonomyDef(f().taxonomy ?? "")?.terms ?? [], text)} />
+      </Match>
       <Match when={f().kind === "taxonomy"}>
         <Choice
           options={termOptions(taxonomyDef(f().taxonomy ?? "")?.terms ?? [])}
-          multiple={f().multiple}
           required={f().required}
           value={props.value}
           onChange={props.onChange}
@@ -566,6 +514,9 @@ export function FieldInput(props: FieldInputProps) {
       </Match>
       <Match when={f().kind === "asset"}>
         <AssetInput {...props} />
+      </Match>
+      <Match when={f().kind === "list" && (f().items ?? "string") === "string"}>
+        <Picker {...props} freeText suggest={() => []} />
       </Match>
       <Match when={f().kind === "list"}>
         <ListInput {...props} kind={f().items ?? "string"} />

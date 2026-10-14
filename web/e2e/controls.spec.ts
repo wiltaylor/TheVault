@@ -364,7 +364,7 @@ test("every control writes its field, and a {{field}} and a slot of the same fie
   await tags.getByRole("button", { name: "Remove alpha" }).click();
   await expect(tags.locator(".chip")).toHaveText(["beta×"]);
   await expect(refs).toContainText("Tags=beta");
-  await expect(page.getByTestId("field-tags").getByLabel("Tags item 1", { exact: true })).toHaveValue("beta");
+  await expect(page.getByTestId("field-tags").locator(".chip")).toHaveText(["beta×"]);
   const sizes = control(layout, "sizes", "chips");
   await sizes.getByRole("button", { name: "Add to Sizes" }).click();
   await sizes.getByRole("combobox", { name: "Add to Sizes" }).fill("sm");

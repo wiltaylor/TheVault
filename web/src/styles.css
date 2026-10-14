@@ -1207,12 +1207,6 @@ a.button {
   overflow-y: auto;
 }
 
-.choice-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
 .list-row,
 .pair-input {
   display: flex;
@@ -1226,54 +1220,6 @@ a.button {
   display: flex;
   gap: 0.3rem;
   align-items: center;
-}
-
-.chips {
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  margin: 0 0 0.3rem;
-  padding: 0;
-}
-
-.chip {
-  display: flex;
-  align-items: center;
-  gap: 0.2rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 0 0 0 0.6rem;
-}
-
-.chip button {
-  border: none;
-  padding: 0.1rem 0.5rem;
-  background: transparent;
-}
-
-.reference-picker {
-  position: relative;
-}
-
-.reference-results {
-  list-style: none;
-  margin: 0.2rem 0 0;
-  padding: 0.2rem;
-  border: 1px solid var(--line);
-  border-radius: 0.4rem;
-  background: var(--panel);
-  max-height: 14rem;
-  overflow-y: auto;
-}
-
-.reference-results li {
-  padding: 0.3rem 0.5rem;
-  cursor: pointer;
-}
-
-.reference-results li:hover {
-  background: var(--accent-soft);
 }
 
 .template-picker {
@@ -1564,13 +1510,7 @@ a.button {
 
 .query-builder .query-builder-from {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
-.query-builder-check {
-  display: flex !important;
-  align-items: center;
+  flex-direction: column;
   gap: 0.3rem;
 }
 
@@ -4869,38 +4809,6 @@ span.filter-op {
   min-width: 12rem;
 }
 
-.filter-note .reference-picker {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-.filter-note .chips {
-  margin: 0;
-}
-
-.filter-note .reference-results {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 10;
-  min-width: 14rem;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 0.4rem;
-  box-shadow: 0 6px 20px rgb(0 0 0 / 0.12);
-}
-
-.filter-note .reference-results li {
-  padding: 0.3rem 0.5rem;
-  border-radius: 0.3rem;
-}
-
-.filter-note .reference-results li:hover {
-  background: var(--hover);
-}
-
 .filter-remove {
   margin-left: auto;
   padding: 0.1rem 0.5rem;
@@ -4913,16 +4821,6 @@ span.filter-op {
 
 .filter-remove:hover {
   color: var(--danger);
-}
-
-.type-chips {
-  margin: 0;
-}
-
-.type-chips .chip {
-  gap: 0.3rem;
-  background: var(--accent-soft);
-  border-color: transparent;
 }
 
 .search-add {
@@ -5583,9 +5481,32 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 }
 
 .control-options li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   padding: 0.35rem 0.6rem;
   border-radius: 0.3rem;
   cursor: pointer;
+}
+
+.control-options li .icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.control-options .combo-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.control-options .combo-hint {
+  margin-left: auto;
+  padding-left: 0.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .control-options li[aria-selected="true"],
@@ -5612,31 +5533,80 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   color: var(--muted);
 }
 
-/* Chip list */
+/* Chip picker: chips with no box round them, and a round + that opens the add box */
 
-.control-chips {
+.chip-picker {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
+  min-width: 0;
+  max-width: 100%;
   min-height: 1.8rem;
 }
 
-.control-chips .chips {
-  margin: 0;
+.chip-picker .chips {
   display: contents;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
-.control-chips .chip {
-  background: var(--accent-soft);
-  border-color: transparent;
-  color: var(--ink);
-  padding-left: 0.6rem;
+.chip-picker .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 100%;
   min-height: 1.8rem;
+  border-radius: 999px;
+  padding: 0 0 0 0.6rem;
+  background: var(--accent-soft);
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.chip-picker .chip .icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.chip-picker .chip-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chip-picker .chip a.chip-text {
+  color: inherit;
+  text-decoration: none;
+}
+
+.chip-picker .chip a.chip-text:hover,
+.chip-picker .chip a.chip-text:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.chip-picker .chip button {
+  flex: none;
+  align-self: stretch;
+  min-width: 1.8rem;
+  border: none;
+  border-radius: 0 999px 999px 0;
+  padding: 0 0.5rem 0 0.2rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.chip-picker .chip button:hover,
+.chip-picker .chip button:focus-visible {
+  color: var(--danger);
 }
 
 /* The + that opens the add box, sized like a chip. */
-.control-chips .chip-add {
+.chip-picker .chip-add {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5651,27 +5621,45 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   line-height: 1;
 }
 
-.control-chips .chip-add:hover,
-.control-chips .chip-add:focus-visible {
+.chip-picker .chip-add:hover,
+.chip-picker .chip-add:focus-visible {
   border-style: solid;
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.control-chips .control-combo {
-  min-width: 8rem;
+.chip-picker .chip-empty {
+  color: var(--muted);
+  font-size: 0.875rem;
+  cursor: pointer;
 }
 
-.control-chips .control-combo input {
+.chip-picker .control-combo {
+  flex: 1 1 9rem;
+  min-width: min(9rem, 100%);
+}
+
+.chip-picker .control-combo input,
+.filter-row .chip-picker .control-combo input {
+  width: 100%;
+  min-width: 0;
   border: none;
   border-bottom: 1px solid var(--accent);
   border-radius: 0;
   padding: 0.25rem 0.3rem;
   background: transparent;
+  color: var(--ink);
+  font-size: 0.9rem;
 }
 
-.control-chips .control-combo input:focus-visible {
+.chip-picker .control-combo input:focus-visible {
   outline: none;
+}
+
+/* A property's editors fill in on focus; the chip picker's box keeps its single line. */
+.property .field-value .chip-picker .control-combo input:focus {
+  border-color: var(--accent);
+  background: transparent;
 }
 
 /* Calendar: a month in place */
@@ -6020,4 +6008,17 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 
 .field.property.bare > .field-value {
   width: 100%;
+}
+
+.filter-types .chip-picker {
+  flex: 1;
+}
+
+.control-options li.disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.control-options li.disabled:hover {
+  background: transparent;
 }

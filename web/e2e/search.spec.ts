@@ -34,8 +34,17 @@ function today(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-async function addFilter(page: Page, section: "type" | "date" | "property", option: string | { label: string }) {
+async function addFilter(page: Page, section: "date" | "property", option: string | { label: string }) {
   await activePane(page).getByLabel(`Add ${section} filter`).selectOption(option);
+}
+
+/** Add a type in the type picker by typing part of its name and picking it. */
+async function addType(page: Page, typed: string, label: string) {
+  const row = activePane(page).getByRole("group", { name: "Type filter" });
+  const box = row.getByRole("combobox", { name: "Add to Types" });
+  if (!(await box.isVisible())) await row.getByRole("button", { name: "Add to Types" }).click();
+  await box.fill(typed);
+  await row.getByRole("option", { name: label, exact: true }).click();
 }
 
 /** The Search page with the findings type chosen, sorted by title. */
@@ -107,12 +116,13 @@ test("the type filter narrows the results", async ({ page }) => {
   await logIn(page, "/search?q=valve");
   // "valve" is in a finding; adding a task-only filter leaves nothing.
   await expect.poll(() => titles(page)).toContain("Leaky valve");
-  await addFilter(page, "type", { label: "Finding" });
+  await addType(page, "find", "Finding");
   await expectTitles(page, ["Leaky valve"]);
   await expect(activePane(page).locator('.filter-row[data-filter="type"]')).toContainText("Finding");
-  await addFilter(page, "type", { label: "Task" });
+  await addType(page, "TAS", "Task");
   await expectTitles(page, ["Leaky valve"]);
-  await activePane(page).getByRole("button", { name: "Remove type Finding" }).click();
+  await expect(page).toHaveURL(/type=finding&type=task/);
+  await activePane(page).getByRole("button", { name: "Remove Finding" }).click();
   await expectTitles(page, []);
   await expect(activePane(page).getByText("No notes match.")).toBeVisible();
 });
@@ -225,7 +235,8 @@ test("property filters: select, taxonomy under, number, bool, reference and is e
   // Reference: a note picked by title, then is empty.
   await addFilter(page, "property", { label: "Owner" });
   const owner = filterRow(page, "owner");
-  await owner.getByLabel("Find Note").fill("Seeded owner");
+  await owner.getByRole("button", { name: "Add to Note" }).click();
+  await owner.getByRole("combobox", { name: "Add to Note" }).fill("Seeded owner");
   await owner.getByRole("option", { name: FINDING_OWNER.title }).click();
   await expectTitles(page, ["Cracked beam", "Leaky valve"]);
   await expect(page).toHaveURL(new RegExp(`prop=finding~owner~is~${FINDING_OWNER.id}`));

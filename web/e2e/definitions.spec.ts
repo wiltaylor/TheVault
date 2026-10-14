@@ -1,4 +1,4 @@
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, Locator } from "@playwright/test";
 import { expect, logIn, test } from "./fixtures";
 
 // The definition editors (S5): types, templates, taxonomies, and every field kind's editor on a
@@ -208,6 +208,15 @@ template default {
   await expect(page.getByTestId("field-estimate").getByLabel("Estimate")).toHaveValue("3");
 });
 
+/** Open a chip picker's + box, type `typed` and pick the suggestion named `option`. */
+async function pick(scope: Locator, label: string, typed: string, option: string) {
+  const plus = scope.getByRole("button", { name: `Add to ${label}` });
+  const box = scope.getByRole("combobox", { name: `Add to ${label}` });
+  if (!(await box.isVisible())) await plus.click();
+  await box.fill(typed);
+  await scope.getByRole("option", { name: option, exact: true }).click();
+}
+
 /** A type with a field of every kind a note page edits, plus a computed one. */
 async function everyKind(admin: APIRequestContext, t: string) {
   const taxonomy = `tax_${t}`;
@@ -267,21 +276,23 @@ test("editing every field kind on a note page saves a value that validates", asy
   await field("span").getByLabel("End").fill("2026-11-01");
   await field("u").getByLabel("Link", { exact: true }).fill("https://example.com/x");
   await field("sel").getByLabel("Priority", { exact: true }).selectOption("high");
-  await field("chan").getByRole("checkbox", { name: "chat" }).check();
-  await field("chan").getByRole("checkbox", { name: "email" }).check();
+  await pick(field("chan"), "Channels", "em", "email");
+  await pick(field("chan"), "Channels", "ch", "chat");
   await field("status").getByLabel("Status", { exact: true }).selectOption("Active/Blocked");
-  await field("topics").getByRole("checkbox", { name: "Done" }).check();
-  await field("topics").getByRole("checkbox", { name: "Active", exact: true }).check();
-  await field("owner").getByLabel("Find Owner").fill(t);
-  await field("owner").getByRole("option", { name: `Target ${t} first` }).click();
+  await pick(field("topics"), "Topics", "act", "Active");
+  await pick(field("topics"), "Topics", "do", "Done");
+  await pick(field("owner"), "Owner", t, `Target ${t} first`);
   await expect(field("owner").getByRole("link", { name: `Target ${t} first` })).toBeVisible();
-  await field("refs").getByLabel("Find Related").fill(t);
-  await field("refs").getByRole("option", { name: `Target ${t} second` }).click();
-  await field("refs").getByRole("option", { name: `Target ${t} first` }).click();
-  await field("aliases").getByRole("button", { name: "Add item" }).click();
-  await field("aliases").getByLabel("Aliases item 1", { exact: true }).fill("one");
-  await field("aliases").getByRole("button", { name: "Add item" }).click();
-  await field("aliases").getByLabel("Aliases item 2", { exact: true }).fill("two");
+  // One reference at a time: with it set, there is no + to add another.
+  await expect(field("owner").getByRole("button", { name: "Add to Owner" })).toHaveCount(0);
+  await pick(field("refs"), "Related", t, `Target ${t} second`);
+  await pick(field("refs"), "Related", t, `Target ${t} first`);
+  await field("aliases").getByRole("button", { name: "Add to Aliases" }).click();
+  await field("aliases").getByRole("combobox", { name: "Add to Aliases" }).fill("one");
+  await field("aliases").getByRole("combobox", { name: "Add to Aliases" }).press("Enter");
+  await field("aliases").getByRole("combobox", { name: "Add to Aliases" }).fill("two");
+  await field("aliases").getByRole("combobox", { name: "Add to Aliases" }).press("Enter");
+  await expect(field("aliases").locator(".chip")).toHaveText(["one×", "two×"]);
   await field("extra").getByRole("button", { name: "Add entry" }).click();
   await field("extra").getByLabel("Extra key 1", { exact: true }).fill("source");
   await field("extra").getByLabel("Extra value 1", { exact: true }).fill("capacities");
