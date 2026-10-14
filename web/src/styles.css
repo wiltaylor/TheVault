@@ -635,6 +635,84 @@ a {
   border-radius: 0.3rem;
 }
 
+/* A template's image from an asset field: every image in the field, in a row that wraps. */
+.field-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.field-images img {
+  min-width: 0;
+}
+
+.field-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 6rem;
+  padding: 1rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+}
+
+button.field-image-placeholder {
+  cursor: pointer;
+}
+
+button.field-image-placeholder:hover:not(:disabled),
+button.field-image-placeholder:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.field-image.editing .field-image-placeholder {
+  background: var(--panel);
+}
+
+.block-fields select {
+  flex: 0 1 10rem;
+  min-width: 0;
+}
+
+/* On a card, an image from a field that leads the card template is its cover, above the title. */
+.card-cover {
+  order: -1;
+}
+
+.card-cover:empty {
+  display: none;
+}
+
+.card-cover .block-image {
+  margin: 0;
+}
+
+.card-cover .field-images {
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+
+.card-cover .field-images img,
+.query-card .field-images img,
+.canvas-card .field-images img {
+  flex: 1 1 0;
+  width: 100%;
+  height: 8rem;
+  object-fit: cover;
+  border-radius: 0.35rem;
+}
+
+.query-cards .card-cover .field-images img {
+  height: 5.5rem;
+}
+
 .block-asset {
   margin: 0.6rem 0;
 }

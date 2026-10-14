@@ -45,6 +45,7 @@ impl Taxonomy {
         let mut c = Check {
             issues: &mut issues,
             fields: None,
+            template: false,
         };
         c.items(
             doc,

@@ -197,6 +197,9 @@ pub(crate) struct Check<'a> {
     /// The fields of the type whose content is checked, when known: a `control` block must
     /// name one of them that it fits.
     pub fields: Option<&'a [FieldDef]>,
+    /// Whether the blocks checked are a template's fixed blocks, where an `image` may show an
+    /// asset field of the note (`field`) in place of a fixed `asset`.
+    pub template: bool,
 }
 
 impl Check<'_> {
@@ -371,16 +374,7 @@ impl Check<'_> {
                 self.only_blocks(d, &[], at);
             }
             "list" => self.list(d, at),
-            "image" => {
-                let items = [
-                    req("asset", Form::Ulid),
-                    opt("alt", Form::Str),
-                    opt("caption", Form::Str),
-                    opt("width", Form::Int(1, i64::MAX)),
-                ];
-                self.items(d, &items, &[], at);
-                self.only_blocks(d, &[], at);
-            }
+            "image" => self.image(d, at),
             "asset" => {
                 self.items(
                     d,
@@ -409,6 +403,54 @@ impl Check<'_> {
             "columns" => self.columns(d, at, &mut |c, b, path| c.content_item(b, path)),
             "control" => self.control(d, at),
             _ => {}
+        }
+    }
+
+    /// An `image` block: a fixed `asset`, or in a template the asset `field` of the note shown.
+    /// Exactly one of the two.
+    fn image(&mut self, d: &Doc, at: &str) {
+        let items = [
+            opt("asset", Form::Ulid),
+            opt("field", Form::Str),
+            opt("alt", Form::Str),
+            opt("caption", Form::Str),
+            opt("width", Form::Int(1, i64::MAX)),
+        ];
+        self.items(d, &items, &[], at);
+        self.only_blocks(d, &[], at);
+        let field = d.field("field");
+        if field.is_some() && !self.template {
+            return self.fail(
+                &format!("{at}.field"),
+                "is allowed only in a template; a note's image names its `asset`",
+            );
+        }
+        match (d.field("asset"), field) {
+            (Some(_), Some(_)) => {
+                return self.fail(at, "takes `asset` or `field`, not both");
+            }
+            (None, None) if self.template => {
+                return self.fail(at, "needs `asset` or `field`");
+            }
+            (None, None) => return self.fail(&format!("{at}.asset"), "is required"),
+            _ => {}
+        }
+        let (Some(fields), Some(Value::Str(name))) = (self.fields, field) else {
+            return;
+        };
+        match fields.iter().find(|f| &f.name == name) {
+            None => self.fail(
+                &format!("{at}.field"),
+                format!("{name:?} names no field of the type"),
+            ),
+            Some(f) if !matches!(f.kind, FieldKind::Asset) => self.fail(
+                &format!("{at}.field"),
+                format!(
+                    "an image shows an asset field, and {name:?} is {}",
+                    field_kind_text(f)
+                ),
+            ),
+            Some(_) => {}
         }
     }
 

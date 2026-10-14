@@ -610,7 +610,7 @@ A tab holds an ordered mix of slots and content blocks:
 |------|------|---------|
 | `slot "<field>"` | block | Places a field. `<field>` is a field of the type or `title`. A field appears at most once per template |
 | `label` inside a slot | string | Overrides the field's label in this template |
-| any [content block](#content-blocks) | block | Fixed content shown on every note. In a `query_view`, `this` is the note being shown |
+| any [content block](#content-blocks) | block | Fixed content shown on every note. In a `query_view`, `this` is the note being shown. An `image` may show an asset field of the note instead of a fixed asset: see [Images from fields](#images-from-fields) |
 | `columns { ... }` | block | A [columns](#columns) layout whose columns hold slots and fixed blocks, so fields sit side by side |
 | `control { ... }` | block | A [control](#control) that edits a field in place, in the tab or in a column. A field may have a slot and any number of controls |
 
@@ -642,7 +642,7 @@ A field that no slot places is still stored and editable through the API and in 
 
 ### Field references
 
-The text of a fixed content block in a template can show a field's value inline: `{{name}}` in any `text` item (a heading, paragraph, quote or list item, including one inside a canvas card) renders the current value of field `name` of the note being shown, read-only. `name` is `title` or a field of the type; the schema rejects any other name with "`{{name}}` names no field of the type". A reference is not a slot: it places nothing, so the field still has no entry on the page and stays editable in the properties sidebar.
+The text of a fixed content block in a template can show a field's value inline: `{{name}}` in any `text` item (a heading, paragraph, quote or list item, including one inside a canvas card), or in an image's `alt` or `caption`, renders the current value of field `name` of the note being shown, read-only. `name` is `title` or a field of the type; the schema rejects any other name with "`{{name}}` names no field of the type". A reference is not a slot: it places nothing, so the field still has no entry on the page and stays editable in the properties sidebar.
 
 - `name` is an identifier written directly between the braces, with no spaces: `{{ due }}` is plain text.
 - `\{{name}}`, with the first brace escaped, and `{{name}}` inside a code span are plain text and are not checked.
@@ -688,6 +688,29 @@ template default {
 template card {
   tab "Card" {
     slot "title"
+    slot "status"
+  }
+}
+```
+
+### Images from fields
+
+An `image` block in a template can name an asset field of the type with `field` in place of `asset`. It shows the asset in that field of the note being shown, so every note of the type shows its own picture in the same place: a cover on its page and on its card.
+
+- An image takes exactly one of `asset` and `field`. The schema rejects one with both, or with neither, with "takes `asset` or `field`, not both" or "needs `asset` or `field`".
+- `field` names an [`asset`](#asset) field of the type. The schema rejects any other name with "`"<name>"` names no field of the type", and a field of another kind with "an image shows an asset field, and `"<name>"` is a ... field".
+- A field with `multiple = true` shows every image in it, in order, in a row that wraps. `width` applies to each image.
+- An asset in the field that is not an image (by its file name: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif` or `.svg`) is skipped. An empty field shows nothing on a card; on the note page it offers to add an image, which uploads the file and sets the field (for a multiple field, adds it).
+- `alt` and `caption` may hold `{{name}}` [field references](#field-references), checked like those in `text`.
+- `field` is template-only. In a note's own content, an image with `field` fails validation with "is allowed only in a template".
+
+```wcl
+template card {
+  tab "Card" {
+    image {
+      field = "cover"
+      alt   = "Cover of {{title}}"
+    }
     slot "status"
   }
 }
@@ -855,7 +878,8 @@ quote {
 
 | Item | Form | Meaning |
 |------|------|---------|
-| `asset` | asset reference | Required. An image asset |
+| `asset` | asset reference | An image asset. Required, except in a template, where an image takes `asset` or `field` |
+| `field` | string | Template only. An [`asset`](#asset) field of the type: the image shows the asset in that field of the note being shown |
 | `alt` | string | Alternative text |
 | `caption` | string | Caption shown under the image |
 | `width` | int | Display width in CSS pixels. Default: the content width |
@@ -866,6 +890,15 @@ image {
   alt     = "Importer architecture sketch"
   caption = "The importer reads an export folder."
   width   = 640
+}
+```
+
+In a template, an image can show a field of the note instead of a fixed asset (see [Images from fields](#images-from-fields)):
+
+```wcl
+image {
+  field = "cover"
+  alt   = "Cover of {{title}}"
 }
 ```
 

@@ -296,6 +296,10 @@ template default {
 
 template card {
   tab "Card" {
+    image {
+      field = "cover"
+      alt   = "Cover of {{title}}"
+    }
     slot "title"
     slot "status"
     slot "due"

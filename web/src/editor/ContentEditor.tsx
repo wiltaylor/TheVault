@@ -253,6 +253,8 @@ export function ContentEditor(props: {
           pickFile("image/*", (asset) => ({ kind: "image", fields: { asset } }));
           return c;
         }),
+        // In a template, an image can also show an asset field of each note: a follow-up choice.
+        submenu: props.template ? imageItems : undefined,
       },
       {
         id: "file",
@@ -300,6 +302,38 @@ export function ContentEditor(props: {
     const all = [...textItems, ...blockItems, ...layoutItems, ...controlItems(), ...properties];
     const exclude = props.exclude ?? [];
     return exclude.length ? all.filter((i) => !exclude.includes(i.id)) : all;
+  }
+
+  /**
+   * A template's image: a file uploaded now, shown on every note, or an asset field of the type,
+   * which shows each note's own image (docs/vault-format.md, "Images from fields").
+   */
+  function imageItems(): MenuItem[] {
+    const section = "Image";
+    const uploadItem: MenuItem = {
+      id: "image-upload",
+      label: "Upload an image",
+      section,
+      keywords: "fixed file",
+      hint: "same on every note",
+      run: () => {
+        const s = slash();
+        if (s) chain().deleteRange({ from: s.from, to: s.to }).run();
+        pickFile("image/*", (asset) => ({ kind: "image", fields: { asset } }));
+      },
+    };
+    const fields = (binding?.type()?.fields ?? []).filter((f) => f.kind === "asset");
+    const fieldItems: MenuItem[] = fields.length
+      ? fields.map((f) => ({
+          id: `image-field-${f.name}`,
+          label: `From field: ${f.label}`,
+          section,
+          keywords: `${f.name} field property asset`,
+          hint: f.multiple ? "each note's images" : "each note's image",
+          run: () => place({ type: "vaultBlock", attrs: { block: fresh({ kind: "image", fields: { field: f.name } }) } }),
+        }))
+      : [{ id: "image-field-none", label: "From field: the type has no asset field", section, run: () => {} }];
+    return [uploadItem, ...fieldItems];
   }
 
   /**

@@ -60,9 +60,13 @@ type Quote {
   text: utf8
 }
 
-@block("image", required_fields = ["asset"])
+# An image names a fixed `asset`; in a template it may name an asset `field`
+# of the note shown instead. `schema` requires exactly one of the two, and
+# `field` only in a template.
+@block("image")
 type Image {
-  asset:   utf8
+  asset:   utf8?
+  field:   utf8?
   alt:     utf8?
   caption: utf8?
   width:   i64?

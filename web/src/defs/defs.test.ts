@@ -203,6 +203,21 @@ handler "before_update" {
     ]);
   });
 
+  it("makes images from fields follow renamed fields, with their alt and caption, and drops those of removed fields", () => {
+    const m = typeFromSchema(stored);
+    m.templates[0]!.tabs[1]!.items = [
+      { block: { kind: "image", fields: { field: "estimate", alt: "{{estimate}}", caption: "Of {{title}}" } } },
+      { block: { kind: "image", fields: { field: "parent" } } },
+      { block: { kind: "image", fields: { asset: "01JB9A0C3D4E5F6G7H8J9K0M1N", caption: "{{estimate}}" } } },
+    ];
+    m.fields[0]!.name = "hours";
+    m.fields = m.fields.filter((f) => f.name !== "parent");
+    expect(followFields(m)[0]!.tabs[1]!.items).toEqual([
+      { block: { kind: "image", fields: { field: "hours", alt: "{{hours}}", caption: "Of {{title}}" } } },
+      { block: { kind: "image", fields: { asset: "01JB9A0C3D4E5F6G7H8J9K0M1N", caption: "{{hours}}" } } },
+    ]);
+  });
+
   it("names new required fields without a default", () => {
     const m = typeFromSchema(stored);
     const owner = newField("owner");

@@ -56,8 +56,26 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
     value: (f) => (props.doc ? fieldValue(props.doc, f) : f.name === "title" ? props.row.title : props.row.fields[f.name]),
     reason: "Open the note to change this.",
   };
+  // On a card, an image from a field that leads the template is the card's cover: drawn first,
+  // above the title (styles.css, `.card-cover`).
+  const cover = () => {
+    if (props.tabTitles) return undefined;
+    const first = props.template?.tabs[0]?.items[0];
+    return first && !("slot" in first) && first.block.kind === "image" && typeof first.block.fields?.field === "string"
+      ? first.block
+      : undefined;
+  };
   return (
     <ControlBindingContext.Provider value={controls}>
+    <Show when={cover()}>
+      {(block) => (
+        <FieldRefs.Provider value={refs}>
+          <div class="card-cover" data-testid="card-cover">
+            <BlockView block={block()} />
+          </div>
+        </FieldRefs.Provider>
+      )}
+    </Show>
     <For each={props.template?.tabs ?? []}>
       {(tab) => (
         <section class="template-tab">
@@ -66,6 +84,7 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
           </Show>
           <For each={tab.items}>
             {(item) => {
+              if (!("slot" in item) && item.block === cover()) return null;
               if (!("slot" in item)) {
                 return (
                   <ThisNote.Provider value={props.row.id}>

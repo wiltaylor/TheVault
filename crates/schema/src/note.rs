@@ -57,6 +57,7 @@ pub(crate) fn validate(
         issues: &mut issues,
         // A control in the note's own content binds a field of the note's type.
         fields: Some(&ty.fields),
+        template: false,
     };
     let mut report = NoteReport::default();
     let mut seen = HashSet::new();

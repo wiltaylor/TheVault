@@ -405,11 +405,12 @@ function followSlots(block: Block, slotName: (slot: string) => string | null): B
 }
 
 /**
- * `block` with every control in it, at any depth, bound to its field's new name; a control whose
- * field is gone goes too, and so does `block` itself when it is one (null).
+ * `block` with every control, and every image from a field, in it, at any depth, bound to its
+ * field's new name; one whose field is gone goes too, and so does `block` itself when it is one
+ * (null).
  */
 function followControls(block: Block, fieldName: (name: string) => string | null): Block | null {
-  if (block.kind === "control") {
+  if (block.kind === "control" || (block.kind === "image" && typeof block.fields?.field === "string")) {
     const field = block.fields?.field;
     if (typeof field !== "string") return block;
     const to = fieldName(field);
@@ -419,11 +420,13 @@ function followControls(block: Block, fieldName: (name: string) => string | null
   return { ...block, blocks: block.blocks.flatMap((b) => followControls(b, fieldName) ?? []) };
 }
 
-/** `block` with the `{{name}}` references in its text items, at any depth, renamed. */
+/** `block` with the `{{name}}` references in its text items (and an image's alt and caption), at any depth, renamed. */
 function followRefs(block: Block, rename: (name: string) => string | null): Block {
-  const text = block.fields?.text;
-  const fields =
-    typeof text === "string" && block.fields ? { ...block.fields, text: renameFieldRefs(text, rename) } : block.fields;
+  let fields = block.fields;
+  for (const item of block.kind === "image" ? ["text", "alt", "caption"] : ["text"]) {
+    const text = fields?.[item];
+    if (typeof text === "string" && fields) fields = { ...fields, [item]: renameFieldRefs(text, rename) };
+  }
   const blocks = block.blocks?.map((b) => followRefs(b, rename));
   const out: Block = { ...block };
   if (fields) out.fields = fields;

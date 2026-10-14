@@ -293,6 +293,7 @@ impl TypeDef {
         let mut c = Check {
             issues: &mut issues,
             fields: None,
+            template: false,
         };
         let items = [
             req("label", Form::Str),
@@ -653,6 +654,8 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
     }
     let mut placed = HashSet::new();
     let mut tabs = Vec::new();
+    // A template's fixed blocks may show the note's own values: `{{name}}`, an image's `field`.
+    c.template = true;
     for t in d.blocks_of("tab") {
         let tab_at = format!("{at} > {}", t.name());
         let title = match t.labels.as_slice() {
@@ -680,7 +683,7 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
                         slot(c, b, fields, &mut placed, path);
                     } else {
                         c.content_item(b, path);
-                        check_field_refs(c, &b.body, fields, path);
+                        check_field_refs(c, b, fields, path);
                     }
                 });
                 items.push(TabItem::Block(block.clone()));
@@ -688,7 +691,7 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
                 let block_at = format!("{tab_at} > {}#{}", block.kind, n + 1);
                 c.no_label(block, &block_at);
                 c.content_block(block, &block_at);
-                check_field_refs(c, &block.body, fields, &block_at);
+                check_field_refs(c, block, fields, &block_at);
                 items.push(TabItem::Block(block.clone()));
             } else {
                 c.fail(
@@ -699,6 +702,7 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
         }
         tabs.push(Tab { title, items });
     }
+    c.template = false;
     Some(Template {
         name,
         label: string(d, "label"),
@@ -735,21 +739,30 @@ fn slot(
     })
 }
 
-/// Every `{{name}}` in the `text` items of a fixed template block, at any depth, must name
-/// `title` or a field of the type. `{{name}}` is template-only markup: in a note it is text.
-fn check_field_refs(c: &mut Check, d: &Doc, fields: &[FieldDef], at: &str) {
-    if let Some(text) = string(d, "text") {
+/// Every `{{name}}` in the `text` items of a fixed template block, and in an image's `alt` and
+/// `caption`, at any depth, must name `title` or a field of the type. `{{name}}` is
+/// template-only markup: in a note it is text.
+fn check_field_refs(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) {
+    let items: &[&str] = if b.kind == "image" {
+        &["text", "alt", "caption"]
+    } else {
+        &["text"]
+    };
+    for item in items {
+        let Some(text) = string(&b.body, item) else {
+            continue;
+        };
         for name in field_refs(&text) {
             if name != "title" && !fields.iter().any(|f| f.name == name) {
                 c.fail(
-                    &format!("{at}.text"),
+                    &format!("{at}.{item}"),
                     format!("`{{{{{name}}}}}` names no field of the type"),
                 );
             }
         }
     }
-    for b in &d.blocks {
-        check_field_refs(c, &b.body, fields, &format!("{at} > {}", b.name()));
+    for child in &b.body.blocks {
+        check_field_refs(c, child, fields, &format!("{at} > {}", child.name()));
     }
 }
 
