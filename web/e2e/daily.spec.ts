@@ -62,6 +62,7 @@ test("another day with no note offers to create one, and the arrows step a day a
 
 test("the daily note type can be edited but has no delete button", async ({ page }) => {
   await logIn(page, "/settings/types/dailynote/edit");
-  await expect(page.getByText("Built in: customise it freely, but it cannot be deleted.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Templates" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Delete type" })).toHaveCount(0);
+  await expect(page.getByText(/cannot be deleted/)).toHaveCount(0);
 });

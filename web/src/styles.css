@@ -5028,6 +5028,10 @@ a.icon-button {
   color: var(--danger);
 }
 
+.def-title-row h1 {
+  margin: 0.1rem 0.4rem 0 0;
+}
+
 /* Column layouts (docs/vault-format.md, "columns"). The layout is its own size container: where
    the space it has (a pane, a card) is under 560px, its columns stack in order. Each column's
    flex-grow is its width, so the columns share the row by their widths. */

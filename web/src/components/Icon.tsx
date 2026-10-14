@@ -137,6 +137,17 @@ export function SearchIcon() {
   );
 }
 
+/** A page layout, for the link to a type's templates. */
+export function TemplateIcon() {
+  return (
+    <Glyph>
+      <rect x="3" y="3" width="18" height="7" rx="1" />
+      <rect x="3" y="14" width="9" height="7" rx="1" />
+      <rect x="16" y="14" width="5" height="7" rx="1" />
+    </Glyph>
+  );
+}
+
 /** A bin, for the trash button beside the theme switch. */
 export function TrashIcon() {
   return (

@@ -29,6 +29,7 @@ import {
 } from "../defs/typeModel";
 import { reloadDefinitions, taxonomies, types } from "../session";
 import { IconPicker } from "../components/IconPicker";
+import { TemplateIcon, TrashIcon } from "../components/Icon";
 import { ScriptField } from "../components/ScriptField";
 
 export function errorText(e: unknown): string {
@@ -703,23 +704,34 @@ export function TypeEditor() {
       </Show>
       <Show when={loaded()}>
         <header class="note-header">
-          <div>
+          <div class="note-heading">
             <p class="note-kind">{isNew() ? "New type" : "Edit type"}</p>
-            <h1>{model.label || name() || "Untitled type"}</h1>
-          </div>
-          <Show when={!isNew()}>
-            <div class="actions">
-              <A href={`/settings/types/${name()}/templates`}>Templates</A>
-              <Show
-                when={name() !== "dailynote"}
-                fallback={<span class="muted">Built in: customise it freely, but it cannot be deleted.</span>}
-              >
-                <button type="button" class="danger" disabled={busy()} onClick={() => void remove()}>
-                  Delete type
-                </button>
+            <div class="note-title-row def-title-row">
+              <h1>{model.label || name() || "Untitled type"}</h1>
+              <Show when={!isNew()}>
+                <A
+                  href={`/settings/types/${name()}/templates`}
+                  class="icon-button"
+                  aria-label="Templates"
+                  title="Edit templates"
+                >
+                  <TemplateIcon />
+                </A>
+                <Show when={name() !== "dailynote"}>
+                  <button
+                    type="button"
+                    class="icon-button danger"
+                    aria-label="Delete type"
+                    title="Delete type"
+                    disabled={busy()}
+                    onClick={() => void remove()}
+                  >
+                    <TrashIcon />
+                  </button>
+                </Show>
               </Show>
             </div>
-          </Show>
+          </div>
         </header>
         <Show when={deleteError()}>
           {(err) => (
