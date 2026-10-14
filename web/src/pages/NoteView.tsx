@@ -620,60 +620,62 @@ export function NoteView(props: { newType?: string; id?: string }) {
                       }}
                     />
                   </h1>
-                  <a
-                    class="type-chip"
-                    href={`/types/${n().type}`}
-                    data-colour={type()?.colour ?? undefined}
-                    title={`All ${type()?.plural ?? type()?.label ?? n().type}`}
-                    aria-label={`Type: ${type()?.label ?? n().type}`}
-                  >
-                    <TypeIcon name={type()?.icon} size={14} />
-                    <span>{type()?.label ?? n().type}</span>
-                  </a>
-                  <button
-                    type="button"
-                    class="icon-button properties-toggle"
-                    aria-label="Properties"
-                    title="Properties"
-                    aria-expanded={propertiesShown()}
-                    aria-controls="properties-panel"
-                    onClick={toggleProperties}
-                  >
-                    <PropertiesIcon />
-                  </button>
-                  <Show when={!props.newType}>
+                  <div class="note-title-tools">
+                    <a
+                      class="type-chip"
+                      href={`/types/${n().type}`}
+                      data-colour={type()?.colour ?? undefined}
+                      title={`All ${type()?.plural ?? type()?.label ?? n().type}`}
+                      aria-label={`Type: ${type()?.label ?? n().type}`}
+                    >
+                      <TypeIcon name={type()?.icon} size={14} />
+                      <span>{type()?.label ?? n().type}</span>
+                    </a>
                     <button
                       type="button"
-                      class="icon-button pin-button"
-                      aria-label={isPinned(n().id) ? "Unpin" : "Pin"}
-                      aria-pressed={isPinned(n().id)}
-                      title={isPinned(n().id) ? "Unpin from the sidebar" : "Pin to the sidebar"}
-                      onClick={() => void togglePin(n().id, formatValue(doc().fields.title) || "Untitled", n().type)}
+                      class="icon-button properties-toggle"
+                      aria-label="Properties"
+                      title="Properties"
+                      aria-expanded={propertiesShown()}
+                      aria-controls="properties-panel"
+                      onClick={toggleProperties}
                     >
-                      <PinIcon filled={isPinned(n().id)} />
+                      <PropertiesIcon />
                     </button>
-                    <button
-                      type="button"
-                      class="icon-button history-toggle"
-                      aria-label="History"
-                      title="History"
-                      aria-expanded={historyShown()}
-                      aria-controls="history-panel"
-                      onClick={toggleHistory}
-                    >
-                      <HistoryIcon />
-                    </button>
-                    <button
-                      type="button"
-                      class="icon-button danger"
-                      aria-label="Delete"
-                      title="Delete note"
-                      onClick={() => void remove()}
-                      disabled={busy()}
-                    >
-                      <TrashIcon />
-                    </button>
-                  </Show>
+                    <Show when={!props.newType}>
+                      <button
+                        type="button"
+                        class="icon-button pin-button"
+                        aria-label={isPinned(n().id) ? "Unpin" : "Pin"}
+                        aria-pressed={isPinned(n().id)}
+                        title={isPinned(n().id) ? "Unpin from the sidebar" : "Pin to the sidebar"}
+                        onClick={() => void togglePin(n().id, formatValue(doc().fields.title) || "Untitled", n().type)}
+                      >
+                        <PinIcon filled={isPinned(n().id)} />
+                      </button>
+                      <button
+                        type="button"
+                        class="icon-button history-toggle"
+                        aria-label="History"
+                        title="History"
+                        aria-expanded={historyShown()}
+                        aria-controls="history-panel"
+                        onClick={toggleHistory}
+                      >
+                        <HistoryIcon />
+                      </button>
+                      <button
+                        type="button"
+                        class="icon-button danger"
+                        aria-label="Delete"
+                        title="Delete note"
+                        onClick={() => void remove()}
+                        disabled={busy()}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </Show>
+                  </div>
                 </div>
               </div>
               <div class="note-actions">

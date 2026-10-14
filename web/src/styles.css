@@ -3927,6 +3927,14 @@ h1.note-title {
   max-width: 100%;
 }
 
+/* The type chip and the title's buttons wrap as one group. */
+.note-title-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .note-title-input {
   /* As wide as the title, so the properties button sits right after it; a title wider than the
      pane wraps onto more lines and the box grows to hold them. */

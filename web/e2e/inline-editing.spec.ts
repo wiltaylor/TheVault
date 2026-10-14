@@ -418,6 +418,10 @@ test("a long title takes the full width on a phone, and the title buttons move u
   const props = (await page.getByRole("button", { name: "Properties" }).boundingBox())!;
   expect(input.width).toBeGreaterThan(row.width * 0.95);
   expect(props.y).toBeGreaterThanOrEqual(input.y + input.height - 1);
+  // The type chip and every button stay on one line together.
+  const chip = (await page.getByRole("link", { name: "Type: Task" }).boundingBox())!;
+  const del = (await page.getByRole("button", { name: "Delete" }).boundingBox())!;
+  expect(Math.abs(del.y + del.height / 2 - (chip.y + chip.height / 2))).toBeLessThan(4);
 });
 
 test("a chip beside the title names the note's type and opens the type's notes", async ({ page, admin }) => {
