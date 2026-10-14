@@ -296,7 +296,8 @@ fn visit(b: &DocBlock, text: &mut Vec<String>, mentioned: &mut Vec<String>) {
 }
 
 /// The note ids mentioned in inline markup (PRD Appendix A), in order: `[[ULID]]` and
-/// `[[ULID|label]]`. Escaped brackets and inline code are skipped.
+/// `[[ULID|label]]`. Escaped brackets, inline code and placeholder links (`[[+type|title]]`,
+/// which have no target yet) are skipped.
 pub fn mentions(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = text;
@@ -312,6 +313,11 @@ pub fn mentions(text: &str) -> Vec<String> {
             }
             '`' => in_code = !in_code,
             '[' if !in_code && rest.starts_with("[[") => {
+                // A placeholder link has no target yet: its title may read like a mention.
+                if let Some((_, len)) = schema::placeholder_at(rest) {
+                    rest = &rest[len..];
+                    continue;
+                }
                 let inner = &rest[2..];
                 if let Some(end) = inner.find("]]") {
                     let target = &inner[..end];
@@ -425,6 +431,13 @@ mod tests {
     fn finds_mentions_with_and_without_labels() {
         let text = format!("see [[{A}]] and [[{B}|the other]].");
         assert_eq!(mentions(&text), vec![A, B]);
+    }
+
+    #[test]
+    fn skips_placeholder_links() {
+        // The second placeholder's title is `[[` and the id: its `]]` ends the placeholder.
+        let text = format!("[[+task|Fix pump]] [[+task|[[{A}]] [[{B}]]");
+        assert_eq!(mentions(&text), vec![B]);
     }
 
     #[test]

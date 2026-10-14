@@ -1,7 +1,11 @@
-import { For, type JSX, Match, Show, Switch, createMemo, useContext } from "solid-js";
+import { For, type JSX, Match, Show, Switch, createMemo, createSignal, useContext } from "solid-js";
 import { type InlineNode, type Mark, parseInline } from "../editor/markup";
 import { mentionText } from "../editor/titles";
+import { followPlaceholder, resolvePlaceholder } from "../placeholders";
+import { useThisNote } from "../views/thisNote";
+import { wantsNewTab } from "../workspace/events";
 import { FieldRefs } from "./fieldRefs";
+import { PlaceholderLinkView, PlaceholdersInert } from "./PlaceholderLink";
 
 /** Only these link targets render as links; anything else shows as plain text. */
 const SAFE_HREF = /^(https?:|mailto:|\/|#)/i;
@@ -52,6 +56,9 @@ function Node(props: { node: InlineNode }) {
           <br />
         </Match>
         <Match when={n.type === "fieldRef" && n}>{(r) => <FieldRef name={r().attrs.name} />}</Match>
+        <Match when={n.type === "placeholderLink" && n}>
+          {(p) => <Placeholder noteType={p().attrs.noteType} title={p().attrs.title} />}
+        </Match>
         <Match when={n.type === "mention" && n}>
           {(m) => (
             <a class="mention" href={`/notes/${m().attrs.id}`} data-testid="mention" data-id={m().attrs.id}>
@@ -63,6 +70,62 @@ function Node(props: { node: InlineNode }) {
     );
   };
   return <>{[...(props.node.marks ?? [])].reverse().reduce<JSX.Element>((child, m) => wrap(m, child), body())}</>;
+}
+
+/**
+ * A placeholder link outside an editor. Clicking it creates the note, rewrites the placeholder
+ * in the note that holds it (see placeholders.ts) and opens the new note. It only shows where
+ * there is no such note to rewrite, or where nothing may change: a template's fixed blocks, a
+ * version from history, the conflict view.
+ */
+function Placeholder(props: { noteType: string; title: string }) {
+  const host = useThisNote();
+  const inert = useContext(PlaceholdersInert) || useContext(FieldRefs) !== undefined || !host;
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+  async function follow(el: Element, background: boolean) {
+    if (inert || busy() || !host) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await followPlaceholder({
+        host,
+        noteType: props.noteType,
+        title: props.title,
+        from: el,
+        background,
+        replace: (id) => resolvePlaceholder(host, props.noteType, props.title, id),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <PlaceholderLinkView
+      noteType={props.noteType}
+      title={props.title}
+      clickable={!inert}
+      busy={busy()}
+      error={error()}
+      onMouseDown={(e) => {
+        // A middle press would start the browser's autoscroll.
+        if (!inert && e.button === 1) e.preventDefault();
+      }}
+      onClick={(e) => {
+        if (inert || e.button !== 0 || e.altKey || e.shiftKey || e.detail > 1) return;
+        e.preventDefault();
+        e.stopPropagation();
+        void follow(e.currentTarget, wantsNewTab(e));
+      }}
+      onAuxClick={(e) => {
+        if (inert || e.button !== 1) return;
+        e.preventDefault();
+        void follow(e.currentTarget, true);
+      }}
+    />
+  );
 }
 
 /** `{{name}}`: the shown note's value of field `name`, or the reference itself, muted, when the type has no such field. */

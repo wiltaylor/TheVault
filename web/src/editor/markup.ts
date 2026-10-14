@@ -18,6 +18,7 @@ export type Mark =
 export type InlineNode =
   | { type: "text"; text: string; marks?: Mark[] }
   | { type: "mention"; attrs: { id: string; label: string | null }; marks?: Mark[] }
+  | { type: "placeholderLink"; attrs: { noteType: string; title: string }; marks?: Mark[] }
   | { type: "hardBreak"; marks?: Mark[] }
   | { type: "fieldRef"; attrs: { name: string }; marks?: Mark[] };
 
@@ -33,6 +34,9 @@ export interface ParseOptions {
 /** `{{name}}` at the start of a string: a field reference, when parsing a template's text. */
 const FIELD_REF = /^\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/;
 
+/** The content blocks whose `text` is inline markup. */
+export const MARKUP_KINDS: ReadonlySet<string> = new Set(["heading", "paragraph", "item", "quote"]);
+
 /** Mark order: outermost first when opening. Code is always innermost. */
 const RANK = ["link", "colour", "bold", "italic", "underline", "strike", "highlight", "code"] as const;
 type MarkType = (typeof RANK)[number];
@@ -47,6 +51,9 @@ const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 export function isUlid(s: string): boolean {
   return ULID.test(s);
 }
+
+/** A type name: `[a-z][a-z0-9_]*`, at most 64 characters. */
+const TYPE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 
 function markKey(m: Mark): string {
   if (m.type === "link") return `link:${m.attrs.href}`;
@@ -118,6 +125,12 @@ class Builder {
     this.nodes.push(marks ? { type: "mention", attrs, marks } : { type: "mention", attrs });
   }
 
+  placeholderLink(noteType: string, title: string) {
+    const marks = this.marks();
+    const attrs = { noteType, title };
+    this.nodes.push(marks ? { type: "placeholderLink", attrs, marks } : { type: "placeholderLink", attrs });
+  }
+
   toggle(type: MarkType) {
     if (this.active.has(type)) this.active.delete(type);
     else this.active.set(type, { type } as Mark);
@@ -176,6 +189,57 @@ function matchMention(s: string, i: number): { id: string; label: string | null;
 }
 
 /**
+ * A placeholder link at `i`: `[[+type|title]]`, a note of `type` titled `title` that does not
+ * exist yet, with its end index. The title runs to the first unescaped `]]` and is not blank.
+ */
+export function matchPlaceholder(s: string, i: number): { noteType: string; title: string; end: number } | null {
+  if (!s.startsWith("[[+", i)) return null;
+  const bar = s.indexOf("|", i + 3);
+  if (bar < 0) return null;
+  const noteType = s.slice(i + 3, bar);
+  if (!TYPE_NAME.test(noteType)) return null;
+  let j = bar + 1;
+  while (j < s.length) {
+    if (s.charAt(j) === "\\") {
+      j += 2;
+    } else if (s.startsWith("]]", j)) {
+      const title = unescape(s.slice(bar + 1, j));
+      return title.trim() === "" ? null : { noteType, title, end: j + 2 };
+    } else {
+      j++;
+    }
+  }
+  return null;
+}
+
+/** A placeholder link as markup. */
+export function placeholderMarkup(noteType: string, title: string): string {
+  return `[[+${noteType}|${escapeLabel(title)}]]`;
+}
+
+/**
+ * `text` with its first placeholder link for a `noteType` titled `title` rewritten as a mention
+ * of `id`, leaving every other character as it was; null when it holds no such placeholder.
+ * Escaped brackets and code spans hold no placeholder, as in [`parseInline`].
+ */
+export function replacePlaceholder(text: string, noteType: string, title: string, id: string): string | null {
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charAt(i);
+    if (c === "\\") {
+      i++;
+    } else if (c === "`") {
+      const close = findUnescaped(text, "`", i + 1);
+      if (close >= 0) i = close;
+    } else if (c === "[") {
+      const p = matchPlaceholder(text, i);
+      if (p && p.noteType === noteType && p.title === title) return `${text.slice(0, i)}[[${id}]]${text.slice(p.end)}`;
+      if (p) i = p.end - 1;
+    }
+  }
+  return null;
+}
+
+/**
  * A link opening at `i`: the index of the `]` that ends its label, its href, and the index after
  * the closing `)`. The label may hold mentions and code spans but no unescaped `[` or `]`.
  */
@@ -195,7 +259,7 @@ function matchLink(s: string, i: number): { close: number; href: string; end: nu
       }
     }
     if (c === "[") {
-      const m = matchMention(s, j);
+      const m = matchMention(s, j) ?? matchPlaceholder(s, j);
       if (!m) return null;
       j = m.end;
       continue;
@@ -314,6 +378,12 @@ export function parseInline(s: string, options: ParseOptions = {}): InlineNode[]
         i = mention.end;
         continue;
       }
+      const placeholder = matchPlaceholder(s, i);
+      if (placeholder) {
+        b.placeholderLink(placeholder.noteType, placeholder.title);
+        i = placeholder.end;
+        continue;
+      }
       if (!link) {
         const l = matchLink(s, i);
         if (l) {
@@ -417,7 +487,7 @@ export function serializeInline(
   };
   for (const node of nodes) {
     let marks = knownMarks(node.marks);
-    if (node.type === "mention" || node.type === "fieldRef") marks = marks.filter((m) => m.type !== "code");
+    if (node.type === "mention" || node.type === "placeholderLink" || node.type === "fieldRef") marks = marks.filter((m) => m.type !== "code");
     step(marks);
     const inCode = marks.some((m) => m.type === "code");
     if (node.type === "text") {
@@ -431,6 +501,8 @@ export function serializeInline(
       const id = String(node.attrs?.id ?? "");
       const label = node.attrs?.label;
       out += typeof label === "string" && label !== "" ? `[[${id}|${escapeLabel(label)}]]` : `[[${id}]]`;
+    } else if (node.type === "placeholderLink") {
+      out += placeholderMarkup(String(node.attrs?.noteType ?? ""), String(node.attrs?.title ?? ""));
     }
   }
   step([]);

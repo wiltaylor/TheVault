@@ -10,6 +10,7 @@ mod blocks;
 mod change;
 mod doc;
 mod encoding;
+mod inline;
 pub mod migrate;
 mod note;
 mod taxonomy;
@@ -29,6 +30,7 @@ pub use encoding::{
     PALETTE, is_date, is_datetime, is_duration, is_ident, is_ink_colour, is_name, is_palette,
     is_ulid, is_url, is_utc_datetime,
 };
+pub use inline::{MARKUP_BLOCKS, Placeholder, placeholder_at, placeholders};
 pub use note::{NoteLookup, NoteReport};
 pub use taxonomy::{Taxonomy, Term};
 pub use types::{
@@ -268,6 +270,21 @@ impl Schema {
                     }
                 }
                 _ => {}
+            }
+        }
+        for tpl in &t.templates {
+            for (n, tab) in tpl.tabs.iter().enumerate() {
+                for item in &tab.items {
+                    let TabItem::Block(b) = item else { continue };
+                    let mut found = Vec::new();
+                    let at = format!("template {} > tab#{}", tpl.name, n + 1);
+                    inline::placeholders_in(std::slice::from_ref(b), &at, &mut found);
+                    for (path, p) in found {
+                        if self.type_def(&p.type_name).is_none() {
+                            issues.push(Issue::new(path, note::unknown_placeholder_type(&p)));
+                        }
+                    }
+                }
             }
         }
         issues

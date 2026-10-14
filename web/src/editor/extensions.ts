@@ -2,7 +2,7 @@
 // the mention picker, column layouts and a holder for content blocks this editor does not edit
 // yet (D29, D34).
 
-import { type AnyExtension, Extension, Mark, Node, mergeAttributes, nodeInputRule } from "@tiptap/core";
+import { type AnyExtension, Extension, InputRule, Mark, Node, mergeAttributes, nodeInputRule } from "@tiptap/core";
 import Code from "@tiptap/extension-code";
 import Highlight from "@tiptap/extension-highlight";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
@@ -28,7 +28,9 @@ import { FieldRefChip } from "./FieldRefChip";
 import { type SlotContext, SlotHolder } from "./SlotHolder";
 import { MentionChip } from "./MentionChip";
 import { MentionPicker } from "./MentionPicker";
-import { PALETTE } from "./markup";
+import { PALETTE, placeholderMarkup } from "./markup";
+import { PlaceholderChip, placeholderActions } from "./PlaceholderChip";
+import { AT_TRIGGER } from "./trigger";
 import { solidNodeView } from "./solidNodeView";
 
 declare module "@tiptap/core" {
@@ -38,7 +40,8 @@ declare module "@tiptap/core" {
       unsetColour: () => ReturnType;
     };
     mentionPicker: {
-      insertMentionPicker: () => ReturnType;
+      /** Open the mention picker at the caret; `trigger` is what typing it took, `[[` or `@`. */
+      insertMentionPicker: (trigger?: "[[" | "@") => ReturnType;
     };
   }
 }
@@ -110,6 +113,46 @@ export const Mention = Node.create({
   },
 });
 
+/**
+ * `[[+type|title]]`: a placeholder link to a note of `type` titled `title` that does not exist
+ * yet. Clicking it creates the note and turns it into a mention (see `FollowLinks`).
+ */
+export const PlaceholderLink = Node.create({
+  name: "placeholderLink",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      noteType: { default: "", parseHTML: (el) => el.getAttribute("data-type") },
+      title: { default: "", parseHTML: (el) => el.getAttribute("data-title") },
+    };
+  },
+  parseHTML() {
+    return [{ tag: "span[data-placeholder-link][data-title]" }];
+  },
+  renderHTML({ node }) {
+    return [
+      "span",
+      { "data-placeholder-link": "", "data-type": node.attrs.noteType, "data-title": node.attrs.title },
+      placeholderMarkup(node.attrs.noteType, node.attrs.title),
+    ];
+  },
+  renderText({ node }) {
+    return node.attrs.title;
+  },
+  addNodeView() {
+    return solidNodeView(PlaceholderChip);
+  },
+});
+
+/** The placeholder link a mouse event in the editor is on, with what following it does. */
+function placeholderAt(view: EditorView, e: MouseEvent): ((background: boolean) => void) | null {
+  const el = e.target instanceof Element ? e.target.closest("[data-placeholder-link]") : null;
+  return el && view.dom.contains(el) ? (placeholderActions.get(el) ?? null) : null;
+}
+
 /** The link or mention a mouse event in the editor is on, as its `<a>`. */
 function linkAt(view: EditorView, e: MouseEvent): HTMLAnchorElement | null {
   const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
@@ -127,6 +170,12 @@ export const FollowLinks = Extension.create({
   name: "followLinks",
   addProseMirrorPlugins() {
     const follow = (view: EditorView, e: MouseEvent, background: boolean) => {
+      const placeholder = view.editable ? placeholderAt(view, e) : null;
+      if (placeholder) {
+        e.preventDefault();
+        placeholder(background);
+        return true;
+      }
       const a = linkAt(view, e);
       if (!a || !followLink(a.getAttribute("href")!, a, background)) return false;
       e.preventDefault();
@@ -141,7 +190,7 @@ export const FollowLinks = Extension.create({
           handleDOMEvents: {
             mousedown: (view, e) => {
               down = { x: e.clientX, y: e.clientY };
-              if (!linkAt(view, e)) return false;
+              if (!linkAt(view, e) && !placeholderAt(view, e)) return false;
               // A middle press on a link would paste or start the browser's autoscroll, and a
               // Ctrl/Cmd press would select the block around it.
               if (e.button !== 1 && !(e.button === 0 && wantsNewTab(e))) return false;
@@ -162,8 +211,9 @@ export const FollowLinks = Extension.create({
 });
 
 /**
- * A search box standing where a mention will go. Typing `[[` or pressing the toolbar's mention
- * button inserts one; choosing a note replaces it with a mention. It is never saved.
+ * A search box standing where a mention will go. Typing `[[`, typing `@` at the start of a word,
+ * or pressing the toolbar's mention button inserts one; choosing a note replaces it with a
+ * mention, and choosing "New <type>" with a placeholder link. It is never saved.
  */
 export const MentionPickerNode = Node.create({
   name: "mentionPicker",
@@ -171,6 +221,10 @@ export const MentionPickerNode = Node.create({
   inline: true,
   atom: true,
   selectable: false,
+  addAttributes() {
+    // What opened it: abandoning a picker typed as `@` leaves the `@` as text.
+    return { trigger: { default: "[[", rendered: false } };
+  },
   parseHTML() {
     return [];
   },
@@ -180,13 +234,24 @@ export const MentionPickerNode = Node.create({
   addCommands() {
     return {
       insertMentionPicker:
-        () =>
+        (trigger = "[[") =>
         ({ commands }) =>
-          commands.insertContent({ type: this.name }),
+          commands.insertContent({ type: this.name, attrs: { trigger } }),
     };
   },
   addInputRules() {
-    return [nodeInputRule({ find: /\[\[$/, type: this.type })];
+    const type = this.type;
+    return [
+      nodeInputRule({ find: /\[\[$/, type, getAttributes: { trigger: "[[" } }),
+      // `@` at the start of a word: the `@` itself becomes the picker.
+      new InputRule({
+        find: AT_TRIGGER,
+        handler: ({ state, range }) => {
+          const at = state.doc.textBetween(range.to - 1, range.to) === "@" ? range.to - 1 : range.to;
+          state.tr.replaceWith(at, range.to, type.create({ trigger: "@" })).scrollIntoView();
+        },
+      }),
+    ];
   },
   addNodeView() {
     return solidNodeView(MentionPicker);
@@ -330,6 +395,7 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
     TaskList,
     TaskItem.configure({ nested: true }),
     Mention,
+    PlaceholderLink,
     MentionPickerNode,
     FollowLinks,
     VaultBlock,

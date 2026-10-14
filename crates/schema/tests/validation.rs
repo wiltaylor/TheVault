@@ -1068,3 +1068,21 @@ fn an_open_taxonomy_may_start_empty_and_a_closed_one_may_not() {
     assert!(wrong.to_string().contains("allow_new"), "{wrong}");
     assert!(!Taxonomy::parse("status", STATUS).unwrap().allow_new);
 }
+
+#[test]
+fn a_placeholder_link_in_template_text_must_name_a_type() {
+    let ty = |target: &str| {
+        format!(
+            "label = \"T\"\ntemplate default {{\n  tab \"Main\" {{\n    paragraph {{\n      text = \"Start [[+{target}|First step]]\"\n    }}\n  }}\n}}\n"
+        )
+    };
+    Schema::from_sources(&[("t", &ty("t"))], &[]).expect("a placeholder for its own type");
+    let err = Schema::from_sources(&[("t", &ty("nope"))], &[])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("template default > tab#1 > paragraph#1.text")
+            && err.contains("names type \"nope\", which does not exist"),
+        "{err}"
+    );
+}

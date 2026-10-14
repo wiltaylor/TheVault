@@ -1130,15 +1130,20 @@ These text items use the inline markup in PRD Appendix A (D41): `heading.text`, 
 | `[label](https://example.com)` | Link |
 | `[[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB]]` | Mention of a note, shown with its current title |
 | `[[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB\|label]]` | Mention of a note, shown with the label |
+| `[[+task\|Fix the pump]]` | Placeholder link: a note of type `task` titled `Fix the pump` that does not exist yet |
 | `\*` | A literal `*`. A backslash escapes any markup character |
 
 Inside a template's fixed blocks, `{{name}}` also renders a field's value; see [Field references](#field-references). Everywhere else it is plain text.
 
 A mention holds a ULID, and `index` records it like a reference, so `linked_from` and backlinks see it. Inside a WCL string a literal backslash is written `\\`, so the markup escape `\*` appears in the file as `\\*`.
 
+A placeholder link is `[[+<type>|<title>]]`. `<type>` is a type name and must name a type that exists; a note or template whose text names any other type fails validation, naming the text item. `<title>` runs to the first unescaped `]]` and is not blank. A backslash escapes `|`, `]` and `\` in it, as in a mention's label. The `+` keeps a placeholder apart from a mention, since a ULID never starts with `+`. Text that does not match this form, such as `[[+task]]`, is plain text. Deleting a type does not rewrite the placeholders that name it: a note holding one fails validation until the placeholder is removed or changed.
+
+A placeholder has no target, so `index` records no link for it; its title is searched like the text around it. In the app, clicking one creates a note of `<type>` titled `<title>`, then rewrites the placeholder in place as a mention `[[<new ULID>]]` through a normal versioned save of the note that holds it. In a template's fixed blocks and in a version shown from history, a placeholder only shows.
+
 ```wcl
 paragraph {
-  text = "Mark risks {red}in red{/}, ==highlight== questions, and see [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB]]."
+  text = "Mark risks {red}in red{/}, ==highlight== questions, and see [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB]]. Then [[+task|Fix the pump]]."
 }
 ```
 

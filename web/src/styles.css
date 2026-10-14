@@ -1015,8 +1015,75 @@ mark {
 }
 
 .mention-result {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   padding: 0.3rem 0.5rem;
   cursor: pointer;
+}
+
+.mention-result-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "New <type>" options sit below the notes found, set apart by a rule. */
+.mention-new-first {
+  border-top: 1px solid var(--line);
+}
+
+.mention-hint {
+  margin-left: auto;
+  font-size: 0.85em;
+}
+
+.mention-hint kbd {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.95em;
+}
+
+/* `[[+type|title]]`: a note not created yet. Dashed and muted, unlike a mention. */
+.placeholder-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  vertical-align: baseline;
+  padding: 0 0.25rem;
+  border: 1px dashed var(--muted);
+  border-radius: 0.25rem;
+  color: var(--muted);
+  white-space: nowrap;
+  line-height: 1.25;
+}
+
+.placeholder-link svg {
+  flex: none;
+  align-self: center;
+}
+
+.placeholder-link.clickable {
+  cursor: pointer;
+}
+
+.placeholder-link.clickable:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.placeholder-link.busy {
+  cursor: progress;
+  opacity: 0.5;
+}
+
+.placeholder-link.error {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+.content-editor-doc .ProseMirror-selectednode .placeholder-link {
+  outline: 2px solid var(--accent);
 }
 
 .mention-result[aria-selected="true"] {

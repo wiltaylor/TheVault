@@ -695,3 +695,77 @@ content body {{
         ]
     );
 }
+
+#[test]
+fn placeholder_links_are_searched_but_link_nowhere() {
+    let (_dir, vault) = fixture();
+    let mut index = Index::open(&vault).unwrap();
+    index.rebuild(&vault).unwrap();
+    let schema = Schema::load(&vault).unwrap();
+    let text = format!(
+        r#"title   = "Plans"
+created = "2026-10-01T09:00:00Z"
+updated = "2026-10-01T09:00:00Z"
+
+content body {{
+  paragraph {{
+    text = "Next: [[+task|Fix the capybara pump]], then [[+project|[[{PROJECT}]] and [[{TASK_B}]]"
+  }}
+}}
+"#
+    );
+    index
+        .update(&schema, &[put(&schema, "task", SCRATCH, &text)])
+        .unwrap();
+    let ids: Vec<String> = index
+        .search("capybara", None)
+        .unwrap()
+        .into_iter()
+        .map(|h| h.id)
+        .collect();
+    assert_eq!(ids, vec![SCRATCH]);
+    let mut stmt = index
+        .connection()
+        .prepare("SELECT via || ' ' || dst FROM links WHERE src = ?1 ORDER BY pos")
+        .unwrap();
+    let links: Vec<String> = stmt
+        .query_map([SCRATCH], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    // The second placeholder's title is `[[` and the project's id; only the real mention links.
+    assert_eq!(links, vec![format!("mention {TASK_B}")]);
+}
+
+#[test]
+fn a_placeholder_naming_no_type_is_invalid() {
+    let (_dir, vault) = fixture();
+    let schema = Schema::load(&vault).unwrap();
+    let text = r#"title = "Plans"
+
+content body {
+  list {
+    style = "bullet"
+
+    item {
+      text = "Do [[+chore|Sweep]] soon"
+    }
+  }
+}
+"#;
+    let err = schema
+        .validate_note_source("task", text, "notes/task/x.wcl", &HashMap::new())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("> list#1 > item#1.text")
+            && err.contains(
+                "the placeholder link titled \"Sweep\" names type \"chore\", which does not exist"
+            ),
+        "{err}"
+    );
+    let ok = text.replace("+chore", "+task");
+    schema
+        .validate_note_source("task", &ok, "notes/task/x.wcl", &HashMap::new())
+        .unwrap();
+}

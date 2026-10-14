@@ -3,7 +3,15 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { Block, TemplateItem } from "../api";
 import { blocksToDoc, docToBlocks, docToItems, itemsToDoc } from "./doc";
 import { editorExtensions } from "./extensions";
-import { type InlineNode, fieldRefNames, parseInline, renameFieldRefs, serializeInline } from "./markup";
+import {
+  type InlineNode,
+  fieldRefNames,
+  parseInline,
+  placeholderMarkup,
+  renameFieldRefs,
+  replacePlaceholder,
+  serializeInline,
+} from "./markup";
 import { knowTitle } from "./titles";
 
 const ID = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
@@ -22,6 +30,7 @@ const MARKS: [string, string][] = [
   ["link", "see [the docs](https://example.com/docs) first"],
   ["mention", `see [[${ID}]] first`],
   ["labelled mention", `see [[${ID}|the parent]] first`],
+  ["placeholder link", "then [[+task|Fix the pump]] soon"],
   ["line break", "one\ntwo"],
 ];
 
@@ -56,6 +65,10 @@ const TRICKY: [string, string][] = [
   ["mention inside bold", `**ask [[${ID}]]**`],
   ["mention label with escapes", `[[${ID}|a \\] b \\| c \\\\ d]]`],
   ["mention inside a link label", `[see [[${ID}]]](https://example.com)`],
+  ["placeholder title with escapes", "[[+task|a \\] b \\| c \\\\ d]]"],
+  ["placeholder inside bold", "**do [[+project_x|Launch]]**"],
+  ["placeholder inside a link label", "[see [[+task|x]]](https://example.com)"],
+  ["literal placeholder", "\\[\\[+task|x\\]\\]"],
   ["highlight next to underline", "==a==++b++"],
   ["only marks", "**x**"],
   ["empty", ""],
@@ -82,6 +95,29 @@ describe("inline markup", () => {
     expect(marked("***b***")).toEqual([["b", ["bold", "italic"]]]);
     expect(parseInline(`[[${ID}|lbl]]`)).toEqual([{ type: "mention", attrs: { id: ID, label: "lbl" } }]);
     expect(parseInline(`[[${ID}]]`)).toEqual([{ type: "mention", attrs: { id: ID, label: null } }]);
+    expect(parseInline("[[+task|Fix \\| it]]")).toEqual([{ type: "placeholderLink", attrs: { noteType: "task", title: "Fix | it" } }]);
+  });
+
+  it("reads a placeholder link only with a type name and a title", () => {
+    const plain = (text: string) => parseInline(text).map((n) => (n.type === "text" ? n.text : n.type)).join("");
+    for (const text of ["[[+task]]", "[[+task|]]", "[[+task|  ]]", "[[+Task|x]]", "[[+9a|x]]", "[[+|x]]", "[[+task|x", "`[[+task|x]]`"]) {
+      expect(parseInline(text).some((n) => n.type === "placeholderLink"), text).toBe(false);
+    }
+    expect(plain("[[+task]]")).toBe("[[+task]]");
+  });
+
+  it("writes a placeholder's title with the escapes it needs", () => {
+    expect(serializeInline([{ type: "placeholderLink", attrs: { noteType: "task", title: "a]] | b\\" } }])).toBe(
+      "[[+task|a\\]\\] \\| b\\\\]]",
+    );
+    expect(placeholderMarkup("task", "x|y")).toBe("[[+task|x\\|y]]");
+  });
+
+  it("replaces the first matching placeholder with a mention and keeps the rest of the text", () => {
+    const text = "`[[+task|A]]` \\[[+task|A]] x  [[+task|B]] **[[+task|A]]** [[+task|A]]";
+    expect(replacePlaceholder(text, "task", "A", ID)).toBe(`\`[[+task|A]]\` \\[[+task|A]] x  [[+task|B]] **[[${ID}]]** [[+task|A]]`);
+    expect(replacePlaceholder(text, "note", "A", ID)).toBeNull();
+    expect(replacePlaceholder("[[+task|a \\| b]]", "task", "a | b", ID)).toBe(`[[${ID}]]`);
   });
 
   it("reads unmatched or unknown markup as text", () => {

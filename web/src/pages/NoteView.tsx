@@ -37,6 +37,8 @@ import { activePane } from "../workspace/model";
 import { usePane } from "../workspace/pane";
 import { workspace } from "../workspace/store";
 import { ThisNote } from "../views/thisNote";
+import { offerPlaceholders, replacePlaceholderInDoc, resolvePlaceholder } from "../placeholders";
+import { PlaceholdersInert } from "../components/PlaceholderLink";
 import { TrashIcon, TypeIcon } from "../components/Icon";
 
 /** How long after the last change a note saves itself. */
@@ -58,10 +60,17 @@ function message(e: unknown): string {
 /** The page for a new note of the type named in `?type=`: its default template, empty (D14). */
 export function NewNote() {
   const [search] = useSearchParams();
-  const type = () => (typeof search.type === "string" ? search.type : "");
+  const param = (name: string) => {
+    const v = search[name];
+    return typeof v === "string" ? v : "";
+  };
+  const type = () => param("type");
+  // `title` fills in the title; `from` names the note whose placeholder link for this type and
+  // title opened the form, rewritten as a mention once the note is created.
+  const prefill = () => (param("title") ? { title: param("title"), from: param("from") || undefined } : undefined);
   return (
     <Show when={typeDef(type())} keyed fallback={<p class="error">There is no type {type()}.</p>}>
-      {(t) => <NoteView newType={t.name} />}
+      {(t) => <NoteView newType={t.name} prefill={prefill()} />}
     </Show>
   );
 }
@@ -114,7 +123,7 @@ function PropertiesIcon() {
  * sidebar, and changes save themselves (D12 versioning; a stale save shows the conflict view).
  * With `newType`, an unsaved note of that type, which Create creates.
  */
-export function NoteView(props: { newType?: string; id?: string }) {
+export function NoteView(props: { newType?: string; id?: string; prefill?: { title: string; from?: string } }) {
   const params = useParams();
   const navigate = useNavigate();
   const pane = usePane();
@@ -233,6 +242,8 @@ export function NoteView(props: { newType?: string; id?: string }) {
           const t = typeDef(props.newType);
           if (!t) return;
           const draft = draftNote(t);
+          const title = untrack(() => props.prefill?.title);
+          if (title) draft.note.fields.title = title;
           setDoc(draft.note);
           setNote(draft);
           return;
@@ -348,6 +359,26 @@ export function NoteView(props: { newType?: string; id?: string }) {
     });
   }
 
+  // A placeholder link clicked outside the editor (a card, the new-note form) is rewritten here,
+  // with this page's own edits, rather than over them.
+  createEffect(() => {
+    const id = note()?.id;
+    if (!id || props.newType) return;
+    onCleanup(
+      offerPlaceholders(id, (noteType, title, newId) => {
+        if (preview() || conflict()) return false;
+        const next = replacePlaceholderInDoc(doc(), noteType, title, newId);
+        if (!next) return false;
+        batch(() => {
+          setDoc(next);
+          setGeneration(generation() + 1);
+        });
+        autosave?.schedule();
+        return true;
+      }),
+    );
+  });
+
   if (pane) {
     onCleanup(
       offerNote(pane.id, {
@@ -432,6 +463,15 @@ export function NoteView(props: { newType?: string; id?: string }) {
       const saved = await api.createNote(n.type, doc());
       const title = saved.note.fields.title;
       if (typeof title === "string") knowTitle(saved.id, title, saved.type);
+      const from = props.prefill;
+      if (from?.from) {
+        // Opened from a placeholder link: that link becomes a mention of the new note.
+        try {
+          await resolvePlaceholder(from.from, n.type, from.title, saved.id);
+        } catch (e) {
+          console.warn(`could not link the new note from ${from.from}`, e);
+        }
+      }
       navigate(`/notes/${saved.id}`);
     } catch (e) {
       setSaveError(message(e));
@@ -735,6 +775,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
                         shown in its place, remounts the editors. */}
                     <Show when={layoutKey()} keyed>
                       {(_) => (
+                        <PlaceholdersInert.Provider value={!!preview()}>
                         <fieldset class="preview-lock" disabled={!!preview()}>
                         <div
                           id={`${uid}tab-panel`}
@@ -768,6 +809,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
                           </For>
                         </div>
                         </fieldset>
+                        </PlaceholdersInert.Provider>
                       )}
                     </Show>
                   </div>
@@ -775,6 +817,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
               }
             >
               {(c) => (
+                <PlaceholdersInert.Provider value={true}>
                 <ConflictView
                   type={type()}
                   mine={c().mine}
@@ -783,6 +826,7 @@ export function NoteView(props: { newType?: string; id?: string }) {
                   onKeepStored={keepStored}
                   onSaveMine={() => void saveMine()}
                 />
+                </PlaceholdersInert.Provider>
               )}
             </Show>
           </ThisNote.Provider>

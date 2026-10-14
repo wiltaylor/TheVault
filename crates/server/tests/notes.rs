@@ -614,3 +614,40 @@ fn create_fills_field_defaults_and_update_does_not() {
     assert_eq!(err["issues"][0]["at"], "owner");
     assert_eq!(file(&id), on_disk);
 }
+
+#[test]
+fn placeholder_links_round_trip_and_must_name_a_type() {
+    let api = Api::start();
+    let text = r"Next [[+chore|Fix the \| pump \]\]]] and [[+task|Plan]].";
+    let wcl = format!(
+        "title = \"Plans\"\n\ncontent body {{\n  paragraph {{\n    text = {}\n  }}\n}}\n",
+        serde_json::to_string(text).unwrap()
+    );
+    let created = api.create(&wcl);
+    let id = s(&created["id"]).to_owned();
+    let read = expect(api.get(&format!("/api/notes/{id}")).send().unwrap(), 200);
+    assert_eq!(
+        read["note"]["blocks"][0]["blocks"][0]["fields"]["text"], text,
+        "{read}"
+    );
+    assert_eq!(api.file(&id).unwrap(), s(&created["wcl"]));
+    assert!(s(&created["wcl"]).contains(&serde_json::to_string(text).unwrap()));
+
+    // An unknown type in a placeholder is refused, naming where it is.
+    let res = api
+        .post("/api/notes?type=task")
+        .header(CONTENT_TYPE, WCL)
+        .body(wcl.replace("+chore", "+errand"))
+        .send()
+        .unwrap();
+    let err = expect(res, 400);
+    assert_eq!(err["error"], "invalid");
+    assert!(
+        s(&err["issues"][0]["at"]).ends_with("paragraph#1.text"),
+        "{err}"
+    );
+    assert_eq!(
+        err["issues"][0]["message"],
+        "the placeholder link titled \"Fix the | pump ]]\" names type \"errand\", which does not exist"
+    );
+}

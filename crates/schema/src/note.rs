@@ -141,6 +141,9 @@ pub(crate) fn validate(
             FieldKind::Canvas => c.canvas(&b.body, &at),
             _ => {}
         }
+        if matches!(f.kind, FieldKind::Content | FieldKind::Canvas) {
+            check_placeholders(schema, &b.body, &at, &mut c);
+        }
     }
 
     for f in ty.fields.iter().filter(|f| f.required) {
@@ -154,6 +157,22 @@ pub(crate) fn validate(
     } else {
         Err(issues)
     }
+}
+
+/// Every `[[+type|title]]` placeholder in the markup text of `body` must name a type.
+pub(crate) fn check_placeholders(schema: &Schema, body: &Doc, at: &str, c: &mut Check) {
+    for (path, p) in crate::inline::placeholders_in_doc(body, at) {
+        if schema.type_def(&p.type_name).is_none() {
+            c.fail(&path, unknown_placeholder_type(&p));
+        }
+    }
+}
+
+pub(crate) fn unknown_placeholder_type(p: &crate::Placeholder) -> String {
+    format!(
+        "the placeholder link titled {:?} names type {:?}, which does not exist",
+        p.title, p.type_name
+    )
 }
 
 /// Check one non-compound field value, or a definition's `default`. Without a context, references,

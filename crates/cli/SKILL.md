@@ -140,6 +140,8 @@ vault put --type task --json < note.json
 
 To see any other block in JSON, `get` a note that has one and read its `note.blocks`.
 
+The `text` of a paragraph, heading, list item or quote is inline markup: `**bold**`, `*italic*`, `[label](https://example.com)`, and so on. `[[<ULID>]]` or `[[<ULID>|label]]` mentions an existing note. `[[+<type>|<title>]]` is a placeholder link to a note that does not exist yet, such as `[[+task|Fix the pump]]`: the type must exist, and a `|`, `]` or `\` in the title is escaped with a backslash. A placeholder links nowhere until someone clicks it in the app, which creates the note and rewrites the placeholder as a mention. Write a placeholder when a note should exist but you are not creating it now; to link a note you have created, mention its id instead.
+
 To change a note, send the whole note with the version you read. A note that changed since you read it is refused with `"status": 409` and `"error": "conflict"`; read it again, reapply your change, and retry.
 
 ```sh

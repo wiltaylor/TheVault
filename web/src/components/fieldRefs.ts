@@ -23,6 +23,7 @@ export function fillFieldRefs(text: string, refs: FieldRefValues | undefined): s
       if (n.type === "text") return n.text;
       if (n.type === "fieldRef") return refs.text(n.attrs.name) ?? `{{${n.attrs.name}}}`;
       if (n.type === "mention") return n.attrs.label ?? "";
+      if (n.type === "placeholderLink") return n.attrs.title;
       return " ";
     })
     .join("");

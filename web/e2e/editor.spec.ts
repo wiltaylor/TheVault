@@ -125,7 +125,7 @@ test("typing each mark through shortcuts and the selection bubble saves the expe
   const picker = page.getByRole("combobox", { name: "Find a note to mention" });
   await expect(picker).toBeFocused();
   await kb.type(word);
-  await expect(page.getByRole("option", { name: new RegExp(word) })).toBeVisible();
+  await expect(page.getByTestId("mention-result").filter({ hasText: word })).toBeVisible();
   await kb.press("Enter");
   await expect(doc.getByTestId("mention")).toHaveText(`Mention ${word}`);
   await kb.type(" 2*3");
@@ -163,7 +163,7 @@ test("text typed straight after choosing a mention and saved at once is all in t
 
   await kb.type("see [[");
   await kb.type(word);
-  await expect(page.getByRole("option", { name: new RegExp(word) })).toBeVisible();
+  await expect(page.getByTestId("mention-result").filter({ hasText: word })).toBeVisible();
   // A busy machine runs animation frames late. Anything that hands focus back to the editor on
   // the next frame drops the keys typed in between, so make that gap wide enough to type into.
   await page.evaluate(() => {
