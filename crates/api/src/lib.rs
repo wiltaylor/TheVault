@@ -66,6 +66,7 @@ use serde_json::{Value, json};
 use writer::Writer;
 
 pub use auth::{Caller, OWNER_SESSION, SESSION_COOKIE, required_scope};
+pub use devices::DEFAULT_SKIP_PATTERN;
 pub use error::ApiError;
 pub use openapi::{ENDPOINTS, document as openapi_document};
 

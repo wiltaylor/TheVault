@@ -623,12 +623,30 @@ fn init_starter_writes_files_that_all_validate() {
         "types/note.wcl",
         "taxonomies/status.wcl",
         "taxonomies/tags.wcl",
+        "devices/android.wcl",
+        "scripts/device_messages.ws",
+        "scripts/device_calls.ws",
+        "scripts/device_contacts.ws",
+        "scripts/device_share.ws",
     ] {
         assert!(dir.join(path).is_file(), "no {path}");
     }
     assert_eq!(
         starter.init["starter"]["types"],
         json!(["person", "project", "task", "note"])
+    );
+    assert_eq!(
+        starter.init["starter"]["scripts"],
+        json!([
+            "device_messages",
+            "device_calls",
+            "device_contacts",
+            "device_share"
+        ])
+    );
+    assert_eq!(
+        starter.init["starter"]["device_files"],
+        json!(["devices/android.wcl"])
     );
     let ids = starter.note_ids();
     assert!(ids.contains(s(&starter.init["starter"]["dashboard"])));
@@ -639,8 +657,11 @@ fn init_starter_writes_files_that_all_validate() {
         .collect();
     assert_eq!(written, ids);
 
-    // Every file is already canonical.
+    // Every WCL file is already canonical.
     for (path, bytes) in files(dir) {
+        if path.extension().is_some_and(|e| e == "ws") {
+            continue;
+        }
         let text = String::from_utf8(bytes).unwrap();
         let rel = path.to_str().unwrap();
         assert_eq!(

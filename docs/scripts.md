@@ -4,13 +4,14 @@ Scripts are wscript files, `scripts/<name>.ws`. They run as type handlers (`docs
 
 ## What each kind of run can use
 
-| Module | `before_*` handlers, migrations | `after_*` handlers | Scheduled scripts |
-|--------|---------------------------------|--------------------|-------------------|
-| `vault` | yes | yes | yes |
-| `http` | no | yes | yes |
-| `secrets` | no | yes | yes |
-| `fs` | no | no | yes |
-| `value`, `json`, `math`, `regex` | yes | yes | yes |
+| Module | `before_*` handlers, migrations | `after_*` handlers | Scheduled scripts | Device handlers and commands |
+|--------|---------------------------------|--------------------|-------------------|------------------------------|
+| `vault` | yes | yes | yes | yes |
+| `http` | no | yes | yes | no |
+| `secrets` | no | yes | yes | no |
+| `fs` | no | no | yes | no |
+| `device` | no | no | no | yes |
+| `value`, `json`, `math`, `regex` | yes | yes | yes | yes |
 
 A script that uses a module its kind of run lacks does not compile. wscript's own `fs`, `process` and `time` modules are never available.
 
@@ -266,6 +267,41 @@ fn run() -> Result[int, string] {
 }
 ```
 
+## `device`
+
+Device event handlers and device commands only. They run on the paired phone, and their `vault` calls change the phone's copy of the vault, which syncs with the home server like any other change. A device script's changes are recorded as made by `handler <script>`.
+
+| Function | Returns |
+|----------|---------|
+| `device::id()` | `string`: this device's id |
+| `device::sms_list(filter: Value)` | `Result[List[Value], string]`: SMS, newest first, in the form of the `sms_received` payload. `filter` may hold `thread_ref`, `number`, `since` (a time) and `limit` |
+| `device::sms_get(device_ref: string)` | `Result[Value, string]`: one SMS |
+| `device::calls_list(filter: Value)` | `Result[List[Value], string]`: calls, newest first, in the form of the `call_ended` payload. `filter` may hold `number`, `since` and `limit` |
+| `device::contacts_list(filter: Value)` | `Result[List[Value], string]`: contacts, in the form of the `contact_changed` payload. `filter` may hold `name` (the exact display name), `number` (E.164) and `limit` |
+| `device::contacts_get(contact_id: string)` | `Result[Value, string]`: one contact |
+| `device::contacts_upsert(contact: Value)` | `Result[Value, string]`: add a contact, or change it when `contact_id` is not null, from `{ contact_id, name, phones, addresses, person }`. Returns `{ contact_id }`. Needs the device's contacts-write switch |
+| `device::contacts_delete(contact_id: string)` | `Result[Value, string]`: delete a contact. Needs the device's contacts-write switch |
+| `device::sms_send(to: string, body: string)` | `Result[Value, string]`: send an SMS. Returns `{ device_ref }`. Needs the device's SMS-send switch |
+| `device::show_notification(title: string, body: string, note: string)` | `Result[Value, string]`: show a phone notification that opens `note` when tapped. Pass `""` for no body or no note |
+
+A read is an error when Android has not given the app the permission for it. A write or a send with its switch off in Settings > Devices is an error, whatever the script, and so is `sms_send` without Android's SEND_SMS permission. Deleting a `message` note never deletes the SMS on the phone.
+
+On the home server, a script a device file names is checked as a device script and never run there.
+
+```rust
+use vault
+use device
+
+fn sms_received(event: Value) -> Result[(), string] {
+    let data = event.get("data").unwrap()
+    let body = data.get("body").unwrap().as_string().unwrap()
+    if body.contains("urgent") {
+        device::show_notification("Urgent SMS", body, "")?;
+    }
+    Ok(())
+}
+```
+
 ## Device events
 
 A device runs the handlers its platform's `devices/<platform>.wcl` names for each event, in file order (`docs/vault-format.md` "Device files"). A handler function takes one `Value`:
@@ -282,6 +318,16 @@ A device runs the handlers its platform's `devices/<platform>.wcl` names for eac
 | `data` | The event's payload, below |
 
 What a handler returns is ignored, except that `Err(message)` records the run as failed. Before a handler runs, the device drops events from anyone on its exclusion list and SMS whose body matches its skip pattern (Settings > Devices).
+
+The device stores each event in a queue in its `state.db` before any handler runs, so an event survives the app being stopped. A failed run leaves the event queued and tries it again on the next pass, up to three passes. The handlers of one event run in file order, and the first that fails stops the rest, so a handler should check `device_ref` before it creates a note.
+
+The exclusion list matches:
+
+| Entry | Drops |
+|-------|-------|
+| `number` | Any event whose `number` or `number_raw`, or a group MMS recipient's, is the number, ignoring spaces and punctuation; and a contact event for a contact with the number |
+| `contact` | Any event whose `contact` has that `id` or that name (ignoring case), an RCS message whose `sender` is the name, and a contact event for that contact |
+| `thread` | Any event whose `thread_ref` is the value |
 
 These conventions hold in every payload:
 

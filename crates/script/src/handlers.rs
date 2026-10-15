@@ -472,6 +472,7 @@ impl Hooks for HandlerHooks {
             ScriptRole::Before => Kind::Before,
             ScriptRole::After => Kind::After,
             ScriptRole::Task => Kind::Task,
+            ScriptRole::Device => Kind::Device,
         };
         self.0
             .after

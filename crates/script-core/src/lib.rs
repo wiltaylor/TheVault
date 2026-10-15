@@ -23,6 +23,7 @@
 //! handler named in the [`Job`] (D13, D30).
 
 pub mod convert;
+mod device;
 pub mod run;
 mod vault;
 mod vault_module;
@@ -39,6 +40,7 @@ use serde_json::Value as Json;
 use wscript::std_modules::DynValue;
 use wscript::{CompiledUnit, Context, Fault, HostError, IntoValue, Module, Vm, VmConfig};
 
+pub use device::{DeviceAccess, DeviceData, DeviceExtensions, NoDevice, Switches, device_module};
 pub use vault::Vault;
 pub use vault_module::vault_module;
 pub use vocab::{Archived, Author};

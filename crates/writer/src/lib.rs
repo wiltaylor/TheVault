@@ -64,7 +64,10 @@ pub use builtin::{
 };
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
 pub use defs::ScriptProblem;
-pub use devices::{COMMAND_TTL_MS, MAX_COMMAND_PAYLOAD, command_json, device_file_path};
+pub use devices::{
+    COMMAND_TTL_MS, DEFAULT_ANDROID_DEVICE_FILE, DEFAULT_DEVICE_SCRIPTS, MAX_COMMAND_PAYLOAD,
+    command_json, default_device_file, default_device_script, device_file_path,
+};
 pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
 pub use index::{Archived, Graph, GraphEdge, GraphNode};
@@ -240,6 +243,8 @@ pub enum ScriptRole {
     After,
     /// A scheduled task (D10).
     Task,
+    /// A device event handler or device command, named by a device file (D5, D22).
+    Device,
 }
 
 impl ScriptRole {
@@ -249,6 +254,7 @@ impl ScriptRole {
             ScriptRole::Before => "before_handler",
             ScriptRole::After => "after_handler",
             ScriptRole::Task => "task",
+            ScriptRole::Device => "device",
         }
     }
 }

@@ -19,6 +19,11 @@
 //! [`Embedded::handle`] takes and returns streaming bodies, so an upload is never held twice and a
 //! `Range` request on an asset answers `206 Partial Content` with just that range (pdf.js). It
 //! must be awaited inside a Tokio runtime, which Tauri's async runtime is.
+//!
+//! [`Embedded::device`] adds the device event runtime of [`device`]: the durable queue of device
+//! events, their handlers, and the commands server scripts send the device (D5, D6, D22).
+
+pub mod device;
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, Weak};
@@ -157,6 +162,14 @@ impl Embedded {
         assets: sync::AssetPolicy,
     ) -> sync::Result<sync::Engine> {
         sync::Engine::new(self.writer().clone(), self.queue().clone(), remote, assets)
+    }
+
+    /// The device event runtime of the device `config` names, over this vault. Open one per
+    /// device; it holds the event queue in the local `state.db`.
+    pub fn device(&self, config: device::DeviceConfig) -> anyhow::Result<device::DeviceRuntime> {
+        let writer = self.writer().clone();
+        let state_db = writer.vault().server_dir().join("state.db");
+        device::DeviceRuntime::open(writer, &state_db, config)
     }
 
     fn parts(&self) -> &Parts {

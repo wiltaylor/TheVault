@@ -1,6 +1,7 @@
 //! The starter pack `vault init --starter` adds: the Task, Project, Person and Note types, the
 //! Status and Tags taxonomies, a few example notes and a dashboard note with kanban and calendar
-//! views (D37). Tags is open, so a note's new tag adds itself to it.
+//! views (D37). Tags is open, so a note's new tag adds itself to it. It also holds the default
+//! device scripts and the `devices/android.wcl` that wires them, for the user to edit (D15).
 //!
 //! Definitions are written as they are. Notes go through `writer`, so they are validated, stamped
 //! and recorded in `state.db` like any other write. A note file may hold `{{id:<key>}}`, the id
@@ -77,6 +78,14 @@ pub fn install(vault: Vault, state: State) -> Result<Value, Fail> {
     for (name, source) in TYPES {
         changes.push(definition(&writer::type_path(name), source)?);
     }
+    for (name, source) in writer::DEFAULT_DEVICE_SCRIPTS {
+        changes.push(Change::write(
+            format!("scripts/{name}.ws"),
+            source.as_bytes(),
+        ));
+    }
+    let android = writer::device_file_path("android");
+    changes.push(definition(&android, writer::DEFAULT_ANDROID_DEVICE_FILE)?);
     vault.commit(changes).map_err(Fail::from_display("store"))?;
 
     let writer = Writer::open(vault, state).map_err(Fail::from_display("starter"))?;
@@ -98,6 +107,8 @@ pub fn install(vault: Vault, state: State) -> Result<Value, Fail> {
     Ok(json!({
         "taxonomies": TAXONOMIES.iter().map(|(n, _)| n).collect::<Vec<_>>(),
         "types": TYPES.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+        "scripts": writer::DEFAULT_DEVICE_SCRIPTS.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+        "device_files": [android],
         "notes": notes,
         "dashboard": ids["dashboard"],
     }))

@@ -16,6 +16,44 @@ pub const COMMAND_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 /// The largest command payload, as JSON text.
 pub const MAX_COMMAND_PAYLOAD: usize = 64 * 1024;
 
+/// The device file an Android device runs when the vault has none, which the starter vault also
+/// holds: every device event handled by the default device scripts, and every command declared.
+pub const DEFAULT_ANDROID_DEVICE_FILE: &str = include_str!("../defaults/devices/android.wcl");
+
+/// The default device scripts, as `(name, source)`: what the default device file names (D15, D16,
+/// D24).
+pub const DEFAULT_DEVICE_SCRIPTS: [(&str, &str); 4] = [
+    (
+        "device_messages",
+        include_str!("../defaults/devices/device_messages.ws"),
+    ),
+    (
+        "device_calls",
+        include_str!("../defaults/devices/device_calls.ws"),
+    ),
+    (
+        "device_contacts",
+        include_str!("../defaults/devices/device_contacts.ws"),
+    ),
+    (
+        "device_share",
+        include_str!("../defaults/devices/device_share.ws"),
+    ),
+];
+
+/// The built-in device file for `platform`, which a device runs when the vault has none.
+pub fn default_device_file(platform: &str) -> Option<&'static str> {
+    (platform == "android").then_some(DEFAULT_ANDROID_DEVICE_FILE)
+}
+
+/// The built-in default device script `name`.
+pub fn default_device_script(name: &str) -> Option<&'static str> {
+    DEFAULT_DEVICE_SCRIPTS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, source)| *source)
+}
+
 /// The vault path of the device file for `platform`.
 pub fn device_file_path(platform: &str) -> String {
     format!("devices/{platform}.wcl")

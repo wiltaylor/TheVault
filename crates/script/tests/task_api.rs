@@ -579,7 +579,13 @@ fn every_example_in_the_scripts_reference_compiles_as_a_task() {
     let mut examples = 0;
     for (i, block) in doc.split("```rust\n").skip(1).enumerate() {
         let source = block.split("```").next().unwrap();
-        if let Err(e) = f.host.check(Kind::Task, "example", source) {
+        // A device script example compiles as the device runs it.
+        let kind = if source.contains("use device") {
+            Kind::Device
+        } else {
+            Kind::Task
+        };
+        if let Err(e) = f.host.check(kind, "example", source) {
             panic!("example {} does not compile: {e}\n{source}", i + 1);
         }
         examples += 1;

@@ -1,0 +1,777 @@
+//! S4: the default device scripts run against a fake phone and canned device events (D5, D6, D15,
+//! D16, D23, D24, D25).
+
+use std::sync::{Arc, Mutex};
+
+use embedded::device::{DeviceConfig, DeviceData, DeviceRuntime, EventStatus};
+use embedded::{Config, Embedded};
+use script::Vault;
+use serde_json::{Value as Json, json};
+use state::Author;
+use tempfile::TempDir;
+use writer::{Input, Writer};
+
+const DEVICE: &str = "01PHONEDEVICE0000000000000";
+
+/// The key of the device's link in a person's `device_contacts`.
+const SLOT: &str = "device_01PHONEDEVICE0000000000000";
+
+/// A phone with a contact list, that records every change and message it is asked for.
+#[derive(Default)]
+struct Phone {
+    contacts: Mutex<Vec<Json>>,
+    actions: Mutex<Vec<String>>,
+}
+
+impl Phone {
+    fn actions(&self) -> Vec<String> {
+        self.actions.lock().unwrap().clone()
+    }
+
+    fn act(&self, what: String) {
+        self.actions.lock().unwrap().push(what);
+    }
+}
+
+impl DeviceData for Phone {
+    fn sms_list(&self, _filter: &Json) -> Result<Vec<Json>, String> {
+        Ok(Vec::new())
+    }
+
+    fn sms_get(&self, device_ref: &str) -> Result<Json, String> {
+        Err(format!("no SMS {device_ref}"))
+    }
+
+    fn calls_list(&self, _filter: &Json) -> Result<Vec<Json>, String> {
+        Ok(Vec::new())
+    }
+
+    fn contacts_list(&self, filter: &Json) -> Result<Vec<Json>, String> {
+        let name = filter["name"].as_str();
+        Ok(self
+            .contacts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| name.is_none_or(|n| c["name"] == n))
+            .cloned()
+            .collect())
+    }
+
+    fn contacts_get(&self, contact_id: &str) -> Result<Json, String> {
+        self.contacts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|c| c["contact_id"] == contact_id)
+            .cloned()
+            .ok_or_else(|| format!("no contact {contact_id}"))
+    }
+
+    fn contacts_upsert(&self, contact: &Json) -> Result<Json, String> {
+        self.act(format!("upsert {contact}"));
+        let id = contact["contact_id"].as_str().unwrap_or("c-new").to_owned();
+        Ok(json!({ "contact_id": id }))
+    }
+
+    fn contacts_delete(&self, contact_id: &str) -> Result<(), String> {
+        self.act(format!("delete {contact_id}"));
+        Ok(())
+    }
+
+    fn sms_send(&self, to: &str, body: &str) -> Result<Json, String> {
+        self.act(format!("sms {to}: {body}"));
+        Ok(json!({ "device_ref": "sms:900" }))
+    }
+
+    fn show_notification(&self, title: &str, body: &str, note: &str) -> Result<(), String> {
+        self.act(format!("notify {title} / {body} / {note}"));
+        Ok(())
+    }
+}
+
+struct Device {
+    _dir: TempDir,
+    server: Embedded,
+    runtime: DeviceRuntime,
+    phone: Arc<Phone>,
+}
+
+impl Device {
+    fn open() -> Device {
+        let dir = TempDir::new().unwrap();
+        let server = Embedded::open(Config {
+            vault: dir.path().to_owned(),
+            web: None,
+            secret_key: None,
+        })
+        .unwrap();
+        let phone = Arc::new(Phone::default());
+        let runtime = server
+            .device(DeviceConfig {
+                id: DEVICE.to_owned(),
+                platform: "android".to_owned(),
+                data: phone.clone(),
+            })
+            .unwrap();
+        Device {
+            _dir: dir,
+            server,
+            runtime,
+            phone,
+        }
+    }
+
+    fn writer(&self) -> &Arc<Writer> {
+        self.server.writer()
+    }
+
+    fn create(&self, type_name: &str, fields: Json) -> String {
+        self.writer()
+            .create(
+                type_name,
+                &Input::Json(json!({ "fields": fields })),
+                &Author::Session("test".into()),
+            )
+            .unwrap()
+            .id
+    }
+
+    fn query(&self, q: &str) -> Vec<Json> {
+        Vault::query(&**self.writer(), q, 10_000).unwrap()
+    }
+
+    fn fields(&self, id: &str) -> Json {
+        Vault::get(&**self.writer(), id).unwrap()["note"]["fields"].clone()
+    }
+
+    /// The person's `device_contacts`, or null when it has none.
+    fn links(&self, id: &str) -> Json {
+        let note = Vault::get(&**self.writer(), id).unwrap();
+        note["note"]["blocks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|b| b["kind"] == "dict" && b["labels"] == json!(["device_contacts"]))
+            .map_or(Json::Null, |b| b["fields"].clone())
+    }
+
+    /// Queue `event` and run the queue; every event in the pass must end `status`.
+    fn send_expect(&self, event: &str, data: Json, status: EventStatus) {
+        self.runtime
+            .enqueue(event, data, 1_760_000_000_000)
+            .unwrap();
+        let ran = self.runtime.run_pending().unwrap();
+        assert!(!ran.is_empty());
+        for e in ran {
+            assert_eq!(e.status, status, "{e:?}");
+        }
+    }
+
+    fn send(&self, event: &str, data: Json) {
+        self.send_expect(event, data, EventStatus::Done);
+    }
+
+    fn settings(&self, settings: Json) {
+        self.runtime.set_settings(&settings).unwrap();
+    }
+}
+
+fn sms(device_ref: &str, number: Option<&str>, raw: &str, thread: &str, body: &str) -> Json {
+    json!({
+        "device_ref": device_ref,
+        "thread_ref": thread,
+        "number": number,
+        "number_raw": raw,
+        "contact": null,
+        "body": body,
+        "sent": "2026-10-20T09:30:00+11:00",
+    })
+}
+
+fn body_text(fields_note: &Json) -> Vec<String> {
+    fields_note["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|b| b["blocks"].as_array().cloned().unwrap_or_default())
+        .map(|p| p["fields"]["text"].as_str().unwrap_or("").to_owned())
+        .collect()
+}
+
+#[test]
+fn sms_become_messages_in_a_conversation_linked_to_the_person_with_the_number() {
+    let d = Device::open();
+    let alex = d.create(
+        "person",
+        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+    );
+
+    d.send(
+        "sms_received",
+        sms(
+            "sms:1",
+            Some("+61400000001"),
+            "0400 000 001",
+            "t1",
+            "Dinner at 7?\nBring wine",
+        ),
+    );
+    let messages = d.query("from message");
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    let m = &messages[0];
+    assert_eq!(m["title"], "Dinner at 7?");
+    let f = &m["fields"];
+    assert_eq!(f["channel"], "sms");
+    assert_eq!(f["direction"], "in");
+    assert_eq!(f["from"], alex.as_str());
+    assert_eq!(f["from_raw"], "+61400000001");
+    assert_eq!(f["device_ref"], "sms:1");
+    assert_eq!(f["partial"], false);
+    let note = Vault::get(&**d.writer(), m["id"].as_str().unwrap()).unwrap();
+    assert_eq!(body_text(&note["note"]), ["Dinner at 7?", "Bring wine"]);
+
+    let conversations = d.query("from conversation");
+    assert_eq!(conversations.len(), 1);
+    let c = &conversations[0];
+    assert_eq!(f["conversation"], c["id"]);
+    assert_eq!(c["fields"]["thread_ref"], "t1");
+    assert_eq!(c["fields"]["channel"], "sms");
+    assert_eq!(c["fields"]["participants"], json!([alex]));
+
+    // The same SMS again, after a restart or a catch-up, is not captured twice.
+    d.send(
+        "sms_received",
+        sms(
+            "sms:1",
+            Some("+61400000001"),
+            "0400 000 001",
+            "t1",
+            "Dinner at 7?\nBring wine",
+        ),
+    );
+    assert_eq!(d.query("from message").len(), 1);
+
+    // A reply sent in the same thread joins the conversation, to Alex.
+    d.send(
+        "sms_sent",
+        sms("sms:2", Some("+61400000001"), "0400 000 001", "t1", "Sure"),
+    );
+    let sent = d.query("from message where device_ref == \"sms:2\"");
+    let f = &sent[0]["fields"];
+    assert_eq!(f["direction"], "out");
+    assert_eq!(f["to"], json!([alex]));
+    assert_eq!(f["to_raw"], json!(["+61400000001"]));
+    assert_eq!(f["conversation"], c["id"]);
+    assert_eq!(d.query("from conversation").len(), 1);
+}
+
+#[test]
+fn an_unknown_number_creates_no_person() {
+    let d = Device::open();
+    d.create(
+        "person",
+        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+    );
+    d.send(
+        "sms_received",
+        sms(
+            "sms:7",
+            Some("+61499999999"),
+            "0499 999 999",
+            "t9",
+            "Parcel waiting",
+        ),
+    );
+    d.send(
+        "sms_received",
+        sms("sms:8", None, "AUSPOST", "t10", "Delivered"),
+    );
+    assert_eq!(d.query("from person").len(), 1);
+    let m = d.query("from message where device_ref == \"sms:7\"");
+    assert_eq!(m[0]["fields"]["from_raw"], "+61499999999");
+    assert!(m[0]["fields"].get("from").is_none(), "{m:?}");
+    let short = d.query("from message where device_ref == \"sms:8\"");
+    assert_eq!(short[0]["fields"]["from_raw"], "AUSPOST");
+    assert!(short[0]["fields"].get("from").is_none());
+    let threads = d.query("from conversation where thread_ref == \"t9\"");
+    assert_eq!(threads[0]["fields"]["participants"], json!([]));
+}
+
+#[test]
+fn a_group_mms_links_every_known_recipient_and_keeps_its_attachments() {
+    let d = Device::open();
+    let alex = d.create(
+        "person",
+        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+    );
+    let sam = d.create(
+        "person",
+        json!({ "title": "Sam Lee", "phones": ["+61400000002"] }),
+    );
+    let photo = d
+        .writer()
+        .put_asset("beach.jpg", b"\xff\xd8\xff".to_vec())
+        .unwrap()
+        .id;
+    d.send(
+        "mms_received",
+        json!({
+            "device_ref": "mms:87",
+            "thread_ref": "t4",
+            "number": "+61400000001",
+            "number_raw": "0400 000 001",
+            "contact": { "id": "c1", "name": "Alex" },
+            "to": [
+                { "number": "+61400000002", "number_raw": "0400 000 002", "contact": null },
+                { "number": "+61400000003", "number_raw": "0400 000 003", "contact": null },
+            ],
+            "subject": "",
+            "body": "Look at this",
+            "attachments": [{ "asset": photo, "filename": "beach.jpg", "mime": "image/jpeg", "size": 3 }],
+            "sent": "2026-10-20T10:00:00+11:00",
+        }),
+    );
+    let m = d.query("from message");
+    assert_eq!(m.len(), 1);
+    let f = &m[0]["fields"];
+    assert_eq!(f["channel"], "mms");
+    assert_eq!(f["from"], alex.as_str());
+    assert_eq!(f["to"], json!([sam]));
+    assert_eq!(f["to_raw"], json!(["+61400000002", "+61400000003"]));
+    assert_eq!(f["attachments"], json!([photo]));
+    let c = d.query("from conversation");
+    assert_eq!(c[0]["fields"]["channel"], "mms");
+    assert_eq!(c[0]["fields"]["participants"], json!([alex, sam]));
+    assert_eq!(d.query("from person").len(), 2);
+}
+
+#[test]
+fn rcs_senders_match_by_name_or_by_the_phone_contact_and_are_partial() {
+    let d = Device::open();
+    let alex = d.create(
+        "person",
+        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+    );
+    let sam = d.create(
+        "person",
+        json!({ "title": "Samuel Lee", "phones": ["+61400000002"] }),
+    );
+    // The phone knows Samuel as "Sammy".
+    d.phone.contacts.lock().unwrap().push(json!({
+        "contact_id": "c2",
+        "name": "Sammy",
+        "phones": ["+61400000002"],
+        "addresses": [],
+    }));
+    let rcs = |key: &str, sender: &str, body: &str| {
+        json!({
+            "device_ref": key,
+            "thread_ref": format!("conv-{sender}"),
+            "sender": sender,
+            "conversation": null,
+            "body": body,
+            "sent": "2026-10-20T11:00:00+11:00",
+            "partial": true,
+        })
+    };
+    d.send("rcs_received", rcs("n1", "Alex Doe", "On my way"));
+    d.send("rcs_received", rcs("n2", "Sammy", "Running late"));
+    d.send("rcs_received", rcs("n3", "Stranger", "Hello"));
+    d.send("rcs_received", rcs("n1", "Alex Doe", "On my way"));
+
+    let by_ref = |r: &str| d.query(&format!("from message where device_ref == \"{r}\""));
+    let a = by_ref("n1");
+    assert_eq!(a.len(), 1);
+    assert_eq!(a[0]["fields"]["from"], alex.as_str());
+    assert_eq!(a[0]["fields"]["channel"], "rcs");
+    assert_eq!(a[0]["fields"]["partial"], true);
+    assert_eq!(a[0]["fields"]["from_raw"], "Alex Doe");
+    assert_eq!(by_ref("n2")[0]["fields"]["from"], sam.as_str());
+    let stranger = by_ref("n3");
+    assert!(stranger[0]["fields"].get("from").is_none());
+    assert_eq!(stranger[0]["fields"]["from_raw"], "Stranger");
+    assert_eq!(d.query("from message").len(), 3);
+    assert_eq!(d.query("from person").len(), 2);
+    assert_eq!(
+        d.query("from conversation where channel == \"rcs\"").len(),
+        3
+    );
+}
+
+#[test]
+fn calls_become_call_notes_once_each() {
+    let d = Device::open();
+    let alex = d.create(
+        "person",
+        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+    );
+    let call = |key: &str, direction: &str, number: &str, duration: i64| {
+        json!({
+            "device_ref": key,
+            "direction": direction,
+            "number": number,
+            "number_raw": number,
+            "contact": null,
+            "started": "2026-10-20T12:00:00+11:00",
+            "duration": duration,
+        })
+    };
+    d.send("call_ended", call("call:1", "in", "+61400000001", 125));
+    d.send("call_ended", call("call:2", "missed", "+61488888888", 0));
+    d.send("call_ended", call("call:1", "in", "+61400000001", 125));
+
+    let calls = d.query("from call sort title asc");
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    let from_alex = &calls[0];
+    assert_eq!(from_alex["title"], "Call from Alex Doe");
+    assert_eq!(from_alex["fields"]["person"], alex.as_str());
+    assert_eq!(from_alex["fields"]["duration"], 125);
+    assert_eq!(from_alex["fields"]["direction"], "in");
+    assert_eq!(from_alex["fields"]["number"], "+61400000001");
+    let missed = &calls[1];
+    assert_eq!(missed["title"], "Missed call from +61488888888");
+    assert!(missed["fields"].get("person").is_none());
+    assert_eq!(d.query("from person").len(), 1);
+}
+
+#[test]
+fn the_exclusion_list_and_the_skip_pattern_drop_events_before_any_handler() {
+    let d = Device::open();
+    d.settings(json!({
+        "exclusions": [
+            { "kind": "number", "value": "+61 400 000 005" },
+            { "kind": "thread", "value": "secret-thread" },
+            { "kind": "contact", "value": "Dr Who" },
+        ],
+    }));
+    d.send_expect(
+        "sms_received",
+        sms("sms:20", Some("+61400000005"), "0400000005", "t20", "hi"),
+        EventStatus::Skipped,
+    );
+    d.send_expect(
+        "sms_received",
+        sms(
+            "sms:21",
+            Some("+61400000006"),
+            "0400000006",
+            "secret-thread",
+            "hi",
+        ),
+        EventStatus::Skipped,
+    );
+    d.send_expect(
+        "call_ended",
+        json!({
+            "device_ref": "call:20", "direction": "in", "number": "+61400000005",
+            "number_raw": "0400000005", "contact": null,
+            "started": "2026-10-20T12:00:00+11:00", "duration": 3,
+        }),
+        EventStatus::Skipped,
+    );
+    d.send_expect(
+        "rcs_received",
+        json!({
+            "device_ref": "n20", "thread_ref": "x", "sender": "Dr Who", "conversation": null,
+            "body": "hello", "sent": "2026-10-20T11:00:00+11:00", "partial": true,
+        }),
+        EventStatus::Skipped,
+    );
+    // The default skip pattern drops one-time codes.
+    d.send_expect(
+        "sms_received",
+        sms(
+            "sms:22",
+            Some("+61400000007"),
+            "0400000007",
+            "t22",
+            "Your verification code is 482913",
+        ),
+        EventStatus::Skipped,
+    );
+    assert!(d.query("from message").is_empty());
+    assert!(d.query("from call").is_empty());
+    let skipped = d.runtime.events().unwrap();
+    assert_eq!(skipped.len(), 5);
+    assert!(
+        skipped[4]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("skip pattern"),
+        "{skipped:?}"
+    );
+    assert!(
+        skipped[0]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("number \"+61 400 000 005\" is on the exclusion list")
+    );
+
+    // Anything else still runs.
+    d.send(
+        "sms_received",
+        sms(
+            "sms:23",
+            Some("+61400000007"),
+            "0400000007",
+            "t22",
+            "See you",
+        ),
+    );
+    assert_eq!(d.query("from message").len(), 1);
+}
+
+#[test]
+fn contacts_sync_with_people_both_ways_and_deletes_only_unlink() {
+    let d = Device::open();
+    let contact = |id: &str, name: &str, phones: Json, updated: &str| {
+        json!({
+            "contact_id": id,
+            "name": name,
+            "phones": phones,
+            "addresses": ["sam@example.com"],
+            "updated": updated,
+        })
+    };
+
+    // A new contact becomes a person linked to it.
+    d.send(
+        "contact_changed",
+        contact(
+            "c9",
+            "Sam Lee",
+            json!(["+61400000002"]),
+            "2020-01-01T00:00:00Z",
+        ),
+    );
+    let people = d.query("from person");
+    assert_eq!(people.len(), 1);
+    let sam = people[0]["id"].as_str().unwrap().to_owned();
+    let f = d.fields(&sam);
+    assert_eq!(f["title"], "Sam Lee");
+    assert_eq!(f["phones"], json!(["+61400000002"]));
+    assert_eq!(f["addresses"], json!(["sam@example.com"]));
+    assert_eq!(d.links(&sam), json!({ SLOT: "c9" }));
+
+    // A later change on the phone wins over the person.
+    d.send(
+        "contact_changed",
+        contact(
+            "c9",
+            "Samuel Lee",
+            json!(["+61400000002", "+61400000022"]),
+            "2999-01-01T00:00:00Z",
+        ),
+    );
+    let f = d.fields(&sam);
+    assert_eq!(f["title"], "Samuel Lee");
+    assert_eq!(f["phones"], json!(["+61400000002", "+61400000022"]));
+    assert_eq!(d.query("from person").len(), 1);
+
+    // A phone change older than the person's last edit gives way: the phone takes the person's
+    // fields when the device may write contacts, and nothing changes when it may not.
+    d.send(
+        "contact_changed",
+        contact(
+            "c9",
+            "Old Name",
+            json!(["+61400000002"]),
+            "2000-01-01T00:00:00Z",
+        ),
+    );
+    assert_eq!(d.fields(&sam)["title"], "Samuel Lee");
+    assert!(d.phone.actions().is_empty());
+    d.settings(json!({ "contacts_write": true }));
+    d.send(
+        "contact_changed",
+        contact(
+            "c9",
+            "Old Name",
+            json!(["+61400000002"]),
+            "2000-01-01T00:00:00Z",
+        ),
+    );
+    let actions = d.phone.actions();
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert!(
+        actions[0].contains("\"name\":\"Samuel Lee\""),
+        "{actions:?}"
+    );
+    assert!(actions[0].contains("\"contact_id\":\"c9\""), "{actions:?}");
+
+    // An existing person with the contact's number is linked, not duplicated.
+    let alex = d.create(
+        "person",
+        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+    );
+    d.send(
+        "contact_changed",
+        contact(
+            "c1",
+            "Alex Doe",
+            json!(["+61400000001"]),
+            "2999-01-01T00:00:00Z",
+        ),
+    );
+    assert_eq!(d.query("from person").len(), 2);
+    assert_eq!(d.links(&alex), json!({ SLOT: "c1" }));
+
+    // Deleting the contact on the phone unlinks the person and keeps it.
+    d.send("contact_deleted", json!({ "contact_id": "c9" }));
+    let f = d.fields(&sam);
+    assert_eq!(f["title"], "Samuel Lee");
+    assert_eq!(d.links(&sam), Json::Null);
+    assert_eq!(d.query("from person").len(), 2);
+}
+
+#[test]
+fn a_share_becomes_a_fleeting_note() {
+    let d = Device::open();
+    let photo = d
+        .writer()
+        .put_asset("cat.png", b"\x89PNG".to_vec())
+        .unwrap()
+        .id;
+    d.send(
+        "share_received",
+        json!({
+            "text": "Read this later https://example.com/post",
+            "subject": "",
+            "url": "https://example.com/post",
+            "attachments": [{ "asset": photo, "filename": "cat.png", "mime": "image/png", "size": 4 }],
+        }),
+    );
+    let notes = d.query("from fleeting");
+    assert_eq!(notes.len(), 1);
+    assert_eq!(
+        notes[0]["title"],
+        "Read this later https://example.com/post"
+    );
+    assert_eq!(notes[0]["fields"]["image"], json!([photo]));
+}
+
+#[test]
+fn switches_block_contact_writes_and_sending_sms() {
+    let d = Device::open();
+    let sam = d.create("person", json!({ "title": "Sam Lee" }));
+    d.settings(json!({ "commands": ["send_sms", "upsert_contact", "delete_contact"] }));
+    let command = |id: &str, name: &str, payload: Json| json!({ "id": id, "name": name, "payload": payload, "status": "pending" });
+    let upsert = command(
+        "cmd1",
+        "upsert_contact",
+        json!({ "contact_id": null, "name": "Sam Lee", "phones": ["+61400000002"], "addresses": [], "person": sam }),
+    );
+    let send = command(
+        "cmd2",
+        "send_sms",
+        json!({ "to": "+61400000002", "body": "Bins out" }),
+    );
+    let delete = command("cmd3", "delete_contact", json!({ "contact_id": "c-new" }));
+
+    for (c, switch) in [
+        (&upsert, "contacts write"),
+        (&send, "SMS send"),
+        (&delete, "contacts write"),
+    ] {
+        let report = d.runtime.run_command(c);
+        assert!(!report.done, "{report:?}");
+        let message = report.result.as_str().unwrap();
+        assert!(
+            message.contains(&format!("turn on {switch} in Settings > Devices")),
+            "{message}"
+        );
+        assert_eq!(report.body()["status"], "failed");
+    }
+    assert!(d.phone.actions().is_empty());
+
+    d.settings(json!({
+        "commands": ["send_sms", "upsert_contact", "delete_contact"],
+        "contacts_write": true,
+        "sms_send": true,
+    }));
+    let report = d.runtime.run_command(&upsert);
+    assert!(report.done, "{report:?}");
+    assert_eq!(report.id, "cmd1");
+    assert_eq!(report.result, json!({ "contact_id": "c-new" }));
+    assert_eq!(d.links(&sam), json!({ SLOT: "c-new" }));
+    let report = d.runtime.run_command(&send);
+    assert!(report.done, "{report:?}");
+    assert_eq!(
+        report.body(),
+        json!({ "status": "done", "result": { "device_ref": "sms:900" } })
+    );
+    let report = d.runtime.run_command(&delete);
+    assert!(report.done, "{report:?}");
+    assert_eq!(d.links(&sam), Json::Null);
+    let actions = d.phone.actions();
+    assert_eq!(actions.len(), 3, "{actions:?}");
+    assert!(actions[0].starts_with("upsert "));
+    assert_eq!(actions[1], "sms +61400000002: Bins out");
+    assert_eq!(actions[2], "delete c-new");
+}
+
+#[test]
+fn queued_events_survive_a_restart_and_failures_are_retried() {
+    let dir = TempDir::new().unwrap();
+    let open = || {
+        Embedded::open(Config {
+            vault: dir.path().to_owned(),
+            web: None,
+            secret_key: None,
+        })
+        .unwrap()
+    };
+    let config = || DeviceConfig {
+        id: DEVICE.to_owned(),
+        platform: "android".to_owned(),
+        data: Arc::new(Phone::default()),
+    };
+    {
+        let server = open();
+        let runtime = server.device(config()).unwrap();
+        runtime
+            .enqueue("call_ended", json!({ "device_ref": "call:5", "direction": "in", "number": "+61400000001", "number_raw": "", "contact": null, "started": "2026-10-20T12:00:00+11:00", "duration": 1 }), 1)
+            .unwrap();
+        runtime.set_settings(&json!({ "sms_send": true })).unwrap();
+        assert!(runtime.enqueue("sms_deleted", json!({}), 1).is_err());
+        assert!(runtime.enqueue("sms_received", json!([]), 1).is_err());
+    }
+    let server = open();
+    let runtime = server.device(config()).unwrap();
+    assert!(runtime.settings().sms_send, "settings are kept");
+    let ran = runtime.run_pending().unwrap();
+    assert_eq!(ran.len(), 1);
+    assert_eq!(ran[0].status, EventStatus::Done, "{ran:?}");
+
+    // A handler that fails leaves its event queued, then failed after the last attempt.
+    server
+        .writer()
+        .put_script(
+            "device_calls",
+            "fn call_ended(event: Value) -> Result[(), string] { Err(\"broken\") }\n",
+        )
+        .unwrap();
+    let id = runtime
+        .enqueue("call_ended", json!({ "device_ref": "call:6" }), 2)
+        .unwrap();
+    for attempt in 1..=embedded::device::MAX_ATTEMPTS {
+        let ran = runtime.run_pending().unwrap();
+        let e = ran.iter().find(|e| e.id == id).unwrap();
+        assert_eq!(e.attempts, attempt);
+        assert!(e.message.as_deref().unwrap().contains("broken"), "{e:?}");
+        let expected = if attempt < embedded::device::MAX_ATTEMPTS {
+            EventStatus::Queued
+        } else {
+            EventStatus::Failed
+        };
+        assert_eq!(e.status, expected);
+    }
+    assert!(runtime.run_pending().unwrap().is_empty());
+    assert_eq!(
+        runtime.event(id).unwrap().unwrap().status,
+        EventStatus::Failed
+    );
+}

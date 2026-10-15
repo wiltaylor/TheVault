@@ -11,6 +11,9 @@
 //! | `fs` | no | no | yes |
 //! | `value`, `json`, `math`, `regex` | yes | yes | yes |
 //!
+//! Device scripts compile against the `vault` module and a `device` module that refuses every
+//! call: they run on a paired phone, never here (D6).
+//!
 //! `docs/scripts.md` lists every host function. wscript's own `fs`, `process` and `time` modules
 //! are never registered: this host's `fs` replaces wscript's, checked against the task's
 //! `read_paths` and `write_paths`. A module a kind of run lacks is a compile error, not a runtime
@@ -103,7 +106,13 @@ impl Extensions for Server {
                 m.push(fs::module(vault.clone()));
                 m
             }
-            Kind::Before | Kind::Migration | Kind::Device => Vec::new(),
+            // Device scripts run on a phone; the server only checks that they compile.
+            Kind::Device => vec![script_core::device_module(Arc::new(DeviceAccess::new(
+                "",
+                Arc::new(NoDevice),
+                Switches::default(),
+            )))],
+            Kind::Before | Kind::Migration => Vec::new(),
         }
     }
 }

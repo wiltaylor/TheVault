@@ -447,8 +447,8 @@ impl Writer {
     }
 
     /// Why `source` would not compile as script `name`, once for each way the vault runs it: as
-    /// a `before_*` or `after_*` handler of some type, or as a task. A script nothing names yet is
-    /// checked as a task. Empty when it compiles every way it runs. Nothing is stored.
+    /// a `before_*` or `after_*` handler of some type, as a task, or on a device. A script nothing
+    /// names yet is checked as a task. Empty when it compiles every way it runs. Nothing is stored.
     pub fn script_problems(&self, name: &str, source: &str) -> Result<Vec<ScriptProblem>> {
         check_name("script", name)?;
         let mut roles: Vec<ScriptRole> = self.read_index(|_, schema| {
@@ -471,6 +471,9 @@ impl Writer {
             {
                 roles.push(ScriptRole::Task);
             }
+        }
+        if !self.device_files_naming(name)?.is_empty() {
+            roles.push(ScriptRole::Device);
         }
         if roles.is_empty() {
             roles.push(ScriptRole::Task);

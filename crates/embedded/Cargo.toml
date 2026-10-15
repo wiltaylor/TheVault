@@ -9,9 +9,14 @@ publish.workspace = true
 anyhow.workspace = true
 api.workspace = true
 axum.workspace = true
+regex = "1"
+rusqlite.workspace = true
 scheduler.workspace = true
 schema.workspace = true
 script.workspace = true
+script-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 state.workspace = true
 store.workspace = true
 sync.workspace = true
@@ -19,7 +24,6 @@ tower = { version = "0.5", features = ["util"] }
 writer.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 futures-util = "0.3"
