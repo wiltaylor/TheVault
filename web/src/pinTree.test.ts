@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PinItem } from "./api";
-import { dropMove, folders, isWithin, moveEntry, placeOf, removeLifting } from "./pinTree";
+import { dropMove, findItem, folders, isWithin, keepShown, moveEntry, placeOf, removeLifting } from "./pinTree";
 
 const note = (id: string, children: PinItem[] = []): PinItem => ({ kind: "note", id, type: "task", title: id, children });
 const folder = (id: string, children: PinItem[] = []): PinItem => ({ kind: "folder", id, name: id, children });
@@ -61,5 +61,28 @@ describe("pinTree", () => {
       { id: "B", name: "B", depth: 1 },
       { id: "C", name: "C", depth: 0 },
     ]);
+  });
+
+  it("keeps the shown entries a reload brings back unchanged, and takes the rest from the server", () => {
+    // After a move shown at once, the server's tree is the same tree as new objects.
+    const shown = moveEntry(tree(), "e", "F", 0)!;
+    expect(keepShown(shown, structuredClone(shown))).toBe(shown);
+
+    // A renamed folder is new, with its unchanged children kept; entries elsewhere are kept.
+    const renamed = structuredClone(shown);
+    (renamed[1] as { name: string }).name = "Renamed";
+    const kept = keepShown(shown, renamed);
+    expect(kept).not.toBe(shown);
+    expect(kept[0]).toBe(shown[0]);
+    expect(kept[1]).not.toBe(shown[1]);
+    expect(kept[1]).toEqual(renamed[1]);
+    expect(kept[1]!.children.every((c, i) => c === shown[1]!.children[i])).toBe(true);
+
+    // A child moved out changes its old parent and the top level, and keeps the child itself.
+    const moved = keepShown(shown, moveEntry(structuredClone(shown), "b", null, 0)!);
+    expect(shape(moved)).toBe("b a F(e c(d))");
+    expect(moved[0]).toBe(findItem(shown, "b"));
+    expect(moved[1]).toBe(shown[0]);
+    expect(moved[2]).not.toBe(shown[1]);
   });
 });

@@ -48,7 +48,11 @@ for var in THEVAULT_APK THEVAULT_EMULATOR_OUT THEVAULT_CHECKS THEVAULT_PERIODIC_
   fi
 done
 
+# /tmp is a tmpfs. Every test vault lives in a temporary folder, and the server fsyncs each write;
+# on the container's disk-backed /tmp, other workers' builds writing to the same disk stretched
+# those fsyncs to seconds and timed tests out (tickets 72, 74, 83). Test data needs no durability.
 exec docker run --rm "${tty_flags[@]}" "${keystore_flags[@]}" "${kvm_flags[@]}" \
+  --tmpfs /tmp:exec,mode=1777 \
   --network host \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp/home \

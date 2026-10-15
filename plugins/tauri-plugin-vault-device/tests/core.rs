@@ -19,6 +19,13 @@ use testkit::{PASSWORD, TestServer};
 
 static TURN: Mutex<()> = Mutex::new(());
 
+/// How long a test waits for the foreground loop to finish a round. A round fsyncs on both sides
+/// (the pushed note on the server, the sync queue and bases here): it takes about 2 s on an idle
+/// machine and was measured at 24 s with other builds writing to the same disk. The sync client's
+/// own request timeout is 30 s, so the wait has to outlast it for a stuck request to show as the
+/// round's error rather than as no round at all.
+const ROUND: Duration = Duration::from_secs(120);
+
 fn turn() -> MutexGuard<'static, ()> {
     TURN.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -267,7 +274,7 @@ fn a_write_kicks_the_foreground_loop() {
         .unwrap()
         .notes
         .remove(0);
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + ROUND;
     loop {
         let status = core.status().unwrap();
         if status["pending"] == 0 && status["last_sync_ms"].is_i64() {
@@ -291,7 +298,7 @@ fn in_front_a_server_change_is_pulled_at_once() {
     core.set_link(Some(link(&admin.pair("Pixel"), 64)));
     core.set_foreground(true);
     let wait = |what: &str, ok: &dyn Fn() -> bool| {
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + ROUND;
         while !ok() {
             assert!(
                 Instant::now() < deadline,

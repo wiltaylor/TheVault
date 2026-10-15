@@ -99,8 +99,25 @@ async function caretIn(doc: Locator, text: string, n: number) {
     },
     { text, n },
   );
-  // ProseMirror reads a selection change a moment after it happens.
-  await doc.page().waitForTimeout(100);
+  // ProseMirror reads a selection change a moment after it happens: wait until its own selection
+  // is the caret just placed, rather than for a fixed time a loaded machine can overrun.
+  await expect
+    .poll(() =>
+      doc.evaluate((el, { text, n }) => {
+        const view = (el as HTMLElement & { editor?: { view: EditorViewLike } }).editor?.view;
+        const para = Array.from(el.querySelectorAll("p")).find((x) => x.textContent === text);
+        if (!view || !para?.firstChild) return false;
+        const sel = view.state.selection;
+        return sel.empty && sel.from === view.posAtDOM(para.firstChild, n);
+      }, { text, n }),
+    )
+    .toBe(true);
+}
+
+/** The parts of ProseMirror's view, as TipTap hangs it on the editor's element, that `caretIn` reads. */
+interface EditorViewLike {
+  state: { selection: { empty: boolean; from: number } };
+  posAtDOM(node: Node, offset: number): number;
 }
 
 async function open(page: Page, admin: APIRequestContext, blocks: Block[]): Promise<{ note: Stored; doc: Locator }> {

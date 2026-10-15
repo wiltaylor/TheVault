@@ -35,10 +35,19 @@ class OnboardingActivityTest {
         PairingStore.defaultCipher = FakeCipher
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        // Open this test's local vault before the activity pairs, as the app has by the time
+        // onboarding shows. A fresh vault writes state.db and the built-in types with an fsync
+        // each, which under disk pressure from other builds takes seconds; done inside the pairing
+        // job, it ate the ten seconds [waitFor] allows. Pairing then finds the vault open.
+        Vault.open(context)
     }
 
     @After
     fun stop() {
+        // Pairing kicked the foreground loop: drop the link so its round, due after the settle
+        // delay, does not run against the closed fake home server while the next test opens its
+        // vault.
+        VaultCore.link(null)
         home.close()
     }
 

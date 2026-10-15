@@ -5,7 +5,7 @@
 import { createResource, createSignal } from "solid-js";
 import { type PinItem, api } from "./api";
 import { changes } from "./changes";
-import { appendEntry, findItem, moveEntry, removeLifting } from "./pinTree";
+import { appendEntry, findItem, keepShown, moveEntry, removeLifting } from "./pinTree";
 import { sessionState } from "./session";
 
 const [pinChanges, setPinChanges] = createSignal(0);
@@ -13,8 +13,9 @@ const [pinChanges, setPinChanges] = createSignal(0);
 const [pins, { mutate }] = createResource(
   // Nothing to load until signed in; a falsy source skips the fetch.
   () => sessionState() === "in" && ([changes(), pinChanges()] as const),
-  // A failed load keeps the sidebar working with no pins rather than throwing on read.
-  async () => api.pins().catch(() => [] as PinItem[]),
+  // A failed load keeps the sidebar working with no pins rather than throwing on read. Entries the
+  // load brings back unchanged keep the objects already shown, so their rows stay in place.
+  async (_, { value }) => keepShown(value ?? [], await api.pins().catch(() => [] as PinItem[])),
   { initialValue: [] as PinItem[] },
 );
 

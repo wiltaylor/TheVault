@@ -114,3 +114,32 @@ export function folders(tree: PinItem[], depth = 0): { id: string; name: string;
     ...folders(i.children, i.kind === "folder" ? depth + 1 : depth),
   ]);
 }
+
+/**
+ * `next`, the tree as the server sent it, reusing the entries of `shown` that it holds unchanged:
+ * the same entry object when its own fields and its children are the same, and `shown` itself
+ * when nothing changed. The sidebar draws its rows by entry object, so a reload that matches what
+ * a change already showed leaves the rows in place rather than drawing them anew under the
+ * pointer, as during a drag begun just after the last drop.
+ */
+export function keepShown(shown: PinItem[], next: PinItem[]): PinItem[] {
+  const old = new Map<string, PinItem>();
+  const index = (items: PinItem[]) => {
+    for (const item of items) {
+      old.set(item.id, item);
+      index(item.children);
+    }
+  };
+  index(shown);
+  const sameList = (a: PinItem[], b: PinItem[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const ownFields = ({ children: _, ...rest }: PinItem) => JSON.stringify(Object.entries(rest).sort(([a], [b]) => (a < b ? -1 : 1)));
+  const walk = (items: PinItem[]): PinItem[] =>
+    items.map((item) => {
+      const children = walk(item.children);
+      const before = old.get(item.id);
+      if (before && sameList(before.children, children) && ownFields(before) === ownFields(item)) return before;
+      return { ...item, children };
+    });
+  const kept = walk(next);
+  return sameList(shown, kept) ? shown : kept;
+}

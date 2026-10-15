@@ -130,6 +130,45 @@ describe("CanvasSurface", () => {
     expect(container.querySelector('[data-testid="canvas-edge-label"]')?.textContent).toBe("leads to");
   });
 
+  it("keeps a caption and a group label being typed when a save's reply replaces the canvas", () => {
+    const start = twoNodes();
+    start.blocks!.push({ kind: "edge", labels: ["e"], fields: { from: "a", to: "b" } });
+    start.blocks!.push({ kind: "group", labels: ["g"], fields: { x: 0, y: 200, width: 200, height: 100, label: "Old" } });
+    const [block, setBlock] = createSignal<Block>(start);
+    const { getByRole, getByLabelText, container } = render(() => <CanvasSurface block={block()} label="Board" onChange={setBlock} />);
+    // The reply to a save made before the input opened: the same canvas, as new objects.
+    const reply = () => setBlock(structuredClone(block()));
+
+    fireEvent.pointerDown(container.querySelector('[data-testid="canvas-edge"]')!, at(200, 25));
+    fireEvent.pointerUp(container.querySelector('[data-testid="canvas-view"]')!, at(200, 25));
+    fireEvent.click(getByRole("button", { name: "Edit caption" }));
+    const typing = getByLabelText("Caption");
+    fireEvent.input(typing, { target: { value: "leads to" } });
+    reply();
+    const caption = getByLabelText("Caption") as HTMLInputElement;
+    expect(caption).toBe(typing);
+    expect(caption.value).toBe("leads to");
+    fireEvent.keyDown(caption, { key: "Enter" });
+    expect(canvasOf(block()).edges[0]?.label).toBe("leads to");
+
+    // A double press on the group's label renames it.
+    for (let i = 0; i < 2; i++) {
+      const name = container.querySelector('[data-testid="canvas-group-label"]')!;
+      fireEvent.pointerDown(name, at(10, 210));
+      fireEvent.pointerUp(container.querySelector('[data-testid="canvas-view"]')!, at(10, 210));
+    }
+    const renaming = getByLabelText("Group label");
+    fireEvent.input(renaming, { target: { value: "New" } });
+    reply();
+    // The same input, not one made anew: a new one would take the focus from it, and its blur
+    // would commit the half-typed label.
+    const label = getByLabelText("Group label") as HTMLInputElement;
+    expect(label).toBe(renaming);
+    expect(label.value).toBe("New");
+    fireEvent.keyDown(label, { key: "Enter" });
+    expect(canvasOf(block()).groups[0]?.label).toBe("New");
+  });
+
   it("pans and zooms, saving the view while editing", () => {
     const [block, setBlock] = createSignal<Block>(twoNodes());
     const { getByRole, getByTestId } = render(() => <CanvasSurface block={block()} label="Board" onChange={setBlock} />);

@@ -12,7 +12,7 @@
 // the canvas is shown, and the view moves without being saved. `body` draws a node in place of
 // its kind's own body, which is how a canvas query view shows its results as cards.
 
-import { type JSX, For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { type JSX, For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import type { Editor } from "@tiptap/core";
 import type { Block, Json } from "../api";
 import { api } from "../api";
@@ -152,6 +152,25 @@ export function CanvasSurface(props: {
   const [paletteOpen, setPaletteOpen] = createSignal<string | null>(null);
   const [renaming, setRenaming] = createSignal<string | null>(null);
   const [captioning, setCaptioning] = createSignal<string | null>(null);
+  // What has been typed into the open caption or group label input. A save's reply replaces the
+  // canvas's items while the input is open, which re-renders it (the caption's) or makes it anew
+  // (the group label's); the input starts from this rather than the stored text, so nothing typed
+  // is lost. Opening or closing either input forgets it.
+  let typed: string | null = null;
+  createEffect(
+    on([captioning, renaming], () => {
+      typed = null;
+    }),
+  );
+  /** Fill a caption or label input as it is made: what was typed into it so far, else `stored`. */
+  function startTyping(el: HTMLInputElement, stored: string | undefined) {
+    const first = typed === null;
+    el.value = typed ?? stored ?? "";
+    queueMicrotask(() => {
+      el.focus({ preventScroll: true });
+      if (first) el.select();
+    });
+  }
   // The height while the bottom handle is dragged.
   const [heightPreview, setHeightPreview] = createSignal<number | null>(null);
   // The view's size on screen, for placing the clusters.
@@ -171,9 +190,12 @@ export function CanvasSurface(props: {
     return p ? canvasOf(p) : stored();
   });
   const byId = createMemo(() => new Map(shown().nodes.map((n) => [n.id, n])));
-  const nodeIds = createMemo(() => shown().nodes.map((n) => n.id), undefined, {
-    equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
-  });
+  const sameIds = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const nodeIds = createMemo(() => shown().nodes.map((n) => n.id), undefined, { equals: sameIds });
+  // Groups render by id, as nodes do, so a save's reply, which brings new objects for the same
+  // groups, updates their frames in place rather than making them anew under an open label input.
+  const groupById = createMemo(() => new Map(shown().groups.map((g) => [g.id, g])));
+  const groupIds = createMemo(() => shown().groups.map((g) => g.id), undefined, { equals: sameIds });
   const height = () => heightPreview() ?? stored().height ?? CANVAS_HEIGHT.initial;
 
   // A stored view that changes from outside, such as after a reload, moves the view with it.
@@ -969,14 +991,9 @@ export function CanvasSurface(props: {
                   class="canvas-caption-input"
                   aria-label="Caption"
                   placeholder="Caption"
-                  value={it().edge.label}
                   style={{ left: `${mid().x}px`, top: `${mid().y}px` }}
-                  ref={(el) =>
-                    queueMicrotask(() => {
-                      el.focus({ preventScroll: true });
-                      el.select();
-                    })
-                  }
+                  ref={(el) => startTyping(el, untrack(() => it().edge.label))}
+                  onInput={(e) => (typed = e.currentTarget.value)}
                   onPointerDown={(e) => e.stopPropagation()}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
@@ -1047,69 +1064,68 @@ export function CanvasSurface(props: {
           }}
         >
           <div class="canvas-world" style={world()}>
-            <For each={shown().groups}>
-              {(g) => (
-                <div
-                  class="canvas-group"
-                  classList={{ selected: selected() === g.id }}
-                  data-testid="canvas-group"
-                  data-id={g.id}
-                  data-colour={g.colour ?? undefined}
-                  style={{
-                    left: `${g.x}px`,
-                    top: `${g.y}px`,
-                    width: `${g.width}px`,
-                    height: `${g.height}px`,
-                    "--item-colour": paletteCss(g.colour),
-                  }}
-                  // The whole frame selects and moves the group. Nodes draw above groups, so a
-                  // node inside one still takes its own clicks.
-                  onPointerDown={(e) => onItemDown(e, g.id)}
-                >
-                  <Show
-                    when={renaming() === g.id}
-                    fallback={
-                      <span
-                        class="canvas-group-label"
-                        data-testid="canvas-group-label"
-                        title={editing() ? "Double-click to rename" : undefined}
-                        onPointerDown={(e) => onLabelDown(e, g.id)}
-                      >
-                        {g.label || g.id}
-                      </span>
-                    }
-                  >
-                    <input
-                      class="canvas-group-label canvas-group-rename"
-                      aria-label="Group label"
-                      value={g.label}
-                      ref={(el) =>
-                        queueMicrotask(() => {
-                          el.focus({ preventScroll: true });
-                          el.select();
-                        })
-                      }
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          finishRename(g.id, e.currentTarget.value);
-                        } else if (e.key === "Escape") {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setRenaming(null);
-                          box.focus({ preventScroll: true });
+            <For each={groupIds()}>
+              {(id) => (
+                <Show when={groupById().get(id)}>
+                  {(g) => (
+                    <div
+                      class="canvas-group"
+                      classList={{ selected: selected() === id }}
+                      data-testid="canvas-group"
+                      data-id={id}
+                      data-colour={g().colour ?? undefined}
+                      style={{
+                        left: `${g().x}px`,
+                        top: `${g().y}px`,
+                        width: `${g().width}px`,
+                        height: `${g().height}px`,
+                        "--item-colour": paletteCss(g().colour),
+                      }}
+                      // The whole frame selects and moves the group. Nodes draw above groups, so a
+                      // node inside one still takes its own clicks.
+                      onPointerDown={(e) => onItemDown(e, id)}
+                    >
+                      <Show
+                        when={renaming() === id}
+                        fallback={
+                          <span
+                            class="canvas-group-label"
+                            data-testid="canvas-group-label"
+                            title={editing() ? "Double-click to rename" : undefined}
+                            onPointerDown={(e) => onLabelDown(e, id)}
+                          >
+                            {g().label || id}
+                          </span>
                         }
-                      }}
-                      onBlur={(e) => {
-                        if (renaming() === g.id) finishRename(g.id, e.currentTarget.value);
-                      }}
-                    />
-                  </Show>
-                  <Show when={editing() && selected() === g.id}>
-                    <span class="canvas-resize" aria-hidden="true" onPointerDown={(e) => onResizeDown(e, g.id, g.width, g.height)} />
-                  </Show>
-                </div>
+                      >
+                        <input
+                          class="canvas-group-label canvas-group-rename"
+                          aria-label="Group label"
+                          ref={(el) => startTyping(el, untrack(() => g().label))}
+                          onInput={(e) => (typed = e.currentTarget.value)}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              finishRename(id, e.currentTarget.value);
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setRenaming(null);
+                              box.focus({ preventScroll: true });
+                            }
+                          }}
+                          onBlur={(e) => {
+                            if (renaming() === id) finishRename(id, e.currentTarget.value);
+                          }}
+                        />
+                      </Show>
+                      <Show when={editing() && selected() === id}>
+                        <span class="canvas-resize" aria-hidden="true" onPointerDown={(e) => onResizeDown(e, id, g().width, g().height)} />
+                      </Show>
+                    </div>
+                  )}
+                </Show>
               )}
             </For>
             <svg class="canvas-edges" width="1" height="1">

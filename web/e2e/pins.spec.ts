@@ -73,6 +73,13 @@ async function makeFolder(admin: APIRequestContext, name: string): Promise<strin
 const row = (page: Page, id: string) => page.locator(`.pinned [data-pin-id="${id}"]`);
 const entry = (page: Page, id: string) => page.locator(`.pinned li.pin-entry:has(> [data-pin-id="${id}"])`);
 
+/** Where `l` is on screen, once it is there: a row the sidebar is drawing anew has no box for a moment. */
+async function boxOf(l: Locator) {
+  let box: Awaited<ReturnType<Locator["boundingBox"]>> = null;
+  await expect.poll(async () => (box = await l.boundingBox())).not.toBeNull();
+  return box!;
+}
+
 /**
  * Press on entry `from`, drag it to entry `to` (`top`, `middle` or `bottom` of its row), check the
  * drop indicator with `during`, and let go.
@@ -84,11 +91,8 @@ async function dragTo(
   where: "top" | "middle" | "bottom",
   during?: () => Promise<void>,
 ) {
-  // The sidebar re-renders after every move; wait for both rows to be on screen before measuring.
-  await expect(row(page, from)).toBeVisible();
-  await expect(to).toBeVisible();
-  const a = (await row(page, from).boundingBox())!;
-  const b = (await to.boundingBox())!;
+  const a = await boxOf(row(page, from));
+  const b = await boxOf(to);
   const y = where === "top" ? b.y + 3 : where === "bottom" ? b.y + b.height - 3 : b.y + b.height / 2;
   await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
   await page.mouse.down();
@@ -269,8 +273,8 @@ test("dragging nests a note in a folder and reorders entries, and the order hold
   expect(shape(await tree(admin))).toBe(`${b} Box(${a}) ${c}`);
 
   // Escape cancels a drag.
-  const from = (await row(page, nb.id).boundingBox())!;
-  const to = (await row(page, nc.id).boundingBox())!;
+  const from = await boxOf(row(page, nb.id));
+  const to = await boxOf(row(page, nc.id));
   await page.mouse.move(from.x + 20, from.y + from.height / 2);
   await page.mouse.down();
   await page.mouse.move(to.x + 20, to.y + to.height / 2, { steps: 6 });
