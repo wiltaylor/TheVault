@@ -1267,8 +1267,22 @@ impl Writer {
         }
         inner.index.update(&inner.schema, &updates)?;
         inner.index.advance(generation)?;
+        self.announce(&saved);
         self.hooks.after(&saved, author, &inner.schema);
         Ok(saved)
+    }
+
+    /// Tell open clients about committed changes (D4). The caller holds the write lock, so the
+    /// events go out in commit order.
+    fn announce(&self, saved: &[Saved]) {
+        for s in saved {
+            self.state.events().publish(state::LiveEvent::NoteChanged {
+                id: s.id.clone(),
+                type_name: s.type_name.clone(),
+                version: s.version.clone(),
+                deleted: s.event == Event::Delete,
+            });
+        }
     }
 
     /// Step 5 for every change not yet in `handled`, with the changes its handlers staged

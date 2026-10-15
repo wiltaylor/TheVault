@@ -79,11 +79,15 @@ fn main() -> anyhow::Result<()> {
     if test_clock.is_none() {
         scheduler.start();
     }
-    let app = api::router(writer, scheduler, test_clock);
+    let app = api::router(writer.clone(), scheduler, test_clock);
 
     tokio::runtime::Runtime::new()
         .context("starting the async runtime")?
-        .block_on(serve(args.listen, args.web, app))
+        .block_on(serve(args.listen, args.web, app, move || {
+            // Open event streams never finish on their own, so end them before waiting on
+            // requests in flight.
+            writer.state().events().close()
+        }))
 }
 
 /// The clock `--test-clock` asks for. A release build refuses it.
@@ -125,6 +129,7 @@ async fn serve(
     listen: SocketAddr,
     web: Option<PathBuf>,
     mut app: axum::Router,
+    on_shutdown: impl FnOnce() + Send + 'static,
 ) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -146,7 +151,10 @@ async fn serve(
         app = app.fallback(move |req| api::web::serve(root.clone(), req));
     }
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown())
+        .with_graceful_shutdown(async {
+            shutdown().await;
+            on_shutdown();
+        })
         .await?;
     Ok(())
 }

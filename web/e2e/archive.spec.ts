@@ -120,7 +120,8 @@ test("archiving a note from its page hides it from every listing until it is una
   await archived.first().getByRole("button", { name: "Unarchive" }).click();
   await expect(archived).toHaveCount(0);
   await expect(pane.getByText("No archived notes match.")).toBeVisible();
-  expect((await stored(admin, note.id)).note.fields.archived).toBeUndefined();
+  // The row goes at once; the write follows.
+  await expect.poll(async () => (await stored(admin, note.id)).note.fields.archived).toBeUndefined();
   await page.goto(`/search?q=${word}`);
   await expect(rows).toHaveCount(2);
 });

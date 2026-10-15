@@ -27,7 +27,7 @@ import {
   TITLE_FIELD,
   unplacedFields,
 } from "../notes";
-import { changes } from "../changes";
+import { changes, onNoteChangedElsewhere } from "../changes";
 import { isPinned, togglePin } from "../pins";
 import { typeDef } from "../session";
 import { focusPanel, offerNote, panelShown, rightIsDrawer, toggleSidebar } from "../sidebars";
@@ -268,34 +268,39 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     ),
   );
 
-  // A write elsewhere in this client (another pane on the same note, a card, a script field) may
-  // have changed this note. Unless it has edits of its own, which will meet the conflict view on
-  // their next save, it takes the stored note.
+  // A write elsewhere in this client (another pane on the same note, a card, a script field), or
+  // on another device as the live stream reports it, may have changed this note. Unless it has
+  // edits of its own, which will meet the conflict view on their next save, it takes the stored
+  // note.
   let recheck: ReturnType<typeof setTimeout> | undefined;
   const untouched = () => !props.newType && !conflict() && !autosave?.dirty() && saveState() !== "saving" && saveState() !== "dirty";
-  createEffect(
-    on(
-      changes,
-      () => {
-        clearTimeout(recheck);
-        recheck = setTimeout(async () => {
-          const n = note();
-          if (!n || !n.id || !untouched()) return;
-          try {
-            const stored = await api.note(n.id);
-            if (note()?.id !== stored.id || note()?.version === stored.version || !untouched()) return;
-            batch(() => {
-              setNote(stored);
-              setDoc(stored.note);
-              setGeneration(generation() + 1);
-            });
-          } catch {
-            // Deleted or unreachable: the next save says so.
-          }
-        }, 250);
-      },
-      { defer: true },
-    ),
+  const recheckSoon = () => {
+    clearTimeout(recheck);
+    recheck = setTimeout(async () => {
+      const n = note();
+      if (!n || !n.id || !untouched()) return;
+      const before = doc();
+      try {
+        const stored = await api.note(n.id);
+        // An edit made while the note was on its way wins: it meets the conflict view on save.
+        if (note()?.id !== stored.id || note()?.version === stored.version || doc() !== before || !untouched()) return;
+        batch(() => {
+          setNote(stored);
+          setDoc(stored.note);
+          setGeneration(generation() + 1);
+        });
+      } catch {
+        // Deleted or unreachable: the next save says so.
+      }
+    }, 250);
+  };
+  createEffect(on(changes, recheckSoon, { defer: true }));
+  onCleanup(
+    onNoteChangedElsewhere((change) => {
+      const n = note();
+      if (!n || (change && (change.id !== n.id || change.version === n.version))) return;
+      recheckSoon();
+    }),
   );
   onCleanup(() => clearTimeout(recheck));
 

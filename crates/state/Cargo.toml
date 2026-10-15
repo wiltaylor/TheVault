@@ -13,6 +13,7 @@ rusqlite.workspace = true
 sha2.workspace = true
 ulid.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "macros"] }
 
 [dev-dependencies]
 rusqlite.workspace = true

@@ -5,6 +5,7 @@
 
 mod auth;
 mod devices;
+mod events;
 mod history;
 mod jobs;
 mod notifications;
@@ -20,6 +21,7 @@ use rusqlite::Connection;
 
 pub use auth::{Scope, TokenInfo};
 pub use devices::{Device, NewDevice, PLATFORMS, PairCode, PushTarget};
+pub use events::{CAPACITY as EVENT_CAPACITY, Events, LiveEvent, Missed, Subscription};
 pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, Version};
 pub use jobs::{HandlerJob, JobStatus};
 pub use notifications::{
@@ -106,6 +108,7 @@ pub struct State {
     conn: Mutex<Connection>,
     key: Option<SecretKey>,
     clock: Arc<dyn Clock>,
+    events: Events,
 }
 
 const SCHEMA_VERSION: i64 = 8;
@@ -295,6 +298,7 @@ impl State {
             conn: Mutex::new(conn),
             key,
             clock,
+            events: Events::default(),
         })
     }
 
@@ -327,6 +331,11 @@ impl State {
             .ok_or_else(|| Error::Corrupt(format!("{} is not UTF-8", path.display())))?;
         self.conn().execute("VACUUM INTO ?1", [target])?;
         Ok(())
+    }
+
+    /// The live events of this vault's changes, for open clients (D4).
+    pub fn events(&self) -> &Events {
+        &self.events
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {

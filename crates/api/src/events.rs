@@ -1,0 +1,75 @@
+//! `GET /api/events`: a server-sent event stream of the vault's live events for an open client
+//! (D4). Each event names what changed by id; the client fetches the details through the API.
+//!
+//! | Event | Data |
+//! |---|---|
+//! | `notification.created` | `{id, unread}` |
+//! | `notification.read` | `{id, unread}`; `id` is `null` when every one was marked read |
+//! | `notification.dismissed` | `{id, unread}` |
+//! | `notification.cleared` | `{cleared, unread}` |
+//! | `note.changed` | `{id, type, version, deleted}` |
+//! | `device.command` | `{device, id}` |
+//!
+//! Each event's SSE `id` is its sequence number since the server started. A comment line goes
+//! out every [`HEARTBEAT`] so proxies keep the connection open. A client that falls too far
+//! behind, or a server shutting down, ends the stream; the client reconnects and fetches what it
+//! shows again.
+
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::extract::State;
+use axum::http::header::{CACHE_CONTROL, HeaderName};
+use axum::response::IntoResponse;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use futures_util::stream;
+use serde_json::json;
+use state::LiveEvent;
+use writer::Writer;
+
+/// How often a heartbeat comment goes out on an idle stream.
+pub const HEARTBEAT: Duration = Duration::from_secs(15);
+
+/// The SSE event for `event`, numbered `seq`.
+fn sse(seq: u64, event: &LiveEvent) -> Event {
+    let data = match event {
+        LiveEvent::NotificationCreated { id, unread }
+        | LiveEvent::NotificationDismissed { id, unread } => json!({ "id": id, "unread": unread }),
+        LiveEvent::NotificationRead { id, unread } => json!({ "id": id, "unread": unread }),
+        LiveEvent::NotificationCleared { cleared, unread } => {
+            json!({ "cleared": cleared, "unread": unread })
+        }
+        LiveEvent::NoteChanged {
+            id,
+            type_name,
+            version,
+            deleted,
+        } => json!({ "id": id, "type": type_name, "version": version, "deleted": deleted }),
+        LiveEvent::DeviceCommand { device, id } => json!({ "device": device, "id": id }),
+    };
+    Event::default()
+        .event(event.name())
+        .id(seq.to_string())
+        .data(data.to_string())
+}
+
+/// `GET /api/events`: the live event stream.
+pub async fn stream(State(w): State<Arc<Writer>>) -> impl IntoResponse {
+    let sub = w.state().events().subscribe();
+    // A first comment, so the client knows the stream is open before any event comes.
+    let opened = stream::once(async { Ok::<_, Infallible>(Event::default().comment("open")) });
+    let events = stream::unfold(sub, |mut sub| async move {
+        let (seq, event) = sub.recv().await.ok()?;
+        Some((Ok::<_, Infallible>(sse(seq, &event)), sub))
+    });
+    let body = Sse::new(futures_util::StreamExt::chain(opened, events))
+        .keep_alive(KeepAlive::new().interval(HEARTBEAT).text("heartbeat"));
+    (
+        [
+            (CACHE_CONTROL, "no-cache"),
+            (HeaderName::from_static("x-accel-buffering"), "no"),
+        ],
+        body,
+    )
+}

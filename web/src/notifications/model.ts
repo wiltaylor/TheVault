@@ -115,3 +115,27 @@ export function announcement(prev: { newest: string | null; unread: number } | n
   if (more > 1) return `${more} new notifications. Latest: ${newest.title}`;
   return `New notification: ${newest.title}`;
 }
+
+/** A notification event from the server's live stream (`/api/events`), with its data. */
+export type NotificationEvent =
+  | { name: "notification.created"; data: { id: string; unread: number } }
+  | { name: "notification.read"; data: { id: string | null; unread: number } }
+  | { name: "notification.dismissed"; data: { id: string; unread: number } }
+  | { name: "notification.cleared"; data: { cleared: number; unread: number } };
+
+/**
+ * `state` after a change made elsewhere. A new notification is not in the event, so it leaves the
+ * list as it is: the caller fetches the first page to show it.
+ */
+export function applyEvent(state: ListState, event: NotificationEvent, at: number): ListState {
+  switch (event.name) {
+    case "notification.created":
+      return state;
+    case "notification.read":
+      return event.data.id === null ? markAllRead(state, at) : markRead(state, event.data.id, at);
+    case "notification.dismissed":
+      return removeItem(state, event.data.id);
+    case "notification.cleared":
+      return clearRead(state);
+  }
+}

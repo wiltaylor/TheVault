@@ -16,7 +16,8 @@
 //! `/api/openapi.json` lists every endpoint.
 //!
 //! Notifications for the user, from scripts, agents and the server, live under
-//! `/api/notifications`.
+//! `/api/notifications`. `/api/events` streams notification and note changes to open clients as
+//! they happen (D4).
 //!
 //! The desktop and Android apps pair under `/api/devices`, each getting a `write` token bound to
 //! the device (D2, D3).
@@ -36,6 +37,7 @@ mod batch;
 mod defs;
 mod devices;
 mod error;
+mod events;
 mod inspect;
 mod notes;
 mod notifications;
@@ -168,6 +170,7 @@ fn build() -> Built {
         .put("/api/pins/folders/{id}", pins::rename_folder)
         .delete("/api/pins/folders/{id}", pins::delete_folder)
         .post("/api/pins/move", pins::move_entry)
+        .get("/api/events", events::stream)
         .get("/api/notifications", notifications::list)
         .post("/api/notifications", notifications::create)
         .delete("/api/notifications", notifications::clear_read)

@@ -186,6 +186,7 @@ impl Writer {
         install(inner, schema)?;
         inner.index.update(&inner.schema, &updates)?;
         inner.index.advance(generation)?;
+        self.announce(&saved);
         Ok((plan, saved))
     }
 

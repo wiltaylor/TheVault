@@ -111,6 +111,8 @@ test("a concurrent API write then a save from the UI shows the conflict view", a
   const title = unique("Contested");
   const created = await createTask(admin, { title, status: "todo", estimate: 1 });
 
+  // Without the live stream the page does not learn of the other write until it saves.
+  await page.route("**/api/events", (route) => route.abort());
   await logIn(page, `/notes/${created.id}`);
   await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
 

@@ -245,6 +245,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/events",
+        "Server-sent events: notification.created|read|dismissed|cleared, note.changed, device.command",
+    ),
+    (
+        "GET",
         "/api/notifications",
         "Notifications, newest first (?unread=true, ?limit=, ?cursor=), with the unread count",
     ),

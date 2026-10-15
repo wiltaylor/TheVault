@@ -1,7 +1,8 @@
 // The notifications bell: a notification made through the API shows on the badge, opens its note
 // or page in the pane when clicked and is then read; mark all read, dismiss and clear read; the
-// phone's sheet under the top bar; keyboard use; and a notification made while the page is open
-// reaching the badge on the next poll.
+// phone's sheet under the top bar; keyboard use; a notification made while the page is open
+// reaching the badge at once over the live event stream, and on the next poll when the stream is
+// blocked; and an open note taking a change made elsewhere.
 //
 // Notifications are global to a vault, and other specs make them (a failing scheduled script
 // does), so these tests run against a server of their own, one test at a time.
@@ -269,12 +270,54 @@ test("on a phone the bell sits in the top bar and the panel is a full-width shee
   await expect(badge(bell)).toHaveCount(0);
 });
 
-test("a notification made while the page is open reaches the badge and is announced", async ({ page, admin, server }) => {
-  // Test-only: poll every half second rather than every 30.
-  await page.addInitScript(() => {
-    (window as unknown as { __THEVAULT_TEST_NOTIFICATION_POLL_MS__: number }).__THEVAULT_TEST_NOTIFICATION_POLL_MS__ = 500;
+/** Make the poll every `ms` before the app loads. Test-only. */
+async function pollEvery(page: Page, ms: number) {
+  await page.addInitScript((ms) => {
+    (window as unknown as { __THEVAULT_TEST_NOTIFICATION_POLL_MS__: number }).__THEVAULT_TEST_NOTIFICATION_POLL_MS__ = ms;
+  }, ms);
+}
+
+/** Log in and wait until the live event stream is open, so nothing made afterwards is missed. */
+async function logInLive(page: Page, server: Server, path = "/daily") {
+  const stream = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/events" && r.status() === 200);
+  await logIn(page, server, path);
+  await stream;
+}
+
+test("changes made elsewhere reach the bell over the live stream without waiting for the poll", async ({ page, admin, server }) => {
+  // The poll would not come within the test: only the stream can bring the changes.
+  await pollEvery(page, 60 * 60 * 1000);
+  await logInLive(page, server);
+  const bell = tabbarBell(page);
+  await expect(badge(bell)).toHaveCount(0);
+  const first = await notify(admin, { title: "Backup finished" });
+  await expect(badge(bell)).toHaveText("1");
+  await expect(page.locator(".visually-hidden[aria-live=polite]")).toHaveText("New notification: Backup finished");
+
+  // With the panel open, a new one joins the list, and reading or dismissing one elsewhere shows.
+  await bell.click();
+  await expect(items(page)).toHaveCount(1);
+  const second = await notify(admin, { title: "Second backup finished" });
+  await expect(items(page)).toHaveCount(2);
+  await expect(items(page).first()).toContainText("Second backup finished");
+  await expect(badge(bell)).toHaveText("2");
+  expect((await admin.post(`/api/notifications/${first.id}/read`)).status()).toBe(200);
+  await expect(badge(bell)).toHaveText("1");
+  expect((await admin.delete(`/api/notifications/${second.id}`)).status()).toBe(200);
+  await expect(items(page)).toHaveCount(1);
+  await expect(badge(bell)).toHaveCount(0);
+});
+
+test("with the live stream blocked, a notification reaches the badge on the next poll", async ({ page, admin, server }) => {
+  let blocked = 0;
+  await page.route("**/api/events", (route) => {
+    blocked += 1;
+    return route.abort();
   });
+  // Test-only: poll every half second rather than every 30.
+  await pollEvery(page, 500);
   await logIn(page, server);
+  await expect.poll(() => blocked).toBeGreaterThan(0);
   const bell = tabbarBell(page);
   await expect(bell).toHaveAccessibleName("Notifications");
   await expect(badge(bell)).toHaveCount(0);
@@ -289,6 +332,18 @@ test("a notification made while the page is open reaches the badge and is announ
   await expect(items(page)).toHaveCount(2, { timeout: 5_000 });
   await expect(items(page).first()).toContainText("Second backup finished");
   await expect(badge(bell)).toHaveText("2");
+});
+
+test("an open note takes a change made elsewhere", async ({ page, admin, server }) => {
+  await pollEvery(page, 60 * 60 * 1000);
+  const note = await createTask(admin, "Draft agenda");
+  await logInLive(page, server, `/notes/${note.id}`);
+  const pane = activePane(page);
+  await expect(pane.getByRole("heading", { name: "Draft agenda" })).toBeVisible();
+  const stored = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { version: string };
+  const res = await admin.put(`/api/notes/${note.id}`, { data: { base_version: stored.version, note: { fields: { title: "Final agenda" } } } });
+  expect(res.status(), await res.text()).toBe(200);
+  await expect(pane.getByRole("heading", { name: "Final agenda" })).toBeVisible();
 });
 
 test("screenshots of the panel with task, API and system notifications", async ({ page, admin, server }) => {

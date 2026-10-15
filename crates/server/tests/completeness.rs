@@ -571,7 +571,12 @@ fn the_endpoint_listing_covers_every_registered_route() {
             .send()
             .unwrap();
         let status = res.status().as_u16();
-        let body = res.text().unwrap();
+        // The event stream never ends, so its status is all there is to read.
+        let body = if path == "/api/events" {
+            String::new()
+        } else {
+            res.text().unwrap()
+        };
         assert!(
             status != 405 && !(status == 404 && body.is_empty()),
             "{method} {concrete}: {status} {body}"

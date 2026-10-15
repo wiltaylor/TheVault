@@ -4,6 +4,7 @@ import {
   type ListState,
   announcement,
   appendPage,
+  applyEvent,
   badgeText,
   bellLabel,
   clearRead,
@@ -128,5 +129,25 @@ describe("announcement", () => {
     expect(announcement({ newest: null, unread: 0 }, page([n("4")], 3))).toBe("3 new notifications. Latest: title 4");
     expect(announcement({ newest: "1", unread: 0 }, page([n("2", { read: 3 })], 0))).toBe("");
     expect(announcement({ newest: "3", unread: 0 }, page([n("2")], 1))).toBe("");
+  });
+});
+
+describe("applyEvent", () => {
+  const state = (): ListState => ({ items: [n("C"), n("B", { read: 5 }), n("A")], next: "A" });
+  const ids = (s: ListState) => s.items.map((x) => `${x.id}${x.read === null ? "" : "*"}`);
+
+  it("leaves the list alone for a new notification, which the caller fetches", () => {
+    const s = state();
+    expect(applyEvent(s, { name: "notification.created", data: { id: "D", unread: 3 } }, 9)).toBe(s);
+  });
+
+  it("marks one read, or all when the event names none", () => {
+    expect(ids(applyEvent(state(), { name: "notification.read", data: { id: "A", unread: 1 } }, 9))).toEqual(["C", "B*", "A*"]);
+    expect(ids(applyEvent(state(), { name: "notification.read", data: { id: null, unread: 0 } }, 9))).toEqual(["C*", "B*", "A*"]);
+  });
+
+  it("removes a dismissed one and clears the read ones", () => {
+    expect(ids(applyEvent(state(), { name: "notification.dismissed", data: { id: "C", unread: 1 } }, 9))).toEqual(["B*", "A"]);
+    expect(ids(applyEvent(state(), { name: "notification.cleared", data: { cleared: 1, unread: 2 } }, 9))).toEqual(["C", "A"]);
   });
 });

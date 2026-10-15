@@ -34,8 +34,8 @@ import "./notifications.css";
 const PANEL_ID = "notifications-panel";
 
 /**
- * Polls for notifications while the app shows and announces new ones politely to screen
- * readers. Mount it once.
+ * Follows the server's live stream (polling while it is down) while the app shows, and announces
+ * new notifications politely to screen readers. Mount it once.
  */
 export function NotificationsLive() {
   onMount(() => onCleanup(startPolling()));

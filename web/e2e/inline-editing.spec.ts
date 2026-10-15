@@ -137,6 +137,8 @@ test("a content block edited inline saves itself", async ({ page, admin }) => {
 
 test("an autosave over a stale version shows the conflict view instead of overwriting", async ({ page, admin }) => {
   const { note, title } = await setup(admin);
+  // Without the live stream the page does not learn of the other write until it saves.
+  await page.route("**/api/events", (route) => route.abort());
   await logIn(page, `/notes/${note.id}`);
   await expect(page.getByLabel("Title")).toHaveText(title);
 

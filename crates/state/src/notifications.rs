@@ -7,7 +7,7 @@
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use crate::{Error, Result, State};
+use crate::{Error, LiveEvent, Result, State};
 
 /// The most notifications kept.
 pub const MAX_NOTIFICATIONS: usize = 500;
@@ -194,6 +194,11 @@ impl State {
             params![id, now, n.title, n.body, n.note_id, n.url, n.source],
         )?;
         tx.commit()?;
+        self.events.publish(LiveEvent::NotificationCreated {
+            id: id.clone(),
+            unread: unread(&conn)?,
+        });
+        drop(conn);
         Ok(Notification {
             id,
             created_ms: now,
@@ -247,20 +252,25 @@ impl State {
 
     /// How many notifications are unread.
     pub fn unread_notifications(&self) -> Result<u64> {
-        Ok(self.conn().query_row(
-            "SELECT COUNT(*) FROM notifications WHERE read_ms IS NULL",
-            [],
-            |r| r.get(0),
-        )?)
+        unread(&self.conn())
     }
 
-    /// Mark one notification read. Marking a read one again keeps when it was first read.
+    /// Mark one notification read. Marking a read one again keeps when it was first read, and
+    /// tells no one.
     pub fn mark_notification_read(&self, id: &str) -> Result<Notification> {
         let now = self.now();
-        self.conn().execute(
+        let conn = self.conn();
+        let marked = conn.execute(
             "UPDATE notifications SET read_ms = ?2 WHERE id = ?1 AND read_ms IS NULL",
             params![id, now],
         )?;
+        if marked > 0 {
+            self.events.publish(LiveEvent::NotificationRead {
+                id: Some(id.to_owned()),
+                unread: unread(&conn)?,
+            });
+        }
+        drop(conn);
         self.notification(id)?
             .ok_or_else(|| Error::UnknownNotification(id.to_owned()))
     }
@@ -268,27 +278,54 @@ impl State {
     /// Mark every unread notification read. Returns how many were unread.
     pub fn mark_all_notifications_read(&self) -> Result<usize> {
         let now = self.now();
-        Ok(self.conn().execute(
+        let conn = self.conn();
+        let marked = conn.execute(
             "UPDATE notifications SET read_ms = ?1 WHERE read_ms IS NULL",
             [now],
-        )?)
+        )?;
+        if marked > 0 {
+            self.events.publish(LiveEvent::NotificationRead {
+                id: None,
+                unread: 0,
+            });
+        }
+        Ok(marked)
     }
 
     /// Remove one notification, read or not.
     pub fn delete_notification(&self, id: &str) -> Result<()> {
-        match self
-            .conn()
-            .execute("DELETE FROM notifications WHERE id = ?1", [id])?
-        {
+        let conn = self.conn();
+        match conn.execute("DELETE FROM notifications WHERE id = ?1", [id])? {
             0 => Err(Error::UnknownNotification(id.to_owned())),
-            _ => Ok(()),
+            _ => {
+                self.events.publish(LiveEvent::NotificationDismissed {
+                    id: id.to_owned(),
+                    unread: unread(&conn)?,
+                });
+                Ok(())
+            }
         }
     }
 
     /// Remove every read notification. Returns how many went.
     pub fn clear_read_notifications(&self) -> Result<usize> {
-        Ok(self
-            .conn()
-            .execute("DELETE FROM notifications WHERE read_ms IS NOT NULL", [])?)
+        let conn = self.conn();
+        let cleared = conn.execute("DELETE FROM notifications WHERE read_ms IS NOT NULL", [])?;
+        if cleared > 0 {
+            self.events.publish(LiveEvent::NotificationCleared {
+                cleared,
+                unread: unread(&conn)?,
+            });
+        }
+        Ok(cleared)
     }
+}
+
+/// How many notifications are unread.
+fn unread(conn: &rusqlite::Connection) -> Result<u64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM notifications WHERE read_ms IS NULL",
+        [],
+        |r| r.get(0),
+    )?)
 }

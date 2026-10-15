@@ -155,7 +155,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 
 | UI action | Where | API | CLI | Gap |
 |---|---|---|---|---|
-| Show the unread count on the bell, now, every 30 seconds and when the window comes back | `notifications/store.ts` | `GET /api/notifications?limit=1` | `vault notifications --unread` | |
+| Show the unread count on the bell, now, as notifications change, and when the window comes back; every 30 seconds while the event stream is down | `notifications/store.ts`, `live.ts` | `GET /api/events`, `GET /api/notifications?limit=1` | `vault notifications --unread` | |
 | Open the panel and page through notifications | `notifications/NotificationsPanel.tsx` | `GET /api/notifications?limit=&cursor=` | `vault notifications [--limit] [--cursor]` | |
 | Click a notification: mark it read and open its note or page | `NotificationsPanel.tsx` | `POST /api/notifications/{id}/read` | `vault notifications read <id>`, then `vault get <note>` | |
 | Mark all read | `NotificationsPanel.tsx` | `POST /api/notifications/read-all` | `vault notifications read --all` | |
@@ -227,6 +227,7 @@ The listing has 85 routes. `/api/test/clock` is left out of the listing on purpo
 | `POST /api/assets` | `vault asset upload` | Image and file blocks, canvas | |
 | `GET /api/assets/{id}` | `vault asset get` | Images, downloads | |
 | `DELETE /api/assets/{id}` | `vault asset delete [--unlink]` | Assets | |
+| `GET /api/events` | none | Bell badge and panel, open notes | Explained: a stream for open clients (D4); a CLI command runs once and reads what it needs |
 | `GET /api/notifications` | `vault notifications [--unread]` | Bell badge and panel | |
 | `POST /api/notifications` | `vault notify` | not used | Scripts call `vault::notify`; the server notifies about failed scheduled scripts |
 | `DELETE /api/notifications` | `vault notifications clear` | Panel, Clear read | |

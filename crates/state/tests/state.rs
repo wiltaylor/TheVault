@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use state::{
-    Author, Clock, Error, JobStatus, MAX_NOTIFICATIONS, NewNotification, PrunePolicy, RunOutcome,
-    Scope, SecretKey, State, key_file_path,
+    Author, Clock, Error, JobStatus, LiveEvent, MAX_NOTIFICATIONS, Missed, NewNotification,
+    PrunePolicy, RunOutcome, Scope, SecretKey, State, Subscription, key_file_path,
 };
 use tempfile::TempDir;
 
@@ -967,4 +967,74 @@ fn a_version_6_state_db_gains_notifications() {
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
     assert_eq!(version, 8);
+}
+
+/// Every event waiting on `sub`, in order, with their sequence numbers.
+fn drain(sub: &mut Subscription) -> Vec<(u64, LiveEvent)> {
+    std::iter::from_fn(|| sub.try_recv().map(Result::unwrap)).collect()
+}
+
+#[test]
+fn notification_changes_publish_live_events_in_order() {
+    let dir = TempDir::new().unwrap();
+    let state = open(&dir);
+    let new = |title: &str| NewNotification {
+        title: title.into(),
+        source: "api".into(),
+        ..Default::default()
+    };
+    // Nobody listening: the event goes nowhere.
+    state.add_notification(&new("before")).unwrap();
+    let mut sub = state.events().subscribe();
+    let a = state.add_notification(&new("a")).unwrap().id;
+    let b = state.add_notification(&new("b")).unwrap().id;
+    state.mark_notification_read(&a).unwrap();
+    // Marking a read notification again changes nothing and says nothing.
+    state.mark_notification_read(&a).unwrap();
+    state.delete_notification(&b).unwrap();
+    state.mark_all_notifications_read().unwrap();
+    state.clear_read_notifications().unwrap();
+    // Nothing left to mark or clear: no events.
+    state.mark_all_notifications_read().unwrap();
+    state.clear_read_notifications().unwrap();
+
+    let got = drain(&mut sub);
+    let seqs: Vec<u64> = got.iter().map(|(n, _)| *n).collect();
+    assert!(seqs.windows(2).all(|w| w[1] == w[0] + 1), "{seqs:?}");
+    let events: Vec<LiveEvent> = got.into_iter().map(|(_, e)| e).collect();
+    assert_eq!(
+        events,
+        vec![
+            LiveEvent::NotificationCreated {
+                id: a.clone(),
+                unread: 2
+            },
+            LiveEvent::NotificationCreated {
+                id: b.clone(),
+                unread: 3
+            },
+            LiveEvent::NotificationRead {
+                id: Some(a),
+                unread: 2
+            },
+            LiveEvent::NotificationDismissed { id: b, unread: 1 },
+            LiveEvent::NotificationRead {
+                id: None,
+                unread: 0
+            },
+            LiveEvent::NotificationCleared {
+                cleared: 2,
+                unread: 0
+            },
+        ]
+    );
+}
+
+#[test]
+fn closing_the_events_ends_every_subscription() {
+    let dir = TempDir::new().unwrap();
+    let state = open(&dir);
+    let mut sub = state.events().subscribe();
+    state.events().close();
+    assert_eq!(sub.try_recv(), Some(Err(Missed::Closed)));
 }
