@@ -3,6 +3,10 @@
 // the server's notes from its local vault, takes an edit while the server is down, and the edit
 // reaches the server once it is back. Started again, it reads its token from the keyring and
 // syncs without pairing. `thevault --capture` opens the capture dialog (D12).
+//
+// The desktop extras (D9, D12, D27): a notification created on the server updates the tray badge
+// and raises a desktop notification; reading it through the API closes it; closing it on the
+// desktop marks it read, and clicking it opens its note. A newer release is offered in the window.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -112,11 +116,12 @@ async function scenario() {
   `);
   await app.type(await app.find("[aria-label='Title']"), ", edited offline");
   await waitFor("the local save", async () => (await app.text("[data-testid='save-status']")) === "Saved");
+  // Typing can reach the local vault as one save or several, depending on how fast it goes.
   const offline = await waitFor("the offline badge with the change waiting", async () => {
     const b = await badge();
-    return b?.phase === "offline" && b.pending === 1 ? b : null;
+    return b?.phase === "offline" && b.pending >= 1 ? b : null;
   });
-  assert.match(offline.text, /Offline · 1 change waiting/);
+  assert.match(offline.text, /Offline · \d+ changes? waiting/);
 
   // The server comes back on the same address, and the change reaches it.
   await home.start();
@@ -149,4 +154,90 @@ test("thevault --capture opens the capture dialog", async () => {
   app = await launch(["--capture"]);
   await waitFor("the web client", inWebClient);
   await waitFor("the capture dialog", () => app.run("return !!document.querySelector('[aria-label=\"Capture text\"]')"));
+});
+
+/** The app's own status, from inside the window. */
+/** Whether the update prompt shows, and its text when it does. */
+const updatePrompt = () =>
+  app.run("const p = document.getElementById('thevault-update'); return p && getComputedStyle(p).display !== 'none' ? p.textContent : null;");
+
+const status = async () => JSON.parse(await app.run("return fetch('/_desktop/status').then(r => r.text());"));
+
+test("a server notification updates the tray badge, shows on the desktop, and closes when read", async () => {
+  try {
+    await notifications();
+  } catch (e) {
+    e.message += `\nnotification daemon log ${JSON.stringify(desktop.notifyd.log)}\n${await diagnose()}`;
+    throw e;
+  }
+});
+
+async function notifications() {
+  const notifyd = desktop.notifyd;
+  await waitFor("the live link to the home server", async () => (await status()).notifications.connected);
+  assert.equal((await status()).tray.unread, 0);
+
+  const note = await home.api("POST", "/api/notifications", { title: "Build finished", body: "All green" });
+  const [raised] = await waitFor("the desktop notification", () => notifyd.raised("Build finished").length && notifyd.raised("Build finished"));
+  assert.equal(raised.body, "All green");
+  assert.equal(raised.app, "TheVault");
+  const badged = await waitFor("the tray badge", async () => {
+    const tray = (await status()).tray;
+    return tray.unread === 1 ? tray : null;
+  });
+  assert.deepEqual(badged, { tray: true, unread: 1, title: "1", tooltip: "TheVault: 1 unread notification" });
+
+  // Read through the API, as the web app or a script would: the desktop notification closes.
+  await home.api("POST", `/api/notifications/${note.id}/read`);
+  await waitFor("the desktop notification to close", () => notifyd.closed(raised.notify));
+  await waitFor("the badge to clear", async () => (await status()).tray.unread === 0);
+  assert.equal(notifyd.raised("Build finished").length, 1, "raised once");
+
+  // Closed on the desktop, it is read on the server.
+  const second = await home.api("POST", "/api/notifications", { title: "Second" });
+  const [shown] = await waitFor("the second notification", () => notifyd.raised("Second").length && notifyd.raised("Second"));
+  await waitFor("the badge", async () => (await status()).tray.unread === 1);
+  notifyd.dismiss(shown.notify);
+  await waitFor("the server to mark it read", async () => (await home.api("GET", "/api/notifications?unread=true")).unread === 0);
+  const listed = await home.api("GET", "/api/notifications");
+  assert.ok(listed.items.find((n) => n.id === second.id).read, "read on the server");
+  await waitFor("the badge to clear", async () => (await status()).tray.unread === 0);
+
+  // Clicked, it opens its note in the window, and is read.
+  const target = await home.api("POST", "/api/notes?type=note", { note: { fields: { title: "Opened from a notification" }, blocks: [] } });
+  await waitFor("the note to sync", async () => {
+    const res = await app.run(`return fetch('/api/notes/${target.id}').then(r => r.status);`);
+    if (res !== 200) await app.run("return fetch('/_desktop/sync', { method: 'POST' }).then(() => 0);");
+    return res === 200;
+  }, 60_000);
+  await home.api("POST", "/api/notifications", { title: "Open me", note: target.id });
+  const [clickable] = await waitFor("the third notification", () => notifyd.raised("Open me").length && notifyd.raised("Open me"));
+  notifyd.click(clickable.notify);
+  await waitFor("the note in the window", async () => (await path()) === `/notes/${target.id}`);
+  await waitFor("the note's title", async () => (await app.text("[aria-label='Title']")) === "Opened from a notification");
+  await waitFor("the server to mark it read", async () => (await home.api("GET", "/api/notifications?unread=true")).unread === 0);
+}
+
+test("a thevault://note link opens the note", async () => {
+  const notes = await home.api("POST", "/api/notes?type=note", { note: { fields: { title: "Linked" }, blocks: [] } });
+  await app.run("return fetch('/_desktop/sync', { method: 'POST' }).then(() => 0);");
+  await waitFor("the note to sync", async () => (await app.run(`return fetch('/api/notes/${notes.id}').then(r => r.status);`)) === 200, 60_000);
+  await app.quit();
+  app = await launch([`thevault://note/${notes.id}`]);
+  await waitFor("the linked note", async () => (await path()) === `/notes/${notes.id}`);
+  await waitFor("the linked note's title", async () => (await app.text("[aria-label='Title']")) === "Linked");
+});
+
+test("a newer release is offered in the window, and Later hides the offer", async () => {
+  await app.quit();
+  desktop.releases.tag = "v99.0.0";
+  app = await launch();
+  await waitFor("the web client", inWebClient);
+  assert.equal(await updatePrompt(), null, "nothing offered before the check");
+  const offer = await waitFor("the update prompt", updatePrompt, 60_000);
+  assert.match(offer, /TheVault 99\.0\.0 is available/);
+  assert.equal((await status()).update.version, "99.0.0");
+  await app.click(await app.find("#thevault-update [data-action='later']"));
+  await waitFor("the prompt to hide", async () => (await updatePrompt()) === null);
+  desktop.releases.tag = "v0.1.0";
 });

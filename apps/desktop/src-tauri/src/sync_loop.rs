@@ -9,6 +9,9 @@
 //! Before each round the loop checks that the server answers at all, with a short timeout. While
 //! it does not, the app is offline: local writes wait in the queue and the check repeats every
 //! few seconds, so the round after the network or the server comes back runs within seconds.
+//!
+//! Once the loop has the device token it hands the server and the token to the live link
+//! ([`crate::live`]), which reads the token from nowhere else.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -18,6 +21,7 @@ use embedded::Embedded;
 use serde::Serialize;
 
 use crate::device::{Device, TokenStore};
+use crate::live::Remote;
 
 /// How often a paired device syncs while nothing else asks it to.
 const INTERVAL: Duration = Duration::from_secs(60);
@@ -96,6 +100,7 @@ impl SyncLoop {
         embedded: Arc<Embedded>,
         device: Option<Device>,
         tokens: Box<dyn TokenStore>,
+        remote: tokio::sync::watch::Sender<Option<Remote>>,
     ) -> SyncLoop {
         let status = Arc::new(Mutex::new(Status {
             paired: device.is_some(),
@@ -118,6 +123,7 @@ impl SyncLoop {
             tokens,
             device,
             engine: None,
+            remote,
         };
         std::thread::Builder::new()
             .name("sync".to_owned())
@@ -204,6 +210,7 @@ struct Worker {
     tokens: Box<dyn TokenStore>,
     device: Option<Device>,
     engine: Option<sync::Engine>,
+    remote: tokio::sync::watch::Sender<Option<Remote>>,
 }
 
 impl Worker {
@@ -254,12 +261,17 @@ impl Worker {
     }
 
     fn build_engine(&mut self, device: &Device, token: String) -> Option<Outcome> {
+        let remote = Remote {
+            url: device.server_url.clone(),
+            token: token.clone(),
+        };
         match self
             .embedded
             .sync_engine(device.remote(token), sync::AssetPolicy::desktop())
         {
             Ok(engine) => {
                 self.engine = Some(engine);
+                self.remote.send_replace(Some(remote));
                 None
             }
             Err(e) => Some(Outcome::of_error(&e)),

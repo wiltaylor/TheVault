@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name={{name}}
+Comment=Notes, offline, synced with your TheVault server
+Exec={{exec}} %u
+Icon={{icon}}
+Terminal=false
+Categories={{categories}}
+StartupWMClass={{exec}}
+MimeType=x-scheme-handler/thevault;
+Actions=capture;
+
+[Desktop Action capture]
+Name=Quick capture
+Exec={{exec}} --capture

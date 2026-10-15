@@ -1,8 +1,10 @@
 // What the S6 tests run the desktop app against: a testkit home server on port 0, a private D-Bus
-// session with an unlocked throwaway Secret Service keyring, and tauri-driver. Every path lives
-// in one temporary folder, and every port is picked free.
+// session with an unlocked throwaway Secret Service keyring and a stand-in notification daemon, a
+// stand-in GitHub Releases endpoint, and tauri-driver. Every path lives in one temporary folder,
+// and every port is picked free.
 
 import { execFileSync, spawn } from "node:child_process";
+import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -20,6 +22,7 @@ function binary(env, path) {
 }
 
 export const appBinary = () => binary("THEVAULT_DESKTOP_BIN", "apps/desktop/src-tauri/target/debug/thevault");
+const notifydBinary = () => binary("FAKE_NOTIFYD_BIN", "apps/desktop/src-tauri/target/debug/examples/fake-notifyd");
 
 /** A port nothing listens on now. */
 export function freePort() {
@@ -103,8 +106,70 @@ export class HomeServer {
 }
 
 /**
- * The desktop session the app runs in: its own XDG folders, a private D-Bus session and an
- * unlocked gnome-keyring as its Secret Service, and tauri-driver on free ports.
+ * The stand-in notification daemon on the session bus: it records what the app raises and closes,
+ * and acts as the user on request.
+ */
+export class Notifyd {
+  constructor(child) {
+    this.child = child;
+    /** Every line it printed, parsed. */
+    this.log = [];
+    createInterface({ input: child.stdout }).on("line", (line) => this.log.push(JSON.parse(line)));
+  }
+
+  /** The notifications raised with `summary`. */
+  raised(summary) {
+    return this.log.filter((l) => l.notify !== undefined && l.summary === summary);
+  }
+
+  closed(id) {
+    return this.log.some((l) => l.close === id);
+  }
+
+  /** Closes notification `id` as the user would. */
+  dismiss(id) {
+    this.child.stdin.write(`dismiss ${id}\n`);
+  }
+
+  click(id) {
+    this.child.stdin.write(`click ${id}\n`);
+  }
+}
+
+/**
+ * A stand-in for the GitHub Releases API: it answers the latest release's tag, which a test can
+ * change. It starts at the app's own version, so nothing is offered.
+ */
+export class Releases {
+  constructor() {
+    this.tag = "v0.1.0";
+    this.server = createHttpServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          tag_name: this.tag,
+          html_url: `http://127.0.0.1/releases/tag/${this.tag}`,
+          draft: false,
+          prerelease: false,
+        }),
+      );
+    });
+  }
+
+  async start() {
+    await new Promise((resolve) => this.server.listen(0, "127.0.0.1", resolve));
+    this.url = `http://127.0.0.1:${this.server.address().port}/latest`;
+  }
+
+  stop() {
+    return new Promise((resolve) => this.server.close(() => resolve()));
+  }
+}
+
+/**
+ * The desktop session the app runs in: its own XDG folders, a private D-Bus session with an
+ * unlocked gnome-keyring as its Secret Service and a stand-in notification daemon, the stand-in
+ * Releases endpoint, and tauri-driver on free ports.
  */
 export class Desktop {
   constructor(root) {
@@ -181,6 +246,14 @@ export class Desktop {
       return out.includes("boolean true");
     });
 
+    const notifyd = this.spawn(notifydBinary(), [], { stdio: ["pipe", "pipe", "inherit"] });
+    this.notifyd = new Notifyd(notifyd);
+    await waitFor("the notification daemon", () => this.notifyd.log.some((l) => l.ready));
+
+    this.releases = new Releases();
+    await this.releases.start();
+    this.env.THEVAULT_UPDATE_URL = this.releases.url;
+
     const port = await freePort();
     const nativePort = await freePort();
     this.spawn("tauri-driver", ["--port", String(port), "--native-port", String(nativePort)], {
@@ -192,6 +265,7 @@ export class Desktop {
 
   async stop() {
     for (const child of this.children.reverse()) await stop(child);
+    await this.releases?.stop();
   }
 }
 

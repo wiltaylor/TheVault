@@ -23,6 +23,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "category": "Productivity"
+    "category": "Productivity",
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/thevault.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/thevault.desktop"
+      }
+    }
   }
 }

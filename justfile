@@ -61,7 +61,7 @@ desktop-build: (require-tool "cargo-tauri") web-build
 # Run the desktop app's unit tests, then the S6 end-to-end tests with tauri-driver under Xvfb
 [group('desktop')]
 desktop-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-tool "gnome-keyring-daemon") desktop-build
-	cd apps/desktop/src-tauri && cargo test
+	cd apps/desktop/src-tauri && cargo test && cargo build --example fake-notifyd
 	cargo build -p server -p testkit --bins
 	xvfb-run -a pnpm -C apps/desktop/e2e test
 
