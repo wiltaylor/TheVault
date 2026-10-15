@@ -265,6 +265,9 @@ enum Command {
     /// API tokens.
     #[command(subcommand)]
     Token(Token),
+    /// Paired desktop and Android apps.
+    #[command(subcommand)]
+    Device(Device),
     /// Secrets that tasks read. Values are never shown.
     #[command(subcommand)]
     Secret(Secret),
@@ -584,6 +587,33 @@ enum Token {
 }
 
 #[derive(Subcommand)]
+enum Device {
+    /// Every paired device with its settings.
+    List,
+    /// Rename a device.
+    Rename { id: String, name: String },
+    /// Change some of a device's settings: a JSON object of the keys to change, read from the
+    /// file or stdin.
+    Settings {
+        id: String,
+        /// Read the settings from this file; `-` or nothing reads stdin.
+        #[arg(long, short)]
+        file: Option<PathBuf>,
+    },
+    /// Revoke a device. Its token stops working at once and its push endpoint is forgotten.
+    Revoke { id: String },
+    /// Issue a single-use pairing code and its QR code, for an app to pair with.
+    PairCode {
+        /// The URL the app reaches the server on. Defaults to --url.
+        #[arg(long)]
+        server_url: Option<String>,
+        /// How long the code works, in seconds. Defaults to ten minutes.
+        #[arg(long)]
+        ttl: Option<u64>,
+    },
+}
+
+#[derive(Subcommand)]
 enum Secret {
     /// Every secret's name and times, never a value.
     List,
@@ -644,12 +674,12 @@ fn run(cli: Cli) -> Result<Value, Fail> {
         Command::RestoreBackup { archive, dir } => backup::restore(&archive, &dir),
         command => {
             let api = Api::new(&cli.url, cli.token)?;
-            remote(&api, command)
+            remote(&api, &cli.url, command)
         }
     }
 }
 
-fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
+fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
     match command {
         Command::Health => api.get(&["api", "health"]),
         Command::Schema => api.get(&["api", "schema"]),
@@ -937,6 +967,29 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
             Token::Revoke { name } => {
                 api.delete(&["api", "tokens", &name])?;
                 Ok(json!({ "name": name, "revoked": true }))
+            }
+        },
+        Command::Device(d) => match d {
+            Device::List => api.get(&["api", "devices"]),
+            Device::Rename { id, name } => {
+                api.patch(&["api", "devices", &id], json!({ "name": name }))
+            }
+            Device::Settings { id, file } => {
+                let settings: Value = serde_json::from_str(&read_text(file.as_deref())?)
+                    .map_err(|e| Fail::new("usage", format!("the settings are not JSON: {e}")))?;
+                api.patch(&["api", "devices", &id], json!({ "settings": settings }))
+            }
+            Device::Revoke { id } => {
+                api.delete(&["api", "devices", &id])?;
+                Ok(json!({ "id": id, "revoked": true }))
+            }
+            Device::PairCode { server_url, ttl } => {
+                let mut body =
+                    json!({ "server_url": server_url.unwrap_or_else(|| url.to_owned()) });
+                if let Some(ttl) = ttl {
+                    body["ttl_secs"] = json!(ttl);
+                }
+                api.post(&["api", "devices", "pair-codes"], body)
             }
         },
         Command::Secret(s) => match s {

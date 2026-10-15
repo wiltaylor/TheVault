@@ -1,9 +1,10 @@
-//! `.vault/state.db`: version history, trash, encrypted secrets, API tokens, task run logs, the
-//! queue of `after_*` handler jobs and the user's notifications.
+//! `.vault/state.db`: version history, trash, encrypted secrets, API tokens, paired devices, task
+//! run logs, the queue of `after_*` handler jobs and the user's notifications.
 //!
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
 mod auth;
+mod devices;
 mod history;
 mod jobs;
 mod notifications;
@@ -18,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 
 pub use auth::{Scope, TokenInfo};
+pub use devices::{Device, NewDevice, PLATFORMS, PairCode, PushTarget};
 pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, Version};
 pub use jobs::{HandlerJob, JobStatus};
 pub use notifications::{
@@ -54,6 +56,10 @@ pub enum Error {
     UnknownToken(String),
     #[error("unknown token scope {0:?}; expected read, write or admin")]
     UnknownScope(String),
+    #[error("no device {0}")]
+    UnknownDevice(String),
+    #[error("unknown device platform {0:?}; expected linux or android")]
+    UnknownPlatform(String),
     #[error("no secret named {0:?}")]
     UnknownSecret(String),
     #[error("no task run {0}")]
@@ -102,7 +108,7 @@ pub struct State {
     clock: Arc<dyn Clock>,
 }
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -239,6 +245,29 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS notifications_unread ON notifications (read_ms, id);
 ";
 
+/// What version 8 adds: paired devices, each bound to a token of its own that deleting cascades
+/// from, and the single-use codes that pair them (D2, D3).
+const SCHEMA_V8: &str = "
+CREATE TABLE IF NOT EXISTS devices (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    platform      TEXT NOT NULL,
+    capabilities  TEXT NOT NULL,
+    token_id      TEXT NOT NULL UNIQUE REFERENCES tokens (name) ON DELETE CASCADE,
+    push_endpoint TEXT,
+    push_p256dh   TEXT,
+    push_auth     TEXT,
+    last_seen_ms  INTEGER,
+    settings      TEXT NOT NULL,
+    created_ms    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pair_codes (
+    code_hash  BLOB PRIMARY KEY,
+    created_ms INTEGER NOT NULL,
+    expires_ms INTEGER NOT NULL
+);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -307,12 +336,22 @@ impl State {
     fn now(&self) -> i64 {
         self.clock.now_ms()
     }
+
+    /// A new ULID for the current time.
+    fn new_ulid(&self) -> ulid::Ulid {
+        let mut random = [0u8; 10];
+        random_bytes(&mut random);
+        let random = random
+            .iter()
+            .fold(0u128, |acc, b| (acc << 8) | u128::from(*b));
+        ulid::Ulid::from_parts(u64::try_from(self.now()).unwrap_or(0), random)
+    }
 }
 
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=6 => {
+        0..=7 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -339,6 +378,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 6 {
                 tx.execute_batch(SCHEMA_V7)?;
+            }
+            if version <= 7 {
+                tx.execute_batch(SCHEMA_V8)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

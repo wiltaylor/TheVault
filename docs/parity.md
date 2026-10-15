@@ -140,6 +140,17 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Create a token | `Access.tsx` | `POST /api/tokens` | `vault token create <name> --scope <scope>` | |
 | Revoke a token | `Access.tsx` | `DELETE /api/tokens/{name}` | `vault token revoke <name>` | |
 
+### Devices
+
+| UI action | Where | API | CLI | Gap |
+|---|---|---|---|---|
+| List paired devices with their settings | `pages/Devices.tsx` | `GET /api/devices` | `vault device list` | |
+| Pair a device: show the QR code and the code | `Devices.tsx` | `POST /api/devices/pair-codes` with `server_url` | `vault device pair-code [--server-url] [--ttl]` | |
+| Rename a device, set its switches, enabled commands, exclusion list and skip pattern | `Devices.tsx` | `PATCH /api/devices/{id}` | `vault device rename <id> <name>`, `vault device settings <id>` (JSON on stdin) | |
+| Revoke a device | `Devices.tsx` | `DELETE /api/devices/{id}` | `vault device revoke <id>` | |
+| Pair with the password or a code | none: the desktop and Android apps do | `POST /api/devices/pair` | none | Explained: an app pairs itself and keeps the token it gets; the CLI uses API tokens |
+| Register a push endpoint | none: the Android app does | `PUT /api/devices/{id}/push` | none | Explained: only the device's own token, or the owner, sets it |
+
 ### Notifications
 
 | UI action | Where | API | CLI | Gap |
@@ -154,7 +165,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 
 ## 2. Every route in the endpoint listing
 
-The listing has 77 routes. `/api/test/clock` is left out of the listing on purpose: it exists only when a test build runs with `--test-clock` (S7).
+The listing has 85 routes. `/api/test/clock` is left out of the listing on purpose: it exists only when a test build runs with `--test-clock` (S7).
 
 | Route | CLI | UI | Note |
 |---|---|---|---|
@@ -222,6 +233,12 @@ The listing has 77 routes. `/api/test/clock` is left out of the listing on purpo
 | `POST /api/notifications/read-all` | `vault notifications read --all` | Panel, Mark all read | |
 | `POST /api/notifications/{id}/read` | `vault notifications read <id>` | Panel, clicking a notification | |
 | `DELETE /api/notifications/{id}` | `vault notifications dismiss <id>` | Panel, × | |
+| `POST /api/devices/pair` | none | not used | The desktop and Android apps pair themselves |
+| `POST /api/devices/pair-codes` | `vault device pair-code` | Devices, Pair a device | |
+| `GET /api/devices` | `vault device list` | Devices | |
+| `PATCH /api/devices/{id}` | `vault device rename`, `vault device settings` | Devices, Save | |
+| `DELETE /api/devices/{id}` | `vault device revoke` | Devices, Revoke | |
+| `PUT /api/devices/{id}/push` | none | not used | The Android app registers its UnifiedPush endpoint |
 | `GET /api/tokens` | `vault token list` | Access | |
 | `POST /api/tokens` | `vault token create` | Access | |
 | `DELETE /api/tokens/{name}` | `vault token revoke` | Access | |

@@ -140,6 +140,10 @@ impl Api {
         self.call(Method::PUT, segments, &[], Body::Json(body))
     }
 
+    pub fn patch(&self, segments: &[&str], body: Value) -> Result<Value, Fail> {
+        self.call(Method::PATCH, segments, &[], Body::Json(body))
+    }
+
     pub fn delete(&self, segments: &[&str]) -> Result<Value, Fail> {
         self.call(Method::DELETE, segments, &[], Body::None)
     }

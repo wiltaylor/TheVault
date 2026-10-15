@@ -1178,6 +1178,30 @@ fn every_command_prints_json() {
     run("token list", &[], "");
     run("token revoke", &["agent"], "");
 
+    let code = run("device pair-code", &["--ttl", "60"], "");
+    assert_eq!(code["payload"]["server_url"], server.base_url().as_str());
+    let named = run(
+        "device pair-code",
+        &["--server-url", "https://vault.example"],
+        "",
+    );
+    assert_eq!(named["payload"]["server_url"], "https://vault.example");
+    let paired: Value = reqwest::blocking::Client::new()
+        .post(server.url("/api/devices/pair"))
+        .json(&json!({ "code": code["code"], "name": "Pixel", "platform": "android" }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let device = s(&paired["device_id"]).to_owned();
+    run("device list", &[], "");
+    let renamed = run("device rename", &[&device, "Work phone"], "");
+    assert_eq!(renamed["name"], "Work phone");
+    let set = run("device settings", &[&device], r#"{"sms_send": true}"#);
+    assert_eq!(set["settings"]["sms_send"], true);
+    run("device revoke", &[&device], "");
+    assert_eq!(run("device list", &[], "")["devices"], json!([]));
+
     let told = run(
         "notify",
         &["Done", "--body", "All of it.", "--note", &id],

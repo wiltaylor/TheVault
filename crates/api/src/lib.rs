@@ -18,12 +18,15 @@
 //! Notifications for the user, from scripts, agents and the server, live under
 //! `/api/notifications`.
 //!
+//! The desktop and Android apps pair under `/api/devices`, each getting a `write` token bound to
+//! the device (D2, D3).
+//!
 //! Scheduled tasks live under `/api/tasks`, with their run history and a route to run one now;
 //! the secrets they read are written, never read back, under `/api/secrets` (D10).
 //!
-//! Every route but health and login needs a session cookie or a bearer token, and the scope
-//! [`auth::required_scope`] names for it (D11). [`owner_router`] serves the same routes to an
-//! in-process caller that is always the owner (D26).
+//! Every route but health, login and device pairing needs a session cookie or a bearer token,
+//! and the scope [`auth::required_scope`] names for it (D11). [`owner_router`] serves the same
+//! routes to an in-process caller that is always the owner (D26).
 //!
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
@@ -31,6 +34,7 @@ mod assets;
 mod auth;
 mod batch;
 mod defs;
+mod devices;
 mod error;
 mod inspect;
 mod notes;
@@ -48,7 +52,7 @@ use std::sync::Arc;
 use axum::extract::DefaultBodyLimit;
 use axum::handler::Handler;
 use axum::http::{Method, StatusCode};
-use axum::routing::{MethodRouter, delete, get, post, put};
+use axum::routing::{MethodRouter, delete, get, patch, post, put};
 use axum::{Json, Router, middleware};
 use scheduler::{Scheduler, TestClock};
 use serde_json::{Value, json};
@@ -96,6 +100,10 @@ impl<S: Clone + Send + Sync + 'static> Routes<S> {
 
     fn delete<H: Handler<T, S>, T: 'static>(self, path: &'static str, h: H) -> Self {
         self.add(Method::DELETE, path, delete(h))
+    }
+
+    fn patch<H: Handler<T, S>, T: 'static>(self, path: &'static str, h: H) -> Self {
+        self.add(Method::PATCH, path, patch(h))
     }
 
     /// A POST whose body may be up to `limit` bytes.
@@ -193,6 +201,12 @@ fn build() -> Built {
         .post_up_to("/api/assets", assets::MAX_UPLOAD, assets::upload)
         .get("/api/assets/{id}", assets::download)
         .delete("/api/assets/{id}", assets::delete)
+        .post("/api/devices/pair", devices::pair)
+        .post("/api/devices/pair-codes", devices::create_pair_code)
+        .get("/api/devices", devices::list)
+        .patch("/api/devices/{id}", devices::update)
+        .delete("/api/devices/{id}", devices::revoke)
+        .put("/api/devices/{id}/push", devices::put_push)
         .get("/api/tokens", tokens::list)
         .post("/api/tokens", tokens::create)
         .delete("/api/tokens/{name}", tokens::revoke)

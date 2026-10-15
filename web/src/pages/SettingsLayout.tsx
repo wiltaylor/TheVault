@@ -8,6 +8,7 @@ const SECTIONS: [string, string][] = [
   ["/settings/scheduled", "Scheduled"],
   ["/settings/secrets", "Secrets"],
   ["/settings/tokens", "API tokens"],
+  ["/settings/devices", "Devices"],
 ];
 
 /** The settings area: tabs for each section above the section's own page. */

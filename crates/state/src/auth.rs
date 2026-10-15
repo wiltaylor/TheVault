@@ -122,6 +122,12 @@ impl State {
                 token_row,
             )
             .optional()?;
+        if let Some((info, _)) = &row {
+            conn.execute(
+                "UPDATE devices SET last_seen_ms = ?1 WHERE token_id = ?2",
+                params![now, info.name],
+            )?;
+        }
         row.map(finish_token).transpose()
     }
 

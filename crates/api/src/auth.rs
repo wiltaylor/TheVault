@@ -68,7 +68,20 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
     }
 }
 
-/// The scope a request needs, or `None` for the public endpoints: health and login.
+/// The scope the request's credentials grant, next to its [`Caller`]: a route that binds a token
+/// to what it may touch, such as a device's own push endpoint, reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrantedScope(pub Scope);
+
+/// Whether `path` is `/api/devices/{id}/push`.
+fn is_device_push(path: &str) -> bool {
+    path.strip_prefix("/api/devices/")
+        .and_then(|rest| rest.strip_suffix("/push"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
+/// The scope a request needs, or `None` for the public endpoints: health, login and device
+/// pairing, which checks the password or a pairing code itself.
 pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     let under = |prefix: &str| {
         path == prefix
@@ -76,7 +89,9 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
                 .strip_prefix(prefix)
                 .is_some_and(|rest| rest.starts_with('/'))
     };
-    if path == "/api/health" || (method == Method::POST && path == "/api/login") {
+    if path == "/api/health"
+        || (method == Method::POST && (path == "/api/login" || path == "/api/devices/pair"))
+    {
         return None;
     }
     if ADMIN_PATHS.iter().any(|p| under(p)) {
@@ -88,7 +103,8 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     {
         return Some(Scope::Read);
     }
-    if WRITE_PATHS.iter().any(|p| under(p)) {
+    // A device sets its own push endpoint with its `write` token; the handler checks it is its own.
+    if WRITE_PATHS.iter().any(|p| under(p)) || (method == Method::PUT && is_device_push(path)) {
         Some(Scope::Write)
     } else {
         Some(Scope::Admin)
@@ -224,6 +240,7 @@ pub async fn authenticate(
         .into_response();
     }
     req.extensions_mut().insert(Caller(granted.author));
+    req.extensions_mut().insert(GrantedScope(granted.scope));
     next.run(req).await
 }
 
@@ -231,6 +248,7 @@ pub async fn authenticate(
 pub async fn as_owner(mut req: Request, next: Next) -> Response {
     req.extensions_mut()
         .insert(Caller(Author::Session(OWNER_SESSION.to_owned())));
+    req.extensions_mut().insert(GrantedScope(Scope::Admin));
     next.run(req).await
 }
 
@@ -349,6 +367,15 @@ mod tests {
             (Method::PUT, "/api/taxonomies/status", Some(Scope::Admin)),
             (Method::GET, "/api/scripts/x", Some(Scope::Read)),
             (Method::PUT, "/api/scripts/x", Some(Scope::Admin)),
+            (Method::POST, "/api/devices/pair", None),
+            (Method::GET, "/api/devices/pair", Some(Scope::Read)),
+            (Method::POST, "/api/devices/pair-codes", Some(Scope::Admin)),
+            (Method::GET, "/api/devices", Some(Scope::Read)),
+            (Method::PATCH, "/api/devices/x", Some(Scope::Admin)),
+            (Method::DELETE, "/api/devices/x", Some(Scope::Admin)),
+            (Method::PUT, "/api/devices/x/push", Some(Scope::Write)),
+            (Method::PUT, "/api/devices/x/y/push", Some(Scope::Admin)),
+            (Method::PUT, "/api/devices//push", Some(Scope::Admin)),
             (Method::GET, "/anything", Some(Scope::Read)),
         ];
         for (method, path, want) in cases {

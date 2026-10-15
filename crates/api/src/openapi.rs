@@ -273,6 +273,36 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/notifications/{id}",
         "Dismiss one notification, read or not",
     ),
+    (
+        "POST",
+        "/api/devices/pair",
+        "Pair a device with the vault password or a pairing code; returns its id and a write token bound to it",
+    ),
+    (
+        "POST",
+        "/api/devices/pair-codes",
+        "Issue a single-use pairing code and its QR code, payload {server_url, code}",
+    ),
+    (
+        "GET",
+        "/api/devices",
+        "Every paired device with its settings",
+    ),
+    (
+        "PATCH",
+        "/api/devices/{id}",
+        "Rename a device or change some of its settings",
+    ),
+    (
+        "DELETE",
+        "/api/devices/{id}",
+        "Revoke a device, deleting its token and push endpoint",
+    ),
+    (
+        "PUT",
+        "/api/devices/{id}/push",
+        "Register or clear a device's UnifiedPush endpoint and WebPush keys",
+    ),
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),
     ("DELETE", "/api/tokens/{name}", "Revoke an API token"),

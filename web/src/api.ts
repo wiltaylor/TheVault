@@ -298,6 +298,48 @@ export interface Token {
   secret?: string;
 }
 
+/** A contact, number or thread a device never captures (D25). */
+export interface DeviceExclusion {
+  kind: "contact" | "number" | "thread";
+  value: string;
+}
+
+/** A paired device's settings, synced to the device (D22, D23, D25). */
+export interface DeviceSettings {
+  /** The commands server scripts may send the device. */
+  commands: string[];
+  contacts_write: boolean;
+  sms_send: boolean;
+  exclusions: DeviceExclusion[];
+  /** A regular expression; an SMS whose body matches it is not captured. */
+  skip_pattern: string;
+}
+
+/** A paired desktop or Android app (D2, D3). */
+export interface Device {
+  id: string;
+  name: string;
+  platform: "linux" | "android";
+  capabilities: string[];
+  /** The name of the device's token. */
+  token: string;
+  /** Whether the device registered a push endpoint. */
+  push: boolean;
+  last_seen: number | null;
+  created: number;
+  settings: DeviceSettings;
+}
+
+/** A single-use pairing code, with the QR code an app scans to pair (D2). */
+export interface PairCode {
+  code: string;
+  expires: number;
+  server_url: string;
+  payload: { server_url: string; code: string };
+  /** The QR code of `payload` as an SVG document. */
+  qr_svg: string;
+}
+
 /** A response other than 2xx, with the API's JSON error body when it sent one. */
 /** How a neighbour in a note's graph links to the note: it is linked to, links to it, or both. */
 export type GraphDirection = "center" | "out" | "in" | "both";
@@ -532,6 +574,15 @@ export const api = {
   /** Store or replace a secret's value. It is never read back. */
   putSecret: (name: string, value: string) => request<Secret>("PUT", `/api/secrets/${enc(name)}`, { value }),
   deleteSecret: (name: string) => request<unknown>("DELETE", `/api/secrets/${enc(name)}`),
+  devices: async () => (await request<{ devices: Device[] }>("GET", "/api/devices")).devices,
+  /** A pairing code whose QR payload names `serverUrl`, the address this page was loaded from. */
+  createPairCode: (serverUrl: string) =>
+    request<PairCode>("POST", "/api/devices/pair-codes", { server_url: serverUrl }),
+  /** Rename a device or change some of its settings. */
+  updateDevice: (id: string, change: { name?: string; settings?: Partial<DeviceSettings> }) =>
+    request<Device>("PATCH", `/api/devices/${enc(id)}`, change),
+  /** Revoke a device: its token stops working at once. */
+  revokeDevice: (id: string) => request<void>("DELETE", `/api/devices/${enc(id)}`),
   tokens: async () => (await request<{ tokens: Token[] }>("GET", "/api/tokens")).tokens,
   /** Create a token. The answer is the only time its secret is shown. */
   createToken: (name: string, scope: Scope) => request<Token>("POST", "/api/tokens", { name, scope }),

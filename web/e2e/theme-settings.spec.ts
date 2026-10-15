@@ -45,7 +45,7 @@ test("the sidebar holds Daily notes, Search, Inbox and Capture, with trash and s
   await expect(trash).toHaveClass(/active/);
 });
 
-test("types, taxonomies, scheduled scripts, secrets and API tokens live under settings, and scripts are not a section", async ({ page }) => {
+test("types, taxonomies, scheduled scripts, secrets, API tokens and devices live under settings, and scripts are not a section", async ({ page }) => {
   await logIn(page);
   const main = page.getByRole("navigation", { name: "Main" });
   for (const moved of ["Types", "Taxonomies", "Tasks", "Scheduled", "Secrets", "API tokens"]) {
@@ -68,7 +68,7 @@ test("types, taxonomies, scheduled scripts, secrets and API tokens live under se
     await expect(page).toHaveURL(new RegExp(`${path}$`));
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
-  await expect(tabs.getByRole("link")).toHaveText(["General", "Types", "Taxonomies", "Scheduled", "Secrets", "API tokens"]);
+  await expect(tabs.getByRole("link")).toHaveText(["General", "Types", "Taxonomies", "Scheduled", "Secrets", "API tokens", "Devices"]);
 });
 
 test("old admin addresses go to their place under settings", async ({ page }) => {

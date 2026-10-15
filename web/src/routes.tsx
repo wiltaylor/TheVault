@@ -5,6 +5,7 @@ import { Secrets, Tokens } from "./pages/Access";
 import { Archive } from "./pages/Archive";
 import { Assets } from "./pages/Assets";
 import { DailyNotes } from "./pages/DailyNotes";
+import { Devices } from "./pages/Devices";
 import { Inbox } from "./pages/Inbox";
 import { NoteHistoryRedirect } from "./history/redirect";
 import { NewNote, NoteView } from "./pages/NoteView";
@@ -53,6 +54,7 @@ export function paneRoutes() {
         <Route path="/taxonomies/:name" component={TaxonomyEditor} />
         <Route path="/secrets" component={Secrets} />
         <Route path="/tokens" component={Tokens} />
+        <Route path="/devices" component={Devices} />
       </Route>
       <Route path="/trash" component={Trash} />
       <Route path="/archive" component={Archive} />

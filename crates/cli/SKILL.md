@@ -359,6 +359,17 @@ vault notifications read --all
 
 The title is required and at most 200 characters; the body is at most 2000, and the app shows its first two lines. A `--note` that does not exist, or is in the trash, is refused with status 400. A notification made with a token records `token:<name>` as its `source`. `vault notifications` lists them newest first with `unread`, the count of unread ones, and `next`, the cursor for `--cursor`. `vault notifications read <id>` marks one read, `vault notifications dismiss <id>` removes one, and `vault notifications clear` removes every read one. Notify only when the user would want to know; do not notify for each step of a task.
 
+## 10. Paired devices
+
+The desktop and Android apps pair with the server once and each get a `write` token of their own, named `device-<id>`. Only touch devices when the user asks. These commands need an `admin` token.
+
+```sh
+vault device pair-code
+vault device list
+```
+
+`vault device pair-code` prints a code that works once, for ten minutes (`--ttl <seconds>` changes that), with `payload`, the `{server_url, code}` the app's QR scanner reads, and `qr_svg`, the QR code as an SVG image. `server_url` is `--url` unless `--server-url` names the address the phone reaches the server on. `vault device list` shows each device with its `settings`: `commands` the server may send it, the `contacts_write` and `sms_send` switches, `exclusions` (`{kind, value}` with kind `contact`, `number` or `thread`) and `skip_pattern`, a regular expression for messages never captured. `vault device rename <id> <name>` renames one, `vault device settings <id>` reads a JSON object of the settings to change from stdin, and `vault device revoke <id>` revokes one: its token stops working at once.
+
 ## Setting up a vault
 
 Only when the user asks for a new vault. `init --starter` adds Task, Project, Person and Note types, a Status taxonomy, an open Tags taxonomy for the Note type's `tags`, a few example notes, and a dashboard note. `reindex` rebuilds the search index from the files and lists every file that fails validation; stop the server first.

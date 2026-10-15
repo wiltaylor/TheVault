@@ -7,7 +7,10 @@ publish.workspace = true
 
 [dependencies]
 axum.workspace = true
+base64.workspace = true
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 query.workspace = true
+regex = "1"
 scheduler.workspace = true
 schema.workspace = true
 serde.workspace = true
