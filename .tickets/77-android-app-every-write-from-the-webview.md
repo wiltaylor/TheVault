@@ -4,8 +4,8 @@ title: 'Android app: every write from the webview fails, because the custom-sche
   request reaches the embedded server with an empty body'
 plan: thevault-clients
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: unmet
 ---
 
 # Android app: every write from the webview fails, because the custom-scheme request reaches the embedded server with an empty body
@@ -25,3 +25,19 @@ Fix direction: route webview API writes another way on Android, e.g. a fetch shi
 Evidence: .scratch/emulator/evidence/webview-write-empty-body.png; probe output recorded in .scratch/emulator/RESULTS.md (check 8).
 
 ## Worklog
+
+### 2026-10-15T11:45:44Z — wil
+
+Status set to claimed.
+
+### 2026-10-15T11:45:44Z — wil
+
+Fixed in 411e135: on Android, requests with a body go over Tauri IPC (api_request, chunked api_upload_* for assets) to the embedded server; browser and desktop unchanged. Root cause: Android WebView shouldInterceptRequest exposes no request body (Tauri's own ipc-protocol.js notes the same). check, android-test and desktop-test pass; emulator confirmation pending.
+
+### 2026-10-15T11:45:44Z — wil
+
+Verified set to unmet.
+
+### 2026-10-15T11:45:44Z — wil
+
+Status set to done.
