@@ -1,7 +1,8 @@
 use vault
 
-// What another app shares to TheVault becomes a fleeting note in the inbox: the text, the link,
-// the shared images, and any other shared file as an attachment.
+// What another app shares to TheVault becomes one fleeting note in the inbox: the text, the link,
+// the shared images, and any other shared file as an attachment. Each item of `attachments` is
+// `{ asset, filename, mime, size }`, a file the app already stored as an asset of this vault.
 
 fn text_of(v: Value, key: string) -> string {
     match v.get(key) {
@@ -10,10 +11,24 @@ fn text_of(v: Value, key: string) -> string {
     }
 }
 
+// Plain text as inline markup: every character that would start markup is escaped, so shared
+// text shows as it was sent. In a string, `{{` is one `{`.
+fn escape_inline(text: string) -> string {
+    text.replace("\\", "\\\\")
+        .replace("*", "\\*")
+        .replace("`", "\\`")
+        .replace("{{", "\\{{")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace("++", "\\+\\+")
+        .replace("~~", "\\~\\~")
+        .replace("==", "\\=\\=")
+}
+
 fn paragraph(text: string) -> Value {
     Value::Map(#{
         "kind": Value::String("paragraph"),
-        "fields": Value::Map(#{ "text": Value::String(text) }),
+        "fields": Value::Map(#{ "text": Value::String(escape_inline(text)) }),
     })
 }
 

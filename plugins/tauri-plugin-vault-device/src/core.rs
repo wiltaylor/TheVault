@@ -20,6 +20,9 @@
 //! device module reaches the phone through the Kotlin bridge. After each round the runtime queues
 //! a `contact_changed` event for each linked `person` that changed, so the change reaches the
 //! phone contact (D16). Commands from server scripts run through [`Core::run_commands`] (D22).
+//!
+//! A share from another app is a `share_received` device event too: [`Core::share`] queues it and
+//! runs it at once, before pairing as well, since its handler needs only the local vault.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -34,7 +37,7 @@ use sync::{AssetPolicy, Report};
 
 use crate::commands;
 use crate::notify::{self, PushTarget};
-use crate::share::{self, Shared};
+use crate::share::{self, Outcome, Shared};
 
 /// How long the foreground loop waits after a write for more writes before it syncs.
 const SETTLE: Duration = Duration::from_millis(1500);
@@ -278,12 +281,49 @@ impl Core {
         *kicks = Some(tx);
     }
 
-    /// Store what another app shared as a fleeting note, then ask for a round. Works offline:
-    /// the note waits in the queue. Returns the note's id.
-    pub fn share(self: &Arc<Self>, shared: &Shared) -> anyhow::Result<String> {
-        let id = share::import(self.server.writer(), shared)?;
+    /// Store what another app shared: keep its files as assets, then queue a `share_received`
+    /// event with them as its attachments and run it now, so the device file's handler decides
+    /// the note, by default a fleeting note in the inbox. Then ask for a round. Works offline:
+    /// what the handler writes waits in the sync queue.
+    ///
+    /// The share is never silently lost. When no device runtime is open, or the device file
+    /// declares no `share_received` handler, the fleeting note is written directly instead
+    /// ([`share::write_note`]). A handler that fails leaves the event queued for the next pass,
+    /// as any device event; its outcome says so. One share runs one of the two, never both.
+    pub fn share(self: &Arc<Self>, shared: &Shared) -> anyhow::Result<Outcome> {
+        if shared.is_empty() {
+            anyhow::bail!("nothing was shared");
+        }
+        let writer = self.server.writer();
+        let attachments = share::store(writer, shared)?;
+        let payload = share::payload(shared, &attachments);
+        let runtime = match self.runtime() {
+            Ok(runtime) if runtime.handles("share_received")? => Some(runtime),
+            _ => None,
+        };
+        let outcome = match runtime {
+            Some(runtime) => {
+                let id = runtime.enqueue("share_received", payload, now_ms())?;
+                let e = runtime
+                    .run_event(id)?
+                    .ok_or_else(|| anyhow::anyhow!("share event {id} left the queue"))?;
+                Outcome {
+                    event: Some(id),
+                    status: e.status.as_str().to_owned(),
+                    message: e.message,
+                    notes: e.notes,
+                }
+            }
+            None => Outcome {
+                event: None,
+                status: "done".to_owned(),
+                message: None,
+                notes: vec![share::write_note(writer, shared, &payload)?],
+            },
+        };
+        share::remove_copies(shared);
         self.kick();
-        Ok(id)
+        Ok(outcome)
     }
 
     /// Fetch asset `id` from the home server into the local vault. `Ok(false)` when the device
@@ -314,7 +354,8 @@ impl Core {
     }
 
     /// The notes waiting for the home server, oldest first, each with its type, its fields and
-    /// the assets its fields name: `[{id, type, fields, assets: [{id, filename, size}]}]`.
+    /// the assets its fields and blocks name: `[{id, type, fields, blocks, assets: [{id,
+    /// filename, size}]}]`.
     pub fn queued(&self) -> anyhow::Result<Value> {
         let writer = self.server.writer();
         let mut out = Vec::new();
@@ -324,24 +365,26 @@ impl Core {
                 continue;
             };
             let doc = writer::doc_to_json(&note.doc);
-            let mut assets = Vec::new();
+            let mut ids: Vec<&str> = Vec::new();
             for v in doc["fields"]
                 .as_object()
                 .into_iter()
                 .flat_map(|f| f.values())
             {
-                let ids: Vec<&str> = match v {
-                    Value::String(s) => vec![s.as_str()],
-                    Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
-                    _ => Vec::new(),
-                };
-                for asset in ids.into_iter().filter_map(|i| writer.asset_info(i).ok()) {
-                    assets.push(json!({
-                        "id": asset.id,
-                        "filename": asset.filename,
-                        "size": asset.size,
-                    }));
+                match v {
+                    Value::String(s) => ids.push(s.as_str()),
+                    Value::Array(a) => ids.extend(a.iter().filter_map(Value::as_str)),
+                    _ => {}
                 }
+            }
+            block_assets(&doc["blocks"], &mut ids);
+            let mut assets = Vec::new();
+            for asset in ids.into_iter().filter_map(|i| writer.asset_info(i).ok()) {
+                assets.push(json!({
+                    "id": asset.id,
+                    "filename": asset.filename,
+                    "size": asset.size,
+                }));
             }
             out.push(json!({
                 "id": note.id,
@@ -385,6 +428,18 @@ impl Core {
             "last_sync_ms": last.as_ref().map(|l| l.at_ms),
             "last_error": last.and_then(|l| l.error),
         }))
+    }
+}
+
+/// The asset ids `blocks` name, at any depth, in order: each `asset` and `image` block's `asset`.
+fn block_assets<'a>(blocks: &'a Value, out: &mut Vec<&'a str>) {
+    for b in blocks.as_array().into_iter().flatten() {
+        if let Some(id) = b["fields"]["asset"].as_str()
+            && (b["kind"] == "asset" || b["kind"] == "image")
+        {
+            out.push(id);
+        }
+        block_assets(&b["blocks"], out);
     }
 }
 

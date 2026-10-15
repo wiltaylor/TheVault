@@ -347,7 +347,7 @@ These conventions hold in every payload:
 | `call_ended` | `{ device_ref, direction, number, number_raw, contact, started, duration }`. `direction` is `"in"`, `"out"` or `"missed"`; `duration` is in whole seconds, `0` for a missed call |
 | `contact_changed` | `{ contact_id, name, phones, addresses, updated, person, synced }`. `phones` lists every number as E.164, the ones that cannot be normalised left out; `addresses` lists every email address. `updated` is when the phone last changed the contact. `person` is the id of the `person` note the contact is linked to, and `synced` is `{ name, phones, addresses }` as the contact and the person last agreed on them; both are `null` on a contact that was never linked |
 | `contact_deleted` | `{ contact_id }` |
-| `share_received` | `{ text, subject, url, attachments }`. What another app shared: `text` and `subject` are `""` when it sent none, `url` is the first link in `text` or `null`, and `attachments` lists the shared files |
+| `share_received` | `{ text, subject, url, attachments }`. What another app shared: `text` and `subject` are `""` when it sent none, `url` is the first link in `text` or `null`, and `attachments` lists the shared files, each `{ asset, filename, mime, size }`: the app stores every shared file as an asset of the local vault before the event is queued |
 
 On Android the app captures these events itself, with no window open (D7, D17):
 
@@ -356,6 +356,7 @@ On Android the app captures these events itself, with no window open (D7, D17):
 - Capture starts from the newest items when the app is set up. Earlier messages, calls and contact changes arrive only when the user turns on the import in the capture setup, which is off by default, and picks a range of dates.
 - Only received MMS are captured, since no event carries a sent one. A group MMS's `to` leaves out this phone's own numbers when Android tells the app what they are.
 - A `person` linked to a phone contact that changes anywhere, once the phone syncs the change, queues a `contact_changed` event for the contact as the phone holds it, so the same handler carries the change to the phone. This happens only while the device's contacts-write switch is on.
+- Something shared to TheVault from another app is a `share_received` event, queued and run at once, with or without a connection and before pairing too, since it needs only the local vault. One share makes what its handler makes, by default one fleeting note in the inbox. A handler that fails leaves the event queued for the next pass, like any device event. When the device file declares no `share_received` handler, the app writes the fleeting note the default `device_share` script would, so a share is never silently lost.
 
 The default `device_contacts` script keeps contacts and `person` notes in step field by field (D16). For each of the name, the phones and the addresses: a field changed on one side since `synced` takes that side; a field changed on both sides takes the side changed most recently. It then writes the settled fields to the contact, with the person's id, which needs the contacts-write switch. Deleting the contact on the phone unlinks the person and keeps it, and a contact whose person was deleted in the vault is left alone rather than making the person again.
 

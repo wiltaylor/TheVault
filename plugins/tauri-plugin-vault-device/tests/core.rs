@@ -100,7 +100,18 @@ fn file(dir: &Path, name: &str, bytes: &[u8]) -> SharedFile {
     SharedFile {
         path,
         filename: name.to_owned(),
+        mime: String::new(),
     }
+}
+
+/// The asset kinds of the note's body blocks, in order.
+fn body_kinds(note: &Value) -> Vec<String> {
+    note["blocks"][0]["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["kind"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 #[test]
@@ -154,6 +165,8 @@ fn a_share_made_offline_is_queued_then_reaches_the_server() {
     let _turn = turn();
     let dir = TempDir::new().unwrap();
     let core = open(&dir);
+    // As the app opens it before pairing.
+    core.device("unpaired", || Arc::new(NoPhone)).unwrap();
 
     // Not paired yet: the share is stored and queued all the same.
     let shared = Shared {
@@ -164,7 +177,23 @@ fn a_share_made_offline_is_queued_then_reaches_the_server() {
             file(dir.path(), "notes.pdf", b"%PDF-1.4"),
         ],
     };
-    let id = core.share(&shared).unwrap();
+    let outcome = core.share(&shared).unwrap();
+    // The note comes from the default `share_received` handler, run through the device queue.
+    assert_eq!(outcome.status, "done", "{outcome:?}");
+    let event = outcome.event.expect("the share ran as a device event");
+    let e = core.runtime().unwrap().event(event).unwrap().unwrap();
+    assert_eq!(e.event, "share_received");
+    assert_eq!(e.data["url"], "https://example.net/post");
+    let attached: Vec<&str> = e.data["attachments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["filename"].as_str().unwrap())
+        .collect();
+    assert_eq!(attached, ["photo.jpg", "notes.pdf"]);
+    assert_eq!(e.data["attachments"][0]["mime"], "image/jpeg");
+    assert_eq!(outcome.notes.len(), 1, "exactly one note: {outcome:?}");
+    let id = outcome.notes[0].clone();
     let queued = core.queued().unwrap();
     let queued = queued.as_array().unwrap();
     assert_eq!(queued.len(), 1, "{queued:?}");
@@ -183,6 +212,7 @@ fn a_share_made_offline_is_queued_then_reaches_the_server() {
         .map(|a| a["filename"].as_str().unwrap())
         .collect();
     assert_eq!(files, ["photo.jpg", "notes.pdf"]);
+    assert_eq!(body_kinds(note), ["paragraph", "asset"]);
     assert!(
         !shared.files[0].path.exists(),
         "the copy is removed once stored"
@@ -196,10 +226,12 @@ fn a_share_made_offline_is_queued_then_reaches_the_server() {
     assert_eq!(core.status().unwrap()["pending"], 0);
     let on_server = admin.send("GET", &format!("/api/notes/{id}"), None);
     assert_eq!(on_server["type"], "fleeting", "{on_server}");
-    let images = on_server["note"]["fields"]["image"].as_array().unwrap();
-    assert_eq!(images.len(), 2);
-    for a in images {
-        let a = a.as_str().unwrap();
+    let note = &on_server["note"];
+    let image = note["fields"]["image"][0].as_str().unwrap();
+    let pdf = note["blocks"][0]["blocks"][1]["fields"]["asset"]
+        .as_str()
+        .unwrap();
+    for a in [image, pdf] {
         let res = admin
             .client
             .get(admin.server.url(&format!("/api/assets/{a}")))
@@ -232,7 +264,9 @@ fn a_write_kicks_the_foreground_loop() {
             text: "kick".into(),
             ..Shared::default()
         })
-        .unwrap();
+        .unwrap()
+        .notes
+        .remove(0);
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let status = core.status().unwrap();
@@ -271,4 +305,167 @@ fn unpaired_sync_is_refused_and_assets_come_on_demand() {
     let report = core.sync_now().unwrap();
     assert_eq!(report.assets_evicted, 1);
     assert!(writer.asset_info(&asset).is_err());
+}
+
+/// A phone with nothing on it; the share handler never asks it anything.
+struct NoPhone;
+
+impl embedded::device::DeviceData for NoPhone {
+    fn sms_list(&self, _: &Value) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+    fn sms_get(&self, r: &str) -> Result<Value, String> {
+        Err(format!("no SMS {r}"))
+    }
+    fn calls_list(&self, _: &Value) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+    fn contacts_list(&self, _: &Value) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+    fn contacts_get(&self, c: &str) -> Result<Value, String> {
+        Err(format!("no contact {c}"))
+    }
+    fn contacts_upsert(&self, _: &Value) -> Result<Value, String> {
+        Err("no contacts".into())
+    }
+    fn contacts_delete(&self, _: &str) -> Result<(), String> {
+        Err("no contacts".into())
+    }
+    fn sms_send(&self, _: &str, _: &str) -> Result<Value, String> {
+        Err("no SMS".into())
+    }
+    fn show_notification(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// A vault folder whose `scripts/device_share.ws` titles each share's note "From my handler".
+fn vault_with_share_handler(dir: &TempDir) -> std::path::PathBuf {
+    let vault = core::vault_dir(dir.path());
+    std::fs::create_dir_all(vault.join("scripts")).unwrap();
+    std::fs::write(
+        vault.join("scripts/device_share.ws"),
+        r#"use vault
+
+fn share_received(event: Value) -> Result[(), string] {
+    vault::create("fleeting", Value::Map(#{ "fields": Value::Map(#{ "title": Value::String("From my handler") }) }))?
+    Ok(())
+}
+"#,
+    )
+    .unwrap();
+    vault
+}
+
+#[test]
+fn a_share_runs_the_users_share_handler() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = core::open(&vault_with_share_handler(&dir)).unwrap();
+    core.device("01PHONE", || Arc::new(NoPhone)).unwrap();
+    let outcome = core
+        .share(&Shared {
+            text: "hello".into(),
+            ..Shared::default()
+        })
+        .unwrap();
+    assert!(outcome.event.is_some(), "{outcome:?}");
+    assert_eq!(outcome.notes.len(), 1, "{outcome:?}");
+    let queued = core.queued().unwrap();
+    assert_eq!(queued.as_array().unwrap().len(), 1, "one note: {queued}");
+    assert_eq!(queued[0]["id"], outcome.notes[0].as_str());
+    assert_eq!(queued[0]["fields"]["title"], "From my handler", "{queued}");
+}
+
+#[test]
+fn a_handler_that_fails_keeps_the_share_queued_and_makes_no_note() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let vault = core::vault_dir(dir.path());
+    std::fs::create_dir_all(vault.join("scripts")).unwrap();
+    std::fs::write(
+        vault.join("scripts/device_share.ws"),
+        "fn share_received(event: Value) -> Result[(), string] { Err(\"offline service\") }\n",
+    )
+    .unwrap();
+    let core = core::open(&vault).unwrap();
+    core.device("01PHONE", || Arc::new(NoPhone)).unwrap();
+    let outcome = core
+        .share(&Shared {
+            text: "keep me".into(),
+            ..Shared::default()
+        })
+        .unwrap();
+    assert_eq!(outcome.status, "queued", "{outcome:?}");
+    assert!(outcome.message.unwrap().contains("offline service"));
+    assert!(outcome.notes.is_empty());
+    assert_eq!(
+        core.queued().unwrap(),
+        json!([]),
+        "no fallback note as well"
+    );
+    let e = core
+        .runtime()
+        .unwrap()
+        .event(outcome.event.unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        e.data["text"], "keep me",
+        "the share waits for the next pass"
+    );
+}
+
+#[test]
+fn with_no_share_handler_the_share_falls_back_to_a_fleeting_note() {
+    let _turn = turn();
+    // No device runtime open: the note is written directly.
+    let dir = TempDir::new().unwrap();
+    let core = core::open(&vault_with_share_handler(&dir)).unwrap();
+    let outcome = core
+        .share(&Shared {
+            text: "no runtime *yet*".into(),
+            files: vec![file(dir.path(), "scan.pdf", b"%PDF-1.4")],
+            ..Shared::default()
+        })
+        .unwrap();
+    assert_eq!(outcome.event, None);
+    assert_eq!(outcome.notes.len(), 1);
+    let queued = core.queued().unwrap();
+    assert_eq!(queued.as_array().unwrap().len(), 1, "{queued}");
+    assert_eq!(queued[0]["fields"]["title"], "no runtime *yet*");
+    assert_eq!(queued[0]["fields"]["processed"], false);
+    assert_eq!(queued[0]["assets"][0]["filename"], "scan.pdf");
+    assert_eq!(body_kinds(&queued[0]), ["paragraph", "asset"]);
+
+    // A device file that declares no `share_received` handler: the same fallback, once.
+    let dir = TempDir::new().unwrap();
+    let core = core::open(&vault_with_share_handler(&dir)).unwrap();
+    let writer = core.server().writer();
+    writer
+        .put_script(
+            "device_calls",
+            writer::default_device_script("device_calls").unwrap(),
+        )
+        .unwrap();
+    writer
+        .put_device_file(
+            "android",
+            "handler \"call_ended\" {\n  script = \"device_calls\"\n}\n",
+        )
+        .unwrap();
+    let runtime = core.device("01PHONE", || Arc::new(NoPhone)).unwrap();
+    let outcome = core
+        .share(&Shared {
+            text: "nobody handles this".into(),
+            ..Shared::default()
+        })
+        .unwrap();
+    assert_eq!(outcome.event, None, "{outcome:?}");
+    let queued = core.queued().unwrap();
+    assert_eq!(queued.as_array().unwrap().len(), 1, "{queued}");
+    assert_eq!(queued[0]["id"], outcome.notes[0].as_str());
+    assert_eq!(queued[0]["fields"]["title"], "nobody handles this");
+    assert!(runtime.events().unwrap().is_empty(), "nothing queued");
 }

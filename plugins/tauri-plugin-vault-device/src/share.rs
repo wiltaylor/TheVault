@@ -1,15 +1,19 @@
-//! What another app shares to TheVault becomes a fleeting note in the local vault, with or without
-//! a connection (D19). The Kotlin share activity has already copied each shared `content://` file
-//! into a file of the app's own; [`import`] stores those files as assets of the local vault and
-//! writes the note, which the writer hooks queue for the home server like any local write.
+//! What another app shares to TheVault, with or without a connection (D19). The Kotlin share
+//! activity has already copied each shared `content://` file into a file of the app's own;
+//! [`store`] keeps those files as assets of the local vault, and [`payload`] builds the
+//! `share_received` payload of `docs/scripts.md` (`{ text, subject, url, attachments }`), each
+//! attachment `{ asset, filename, mime, size }`.
 //!
-//! The note is built from the `share_received` payload of `docs/scripts.md`
-//! (`{ text, subject, url, attachments }`), so routing the share through the device runtime's
-//! `share_received` handler later changes where the note is made, not what it is built from.
+//! [`crate::core::Core::share`] queues that payload as a `share_received` device event and runs
+//! it at once, so the device file's handler, by default `scripts/device_share.ws`, decides what
+//! the share becomes. When no device runtime is open, or the device file declares no
+//! `share_received` handler, [`write_note`] makes the fleeting note the default script would, so a
+//! share is never silently lost. Either way exactly one of the two runs. The writer hooks queue
+//! whatever is written for the home server like any local write.
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use vocab::Author;
 use writer::{FLEETING_PROCESSED_FIELD, FLEETING_TYPE, Input, Writer};
@@ -40,12 +44,62 @@ pub struct SharedFile {
     pub path: PathBuf,
     /// The name the sharing app gave the file.
     pub filename: String,
+    /// The media type the sharing app gave the file, or `""`, when it is guessed from the name.
+    pub mime: String,
+}
+
+/// What became of a share.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Outcome {
+    /// The queued `share_received` event that ran, or `None` when the share fell back to
+    /// [`write_note`].
+    pub event: Option<i64>,
+    /// How the event stands: `done`, or `queued` when its handler failed and the event waits for
+    /// the next pass (`failed` once it has failed every pass). Always `done` for the fallback.
+    pub status: String,
+    /// Why the handler failed.
+    pub message: Option<String>,
+    /// The notes the share made: the ones the handler created, or the fallback's one note.
+    pub notes: Vec<String>,
 }
 
 impl Shared {
     pub fn is_empty(&self) -> bool {
         self.text.trim().is_empty() && self.subject.trim().is_empty() && self.files.is_empty()
     }
+}
+
+/// The media type of a shared file: the one its app gave, else a guess from its name.
+pub fn mime(file: &SharedFile) -> String {
+    let given = file.mime.trim();
+    if !given.is_empty() && given != "*/*" && !given.ends_with("/*") {
+        return given.to_ascii_lowercase();
+    }
+    let ext = file
+        .filename
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "txt" | "md" => "text/plain",
+        "csv" => "text/csv",
+        "json" => "application/json",
+        "zip" => "application/zip",
+        "mp3" => "audio/mpeg",
+        "mp4" => "video/mp4",
+        _ => "application/octet-stream",
+    }
+    .to_owned()
 }
 
 /// The first `http://` or `https://` link in `text`, without trailing punctuation.
@@ -143,8 +197,33 @@ pub fn title(shared: &Shared) -> String {
     format!("{}…", cut.trim_end())
 }
 
-/// The `share_received` payload for `shared`, whose files were stored as `attachments`.
-pub fn payload(shared: &Shared, attachments: &[String]) -> Value {
+/// Store each shared file as an asset of the local vault, and answer them as the payload's
+/// `attachments`: `[{ asset, filename, mime, size }]`, in the order they were shared.
+pub fn store(writer: &Writer, shared: &Shared) -> anyhow::Result<Vec<Value>> {
+    let mut attachments = Vec::new();
+    for file in &shared.files {
+        let bytes = std::fs::read(&file.path)
+            .map_err(|e| anyhow::anyhow!("reading shared file {}: {e}", file.path.display()))?;
+        let asset = writer.put_asset(&safe_filename(&file.filename), bytes)?;
+        attachments.push(json!({
+            "asset": asset.id,
+            "filename": asset.filename,
+            "mime": mime(file),
+            "size": asset.size,
+        }));
+    }
+    Ok(attachments)
+}
+
+/// Remove the copies the share activity made, once [`store`] kept them.
+pub fn remove_copies(shared: &Shared) {
+    for file in &shared.files {
+        let _ = std::fs::remove_file(&file.path);
+    }
+}
+
+/// The `share_received` payload for `shared`, whose files [`store`] kept as `attachments`.
+pub fn payload(shared: &Shared, attachments: &[Value]) -> Value {
     json!({
         "text": shared.text,
         "subject": shared.subject,
@@ -153,7 +232,9 @@ pub fn payload(shared: &Shared, attachments: &[String]) -> Value {
     })
 }
 
-/// The fleeting note a `share_received` payload becomes, in the JSON form of [`Input::Json`].
+/// The fleeting note a `share_received` payload becomes when no handler takes it, in the JSON
+/// form of [`Input::Json`]: the note the default `device_share` script makes. The shared images
+/// are its `image` field, and every other file an `asset` block after the text.
 pub fn fleeting_note(shared: &Shared, payload: &Value) -> Value {
     let mut fields = serde_json::Map::new();
     fields.insert("title".into(), json!(title(shared)));
@@ -162,39 +243,40 @@ pub fn fleeting_note(shared: &Shared, payload: &Value) -> Value {
         .as_array()
         .cloned()
         .unwrap_or_default();
-    if !attachments.is_empty() {
-        fields.insert("image".into(), Value::Array(attachments));
+    let is_image = |a: &Value| a["mime"].as_str().is_some_and(|m| m.starts_with("image/"));
+    let images: Vec<Value> = attachments
+        .iter()
+        .filter(|a| is_image(a))
+        .map(|a| a["asset"].clone())
+        .collect();
+    if !images.is_empty() {
+        fields.insert("image".into(), Value::Array(images));
+    }
+    let mut body = paragraphs(&shared.text);
+    if let Some(url) = payload["url"].as_str()
+        && !shared.text.contains(url)
+    {
+        body.extend(paragraphs(url));
+    }
+    for a in attachments.iter().filter(|a| !is_image(a)) {
+        body.push(json!({ "kind": "asset", "fields": { "asset": a["asset"] } }));
     }
     let mut blocks = Vec::new();
-    let body = paragraphs(&shared.text);
     if !body.is_empty() {
         blocks.push(json!({ "kind": "content", "labels": ["body"], "blocks": body }));
     }
     json!({ "fields": fields, "blocks": blocks })
 }
 
-/// Store the shared files as assets and write the fleeting note. Returns the note's id.
-pub fn import(writer: &Writer, shared: &Shared) -> anyhow::Result<String> {
-    if shared.is_empty() {
-        anyhow::bail!("nothing was shared");
-    }
-    let mut attachments = Vec::new();
-    for file in &shared.files {
-        let bytes = std::fs::read(&file.path)
-            .map_err(|e| anyhow::anyhow!("reading shared file {}: {e}", file.path.display()))?;
-        let asset = writer.put_asset(&safe_filename(&file.filename), bytes)?;
-        attachments.push(asset.id);
-    }
-    let payload = payload(shared, &attachments);
-    let note = fleeting_note(shared, &payload);
+/// The fallback: write the fleeting note for `payload` directly, with no handler. Returns the
+/// note's id.
+pub fn write_note(writer: &Writer, shared: &Shared, payload: &Value) -> anyhow::Result<String> {
+    let note = fleeting_note(shared, payload);
     let saved = writer.create(
         FLEETING_TYPE,
         &Input::Json(note),
         &Author::Session(OWNER.to_owned()),
     )?;
-    for file in &shared.files {
-        let _ = std::fs::remove_file(&file.path);
-    }
     Ok(saved.id)
 }
 
@@ -233,6 +315,7 @@ mod tests {
             files: vec![SharedFile {
                 path: "/tmp/x".into(),
                 filename: "photo.jpg".into(),
+                mime: String::new(),
             }],
             ..Shared::default()
         };
@@ -260,14 +343,38 @@ mod tests {
     }
 
     #[test]
+    fn media_types_come_from_the_app_or_the_name() {
+        let f = |filename: &str, mime: &str| SharedFile {
+            path: "/tmp/x".into(),
+            filename: filename.into(),
+            mime: mime.into(),
+        };
+        assert_eq!(mime(&f("a.JPG", "")), "image/jpeg");
+        assert_eq!(mime(&f("a.bin", "image/png")), "image/png");
+        assert_eq!(mime(&f("report.pdf", "*/*")), "application/pdf");
+        assert_eq!(mime(&f("noext", "")), "application/octet-stream");
+    }
+
+    #[test]
     fn the_note_carries_body_assets_and_is_unprocessed() {
         let s = text("Hello\n\nhttps://e.net");
-        let p = payload(&s, &["01J00000000000000000000000".to_owned()]);
+        let attachments = [
+            json!({ "asset": "01J00000000000000000000000", "filename": "a.png", "mime": "image/png", "size": 1 }),
+            json!({ "asset": "01J00000000000000000000001", "filename": "b.pdf", "mime": "application/pdf", "size": 1 }),
+        ];
+        let p = payload(&s, &attachments);
         assert_eq!(p["url"], "https://e.net");
+        assert_eq!(p["attachments"][1]["filename"], "b.pdf");
         let note = fleeting_note(&s, &p);
         assert_eq!(note["fields"]["processed"], false);
-        assert_eq!(note["fields"]["image"][0], "01J00000000000000000000000");
+        assert_eq!(
+            note["fields"]["image"],
+            json!(["01J00000000000000000000000"])
+        );
         assert_eq!(note["blocks"][0]["labels"][0], "body");
-        assert_eq!(note["blocks"][0]["blocks"].as_array().unwrap().len(), 2);
+        let body = note["blocks"][0]["blocks"].as_array().unwrap();
+        assert_eq!(body.len(), 3);
+        assert_eq!(body[2]["kind"], "asset");
+        assert_eq!(body[2]["fields"]["asset"], "01J00000000000000000000001");
     }
 }

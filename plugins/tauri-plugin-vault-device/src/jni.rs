@@ -176,7 +176,9 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_sync<'local>
 }
 
 /// `VaultCore.share(shared: String): String`: store a share (`{text, subject, files: [{path,
-/// filename}]}`) as a fleeting note and answer its id.
+/// filename, mime}]}`) and run it as a `share_received` event ([`Core::share`]). Answers
+/// `{event, status, message, notes}` as JSON: `event` is null when the share fell back to a note
+/// written directly.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_share<'local>(
     mut env: JNIEnv<'local>,
@@ -185,7 +187,7 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_share<'local
 ) -> jstring {
     answer(&mut env, |env| {
         let shared: Shared = serde_json::from_str(&required(env, &shared, "shared")?)?;
-        Ok(Some(core()?.share(&shared)?))
+        Ok(Some(serde_json::to_string(&core()?.share(&shared)?)?))
     })
 }
 

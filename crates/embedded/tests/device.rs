@@ -806,30 +806,147 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
     assert!(d.query("from person").is_empty());
 }
 
-#[test]
-fn a_share_becomes_a_fleeting_note() {
-    let d = Device::open();
+/// A share as the Android share target queues it: a photo and a PDF the app stored as assets.
+fn share(d: &Device, text: &str) -> (Json, String, String) {
     let photo = d
         .writer()
         .put_asset("cat.png", b"\x89PNG".to_vec())
         .unwrap()
         .id;
-    d.send(
-        "share_received",
-        json!({
-            "text": "Read this later https://example.com/post",
-            "subject": "",
-            "url": "https://example.com/post",
-            "attachments": [{ "asset": photo, "filename": "cat.png", "mime": "image/png", "size": 4 }],
-        }),
+    let pdf = d
+        .writer()
+        .put_asset("menu.pdf", b"%PDF-1.4".to_vec())
+        .unwrap()
+        .id;
+    let data = json!({
+        "text": text,
+        "subject": "",
+        "url": "https://example.com/post",
+        "attachments": [
+            { "asset": photo, "filename": "cat.png", "mime": "image/png", "size": 4 },
+            { "asset": pdf, "filename": "menu.pdf", "mime": "application/pdf", "size": 8 },
+        ],
+    });
+    (data, photo, pdf)
+}
+
+#[test]
+fn a_share_becomes_exactly_one_fleeting_note_through_device_share() {
+    let d = Device::open();
+    assert!(d.runtime.handles("share_received").unwrap());
+    let (data, photo, pdf) = share(&d, "Read *this* later https://example.com/post");
+    let id = d.runtime.enqueue("share_received", data, 1).unwrap();
+    let e = d.runtime.run_event(id).unwrap().unwrap();
+    assert_eq!(e.status, EventStatus::Done, "{e:?}");
+    assert_eq!(e.notes.len(), 1, "{e:?}");
+    assert_eq!(
+        d.runtime.event(id).unwrap().unwrap().notes,
+        e.notes,
+        "kept in the queue"
     );
+
     let notes = d.query("from fleeting");
-    assert_eq!(notes.len(), 1);
+    assert_eq!(notes.len(), 1, "exactly one note: {notes:?}");
+    assert_eq!(notes[0]["id"], e.notes[0].as_str());
     assert_eq!(
         notes[0]["title"],
-        "Read this later https://example.com/post"
+        "Read *this* later https://example.com/post"
     );
-    assert_eq!(notes[0]["fields"]["image"], json!([photo]));
+    let note = Vault::get(&**d.writer(), &e.notes[0]).unwrap()["note"].clone();
+    assert_eq!(note["fields"]["image"], json!([photo]));
+    assert_eq!(note["fields"]["processed"], false);
+    let body = note["blocks"][0]["blocks"].as_array().unwrap();
+    assert_eq!(
+        body[0]["fields"]["text"], "Read \\*this\\* later https://example.com/post",
+        "shared text is escaped, not read as markup"
+    );
+    assert_eq!(body.last().unwrap()["kind"], "asset");
+    assert_eq!(body.last().unwrap()["fields"]["asset"], pdf.as_str());
+
+    // Running it again, or a pass over the queue, makes no second note.
+    assert_eq!(d.runtime.run_event(id).unwrap().unwrap().notes, e.notes);
+    assert!(d.runtime.run_pending().unwrap().is_empty());
+    assert_eq!(d.query("from fleeting").len(), 1);
+}
+
+#[test]
+fn a_users_share_handler_decides_what_a_share_becomes() {
+    let d = Device::open();
+    d.writer()
+        .put_script(
+            "device_share",
+            r#"use vault
+
+fn share_received(event: Value) -> Result[(), string] {
+    let data = event.get("data").unwrap()
+    let files = match data.get("attachments") {
+        Some(Value::List(items)) => items,
+        _ => [],
+    }
+    let assets = files.map(|a| a.get("asset").unwrap())
+    vault::create("fleeting", Value::Map(#{
+        "fields": Value::Map(#{
+            "title": Value::String("Shared: " + data.get("url").unwrap().as_string().unwrap()),
+            "image": Value::List(assets),
+        }),
+    }))?
+    Ok(())
+}
+"#,
+        )
+        .unwrap();
+    let (data, photo, pdf) = share(&d, "Read this later https://example.com/post");
+    let id = d.runtime.enqueue("share_received", data, 1).unwrap();
+    let e = d.runtime.run_event(id).unwrap().unwrap();
+    assert_eq!(e.status, EventStatus::Done, "{e:?}");
+    assert_eq!(e.notes.len(), 1);
+    let notes = d.query("from fleeting");
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["title"], "Shared: https://example.com/post");
+    assert_eq!(d.fields(&e.notes[0])["image"], json!([photo, pdf]));
+}
+
+#[test]
+fn a_device_file_without_a_share_handler_makes_nothing_of_a_share() {
+    let d = Device::open();
+    d.writer()
+        .put_script(
+            "device_calls",
+            writer::default_device_script("device_calls").unwrap(),
+        )
+        .unwrap();
+    d.writer()
+        .put_device_file(
+            "android",
+            "handler \"call_ended\" {\n  script = \"device_calls\"\n}\n",
+        )
+        .unwrap();
+    // The caller sees this and writes the note itself, so the share is not lost.
+    assert!(!d.runtime.handles("share_received").unwrap());
+    assert!(d.runtime.handles("call_ended").unwrap());
+    let (data, _, _) = share(&d, "nobody takes this");
+    let id = d.runtime.enqueue("share_received", data, 1).unwrap();
+    let e = d.runtime.run_event(id).unwrap().unwrap();
+    assert_eq!(e.status, EventStatus::Done);
+    assert!(e.notes.is_empty());
+    assert!(d.query("from fleeting").is_empty());
+}
+
+#[test]
+fn a_pass_records_the_notes_each_event_made() {
+    let d = Device::open();
+    d.runtime
+        .enqueue("share_received", share(&d, "one").0, 1)
+        .unwrap();
+    d.runtime
+        .enqueue("share_received", share(&d, "two").0, 2)
+        .unwrap();
+    let ran = d.runtime.run_pending().unwrap();
+    assert_eq!(ran.len(), 2);
+    assert!(ran.iter().all(|e| e.notes.len() == 1), "{ran:?}");
+    assert_ne!(ran[0].notes, ran[1].notes);
+    assert_eq!(d.fields(&ran[0].notes[0])["title"], "one");
+    assert_eq!(d.fields(&ran[1].notes[0])["title"], "two");
 }
 
 #[test]
@@ -917,6 +1034,12 @@ fn queued_events_survive_a_restart_and_failures_are_retried() {
         runtime.set_settings(&json!({ "sms_send": true })).unwrap();
         assert!(runtime.enqueue("sms_deleted", json!({}), 1).is_err());
         assert!(runtime.enqueue("sms_received", json!([]), 1).is_err());
+        // A queue made before events recorded their notes takes the column on the next open.
+        let db = server.writer().vault().server_dir().join("state.db");
+        rusqlite::Connection::open(db)
+            .unwrap()
+            .execute_batch("ALTER TABLE device_events DROP COLUMN notes")
+            .unwrap();
     }
     let server = open();
     let runtime = server.device(config()).unwrap();

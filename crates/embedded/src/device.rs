@@ -22,8 +22,13 @@
 //!
 //! A vault without `devices/<platform>.wcl` runs the built-in default device file, and a script
 //! the device file names that the vault lacks runs from the built-in defaults (D15).
+//!
+//! Each queued event records the notes its handlers created ([`QueuedEvent::notes`]), so a caller
+//! that runs one event at once with [`DeviceRuntime::run_event`], such as the share target, can
+//! tell what it made.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use anyhow::Context;
@@ -33,7 +38,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 use writer::Writer;
 
-use script_core::{DeviceAccess, DeviceExtensions, Host, Job, Kind, Limits, Vault};
+use script_core::{
+    Archived, Author, DeviceAccess, DeviceExtensions, Host, Job, Kind, Limits, Vault, current_job,
+};
 pub use script_core::{DeviceData, Switches};
 
 /// Passes over a failing event before it is marked failed and left alone.
@@ -51,7 +58,8 @@ CREATE TABLE IF NOT EXISTS device_events (
     status     TEXT NOT NULL DEFAULT 'queued',
     attempts   INTEGER NOT NULL DEFAULT 0,
     message    TEXT,
-    updated_ms INTEGER NOT NULL
+    updated_ms INTEGER NOT NULL,
+    notes      TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS device_events_status ON device_events (status, id);
 
@@ -183,6 +191,8 @@ pub struct QueuedEvent {
     pub attempts: i64,
     /// Why it was skipped, or the last failure.
     pub message: Option<String>,
+    /// The ids of the notes its handlers created, over every pass, oldest first.
+    pub notes: Vec<String>,
 }
 
 /// How a command run ended, in the form `POST /api/devices/{id}/commands/{cid}/result` takes.
@@ -210,6 +220,8 @@ impl CommandReport {
 pub struct DeviceRuntime {
     writer: Arc<Writer>,
     host: Host,
+    /// The vault the host's scripts reach, which records the notes each event's handlers create.
+    recorder: Arc<Recorder>,
     access: Arc<DeviceAccess>,
     data: Arc<dyn DeviceData>,
     platform: String,
@@ -235,6 +247,16 @@ impl DeviceRuntime {
         conn.pragma_update(None, "synchronous", "FULL")?;
         conn.execute_batch(SCHEMA)
             .context("creating the device event queue")?;
+        // A queue made before events recorded their notes.
+        if conn
+            .prepare("SELECT notes FROM device_events LIMIT 0")
+            .is_err()
+        {
+            conn.execute_batch(
+                "ALTER TABLE device_events ADD COLUMN notes TEXT NOT NULL DEFAULT '[]'",
+            )
+            .context("adding the notes of device events")?;
+        }
         let settings = conn
             .query_row(
                 "SELECT value FROM device_runtime WHERE key = 'settings'",
@@ -249,7 +271,11 @@ impl DeviceRuntime {
             config.data.clone(),
             settings.switches(),
         ));
-        let vault: Arc<dyn Vault> = writer.clone();
+        let recorder = Arc::new(Recorder {
+            writer: writer.clone(),
+            created: Mutex::new(HashMap::new()),
+        });
+        let vault: Arc<dyn Vault> = recorder.clone();
         let host = Host::with_extensions(
             vault,
             1,
@@ -259,6 +285,7 @@ impl DeviceRuntime {
         Ok(DeviceRuntime {
             writer,
             host,
+            recorder,
             access,
             data: config.data,
             platform: config.platform,
@@ -329,7 +356,7 @@ impl DeviceRuntime {
         Ok(self
             .conn()
             .query_row(
-                "SELECT id, event, data, at_ms, status, attempts, message FROM device_events
+                "SELECT id, event, data, at_ms, status, attempts, message, notes FROM device_events
                  WHERE id = ?1",
                 [id],
                 event_row,
@@ -341,7 +368,7 @@ impl DeviceRuntime {
     pub fn events(&self) -> anyhow::Result<Vec<QueuedEvent>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, event, data, at_ms, status, attempts, message FROM device_events
+            "SELECT id, event, data, at_ms, status, attempts, message, notes FROM device_events
              ORDER BY id",
         )?;
         let rows = stmt.query_map([], event_row)?;
@@ -360,7 +387,7 @@ impl DeviceRuntime {
                 [now - RETENTION_MS],
             )?;
             let mut stmt = conn.prepare(
-                "SELECT id, event, data, at_ms, status, attempts, message FROM device_events
+                "SELECT id, event, data, at_ms, status, attempts, message, notes FROM device_events
                  WHERE status = 'queued' ORDER BY id",
             )?;
             let rows = stmt.query_map([], event_row)?;
@@ -369,41 +396,78 @@ impl DeviceRuntime {
         let settings = self.settings();
         let file = self.device_file()?;
         let mut out = Vec::with_capacity(queued.len());
-        for mut e in queued {
-            if let Some(why) = dropped(&settings, &e.event, &e.data) {
-                e.status = EventStatus::Skipped;
-                e.message = Some(why);
-            } else {
-                e.attempts += 1;
-                match self.run_handlers(file.as_ref(), &e) {
-                    Ok(()) => {
-                        e.status = EventStatus::Done;
-                        e.message = None;
-                    }
-                    Err(message) => {
-                        e.status = if e.attempts >= MAX_ATTEMPTS {
-                            EventStatus::Failed
-                        } else {
-                            EventStatus::Queued
-                        };
-                        e.message = Some(message);
-                    }
-                }
-            }
-            self.conn().execute(
-                "UPDATE device_events SET status = ?2, attempts = ?3, message = ?4, updated_ms = ?5
-                 WHERE id = ?1",
-                params![
-                    e.id,
-                    e.status.as_str(),
-                    e.attempts,
-                    e.message,
-                    self.writer.now_ms()
-                ],
-            )?;
-            out.push(e);
+        for e in queued {
+            out.push(self.run_one(&settings, file.as_ref(), e)?);
         }
         Ok(out)
+    }
+
+    /// Run queued event `id` alone, now, and return it as it then stands, with the notes its
+    /// handlers created. The rest of the queue waits for [`DeviceRuntime::run_pending`]. An event
+    /// a pass already took is returned as that pass left it, not run again, so a pass running at
+    /// the same time never runs it twice. `None` when the queue holds no event `id`.
+    pub fn run_event(&self, id: i64) -> anyhow::Result<Option<QueuedEvent>> {
+        let _pass = self.pass.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = self.event(id)? else {
+            return Ok(None);
+        };
+        if e.status != EventStatus::Queued {
+            return Ok(Some(e));
+        }
+        let file = self.device_file()?;
+        self.run_one(&self.settings(), file.as_ref(), e).map(Some)
+    }
+
+    /// Whether the device file in force declares a handler for `event`.
+    pub fn handles(&self, event: &str) -> anyhow::Result<bool> {
+        Ok(self
+            .device_file()?
+            .is_some_and(|f| f.handlers.iter().any(|h| h.name == event)))
+    }
+
+    /// One pass over queued event `e`: drop it, or run its handlers, then store how it stands.
+    fn run_one(
+        &self,
+        settings: &DeviceSettings,
+        file: Option<&DeviceFile>,
+        mut e: QueuedEvent,
+    ) -> anyhow::Result<QueuedEvent> {
+        if let Some(why) = dropped(settings, &e.event, &e.data) {
+            e.status = EventStatus::Skipped;
+            e.message = Some(why);
+        } else {
+            e.attempts += 1;
+            let ran = self.run_handlers(file, &e);
+            e.notes.extend(self.recorder.take(e.id));
+            match ran {
+                Ok(()) => {
+                    e.status = EventStatus::Done;
+                    e.message = None;
+                }
+                Err(message) => {
+                    e.status = if e.attempts >= MAX_ATTEMPTS {
+                        EventStatus::Failed
+                    } else {
+                        EventStatus::Queued
+                    };
+                    e.message = Some(message);
+                }
+            }
+        }
+        self.conn().execute(
+            "UPDATE device_events
+             SET status = ?2, attempts = ?3, message = ?4, updated_ms = ?5, notes = ?6
+             WHERE id = ?1",
+            params![
+                e.id,
+                e.status.as_str(),
+                e.attempts,
+                e.message,
+                self.writer.now_ms(),
+                serde_json::to_string(&e.notes)?,
+            ],
+        )?;
+        Ok(e)
     }
 
     /// Every handler of `e`'s event, in file order. The first failure stops the rest.
@@ -417,8 +481,9 @@ impl DeviceRuntime {
             "at": e.at_ms,
             "data": e.data,
         });
+        let context = json!({ RUN_EVENT: e.id });
         for h in file.handlers.iter().filter(|h| h.name == e.event) {
-            self.run(&h.script, &h.function, value.clone())?;
+            self.run(&h.script, &h.function, value.clone(), context.clone())?;
         }
         Ok(())
     }
@@ -530,7 +595,7 @@ impl DeviceRuntime {
             "command": name,
             "payload": command.get("payload").cloned().unwrap_or(Json::Null),
         });
-        match self.run(&hook.script, &hook.function, value) {
+        match self.run(&hook.script, &hook.function, value, Json::Null) {
             Ok(result) => CommandReport {
                 id: id.clone(),
                 done: true,
@@ -553,8 +618,14 @@ impl DeviceRuntime {
         Ok(Some(DeviceFile::parse(&self.platform, &text)?))
     }
 
-    /// Run `function` of script `script` on `value`, as a device run.
-    fn run(&self, script: &str, function: &str, value: Json) -> Result<Json, String> {
+    /// Run `function` of script `script` on `value`, as a device run with `context`.
+    fn run(
+        &self,
+        script: &str,
+        function: &str,
+        value: Json,
+        context: Json,
+    ) -> Result<Json, String> {
         let source = match self.writer.read_script(script) {
             Ok(source) => source,
             Err(e) => writer::default_device_script(script)
@@ -563,6 +634,7 @@ impl DeviceRuntime {
         };
         let mut job = Job::new(Kind::Device, script, &source, function);
         job.args = vec![value];
+        job.context = context;
         self.host.run(job).result.map_err(|e| e.to_string())
     }
 }
@@ -570,6 +642,7 @@ impl DeviceRuntime {
 fn event_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedEvent> {
     let data: String = r.get(2)?;
     let status: String = r.get(4)?;
+    let notes: String = r.get(7)?;
     Ok(QueuedEvent {
         id: r.get(0)?,
         event: r.get(1)?,
@@ -578,7 +651,139 @@ fn event_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedEvent> {
         status: EventStatus::parse(&status),
         attempts: r.get(5)?,
         message: r.get(6)?,
+        notes: serde_json::from_str(&notes).unwrap_or_default(),
     })
+}
+
+/// The member of a handler run's [`Job::context`] naming the queued event it runs for.
+const RUN_EVENT: &str = "device_event";
+
+/// The local vault as device scripts reach it: the writer's, noting each note a handler run
+/// creates against the queued event the run is for.
+struct Recorder {
+    writer: Arc<Writer>,
+    /// Queued event id to the notes created for it, until its pass takes them.
+    created: Mutex<HashMap<i64, Vec<String>>>,
+}
+
+impl Recorder {
+    fn take(&self, event: i64) -> Vec<String> {
+        self.created
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&event)
+            .unwrap_or_default()
+    }
+}
+
+impl Vault for Recorder {
+    fn get(&self, id: &str) -> Result<Json, String> {
+        Vault::get(&*self.writer, id)
+    }
+
+    fn query(&self, text: &str, max_rows: usize) -> Result<Vec<Json>, String> {
+        Vault::query(&*self.writer, text, max_rows)
+    }
+
+    fn query_page(&self, text: &str, size: usize, cursor: Option<String>) -> Result<Json, String> {
+        Vault::query_page(&*self.writer, text, size, cursor)
+    }
+
+    fn search(&self, text: &str, limit: usize, archived: Archived) -> Result<Vec<Json>, String> {
+        Vault::search(&*self.writer, text, limit, archived)
+    }
+
+    fn create(&self, type_name: &str, note: Json, author: &Author) -> Result<Json, String> {
+        let saved = Vault::create(&*self.writer, type_name, note, author)?;
+        let event = current_job(|j| j.context.get(RUN_EVENT).and_then(Json::as_i64)).flatten();
+        if let (Some(event), Some(id)) = (event, saved.get("id").and_then(Json::as_str)) {
+            self.created
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(event)
+                .or_default()
+                .push(id.to_owned());
+        }
+        Ok(saved)
+    }
+
+    fn update(&self, id: &str, note: Json, version: &str, author: &Author) -> Result<Json, String> {
+        Vault::update(&*self.writer, id, note, version, author)
+    }
+
+    fn delete(&self, id: &str, version: &str, author: &Author) -> Result<Json, String> {
+        Vault::delete(&*self.writer, id, version, author)
+    }
+
+    fn restore(&self, id: &str, author: &Author) -> Result<Json, String> {
+        Vault::restore(&*self.writer, id, author)
+    }
+
+    fn set_archived(&self, id: &str, archived: bool, author: &Author) -> Result<Json, String> {
+        Vault::set_archived(&*self.writer, id, archived, author)
+    }
+
+    fn links(&self, id: &str) -> Result<Vec<Json>, String> {
+        Vault::links(&*self.writer, id)
+    }
+
+    fn backlinks(&self, id: &str) -> Result<Vec<Json>, String> {
+        Vault::backlinks(&*self.writer, id)
+    }
+
+    fn assets(&self) -> Result<Vec<Json>, String> {
+        Vault::assets(&*self.writer)
+    }
+
+    fn asset(&self, id: &str) -> Result<(Json, Vec<u8>), String> {
+        Vault::asset(&*self.writer, id)
+    }
+
+    fn upload_asset(&self, filename: &str, bytes: Vec<u8>) -> Result<Json, String> {
+        Vault::upload_asset(&*self.writer, filename, bytes)
+    }
+
+    fn types(&self) -> Result<Vec<Json>, String> {
+        Vault::types(&*self.writer)
+    }
+
+    fn taxonomies(&self) -> Result<Vec<Json>, String> {
+        Vault::taxonomies(&*self.writer)
+    }
+
+    fn add_term(&self, taxonomy: &str, path: &str, author: &Author) -> Result<Json, String> {
+        Vault::add_term(&*self.writer, taxonomy, path, author)
+    }
+
+    fn daily(&self, date: &str, author: &Author) -> Result<Json, String> {
+        Vault::daily(&*self.writer, date, author)
+    }
+
+    fn secret(&self, name: &str) -> Result<Option<String>, String> {
+        Vault::secret(&*self.writer, name)
+    }
+
+    fn notify(&self, source: &str, title: &str, body: &str, note: &str) -> Result<Json, String> {
+        Vault::notify(&*self.writer, source, title, body, note)
+    }
+
+    fn device_command(
+        &self,
+        source: &str,
+        device: &str,
+        name: &str,
+        payload: Json,
+    ) -> Result<Json, String> {
+        Vault::device_command(&*self.writer, source, device, name, payload)
+    }
+
+    fn protected(&self) -> Vec<PathBuf> {
+        Vault::protected(&*self.writer)
+    }
+
+    fn now_ms(&self) -> i64 {
+        Vault::now_ms(&*self.writer)
+    }
 }
 
 /// A number with its spacing and punctuation taken out, for comparing.

@@ -55,8 +55,14 @@ object VaultCore {
     external fun sync(): String
 
     /**
-     * Stores a share, `{text, subject, files: [{path, filename}]}` as JSON, as a fleeting note
-     * and answers its id. The files are copies the core removes once stored.
+     * Stores a share, `{text, subject, files: [{path, filename, mime}]}` as JSON: keeps the files
+     * as assets, then queues a `share_received` event with them as its attachments and runs it
+     * now, so the device file's handler decides the note. Answers `{event, status, message,
+     * notes}` as JSON: the queued event's id, how it stands (`done`, or `queued` when the handler
+     * failed and it waits for the next pass), why it failed, and the ids of the notes it made.
+     * With no device runtime open ([openDevice]) or no `share_received` handler, the core writes
+     * the fleeting note directly and `event` is null, so a share is never lost. The files are
+     * copies the core removes once stored.
      */
     @JvmStatic
     external fun share(shared: String): String

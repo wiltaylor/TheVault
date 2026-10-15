@@ -11,10 +11,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Turns a share intent into a fleeting note in the local vault, with no connection needed
- * (D19, note 01). Each shared `content://` file is copied natively into the app's own cache
- * folder, since the sharing app's grant ends with the intent; the core stores the copies as
- * assets and removes them.
+ * Hands a share intent to the core as a `share_received` device event, with no connection
+ * needed (D19, note 01). Each shared `content://` file is copied natively into the app's own
+ * cache folder, since the sharing app's grant ends with the intent; the core stores the copies as
+ * assets, passes them to the handler as the event's attachments, and removes them. The device
+ * file's handler, by default `scripts/device_share.ws`, decides the note: a fleeting note in the
+ * inbox unless the user changed it.
  */
 object ShareImporter {
     /** What [intent] shares, or null when it shares nothing this app takes. */
@@ -31,17 +33,21 @@ object ShareImporter {
             val input = context.contentResolver.openInputStream(uri)
                 ?: throw IllegalStateException("cannot read shared file $name")
             input.use { src -> copy.outputStream().use { dst -> src.copyTo(dst) } }
-            files.put(JSONObject().put("path", copy.path).put("filename", name))
+            val mime = context.contentResolver.getType(uri) ?: ""
+            files.put(JSONObject().put("path", copy.path).put("filename", name).put("mime", mime))
         }
         if (text.isBlank() && subject.isBlank() && files.length() == 0) return null
         return JSONObject().put("text", text).put("subject", subject).put("files", files)
     }
 
-    /** Stores what [intent] shares as a fleeting note and answers its id, or null for nothing. */
-    fun import(context: Context, intent: Intent): String? {
+    /**
+     * Runs what [intent] shares through the device runtime and answers what became of it,
+     * `{event, status, message, notes}` (see [VaultCore.share]), or null when it shares nothing.
+     */
+    fun import(context: Context, intent: Intent): JSONObject? {
         val shared = read(context, intent) ?: return null
-        Vault.open(context)
-        return VaultCore.share(shared.toString())
+        Device.ensureCore(context)
+        return JSONObject(VaultCore.share(shared.toString()))
     }
 
     private fun streams(intent: Intent): List<Uri> {

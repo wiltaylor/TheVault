@@ -20,9 +20,10 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
- * S5: share intents with text, a link, one image and several files become fleeting notes in the
- * local vault, queued for the home server, with the shared files as their assets. The device is
- * not paired, so this is the offline case: nothing leaves the phone.
+ * S5: share intents with text, a link, one image and several files run as `share_received`
+ * device events, whose default handler (`scripts/device_share.ws`) makes one fleeting note each
+ * in the local vault, queued for the home server, with the shared files as their assets. The
+ * device is not paired, so this is the offline case: nothing leaves the phone.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -32,6 +33,7 @@ class ShareTargetTest {
     @Before
     fun openTheVault() {
         PairingStore.defaultCipher = FakeCipher
+        Device.reset()
         Vault.open(context)
     }
 
@@ -50,6 +52,35 @@ class ShareTargetTest {
         }
         throw AssertionError("note $id is not queued: $all")
     }
+
+    /** Queued event [id], from `VaultCore.events()`. */
+    private fun event(id: Long): JSONObject {
+        val all = JSONArray(VaultCore.events())
+        for (i in 0 until all.length()) {
+            if (all.getJSONObject(i).getLong("id") == id) return all.getJSONObject(i)
+        }
+        throw AssertionError("no event $id: $all")
+    }
+
+    /**
+     * Shares [intent] and answers the one note it made, after checking it came from the
+     * `share_received` handler run through the device event queue, not the core's fallback.
+     */
+    private fun share(intent: Intent): JSONObject {
+        val outcome = ShareImporter.import(context, intent)!!
+        assertEquals(outcome.toString(), "done", outcome.getString("status"))
+        assertFalse("the share fell back instead of running its handler: $outcome", outcome.isNull("event"))
+        val event = event(outcome.getLong("event"))
+        assertEquals("share_received", event.getString("event"))
+        assertEquals("done", event.getString("status"))
+        val notes = outcome.getJSONArray("notes")
+        assertEquals("exactly one note per share: $outcome", 1, notes.length())
+        return queued(notes.getString(0))
+    }
+
+    /** The attachments of the `share_received` event a share [outcome] names. */
+    private fun attachments(outcome: JSONObject): JSONArray =
+        event(outcome.getLong("event")).getJSONObject("data").getJSONArray("attachments")
 
     private fun filenames(note: JSONObject): List<String> {
         val assets = note.getJSONArray("assets")
@@ -74,7 +105,7 @@ class ShareTargetTest {
     fun sharedTextBecomesAFleetingNote() {
         val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
             .putExtra(Intent.EXTRA_TEXT, "Buy *oat* milk\n\nand bread")
-        val note = queued(ShareImporter.import(context, intent)!!)
+        val note = share(intent)
         assertEquals("fleeting", note.getString("type"))
         assertEquals("Buy *oat* milk", note.getJSONObject("fields").getString("title"))
         assertFalse(note.getJSONObject("fields").getBoolean("processed"))
@@ -87,7 +118,7 @@ class ShareTargetTest {
         val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
             .putExtra(Intent.EXTRA_SUBJECT, "Rust 2024 is out")
             .putExtra(Intent.EXTRA_TEXT, "https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html")
-        val note = queued(ShareImporter.import(context, intent)!!)
+        val note = share(intent)
         assertEquals("Rust 2024 is out", note.getJSONObject("fields").getString("title"))
         assertEquals("https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html", bodyText(note))
     }
@@ -97,7 +128,7 @@ class ShareTargetTest {
         val bytes = ByteArray(4096) { (it % 251).toByte() }
         val intent = Intent(Intent.ACTION_SEND).setType("image/jpeg")
             .putExtra(Intent.EXTRA_STREAM, shared("IMG_0001.jpg", bytes))
-        val note = queued(ShareImporter.import(context, intent)!!)
+        val note = share(intent)
         assertEquals(listOf("IMG_0001.jpg"), filenames(note))
         assertEquals(4096, note.getJSONArray("assets").getJSONObject(0).getInt("size"))
         assertEquals("IMG_0001.jpg", note.getJSONObject("fields").getString("title"))
@@ -116,9 +147,39 @@ class ShareTargetTest {
         )
         val intent = Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*")
             .putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-        val note = queued(ShareImporter.import(context, intent)!!)
-        assertEquals(listOf("report.pdf", "data.csv", "photo.png"), filenames(note))
-        assertEquals(3, note.getJSONObject("fields").getJSONArray("image").length())
+        val note = share(intent)
+        assertEquals(listOf("data.csv", "photo.png", "report.pdf"), filenames(note).sorted())
+        // The default handler shows the image and attaches the other files after the text.
+        val image = note.getJSONObject("fields").getJSONArray("image")
+        assertEquals(1, image.length())
+        val photo = (0 until 3).map { note.getJSONArray("assets").getJSONObject(it) }
+            .single { it.getString("filename") == "photo.png" }
+        assertEquals(photo.getString("id"), image.getString(0))
+        val body = note.getJSONArray("blocks").getJSONObject(0).getJSONArray("blocks")
+        assertEquals(listOf("asset", "asset"), (0 until body.length()).map { body.getJSONObject(it).getString("kind") })
+        assertEquals("report.pdf", note.getJSONObject("fields").getString("title"))
+    }
+
+    @Test
+    fun sharedFilesReachTheHandlerAsAttachments() {
+        val uris = arrayListOf(
+            shared("scan.pdf", "%PDF-1.4 scan".toByteArray()),
+            shared("IMG_0002.png", ByteArray(64)),
+        )
+        val intent = Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*")
+            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+        val outcome = ShareImporter.import(context, intent)!!
+        val files = attachments(outcome)
+        assertEquals(2, files.length())
+        val pdf = files.getJSONObject(0)
+        assertEquals("scan.pdf", pdf.getString("filename"))
+        assertEquals("application/pdf", pdf.getString("mime"))
+        assertEquals(13, pdf.getInt("size"))
+        assertEquals("image/png", files.getJSONObject(1).getString("mime"))
+        // Each attachment is an asset of the local vault, which the note names.
+        val note = queued(outcome.getJSONArray("notes").getString(0))
+        val ids = (0 until 2).map { note.getJSONArray("assets").getJSONObject(it).getString("id") }.toSet()
+        assertEquals(setOf(pdf.getString("asset"), files.getJSONObject(1).getString("asset")), ids)
     }
 
     @Test
