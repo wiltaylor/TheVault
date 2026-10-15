@@ -100,10 +100,29 @@ aur-release: (require-tool "makepkg") (require-tool "jq")
 	tar -czf target/desktop-release/thevault-bin-aur.tar.gz -C target/desktop-release/aur thevault-bin
 	rm -rf target/desktop-release/aur
 
-# Build the Android debug APK for aarch64 into apps/android/src-tauri/gen/android/app/build/outputs/apk
+# Build the Android debug APK, for aarch64 or x86_64 (the emulator), into apps/android/src-tauri/gen/android/app/build/outputs/apk
 [group('android')]
-android-build: (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
-	cd apps/android && GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --debug --apk --target aarch64
+android-build target='aarch64': (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
+	cd apps/android && GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --debug --apk --target {{target}}
+
+# Run docs/android-manual-checks.md on a headless Android 15 emulator, and write the results to .scratch/emulator/RESULTS.generated.md; THEVAULT_APK tests another APK
+[group('android')]
+android-emulator-checks: (require-tool "emulator") (require-tool "adb") (require-tool "cargo")
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [ -z "${THEVAULT_APK:-}" ]; then just android-build x86_64; else just web-build; fi
+	cargo build -p server -p cli --bins
+	# A factory-fresh data partition each run; -writable-system lets the run swap Google Messages for its test stand-in.
+	apps/android/emulator/boot.sh --wipe -writable-system
+	status=0
+	node apps/android/emulator/checks.mjs || status=$?
+	adb emu kill >/dev/null 2>&1 || true
+	exit $status
+
+# Lint the crates the Android app embeds for target_os = "android" (ticket 76)
+[group('android')]
+android-check: (require-tool "cargo-ndk")
+	scripts/android-check.sh
 
 # Build the signed release APK for aarch64 into target/android-release with its SHA256SUMS, signed with the keystore THEVAULT_ANDROID_KEYSTORE names (D10)
 [group('android')]

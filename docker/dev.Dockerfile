@@ -81,3 +81,20 @@ RUN apt-get update \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends makepkg pacman-package-manager libarchive-tools \
  && rm -rf /var/lib/apt/lists/*
+
+# The Android emulator and an x86_64 Android 15 (API 35) system image, for the manual checks run
+# in an emulator (`just android-emulator-checks`), plus the libraries the headless emulator loads.
+# ./dev passes /dev/kvm through when the host has it. A layer of its own, so adding it rebuilds
+# nothing above.
+ARG ANDROID_EMULATOR_IMAGE="system-images;android-35;google_apis;x86_64"
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libpulse0 libnss3 libxcomposite1 libxcursor1 libxdamage1 libxi6 libxtst6 libxrandr2 \
+      libasound2 libgl1 libegl1 libxkbfile1 libxkbcommon0 libdrm2 libgbm1 libbsd0 libc++1 \
+      qrencode netcat-openbsd \
+ && rm -rf /var/lib/apt/lists/* \
+ && sdkmanager --install "emulator" "${ANDROID_EMULATOR_IMAGE}" \
+ && chmod -R a+rwX "$ANDROID_HOME"
+ENV PATH=${PATH}:${ANDROID_HOME}/emulator ANDROID_AVD_HOME=/avd
+# The AVD lives in the thevault-avd volume ./dev mounts here, so it survives between containers.
+RUN mkdir -p /avd && chmod 1777 /avd

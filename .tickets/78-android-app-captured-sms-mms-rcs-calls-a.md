@@ -5,7 +5,7 @@ title: 'Android app: captured SMS, MMS, RCS, calls and contact changes are not s
 plan: thevault-clients
 blocked_by: []
 status: done
-verified: unmet
+verified: verified
 ---
 
 # Android app: captured SMS, MMS, RCS, calls and contact changes are not synced until the next app open or 15-minute job
@@ -41,3 +41,11 @@ Verified set to unmet.
 ### 2026-10-15T12:11:09Z — wil
 
 Status set to done.
+
+### 2026-10-15T14:00:27Z — wil
+
+Confirmed by the emulator run of docs/android-manual-checks.md on main at 8404c46 (Android 15 x86_64, fresh debug APK, wiped emulator); see .scratch/emulator/RESULTS.md.
+
+### 2026-10-15T14:00:27Z — wil
+
+Verified set to verified.

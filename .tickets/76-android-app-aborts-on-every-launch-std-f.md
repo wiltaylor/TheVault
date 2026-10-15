@@ -5,7 +5,7 @@ title: 'Android app aborts on every launch: std File::lock is unsupported on And
 plan: thevault-clients
 blocked_by: []
 status: done
-verified: unmet
+verified: verified
 ---
 
 # Android app aborts on every launch: std File::lock is unsupported on Android, so opening the local vault fails
@@ -47,3 +47,11 @@ Verified set to unmet.
 ### 2026-10-15T11:31:04Z — wil
 
 Status set to done.
+
+### 2026-10-15T14:00:27Z — wil
+
+Confirmed by the emulator run of docs/android-manual-checks.md on main at 8404c46 (Android 15 x86_64, fresh debug APK, wiped emulator); see .scratch/emulator/RESULTS.md.
+
+### 2026-10-15T14:00:27Z — wil
+
+Verified set to verified.

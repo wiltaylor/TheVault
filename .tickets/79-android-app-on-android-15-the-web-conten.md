@@ -5,7 +5,7 @@ title: 'Android app: on Android 15 the web content draws under the status bar (e
 plan: thevault-clients
 blocked_by: []
 status: done
-verified: unmet
+verified: verified
 ---
 
 # Android app: on Android 15 the web content draws under the status bar (edge-to-edge), so the header and search box sit under the clock and icons
@@ -39,3 +39,11 @@ Verified set to unmet.
 ### 2026-10-15T11:50:17Z — wil
 
 Status set to done.
+
+### 2026-10-15T14:00:27Z — wil
+
+Confirmed by the emulator run of docs/android-manual-checks.md on main at 8404c46 (Android 15 x86_64, fresh debug APK, wiped emulator); see .scratch/emulator/RESULTS.md.
+
+### 2026-10-15T14:00:27Z — wil
+
+Verified set to verified.

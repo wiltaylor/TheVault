@@ -5,7 +5,7 @@ title: 'Android MMS: a captured MMS image shows as a file chip in the message no
 plan: thevault-clients
 blocked_by: []
 status: done
-verified: unmet
+verified: verified
 ---
 
 # Android MMS: a captured MMS image shows as a file chip in the message note, not as the image
@@ -39,3 +39,11 @@ Verified set to unmet.
 ### 2026-10-15T13:05:55Z — wil
 
 Status set to done.
+
+### 2026-10-15T14:00:27Z — wil
+
+Confirmed by the emulator run of docs/android-manual-checks.md on main at 8404c46 (Android 15 x86_64, fresh debug APK, wiped emulator); see .scratch/emulator/RESULTS.md.
+
+### 2026-10-15T14:00:27Z — wil
+
+Verified set to verified.

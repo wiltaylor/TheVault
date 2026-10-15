@@ -5,7 +5,7 @@ title: 'Android app: an open app never pulls server changes, so a person renamed
 plan: thevault-clients
 blocked_by: []
 status: done
-verified: unmet
+verified: verified
 ---
 
 # Android app: an open app never pulls server changes, so a person renamed in the web app reaches the phone contact only after the app is reopened
@@ -39,3 +39,11 @@ Verified set to unmet.
 ### 2026-10-15T13:22:09Z — wil
 
 Status set to done.
+
+### 2026-10-15T14:00:27Z — wil
+
+Confirmed by the emulator run of docs/android-manual-checks.md on main at 8404c46 (Android 15 x86_64, fresh debug APK, wiped emulator); see .scratch/emulator/RESULTS.md.
+
+### 2026-10-15T14:00:27Z — wil
+
+Verified set to verified.

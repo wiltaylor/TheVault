@@ -5,7 +5,7 @@ title: 'Contacts: a person created in the web app never becomes a phone contact,
 plan: thevault-clients
 blocked_by: []
 status: done
-verified: unmet
+verified: verified
 ---
 
 # Contacts: a person created in the web app never becomes a phone contact, since nothing queues upsert_contact for an unlinked person
@@ -39,3 +39,11 @@ Verified set to unmet.
 ### 2026-10-15T13:14:01Z — wil
 
 Status set to done.
+
+### 2026-10-15T14:00:27Z — wil
+
+Confirmed by the emulator run of docs/android-manual-checks.md on main at 8404c46 (Android 15 x86_64, fresh debug APK, wiped emulator); see .scratch/emulator/RESULTS.md.
+
+### 2026-10-15T14:00:27Z — wil
+
+Verified set to verified.

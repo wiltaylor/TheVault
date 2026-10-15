@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TEST ONLY. Never shipped, never built by any release recipe.
+
+  A stand-in for Google Messages that the emulator checks (apps/android/emulator) install on an
+  emulator whose real Google Messages was removed. It takes Google Messages' package name, so
+  TheVault's RCS listener, which only reads notifications posted by that package, treats its
+  notifications as Google Messages'. It is also the default SMS app, as Google Messages is on a
+  phone: it writes each incoming SMS to the Telephony provider and posts a MessagingStyle
+  notification for it. Broadcasts to CommandReceiver post RCS-style notifications and insert
+  incoming MMS into the provider, which the emulator's modem cannot deliver. ShareSourceActivity
+  shares generated images and PDFs through its own content provider, as Photos or Files would, since
+  `am start` from the shell cannot grant a MediaStore URI.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.google.android.apps.messaging"
+    android:versionCode="1"
+    android:versionName="test-only">
+
+    <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="35" />
+
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_MMS" />
+    <uses-permission android:name="android.permission.RECEIVE_WAP_PUSH" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application android:label="Messages (TheVault test stand-in)" android:allowBackup="false">
+        <!-- What makes it eligible for the SMS role. -->
+        <receiver android:name=".SmsDeliverReceiver" android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_DELIVER" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".MmsDeliverReceiver" android:exported="true"
+            android:permission="android.permission.BROADCAST_WAP_PUSH">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.WAP_PUSH_DELIVER" />
+                <data android:mimeType="application/vnd.wap.mms-message" />
+            </intent-filter>
+        </receiver>
+        <service android:name=".RespondService" android:exported="true"
+            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </service>
+        <activity android:name=".ComposeActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </activity>
+
+        <!-- The share source for the share-target checks: am start -n com.google.android.apps.messaging/.ShareSourceActivity ... -->
+        <activity android:name=".ShareSourceActivity" android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <provider android:name=".SharedFiles" android:exported="false"
+            android:authorities="com.google.android.apps.messaging.testshare"
+            android:grantUriPermissions="true" />
+
+        <!-- The emulator checks drive it with: am broadcast -n com.google.android.apps.messaging/.CommandReceiver -a <action> -->
+        <receiver android:name=".CommandReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="thevault.test.RCS" />
+                <action android:name="thevault.test.MMS" />
+                <action android:name="thevault.test.CONTACT" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
