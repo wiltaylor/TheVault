@@ -65,6 +65,41 @@ desktop-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-t
 	cargo build -p server -p testkit --bins
 	xvfb-run -a pnpm -C apps/desktop/e2e test
 
+# Build the release bundles, AppImage, deb and rpm, into target/desktop-release with their SHA256SUMS (D11)
+[group('desktop')]
+desktop-release: (require-tool "cargo-tauri") web-build
+	rm -rf apps/desktop/src-tauri/target/release/bundle target/desktop-release
+	cd apps/desktop && XDG_CACHE_HOME="$PWD/src-tauri/target/tauri-cache" APPIMAGE_EXTRACT_AND_RUN=1 cargo tauri build --bundles appimage,deb,rpm
+	mkdir -p target/desktop-release
+	cp apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage apps/desktop/src-tauri/target/release/bundle/deb/*.deb apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm target/desktop-release/
+	cd target/desktop-release && sha256sum * > SHA256SUMS
+
+# Build the release bundles, then check that the AppImage starts to the setup page under Xvfb
+[group('desktop')]
+desktop-release-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-tool "gnome-keyring-daemon") desktop-release
+	xvfb-run -a node --test --test-timeout=600000 apps/desktop/e2e/appimage.smoke.mjs
+
+# Check that packaging/aur/.SRCINFO matches the PKGBUILD, as makepkg prints it
+[group('desktop')]
+aur-check: (require-tool "makepkg")
+	cd packaging/aur && makepkg --printsrcinfo | diff -u .SRCINFO -
+
+# Write the AUR thevault-bin PKGBUILD and .SRCINFO for the deb in target/desktop-release into target/desktop-release/thevault-bin-aur.tar.gz
+[group('desktop')]
+aur-release: (require-tool "makepkg") (require-tool "jq")
+	#!/usr/bin/env bash
+	set -euo pipefail
+	version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+	deb="target/desktop-release/TheVault_${version}_amd64.deb"
+	test -f "$deb" || { echo "$deb is missing; run just desktop-release" >&2; exit 1; }
+	sum=$(sha256sum "$deb" | cut -d' ' -f1)
+	out=target/desktop-release/aur/thevault-bin
+	rm -rf target/desktop-release/aur && mkdir -p "$out"
+	sed -e "s/^pkgver=.*/pkgver=${version}/" -e "s/^sha256sums=.*/sha256sums=('${sum}')/" packaging/aur/PKGBUILD > "$out/PKGBUILD"
+	(cd "$out" && makepkg --printsrcinfo > .SRCINFO)
+	tar -czf target/desktop-release/thevault-bin-aur.tar.gz -C target/desktop-release/aur thevault-bin
+	rm -rf target/desktop-release/aur
+
 # Build the Android debug APK for aarch64 into apps/android/src-tauri/gen/android/app/build/outputs/apk
 [group('android')]
 android-build: (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build

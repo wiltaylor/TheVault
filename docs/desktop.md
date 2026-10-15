@@ -41,11 +41,49 @@ The badge in the bottom left corner of every page shows where sync stands: synce
 
 `thevault --capture` opens the capture dialog. When the app is already running, the running app shows its window and opens the dialog; otherwise the app starts with it open. Bind it to a key in the desktop's keyboard settings where the global shortcuts portal is not available (D12).
 
+## Installing
+
+Each GitHub Release carries the app as an AppImage, a deb and an rpm, with their `SHA256SUMS` (D11). There is no Flatpak: its sandbox gets in the way of the global hotkey and the keyring. The app keeps its device token in the Secret Service, so the desktop needs one running, such as GNOME Keyring or KWallet.
+
+### Arch Linux and CachyOS
+
+Install `thevault-bin` from the AUR with an AUR helper:
+
+```bash
+paru -S thevault-bin    # or: yay -S thevault-bin
+```
+
+Without a helper, build it by hand:
+
+```bash
+git clone https://aur.archlinux.org/thevault-bin.git
+cd thevault-bin
+makepkg -si
+```
+
+The package installs the release's deb contents: `/usr/bin/thevault`, its desktop entry and its icons. It depends on `webkit2gtk-4.1` and `gtk3`, and suggests `gnome-keyring` or `kwallet` for the Secret Service.
+
+### Other distributions
+
+- Debian and Ubuntu: `sudo apt install ./TheVault_<version>_amd64.deb`.
+- Fedora: `sudo dnf install ./TheVault-<version>-1.x86_64.rpm`.
+- openSUSE: `sudo zypper install ./TheVault-<version>-1.x86_64.rpm`.
+- Anywhere else: `chmod +x TheVault_<version>_amd64.AppImage` and run it.
+
+## Releasing
+
+Pushing a tag `v<version>` runs `.github/workflows/release.yml`. The tag must match `version` in `apps/desktop/src-tauri/tauri.conf.json`. The workflow runs `just desktop-release-test` and `just aur-release` in the dev container, then creates the tag's GitHub Release with the AppImage, deb, rpm, `SHA256SUMS` and `thevault-bin-aur.tar.gz`.
+
+`thevault-bin-aur.tar.gz` holds the release's `PKGBUILD` and `.SRCINFO`, with the version and the deb's checksum filled in. To update the AUR package, copy both into a clone of `ssh://aur@aur.archlinux.org/thevault-bin.git`, then commit and push. `packaging/aur/PKGBUILD` is the template, and `./dev just aur-check` checks that `packaging/aur/.SRCINFO` still matches it.
+
 ## Building and testing
 
 ```bash
 ./dev just desktop-build   # apps/desktop/src-tauri/target/debug/thevault
 ./dev just desktop-test    # unit tests, then S6 under Xvfb through tauri-driver
+./dev just desktop-release        # AppImage, deb and rpm into target/desktop-release
+./dev just desktop-release-test   # the bundles, then the AppImage started under Xvfb to the setup page
+./dev just aur-check              # packaging/aur/.SRCINFO matches the PKGBUILD
 ```
 
 S6 (`apps/desktop/e2e`) starts a testkit home server on port 0, a private D-Bus session with an unlocked throwaway gnome-keyring, and the app with its own XDG folders. It pairs, opens a note pulled from the server, edits it with the server stopped, and checks that the edit reaches the server once the server is back on the same address. It then starts the app again and checks that it syncs with the token from the keyring.

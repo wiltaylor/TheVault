@@ -1,0 +1,47 @@
+# Builds the Linux desktop release on a version tag and publishes it on the tag's GitHub Release
+# (D11): the AppImage, deb and rpm, their SHA256SUMS, and the AUR thevault-bin PKGBUILD and
+# .SRCINFO for that release. Everything builds in the dev container, as it does locally.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the app's version
+        run: |
+          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match tauri.conf.json version ${version}" >&2
+            exit 1
+          fi
+
+      # The dev image carries the Android SDK as well and needs more disk than the runner has free.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Build the bundles and smoke-test the AppImage
+        run: ./dev just desktop-release-test
+
+      - name: Write the AUR package for this release
+        run: ./dev just aur-release
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" --verify-tag --title "TheVault ${GITHUB_REF_NAME}" --generate-notes \
+            target/desktop-release/*.AppImage \
+            target/desktop-release/*.deb \
+            target/desktop-release/*.rpm \
+            target/desktop-release/SHA256SUMS \
+            target/desktop-release/thevault-bin-aur.tar.gz

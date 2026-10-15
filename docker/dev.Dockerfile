@@ -75,3 +75,9 @@ RUN mkdir -p /cargo /pnpm-store /gradle && chmod 1777 /cargo /pnpm-store /gradle
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gnome-keyring libnss-wrapper \
  && rm -rf /var/lib/apt/lists/*
+
+# makepkg, which checks the AUR PKGBUILD in packaging/aur and writes its .SRCINFO. A layer of its
+# own, so adding it rebuilds nothing above.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends makepkg pacman-package-manager libarchive-tools \
+ && rm -rf /var/lib/apt/lists/*

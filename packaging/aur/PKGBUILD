@@ -1,0 +1,29 @@
+# Maintainer: Wil Taylor
+#
+# thevault-bin installs TheVault's Linux desktop app from the deb on a GitHub Release (D11).
+# The release workflow writes this file with the release's version and the deb's checksum into
+# the release's assets, next to its .SRCINFO; this copy is the template it starts from.
+
+pkgname=thevault-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="TheVault's Linux desktop app: a self-hosted note vault that works offline and syncs"
+arch=('x86_64')
+url="https://github.com/wiltaylor/thevault"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'hicolor-icon-theme')
+optdepends=('gnome-keyring: a Secret Service to keep the device token in'
+            'kwallet: a Secret Service to keep the device token in')
+provides=('thevault')
+conflicts=('thevault')
+options=('!strip' '!debug')
+source=("${url}/releases/download/v${pkgver}/TheVault_${pkgver}_amd64.deb")
+sha256sums=('SKIP')
+
+package() {
+  bsdtar -xf data.tar.gz -C "$pkgdir"
+  # Tauri names the 128x128@2x icon's folder 256x256@2; it belongs under 256x256.
+  if [[ -d "$pkgdir/usr/share/icons/hicolor/256x256@2" ]]; then
+    mv "$pkgdir/usr/share/icons/hicolor/256x256@2" "$pkgdir/usr/share/icons/hicolor/256x256"
+  fi
+}

@@ -1,0 +1,20 @@
+pkgbase = thevault-bin
+	pkgdesc = TheVault's Linux desktop app: a self-hosted note vault that works offline and syncs
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/wiltaylor/thevault
+	arch = x86_64
+	license = MIT
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = hicolor-icon-theme
+	optdepends = gnome-keyring: a Secret Service to keep the device token in
+	optdepends = kwallet: a Secret Service to keep the device token in
+	provides = thevault
+	conflicts = thevault
+	options = !strip
+	options = !debug
+	source = https://github.com/wiltaylor/thevault/releases/download/v0.1.0/TheVault_0.1.0_amd64.deb
+	sha256sums = SKIP
+
+pkgname = thevault-bin
