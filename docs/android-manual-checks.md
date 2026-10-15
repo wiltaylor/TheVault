@@ -41,3 +41,18 @@ Share from at least three different apps. For example, use Chrome for a link, Ph
 | 13 | Share one image. | A fleeting note that shows the image. |
 | 14 | Share several files at once, such as images and a PDF. | One fleeting note with every file attached. |
 | 15 | With airplane mode on, share something, then turn airplane mode off. | The note is saved at once. It reaches the web app's Inbox after the next sync. |
+
+## Notifications and UnifiedPush
+
+Install a UnifiedPush distributor first, such as ntfy, and set it up to reach its server. The timed checks need a stopwatch.
+
+| # | Do this | Expect this |
+|---|---------|-------------|
+| 16 | Open the app after pairing. | If more than one distributor is installed, Android asks which one to use. Afterwards, in the web app, Settings > Devices shows push as on for the phone. |
+| 17 | With the app closed and the screen off, create a notification on the server, for example from a script with `vault::notify`. Time it. | An Android notification with the same title and body appears within 10 seconds. |
+| 18 | Mark that notification read in the web app's bell. Time it. | The Android notification disappears within 10 seconds. |
+| 19 | Create two notifications. Dismiss one in the web app, then clear read notifications. | Each Android notification disappears within 10 seconds of the action that removes it from the server's unread list. |
+| 20 | Create a notification, then swipe it away on the phone. | Within a few seconds, the web app's bell shows it as read. With airplane mode on, the read reaches the server once the phone is online again. |
+| 21 | Create a notification that opens a note, then tap it on the phone. | The app opens at that note, and the web app's bell shows the notification as read. Repeat with the app already open in the background. |
+| 22 | Uninstall the distributor, or onboard on a phone without one. Create a notification on the server and wait up to 15 minutes without opening the app. | The Android notification appears within 15 minutes. The fallback check reads the server's unread list every 15 minutes while the phone has a network. |
+| 23 | On a fresh install, refuse the notification permission at the end of onboarding. | Pairing still completes. No Android notifications appear until the permission is granted in the system settings. |

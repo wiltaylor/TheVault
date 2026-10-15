@@ -1,6 +1,9 @@
 package dev.wiltaylor.thevault.device
 
+import android.Manifest
 import android.app.Activity
+import android.app.Application
+import android.content.pm.PackageManager
 import android.content.Context
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
@@ -17,7 +20,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/** Onboarding pairs through the Rust core and keeps the token sealed (D2). */
+/**
+ * Onboarding pairs through the Rust core and keeps the token sealed (D2), then asks to post
+ * notifications (D9).
+ */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class OnboardingActivityTest {
@@ -28,6 +34,7 @@ class OnboardingActivityTest {
     fun setUp() {
         PairingStore.defaultCipher = FakeCipher
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     @After
@@ -84,5 +91,26 @@ class OnboardingActivityTest {
         assertEquals("wrong password", activity.message.text.toString())
         assertFalse(activity.isFinishing)
         assertFalse(PairingStore(context).isPaired)
+    }
+
+    @Test
+    fun afterPairingItAsksToPostNotificationsAndClosesWhateverTheAnswer() {
+        shadowOf(context as Application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val activity = Robolectric.buildActivity(OnboardingActivity::class.java).setup().get()
+        activity.pair(home.url, FakeHome.PASSWORD, null)
+        waitFor { shadowOf(activity).lastRequestedPermission != null }
+        val asked = shadowOf(activity).lastRequestedPermission!!
+        assertEquals(listOf(Manifest.permission.POST_NOTIFICATIONS), asked.requestedPermissions.toList())
+        assertFalse(activity.isFinishing)
+        assertTrue(PairingStore(context).isPaired)
+
+        activity.onRequestPermissionsResult(
+            asked.requestCode,
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            intArrayOf(PackageManager.PERMISSION_DENIED),
+        )
+        waitFor { activity.isFinishing }
+        assertTrue(activity.isFinishing)
+        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
     }
 }

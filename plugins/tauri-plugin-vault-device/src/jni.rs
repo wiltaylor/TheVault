@@ -22,6 +22,7 @@ use jni::{JNIEnv, JavaVM};
 use serde_json::{Value as Json, json};
 
 use crate::core::{self, Core, Link};
+use crate::notify::PushTarget;
 use crate::pair::{self, Secret};
 use crate::share::Shared;
 
@@ -315,6 +316,59 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_putAsset<'lo
             json!({ "asset": asset.id, "filename": asset.filename, "size": asset.size })
                 .to_string(),
         ))
+    })
+}
+
+/// `VaultCore.unreadNotifications(): String`: the home server's unread notifications, newest
+/// first, as a JSON array. It makes a network request: call it off the main thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_unreadNotifications<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    answer(&mut env, |_| {
+        Ok(Some(serde_json::to_string(
+            &core()?.unread_notifications()?,
+        )?))
+    })
+}
+
+/// `VaultCore.markRead(id: String): String`: mark a notification read on the home server.
+/// Answers `true`, or `false` when the server no longer has it. It makes a network request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_markRead<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    id: JString<'local>,
+) -> jstring {
+    answer(&mut env, |env| {
+        let id = required(env, &id, "id")?;
+        Ok(Some(core()?.mark_read(&id)?.to_string()))
+    })
+}
+
+/// `VaultCore.setPush(endpoint: String?, p256dh: String?, auth: String?)`: register the
+/// UnifiedPush endpoint and its WebPush keys with the home server, or clear it when `endpoint` is
+/// null. It makes a network request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_setPush<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    endpoint: JString<'local>,
+    p256dh: JString<'local>,
+    auth: JString<'local>,
+) -> jstring {
+    answer(&mut env, |env| {
+        let target = match arg(env, &endpoint)? {
+            Some(endpoint) => Some(PushTarget {
+                endpoint,
+                p256dh: required(env, &p256dh, "p256dh")?,
+                auth: required(env, &auth, "auth")?,
+            }),
+            None => None,
+        };
+        core()?.set_push(target.as_ref())?;
+        Ok(None)
     })
 }
 

@@ -1,9 +1,10 @@
 //! TheVault's Android device plugin (note 01).
 //!
 //! The Kotlin half in `android/` holds onboarding and pairing, the token in the Android
-//! Keystore, the background sync worker, the share target, and SMS, MMS, call log and contacts
-//! capture with its capture setup screen (D7); later the notification listener and UnifiedPush
-//! code. Background Kotlin code runs where no webview, and
+//! Keystore, the background sync worker, the share target, SMS, MMS, call log and contacts
+//! capture with its capture setup screen (D7), and the UnifiedPush receiver that mirrors the home
+//! server's notifications (D9); later the notification listener code. Background Kotlin code
+//! runs where no webview, and
 //! maybe no Tauri runtime, exists, so it reaches the Rust core through plain JNI rather than Tauri
 //! commands (D17). [`jni`] holds those entry points and [`core`] the core they share with the
 //! app's webview.
@@ -17,6 +18,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 pub mod core;
 pub mod jni;
+pub mod notify;
 pub mod pair;
 pub mod share;
 

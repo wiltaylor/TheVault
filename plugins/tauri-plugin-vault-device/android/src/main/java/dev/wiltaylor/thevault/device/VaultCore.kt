@@ -65,6 +65,27 @@ object VaultCore {
     @JvmStatic
     external fun queued(): String
 
+    /**
+     * The home server's unread notifications, newest first, as a JSON array of
+     * `{id, created, title, body, note, url, ...}`. It makes a network request.
+     */
+    @JvmStatic
+    external fun unreadNotifications(): String
+
+    /**
+     * Marks notification [id] read on the home server. Answers `"true"`, or `"false"` when the
+     * server no longer has it. It makes a network request.
+     */
+    @JvmStatic
+    external fun markRead(id: String): String
+
+    /**
+     * Registers the UnifiedPush [endpoint] and its WebPush keys, base64url, with the home server,
+     * or clears the endpoint when it is null. It makes a network request.
+     */
+    @JvmStatic
+    external fun setPush(endpoint: String?, p256dh: String?, auth: String?): String?
+
     /** `{paired, pending, last_sync_ms, last_error}` as JSON. */
     @JvmStatic
     external fun status(): String

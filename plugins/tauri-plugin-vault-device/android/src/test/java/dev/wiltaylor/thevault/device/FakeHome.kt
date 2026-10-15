@@ -8,14 +8,41 @@ import okhttp3.mockwebserver.RecordedRequest
 import org.json.JSONObject
 
 /**
- * A home server just big enough for pairing and one empty sync round, on a free port
- * (OkHttp's MockWebServer). It records
- * each request as `METHOD /path` (query included) and its body.
+ * A home server just big enough for pairing, one empty sync round, the notification list and
+ * the push endpoint, on a free port (OkHttp's MockWebServer). It records each request as
+ * `METHOD /path` (query included) and its body.
  */
 class FakeHome(private val protocol: Int = 1) : AutoCloseable {
     val requests: MutableList<String> = Collections.synchronizedList(mutableListOf())
     val bodies: MutableList<String> = Collections.synchronizedList(mutableListOf())
     private val server = MockWebServer()
+
+    /** The server's notifications, newest first, as `GET /api/notifications` sends them. */
+    val notifications: MutableList<JSONObject> = Collections.synchronizedList(mutableListOf())
+
+    /** Adds an unread notification, newest. */
+    fun notify(id: String, title: String, body: String? = null, note: String? = null, url: String? = null) {
+        notifications.add(
+            0,
+            JSONObject()
+                .put("id", id)
+                .put("created", 1_760_000_000_000L + notifications.size)
+                .put("title", title)
+                .put("body", body ?: JSONObject.NULL)
+                .put("note", note ?: JSONObject.NULL)
+                .put("url", url ?: JSONObject.NULL)
+                .put("source", "test")
+                .put("read", JSONObject.NULL),
+        )
+    }
+
+    /** Marks a notification read, as reading it on another device does. */
+    fun read(id: String) {
+        synchronized(notifications) { notifications.find { it.getString("id") == id }?.put("read", 1L) }
+    }
+
+    private fun unread(): List<JSONObject> =
+        synchronized(notifications) { notifications.filter { it.isNull("read") } }
 
     init {
         server.dispatcher = object : Dispatcher() {
@@ -56,6 +83,22 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
         method == "PUT" && path == "/api/devices/$DEVICE_ID/bases" -> 200 to """{"bases":{}}"""
         path.startsWith("/api/sync/changes") -> 200 to """{"changes":[],"next":0,"latest":0}"""
         path == "/api/assets" -> 200 to """{"assets":[]}"""
+        method == "GET" && path.startsWith("/api/notifications?") -> {
+            val items = org.json.JSONArray(unread())
+            200 to JSONObject().put("items", items).put("next", JSONObject.NULL).put("unread", items.length()).toString()
+        }
+        method == "POST" && path.startsWith("/api/notifications/") && path.endsWith("/read") -> {
+            val id = path.removePrefix("/api/notifications/").removeSuffix("/read")
+            val found = synchronized(notifications) { notifications.find { it.getString("id") == id } }
+            if (found == null) {
+                404 to """{"error":"not_found","message":"no such notification"}"""
+            } else {
+                found.put("read", 1L)
+                200 to found.toString()
+            }
+        }
+        method == "PUT" && path == "/api/devices/$DEVICE_ID/push" ->
+            200 to JSONObject().put("id", DEVICE_ID).put("push", !JSONObject(body).isNull("endpoint")).toString()
         else -> 404 to """{"error":"not_found","message":"no route"}"""
     }
 

@@ -1,5 +1,7 @@
 package dev.wiltaylor.thevault.device
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -11,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import java.util.concurrent.Executors
@@ -20,7 +23,8 @@ import org.json.JSONObject
  * First-run setup (D2, D10 onboarding): pair with the home server by its address and the vault
  * password, or by scanning the pairing QR code that Settings > Devices shows on the web app. The
  * token the server returns goes into the Android Keystore ([PairingStore]); then the first sync
- * starts and background sync is scheduled.
+ * starts and background sync is scheduled. Last it asks to post notifications, which mirror the
+ * server's (D9); the answer does not stop pairing.
  */
 class OnboardingActivity : ComponentActivity() {
     lateinit var serverUrl: EditText
@@ -40,6 +44,10 @@ class OnboardingActivity : ComponentActivity() {
             serverUrl.setText(qr.serverUrl)
             pair(qr.serverUrl, null, qr.code)
         }
+    }
+
+    private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        done()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -114,13 +122,28 @@ class OnboardingActivity : ComponentActivity() {
             runOnUiThread {
                 busy(false)
                 if (error == null) {
-                    setResult(RESULT_OK)
-                    finish()
+                    askToNotify()
                 } else {
                     message.text = error
                 }
             }
         }
+    }
+
+    /** Asks for POST_NOTIFICATIONS unless it is already granted, then closes. */
+    private fun askToNotify() {
+        val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            done()
+        } else {
+            message.text = "Allow notifications to see TheVault's on this phone."
+            notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun done() {
+        setResult(RESULT_OK)
+        finish()
     }
 
     private fun busy(on: Boolean) {

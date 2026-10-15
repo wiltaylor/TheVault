@@ -14,6 +14,7 @@
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.WRITE_CONTACTS" />
+    <!-- Also mirroring the home server's notifications (D9); asked for during onboarding. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
@@ -67,5 +68,19 @@
                 <action android:name="android.intent.action.PHONE_STATE" />
             </intent-filter>
         </receiver>
+
+        <!-- UnifiedPush messages from the distributor (D4). -->
+        <service
+            android:name=".VaultPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- A mirrored notification swiped away: mark it read on the server (D9). -->
+        <receiver
+            android:name=".NotificationDismissReceiver"
+            android:exported="false" />
     </application>
 </manifest>

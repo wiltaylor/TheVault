@@ -51,10 +51,14 @@ dependencies {
     implementation("com.googlecode.libphonenumber:libphonenumber:8.13.52")
     // QR scanning without Google Play services (D10).
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // UnifiedPush (D4): registration, and WebPush decryption with keys it keeps.
+    implementation("org.unifiedpush.android:connector:3.3.5")
     implementation(project(":tauri-android"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("org.robolectric:robolectric:4.16")
     testImplementation("androidx.work:work-testing:2.10.5")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    // The connector's WebPush decrypter, compiled against in the interop test.
+    testImplementation("com.google.crypto.tink:tink:1.23.0")
 }

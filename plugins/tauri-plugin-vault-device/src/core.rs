@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sync::{AssetPolicy, Report};
 
+use crate::notify::{self, PushTarget};
 use crate::share::{self, Shared};
 
 /// How long the foreground loop waits after a write for more writes before it syncs.
@@ -205,9 +206,7 @@ impl Core {
     /// Run one round now, waiting for any round already running. It blocks: never call it from
     /// inside an async runtime.
     pub fn sync_now(&self) -> anyhow::Result<Report> {
-        let link = self
-            .link()
-            .ok_or_else(|| anyhow::anyhow!("this device is not paired"))?;
+        let link = self.linked()?;
         let _round = lock(&self.round);
         let result = self
             .server
@@ -323,6 +322,28 @@ impl Core {
             }));
         }
         Ok(Value::Array(out))
+    }
+
+    fn linked(&self) -> anyhow::Result<Link> {
+        self.link()
+            .ok_or_else(|| anyhow::anyhow!("this device is not paired"))
+    }
+
+    /// The home server's unread notifications, newest first (D9). It blocks.
+    pub fn unread_notifications(&self) -> anyhow::Result<Vec<Value>> {
+        notify::unread(&self.linked()?)
+    }
+
+    /// Mark notification `id` read on the home server; `Ok(false)` when the server no longer
+    /// has it. It blocks.
+    pub fn mark_read(&self, id: &str) -> anyhow::Result<bool> {
+        notify::mark_read(&self.linked()?, id)
+    }
+
+    /// Register the UnifiedPush endpoint with the home server, or clear it with `None` (D4). It
+    /// blocks.
+    pub fn set_push(&self, target: Option<&PushTarget>) -> anyhow::Result<()> {
+        notify::set_push(&self.linked()?, target)
     }
 
     /// Whether the device is paired, how many notes wait, and how the last round went.
