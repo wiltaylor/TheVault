@@ -308,6 +308,21 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/devices/{id}/push",
         "Register or clear a device's UnifiedPush endpoint and WebPush keys",
     ),
+    (
+        "PUT",
+        "/api/devices/{id}/bases",
+        "Replace the base versions a device holds, one per note; pruning keeps them",
+    ),
+    (
+        "GET",
+        "/api/sync/info",
+        "The sync protocol, vault format and server versions; needs no credentials",
+    ),
+    (
+        "GET",
+        "/api/sync/changes",
+        "Every note and definition file changed after ?since=, oldest first, paged by ?limit=, with next and latest",
+    ),
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),
     ("DELETE", "/api/tokens/{name}", "Revoke an API token"),

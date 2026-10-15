@@ -68,9 +68,7 @@ impl Writer {
                 filename: filename.to_owned(),
                 size: bytes.len() as u64,
             };
-            let generation = self
-                .vault
-                .commit(vec![Change::write(asset.path(), bytes)])?;
+            let generation = self.commit(vec![Change::write(asset.path(), bytes)])?;
             inner.index.advance(generation)?;
             asset
         };
@@ -180,7 +178,7 @@ impl Writer {
         inner.index.forget_asset_text(id);
         let delete = vec![Change::delete(asset.path())];
         let saved = if changes.is_empty() {
-            let generation = self.vault.commit(delete)?;
+            let generation = self.commit(delete)?;
             inner.index.advance(generation)?;
             Vec::new()
         } else {

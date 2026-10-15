@@ -1,6 +1,15 @@
 //! Plain types that the script engine and the server crates both name, with no dependencies, so
 //! `script-core` can name them without reaching `state` or `index` (D6).
 
+/// The version of the sync protocol: `GET /api/sync/info`, `GET /api/sync/changes` and the device
+/// bases. A device refuses to sync with a server whose protocol is newer than it knows (D27).
+pub const SYNC_PROTOCOL: u32 = 1;
+
+/// The version of the vault file format in `docs/vault-format.md`. A device refuses to sync with a
+/// server whose format is newer than it knows, since it could write notes the server reads wrong
+/// (D27). Raise it with any change an older reader would misread.
+pub const FORMAT_VERSION: u32 = 1;
+
 /// Who made a change (D13, D30).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Author {

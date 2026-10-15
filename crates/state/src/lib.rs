@@ -1,9 +1,11 @@
-//! `.vault/state.db`: version history, trash, encrypted secrets, API tokens, paired devices, task
-//! run logs, the queue of `after_*` handler jobs and the user's notifications.
+//! `.vault/state.db`: version history, trash, the change feed devices sync from, encrypted secrets,
+//! API tokens, paired devices and their base versions, task run logs, the queue of `after_*`
+//! handler jobs and the user's notifications.
 //!
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
 mod auth;
+mod changes;
 mod devices;
 mod events;
 mod history;
@@ -20,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 
 pub use auth::{Scope, TokenInfo};
+pub use changes::{ChangeKey, ChangePage, Journaled};
 pub use devices::{Device, NewDevice, PLATFORMS, PairCode, PushTarget};
 pub use events::{CAPACITY as EVENT_CAPACITY, Events, LiveEvent, Missed, Subscription};
 pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, Version};
@@ -58,6 +61,8 @@ pub enum Error {
     UnknownToken(String),
     #[error("unknown token scope {0:?}; expected read, write or admin")]
     UnknownScope(String),
+    #[error("note {note} has no version {version}")]
+    UnknownVersion { note: String, version: String },
     #[error("no device {0}")]
     UnknownDevice(String),
     #[error("unknown device platform {0:?}; expected linux or android")]
@@ -111,7 +116,7 @@ pub struct State {
     events: Events,
 }
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -271,6 +276,34 @@ CREATE TABLE IF NOT EXISTS pair_codes (
 );
 ";
 
+/// What version 9 adds: the change feed devices sync from, and the base versions each device still
+/// holds (D20, D29). `changes` keeps one row per note or vault file, replaced with a new `seq` each
+/// time it changes, so the feed is every key ordered by its latest change. Notes already in
+/// `state.db` start in it; the writer adds the files it finds on open.
+const SCHEMA_V9: &str = "
+CREATE TABLE IF NOT EXISTS changes (
+    seq     INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind    TEXT NOT NULL CHECK (kind IN ('note', 'file')),
+    name    TEXT NOT NULL,
+    present INTEGER NOT NULL,
+    at_ms   INTEGER NOT NULL,
+    UNIQUE (kind, name)
+);
+INSERT OR IGNORE INTO changes (kind, name, present, at_ms)
+    SELECT 'note', h.note_id, 1, v.at_ms
+    FROM heads h JOIN versions v ON v.token = h.token
+    ORDER BY v.seq;
+INSERT OR IGNORE INTO changes (kind, name, present, at_ms)
+    SELECT 'note', note_id, 0, deleted_ms FROM trash ORDER BY deleted_ms;
+CREATE TABLE IF NOT EXISTS device_bases (
+    device_id TEXT NOT NULL REFERENCES devices (id) ON DELETE CASCADE,
+    note_id   TEXT NOT NULL,
+    version   TEXT NOT NULL,
+    PRIMARY KEY (device_id, note_id)
+);
+CREATE INDEX IF NOT EXISTS device_bases_version ON device_bases (version);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -360,7 +393,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=7 => {
+        0..=8 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -390,6 +423,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 7 {
                 tx.execute_batch(SCHEMA_V8)?;
+            }
+            if version <= 8 {
+                tx.execute_batch(SCHEMA_V9)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

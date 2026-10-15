@@ -25,7 +25,11 @@
 //! Scheduled tasks live under `/api/tasks`, with their run history and a route to run one now;
 //! the secrets they read are written, never read back, under `/api/secrets` (D10).
 //!
-//! Every route but health, login and device pairing needs a session cookie or a bearer token,
+//! Devices sync through `/api/sync`: an unauthenticated version handshake and a change feed of
+//! every note and definition file, and record the base versions they hold under
+//! `/api/devices/{id}/bases` (D20, D27, D29).
+//!
+//! Every route but health, login, device pairing and the sync handshake needs a session cookie or a bearer token,
 //! and the scope [`auth::required_scope`] names for it (D11). [`owner_router`] serves the same
 //! routes to an in-process caller that is always the owner (D26).
 //!
@@ -44,6 +48,7 @@ mod notifications;
 mod openapi;
 mod pins;
 mod query;
+mod sync;
 mod tasks;
 mod tokens;
 mod types;
@@ -210,6 +215,9 @@ fn build() -> Built {
         .patch("/api/devices/{id}", devices::update)
         .delete("/api/devices/{id}", devices::revoke)
         .put("/api/devices/{id}/push", devices::put_push)
+        .put("/api/devices/{id}/bases", sync::put_bases)
+        .get("/api/sync/info", sync::info)
+        .get("/api/sync/changes", sync::changes)
         .get("/api/tokens", tokens::list)
         .post("/api/tokens", tokens::create)
         .delete("/api/tokens/{name}", tokens::revoke)

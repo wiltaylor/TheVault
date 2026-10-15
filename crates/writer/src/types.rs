@@ -158,7 +158,7 @@ impl Writer {
                 .unwrap_or_else(|_| NoteReport::default());
             staged.push((id, doc, report, text));
         }
-        let generation = self.vault.commit(files)?;
+        let generation = self.commit(files)?;
 
         let mut saved = Vec::new();
         let mut updates = Vec::with_capacity(staged.len());
@@ -214,7 +214,7 @@ impl Writer {
             .cloned()
             .collect();
         let schema = rebuild_schema(&inner.schema, types)?;
-        let generation = self.vault.commit(vec![Change::delete(type_path(name))])?;
+        let generation = self.commit(vec![Change::delete(type_path(name))])?;
         install(&mut inner, schema)?;
         inner.index.advance(generation)?;
         Ok(())

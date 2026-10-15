@@ -113,7 +113,7 @@ impl Writer {
             })
             .collect();
         if notes.is_empty() {
-            let generation = self.vault.commit(changes)?;
+            let generation = self.commit(changes)?;
             inner.index.set_schema(&schema)?;
             inner.index.advance(generation)?;
             inner.schema = schema;
@@ -441,9 +441,7 @@ impl Writer {
         let _w = self.write_lock();
         let mut inner = self.lock();
         check_name("script", name)?;
-        let generation = self
-            .vault
-            .commit(vec![Change::write(script_path(name), source.as_bytes())])?;
+        let generation = self.commit(vec![Change::write(script_path(name), source.as_bytes())])?;
         inner.index.advance(generation)?;
         Ok(source.to_owned())
     }
@@ -520,7 +518,7 @@ impl Writer {
                 by,
             });
         }
-        let generation = self.vault.commit(vec![Change::delete(script_path(name))])?;
+        let generation = self.commit(vec![Change::delete(script_path(name))])?;
         inner.index.advance(generation)?;
         Ok(())
     }
@@ -572,9 +570,7 @@ impl Writer {
                 )],
             }));
         }
-        let generation = self
-            .vault
-            .commit(vec![Change::write(path, text.as_bytes())])?;
+        let generation = self.commit(vec![Change::write(path, text.as_bytes())])?;
         inner.index.advance(generation)?;
         Ok(text)
     }
@@ -583,7 +579,7 @@ impl Writer {
     pub fn delete_task(&self, name: &str) -> Result<()> {
         let mut inner = self.lock();
         self.read_task(name)?;
-        let generation = self.vault.commit(vec![Change::delete(task_path(name))])?;
+        let generation = self.commit(vec![Change::delete(task_path(name))])?;
         inner.index.advance(generation)?;
         Ok(())
     }

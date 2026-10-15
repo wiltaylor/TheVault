@@ -2,6 +2,7 @@
 
 use rusqlite::{OptionalExtension, params};
 
+use crate::changes::{ChangeKey, journal};
 use crate::{Error, Result, State, random_bytes, to_hex};
 
 pub use vocab::Author;
@@ -80,7 +81,9 @@ impl State {
     /// [`MERGE_GAP_MS`], and its run of merged saves began within [`MERGE_SPAN_MS`]. Autosave
     /// writes every few seconds while someone types, and this keeps that from filling the history.
     /// A merged save still gets a new token, so a client holding the old one gets a conflict
-    /// (D12). Saves by tokens and handlers always add a version, so each one stays visible.
+    /// (D12). Saves by tokens and handlers always add a version, so each one stays visible: a
+    /// device's token is one, so its writes never merge (D29). Nor does a save merge into a version
+    /// a device holds as its base, since merging rewrites that version.
     pub fn record_version(
         &self,
         note_id: &str,
@@ -124,7 +127,8 @@ impl State {
                 "SELECT v.seq FROM heads h JOIN versions v ON v.token = h.token
                  WHERE h.note_id = ?1 AND v.note_type = ?2 AND v.author_kind = ?3
                    AND v.author_name = ?4 AND ?5 - v.at_ms <= ?6
-                   AND ?5 - COALESCE(v.started_ms, v.at_ms) <= ?7",
+                   AND ?5 - COALESCE(v.started_ms, v.at_ms) <= ?7
+                   AND NOT EXISTS (SELECT 1 FROM device_bases b WHERE b.version = v.token)",
                 params![
                     note_id,
                     note_type,
@@ -165,6 +169,7 @@ impl State {
             params![note_id, token],
         )?;
         tx.execute("DELETE FROM trash WHERE note_id = ?1", [note_id])?;
+        journal(&tx, &ChangeKey::Note(note_id.to_owned()), true, at_ms)?;
         tx.commit()?;
 
         Ok(Version {
@@ -262,6 +267,7 @@ impl State {
             params![note_id, note_type, content, version, kind, name, deleted_ms],
         )?;
         tx.execute("DELETE FROM heads WHERE note_id = ?1", [note_id])?;
+        journal(&tx, &ChangeKey::Note(note_id.to_owned()), false, deleted_ms)?;
         tx.commit()?;
         Ok(TrashEntry {
             note_id: note_id.to_owned(),
@@ -282,6 +288,20 @@ impl State {
         )?;
         let rows = stmt.query_map([], trash_row)?;
         rows.map(|r| finish_trash(r?)).collect()
+    }
+
+    /// Note `note_id` as it sits in the trash, or `None` when it is not there.
+    pub fn trash_entry(&self, note_id: &str) -> Result<Option<TrashEntry>> {
+        let conn = self.conn();
+        let row = conn
+            .query_row(
+                "SELECT note_id, note_type, content, version, author_kind, author_name, deleted_ms
+                 FROM trash WHERE note_id = ?1",
+                [note_id],
+                trash_row,
+            )
+            .optional()?;
+        row.map(finish_trash).transpose()
     }
 
     /// Whether note `note_id` is in the trash.
@@ -314,7 +334,8 @@ impl State {
         finish_trash(row)
     }
 
-    /// Removes old versions under `policy` and returns how many were removed.
+    /// Removes old versions under `policy` and returns how many were removed. A version a device
+    /// holds as its base is never removed (D29).
     pub fn prune(&self, policy: &PrunePolicy) -> Result<usize> {
         if policy.keep_versions == Some(0) {
             return Err(Error::InvalidPrunePolicy(
@@ -336,7 +357,8 @@ impl State {
                          SELECT seq, ROW_NUMBER() OVER (PARTITION BY note_id ORDER BY seq DESC) AS n
                          FROM versions
                      ) WHERE n > ?1
-                 )",
+                 )
+                 AND token NOT IN (SELECT version FROM device_bases)",
                 [keep],
             )?;
         }
@@ -345,7 +367,8 @@ impl State {
             removed += tx.execute(
                 "DELETE FROM versions
                  WHERE at_ms < ?1
-                   AND seq NOT IN (SELECT MAX(seq) FROM versions GROUP BY note_id)",
+                   AND seq NOT IN (SELECT MAX(seq) FROM versions GROUP BY note_id)
+                   AND token NOT IN (SELECT version FROM device_bases)",
                 [cutoff],
             )?;
         }

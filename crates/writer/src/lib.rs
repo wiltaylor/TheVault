@@ -35,6 +35,7 @@ mod batch;
 mod builtin;
 mod daily;
 mod defs;
+mod feed;
 mod fleeting;
 mod note;
 mod notify;
@@ -61,6 +62,7 @@ pub use builtin::{
 };
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
 pub use defs::ScriptProblem;
+pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
 pub use index::{Archived, Graph, GraphEdge, GraphNode};
 pub use note::{ARCHIVED, Input, block_to_json, doc_to_json, is_archived, value_to_json};
@@ -415,13 +417,14 @@ impl Writer {
     /// bring `state.db` up to the vault files and rebuild the index from them. An index that is
     /// current is trusted as it is: every commit it holds also finished its `state.db` step, and
     /// files edited outside the server are not watched (D28), so `vault reindex` is how to pick
-    /// them up.
+    /// them up. The change feed is brought up to the synced files on disk either way (D20).
     pub fn open(vault: Vault, state: State) -> Result<Writer> {
         let mut index = Index::open(&vault)?;
         if !index.is_current(&vault)? {
             recover(&vault, &state)?;
             index.rebuild(&vault)?;
         }
+        feed::reconcile(&vault, &state)?;
         let schema = Schema::load(&vault)?;
         Ok(Writer {
             vault,
@@ -547,7 +550,7 @@ impl Writer {
         let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
             .map_err(Error::InvalidType)?;
         builtin::check_built_in_types(&schema)?;
-        let generation = self.vault.commit(changes)?;
+        let generation = self.commit(changes)?;
         inner.index.set_schema(&schema)?;
         inner.index.advance(generation)?;
         inner.schema = schema;
@@ -1223,8 +1226,8 @@ impl Writer {
             });
         }
         let generation = match inner.commit_hook.as_mut() {
-            Some(hook) => self.vault.commit_with_hook(files, &mut **hook)?,
-            None => self.vault.commit(files)?,
+            Some(hook) => self.commit_with_hook(files, &mut **hook)?,
+            None => self.commit(files)?,
         };
 
         let mut saved = Vec::with_capacity(rendered.len());

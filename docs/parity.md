@@ -150,6 +150,8 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Revoke a device | `Devices.tsx` | `DELETE /api/devices/{id}` | `vault device revoke <id>` | |
 | Pair with the password or a code | none: the desktop and Android apps do | `POST /api/devices/pair` | none | Explained: an app pairs itself and keeps the token it gets; the CLI uses API tokens |
 | Register a push endpoint | none: the Android app does | `PUT /api/devices/{id}/push` | none | Explained: only the device's own token, or the owner, sets it |
+| Record the base versions a device holds | none: the apps' sync engine does | `PUT /api/devices/{id}/bases` | none | Explained: only the device's own token, or the owner, sets them (see `docs/sync.md`) |
+| Check the server's sync versions; pull the change feed | none: the apps' sync engine does | `GET /api/sync/info`, `GET /api/sync/changes` | none | Explained: device sync, not a user action (see `docs/sync.md`) |
 
 ### Notifications
 
@@ -240,6 +242,9 @@ The listing has 85 routes. `/api/test/clock` is left out of the listing on purpo
 | `PATCH /api/devices/{id}` | `vault device rename`, `vault device settings` | Devices, Save | |
 | `DELETE /api/devices/{id}` | `vault device revoke` | Devices, Revoke | |
 | `PUT /api/devices/{id}/push` | none | not used | The Android app registers its UnifiedPush endpoint |
+| `PUT /api/devices/{id}/bases` | none | not used | The apps' sync engine records its bases |
+| `GET /api/sync/info` | none | not used | The apps check it before they sync |
+| `GET /api/sync/changes` | none | not used | The apps' sync engine pulls it |
 | `GET /api/tokens` | `vault token list` | Access | |
 | `POST /api/tokens` | `vault token create` | Access | |
 | `DELETE /api/tokens/{name}` | `vault token revoke` | Access | |

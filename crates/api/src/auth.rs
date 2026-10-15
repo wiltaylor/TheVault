@@ -73,15 +73,20 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrantedScope(pub Scope);
 
-/// Whether `path` is `/api/devices/{id}/push`.
-fn is_device_push(path: &str) -> bool {
+/// Whether `path` is `/api/devices/{id}/push` or `/api/devices/{id}/bases`, which a device sets
+/// for itself.
+fn is_device_own(path: &str) -> bool {
     path.strip_prefix("/api/devices/")
-        .and_then(|rest| rest.strip_suffix("/push"))
+        .and_then(|rest| {
+            rest.strip_suffix("/push")
+                .or_else(|| rest.strip_suffix("/bases"))
+        })
         .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
 
-/// The scope a request needs, or `None` for the public endpoints: health, login and device
-/// pairing, which checks the password or a pairing code itself.
+/// The scope a request needs, or `None` for the public endpoints: health, login, device pairing,
+/// which checks the password or a pairing code itself, and the sync handshake, which an app reads
+/// before it pairs (D27).
 pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     let under = |prefix: &str| {
         path == prefix
@@ -90,6 +95,7 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
                 .is_some_and(|rest| rest.starts_with('/'))
     };
     if path == "/api/health"
+        || (method == Method::GET && path == "/api/sync/info")
         || (method == Method::POST && (path == "/api/login" || path == "/api/devices/pair"))
     {
         return None;
@@ -103,8 +109,9 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     {
         return Some(Scope::Read);
     }
-    // A device sets its own push endpoint with its `write` token; the handler checks it is its own.
-    if WRITE_PATHS.iter().any(|p| under(p)) || (method == Method::PUT && is_device_push(path)) {
+    // A device sets its own push endpoint and bases with its `write` token; the handler checks it
+    // is its own.
+    if WRITE_PATHS.iter().any(|p| under(p)) || (method == Method::PUT && is_device_own(path)) {
         Some(Scope::Write)
     } else {
         Some(Scope::Admin)
@@ -376,6 +383,11 @@ mod tests {
             (Method::PUT, "/api/devices/x/push", Some(Scope::Write)),
             (Method::PUT, "/api/devices/x/y/push", Some(Scope::Admin)),
             (Method::PUT, "/api/devices//push", Some(Scope::Admin)),
+            (Method::PUT, "/api/devices/x/bases", Some(Scope::Write)),
+            (Method::PUT, "/api/devices/x/y/bases", Some(Scope::Admin)),
+            (Method::GET, "/api/sync/info", None),
+            (Method::POST, "/api/sync/info", Some(Scope::Admin)),
+            (Method::GET, "/api/sync/changes", Some(Scope::Read)),
             (Method::GET, "/anything", Some(Scope::Read)),
         ];
         for (method, path, want) in cases {
