@@ -53,8 +53,9 @@ class VaultPushService : PushService() {
 
 /**
  * What a decrypted push does. The server sends `{"event", "id"}` and no more (D9): a new
- * notification is fetched and shown, a read or dismissed one is cancelled at once, and a clear
- * reconciles with the server's list.
+ * notification is fetched and shown, a read or dismissed one is cancelled at once, a clear
+ * reconciles with the server's list, and a device command has the pending commands fetched and
+ * run (D22).
  */
 object PushHandler {
     /** Handles one decrypted message and answers its event, or null when it is not one. */
@@ -70,7 +71,7 @@ object PushHandler {
             "notification.created" -> NotificationWorker.enqueue(context, id)
             "notification.read", "notification.dismissed" -> id?.let { NotificationMirror.cancel(context, it) }
             "notification.cleared" -> NotificationWorker.enqueue(context)
-            // Device commands belong to the device runtime; nothing else is sent.
+            "device.command" -> CommandWorker.enqueue(context)
             else -> return null
         }
         return event

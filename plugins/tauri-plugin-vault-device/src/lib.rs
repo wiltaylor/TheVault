@@ -16,6 +16,7 @@ use serde_json::{Value as Json, json};
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime};
 
+pub mod commands;
 pub mod core;
 pub mod jni;
 pub mod notify;

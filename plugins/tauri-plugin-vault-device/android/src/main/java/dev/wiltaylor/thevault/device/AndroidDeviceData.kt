@@ -49,7 +49,8 @@ class AndroidDeviceData(private val context: Context, private val capture: Devic
             throw SecurityException("SEND_SMS")
         }
         val sms = context.getSystemService(SmsManager::class.java)
-        val parts = sms.divideMessage(body)
+        // Any body this short fits one SMS, whatever its alphabet; a longer one goes in parts.
+        val parts = if (body.length <= SINGLE_SMS) arrayListOf(body) else sms.divideMessage(body)
         if (parts.size > 1) sms.sendMultipartTextMessage(to, null, parts, null, null) else sms.sendTextMessage(to, null, body, null, null)
         // Android writes the sent message to the provider after it goes, where capture reads it
         // as `sms_sent`; its row id is not known yet.
@@ -80,5 +81,8 @@ class AndroidDeviceData(private val context: Context, private val capture: Devic
 
     companion object {
         const val CHANNEL = "device-scripts"
+
+        /** The longest body that is always one SMS: 70 characters in UCS-2, 160 in GSM 7-bit. */
+        private const val SINGLE_SMS = 70
     }
 }

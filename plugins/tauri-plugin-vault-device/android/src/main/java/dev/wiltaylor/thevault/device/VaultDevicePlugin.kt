@@ -15,9 +15,9 @@ import app.tauri.plugin.Plugin
  * pairing and asks for a sync round, or starts onboarding on a device that is not paired yet;
  * background sync runs from [SyncWorker]. Once paired, it opens the capture setup screen until
  * that has been finished, and starts device capture (D7), which then runs from receivers and
- * workers with no webview. A paired app also starts UnifiedPush once per process and reconciles
- * the mirrored notifications each time it comes to the front; a tapped notification opens its
- * note here (D9). The notification listener code lands here too.
+ * workers with no webview. A paired app also starts UnifiedPush once per process, and each time
+ * it comes to the front reconciles the mirrored notifications and runs pending device commands; a
+ * tapped notification opens its note here (D9, D22). The notification listener code lands here too.
  *
  * Commands for the webview: `open_capture_setup` and `capture_status`.
  */
@@ -59,6 +59,7 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
             SyncWorker.schedule(context)
             startCapture()
             NotificationWorker.enqueue(context)
+            CommandWorker.enqueue(context)
             if (!pushStarted) {
                 pushStarted = true
                 PushRegistration.start(activity)

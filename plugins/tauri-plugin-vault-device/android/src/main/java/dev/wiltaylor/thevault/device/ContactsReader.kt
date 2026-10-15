@@ -37,7 +37,12 @@ class ContactLookup(private val resolver: ContentResolver) {
 /**
  * Reads, adds, changes and deletes phone contacts through `ContactsContract`, as
  * `contact_changed` and `contact_deleted` payloads: `{ contact_id, name, phones, addresses,
- * updated }`, with `phones` in E.164 and `addresses` the email addresses.
+ * updated, person, synced }`, with `phones` in E.164 and `addresses` the email addresses.
+ *
+ * A contact linked to a `person` note carries one data row of its own, [PERSON_MIME], holding
+ * the note's id and what the contact and the person last agreed on (D16, D24): `person` and
+ * `synced` in the payload, both null on a contact never linked. The contacts app does not show
+ * the row.
  *
  * A changed contact's key is its last-updated time, and a deleted one's its deletion time, in
  * milliseconds: the provider gives no other order for changes.
@@ -124,15 +129,24 @@ class ContactsReader(private val resolver: ContentResolver, private val numbers:
     }
 
     /**
-     * `device::contacts_upsert`: add the contact, or replace the name, phones and addresses of
-     * contact `contact_id`. Returns `{ contact_id }`.
+     * `device::contacts_upsert`: add the contact, or change contact `contact_id`, to hold the
+     * name, phones and addresses given. Only the kinds that differ are rewritten, so a contact
+     * that already agrees keeps its own number formatting and labels. With `person`, the
+     * contact's [PERSON_MIME] row is set to the note's id and to these fields as what the two
+     * sides now agree on, and a contact with no `contact_id` that already holds that person is
+     * changed rather than added twice. Returns `{ contact_id }`.
      */
     fun upsert(contact: JSONObject): JSONObject {
         val name = contact.optString("name")
         val phones = contact.optJSONArray("phones").strings()
         val addresses = contact.optJSONArray("addresses").strings()
+        val person = contact.text("person")
+        val synced = JSONObject()
+            .put("name", name)
+            .put("phones", Payloads.list(phones))
+            .put("addresses", Payloads.list(addresses))
         val ops = ArrayList<ContentProviderOperation>()
-        val existing = contact.text("contact_id")
+        val existing = contact.text("contact_id") ?: person?.let(::contactOfPerson)
         if (existing == null) {
             ops.add(
                 ContentProviderOperation.newInsert(RawContacts.CONTENT_URI)
@@ -140,7 +154,10 @@ class ContactsReader(private val resolver: ContentResolver, private val numbers:
                     .withValue(RawContacts.ACCOUNT_NAME, null)
                     .build(),
             )
-            addData(ops, null, name, phones, addresses)
+            addName(ops, null, name)
+            addPhones(ops, null, phones)
+            addAddresses(ops, null, addresses)
+            if (person != null) addPerson(ops, null, person, synced)
             val results = resolver.applyBatch(ContactsContract.AUTHORITY, ops)
             val rawId = results.firstOrNull()?.uri?.let { ContentUris.parseId(it) }
                 ?: throw IllegalStateException("the phone did not add the contact")
@@ -154,17 +171,26 @@ class ContactsReader(private val resolver: ContentResolver, private val numbers:
                 ?: throw IllegalStateException("the phone added the contact but has no id for it")
             return JSONObject().put("contact_id", contactId.toString())
         }
-        val rawId = rawContactOf(existing)
-        ops.add(
-            ContentProviderOperation.newDelete(Data.CONTENT_URI)
-                .withSelection(
-                    "${Data.RAW_CONTACT_ID} = ? AND ${Data.MIMETYPE} IN (?, ?, ?)",
-                    arrayOf(rawId.toString(), StructuredName.CONTENT_ITEM_TYPE, Phone.CONTENT_ITEM_TYPE, Email.CONTENT_ITEM_TYPE),
-                )
-                .build(),
-        )
-        addData(ops, rawId, name, phones, addresses)
-        resolver.applyBatch(ContactsContract.AUTHORITY, ops)
+        val now = get(existing)
+        val raws = rawContactsOf(existing)
+        val rawId = raws.first()
+        if (now.optString("name") != name) {
+            ops.add(deleteRows(raws, StructuredName.CONTENT_ITEM_TYPE))
+            addName(ops, rawId, name)
+        }
+        if (now.getJSONArray("phones").strings() != phones) {
+            ops.add(deleteRows(raws, Phone.CONTENT_ITEM_TYPE))
+            addPhones(ops, rawId, phones)
+        }
+        if (now.getJSONArray("addresses").strings() != addresses) {
+            ops.add(deleteRows(raws, Email.CONTENT_ITEM_TYPE))
+            addAddresses(ops, rawId, addresses)
+        }
+        if (person != null && (now.optString("person") != person || now.optJSONObject("synced")?.toString() != synced.toString())) {
+            ops.add(deleteRows(raws, PERSON_MIME))
+            addPerson(ops, rawId, person, synced)
+        }
+        if (ops.isNotEmpty()) resolver.applyBatch(ContactsContract.AUTHORITY, ops)
         return JSONObject().put("contact_id", existing)
     }
 
@@ -174,33 +200,64 @@ class ContactsReader(private val resolver: ContentResolver, private val numbers:
         resolver.delete(ContentUris.withAppendedId(Contacts.CONTENT_URI, id), null, null)
     }
 
-    private fun rawContactOf(contactId: String): Long = resolver.rows(
+    /** The raw contacts making up contact [contactId], oldest first. */
+    private fun rawContactsOf(contactId: String): List<Long> = resolver.rows(
         RawContacts.CONTENT_URI,
         arrayOf(RawContacts._ID),
         "${RawContacts.CONTACT_ID} = ?",
         arrayOf(contactId),
-        limit = 1,
-    ) { it.long(RawContacts._ID) }.firstOrNull() ?: throw NoSuchElementException("no contact $contactId")
+        "${RawContacts._ID} ASC",
+    ) { it.long(RawContacts._ID) }.ifEmpty { throw NoSuchElementException("no contact $contactId") }
 
-    /** Data rows for the name, phones and addresses: of [rawId], or of the raw contact inserted first in [ops]. */
-    private fun addData(
-        ops: ArrayList<ContentProviderOperation>,
-        rawId: Long?,
-        name: String,
-        phones: List<String>,
-        addresses: List<String>,
-    ) {
-        fun row(mime: String): ContentProviderOperation.Builder {
-            val b = ContentProviderOperation.newInsert(Data.CONTENT_URI).withValue(Data.MIMETYPE, mime)
-            return if (rawId == null) b.withValueBackReference(Data.RAW_CONTACT_ID, 0) else b.withValue(Data.RAW_CONTACT_ID, rawId)
-        }
-        ops.add(row(StructuredName.CONTENT_ITEM_TYPE).withValue(StructuredName.DISPLAY_NAME, name).build())
-        phones.forEach {
-            ops.add(row(Phone.CONTENT_ITEM_TYPE).withValue(Phone.NUMBER, it).withValue(Phone.TYPE, Phone.TYPE_MOBILE).build())
-        }
-        addresses.forEach {
-            ops.add(row(Email.CONTENT_ITEM_TYPE).withValue(Email.ADDRESS, it).withValue(Email.TYPE, Email.TYPE_OTHER).build())
-        }
+    /** The contact holding person note [person], if any. */
+    private fun contactOfPerson(person: String): String? = resolver.rows(
+        Data.CONTENT_URI,
+        arrayOf(Data.CONTACT_ID),
+        "${Data.MIMETYPE} = ? AND ${Data.DATA1} = ?",
+        arrayOf(PERSON_MIME, person),
+        limit = 1,
+    ) { it.long(Data.CONTACT_ID).toString() }.firstOrNull()
+
+    /** The contact's [PERSON_MIME] row: the person's id and what the sides last agreed on. */
+    private fun personRow(contactId: Long): Pair<String?, JSONObject?>? = resolver.rows(
+        Data.CONTENT_URI,
+        arrayOf(Data.DATA1, Data.DATA2),
+        "${Data.CONTACT_ID} = ? AND ${Data.MIMETYPE} = ?",
+        arrayOf(contactId.toString(), PERSON_MIME),
+        limit = 1,
+    ) { c ->
+        val synced = c.string(Data.DATA2)?.let { runCatching { JSONObject(it) }.getOrNull() }
+        c.string(Data.DATA1) to synced
+    }.firstOrNull()
+
+    private fun deleteRows(raws: List<Long>, mime: String): ContentProviderOperation =
+        ContentProviderOperation.newDelete(Data.CONTENT_URI)
+            .withSelection(
+                "${Data.RAW_CONTACT_ID} IN (${raws.joinToString(",") { "?" }}) AND ${Data.MIMETYPE} = ?",
+                (raws.map(Long::toString) + mime).toTypedArray(),
+            )
+            .build()
+
+    /** A data row insert: into [rawId], or into the raw contact inserted first in the batch. */
+    private fun row(rawId: Long?, mime: String): ContentProviderOperation.Builder {
+        val b = ContentProviderOperation.newInsert(Data.CONTENT_URI).withValue(Data.MIMETYPE, mime)
+        return if (rawId == null) b.withValueBackReference(Data.RAW_CONTACT_ID, 0) else b.withValue(Data.RAW_CONTACT_ID, rawId)
+    }
+
+    private fun addName(ops: ArrayList<ContentProviderOperation>, rawId: Long?, name: String) {
+        ops.add(row(rawId, StructuredName.CONTENT_ITEM_TYPE).withValue(StructuredName.DISPLAY_NAME, name).build())
+    }
+
+    private fun addPhones(ops: ArrayList<ContentProviderOperation>, rawId: Long?, phones: List<String>) = phones.forEach {
+        ops.add(row(rawId, Phone.CONTENT_ITEM_TYPE).withValue(Phone.NUMBER, it).withValue(Phone.TYPE, Phone.TYPE_MOBILE).build())
+    }
+
+    private fun addAddresses(ops: ArrayList<ContentProviderOperation>, rawId: Long?, addresses: List<String>) = addresses.forEach {
+        ops.add(row(rawId, Email.CONTENT_ITEM_TYPE).withValue(Email.ADDRESS, it).withValue(Email.TYPE, Email.TYPE_OTHER).build())
+    }
+
+    private fun addPerson(ops: ArrayList<ContentProviderOperation>, rawId: Long?, person: String, synced: JSONObject) {
+        ops.add(row(rawId, PERSON_MIME).withValue(Data.DATA1, person).withValue(Data.DATA2, synced.toString()).build())
     }
 
     private fun contact(id: Long, name: String?, updated: Long): JSONObject {
@@ -211,12 +268,20 @@ class ContactsReader(private val resolver: ContentResolver, private val numbers:
         val addresses = resolver.rows(Email.CONTENT_URI, arrayOf(Email.ADDRESS), "${Email.CONTACT_ID} = ?", args) {
             it.string(Email.ADDRESS)
         }.distinct()
+        val vault = personRow(id)
         return JSONObject()
             .put("contact_id", id.toString())
             .put("name", name ?: "")
             .put("phones", Payloads.list(phones))
             .put("addresses", Payloads.list(addresses))
             .put("updated", Payloads.time(updated))
+            .put("person", vault?.first ?: JSONObject.NULL)
+            .put("synced", vault?.second ?: JSONObject.NULL)
+    }
+
+    companion object {
+        /** The MIME type of the data row that links a contact to its `person` note. */
+        const val PERSON_MIME = "vnd.android.cursor.item/vnd.dev.wiltaylor.thevault.person"
     }
 }
 

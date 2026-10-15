@@ -15,6 +15,11 @@
 //! A command a server script queued for the device runs through [`DeviceRuntime::run_command`]
 //! only when the device file declares it and the device's settings enable it (D22).
 //!
+//! Contacts sync both ways (D16). A contact changing on the phone is a `contact_changed` event; a
+//! linked `person` changing anywhere reaches the phone through
+//! [`DeviceRuntime::queue_person_changes`], which queues the same event for its contact so that
+//! the one handler settles both directions, field by field.
+//!
 //! A vault without `devices/<platform>.wcl` runs the built-in default device file, and a script
 //! the device file names that the vault lacks runs from the built-in defaults (D15).
 
@@ -53,6 +58,11 @@ CREATE INDEX IF NOT EXISTS device_events_status ON device_events (status, id);
 CREATE TABLE IF NOT EXISTS device_runtime (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS device_people (
+    id      TEXT PRIMARY KEY,
+    version TEXT NOT NULL
 );
 ";
 
@@ -201,6 +211,7 @@ pub struct DeviceRuntime {
     writer: Arc<Writer>,
     host: Host,
     access: Arc<DeviceAccess>,
+    data: Arc<dyn DeviceData>,
     platform: String,
     settings: RwLock<DeviceSettings>,
     queue: Mutex<Connection>,
@@ -235,7 +246,7 @@ impl DeviceRuntime {
             .unwrap_or_default();
         let access = Arc::new(DeviceAccess::new(
             &config.id,
-            config.data,
+            config.data.clone(),
             settings.switches(),
         ));
         let vault: Arc<dyn Vault> = writer.clone();
@@ -249,6 +260,7 @@ impl DeviceRuntime {
             writer,
             host,
             access,
+            data: config.data,
             platform: config.platform,
             settings: RwLock::new(settings),
             queue: Mutex::new(conn),
@@ -409,6 +421,82 @@ impl DeviceRuntime {
             self.run(&h.script, &h.function, value.clone())?;
         }
         Ok(())
+    }
+
+    /// Queue a `contact_changed` event for the phone contact of each `person` linked to this
+    /// device whose version changed since the last call, with the contact as the phone holds it
+    /// now, so the handler carries the person's changes to the contact (D16). Call it after a
+    /// sync round. Returns how many it queued.
+    ///
+    /// It queues nothing while the device may not write contacts, and remembers nothing either,
+    /// so the changes in between are taken once the switch is on. The first call only remembers
+    /// each person's version: what changed before the phone started syncing is not news.
+    pub fn queue_person_changes(&self) -> anyhow::Result<usize> {
+        let started = self
+            .conn()
+            .query_row(
+                "SELECT 1 FROM device_runtime WHERE key = 'people_started'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if started && !self.settings().contacts_write {
+            return Ok(0);
+        }
+        let people = self.writer.list(Some("person"))?;
+        let seen: std::collections::HashMap<String, String> = {
+            let conn = self.conn();
+            let mut stmt = conn.prepare("SELECT id, version FROM device_people")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let slot = format!("device_{}", self.device_id());
+        let now = self.writer.now_ms();
+        let mut queued = 0;
+        for p in &people {
+            if seen.get(&p.id) == Some(&p.version) {
+                continue;
+            }
+            self.conn().execute(
+                "INSERT INTO device_people (id, version) VALUES (?1, ?2)
+                 ON CONFLICT (id) DO UPDATE SET version = excluded.version",
+                params![p.id, p.version],
+            )?;
+            if !started {
+                continue;
+            }
+            let Ok(note) = self.writer.read(&p.id) else {
+                continue;
+            };
+            let doc = writer::doc_to_json(&note.doc);
+            let contact_id = doc["blocks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|b| b["kind"] == "dict" && b["labels"] == json!(["device_contacts"]))
+                .and_then(|b| b["fields"][&slot].as_str())
+                .map(str::to_owned);
+            let Some(contact_id) = contact_id else {
+                continue;
+            };
+            // A contact the phone no longer has was deleted there, and its own event unlinks it.
+            let Ok(contact) = self.data.contacts_get(&contact_id) else {
+                continue;
+            };
+            if contact.is_object() {
+                self.enqueue("contact_changed", contact, now)?;
+                queued += 1;
+            }
+        }
+        if !started {
+            self.conn().execute(
+                "INSERT INTO device_runtime (key, value) VALUES ('people_started', '1')
+                 ON CONFLICT (key) DO NOTHING",
+                [],
+            )?;
+        }
+        Ok(queued)
     }
 
     /// Run command `command`, as `GET /api/devices/{id}/commands` lists it: `{ id, name, payload,

@@ -345,7 +345,7 @@ These conventions hold in every payload:
 | `mms_received` | `{ device_ref, thread_ref, number, number_raw, contact, to, subject, body, attachments, sent }`. `number` is the sender. `to` lists every recipient of a group message, other than this phone, as `{ number, number_raw, contact }`. `subject` and `body` are `""` when the message has none |
 | `rcs_received` | `{ device_ref, thread_ref, sender, conversation, body, sent, partial }`. Read from a Google Messages notification: `sender` is the display name it shows, `conversation` the conversation title or `null` for a one-to-one chat, and `thread_ref` the notification's conversation key. There is no number. `partial` is always `true` |
 | `call_ended` | `{ device_ref, direction, number, number_raw, contact, started, duration }`. `direction` is `"in"`, `"out"` or `"missed"`; `duration` is in whole seconds, `0` for a missed call |
-| `contact_changed` | `{ contact_id, name, phones, addresses, updated }`. `phones` lists every number as E.164, the ones that cannot be normalised left out; `addresses` lists every email address. `updated` is when the phone last changed the contact |
+| `contact_changed` | `{ contact_id, name, phones, addresses, updated, person, synced }`. `phones` lists every number as E.164, the ones that cannot be normalised left out; `addresses` lists every email address. `updated` is when the phone last changed the contact. `person` is the id of the `person` note the contact is linked to, and `synced` is `{ name, phones, addresses }` as the contact and the person last agreed on them; both are `null` on a contact that was never linked |
 | `contact_deleted` | `{ contact_id }` |
 | `share_received` | `{ text, subject, url, attachments }`. What another app shared: `text` and `subject` are `""` when it sent none, `url` is the first link in `text` or `null`, and `attachments` lists the shared files |
 
@@ -355,6 +355,9 @@ On Android the app captures these events itself, with no window open (D7, D17):
 - Every hour, a catch-up reads each store from where capture last stopped, so nothing is missed while the app is stopped, and nothing is captured twice.
 - Capture starts from the newest items when the app is set up. Earlier messages, calls and contact changes arrive only when the user turns on the import in the capture setup, which is off by default, and picks a range of dates.
 - Only received MMS are captured, since no event carries a sent one. A group MMS's `to` leaves out this phone's own numbers when Android tells the app what they are.
+- A `person` linked to a phone contact that changes anywhere, once the phone syncs the change, queues a `contact_changed` event for the contact as the phone holds it, so the same handler carries the change to the phone. This happens only while the device's contacts-write switch is on.
+
+The default `device_contacts` script keeps contacts and `person` notes in step field by field (D16). For each of the name, the phones and the addresses: a field changed on one side since `synced` takes that side; a field changed on both sides takes the side changed most recently. It then writes the settled fields to the contact, with the person's id, which needs the contacts-write switch. Deleting the contact on the phone unlinks the person and keeps it, and a contact whose person was deleted in the vault is left alone rather than making the person again.
 
 ## Device commands
 
@@ -369,8 +372,10 @@ A command runs on the device through the script function its `command` block nam
 | Command | `payload` | Result when `done` |
 |---------|-----------|--------------------|
 | `send_sms` | `{ to, body }`. `to` is a number, E.164 or as dialled | `{ device_ref }` of the sent message. Needs the device's SMS-send switch |
-| `upsert_contact` | `{ contact_id, name, phones, addresses, person }`. `contact_id` is `null` to add a contact. `person` is the id of the `person` note the contact mirrors | `{ contact_id }`. Needs the device's contacts-write switch |
+| `upsert_contact` | `{ contact_id, name, phones, addresses, person }`. `contact_id` is `null` to add a contact, or to change the contact that already holds `person`. `person` is the id of the `person` note the contact mirrors; the contact stores it, and these fields as what the two last agreed on | `{ contact_id }`. Needs the device's contacts-write switch |
 | `delete_contact` | `{ contact_id }` | `{}`. Needs the device's contacts-write switch |
 | `show_notification` | `{ title, body, note }`. `body` and `note` are `""` for none; tapping the notification opens `note` | `{}` |
 
 A device reports on a command at `POST /api/devices/<id>/commands/<cid>/result` with `{ "status": "delivered" }` once it has the command, then `{ "status": "done" | "failed", "result": ... }`. A command that is finished or expired answers 409.
+
+The Android app fetches its pending commands when a `device.command` push arrives, when the app opens, and, on a phone with no UnifiedPush distributor, every 15 minutes. It first takes its settings from the home server, so a command enabled a moment ago runs. It reports each command `delivered` before running it, so a run that a crash cuts short is not repeated: the command expires instead. `send_sms` also needs Android's SEND_SMS permission; without it the command fails with a message that says so.

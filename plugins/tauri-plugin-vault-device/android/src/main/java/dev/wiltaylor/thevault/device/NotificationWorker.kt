@@ -59,8 +59,12 @@ class NotificationWorker(context: Context, params: WorkerParameters) : Worker(co
             WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
         }
 
-        /** Starts the 15-minute check, for a phone that has no distributor, keeping one already set. */
+        /**
+         * Starts the 15-minute check, for a phone that has no distributor, keeping one already
+         * set. Device commands are checked on the same schedule ([CommandWorker]).
+         */
         fun schedule(context: Context) {
+            CommandWorker.schedule(context)
             val request = PeriodicWorkRequestBuilder<NotificationWorker>(PERIOD_MINUTES, TimeUnit.MINUTES)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
@@ -70,6 +74,7 @@ class NotificationWorker(context: Context, params: WorkerParameters) : Worker(co
 
         /** Stops the 15-minute check once pushes reach the phone. */
         fun unschedule(context: Context) {
+            CommandWorker.unschedule(context)
             WorkManager.getInstance(context).cancelUniqueWork(FALLBACK)
         }
     }

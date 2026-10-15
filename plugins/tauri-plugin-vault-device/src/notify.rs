@@ -32,18 +32,18 @@ pub struct PushTarget {
     pub auth: String,
 }
 
-fn client() -> anyhow::Result<Client> {
+pub(crate) fn client() -> anyhow::Result<Client> {
     Ok(Client::builder().timeout(TIMEOUT).build()?)
 }
 
-fn send(link: &Link, rb: RequestBuilder) -> anyhow::Result<Response> {
+pub(crate) fn send(link: &Link, rb: RequestBuilder) -> anyhow::Result<Response> {
     rb.bearer_auth(&link.token)
         .send()
         .map_err(|e| anyhow::anyhow!("cannot reach {}: {e}", link.server_url))
 }
 
 /// The error for an answer that is not a success: the server's message, else its status.
-fn refused(res: Response) -> anyhow::Error {
+pub(crate) fn refused(res: Response) -> anyhow::Error {
     let status = res.status();
     let answer: Value = res.json().unwrap_or(Value::Null);
     let message = answer["message"]

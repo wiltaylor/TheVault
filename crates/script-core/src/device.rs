@@ -20,7 +20,7 @@ use crate::{Extensions, Kind, Reply, Vault, convert, run};
 /// Items travel in the shapes of the device event payloads in `docs/scripts.md`: an SMS as
 /// `{ device_ref, thread_ref, number, number_raw, contact, body, sent, direction }`, a call as
 /// `{ device_ref, direction, number, number_raw, contact, started, duration }`, a contact as
-/// `{ contact_id, name, phones, addresses, updated }`.
+/// `{ contact_id, name, phones, addresses, updated, person, synced }`.
 pub trait DeviceData: Send + Sync {
     /// SMS matching `filter`, newest first. `filter` may hold `thread_ref`, `number`, `since` (a
     /// time) and `limit`.

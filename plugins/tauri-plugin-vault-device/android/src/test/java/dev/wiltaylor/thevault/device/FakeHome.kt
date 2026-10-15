@@ -8,8 +8,8 @@ import okhttp3.mockwebserver.RecordedRequest
 import org.json.JSONObject
 
 /**
- * A home server just big enough for pairing, one empty sync round, the notification list and
- * the push endpoint, on a free port (OkHttp's MockWebServer). It records each request as
+ * A home server just big enough for pairing, one empty sync round, the notification list, the
+ * push endpoint, and the device's settings and commands, on a free port (OkHttp's MockWebServer). It records each request as
  * `METHOD /path` (query included) and its body.
  */
 class FakeHome(private val protocol: Int = 1) : AutoCloseable {
@@ -40,6 +40,29 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
     fun read(id: String) {
         synchronized(notifications) { notifications.find { it.getString("id") == id }?.put("read", 1L) }
     }
+
+    /** This device's settings, as `GET /api/devices` lists them. */
+    @Volatile
+    var settings: JSONObject = JSONObject()
+
+    /** The commands server scripts queued for this device, oldest first, each with its `status` and `result`. */
+    val commands: MutableList<JSONObject> = Collections.synchronizedList(mutableListOf())
+
+    /** Queues a pending command, as `vault::device_command` does. */
+    fun command(id: String, name: String, payload: JSONObject) {
+        commands.add(
+            JSONObject()
+                .put("id", id)
+                .put("device", DEVICE_ID)
+                .put("name", name)
+                .put("payload", payload)
+                .put("status", "pending")
+                .put("result", JSONObject.NULL),
+        )
+    }
+
+    /** Command [id] as it now stands. */
+    fun command(id: String): JSONObject = synchronized(commands) { commands.first { it.getString("id") == id } }
 
     private fun unread(): List<JSONObject> =
         synchronized(notifications) { notifications.filter { it.isNull("read") } }
@@ -95,6 +118,29 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
             } else {
                 found.put("read", 1L)
                 200 to found.toString()
+            }
+        }
+        method == "GET" && path == "/api/devices" -> {
+            val me = JSONObject().put("id", DEVICE_ID).put("name", "Pixel").put("platform", "android").put("settings", settings)
+            200 to JSONObject().put("devices", org.json.JSONArray().put(me)).toString()
+        }
+        method == "GET" && path == "/api/devices/$DEVICE_ID/commands?status=pending" -> {
+            val pending = synchronized(commands) { commands.filter { it.getString("status") == "pending" } }
+            200 to JSONObject().put("commands", org.json.JSONArray(pending)).toString()
+        }
+        method == "POST" && path.startsWith("/api/devices/$DEVICE_ID/commands/") && path.endsWith("/result") -> {
+            val id = path.removePrefix("/api/devices/$DEVICE_ID/commands/").removeSuffix("/result")
+            val found = synchronized(commands) { commands.find { it.getString("id") == id } }
+            val report = JSONObject(body)
+            when {
+                found == null -> 404 to """{"error":"not_found","message":"no such command"}"""
+                found.getString("status") !in listOf("pending", "delivered") ->
+                    409 to """{"error":"conflict","message":"the command is finished"}"""
+                else -> {
+                    found.put("status", report.getString("status"))
+                    if (report.has("result")) found.put("result", report.get("result"))
+                    200 to found.toString()
+                }
             }
         }
         method == "PUT" && path == "/api/devices/$DEVICE_ID/push" ->

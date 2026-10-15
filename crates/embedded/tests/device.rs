@@ -627,6 +627,185 @@ fn contacts_sync_with_people_both_ways_and_deletes_only_unlink() {
     assert_eq!(d.query("from person").len(), 2);
 }
 
+/// The last `upsert` the phone was asked for, as JSON.
+fn last_upsert(phone: &Phone) -> Json {
+    let actions = phone.actions();
+    let last = actions
+        .iter()
+        .rev()
+        .find_map(|a| a.strip_prefix("upsert "))
+        .unwrap_or_else(|| panic!("no upsert in {actions:?}"));
+    serde_json::from_str(last).unwrap()
+}
+
+#[test]
+fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
+    let d = Device::open();
+    assert_eq!(
+        d.runtime.queue_person_changes().unwrap(),
+        0,
+        "the first call only starts"
+    );
+    d.settings(json!({ "contacts_write": true }));
+
+    // A new contact becomes a person, and the contact is given the person's id and the fields
+    // both sides now agree on.
+    d.send(
+        "contact_changed",
+        json!({
+            "contact_id": "c5",
+            "name": "Kim Park",
+            "phones": ["+61400000005"],
+            "addresses": [],
+            "updated": "2020-01-01T00:00:00Z",
+        }),
+    );
+    let kim = d.query("from person")[0]["id"].as_str().unwrap().to_owned();
+    let up = last_upsert(&d.phone);
+    assert_eq!(up["person"], kim.as_str());
+    assert_eq!(up["contact_id"], "c5");
+    assert_eq!(up["name"], "Kim Park");
+    let synced = json!({ "name": "Kim Park", "phones": ["+61400000005"], "addresses": [] });
+
+    // The person is renamed in the vault, and the phone adds a number, in an edit older than
+    // the rename. Each side changed a different field, so each change stands.
+    Vault::patch(
+        &**d.writer(),
+        &kim,
+        json!({ "title": "Kim Park-Lee" }),
+        "",
+        &Author::Session("test".into()),
+    )
+    .unwrap();
+    d.send(
+        "contact_changed",
+        json!({
+            "contact_id": "c5",
+            "name": "Kim Park",
+            "phones": ["+61400000005", "+61400000055"],
+            "addresses": [],
+            "updated": "2020-02-01T00:00:00Z",
+            "person": kim,
+            "synced": synced,
+        }),
+    );
+    let f = d.fields(&kim);
+    assert_eq!(f["title"], "Kim Park-Lee");
+    assert_eq!(f["phones"], json!(["+61400000005", "+61400000055"]));
+    let up = last_upsert(&d.phone);
+    assert_eq!(up["name"], "Kim Park-Lee");
+    assert_eq!(up["phones"], json!(["+61400000005", "+61400000055"]));
+    let synced = json!({
+        "name": "Kim Park-Lee",
+        "phones": ["+61400000005", "+61400000055"],
+        "addresses": [],
+    });
+
+    // Both sides changed the name: the more recent edit wins, here the phone's.
+    Vault::patch(
+        &**d.writer(),
+        &kim,
+        json!({ "title": "K. Park-Lee" }),
+        "",
+        &Author::Session("test".into()),
+    )
+    .unwrap();
+    d.send(
+        "contact_changed",
+        json!({
+            "contact_id": "c5",
+            "name": "Kimberly Park-Lee",
+            "phones": ["+61400000005", "+61400000055"],
+            "addresses": [],
+            "updated": "2999-01-01T00:00:00Z",
+            "person": kim,
+            "synced": synced,
+        }),
+    );
+    assert_eq!(d.fields(&kim)["title"], "Kimberly Park-Lee");
+
+    // A contact that agrees with its person and holds what they agreed on asks nothing more.
+    let synced = json!({
+        "name": "Kimberly Park-Lee",
+        "phones": ["+61400000005", "+61400000055"],
+        "addresses": [],
+    });
+    let contact = json!({
+        "contact_id": "c5",
+        "name": "Kimberly Park-Lee",
+        "phones": ["+61400000005", "+61400000055"],
+        "addresses": [],
+        "updated": "2999-01-02T00:00:00Z",
+        "person": kim,
+        "synced": synced,
+    });
+    let before = d.phone.actions().len();
+    d.send("contact_changed", contact.clone());
+    assert_eq!(d.phone.actions().len(), before, "{:?}", d.phone.actions());
+
+    // A person edited after a sync round reaches the phone: the runtime queues its contact,
+    // as the phone holds it, and the handler hands the contact the person's change.
+    d.phone.contacts.lock().unwrap().push(json!({
+        "contact_id": "c5",
+        "name": "Kimberly Park-Lee",
+        "phones": ["+61400000005", "+61400000055"],
+        "addresses": [],
+        "updated": "2020-03-01T00:00:00Z",
+        "person": kim,
+        "synced": contact["synced"],
+    }));
+    d.runtime.queue_person_changes().unwrap();
+    d.runtime.run_pending().unwrap();
+    Vault::patch(
+        &**d.writer(),
+        &kim,
+        json!({ "addresses": ["kim@example.com"] }),
+        "",
+        &Author::Session("test".into()),
+    )
+    .unwrap();
+    d.settings(json!({ "contacts_write": false }));
+    assert_eq!(
+        d.runtime.queue_person_changes().unwrap(),
+        0,
+        "not while writes are off"
+    );
+    d.settings(json!({ "contacts_write": true }));
+    let before = d.phone.actions().len();
+    assert_eq!(d.runtime.queue_person_changes().unwrap(), 1);
+    d.runtime.run_pending().unwrap();
+    assert_eq!(
+        d.phone.actions().len(),
+        before + 1,
+        "{:?}",
+        d.phone.actions()
+    );
+    let up = last_upsert(&d.phone);
+    assert_eq!(up["contact_id"], "c5");
+    assert_eq!(up["addresses"], json!(["kim@example.com"]));
+    assert_eq!(up["name"], "Kimberly Park-Lee");
+    assert_eq!(
+        d.runtime.queue_person_changes().unwrap(),
+        0,
+        "each change once"
+    );
+
+    // A contact whose person was deleted in the vault stays unlinked: no person comes back.
+    let version = Vault::get(&**d.writer(), &kim).unwrap()["version"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    Vault::delete(
+        &**d.writer(),
+        &kim,
+        &version,
+        &Author::Session("test".into()),
+    )
+    .unwrap();
+    d.send("contact_changed", contact);
+    assert!(d.query("from person").is_empty());
+}
+
 #[test]
 fn a_share_becomes_a_fleeting_note() {
     let d = Device::open();

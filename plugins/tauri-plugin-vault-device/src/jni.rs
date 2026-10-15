@@ -207,6 +207,18 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_status<'loca
     answer(&mut env, |_| Ok(Some(core()?.status()?.to_string())))
 }
 
+/// `VaultCore.runCommands(): String`: fetch the commands server scripts queued for this device,
+/// run each the device file declares and its settings enable, and report every result to the home
+/// server. Answers what ran as a JSON list of `{ id, name, status, result }`. It makes network
+/// requests: call it off the main thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_runCommands<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    answer(&mut env, |_| Ok(Some(core()?.run_commands()?.to_string())))
+}
+
 /// A queued event as Kotlin reads it, with its payload when `data` is set.
 pub fn event_json(e: &QueuedEvent, data: bool) -> Json {
     let mut out = json!({

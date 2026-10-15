@@ -17,7 +17,9 @@
 //!   hold, and [`Core::note_opened`] when a note is opened, so its assets are prefetched next time.
 //!
 //! Device capture (D7, D17) hands events to the device runtime [`Core::device`] opens, whose
-//! device module reaches the phone through the Kotlin bridge.
+//! device module reaches the phone through the Kotlin bridge. After each round the runtime queues
+//! a `contact_changed` event for each linked `person` that changed, so the change reaches the
+//! phone contact (D16). Commands from server scripts run through [`Core::run_commands`] (D22).
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -30,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sync::{AssetPolicy, Report};
 
+use crate::commands;
 use crate::notify::{self, PushTarget};
 use crate::share::{self, Shared};
 
@@ -100,6 +103,8 @@ pub struct Core {
     last: Mutex<Option<Last>>,
     /// The device runtime and the device id it opened with, once Kotlin opens it.
     device: Mutex<Option<(String, Arc<DeviceRuntime>)>>,
+    /// Held while commands run, so a push and the periodic check never take one command twice.
+    commands: Mutex<()>,
 }
 
 /// The platform the device runtime runs as, which names its device file.
@@ -141,6 +146,7 @@ pub fn open(vault: &Path) -> anyhow::Result<Arc<Core>> {
         kicks: Mutex::new(None),
         last: Mutex::new(None),
         device: Mutex::new(None),
+        commands: Mutex::new(()),
     });
     *current = Some(core.clone());
     Ok(core)
@@ -216,7 +222,31 @@ impl Core {
             at_ms: now_ms(),
             error: result.as_ref().err().map(ToString::to_string),
         });
-        Ok(result?)
+        let report = result?;
+        if let Err(e) = self.people_to_contacts() {
+            eprintln!("person changes not queued for the phone: {e:#}");
+        }
+        Ok(report)
+    }
+
+    /// Queue the person changes the round brought for their phone contacts, and run them.
+    fn people_to_contacts(&self) -> anyhow::Result<()> {
+        let Ok(runtime) = self.runtime() else {
+            return Ok(());
+        };
+        if runtime.queue_person_changes()? > 0 {
+            runtime.run_pending()?;
+        }
+        Ok(())
+    }
+
+    /// Run the commands server scripts queued for this device, after taking its settings from
+    /// the home server. Answers what ran, `[{ id, name, status, result }]`. It blocks.
+    pub fn run_commands(&self) -> anyhow::Result<Value> {
+        let link = self.linked()?;
+        let runtime = self.runtime()?;
+        let _one = lock(&self.commands);
+        commands::run(&link, &runtime)
     }
 
     /// Ask the foreground loop for a round once writes settle. Nothing happens while unpaired.

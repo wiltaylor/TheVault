@@ -86,6 +86,14 @@ object VaultCore {
     @JvmStatic
     external fun setPush(endpoint: String?, p256dh: String?, auth: String?): String?
 
+    /**
+     * Fetches the commands server scripts queued for this device, runs each one the device file
+     * declares and the device's settings enable, and reports every result to the home server.
+     * Answers what ran, `[{id, name, status, result}]`, as JSON. It makes network requests.
+     */
+    @JvmStatic
+    external fun runCommands(): String
+
     /** `{paired, pending, last_sync_ms, last_error}` as JSON. */
     @JvmStatic
     external fun status(): String

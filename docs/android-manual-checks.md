@@ -110,6 +110,18 @@ Run these for each release, with the APK attached to its GitHub Release.
 | 42 | Install the release APK over the previous release with `adb install -r`, or update it from Obtainium. | The update installs without uninstalling first. The app stays paired, and its notes are still there. |
 | 43 | Open **About** in Android's App info for TheVault. | The version matches the release tag. |
 
+## Device commands and contact conflicts
+
+In the web app, open Settings > Devices for the phone. Turn on **Contacts write** and **SMS send**, and enable the `upsert_contact`, `delete_contact`, `send_sms` and `show_notification` commands.
+
+| # | Do this | Expect this |
+|---|---------|-------------|
+| 44 | On the phone, add a second number to a linked contact. At about the same time, change that person's email address in the web app. | After the next sync, both sides hold both changes: the phone's new number and the web app's new email address. |
+| 45 | Delete a linked `person` note in the web app, then edit its contact on the phone. | No `person` note comes back. The contact stays on the phone. |
+| 46 | From a server script, queue `send_sms` for the phone with your own number, with the app closed and the screen off. | The text arrives within a few seconds of the push. The web app's command list shows the command `done`. |
+| 47 | Turn **SMS send** off for the phone and queue `send_sms` again. | No text is sent. The command shows `failed`, and its result says to turn on SMS send. |
+| 48 | Uninstall the UnifiedPush distributor and queue `show_notification`. Wait up to 15 minutes without opening the app. | The notification appears within 15 minutes. The fallback check runs pending commands while the phone has a network. |
+
 ## Coverage
 
 Every check in S7 of the implementation specification, and the checks that cover it:
@@ -121,7 +133,7 @@ Every check in S7 of the implementation specification, and the checks that cover
 | An MMS with an image | 31 |
 | An RCS message | 32 |
 | A call | 33 |
-| Contact edits in both directions | 35 to 39 |
+| Contact edits in both directions | 35 to 39, 44, 45 |
 | Onboarding, including Allow restricted settings | 1 to 6, 24 to 28 |
 | A UnifiedPush notification shown and cleared from the web app within seconds | 16 to 20 |
 | Offline capture synced later | 9, 15, 40, 41 |
