@@ -23,7 +23,20 @@ if [ -t 0 ] && [ -t 1 ]; then
   tty_flags=(-it)
 fi
 
-exec docker run --rm "${tty_flags[@]}" \
+# The Android release keystore lives outside the repository (D10): pass its passwords through by
+# name, so they never appear on the docker command line, and mount the keystore file read-only.
+keystore_flags=()
+for var in THEVAULT_ANDROID_KEYSTORE_PASSWORD THEVAULT_ANDROID_KEY_ALIAS THEVAULT_ANDROID_KEY_PASSWORD; do
+  if [ -n "${!var:-}" ]; then
+    keystore_flags+=(-e "$var")
+  fi
+done
+if [ -n "${THEVAULT_ANDROID_KEYSTORE:-}" ]; then
+  keystore=$(realpath "$THEVAULT_ANDROID_KEYSTORE")
+  keystore_flags+=(-e "THEVAULT_ANDROID_KEYSTORE=$keystore" -v "$keystore:$keystore:ro")
+fi
+
+exec docker run --rm "${tty_flags[@]}" "${keystore_flags[@]}" \
   --network host \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp/home \

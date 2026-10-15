@@ -1,12 +1,14 @@
 # Android manual checks (S7)
 
-The automated tests run on the JVM (Robolectric) and against a host build of the Rust core. They never install the app on a phone. Run these checks on a real phone with Android 13 or later before each release. Later Android tickets add their own sections.
+The automated tests run on the JVM (Robolectric) and against a host build of the Rust core. They never install the app on a phone. Run these checks on a real phone with Android 13 or later before each release. Run the restricted settings checks on Android 15 or later as well, where Android blocks SMS access for an app installed from outside Google Play.
 
 ## Before you start
 
-1. Build the debug APK: `./dev just android-build`. The APK is written to `apps/android/src-tauri/gen/android/app/build/outputs/apk/`.
+1. Build the APK. For a release, build the signed release APK as `docs/android-release.md` describes: `./dev just android-release` writes it to `target/android-release/`. Between releases, the debug APK is enough: `./dev just android-build` writes it to `apps/android/src-tauri/gen/android/app/build/outputs/apk/`.
 2. Install it: `adb install -r <apk>`.
 3. Run a home server that the phone can reach, and sign in to its web app in a browser.
+4. Install a UnifiedPush distributor on the phone, such as ntfy, for the notification checks.
+5. Have a second phone, or a friend, who can send you an SMS, an MMS with an image and an RCS message, and call you.
 
 Record the result of each check (pass, or fail with what happened), the phone model and its Android version.
 
@@ -56,3 +58,70 @@ Install a UnifiedPush distributor first, such as ntfy, and set it up to reach it
 | 21 | Create a notification that opens a note, then tap it on the phone. | The app opens at that note, and the web app's bell shows the notification as read. Repeat with the app already open in the background. |
 | 22 | Uninstall the distributor, or onboard on a phone without one. Create a notification on the server and wait up to 15 minutes without opening the app. | The Android notification appears within 15 minutes. The fallback check reads the server's unread list every 15 minutes while the phone has a network. |
 | 23 | On a fresh install, refuse the notification permission at the end of onboarding. | Pairing still completes. No Android notifications appear until the permission is granted in the system settings. |
+
+## Allow restricted settings
+
+Run these on Android 15 or later, with the app installed by `adb` or Obtainium rather than Google Play.
+
+| # | Do this | Expect this |
+|---|---------|-------------|
+| 24 | After pairing, step through the capture setup. On the **Messages** step, tap **Allow**. | Android does not show its permission dialog, or says the setting is restricted. The app shows the three Allow restricted settings steps and an **Open App info** button. |
+| 25 | Tap **Open App info**. Tap the three-dot menu at the top right, then **Allow restricted settings**, and confirm with your screen lock. Go back to the app and tap **Try again**. | Android asks for the SMS permissions. Once you allow them, the setup moves to the **Calls** step. |
+| 26 | Allow the **Calls**, **Contacts** and **Notifications** steps. Skip **Sending SMS**. | Each step asks for its permissions once and moves on. Skipping **Sending SMS** moves on without asking. |
+| 27 | Grant notification access for RCS: in Android's Settings, open **Notifications** > **Device & app notifications** (named **Notification read, reply & control** on some phones), and turn on TheVault. If the switch is greyed out, allow restricted settings from App info as in check 25 first. | TheVault is listed with notification access on. |
+| 28 | On the import page, leave the import off and finish. | The app opens. No old messages, calls or contacts arrive in the web app. |
+
+## Messages and calls
+
+Wait a few seconds after each one, then look in the web app.
+
+| # | Do this | Expect this |
+|---|---------|-------------|
+| 29 | Receive an SMS from a number saved as a contact whose `person` note has that number. | A `message` note with the SMS body, `from` linked to that person, inside a `conversation` note for the thread. |
+| 30 | Receive an SMS from a number that no contact or `person` has. | A `message` note with the number in `from_raw`. No new `person` note. |
+| 31 | Receive an MMS with an image. | A `message` note in the thread's `conversation` with the image attached and shown. |
+| 32 | Receive an RCS message in Google Messages, with the conversation not open on screen. | A `message` note with the sender's name, linked to the person of that name, and `partial` set. |
+| 33 | Receive a call and answer it. Then miss a call. Then place a call. | Three `call` notes, with `direction` `in`, `missed` and `out`, linked to the person holding the number. The missed call has `duration` 0. |
+| 34 | Restart the phone, then open the app. | No message or call from checks 29 to 33 appears twice. |
+
+## Contacts
+
+| # | Do this | Expect this |
+|---|---------|-------------|
+| 35 | In the phone's Contacts app, add a contact with a name and a phone number. | A `person` note with that name and number. |
+| 36 | Edit that contact's phone number on the phone. | The `person` note's phone changes to match. |
+| 37 | In the web app, in Settings > Devices, turn on the phone's contacts-write switch and its `upsert_contact` and `delete_contact` commands. Edit that `person` note's name. | The phone contact's name changes to match within a minute. |
+| 38 | Create a `person` note with a phone number in the web app. | A matching contact appears on the phone. |
+| 39 | Delete the contact on the phone. | The `person` note stays. It is no longer linked to the phone's contact. |
+
+## Offline capture
+
+| # | Do this | Expect this |
+|---|---------|-------------|
+| 40 | Turn off Wi-Fi and mobile data, leaving the phone able to receive SMS and calls. Receive an SMS and a call. | No note appears in the web app yet. |
+| 41 | Turn Wi-Fi or mobile data back on. | The `message` and `call` notes from check 40 reach the web app after the next sync. |
+
+## Release install
+
+Run these for each release, with the APK attached to its GitHub Release.
+
+| # | Do this | Expect this |
+|---|---------|-------------|
+| 42 | Install the release APK over the previous release with `adb install -r`, or update it from Obtainium. | The update installs without uninstalling first. The app stays paired, and its notes are still there. |
+| 43 | Open **About** in Android's App info for TheVault. | The version matches the release tag. |
+
+## Coverage
+
+Every check in S7 of the implementation specification, and the checks that cover it:
+
+| S7 check | Checks |
+|---|---|
+| Share target from three apps | 11 to 15 |
+| A live SMS | 29, 30 |
+| An MMS with an image | 31 |
+| An RCS message | 32 |
+| A call | 33 |
+| Contact edits in both directions | 35 to 39 |
+| Onboarding, including Allow restricted settings | 1 to 6, 24 to 28 |
+| A UnifiedPush notification shown and cleared from the web app within seconds | 16 to 20 |
+| Offline capture synced later | 9, 15, 40, 41 |

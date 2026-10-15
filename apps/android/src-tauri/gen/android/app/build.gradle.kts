@@ -14,6 +14,10 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// The release keystore stays outside the repository (D10). `just android-release` reads its
+// path and passwords from these variables; with none set, the release APK is left unsigned.
+val releaseKeystore: String? = System.getenv("THEVAULT_ANDROID_KEYSTORE")?.takeIf { it.isNotBlank() }
+
 android {
     compileSdk = 36
     namespace = "dev.wiltaylor.thevault"
@@ -24,6 +28,17 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("THEVAULT_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("THEVAULT_ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("THEVAULT_ANDROID_KEY_PASSWORD")
+                    ?: System.getenv("THEVAULT_ANDROID_KEYSTORE_PASSWORD")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -40,6 +55,9 @@ android {
             }
         }
         getByName("release") {
+            if (releaseKeystore != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                enable = true
             }

@@ -105,6 +105,34 @@ aur-release: (require-tool "makepkg") (require-tool "jq")
 android-build: (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
 	cd apps/android && cargo tauri android build --debug --apk --target aarch64
 
+# Build the signed release APK for aarch64 into target/android-release with its SHA256SUMS, signed with the keystore THEVAULT_ANDROID_KEYSTORE names (D10)
+[group('android')]
+android-release: (require-tool "cargo-tauri") (require-tool "cargo-ndk") (require-tool "jq") web-build
+	#!/usr/bin/env bash
+	set -euo pipefail
+	for var in THEVAULT_ANDROID_KEYSTORE THEVAULT_ANDROID_KEYSTORE_PASSWORD THEVAULT_ANDROID_KEY_ALIAS; do
+		if [ -z "${!var:-}" ]; then
+			echo "$var is not set; see docs/android-release.md" >&2
+			exit 1
+		fi
+	done
+	test -f "$THEVAULT_ANDROID_KEYSTORE" || { echo "keystore $THEVAULT_ANDROID_KEYSTORE does not exist" >&2; exit 1; }
+	apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+	version=$(jq -r .version apps/android/src-tauri/tauri.conf.json)
+	apks=apps/android/src-tauri/gen/android/app/build/outputs/apk
+	rm -rf "$apks" target/android-release
+	# Every container shares the Gradle home and the host network, so a Gradle client could hand the
+	# build to another container's idle daemon, which cannot see this checkout. Build without one.
+	(cd apps/android && GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --apk --target aarch64)
+	mkdir -p target/android-release
+	apk="target/android-release/TheVault_${version}_aarch64.apk"
+	built=$(find "$apks" -name '*-release.apk' | head -n 1)
+	test -n "$built" || { echo "no signed release APK under $apks" >&2; exit 1; }
+	cp "$built" "$apk"
+	"$apksigner" verify --min-sdk-version 33 --print-certs "$apk"
+	(cd target/android-release && sha256sum -- *.apk > SHA256SUMS)
+	echo "wrote $apk"
+
 # Run the app's Rust tests (the core against a vault-server), then the S5 Kotlin unit tests with Robolectric on the JVM against a host build of the plugin's Rust library
 [group('android')]
 android-test: (require-tool "java") android-build
