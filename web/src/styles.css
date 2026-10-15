@@ -786,6 +786,11 @@ a {
   padding: 0.6rem 0;
 }
 
+/* A block that draws nothing here (an empty image from a field placed elsewhere) leaves no gap. */
+.template-block:empty {
+  display: none;
+}
+
 /* Media and technical blocks */
 
 .block-code,
@@ -872,10 +877,57 @@ button.field-image-placeholder {
   cursor: pointer;
 }
 
+/* On the note page, an empty image field is a slim, quiet row; while a file is dragged over it,
+   it grows into a full drop target. */
+.block-image.field-image.empty {
+  margin: 0.25rem 0;
+}
+
+button.field-image-placeholder.add {
+  justify-content: flex-start;
+  min-height: 2.5rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.875rem;
+  transition:
+    min-height 0.15s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+button.field-image-placeholder.add svg {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+button.field-image-placeholder.add.over {
+  justify-content: center;
+  min-height: 7rem;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 button.field-image-placeholder:hover:not(:disabled),
 button.field-image-placeholder:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+button.field-image-placeholder:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button.field-image-placeholder:disabled {
+  cursor: progress;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.field-image-placeholder.add {
+    transition: none;
+  }
 }
 
 .field-image.editing .field-image-placeholder {

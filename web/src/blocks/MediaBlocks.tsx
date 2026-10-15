@@ -5,6 +5,7 @@ import { For, Show, createContext, createResource, createSignal, useContext } fr
 import { type Asset, type Block, type FieldDef, type Json, api, assetUrl } from "../api";
 import { FieldRefs, fillFieldRefs } from "../components/fieldRefs";
 import { useControlBinding } from "../controls/binding";
+import { templatePlaces } from "../notes";
 import { VIEWER_HEIGHT, isPdfFile } from "../pdf/model";
 import { CardIcon } from "../pdf/PdfIcons";
 import { PdfThumbButton } from "../pdf/PdfPreview";
@@ -173,7 +174,9 @@ export function ImageIcon() {
 /**
  * A template's image from an asset field (docs/vault-format.md, "Images from fields"): every
  * image asset in that field of the note shown, in a row that wraps. Edited in the template
- * editor, it is a placeholder naming the field. Empty on the note page, it offers to add one.
+ * editor, it is a placeholder naming the field. Empty on the note page, it offers to add one in a
+ * slim row, unless the template places the field another way too (a slot or a control, which has
+ * its own upload): then it shows nothing.
  */
 function FieldImage(props: { block: Block; onChange?: (block: Block) => void }) {
   const binding = useControlBinding();
@@ -204,7 +207,11 @@ function FieldImage(props: { block: Block; onChange?: (block: Block) => void }) 
     },
   );
   const shown = () => (ids().length ? (images.latest ?? []) : []);
-  const canAdd = () => !props.onChange && !!binding?.set && !binding.preview && field()?.kind === "asset";
+  const placedElsewhere = () => {
+    const t = binding?.type();
+    return !!t && templatePlaces(t, name());
+  };
+  const canAdd = () => !props.onChange && !!binding?.set && !binding.preview && field()?.kind === "asset" && !placedElsewhere();
 
   async function add(file: File) {
     const f = field();
@@ -280,9 +287,23 @@ function FieldImage(props: { block: Block; onChange?: (block: Block) => void }) 
   );
 }
 
-/** The note page's placeholder for an empty image field: choosing a file uploads it and sets the field. */
+/** Whether a drag carries files. */
+const dragsFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+
+/**
+ * The note page's placeholder for an empty image field: a slim row whose button chooses a file,
+ * and which grows into a drop target while a file is dragged over it. Either uploads the file and
+ * sets the field.
+ */
 function FieldImageAdd(props: { label: string; busy: boolean; onFile: (file: File) => void }) {
   let input!: HTMLInputElement;
+  const [over, setOver] = createSignal(false);
+  const enter = (e: DragEvent) => {
+    if (!dragsFiles(e) || props.busy) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    setOver(true);
+  };
   return (
     <>
       <input
@@ -299,14 +320,29 @@ function FieldImageAdd(props: { label: string; busy: boolean; onFile: (file: Fil
       <button
         type="button"
         class="field-image-placeholder add"
+        classList={{ over: over() }}
         data-testid="field-image-add"
         aria-label={`Add image to ${props.label}`}
         title={`Add image to ${props.label}`}
         disabled={props.busy}
         onClick={() => input.click()}
+        onDragEnter={enter}
+        onDragOver={enter}
+        onDragLeave={(e) => {
+          if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) setOver(false);
+        }}
+        onDrop={(e) => {
+          if (!dragsFiles(e)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOver(false);
+          const files = [...(e.dataTransfer?.files ?? [])];
+          const file = files.find((f) => f.type.startsWith("image/") || isImageFile(f.name));
+          if (file && !props.busy) props.onFile(file);
+        }}
       >
         <ImageIcon />
-        <span>{props.busy ? "Uploading…" : "Add image"}</span>
+        <span>{props.busy ? "Uploading…" : over() ? "Drop image to add it" : "Add image"}</span>
       </button>
     </>
   );

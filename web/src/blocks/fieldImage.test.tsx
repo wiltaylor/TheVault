@@ -112,4 +112,53 @@ describe("an image from an asset field", () => {
     expect(block().fields?.field).toBe("photos");
     expect(getByTestId("field-image-placeholder").textContent).toBe("Image from Photos");
   });
+
+  describe("empty on the note page", () => {
+    const typed = (items: unknown[]): TypeDef =>
+      ({ ...TYPE, templates: [{ name: "default", tabs: [{ title: "Main", items }] }] }) as unknown as TypeDef;
+    const editable = (type: TypeDef): ControlBinding => ({ type: () => type, value: () => undefined, set: vi.fn() });
+
+    it("shows nothing when the template also places the field with a slot", async () => {
+      const type = typed([{ block: image("photos") }, { slot: "photos" }]);
+      const { container } = show(image("photos"), editable(type));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(container.querySelector("figure")).toBeNull();
+      expect(container.querySelector("button")).toBeNull();
+    });
+
+    it("still offers the row when the only other place is a control that cannot edit an asset field", () => {
+      // No control kind edits an asset field, so such a control uploads nothing and places nothing.
+      const control: Block = { kind: "control", fields: { field: "photos", kind: "text" } };
+      const type = typed([{ block: image("photos") }, { block: control }]);
+      const { getByTestId } = show(image("photos"), editable(type));
+      expect(getByTestId("field-image-add")).toBeTruthy();
+    });
+
+    it("offers a compact add-image row when the template places the field nowhere else", () => {
+      const type = typed([{ block: image("photos") }, { slot: "title" }]);
+      const { getByTestId } = show(image("photos"), editable(type));
+      const add = getByTestId("field-image-add");
+      expect(add.classList.contains("add")).toBe(true);
+      expect(add.getAttribute("aria-label")).toBe("Add image to Photos");
+      expect(add.textContent).toBe("Add image");
+    });
+
+    it("grows into a drop target while a file is dragged over it, and uploads a dropped image", async () => {
+      vi.spyOn(api, "uploadAsset").mockResolvedValue(asset("NEW2", "dropped.png"));
+      const set = vi.fn();
+      const type = typed([{ block: image("cover") }]);
+      const { getByTestId } = show(image("cover"), { type: () => type, value: () => undefined, set });
+      const add = getByTestId("field-image-add");
+      const file = new File(["x"], "dropped.png", { type: "image/png" });
+      const dataTransfer = { types: ["Files"], files: [file], dropEffect: "none" };
+      fireEvent.dragEnter(add, { dataTransfer });
+      expect(add.classList.contains("over")).toBe(true);
+      expect(add.textContent).toBe("Drop image to add it");
+      fireEvent.drop(add, { dataTransfer });
+      expect(add.classList.contains("over")).toBe(false);
+      await waitFor(() => expect(set).toHaveBeenCalled());
+      // A single field takes the image's id.
+      expect(set.mock.calls[0]![1]).toBe("NEW2");
+    });
+  });
 });

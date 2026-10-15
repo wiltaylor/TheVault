@@ -118,6 +118,14 @@ export function slottedFields(type: TypeDef): Set<string> {
 }
 
 /**
+ * Whether the type's default template places field `name` with a slot or an editable control, so
+ * an empty image from that field need not offer an upload of its own.
+ */
+export function templatePlaces(type: TypeDef, name: string): boolean {
+  return slottedFields(type).has(name) || controlledFields(type).has(name);
+}
+
+/**
  * The type's fields the note page has no slot or editable control for, in type order: the
  * properties sidebar edits these. A control in the template or in the note's own content places
  * its field as a slot does; a read-only control on a computed field and a `{{name}}` reference

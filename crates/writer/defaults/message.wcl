@@ -79,6 +79,16 @@ field device_ref {
 
 template default {
   tab "Message" {
+    columns {
+      column {
+        slot "from"
+        slot "to"
+      }
+      column {
+        slot "sent"
+        slot "conversation"
+      }
+    }
     slot "body"
     image {
       field = "attachments"

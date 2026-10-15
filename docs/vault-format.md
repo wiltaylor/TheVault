@@ -845,7 +845,7 @@ An `image` block in a template can name an asset field of the type with `field` 
 - An image takes exactly one of `asset` and `field`. The schema rejects one with both, or with neither, with "takes `asset` or `field`, not both" or "needs `asset` or `field`".
 - `field` names an [`asset`](#asset) field of the type. The schema rejects any other name with "`"<name>"` names no field of the type", and a field of another kind with "an image shows an asset field, and `"<name>"` is a ... field".
 - A field with `multiple = true` shows every image in it, in order, in a row that wraps. `width` applies to each image.
-- An asset in the field that is not an image (by its file name: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif` or `.svg`) is skipped. An empty field shows nothing on a card; on the note page it offers to add an image, which uploads the file and sets the field (for a multiple field, adds it).
+- An asset in the field that is not an image (by its file name: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif` or `.svg`) is skipped. An empty field shows nothing on a card. On the note page it offers to add an image, by choosing a file or dropping one, which uploads the file and sets the field (for a multiple field, adds it). It shows nothing there either when the default template also places the field with a slot or an editable control, which has its own upload.
 - `alt` and `caption` may hold `{{name}}` [field references](#field-references), checked like those in `text`.
 - `field` is template-only. In a note's own content, an image with `field` fails validation with "is allowed only in a template".
 
