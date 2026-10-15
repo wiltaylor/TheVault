@@ -14,6 +14,7 @@ anyhow.workspace = true
 api.workspace = true
 axum.workspace = true
 clap.workspace = true
+push.workspace = true
 scheduler.workspace = true
 script.workspace = true
 serde_json.workspace = true
@@ -23,6 +24,8 @@ tokio.workspace = true
 writer.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
+p256 = { version = "0.13", default-features = false, features = ["ecdh"] }
 reqwest.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

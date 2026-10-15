@@ -244,6 +244,18 @@ impl State {
         self.device(id)
     }
 
+    /// Forget the device's push endpoint because the push service said it is gone, but only if
+    /// it is still `endpoint`: a device that registered a new one meanwhile keeps it. True when
+    /// it was removed.
+    pub fn drop_device_push(&self, id: &str, endpoint: &str) -> Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE devices SET push_endpoint = NULL, push_p256dh = NULL, push_auth = NULL
+             WHERE id = ?1 AND push_endpoint = ?2",
+            params![id, endpoint],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Revoke a device: delete its token, which deletes the device with its push endpoint.
     pub fn revoke_device(&self, id: &str) -> Result<()> {
         let device = self.device(id)?;

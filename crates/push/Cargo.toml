@@ -1,0 +1,26 @@
+[package]
+name = "push"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+aes-gcm = "0.10"
+base64.workspace = true
+hkdf = "0.12"
+p256 = { version = "0.13", default-features = false, features = ["ecdh"] }
+reqwest.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+state.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+writer.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+testkit.workspace = true
+
+[lints]
+workspace = true

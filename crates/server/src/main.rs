@@ -81,13 +81,17 @@ fn main() -> anyhow::Result<()> {
     }
     let app = api::router(writer.clone(), scheduler, test_clock);
 
-    tokio::runtime::Runtime::new()
-        .context("starting the async runtime")?
-        .block_on(serve(args.listen, args.web, app, move || {
-            // Open event streams never finish on their own, so end them before waiting on
-            // requests in flight.
-            writer.state().events().close()
-        }))
+    let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
+    // Paired devices hear about notifications and their commands by push (D4, D9).
+    let _push = {
+        let _entered = runtime.enter();
+        push::Dispatcher::default().spawn(writer.clone())
+    };
+    runtime.block_on(serve(args.listen, args.web, app, move || {
+        // Open event streams never finish on their own, so end them before waiting on
+        // requests in flight.
+        writer.state().events().close()
+    }))
 }
 
 /// The clock `--test-clock` asks for. A release build refuses it.

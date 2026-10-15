@@ -167,6 +167,28 @@ fn clearing_push_removes_the_endpoint() {
 }
 
 #[test]
+fn a_gone_endpoint_is_dropped_only_while_it_is_still_registered() {
+    let dir = TempDir::new().unwrap();
+    let (state, _) = open(&dir);
+    let (device, _) = state.pair_device(&phone()).unwrap();
+    let old = PushTarget {
+        endpoint: "https://push.example/up/old".into(),
+        p256dh: "key".into(),
+        auth: "auth".into(),
+    };
+    let new = PushTarget {
+        endpoint: "https://push.example/up/new".into(),
+        ..old.clone()
+    };
+    state.set_device_push(&device.id, Some(&old)).unwrap();
+    state.set_device_push(&device.id, Some(&new)).unwrap();
+    assert!(!state.drop_device_push(&device.id, &old.endpoint).unwrap());
+    assert_eq!(state.device(&device.id).unwrap().push, Some(new.clone()));
+    assert!(state.drop_device_push(&device.id, &new.endpoint).unwrap());
+    assert_eq!(state.device(&device.id).unwrap().push, None);
+}
+
+#[test]
 fn a_pairing_code_works_once() {
     let dir = TempDir::new().unwrap();
     let (state, _) = open(&dir);
