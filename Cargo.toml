@@ -38,6 +38,8 @@ index = { path = "crates/index" }
 state = { path = "crates/state" }
 query = { path = "crates/query" }
 script = { path = "crates/script" }
+script-core = { path = "crates/script-core" }
+vocab = { path = "crates/vocab" }
 scheduler = { path = "crates/scheduler" }
 api = { path = "crates/api" }
 testkit = { path = "crates/testkit" }

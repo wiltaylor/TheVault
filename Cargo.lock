@@ -1258,6 +1258,7 @@ dependencies = [
  "tantivy",
  "tempfile",
  "thiserror",
+ "vocab",
 ]
 
 [[package]]
@@ -2160,20 +2161,29 @@ name = "script"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "chrono",
- "chrono-tz",
- "query",
  "reqwest",
- "rusqlite",
  "rustix",
  "schema",
+ "script-core",
  "serde_json",
  "state",
  "store",
  "tempfile",
  "testkit",
- "thiserror",
  "writer",
+ "wscript",
+]
+
+[[package]]
+name = "script-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "serde_json",
+ "thiserror",
+ "vocab",
  "wscript",
 ]
 
@@ -2378,6 +2388,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "ulid",
+ "vocab",
 ]
 
 [[package]]
@@ -3005,6 +3016,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vocab"
+version = "0.1.0"
+
+[[package]]
 name = "want"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3328,6 +3343,7 @@ dependencies = [
  "query",
  "rusqlite",
  "schema",
+ "script-core",
  "serde_json",
  "sha2",
  "state",

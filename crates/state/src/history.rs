@@ -4,39 +4,7 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::{Error, Result, State, random_bytes, to_hex};
 
-/// Who made a change (D13, D30).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Author {
-    /// A browser session.
-    Session(String),
-    /// A named API token.
-    Token(String),
-    /// A named wscript handler.
-    Handler(String),
-    /// A named scheduled task (D10).
-    Task(String),
-}
-
-impl Author {
-    fn parts(&self) -> (&'static str, &str) {
-        match self {
-            Author::Session(n) => ("session", n),
-            Author::Token(n) => ("token", n),
-            Author::Handler(n) => ("handler", n),
-            Author::Task(n) => ("task", n),
-        }
-    }
-
-    fn from_parts(kind: &str, name: String) -> Result<Self> {
-        match kind {
-            "session" => Ok(Author::Session(name)),
-            "token" => Ok(Author::Token(name)),
-            "handler" => Ok(Author::Handler(name)),
-            "task" => Ok(Author::Task(name)),
-            other => Err(Error::Corrupt(format!("unknown author kind {other:?}"))),
-        }
-    }
-}
+pub use vocab::Author;
 
 /// One recorded version of a note.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +68,7 @@ fn version_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VersionRow> {
 }
 
 fn finish_version((mut version, kind, name): VersionRow) -> Result<Version> {
-    version.author = Author::from_parts(&kind, name)?;
+    version.author = author_from_parts(&kind, name)?;
     Ok(version)
 }
 
@@ -404,6 +372,11 @@ fn trash_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrashRow> {
 }
 
 fn finish_trash((mut entry, kind, name): TrashRow) -> Result<TrashEntry> {
-    entry.deleted_by = Author::from_parts(&kind, name)?;
+    entry.deleted_by = author_from_parts(&kind, name)?;
     Ok(entry)
+}
+
+fn author_from_parts(kind: &str, name: String) -> Result<Author> {
+    Author::from_parts(kind, name)
+        .ok_or_else(|| Error::Corrupt(format!("unknown author kind {kind:?}")))
 }

@@ -1,0 +1,18 @@
+[package]
+name = "script-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono-tz = "0.10"
+serde_json.workspace = true
+thiserror.workspace = true
+vocab.workspace = true
+wscript.workspace = true
+
+[lints]
+workspace = true

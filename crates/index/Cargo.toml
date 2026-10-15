@@ -11,6 +11,7 @@ schema.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 tantivy.workspace = true
+vocab.workspace = true
 pdf-extract.workspace = true
 thiserror.workspace = true
 

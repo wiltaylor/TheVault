@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
-use state::Author;
+use vocab::Author;
 use wscript::HostError;
 
 use crate::{Job, Limits};

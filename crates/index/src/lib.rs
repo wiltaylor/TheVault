@@ -48,6 +48,7 @@ pub use graph::{Graph, GraphEdge, GraphNode};
 pub use project::mentions;
 pub use rebuild::{Failure, RebuildReport};
 pub use search::{Hit, SearchPage};
+pub use vocab::Archived;
 
 /// Errors from the index. A file that fails validation is not an error: a rebuild reports it.
 #[derive(Debug, thiserror::Error)]
@@ -73,48 +74,6 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-/// Which notes a listing or search reads, by whether they are archived. A note is archived when
-/// it holds `archived = true`; listings leave archived notes out unless they ask for them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Archived {
-    /// Only notes that are not archived: the default.
-    #[default]
-    Exclude,
-    /// Every note, archived or not.
-    Include,
-    /// Only archived notes.
-    Only,
-}
-
-impl Archived {
-    /// `exclude`, `include` or `only`.
-    pub fn parse(s: &str) -> Option<Archived> {
-        Some(match s {
-            "exclude" => Archived::Exclude,
-            "include" => Archived::Include,
-            "only" => Archived::Only,
-            _ => return None,
-        })
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Archived::Exclude => "exclude",
-            Archived::Include => "include",
-            Archived::Only => "only",
-        }
-    }
-
-    /// An SQL condition on `column`, the `archived` column of `notes`.
-    pub fn sql(self, column: &str) -> String {
-        match self {
-            Archived::Exclude => format!("{column} = 0"),
-            Archived::Include => "1".to_owned(),
-            Archived::Only => format!("{column} = 1"),
-        }
-    }
-}
 
 /// One note change to apply to the index.
 #[derive(Debug, Clone)]

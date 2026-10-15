@@ -39,6 +39,7 @@ mod fleeting;
 mod note;
 mod notify;
 mod refs;
+mod script_vault;
 mod terms;
 mod time;
 mod types;

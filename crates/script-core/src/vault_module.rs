@@ -2,7 +2,6 @@
 //! goes through a [`Vault`], so changes take the write path (D30). `docs/scripts.md` documents
 //! them for script authors.
 
-use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -13,7 +12,7 @@ use serde_json::{Value as Json, json};
 use wscript::std_modules::DynValue;
 use wscript::{Fault, Module};
 
-use crate::{Reply, Vault, convert, fs, host_call, note_body, run};
+use crate::{Reply, Vault, convert, host_call, note_body, run};
 
 fn to_dyn_list(rows: Vec<Json>) -> Vec<DynValue> {
     rows.into_iter().map(convert::to_dyn).collect()
@@ -39,7 +38,7 @@ fn today(now_ms: i64) -> String {
 /// `handler:<type>.<event>` for a handler, `script:<name>` otherwise.
 fn notify_source() -> String {
     crate::current_job(|j| {
-        if let Some(state::Author::Task(task)) = &j.author {
+        if let Some(vocab::Author::Task(task)) = &j.author {
             return format!("task:{task}");
         }
         let note = j.args.first();
@@ -101,7 +100,7 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
         ["text", "limit"],
         move |text: String, limit: i64| -> Reply<Vec<DynValue>> {
             Fault(host_call(|_, _| {
-                vv.search(&text, size(limit), writer::Archived::Exclude)
+                vv.search(&text, size(limit), vocab::Archived::Exclude)
                     .map(to_dyn_list)
             }))
         },
@@ -112,7 +111,7 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
         ["text", "limit", "archived"],
         move |text: String, limit: i64, archived: String| -> Reply<Vec<DynValue>> {
             Fault(host_call(|_, _| {
-                let mode = writer::Archived::parse(&archived).ok_or_else(|| {
+                let mode = vocab::Archived::parse(&archived).ok_or_else(|| {
                     format!("archived is {archived:?}: it must be exclude, include or only")
                 })?;
                 vv.search(&text, size(limit), mode).map(to_dyn_list)
@@ -249,25 +248,6 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
                     .decode(data.trim())
                     .map_err(|e| format!("the data is not base64: {e}"))?;
                 vv.upload_asset(&filename, bytes).map(convert::to_dyn)
-            }))
-        },
-    );
-    let vv = v.clone();
-    m.fn_named(
-        "upload_asset_file",
-        ["path"],
-        move |path: String| -> Reply<DynValue> {
-            let bytes = match fs::read_allowed(&path, &vv.protected()) {
-                Ok(Ok(b)) => b,
-                Ok(Err(e)) => return Fault(Ok(Err(e))),
-                Err(e) => return Fault(Err(e)),
-            };
-            Fault(host_call(|_, _| {
-                let name = Path::new(&path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .ok_or_else(|| format!("{path:?} names no file"))?;
-                vv.upload_asset(&name, bytes).map(convert::to_dyn)
             }))
         },
     );
