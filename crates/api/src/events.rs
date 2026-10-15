@@ -45,6 +45,7 @@ fn sse(seq: u64, event: &LiveEvent) -> Event {
             type_name,
             version,
             deleted,
+            ..
         } => json!({ "id": id, "type": type_name, "version": version, "deleted": deleted }),
         LiveEvent::DeviceCommand { device, id } => json!({ "device": device, "id": id }),
     };

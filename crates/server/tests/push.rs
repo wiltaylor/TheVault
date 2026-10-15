@@ -1,7 +1,9 @@
 //! S1: the server pushes notification events to each paired device's UnifiedPush endpoint as
 //! RFC 8291 WebPush messages that carry ids only, and forgets an endpoint the push service says
-//! is gone (D4, D9).
+//! is gone (D4, D9). Note changes are pushed too, coalesced, and never back to the device that
+//! made them.
 
+use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -184,4 +186,98 @@ fn a_gone_endpoint_is_removed_from_the_device() {
     notify(&admin, &server, "Again");
     thread::sleep(Duration::from_millis(300));
     assert_eq!(service.requests().len(), 1);
+}
+
+const MEMO: &str = r#"label = "Memo"
+
+template default {
+  tab "Main" {
+    slot "title"
+  }
+}
+"#;
+
+fn memo_type(vault: &Path) {
+    std::fs::create_dir_all(vault.join("types")).unwrap();
+    std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
+}
+
+fn memo(c: &Client, server: &TestServer, title: &str) -> String {
+    let out = send(
+        c.post(server.url("/api/notes?type=memo"))
+            .json(&json!({ "note": { "fields": { "title": title }, "blocks": [] } })),
+        201,
+    );
+    out["id"].as_str().unwrap().to_owned()
+}
+
+/// The pushes `phone` got at `path`, oldest first.
+fn pushed(service: &StandIn, phone: &Phone, path: &str) -> Vec<Value> {
+    service
+        .requests()
+        .iter()
+        .filter(|r| r.path == path)
+        .map(|r| phone.open(&r.body))
+        .collect()
+}
+
+#[test]
+fn note_changes_are_pushed_coalesced_and_never_to_the_device_that_made_them() {
+    let server = TestServer::start_seeded(memo_type);
+    let admin = client(server.admin_token());
+    let service = StandIn::start();
+    service.route("/up/a", Reply::text(201, ""));
+    service.route("/up/b", Reply::text(201, ""));
+    let a = Phone::pair(&server, "Pixel", 6);
+    let b = Phone::pair(&server, "Tablet", 7);
+    a.register(&server, &service.url("/up/a"));
+    b.register(&server, &service.url("/up/b"));
+
+    // A change after a quiet spell is pushed within seconds, to every device, by id only.
+    let first = memo(&admin, &server, "Secret title");
+    let seen = wait_for(&service, 2);
+    let started = Instant::now();
+    for r in &seen {
+        assert_eq!(r.header("urgency"), Some("normal"));
+        assert!(!String::from_utf8_lossy(&r.body).contains("Secret"));
+    }
+    let want = json!({ "event": "note.changed", "ids": [first] });
+    assert_eq!(pushed(&service, &a, "/up/a"), std::slice::from_ref(&want));
+    assert_eq!(pushed(&service, &b, "/up/b"), [want]);
+
+    // A burst of changes, one of them the phone's own, sends each device one push once the
+    // window has passed. The phone is not told about its own write.
+    let second = memo(&admin, &server, "Two");
+    let third = memo(&admin, &server, "Three");
+    let own = memo(&client(&a.token), &server, "From the phone");
+    thread::sleep(Duration::from_secs(5));
+    assert_eq!(
+        service.requests().len(),
+        2,
+        "nothing more inside the window"
+    );
+    wait_for(&service, 4);
+    assert!(
+        started.elapsed() >= Duration::from_secs(8),
+        "the second push waited for the window"
+    );
+    thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        pushed(&service, &a, "/up/a")[1..],
+        [json!({ "event": "note.changed", "ids": [second, third] })]
+    );
+    assert_eq!(
+        pushed(&service, &b, "/up/b")[1..],
+        [json!({ "event": "note.changed", "ids": [second, third, own] })]
+    );
+
+    // A change only the phone made goes to the other device alone.
+    let alone = memo(&client(&a.token), &server, "Phone only");
+    wait_for(&service, 5);
+    thread::sleep(Duration::from_secs(2));
+    assert_eq!(pushed(&service, &a, "/up/a").len(), 2);
+    assert_eq!(
+        pushed(&service, &b, "/up/b")[2..],
+        [json!({ "event": "note.changed", "ids": [alone] })]
+    );
 }

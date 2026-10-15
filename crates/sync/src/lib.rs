@@ -38,6 +38,7 @@
 //! blocking writer. Call it from a thread of its own, never from inside an async runtime.
 
 mod client;
+pub mod live;
 pub mod merge;
 mod queue;
 

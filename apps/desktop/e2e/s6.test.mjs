@@ -6,7 +6,8 @@
 //
 // The desktop extras (D9, D12, D27): a notification created on the server updates the tray badge
 // and raises a desktop notification; reading it through the API closes it; closing it on the
-// desktop marks it read, and clicking it opens its note. A newer release is offered in the window.
+// desktop marks it read, and clicking it opens its note. A note changed on the server is pulled
+// within seconds while the app is open. A newer release is offered in the window.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -217,6 +218,21 @@ async function notifications() {
   await waitFor("the note's title", async () => (await app.text("[aria-label='Title']")) === "Opened from a notification");
   await waitFor("the server to mark it read", async () => (await home.api("GET", "/api/notifications?unread=true")).unread === 0);
 }
+
+// Ticket 82: the timed round runs once a minute, so a change seen within a few seconds, twice,
+// came through the live link's note.changed.
+test("a note changed on the server is pulled within seconds while the app is open", async () => {
+  await waitFor("the live link to the home server", async () => (await status()).notifications.connected);
+  const local = (id) => app.run(`return fetch('/api/notes/${id}').then(r => r.ok ? r.json() : null).then(n => n && n.note.fields.title);`);
+  const made = await home.api("POST", "/api/notes?type=note", { note: { fields: { title: "Made on the server" }, blocks: [] } });
+  await waitFor("the new note in the local vault", async () => (await local(made.id)) === "Made on the server", 8_000);
+  const current = await home.api("GET", `/api/notes/${made.id}`);
+  await home.api("PUT", `/api/notes/${made.id}`, {
+    note: { fields: { title: "Renamed on the server" }, blocks: [] },
+    base_version: current.version,
+  });
+  await waitFor("the rename in the local vault", async () => (await local(made.id)) === "Renamed on the server", 8_000);
+});
 
 test("a thevault://note link opens the note", async () => {
   const notes = await home.api("POST", "/api/notes?type=note", { note: { fields: { title: "Linked" }, blocks: [] } });

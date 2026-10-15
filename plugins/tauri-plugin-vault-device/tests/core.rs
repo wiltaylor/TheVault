@@ -280,6 +280,52 @@ fn a_write_kicks_the_foreground_loop() {
     admin.send("GET", &format!("/api/notes/{id}"), None);
 }
 
+/// Ticket 82: with the app in front, a note changed on the server reaches the local vault within
+/// seconds, through the live event stream and a pull round, with no local write and no timer.
+#[test]
+fn in_front_a_server_change_is_pulled_at_once() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let admin = Admin::start();
+    core.set_link(Some(link(&admin.pair("Pixel"), 64)));
+    core.set_foreground(true);
+    let wait = |what: &str, ok: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !ok() {
+            assert!(
+                Instant::now() < deadline,
+                "{what}: {}",
+                core.status().unwrap()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    // Opening the stream asks for a round.
+    wait("the stream opens and a round runs", &|| {
+        let s = core.status().unwrap();
+        s["live"] == true && s["last_sync_ms"].is_i64()
+    });
+    let first = core.status().unwrap()["last_sync_ms"].clone();
+
+    let note = admin.send(
+        "POST",
+        "/api/notes?type=fleeting",
+        Some(json!({ "note": { "fields": { "title": "From the web" }, "blocks": [] } })),
+    );
+    let id = note["id"].as_str().unwrap().to_owned();
+    let writer = core.server().writer();
+    wait("the change is pulled by a round of its own", &|| {
+        writer.read(&id).is_ok() && core.status().unwrap()["last_sync_ms"] != first
+    });
+
+    // Out of the front, the stream closes within a heartbeat.
+    core.set_foreground(false);
+    wait("the stream closes", &|| {
+        core.status().unwrap()["live"] == false
+    });
+}
+
 /// Ticket 78: what the background capture path does once a receiver has queued an SMS and a
 /// call. `RunEventsWorker` runs the handlers, and the prompt `SyncWorker` round it schedules runs
 /// `sync_now`, which pushes the notes the handlers wrote and empties the queue.

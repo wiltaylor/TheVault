@@ -103,18 +103,21 @@ impl Writer {
                     }],
                 )?;
                 inner.index.advance(generation)?;
-                self.announce(&[Saved {
-                    id: id.clone(),
-                    type_name: type_name.clone(),
-                    event: if old_type.is_some() {
-                        Event::Update
-                    } else {
-                        Event::Create
-                    },
-                    version: version.token.clone(),
-                    wcl: wcl.clone(),
-                    also: Vec::new(),
-                }]);
+                self.announce(
+                    &[Saved {
+                        id: id.clone(),
+                        type_name: type_name.clone(),
+                        event: if old_type.is_some() {
+                            Event::Update
+                        } else {
+                            Event::Create
+                        },
+                        version: version.token.clone(),
+                        wcl: wcl.clone(),
+                        also: Vec::new(),
+                    }],
+                    &|_| None,
+                );
                 Ok(Some(version.token))
             }
             Remote::Delete { id } => {
@@ -131,14 +134,17 @@ impl Writer {
                     .index
                     .update(&inner.schema, &[index::Update::Delete { id: id.clone() }])?;
                 inner.index.advance(generation)?;
-                self.announce(&[Saved {
-                    id: id.clone(),
-                    type_name,
-                    event: Event::Delete,
-                    version: entry.version.clone(),
-                    wcl: entry.content,
-                    also: Vec::new(),
-                }]);
+                self.announce(
+                    &[Saved {
+                        id: id.clone(),
+                        type_name,
+                        event: Event::Delete,
+                        version: entry.version.clone(),
+                        wcl: entry.content,
+                        also: Vec::new(),
+                    }],
+                    &|_| None,
+                );
                 Ok(Some(entry.version))
             }
         }

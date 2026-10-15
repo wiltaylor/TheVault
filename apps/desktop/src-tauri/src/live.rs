@@ -1,5 +1,6 @@
-//! The live link to the home server (D9, D12): the unread count for the tray badge, and server
-//! notifications mirrored as desktop notifications.
+//! The live link to the home server (D4, D9, D12): the unread count for the tray badge, server
+//! notifications mirrored as desktop notifications, and a prompt pull when a note changes on the
+//! server.
 //!
 //! One task holds `GET /api/events` open on the home server with the device token, and
 //! reconnects with a growing pause when the stream fails. On connecting, and on every
@@ -14,6 +15,11 @@
 //!
 //! Closing a raised notification on the desktop marks it read on the server, as a swipe does on
 //! Android; clicking it opens what it points at in the window, and marks it read too.
+//!
+//! Each `note.changed`, and each reconnect after the first connection, is handed to the shell
+//! ([`Shell::server_changed`]), which asks the sync loop for a round, so a change made in the
+//! browser or on another device reaches this app within seconds. The stream is parsed by the
+//! sync crate's [`SseParser`], which the Android app's follower uses too.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -23,6 +29,8 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::watch;
+
+use sync::live::{NoteChanged, SseParser};
 
 use crate::notifier::{Notifier, Signal};
 
@@ -50,6 +58,9 @@ pub trait Shell: Send + Sync + 'static {
     fn badge(&self, unread: u64);
     /// Show the window at the web client's `path`.
     fn open(&self, path: &str);
+    /// A note changed on the server, or `None` after a reconnect, when what changed meanwhile
+    /// is unknown: the local vault should pull.
+    fn server_changed(&self, change: Option<NoteChanged>);
 }
 
 /// Where the live link stands, for `/_desktop/status`.
@@ -148,59 +159,6 @@ impl Mirror {
     }
 }
 
-/// One server-sent event: its name and its data.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Event {
-    pub name: String,
-    pub data: String,
-}
-
-/// Splits a server-sent event stream into events, whatever chunks it arrives in.
-#[derive(Debug, Default)]
-pub struct SseParser {
-    buffer: String,
-    name: String,
-    data: Vec<String>,
-}
-
-impl SseParser {
-    /// The events `chunk` completes.
-    pub fn push(&mut self, chunk: &str) -> Vec<Event> {
-        self.buffer.push_str(chunk);
-        let mut events = Vec::new();
-        while let Some(end) = self.buffer.find('\n') {
-            let line: String = self.buffer.drain(..=end).collect();
-            let line = line.trim_end_matches('\n').trim_end_matches('\r');
-            if line.is_empty() {
-                if !self.data.is_empty() {
-                    events.push(Event {
-                        name: if self.name.is_empty() {
-                            "message".to_owned()
-                        } else {
-                            std::mem::take(&mut self.name)
-                        },
-                        data: self.data.join("\n"),
-                    });
-                }
-                self.name.clear();
-                self.data.clear();
-                continue;
-            }
-            if line.starts_with(':') {
-                continue;
-            }
-            let (field, value) = line.split_once(':').unwrap_or((line, ""));
-            let value = value.strip_prefix(' ').unwrap_or(value);
-            match field {
-                "event" => self.name = value.to_owned(),
-                "data" => self.data.push(value.to_owned()),
-                _ => {}
-            }
-        }
-        events
-    }
-}
-
 /// The live link's handle.
 pub struct Live {
     status: Arc<Mutex<Status>>,
@@ -221,6 +179,7 @@ impl Live {
                 .connect_timeout(Duration::from_secs(10))
                 .build()
                 .expect("an HTTP client builds"),
+            opened_before: false,
         };
         tauri::async_runtime::spawn(task.run(remote));
         Live { status }
@@ -253,6 +212,9 @@ struct Task {
     items: HashMap<String, Item>,
     notifier: Option<Notifier>,
     client: reqwest::Client,
+    /// Whether the stream to the current server opened before, so opening it again means
+    /// changes may have been missed.
+    opened_before: bool,
 }
 
 impl Task {
@@ -282,7 +244,10 @@ impl Task {
                 };
             }
             match end {
-                End::Changed => backoff = MIN_BACKOFF,
+                End::Changed => {
+                    backoff = MIN_BACKOFF;
+                    self.opened_before = false;
+                }
                 End::Refused(_) => {
                     if remote.changed().await.is_err() {
                         return;
@@ -330,6 +295,9 @@ impl Task {
             s.message = None;
         }
         *backoff = MIN_BACKOFF;
+        if std::mem::replace(&mut self.opened_before, true) {
+            self.shell.server_changed(None);
+        }
         if let Err(e) = self.refresh(remote).await {
             return End::Failed(e);
         }
@@ -345,6 +313,9 @@ impl Task {
                         Ok(Some(Ok(chunk))) => chunk,
                     };
                     let events = parser.push(&String::from_utf8_lossy(&chunk));
+                    for change in events.iter().filter_map(NoteChanged::of) {
+                        self.shell.server_changed(Some(change));
+                    }
                     if events.iter().any(|e| e.name.starts_with("notification."))
                         && let Err(e) = self.refresh(remote).await
                     {
@@ -553,35 +524,6 @@ mod tests {
         assert_eq!(
             n.path().as_deref(),
             Some("/notes/01J9ZQ4V6W3K8M2N5P7R9T1XYZ")
-        );
-    }
-
-    #[test]
-    fn server_sent_events_parse_across_chunks() {
-        let mut p = SseParser::default();
-        assert!(p.push(": open\n\n").is_empty(), "a comment is no event");
-        assert!(p.push("event: notification.created\nid: 1\nda").is_empty());
-        let events = p.push("ta: {\"id\":\"a\",\"unread\":1}\n\n: heartbeat\n\n");
-        assert_eq!(
-            events,
-            [Event {
-                name: "notification.created".into(),
-                data: "{\"id\":\"a\",\"unread\":1}".into()
-            }]
-        );
-        let events = p.push("event: note.changed\r\ndata: x\r\ndata: y\r\n\r\ndata:z\n\n");
-        assert_eq!(
-            events,
-            [
-                Event {
-                    name: "note.changed".into(),
-                    data: "x\ny".into()
-                },
-                Event {
-                    name: "message".into(),
-                    data: "z".into()
-                }
-            ]
         );
     }
 }

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use embedded::device::{DeviceData, QueuedEvent};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString};
-use jni::sys::{jlong, jstring};
+use jni::sys::{jboolean, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
 use serde_json::{Value as Json, json};
 
@@ -158,6 +158,20 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_kick<'local>
 ) -> jstring {
     answer(&mut env, |_| {
         core()?.kick();
+        Ok(None)
+    })
+}
+
+/// `VaultCore.foreground(on: Boolean)`: the app came to the front or left it, so the core
+/// follows the home server's live events, or stops.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_foreground<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    on: jboolean,
+) -> jstring {
+    answer(&mut env, |_| {
+        core()?.set_foreground(on != 0);
         Ok(None)
     })
 }

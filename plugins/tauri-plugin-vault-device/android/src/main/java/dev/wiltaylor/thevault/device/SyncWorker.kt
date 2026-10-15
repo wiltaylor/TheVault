@@ -22,7 +22,9 @@ import java.util.concurrent.TimeUnit
  *
  * Two schedules run it: the periodic one ([schedule]), and a prompt one ([soon]) that background
  * capture asks for once a device event's handler has written notes, so a captured SMS, call or
- * contact change reaches the home server in seconds rather than at the next period.
+ * contact change reaches the home server in seconds rather than at the next period. A
+ * `note.changed` push from the home server asks for the prompt round too, so a change made
+ * elsewhere reaches the phone while the app is closed.
  *
  * The output carries the round's report as JSON under [REPORT], or the error under [ERROR]. A
  * server that cannot be reached retries later; a server newer than the app fails the run and

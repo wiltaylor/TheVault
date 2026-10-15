@@ -25,12 +25,14 @@ pub enum LiveEvent {
     /// The read notifications were removed.
     NotificationCleared { cleared: usize, unread: u64 },
     /// A note was written or deleted. `version` is its new version, or for a delete the version
-    /// it went to the trash with.
+    /// it went to the trash with. `token` names the API token that made the change, when one
+    /// did, so the push dispatcher does not tell a device about its own writes.
     NoteChanged {
         id: String,
         type_name: String,
         version: String,
         deleted: bool,
+        token: Option<String>,
     },
     /// A command was queued for a device.
     DeviceCommand { device: String, id: String },

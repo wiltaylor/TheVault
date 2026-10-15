@@ -1331,7 +1331,10 @@ impl Writer {
         }
         inner.index.update(&inner.schema, &updates)?;
         inner.index.advance(generation)?;
-        self.announce(&saved);
+        self.announce(&saved, &|id| match authors.get(id).unwrap_or(author) {
+            Author::Token(name) => Some(name.clone()),
+            _ => None,
+        });
         self.hooks.after(&saved, author, &inner.schema);
         self.people_to_contacts(&people);
         Ok(saved)
@@ -1339,13 +1342,15 @@ impl Writer {
 
     /// Tell open clients about committed changes (D4). The caller holds the write lock, so the
     /// events go out in commit order.
-    fn announce(&self, saved: &[Saved]) {
+    /// `token` names the API token that made the change to a note, when a token did.
+    pub(crate) fn announce(&self, saved: &[Saved], token: &dyn Fn(&str) -> Option<String>) {
         for s in saved {
             self.state.events().publish(state::LiveEvent::NoteChanged {
                 id: s.id.clone(),
                 type_name: s.type_name.clone(),
                 version: s.version.clone(),
                 deleted: s.event == Event::Delete,
+                token: token(&s.id),
             });
         }
     }

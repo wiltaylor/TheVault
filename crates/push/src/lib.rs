@@ -7,9 +7,17 @@
 //! runs on its own task: a failed attempt (no answer, 429 or 5xx) is retried with doubling
 //! waits, and an endpoint the push service answers 404 or 410 for is gone, so it is removed from
 //! the device. Devices without an endpoint are not sent anything.
+//!
+//! Note changes are coalesced, so a burst of edits sends one push ([`Changes`]): the first change
+//! after a quiet spell goes out [`Dispatcher::with_note_window`]'s `delay` later, and no more
+//! than one `note.changed` goes out per window. Each device is told the ids changed since the
+//! last one, `{"event": "note.changed", "ids": [...]}`, leaving out the changes its own token
+//! made; a device whose own writes are all there is gets nothing. Too many ids for one message
+//! send the first [`MAX_IDS`] and `"more": true`. The device runs a sync round on it.
 
 pub mod webpush;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,6 +25,7 @@ use reqwest::StatusCode;
 use serde_json::{Value, json};
 use state::{Device, LiveEvent, Missed, PushTarget, State};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 /// Whatever owns the vault's [`State`]: the server's writer, or a bare `State` in tests.
 pub trait HasState: Send + Sync + 'static {
@@ -65,6 +74,7 @@ pub fn message(event: &LiveEvent) -> Option<Message> {
             json!({ "event": name, "id": id }),
             "high",
         ),
+        // Coalesced by the dispatcher instead: see [`Changes`].
         LiveEvent::NoteChanged { .. } => return None,
     };
     Some(Message {
@@ -96,6 +106,8 @@ pub struct Dispatcher {
     attempts: u32,
     first_wait: Duration,
     ttl: Duration,
+    note_delay: Duration,
+    note_window: Duration,
 }
 
 impl Default for Dispatcher {
@@ -108,6 +120,8 @@ impl Default for Dispatcher {
             attempts: 5,
             first_wait: Duration::from_secs(2),
             ttl: Duration::from_secs(24 * 60 * 60),
+            note_delay: Duration::from_secs(1),
+            note_window: Duration::from_secs(10),
         }
     }
 }
@@ -121,41 +135,97 @@ impl Dispatcher {
         self
     }
 
+    /// Push note changes `delay` after the first one, and at most one `note.changed` every
+    /// `window`. The defaults are 1 and 10 seconds.
+    pub fn with_note_window(mut self, delay: Duration, window: Duration) -> Self {
+        self.note_delay = delay;
+        self.note_window = window;
+        self
+    }
+
     /// Follow `owner`'s events on the current Tokio runtime until they close. It subscribes
     /// before returning, so every event published after this call is pushed.
     pub fn spawn<S: HasState>(self, owner: Arc<S>) -> JoinHandle<()> {
         let mut events = owner.state().events().subscribe();
         let this = Arc::new(self);
         tokio::spawn(async move {
+            let mut changes = Changes::new(this.note_delay, this.note_window);
             loop {
-                match events.recv().await {
-                    Ok((_, event)) => {
-                        if let Some(message) = message(&event) {
-                            this.send(&owner, message).await;
+                let due = changes.due();
+                tokio::select! {
+                    got = events.recv() => match got {
+                        Ok((_, LiveEvent::NoteChanged { id, token, .. })) => {
+                            changes.add(id, token, Instant::now());
                         }
+                        Ok((_, event)) => {
+                            if let Some(message) = message(&event) {
+                                this.send(&owner, message).await;
+                            }
+                        }
+                        Err(Missed::Lagged(n)) => {
+                            eprintln!("push: fell behind and did not send {n} events")
+                        }
+                        Err(Missed::Closed) => {
+                            let batch = changes.take(Instant::now());
+                            this.send_changes(&owner, batch).await;
+                            return;
+                        }
+                    },
+                    _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
+                        let batch = changes.take(Instant::now());
+                        this.send_changes(&owner, batch).await;
                     }
-                    Err(Missed::Lagged(n)) => {
-                        eprintln!("push: fell behind and did not send {n} events")
-                    }
-                    Err(Missed::Closed) => return,
                 }
             }
         })
     }
 
-    /// Start delivering `message` to every device it is for, each on its own task.
-    async fn send<S: HasState>(self: &Arc<Self>, owner: &Arc<S>, message: Message) {
+    /// Every device, or `None` when listing them failed.
+    async fn devices<S: HasState>(owner: &Arc<S>) -> Option<Vec<Device>> {
         let o = owner.clone();
-        let devices = match tokio::task::spawn_blocking(move || o.state().list_devices()).await {
-            Ok(Ok(devices)) => devices,
+        match tokio::task::spawn_blocking(move || o.state().list_devices()).await {
+            Ok(Ok(devices)) => Some(devices),
             Ok(Err(e)) => {
                 eprintln!("push: listing the devices failed: {e}");
-                return;
+                None
             }
             Err(e) => {
                 eprintln!("push: listing the devices failed: {e}");
-                return;
+                None
             }
+        }
+    }
+
+    /// Start telling every device with an endpoint which notes in `batch` changed, leaving out
+    /// the changes its own token made.
+    async fn send_changes<S: HasState>(self: &Arc<Self>, owner: &Arc<S>, batch: Vec<Change>) {
+        if batch.is_empty() {
+            return;
+        }
+        let Some(devices) = Self::devices(owner).await else {
+            return;
+        };
+        for device in devices {
+            let Some(target) = device.push.clone() else {
+                continue;
+            };
+            let Some(body) = changes_body(&batch, &device.token_id) else {
+                continue;
+            };
+            let this = self.clone();
+            let owner = owner.clone();
+            let body = body.to_string().into_bytes();
+            tokio::spawn(async move {
+                this.deliver(&owner, &device.id, &target, &body, "normal")
+                    .await;
+            });
+        }
+    }
+
+    /// Start delivering `message` to every device it is for, each on its own task.
+    async fn send<S: HasState>(self: &Arc<Self>, owner: &Arc<S>, message: Message) {
+        let Some(devices) = Self::devices(owner).await else {
+            return;
         };
         let body = Arc::new(message.body.to_string().into_bytes());
         for (device, target) in targets(devices, message.device.as_deref()) {
@@ -238,4 +308,86 @@ pub fn targets(devices: Vec<Device>, only: Option<&str>) -> Vec<(String, PushTar
         .filter(|d| only.is_none_or(|id| d.id == id))
         .filter_map(|d| d.push.map(|p| (d.id, p)))
         .collect()
+}
+
+/// The most note ids one `note.changed` push names. A WebPush message holds about 4 KB.
+pub const MAX_IDS: usize = 64;
+
+/// One note change waiting to be pushed: the note, and the token that made it, when one did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Change {
+    pub id: String,
+    pub token: Option<String>,
+}
+
+/// The note changes waiting for the next `note.changed` push, and when it may go out.
+#[derive(Debug)]
+pub struct Changes {
+    delay: Duration,
+    window: Duration,
+    waiting: Vec<Change>,
+    /// When the first change waiting arrived.
+    first: Option<Instant>,
+    /// When the last push went out.
+    last: Option<Instant>,
+}
+
+impl Changes {
+    pub fn new(delay: Duration, window: Duration) -> Changes {
+        Changes {
+            delay,
+            window,
+            waiting: Vec::new(),
+            first: None,
+            last: None,
+        }
+    }
+
+    /// Note `id` changed at `now`, by `token`.
+    pub fn add(&mut self, id: String, token: Option<String>, now: Instant) {
+        let change = Change { id, token };
+        if !self.waiting.contains(&change) {
+            self.waiting.push(change);
+        }
+        self.first.get_or_insert(now);
+    }
+
+    /// When the waiting changes go out: `delay` after the first of them, and not before a
+    /// `window` has passed since the last push. `None` when nothing waits.
+    pub fn due(&self) -> Option<Instant> {
+        let first = self.first? + self.delay;
+        Some(match self.last {
+            Some(last) => first.max(last + self.window),
+            None => first,
+        })
+    }
+
+    /// Take the waiting changes to push them at `now`.
+    pub fn take(&mut self, now: Instant) -> Vec<Change> {
+        self.first = None;
+        if !self.waiting.is_empty() {
+            self.last = Some(now);
+        }
+        std::mem::take(&mut self.waiting)
+    }
+}
+
+/// The `note.changed` message for the device whose token is `token`: the ids in `batch` its own
+/// token did not change, or `None` when there are none.
+pub fn changes_body(batch: &[Change], token: &str) -> Option<Value> {
+    let mut seen = HashSet::new();
+    let ids: Vec<&str> = batch
+        .iter()
+        .filter(|c| c.token.as_deref() != Some(token))
+        .map(|c| c.id.as_str())
+        .filter(|id| seen.insert(*id))
+        .collect();
+    if ids.is_empty() {
+        return None;
+    }
+    let mut body = json!({ "event": "note.changed", "ids": &ids[..ids.len().min(MAX_IDS)] });
+    if ids.len() > MAX_IDS {
+        body["more"] = json!(true);
+    }
+    Some(body)
 }

@@ -34,6 +34,7 @@ One thread runs the sync rounds of `crates/sync` with every asset kept locally (
 - when the app starts;
 - every 60 seconds;
 - 0.75 seconds after a write reaches the local vault, so a burst of saves syncs once;
+- 1 second after the live link's event stream reports a `note.changed` for a note version the local vault does not hold, and 1 second after the stream reconnects, so a change made in the browser or on another device shows within seconds. The echo of the app's own pushed write is not news and runs no round;
 - when the server answers again: while it does not, the app checks every 3 seconds;
 - when the user clicks the sync badge.
 
@@ -150,4 +151,4 @@ Pushing a tag `v<version>` runs `.github/workflows/release.yml`. The tag must ma
 
 S6 (`apps/desktop/e2e`) starts a testkit home server on port 0, a private D-Bus session with an unlocked throwaway gnome-keyring and a stand-in notification daemon (`examples/fake-notifyd.rs`), a stand-in GitHub Releases endpoint on port 0, and the app with its own XDG folders. It pairs, opens a note pulled from the server, edits it with the server stopped, and checks that the edit reaches the server once the server is back on the same address. It then starts the app again and checks that it syncs with the token from the keyring.
 
-The desktop extras' cases: a notification created on the server sets the tray badge and is raised on the desktop; reading it through the API closes it and clears the badge; closing one on the desktop marks it read on the server; clicking one opens its note. A `thevault://note/<id>` argument opens the note, and a newer release brings up the update prompt, which **Later** hides.
+The desktop extras' cases: a notification created on the server sets the tray badge and is raised on the desktop; reading it through the API closes it and clears the badge; closing one on the desktop marks it read on the server; clicking one opens its note. A note created and then renamed on the server reaches the local vault within seconds, through the live link. A `thevault://note/<id>` argument opens the note, and a newer release brings up the update prompt, which **Later** hides.

@@ -144,6 +144,12 @@ impl live::Shell for LiveShell {
     fn open(&self, path: &str) {
         open_path(&self.0, path);
     }
+
+    fn server_changed(&self, change: Option<sync::live::NoteChanged>) {
+        if let Some(state) = self.0.try_state::<App>() {
+            state.sync.trigger(Trigger::ServerChanged(change));
+        }
+    }
 }
 
 pub fn run() {

@@ -9,10 +9,15 @@
 //! The device token lives in the Android Keystore (D2). Kotlin hands the core the pairing it
 //! holds with [`Core::set_link`]; the core keeps it in memory only.
 //!
-//! Sync (D19, D20) runs in three ways, one round at a time:
+//! Sync (D19, D20) runs in these ways, one round at a time:
 //! - in the foreground, when the app opens and after each local write: [`Core::kick`] wakes a
 //!   thread that waits for writes to settle and then runs a round;
-//! - in the background, from WorkManager's periodic worker, through [`Core::sync_now`];
+//! - in the foreground, when a note changes on the server: while Kotlin says the app is in front
+//!   ([`Core::set_foreground`]), a thread holds the home server's `GET /api/events` open with
+//!   the device token, reconnecting with a growing pause, and asks for a round a second after
+//!   each `note.changed` the device does not hold yet, and on each (re)connect;
+//! - in the background, from WorkManager's periodic worker, and from the prompt worker a
+//!   `note.changed` push schedules, through [`Core::sync_now`];
 //! - for assets, on demand: [`Core::fetch_asset`] when a note shows an asset the device does not
 //!   hold, and [`Core::note_opened`] when a note is opened, so its assets are prefetched next time.
 //!
@@ -26,13 +31,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use embedded::device::{DeviceConfig, DeviceData, DeviceRuntime};
 use embedded::{Config, Embedded};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sync::live::{self, Seen};
 use sync::{AssetPolicy, Report};
 
 use crate::commands;
@@ -41,6 +47,14 @@ use crate::share::{self, Outcome, Shared};
 
 /// How long the foreground loop waits after a write for more writes before it syncs.
 const SETTLE: Duration = Duration::from_millis(1500);
+
+/// How long the foreground loop waits after a change on the server for more before it pulls.
+const REMOTE_SETTLE: Duration = Duration::from_secs(1);
+
+/// The first pause before the event stream reconnects, doubled after each failure up to
+/// [`MAX_BACKOFF`].
+const MIN_BACKOFF: Duration = Duration::from_secs(1);
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 /// The asset cache size when the app's setting is missing (D19).
 pub const DEFAULT_CACHE_MB: u64 = 512;
@@ -94,6 +108,17 @@ struct Last {
     error: Option<String>,
 }
 
+/// The live event stream's state.
+#[derive(Debug, Default)]
+struct Live {
+    /// Whether the app is in front, as Kotlin last said.
+    foreground: bool,
+    /// Whether the thread that follows the stream runs.
+    running: bool,
+    /// Whether the stream is open now.
+    connected: bool,
+}
+
 /// The core of one process.
 pub struct Core {
     vault: PathBuf,
@@ -101,8 +126,10 @@ pub struct Core {
     link: Mutex<Option<Link>>,
     /// Held for the whole of a round, so rounds never overlap.
     round: Mutex<()>,
-    /// Wakes the foreground loop; `None` until the first kick starts it.
-    kicks: Mutex<Option<Sender<()>>>,
+    /// Wakes the foreground loop with how long to wait for more; `None` until the first kick
+    /// starts it.
+    kicks: Mutex<Option<Sender<Duration>>>,
+    live: Mutex<Live>,
     last: Mutex<Option<Last>>,
     /// The device runtime and the device id it opened with, once Kotlin opens it.
     device: Mutex<Option<(String, Arc<DeviceRuntime>)>>,
@@ -147,6 +174,7 @@ pub fn open(vault: &Path) -> anyhow::Result<Arc<Core>> {
         link: Mutex::new(None),
         round: Mutex::new(()),
         kicks: Mutex::new(None),
+        live: Mutex::new(Live::default()),
         last: Mutex::new(None),
         device: Mutex::new(None),
         commands: Mutex::new(()),
@@ -254,22 +282,29 @@ impl Core {
 
     /// Ask the foreground loop for a round once writes settle. Nothing happens while unpaired.
     pub fn kick(self: &Arc<Self>) {
+        self.nudge(SETTLE);
+    }
+
+    /// Ask the foreground loop for a round once nothing more has asked for `settle`.
+    fn nudge(self: &Arc<Self>, settle: Duration) {
         if self.link().is_none() {
             return;
         }
         let mut kicks = lock(&self.kicks);
         if let Some(tx) = kicks.as_ref()
-            && tx.send(()).is_ok()
+            && tx.send(settle).is_ok()
         {
             return;
         }
-        let (tx, rx) = mpsc::channel::<()>();
+        let (tx, rx) = mpsc::channel::<Duration>();
         let core = Arc::downgrade(self);
         std::thread::Builder::new()
             .name("vault-sync".into())
             .spawn(move || {
-                while rx.recv().is_ok() {
-                    while rx.recv_timeout(SETTLE).is_ok() {}
+                while let Ok(mut settle) = rx.recv() {
+                    while let Ok(next) = rx.recv_timeout(settle) {
+                        settle = next;
+                    }
                     let Some(core) = core.upgrade() else { return };
                     if let Err(e) = core.sync_now() {
                         eprintln!("sync failed: {e}");
@@ -277,8 +312,25 @@ impl Core {
                 }
             })
             .expect("starting the sync thread");
-        let _ = tx.send(());
+        let _ = tx.send(settle);
         *kicks = Some(tx);
+    }
+
+    /// The app came to the front (`true`) or left it. In front, a paired core follows the home
+    /// server's live events and pulls what changes there; out of it, it stops within a heartbeat
+    /// and the server's `note.changed` push takes over.
+    pub fn set_foreground(self: &Arc<Self>, on: bool) {
+        let mut live = lock(&self.live);
+        live.foreground = on;
+        if !on || live.running || self.link().is_none() {
+            return;
+        }
+        live.running = true;
+        let core = Arc::downgrade(self);
+        std::thread::Builder::new()
+            .name("vault-live".into())
+            .spawn(move || follow_events(core))
+            .expect("starting the live events thread");
     }
 
     /// Store what another app shared: keep its files as assets, then queue a `share_received`
@@ -427,7 +479,62 @@ impl Core {
             "pending": self.server.queue().pending()?.len(),
             "last_sync_ms": last.as_ref().map(|l| l.at_ms),
             "last_error": last.and_then(|l| l.error),
+            "live": lock(&self.live).connected,
         }))
+    }
+}
+
+/// Follow the home server's events while the app is in front and paired, as
+/// [`Core::set_foreground`] says.
+fn follow_events(core: Weak<Core>) {
+    let mut backoff = MIN_BACKOFF;
+    loop {
+        let Some(core) = core.upgrade() else { return };
+        let link = {
+            let mut live = lock(&core.live);
+            match core.link() {
+                Some(link) if live.foreground => link,
+                _ => {
+                    live.running = false;
+                    return;
+                }
+            }
+        };
+        let keep = || lock(&core.live).foreground && core.link().as_ref() == Some(&link);
+        let mut opened = false;
+        let ended = live::follow(&link.remote(), live::SILENCE, &keep, &mut |seen| {
+            let news = match seen {
+                Seen::Opened => {
+                    opened = true;
+                    lock(&core.live).connected = true;
+                    true
+                }
+                Seen::NoteChanged(change) => live::is_news(core.server.queue(), &change),
+            };
+            if news {
+                core.nudge(REMOTE_SETTLE);
+            }
+        });
+        lock(&core.live).connected = false;
+        if opened {
+            backoff = MIN_BACKOFF;
+        }
+        match ended {
+            Ok(()) => continue,
+            Err(sync::Error::Server { status, .. }) if status == 401 || status == 403 => {
+                // A revoked device: the next time the app comes to the front tries again.
+                let mut live = lock(&core.live);
+                live.running = false;
+                return;
+            }
+            Err(e) => eprintln!("the live event stream ended: {e}"),
+        }
+        // Wait before reconnecting, but stop at once when the app leaves the front.
+        let until = Instant::now() + backoff;
+        while Instant::now() < until && keep() {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        backoff = (backoff * 2).min(MAX_BACKOFF);
     }
 }
 

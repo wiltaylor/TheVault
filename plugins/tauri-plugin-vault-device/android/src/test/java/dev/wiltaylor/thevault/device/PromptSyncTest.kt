@@ -159,6 +159,35 @@ class PromptSyncTest {
         assertTrue("nothing left the phone", home.requests.isEmpty())
     }
 
+    private fun notePush(vararg ids: String): String? =
+        PushHandler.handle(
+            context,
+            JSONObject().put("event", "note.changed").put("ids", JSONArray(ids.toList()))
+                .toString().toByteArray(),
+        )
+
+    /** Ticket 82: a note changed on the server, pushed while the app is closed, is pulled soon. */
+    @Test
+    fun aNoteChangedPushSchedulesOnePromptSync() {
+        pair()
+        assertEquals("note.changed", notePush("01JB8Z4K2MQ7V3X9T5R6W8Y2ZA"))
+        assertEquals("note.changed", notePush("01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"))
+        val round = oneRoundWaiting()
+
+        WorkManagerTestInitHelper.getTestDriver(context)!!.setAllConstraintsMet(round.id)
+
+        assertEquals(WorkInfo.State.SUCCEEDED, rounds().single().state)
+        assertTrue("the round ran: ${home.requests}", "GET /api/sync/info" in home.requests)
+        assertTrue("the round pulled: ${home.requests}", home.requests.any { it.startsWith("GET /api/sync/changes") })
+    }
+
+    @Test
+    fun aNoteChangedPushToAnUnpairedPhoneSchedulesNothing() {
+        assertEquals("note.changed", notePush("01JB8Z4K2MQ7V3X9T5R6W8Y2ZA"))
+        assertTrue(rounds().isEmpty())
+        assertTrue(home.requests.isEmpty())
+    }
+
     @Test
     fun withTheAppInFrontTheForegroundLoopSyncsInstead() {
         pair()

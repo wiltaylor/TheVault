@@ -175,21 +175,89 @@ async fn a_device_command_goes_only_to_its_device() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn note_changes_are_not_pushed() {
+async fn note_changes_are_coalesced_and_skip_the_device_that_made_them() {
     let dir = TempDir::new().unwrap();
     let state = open_state(&dir);
     let service = StandIn::start();
     service.route("/a", Reply::text(201, ""));
-    device(&state, "A", Some(&Keys::new(1).target(service.url("/a"))));
-    quick().spawn(state.clone());
-    state.events().publish(state::LiveEvent::NoteChanged {
-        id: "n".into(),
-        type_name: "memo".into(),
-        version: "1".into(),
-        deleted: false,
-    });
+    service.route("/b", Reply::text(201, ""));
+    let (ka, kb) = (Keys::new(1), Keys::new(2));
+    let a = device(&state, "A", Some(&ka.target(service.url("/a"))));
+    device(&state, "B", Some(&kb.target(service.url("/b"))));
+    let a_token = state
+        .list_devices()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.id == a)
+        .unwrap()
+        .token_id;
+    quick()
+        .with_note_window(Duration::from_millis(50), Duration::from_millis(800))
+        .spawn(state.clone());
+    let change = |id: &str, token: Option<&str>| {
+        state.events().publish(state::LiveEvent::NoteChanged {
+            id: id.into(),
+            type_name: "memo".into(),
+            version: "1".into(),
+            deleted: false,
+            token: token.map(str::to_owned),
+        })
+    };
+    change("n1", None);
+    change("n1", None);
+    change("n2", Some(&a_token));
+    let seen = wait_for(&service, 2).await;
+    let first = Instant::now();
+    for r in &seen {
+        assert_eq!(r.header("urgency"), Some("normal"));
+        let (keys, ids) = if r.path == "/a" {
+            (&ka, json!(["n1"]))
+        } else {
+            (&kb, json!(["n1", "n2"]))
+        };
+        assert_eq!(
+            keys.open(&r.body),
+            json!({ "event": "note.changed", "ids": ids })
+        );
+    }
+    // Inside the window, changes wait; then they go out together.
+    change("n3", None);
+    change("n4", None);
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(service.requests().is_empty());
+    assert_eq!(service.requests().len(), 2);
+    let seen = wait_for(&service, 4).await;
+    assert!(first.elapsed() >= Duration::from_millis(600));
+    for r in &seen[2..] {
+        let keys = if r.path == "/a" { &ka } else { &kb };
+        assert_eq!(
+            keys.open(&r.body),
+            json!({ "event": "note.changed", "ids": ["n3", "n4"] })
+        );
+    }
+    // The device's own change alone reaches only the other device.
+    change("n5", Some(&a_token));
+    let seen = wait_for(&service, 5).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(service.requests().len(), 5);
+    assert_eq!(seen[4].path, "/b");
+}
+
+#[test]
+fn a_long_burst_names_the_first_ids_and_says_there_are_more() {
+    let batch: Vec<push::Change> = (0..push::MAX_IDS + 3)
+        .map(|i| push::Change {
+            id: format!("n{i}"),
+            token: None,
+        })
+        .collect();
+    let body = push::changes_body(&batch, "device-x").unwrap();
+    assert_eq!(body["ids"].as_array().unwrap().len(), push::MAX_IDS);
+    assert_eq!(body["more"], true);
+    let own: Vec<push::Change> = vec![push::Change {
+        id: "n".into(),
+        token: Some("device-x".into()),
+    }];
+    assert_eq!(push::changes_body(&own, "device-x"), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]

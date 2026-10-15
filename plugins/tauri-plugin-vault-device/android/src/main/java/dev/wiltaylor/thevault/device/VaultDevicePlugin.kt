@@ -17,7 +17,8 @@ import app.tauri.plugin.Plugin
  * that has been finished, and starts device capture (D7), which then runs from receivers and
  * workers with no webview. A paired app also starts UnifiedPush once per process, and each time
  * it comes to the front reconciles the mirrored notifications and runs pending device commands; a
- * tapped notification opens its note here (D9, D22). The notification listener code lands here too.
+ * tapped notification opens its note here (D9, D22). While in front, the core follows the home
+ * server's live events, so a note changed elsewhere is pulled within seconds (D4). The notification listener code lands here too.
  * It also keeps the page clear of the system bars and the keyboard ([SystemBars], ticket 79).
  *
  * Commands for the webview: `open_capture_setup` and `capture_status`.
@@ -41,13 +42,26 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
     override fun onResume() {
         super.onResume()
         SyncWorker.foreground = true
-        openAndSync()
+        if (openAndSync()) live(true)
     }
 
-    /** Out of the front: background writes sync through WorkManager ([SyncWorker.soon]). */
+    /**
+     * Out of the front: background writes sync through WorkManager ([SyncWorker.soon]), and
+     * server changes arrive as a `note.changed` push instead of on the live stream.
+     */
     override fun onPause() {
         super.onPause()
         SyncWorker.foreground = false
+        live(false)
+    }
+
+    /** In front, the core follows the home server's live events and pulls each change (D4). */
+    private fun live(on: Boolean) {
+        try {
+            VaultCore.foreground(on)
+        } catch (e: IllegalStateException) {
+            // The vault is not open: there is nothing to follow.
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

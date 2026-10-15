@@ -50,6 +50,13 @@ object VaultCore {
     @JvmStatic
     external fun kick(): String?
 
+    /**
+     * Tells the core the app came to the front ([on] true) or left it. In front, a paired core
+     * follows the home server's live events and runs a round soon after each change there.
+     */
+    @JvmStatic
+    external fun foreground(on: Boolean): String?
+
     /** Runs one sync round now and answers its report as JSON. It blocks for the whole round. */
     @JvmStatic
     external fun sync(): String

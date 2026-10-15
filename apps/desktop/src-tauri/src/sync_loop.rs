@@ -3,7 +3,8 @@
 //!
 //! One thread runs [`sync::Engine`] rounds, since the engine blocks. A round runs when the app
 //! starts, on a timer, when the server answers again after being unreachable, a moment after
-//! each local write, and when the user asks. The desktop keeps every asset
+//! each local write, a moment after the live link ([`crate::live`]) sees a note change on the
+//! server that the local vault does not hold yet, and when the user asks. The desktop keeps every asset
 //! ([`sync::AssetPolicy::All`]).
 //!
 //! Before each round the loop checks that the server answers at all, with a short timeout. While
@@ -35,6 +36,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long after a local write the round runs, so a burst of saves syncs once.
 const AFTER_WRITE: Duration = Duration::from_millis(750);
 
+/// How long after a change on the server the round runs, so a burst of changes pulls once.
+const AFTER_REMOTE: Duration = Duration::from_secs(1);
+
 /// Far enough away to mean "not until asked".
 const NEVER: Duration = Duration::from_secs(365 * 24 * 60 * 60);
 
@@ -44,6 +48,8 @@ pub enum Trigger {
     LocalWrite,
     /// The user asked to sync now.
     Now,
+    /// A note changed on the server, or the live link reconnected (`None`).
+    ServerChanged(Option<sync::live::NoteChanged>),
     /// Setup paired the device.
     Paired(Device, String),
 }
@@ -228,6 +234,15 @@ impl Worker {
                     continue;
                 }
                 Ok(Trigger::Now) => due = Instant::now(),
+                Ok(Trigger::ServerChanged(change)) => {
+                    let news = change.is_none_or(|c| {
+                        self.device.is_some() && sync::live::is_news(self.embedded.queue(), &c)
+                    });
+                    if news {
+                        due = due.min(Instant::now() + AFTER_REMOTE);
+                    }
+                    continue;
+                }
                 Ok(Trigger::Paired(device, token)) => {
                     self.engine = None;
                     self.build_engine(&device, token);
