@@ -4,8 +4,8 @@ title: 'Contacts: a person created in the web app never becomes a phone contact,
   nothing queues upsert_contact for an unlinked person'
 plan: thevault-clients
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: unmet
 ---
 
 # Contacts: a person created in the web app never becomes a phone contact, since nothing queues upsert_contact for an unlinked person
@@ -23,3 +23,19 @@ Fix direction: a default after_create/after_update handler for person (or a step
 Evidence: .scratch/emulator/RESULTS.md check 38.
 
 ## Worklog
+
+### 2026-10-15T13:14:01Z — wil
+
+Status set to claimed.
+
+### 2026-10-15T13:14:01Z — wil
+
+Fixed in 5b2b34a: the writer queues upsert_contact for each eligible device (contacts write on, command enabled) when a person with a phone or address is created or its contact fields change and it is not linked on that device; no echo to the writing device; the server links device_contacts when the device reports done. Linked people keep flowing via contact sync, not a full overwrite (D16). check and android-test pass (android-test passed on rerun; first run had 2 OnboardingActivityTest failures 'cannot reach the server' at load avg ~16). Emulator confirmation pending.
+
+### 2026-10-15T13:14:01Z — wil
+
+Verified set to unmet.
+
+### 2026-10-15T13:14:01Z — wil
+
+Status set to done.
