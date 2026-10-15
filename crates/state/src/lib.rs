@@ -1,11 +1,12 @@
-//! `.vault/state.db`: version history, trash, encrypted secrets, API tokens, task run logs and the
-//! queue of `after_*` handler jobs.
+//! `.vault/state.db`: version history, trash, encrypted secrets, API tokens, task run logs, the
+//! queue of `after_*` handler jobs and the user's notifications.
 //!
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
 mod auth;
 mod history;
 mod jobs;
+mod notifications;
 mod pins;
 mod runs;
 mod secrets;
@@ -19,6 +20,10 @@ use rusqlite::Connection;
 pub use auth::{Scope, TokenInfo};
 pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, Version};
 pub use jobs::{HandlerJob, JobStatus};
+pub use notifications::{
+    MAX_BODY, MAX_NOTIFICATIONS, MAX_TITLE, NewNotification, Notification, NotificationPage,
+    READ_RETENTION_MS, is_app_path,
+};
 pub use pins::{PinEntry, PinKind, PinNode};
 pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{SecretInfo, SecretKey, key_file_path};
@@ -63,6 +68,10 @@ pub enum Error {
     PinCycle { id: String, target: String },
     #[error("a folder name cannot be empty")]
     EmptyFolderName,
+    #[error("{0}")]
+    InvalidNotification(String),
+    #[error("no notification {0}")]
+    UnknownNotification(String),
     #[error("state.db is corrupt: {0}")]
     Corrupt(String),
 }
@@ -93,7 +102,7 @@ pub struct State {
     clock: Arc<dyn Clock>,
 }
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -214,6 +223,22 @@ INSERT OR IGNORE INTO pin_entries (id, kind, name, parent, position, created_ms)
 DROP TABLE IF EXISTS pins;
 ";
 
+/// What version 7 adds: notifications for the user. `id` is a ULID, so it sorts by creation;
+/// `read_ms` is `NULL` until the notification is read.
+const SCHEMA_V7: &str = "
+CREATE TABLE IF NOT EXISTS notifications (
+    id         TEXT PRIMARY KEY,
+    created_ms INTEGER NOT NULL,
+    title      TEXT NOT NULL,
+    body       TEXT,
+    note_id    TEXT,
+    url        TEXT,
+    source     TEXT NOT NULL,
+    read_ms    INTEGER
+);
+CREATE INDEX IF NOT EXISTS notifications_unread ON notifications (read_ms, id);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -287,7 +312,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=5 => {
+        0..=6 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -312,6 +337,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             if version <= 5 {
                 tx.execute_batch(SCHEMA_V6)?;
             }
+            if version <= 6 {
+                tx.execute_batch(SCHEMA_V7)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())
@@ -332,7 +360,7 @@ pub fn random_hex(bytes: usize) -> String {
     to_hex(&raw)
 }
 
-fn random_bytes(buf: &mut [u8]) {
+pub(crate) fn random_bytes(buf: &mut [u8]) {
     use chacha20poly1305::aead::OsRng;
     use chacha20poly1305::aead::rand_core::RngCore;
     OsRng.fill_bytes(buf);

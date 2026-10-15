@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use state::{
-    Author, Clock, Error, JobStatus, PrunePolicy, RunOutcome, Scope, SecretKey, State,
-    key_file_path,
+    Author, Clock, Error, JobStatus, MAX_NOTIFICATIONS, NewNotification, PrunePolicy, RunOutcome,
+    Scope, SecretKey, State, key_file_path,
 };
 use tempfile::TempDir;
 
@@ -776,4 +776,195 @@ fn saves_by_tokens_never_merge() {
             .unwrap();
     }
     assert_eq!(state.history(NOTE_A).unwrap().len(), 3);
+}
+
+fn note(title: &str) -> NewNotification {
+    NewNotification {
+        title: title.to_owned(),
+        source: "api".to_owned(),
+        ..NewNotification::default()
+    }
+}
+
+#[test]
+fn notifications_list_newest_first_page_and_count_unread() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(1_000);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        let n = state
+            .add_notification(&NewNotification {
+                title: format!("  Note {i}  "),
+                body: Some(if i == 0 { "   ".into() } else { "body".into() }),
+                note_id: Some(NOTE_A.into()),
+                url: None,
+                source: "task:digest".into(),
+            })
+            .unwrap();
+        assert_eq!(n.title, format!("Note {i}"));
+        assert_eq!(n.read_ms, None);
+        ids.push(n.id);
+        // Two in the same millisecond still keep their order.
+        if i % 2 == 1 {
+            clock.advance(1);
+        }
+    }
+    assert_eq!(state.notification(&ids[0]).unwrap().unwrap().body, None);
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(sorted, ids, "ids sort by creation");
+    assert_eq!(state.unread_notifications().unwrap(), 5);
+
+    let first = state.notifications(false, 2, None).unwrap();
+    let titles = |p: &state::NotificationPage| -> Vec<String> {
+        p.items.iter().map(|n| n.title.clone()).collect()
+    };
+    assert_eq!(titles(&first), ["Note 4", "Note 3"]);
+    let second = state
+        .notifications(false, 2, first.next.as_deref())
+        .unwrap();
+    assert_eq!(titles(&second), ["Note 2", "Note 1"]);
+    let last = state
+        .notifications(false, 2, second.next.as_deref())
+        .unwrap();
+    assert_eq!(titles(&last), ["Note 0"]);
+    assert_eq!(last.next, None);
+
+    clock.advance(10);
+    let read = state.mark_notification_read(&ids[3]).unwrap();
+    assert_eq!(read.read_ms, Some(clock.now_ms()));
+    clock.advance(10);
+    // Reading it again keeps when it was first read.
+    assert_eq!(
+        state.mark_notification_read(&ids[3]).unwrap().read_ms,
+        read.read_ms
+    );
+    assert_eq!(state.unread_notifications().unwrap(), 4);
+    let unread = state.notifications(true, 10, None).unwrap();
+    assert_eq!(titles(&unread), ["Note 4", "Note 2", "Note 1", "Note 0"]);
+
+    state.delete_notification(&ids[4]).unwrap();
+    assert!(matches!(
+        state.delete_notification(&ids[4]),
+        Err(Error::UnknownNotification(_))
+    ));
+    assert!(matches!(
+        state.mark_notification_read("nope"),
+        Err(Error::UnknownNotification(_))
+    ));
+    assert_eq!(state.mark_all_notifications_read().unwrap(), 3);
+    assert_eq!(state.unread_notifications().unwrap(), 0);
+    assert_eq!(state.clear_read_notifications().unwrap(), 4);
+    assert!(
+        state
+            .notifications(false, 10, None)
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}
+
+#[test]
+fn notifications_are_checked() {
+    let dir = TempDir::new().unwrap();
+    let state = open(&dir);
+    let bad = |n: NewNotification| {
+        assert!(
+            matches!(
+                state.add_notification(&n),
+                Err(Error::InvalidNotification(_))
+            ),
+            "{n:?} was accepted"
+        );
+    };
+    bad(note("   "));
+    bad(note(&"x".repeat(201)));
+    bad(NewNotification {
+        body: Some("y".repeat(2001)),
+        ..note("ok")
+    });
+    for url in [
+        "https://example.com",
+        "//evil.example",
+        "/api/notes",
+        "/login",
+        "/a b",
+        "rel",
+    ] {
+        bad(NewNotification {
+            url: Some(url.into()),
+            ..note("ok")
+        });
+    }
+    bad(NewNotification {
+        source: " ".into(),
+        ..note("ok")
+    });
+    state.add_notification(&note(&"é".repeat(200))).unwrap();
+    let n = state
+        .add_notification(&NewNotification {
+            url: Some("/settings/scheduled/digest".into()),
+            body: Some("z".repeat(2000)),
+            ..note("ok")
+        })
+        .unwrap();
+    assert_eq!(n.url.as_deref(), Some("/settings/scheduled/digest"));
+}
+
+#[test]
+fn adding_a_notification_prunes_old_read_ones_and_keeps_at_most_500() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(10 * DAY_MS);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+    let old = state.add_notification(&note("read long ago")).unwrap();
+    let kept = state.add_notification(&note("unread long ago")).unwrap();
+    state.mark_notification_read(&old.id).unwrap();
+    clock.advance(30 * DAY_MS + 1);
+    state.add_notification(&note("new")).unwrap();
+    assert!(
+        state.notification(&old.id).unwrap().is_none(),
+        "a read one past 30 days stays"
+    );
+    assert!(
+        state.notification(&kept.id).unwrap().is_some(),
+        "an unread one went"
+    );
+
+    for i in 0..MAX_NOTIFICATIONS {
+        state.add_notification(&note(&format!("n{i}"))).unwrap();
+    }
+    let all = state.notifications(false, MAX_NOTIFICATIONS, None).unwrap();
+    assert_eq!(all.items.len(), MAX_NOTIFICATIONS);
+    assert_eq!(all.next, None);
+    assert_eq!(all.items[0].title, format!("n{}", MAX_NOTIFICATIONS - 1));
+    assert_eq!(all.items.last().unwrap().title, "n0");
+    assert_eq!(
+        state.unread_notifications().unwrap(),
+        MAX_NOTIFICATIONS as u64
+    );
+}
+
+#[test]
+fn a_version_6_state_db_gains_notifications() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("state.db");
+    let state = open(&dir);
+    state.pin(NOTE_A).unwrap();
+    drop(state);
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("DROP TABLE notifications; PRAGMA user_version = 6;")
+            .unwrap();
+    }
+    let state = open(&dir);
+    assert_eq!(state.pins().unwrap(), [NOTE_A]);
+    state.add_notification(&note("after the upgrade")).unwrap();
+    assert_eq!(state.unread_notifications().unwrap(), 1);
+    drop(state);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 7);
 }

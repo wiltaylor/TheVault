@@ -190,3 +190,65 @@ fn an_index_written_without_the_id_fast_field_is_replaced_and_rebuilt() {
         [id(1)]
     );
 }
+
+#[test]
+fn search_pages_leave_archived_notes_out_include_them_or_read_only_them() {
+    let (_dir, vault, schema) = vault();
+    let mut index = Index::open(&vault).unwrap();
+    index.rebuild(&vault).unwrap();
+    let note = |i: usize, archived: bool| {
+        let flag = if archived { "archived = true\n" } else { "" };
+        let text = format!(
+            "title   = \"plum {i}\"\ncreated = \"2026-10-01T09:00:00Z\"\nupdated = \"2026-10-01T09:00:00Z\"\n{flag}"
+        );
+        let file = format!("notes/item/{}.wcl", id(i));
+        let report = schema
+            .validate_note_source("item", &text, &file, &HashMap::new())
+            .unwrap();
+        Update::Put {
+            id: id(i),
+            type_name: "item".to_owned(),
+            doc: Doc::parse(&text, &file).unwrap(),
+            report,
+        }
+    };
+    index
+        .update(&schema, &[note(1, false), note(2, true), note(3, false)])
+        .unwrap();
+    let ids = |index: &Index, archived: index::Archived| -> (Vec<String>, usize) {
+        let page = index
+            .search_page_where("plum", None, archived, None, 10)
+            .unwrap();
+        let mut ids: Vec<String> = page.hits.into_iter().map(|h| h.id).collect();
+        ids.sort();
+        (ids, page.total)
+    };
+    assert_eq!(
+        ids(&index, index::Archived::Exclude),
+        (vec![id(1), id(3)], 2)
+    );
+    assert_eq!(ids(&index, index::Archived::Only), (vec![id(2)], 1));
+    assert_eq!(
+        ids(&index, index::Archived::Include),
+        (vec![id(1), id(2), id(3)], 3)
+    );
+    // The archive state scores nothing: a note scores the same whichever way it is read.
+    let score = |archived: index::Archived| {
+        index
+            .search_page_where("plum", None, archived, None, 10)
+            .unwrap()
+            .hits
+            .into_iter()
+            .find(|h| h.id == id(2))
+            .map(|h| h.score)
+    };
+    assert_eq!(
+        score(index::Archived::Only),
+        score(index::Archived::Include)
+    );
+
+    // Unarchiving a note puts it back among the default hits.
+    index.update(&schema, &[note(2, false)]).unwrap();
+    assert_eq!(ids(&index, index::Archived::Exclude).1, 3);
+    assert_eq!(ids(&index, index::Archived::Only).1, 0);
+}

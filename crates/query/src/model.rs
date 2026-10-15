@@ -13,6 +13,9 @@ use crate::print::path;
 pub struct Model {
     /// Type names, or empty for `from *`.
     pub from: Vec<String>,
+    /// `include archived`: archived notes as well as the rest.
+    #[serde(default)]
+    pub include_archived: bool,
     /// The `where` clause, or `None` when there is none.
     pub filter: Option<Group>,
     pub search: Option<String>,
@@ -138,6 +141,7 @@ impl Model {
         let filter = q.filter.as_ref().map(group).transpose()?;
         let model = Model {
             from,
+            include_archived: q.include_archived,
             filter,
             search: q.search.clone(),
             sort: q
@@ -199,6 +203,7 @@ impl Model {
             .collect::<Result<_>>()?;
         Ok(Query {
             from,
+            include_archived: self.include_archived,
             filter,
             search: self.search.clone(),
             sort,

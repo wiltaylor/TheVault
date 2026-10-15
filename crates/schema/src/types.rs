@@ -9,8 +9,9 @@ use crate::encoding::{is_name, is_ulid};
 use crate::note::check_value;
 use crate::{Invalid, Issue};
 
-/// Built-in note fields. A type may not define a field with one of these names.
-pub const RESERVED_FIELDS: [&str; 3] = ["title", "created", "updated"];
+/// Built-in note fields. A type may not define a field with one of these names. `archived` is
+/// the archive flag, which the server writes (see `docs/vault-format.md` "Note files").
+pub const RESERVED_FIELDS: [&str; 4] = ["title", "created", "updated", "archived"];
 
 /// The handler events.
 pub const EVENTS: [&str; 6] = [

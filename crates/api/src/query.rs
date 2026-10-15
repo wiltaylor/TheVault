@@ -25,6 +25,8 @@ pub const DEFAULT_PAGE: usize = 100;
 #[serde(deny_unknown_fields)]
 pub struct RunBody {
     query: String,
+    /// `include` or `only` to read archived notes; see [`with_archived`].
+    archived: Option<String>,
     /// The note that holds the query, bound to `this`.
     this: Option<String>,
     cursor: Option<String>,
@@ -35,6 +37,7 @@ pub struct RunBody {
 #[serde(deny_unknown_fields)]
 pub struct RunParams {
     q: String,
+    archived: Option<String>,
     this: Option<String>,
     cursor: Option<String>,
     page_size: Option<usize>,
@@ -44,6 +47,8 @@ pub struct RunParams {
 #[serde(deny_unknown_fields)]
 pub struct SearchParams {
     q: String,
+    /// `include` or `only` to search archived notes; they are left out otherwise.
+    archived: Option<String>,
     cursor: Option<String>,
     page_size: Option<usize>,
 }
@@ -131,7 +136,7 @@ pub async fn run_post(
     body: Result<Json<RunBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let b = json_body(body)?;
-    let q = parse(&b.query)?;
+    let q = with_archived(parse(&b.query)?, b.archived.as_deref())?;
     run_page(w, q, b.this, b.cursor, b.page_size).await
 }
 
@@ -140,7 +145,7 @@ pub async fn run_get(
     p: Result<Query<RunParams>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let p = params(p)?;
-    let q = parse(&p.q)?;
+    let q = with_archived(parse(&p.q)?, p.archived.as_deref())?;
     run_page(w, q, p.this, p.cursor, p.page_size).await
 }
 
@@ -153,16 +158,38 @@ pub async fn search(
     if p.q.trim().is_empty() {
         return Err(ApiError::bad_request("`q` is empty"));
     }
-    let q = query::Query {
-        from: query::From::All,
-        filter: None,
-        search: Some(p.q),
-        sort: Vec::new(),
-        group_by: None,
-        select: Vec::new(),
-        limit: None,
-    };
+    let archived = archived_param(p.archived.as_deref())?;
+    let q = query::Query::search_all(p.q, archived);
     run_page(w, q, None, p.cursor, p.page_size).await
+}
+
+/// `q` with an `archived` parameter applied: `include` adds `include archived`, `only` adds
+/// `&& archived` to the filter, and `exclude` or none leaves the query to decide.
+fn with_archived(mut q: query::Query, value: Option<&str>) -> Result<query::Query, ApiError> {
+    match archived_param(value)? {
+        writer::Archived::Exclude => {}
+        writer::Archived::Include => q.include_archived = true,
+        writer::Archived::Only => {
+            let only = query::Expr::Name(query::ARCHIVED.to_owned());
+            q.filter = Some(match q.filter.take() {
+                Some(e) => query::Expr::Binary(query::BinOp::And, Box::new(e), Box::new(only)),
+                None => only,
+            });
+        }
+    }
+    Ok(q)
+}
+
+/// An `archived` URL parameter: `exclude`, the default, `include` or `only`.
+pub(crate) fn archived_param(value: Option<&str>) -> Result<writer::Archived, ApiError> {
+    match value {
+        None => Ok(writer::Archived::Exclude),
+        Some(v) => writer::Archived::parse(v).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "`archived` is {v:?}: it must be exclude, include or only"
+            ))
+        }),
+    }
 }
 
 /// Check a query's syntax and return its canonical text and, when the builder can show it, its

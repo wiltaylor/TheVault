@@ -6,5 +6,6 @@
   title:   utf8
   created: utf8
   updated: utf8
+  archived: bool?
   @children("canvas", max = 1) canvases: list<Canvas>
 }

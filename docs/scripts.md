@@ -49,11 +49,12 @@ fn run() -> Result[string, string] {
 | `vault::get(id: string)` | `Result[Value, string]`: the note `{ id, type, version, note }` |
 | `vault::query(text: string)` | `Result[List[Value], string]`: every row of a query, as `{ id, type, title, fields }`. More than 10,000 rows is an error; add a `limit` or page |
 | `vault::query_page(text: string, size: int, cursor: string)` | `Result[Value, string]`: one page, `{ rows, total, next }`. Pass `""` for the first page and `next` for the one after; `next` is null on the last page. `size` is 1 to 1000 |
-| `vault::search(text: string, limit: int)` | `Result[List[Value], string]`: full-text search over every note, best match first, at most `limit` rows |
+| `vault::search(text: string, limit: int)` | `Result[List[Value], string]`: full-text search over every note that is not archived, best match first, at most `limit` rows |
+| `vault::search_archived(text: string, limit: int, archived: string)` | `Result[List[Value], string]`: `vault::search` with archived notes left out (`"exclude"`), kept (`"include"`) or searched alone (`"only"`) |
 | `vault::links(id: string)` | `Result[List[Value], string]`: the notes `id` links to, as `{ id, type, title, via, field }`. `via` is `field` for a reference field and `mention` for a `[[link]]` in text. `type` and `title` are null for a link to a missing note |
 | `vault::backlinks(id: string)` | `Result[List[Value], string]`: the notes that link to `id`, in the same form |
 
-The query language is in `docs/plans/thevault-prd/PRD.md`, Appendix B.
+The query language is in `docs/plans/thevault-prd/PRD.md`, Appendix B. A query leaves archived notes out unless it says `include archived` after its types or names `archived` in its `where`, as `from task where archived` does; see `docs/vault-format.md`, "Archived notes in queries".
 
 ```rust
 use vault
@@ -79,6 +80,8 @@ fn run() -> Result[int, string] {
 | `vault::append_blocks(id: string, field: string, blocks: Value, version: string)` | `Result[Value, string]`: append one content block, or a list of them, in their JSON form (`{ kind, fields, blocks }`) |
 | `vault::delete(id: string, version: string)` | `Result[Value, string]`: move the note to the trash |
 | `vault::restore(id: string)` | `Result[Value, string]`: take a note out of the trash |
+| `vault::archive(id: string)` | `Result[Value, string]`: archive the note as it is now. It stays readable and editable, but queries and searches leave it out unless they ask for archived notes |
+| `vault::unarchive(id: string)` | `Result[Value, string]`: take the note out of the archive |
 | `vault::daily(date: string)` | `Result[Value, string]`: the daily note for `YYYY-MM-DD`, created when there is none. `""` is today. The result has `created: bool` |
 
 ```rust
@@ -126,6 +129,32 @@ fn run() -> Result[string, string] {
 | `vault::types()` | `Result[List[Value], string]`: every type, as `{ name, label, plural, description, fields }`. Each field is `{ name, label, kind, required, multiple, computed }`, plus `taxonomy` for a taxonomy field |
 | `vault::taxonomies()` | `Result[List[Value], string]`: every taxonomy, as `{ name, label, description, allow_new, terms }`, where `terms` lists every term path |
 | `vault::add_term(taxonomy: string, path: string)` | `Result[Value, string]`: add a term to an open taxonomy (`allow_new = true`). Only the last name in the path may be new. Returns `{ taxonomy, path, added }`; adding a term that exists already changes nothing |
+
+### Notifying the user
+
+| Function | Returns |
+|----------|---------|
+| `vault::notify(title: string, body: string, note: string)` | `Result[Value, string]`: add a notification under the bell in the web app, as `{ id, title, body, note, source }`. Pass `""` for no body or no note. Clicking it opens `note` |
+
+The title is required and at most 200 characters, and the body at most 2000; the app shows the body's first two lines. A note that does not exist or is in the trash is an error. The notification's source is the run: `task:<name>` for a scheduled script and `handler:<type>.<event>` for a handler, such as `handler:invoice.after_create`. `notify` works in `after_*` handlers and scheduled scripts; a `before_*` handler or a migration gets an error, because it runs inside a write, which may be refused or be a dry run.
+
+```rust
+use vault
+
+fn run() -> Result[(), string] {
+    let page = vault::query_page("from task where !done && due < today()", 1, "")?
+    let overdue = page.get("total").unwrap().as_int().unwrap()
+    if overdue == 0 {
+        return Ok(())
+    }
+    let day = vault::daily("")?
+    let id = day.get("id").unwrap().as_string().unwrap()
+    vault::notify(fmt("{} tasks are overdue", overdue), "See today's note.", id)?
+    Ok(())
+}
+```
+
+A scheduled script that fails and has no retry left notifies the user itself, with a link to the task's editor; it need not notify about its own failure.
 
 ### Time and the log
 

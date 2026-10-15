@@ -11,13 +11,14 @@ use rusqlite::{Connection, params_from_iter};
 use schema::{FieldDef, FieldKind, Schema};
 use serde::Serialize;
 
-use crate::ast::{BinOp, Dir, Expr, From, Lit, Path, Query, UnOp};
+use crate::ast::{ARCHIVED, BinOp, Dir, Expr, From, Lit, Path, Query, UnOp};
 use crate::plan;
 use crate::print::path as path_text;
 use crate::value::{self, Eval, Key, V};
 
-/// Fields every note has, besides those its type declares.
-pub(crate) const BUILTINS: [&str; 5] = ["id", "type", "title", "created", "updated"];
+/// Fields every note has, besides those its type declares. `archived` is true for an archived
+/// note and false for any other.
+pub(crate) const BUILTINS: [&str; 6] = ["id", "type", "title", "created", "updated", "archived"];
 
 /// The most rows one page may hold.
 pub const MAX_PAGE: usize = 1000;
@@ -164,6 +165,11 @@ impl Note {
         })
     }
 
+    /// Whether the note is archived: its stored fields hold `archived = true`.
+    fn archived(&self) -> bool {
+        self.data.get(ARCHIVED) == Some(&serde_json::Value::Bool(true))
+    }
+
     /// A note with no fields, to evaluate an expression that reads none.
     pub(crate) fn empty() -> Note {
         Note {
@@ -188,13 +194,22 @@ pub(crate) struct Runner<'a> {
 
 /// Run a query and return one page of it. A query the planner can translate runs as SQL that
 /// reads only the page (D33); any other is evaluated note by note.
+///
+/// Archived notes are left out unless the query says `include archived` or its filter names
+/// `archived`, as `from * where archived` does.
 pub fn run(q: &Query, ctx: &Context<'_>, page: &PageRequest) -> Result<Page> {
     let types = check(q, ctx)?;
     let r = Runner::new(ctx)?;
     if let Some(text) = plain_search(q) {
         let only = matches!(q.from, From::Types(_)).then_some(types.as_slice());
-        return r.search_page(text, only, &types, &q.select, page);
+        let archived = if q.include_archived {
+            index::Archived::Include
+        } else {
+            index::Archived::Exclude
+        };
+        return r.search_page(text, only, archived, &types, &q.select, page);
     }
+    let q = &archive_rule(q);
     match plan::run(q, &types, &r, page)? {
         Some(p) => Ok(p),
         None => r.scan(q, &types, page),
@@ -206,7 +221,23 @@ pub fn run(q: &Query, ctx: &Context<'_>, page: &PageRequest) -> Result<Page> {
 #[doc(hidden)]
 pub fn run_scan(q: &Query, ctx: &Context<'_>, page: &PageRequest) -> Result<Page> {
     let types = check(q, ctx)?;
-    Runner::new(ctx)?.scan(q, &types, page)
+    Runner::new(ctx)?.scan(&archive_rule(q), &types, page)
+}
+
+/// `q` with the archive rule applied: a query that neither says `include archived` nor names
+/// `archived` in its filter gets `&& !archived` after its filter, so it leaves archived notes
+/// out.
+pub(crate) fn archive_rule(q: &Query) -> Query {
+    let mut q = q.clone();
+    if q.include_archived || q.filter.as_ref().is_some_and(Expr::names_archived) {
+        return q;
+    }
+    let not = Expr::Unary(UnOp::Not, Box::new(Expr::Name(ARCHIVED.to_owned())));
+    q.filter = Some(match q.filter.take() {
+        Some(e) => Expr::Binary(BinOp::And, Box::new(e), Box::new(not)),
+        None => not,
+    });
+    q
 }
 
 /// Whether [`run`] runs `q` as SQL rather than note by note. Tests use it to keep the planner
@@ -218,7 +249,7 @@ pub fn is_planned(q: &Query, ctx: &Context<'_>) -> Result<bool> {
         cursor: None,
         size: 1,
     };
-    Ok(plan::run(q, &types, &Runner::new(ctx)?, &first)?.is_some())
+    Ok(plan::run(&archive_rule(q), &types, &Runner::new(ctx)?, &first)?.is_some())
 }
 
 impl<'a> Runner<'a> {
@@ -517,10 +548,12 @@ impl Runner<'_> {
     /// A [`plain_search`] page: the page's hits from tantivy, among notes of `only` when given,
     /// by score then id as `run` orders them, and only those notes read from `index.db`. The
     /// cursor is the one `run` writes.
+    #[allow(clippy::too_many_arguments)]
     fn search_page(
         &self,
         text: &str,
         only: Option<&[String]>,
+        archived: index::Archived,
         types: &[String],
         select: &[Path],
         page: &PageRequest,
@@ -544,13 +577,10 @@ impl Runner<'_> {
         let size = page_size(page);
         let after = after.as_ref().map(|(s, id)| (*s, id.as_str()));
         // One more than the page, to know whether another page follows.
-        let found = match only {
-            Some(types) => self
-                .ctx
-                .index
-                .search_page_in(text, types, after, size + 1)?,
-            None => self.ctx.index.search_page(text, after, size + 1)?,
-        };
+        let found = self
+            .ctx
+            .index
+            .search_page_where(text, only, archived, after, size + 1)?;
         out.total = found.total;
         let page_hits = &found.hits[..found.hits.len().min(size)];
         for h in page_hits {
@@ -638,6 +668,7 @@ impl Runner<'_> {
             "title" => V::Str(note.title.clone()),
             "created" => opt_time(&note.created),
             "updated" => opt_time(&note.updated),
+            ARCHIVED => V::Bool(note.archived()),
             _ => match (self.field_def(note, name), note.data.get(name)) {
                 (Some(def), Some(raw)) => value::from_json(raw, &def.kind),
                 _ => V::Null,
@@ -948,6 +979,7 @@ impl Runner<'_> {
             "title" => text(&n.title),
             "created" => n.created.as_deref().map(text).unwrap_or_default(),
             "updated" => n.updated.as_deref().map(text).unwrap_or_default(),
+            ARCHIVED => serde_json::Value::Bool(n.archived()),
             _ => n.data.get(name).cloned().unwrap_or_default(),
         })
     }

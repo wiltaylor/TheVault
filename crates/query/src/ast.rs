@@ -5,12 +5,32 @@
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub from: From,
+    /// `include archived`: read archived notes as well as the rest. Without it, and with a
+    /// filter that does not name `archived`, archived notes are left out.
+    pub include_archived: bool,
     pub filter: Option<Expr>,
     pub search: Option<String>,
     pub sort: Vec<SortKey>,
     pub group_by: Option<Path>,
     pub select: Vec<Path>,
     pub limit: Option<u64>,
+}
+
+impl Query {
+    /// `from * search "text"`: full-text search over every note, best match first, reading
+    /// archived notes as `archived` says.
+    pub fn search_all(text: impl Into<String>, archived: index::Archived) -> Query {
+        Query {
+            from: From::All,
+            include_archived: archived == index::Archived::Include,
+            filter: (archived == index::Archived::Only).then(|| Expr::Name(ARCHIVED.to_owned())),
+            search: Some(text.into()),
+            sort: Vec::new(),
+            group_by: None,
+            select: Vec::new(),
+            limit: None,
+        }
+    }
 }
 
 /// The types a query reads.
@@ -119,6 +139,9 @@ impl BinOp {
     }
 }
 
+/// The built-in flag of an archived note.
+pub const ARCHIVED: &str = "archived";
+
 /// The host functions queries add to wscript, with their argument counts.
 pub const FUNCTIONS: [(&str, usize); 10] = [
     ("today", 0),
@@ -134,6 +157,21 @@ pub const FUNCTIONS: [(&str, usize); 10] = [
 ];
 
 impl Expr {
+    /// Whether the expression reads the `archived` flag of the note in scope: the bare name
+    /// `archived`, outside any closure that binds it. Such a filter decides for itself which
+    /// archived notes a query reads.
+    pub fn names_archived(&self) -> bool {
+        match self {
+            Expr::Name(n) => n == ARCHIVED,
+            Expr::Lit(_) | Expr::This => false,
+            // `x.archived` reads another note's flag, so only the base can name this note's.
+            Expr::Field(e, _) | Expr::Unary(_, e) => e.names_archived(),
+            Expr::Closure(params, e) => !params.iter().any(|p| p == ARCHIVED) && e.names_archived(),
+            Expr::Call(_, args) => args.iter().any(Expr::names_archived),
+            Expr::Binary(_, a, b) => a.names_archived() || b.names_archived(),
+        }
+    }
+
     /// Whether `this` appears anywhere in the expression.
     pub fn uses_this(&self) -> bool {
         match self {

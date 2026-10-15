@@ -224,7 +224,7 @@ fn doc_assets<'a>(doc: &'a Doc, out: &mut Vec<&'a str>) {
         }
     }
     for (name, v) in &doc.fields {
-        if !matches!(name.as_str(), "title" | "created" | "updated") {
+        if !matches!(name.as_str(), "title" | "created" | "updated" | "archived") {
             push(v, out);
         }
     }

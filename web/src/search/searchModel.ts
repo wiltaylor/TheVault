@@ -2,7 +2,7 @@
 // and becomes query-language text (PRD Appendix B) that runs through POST /api/query. Pure: no
 // signals, no DOM, so every operator is unit-tested.
 
-import type { FieldDef, TypeDef } from "../api";
+import type { ArchivedFilter, FieldDef, TypeDef } from "../api";
 
 export type SortKey = "relevance" | "updated" | "created" | "title";
 export type SortDir = "asc" | "desc";
@@ -60,9 +60,18 @@ export interface SearchState {
   sort: SortKey | null;
   /** Null for the sort's own default direction. */
   dir: SortDir | null;
+  /** Archived notes: left out (the default), included with the rest, or the only ones. */
+  archived: ArchivedFilter;
 }
 
-export const EMPTY: SearchState = { text: "", types: [], filters: [], sort: null, dir: null };
+export const EMPTY: SearchState = { text: "", types: [], filters: [], sort: null, dir: null, archived: "exclude" };
+
+/** The archived filter's choices, in menu order. */
+export const ARCHIVED_CHOICES: [ArchivedFilter, string][] = [
+  ["exclude", "Hide archived"],
+  ["include", "Include archived"],
+  ["only", "Only archived"],
+];
 
 /** Fields every note has. */
 export const BUILTIN_DATES: { name: string; label: string }[] = [
@@ -460,7 +469,11 @@ export function toQuery(s: SearchState, types: TypeDef[], offset: OffsetAt = bro
     if (c === null) continue;
     conds.push(guard && filter.owner ? all([`type == ${lit(filter.owner)}`, c]) : c);
   }
+  // Archived notes are left out unless asked for: `include archived` keeps them, a condition on
+  // `archived` reads nothing else.
+  if (s.archived === "only") conds.push("archived");
   let q = `from ${from.length ? from.join(", ") : "*"}`;
+  if (s.archived === "include") q += " include archived";
   if (conds.length) q += ` where ${all(conds)}`;
   // The last word matches as a prefix while it is being typed; a space after it says it is
   // complete, so one trailing space is kept.
@@ -471,9 +484,9 @@ export function toQuery(s: SearchState, types: TypeDef[], offset: OffsetAt = bro
   return q;
 }
 
-/** How many filters the page shows: the type filter counts once. */
+/** How many filters the page shows: the type filter counts once, and so does asking for archived notes. */
 export function filterCount(s: SearchState): number {
-  return (s.types.length ? 1 : 0) + s.filters.length;
+  return (s.types.length ? 1 : 0) + s.filters.length + (s.archived === "exclude" ? 0 : 1);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -511,13 +524,15 @@ function decodeFilter(section: Filter["section"], raw: string): Filter | null {
 
 /**
  * The query string of a search, without `?`: `q`, then `type`, `date` and `prop` once per type
- * or filter, then `sort` and `dir`. The default search is the empty string.
+ * or filter, then `archived` when archived notes are asked for, then `sort` and `dir`. The
+ * default search is the empty string.
  */
 export function encodeSearch(s: SearchState): string {
   const p: string[] = [];
   if (s.text) p.push(`q=${enc(s.text)}`);
   for (const t of s.types) p.push(`type=${enc(t)}`);
   for (const f of s.filters) p.push(`${f.section === "date" ? "date" : "prop"}=${encodeFilter(f)}`);
+  if (s.archived !== "exclude") p.push(`archived=${s.archived}`);
   if (s.sort) p.push(`sort=${s.sort}`);
   if (s.dir) p.push(`dir=${s.dir}`);
   return p.join("&");
@@ -525,7 +540,7 @@ export function encodeSearch(s: SearchState): string {
 
 /** A search from a query string, with or without `?`. Anything it cannot read is dropped. */
 export function decodeSearch(query: string): SearchState {
-  const out: SearchState = { text: "", types: [], filters: [], sort: null, dir: null };
+  const out: SearchState = { text: "", types: [], filters: [], sort: null, dir: null, archived: "exclude" };
   const qs = query.startsWith("?") ? query.slice(1) : query;
   for (const pair of qs.split("&")) {
     if (!pair) continue;
@@ -544,6 +559,7 @@ export function decodeSearch(query: string): SearchState {
     else if (key === "type" && value) out.types.push(value);
     else if (key === "sort" && SORTS.has(value as SortKey)) out.sort = value as SortKey;
     else if (key === "dir" && (value === "asc" || value === "desc")) out.dir = value;
+    else if (key === "archived" && (value === "include" || value === "only")) out.archived = value;
   }
   return out;
 }

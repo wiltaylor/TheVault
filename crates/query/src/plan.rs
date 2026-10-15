@@ -778,6 +778,7 @@ impl Planner<'_, '_> {
             "title" => Some(("n.title", Class::Text)),
             "created" => Some(("n.created_at", Class::Time)),
             "updated" => Some(("n.updated_at", Class::Time)),
+            "archived" => Some(("n.archived", Class::Bool)),
             _ => None,
         };
         if let Some((col, class)) = builtin {
@@ -958,7 +959,7 @@ impl Planner<'_, '_> {
                     }
                     // Never empty.
                     "id" | "type" => return Some(if neg { "1" } else { "0" }.to_owned()),
-                    "created" | "updated" => return None,
+                    "created" | "updated" | "archived" => return None,
                     _ => {}
                 }
                 let (blank, rows) = self.emptiness(n)?;
@@ -975,6 +976,9 @@ impl Planner<'_, '_> {
             Expr::Name(n) => match self.col(n)? {
                 Col::Field(field, Class::Bool, false) => {
                     Some(self.field_rows(e, &field, false, |t| format!("{t}num = 1"), neg))
+                }
+                Col::Builtin(col, Class::Bool) => {
+                    Some(format!("{col} = {}", if neg { 0 } else { 1 }))
                 }
                 _ => None,
             },
@@ -1094,6 +1098,9 @@ impl Planner<'_, '_> {
             return None;
         };
         match self.col(name)? {
+            // The evaluator orders a bool as a bool, which a column of 0 and 1 cannot follow
+            // into a cursor.
+            Col::Builtin(_, Class::Bool) => None,
             Col::Builtin(col, _) => Some(col.to_owned()),
             Col::Field(_, _, true) => None,
             Col::Field(field, class, false) => {

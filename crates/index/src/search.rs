@@ -10,14 +10,14 @@ use tantivy::directory::MmapDirectory;
 use tantivy::query::{
     BooleanQuery, ConstScoreQuery, EmptyQuery, Occur, Query, QueryParser, TermQuery, TermSetQuery,
 };
-use tantivy::schema::{FAST, Field, IndexRecordOption, STORED, STRING, Schema, TEXT};
+use tantivy::schema::{FAST, Field, INDEXED, IndexRecordOption, STORED, STRING, Schema, TEXT};
 use tantivy::{
     DocId, IndexReader, IndexWriter, ReloadPolicy, Score, Searcher, SegmentOrdinal, SegmentReader,
     TantivyError, Term, doc,
 };
 
 use crate::project::SearchDoc;
-use crate::{Result, io_err};
+use crate::{Archived, Result, io_err};
 
 /// Memory the writer may buffer before it flushes a segment.
 const WRITER_HEAP: usize = 50_000_000;
@@ -62,6 +62,8 @@ pub(crate) struct Search {
     type_name: Field,
     title: Field,
     body: Field,
+    /// `1` for an archived note, `0` for any other.
+    archived: Field,
 }
 
 impl Search {
@@ -75,6 +77,7 @@ impl Search {
         let type_name = b.add_text_field("type", STRING);
         let title = b.add_text_field("title", TEXT);
         let body = b.add_text_field("body", TEXT);
+        let archived = b.add_u64_field("archived", INDEXED);
         let schema = b.build();
         let mut reset = false;
         let index = match tantivy::Index::open_or_create(MmapDirectory::open(dir)?, schema.clone())
@@ -102,6 +105,7 @@ impl Search {
             type_name,
             title,
             body,
+            archived,
         };
         Ok((search, reset))
     }
@@ -118,6 +122,7 @@ impl Search {
                         self.type_name => d.type_name.as_str(),
                         self.title => d.title.as_str(),
                         self.body => d.body.as_str(),
+                        self.archived => u64::from(d.archived),
                     ))?;
                 }
                 Change::Delete(id) => {
@@ -165,8 +170,37 @@ impl Search {
         after: Option<(Score, &str)>,
         size: usize,
     ) -> Result<SearchPage> {
+        self.page_where(text, types, Archived::Include, after, size)
+    }
+
+    /// [`Search::page`] among the notes `archived` names.
+    pub fn page_where(
+        &self,
+        text: &str,
+        types: Option<&[String]>,
+        archived: Archived,
+        after: Option<(Score, &str)>,
+        size: usize,
+    ) -> Result<SearchPage> {
         let searcher = self.reader.searcher();
         let query = self.query(&searcher, text, types)?;
+        let flag = Term::from_field_u64(self.archived, 1);
+        let flag = || Box::new(TermQuery::new(flag.clone(), IndexRecordOption::Basic));
+        // Like a restriction to types, the archive state scores nothing.
+        let query: Box<dyn Query> = match archived {
+            Archived::Include => query,
+            Archived::Exclude => Box::new(BooleanQuery::new(vec![
+                (Occur::Must, query),
+                (Occur::MustNot, flag() as Box<dyn Query>),
+            ])),
+            Archived::Only => Box::new(BooleanQuery::new(vec![
+                (Occur::Must, query),
+                (
+                    Occur::Must,
+                    Box::new(ConstScoreQuery::new(flag(), 0.0)) as Box<dyn Query>,
+                ),
+            ])),
+        };
         let collector = TopHits {
             id: "id",
             size,

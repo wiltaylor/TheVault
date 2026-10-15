@@ -16,6 +16,8 @@ const T2: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2T2";
 const T3: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2T3";
 const T4: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2T4";
 const T5: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2T5";
+/// An archived task, which no query reads unless it asks for archived notes.
+const T6: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2T6";
 const B1: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2B1";
 const A1: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2A1";
 const A2: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2A2";
@@ -229,6 +231,15 @@ fn notes() -> Vec<(&'static str, &'static str, String)> {
             ),
         ),
         ("task", T5, note("Loose end", u, "done = false\n")),
+        (
+            "task",
+            T6,
+            note(
+                "Retired idea",
+                u,
+                "archived = true\ndone = false\nestimate = 2\n",
+            ),
+        ),
         (
             "book",
             B1,
@@ -627,6 +638,45 @@ fn table() -> Vec<(&'static str, Option<&'static str>, Vec<&'static str>, B)> {
             Model,
         ),
         ("from task limit 0", None, vec![], Model),
+        // archived notes
+        ("from task where archived", None, vec![T6], Model),
+        (
+            "from * where !archived && estimate == 2",
+            None,
+            vec![],
+            Model,
+        ),
+        (
+            "from task include archived where !done sort title",
+            None,
+            vec![T3, T5, T4, T6, T1],
+            Model,
+        ),
+        (
+            "from task where archived || done sort title",
+            None,
+            vec![T6, T2],
+            Model,
+        ),
+        ("from * search \"retired\"", None, vec![], Model),
+        (
+            "from * include archived search \"retired\"",
+            None,
+            vec![T6],
+            Model,
+        ),
+        (
+            "from task where archived search \"idea\"",
+            None,
+            vec![T6],
+            Model,
+        ),
+        (
+            "from task where any(tags, |archived| archived == \"docs\")",
+            None,
+            vec![T2],
+            Text,
+        ),
     ]
 }
 
@@ -955,7 +1005,13 @@ fn a_cursor_from_elsewhere_is_refused() {
 
 #[test]
 fn parse_errors_report_line_and_column() {
-    let cases: [(&str, usize, usize, &str); 12] = [
+    let cases: [(&str, usize, usize, &str); 13] = [
+        (
+            "from task include where done",
+            1,
+            19,
+            "expected `archived` after `include`",
+        ),
         ("where done", 1, 1, "expected `from`"),
         ("from task\nwhere done &&", 2, 14, "expected an expression"),
         ("from task sort due where done", 1, 20, "out of order"),
@@ -1009,6 +1065,15 @@ fn format_canonicalises_layout_comments_and_parentheses() {
         query::format(text).unwrap(),
         "from task where done && (a || b) sort due desc, title"
     );
+    assert_eq!(
+        query::format("from task  include   archived where done").unwrap(),
+        "from task include archived where done"
+    );
+    // `include` is a word only after the type list, so a field may still be called that.
+    assert_eq!(
+        query::format("from task where include sort include").unwrap(),
+        "from task where include sort include"
+    );
     let strings = "from task where title == \"say \\\"hi\\\" {{x}}\\n\"";
     assert_eq!(query::format(strings).unwrap(), strings);
     // Precedence is wscript's: comparisons share a tier and associate to the left.
@@ -1048,6 +1113,7 @@ fn a_model_built_in_the_ui_becomes_text() {
     use query::{Condition, Group, Item, Join, Op, Operand, Order, Sort};
     let model = Model {
         from: vec!["task".into()],
+        include_archived: false,
         filter: Some(Group {
             join: Join::All,
             items: vec![
@@ -1258,6 +1324,20 @@ fn edge_queries() -> Vec<(&'static str, Option<&'static str>)> {
         ("from task search \"im\"", None),
         ("from * search \"e\"", None),
         ("from * where done search \"nothing at all\"", None),
+        // archived notes
+        ("from task include archived", None),
+        ("from task include archived sort archived, title", None),
+        ("from task include archived group by archived", None),
+        ("from task where archived != false", None),
+        ("from task where archived == true && !done", None),
+        ("from * where !archived sort updated desc", None),
+        ("from task where empty(archived)", None),
+        ("from task include archived select archived, title", None),
+        ("from task where project.archived", None),
+        (
+            "from task include archived search \"idea\" sort title",
+            None,
+        ),
     ]
 }
 
@@ -1380,6 +1460,11 @@ fn the_benchmarked_query_shapes_run_as_sql() {
         "from task search \"importer\"",
         "from * where !done search \"tomatoes\" sort updated desc",
         "from book, article where !empty(topics) search \"event\" group by type",
+        // The archive rule and conditions on `archived` read the notes table's column.
+        "from task where archived sort updated desc",
+        "from * where archived || status == \"Inbox\"",
+        "from task include archived where !done sort title",
+        "from task where archived == true && estimate > 1",
     ] {
         let q = query::parse(text).unwrap();
         let ctx = f.ctx().with_this(P1);

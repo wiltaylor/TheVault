@@ -4,15 +4,16 @@
 
 import { A, useLocation, useNavigate } from "@solidjs/router";
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
-import { type FieldDef, type Row, type TypeDef, api } from "../api";
+import { type ArchivedFilter, type FieldDef, type Row, type TypeDef, api, isArchived } from "../api";
 import { copyText } from "../blocks/CodeBlock";
 import { ChipPicker, typeSuggestions } from "../components/ChipPicker";
 import { FieldInput, termOptions } from "../components/FieldInput";
 import { SearchIcon, TypeIcon } from "../components/Icon";
 import { createPagedRows } from "../components/pagedRows";
 import { VirtualList } from "../components/VirtualList";
-import { knowTitle, noteTitle } from "../editor/titles";
+import { knowArchived, knowTitle, noteTitle } from "../editor/titles";
 import {
+  ARCHIVED_CHOICES,
   BUILTIN_DATES,
   type Filter,
   type Op,
@@ -116,8 +117,11 @@ export function Search() {
 
   const { rows, total, error, loadUntil } = createPagedRows(
     async (cursor, size) => {
-      const page = await api.query(`${queryText()} select updated`, cursor, size);
-      for (const r of page.rows) knowTitle(r.id, r.title, r.type);
+      const page = await api.query(`${queryText()} select updated, archived`, cursor, size);
+      for (const r of page.rows) {
+        knowTitle(r.id, r.title, r.type);
+        knowArchived(r.id, isArchived(r.fields));
+      }
       return page;
     },
     queryText,
@@ -206,6 +210,26 @@ export function Search() {
           </Show>
         </div>
 
+        <div class="filter-row filter-archived" role="group" aria-label="Archived filter" data-filter="archived">
+          <label class="filter-field" for="search-archived">
+            Archived
+          </label>
+          <select
+            id="search-archived"
+            class="filter-value"
+            aria-label="Archived notes"
+            onChange={(e) => update({ ...draft(), archived: e.currentTarget.value as ArchivedFilter })}
+          >
+            <For each={ARCHIVED_CHOICES}>
+              {([value, text]) => (
+                <option value={value} selected={draft().archived === value}>
+                  {text}
+                </option>
+              )}
+            </For>
+          </select>
+        </div>
+
         <Index each={draft().filters}>
           {(f, i) => <FilterRow filter={f()} chosen={draft().types} onChange={(next, key) => setFilter(i, next, key)} />}
         </Index>
@@ -219,7 +243,11 @@ export function Search() {
             <FieldOptions groups={fieldGroups(types(), draft().types, filterable)} />
           </AddSelect>
           <Show when={count() > 0}>
-            <button type="button" class="link search-clear" onClick={() => update({ ...draft(), types: [], filters: [] })}>
+            <button
+              type="button"
+              class="link search-clear"
+              onClick={() => update({ ...draft(), types: [], filters: [], archived: "exclude" })}
+            >
               Clear filters
             </button>
           </Show>
@@ -300,6 +328,11 @@ function ResultRow(props: { row: Row }) {
         <TypeIcon name={t()?.icon} size={16} />
       </span>
       <span class="note-title">{props.row.title || "Untitled"}</span>
+      <Show when={isArchived(props.row.fields)}>
+        <span class="archived-chip" title="Archived">
+          Archived
+        </span>
+      </Show>
       <span class="search-row-meta">
         <span class="note-type">{t()?.label ?? props.row.type}</span>
         <time class="note-date" datetime={typeof updated() === "string" ? (updated() as string) : undefined}>

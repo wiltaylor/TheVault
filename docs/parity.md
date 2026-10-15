@@ -36,6 +36,8 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Conflict view: save my version | `components/ConflictView.tsx` | `GET /api/notes/{id}`, then `PUT` at the stored version | `vault get <id>`, then `vault put <id> --base <stored version>` (the CLI prints the 409 body) | |
 | Conflict view: keep the stored version | `ConflictView.tsx` | — | — | Client-side only |
 | Delete a note | `NoteView.tsx` | `DELETE /api/notes/{id}?base_version=` | `vault delete <id> --base <version>` | |
+| Archive or unarchive a note (title row button, banner, command palette, Archive page) | `NoteView.tsx`, `palette/actions.ts`, `pages/Archive.tsx` | `POST /api/notes/{id}/archive` or `/unarchive` with `?base_version=` | `vault archive <id> --base <version>`, `vault unarchive <id> --base <version>` | |
+| List archived notes (Archive page, Search's archived filter, a type's Show archived) | `pages/Archive.tsx`, `pages/Search.tsx`, `pages/TypeList.tsx` | `POST /api/query` with `where archived` or `include archived` | `vault list --archived only`, `vault query --archived include\|only`, `vault search --archived include\|only` | |
 | Reference picker and mention search | `components/FieldInput.tsx`, `editor/MentionPicker.tsx` | `GET /api/search`, or `POST /api/query` with `search "…"` | `vault search`, `vault query` | |
 | Show reference and mention titles | `editor/titles.ts` | `GET /api/notes/{id}` | `vault get <id>` | |
 | Choose an existing asset for an asset field | `FieldInput.tsx` | `GET /api/assets` | `vault asset list` | |
@@ -138,9 +140,21 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Create a token | `Access.tsx` | `POST /api/tokens` | `vault token create <name> --scope <scope>` | |
 | Revoke a token | `Access.tsx` | `DELETE /api/tokens/{name}` | `vault token revoke <name>` | |
 
+### Notifications
+
+| UI action | Where | API | CLI | Gap |
+|---|---|---|---|---|
+| Show the unread count on the bell, now, every 30 seconds and when the window comes back | `notifications/store.ts` | `GET /api/notifications?limit=1` | `vault notifications --unread` | |
+| Open the panel and page through notifications | `notifications/NotificationsPanel.tsx` | `GET /api/notifications?limit=&cursor=` | `vault notifications [--limit] [--cursor]` | |
+| Click a notification: mark it read and open its note or page | `NotificationsPanel.tsx` | `POST /api/notifications/{id}/read` | `vault notifications read <id>`, then `vault get <note>` | |
+| Mark all read | `NotificationsPanel.tsx` | `POST /api/notifications/read-all` | `vault notifications read --all` | |
+| Dismiss one (×) | `NotificationsPanel.tsx` | `DELETE /api/notifications/{id}` | `vault notifications dismiss <id>` | |
+| Clear read | `NotificationsPanel.tsx` | `DELETE /api/notifications` | `vault notifications clear` | |
+| Create a notification | none: scripts (`vault::notify`), agents and the server create them | `POST /api/notifications` | `vault notify <title> [--body] [--note] [--link]` | Explained: notifications are messages to the user, not something the user writes |
+
 ## 2. Every route in the endpoint listing
 
-The listing has 69 routes. `/api/test/clock` is left out of the listing on purpose: it exists only when a test build runs with `--test-clock` (S7).
+The listing has 77 routes. `/api/test/clock` is left out of the listing on purpose: it exists only when a test build runs with `--test-clock` (S7).
 
 | Route | CLI | UI | Note |
 |---|---|---|---|
@@ -158,6 +172,8 @@ The listing has 69 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/notes/{id}/history/{version}` | `vault get --version` | History | |
 | `GET /api/notes/{id}/graph` | `vault graph` | Right sidebar, Graph | |
 | `POST /api/notes/{id}/restore` | `vault restore` | History | |
+| `POST /api/notes/{id}/archive` | `vault archive` | Note archive button, palette, Archive page | |
+| `POST /api/notes/{id}/unarchive` | `vault unarchive` | Archived banner, palette, Archive page | |
 | `GET /api/notes/{id}/canvas/{name}` | `vault canvas get` | not used | Explained: the UI already holds the canvas in the note it opened |
 | `PUT /api/notes/{id}/canvas/{name}` | `vault canvas put` | not used | Explained: the UI saves canvases inside the note `PUT`, through the same writer |
 | `POST /api/batch` | `vault batch [--dry-run]` | not used | Agent and import path (D32). The PRD has no batch UI |
@@ -200,6 +216,12 @@ The listing has 69 routes. `/api/test/clock` is left out of the listing on purpo
 | `POST /api/assets` | `vault asset upload` | Image and file blocks, canvas | |
 | `GET /api/assets/{id}` | `vault asset get` | Images, downloads | |
 | `DELETE /api/assets/{id}` | `vault asset delete [--unlink]` | Assets | |
+| `GET /api/notifications` | `vault notifications [--unread]` | Bell badge and panel | |
+| `POST /api/notifications` | `vault notify` | not used | Scripts call `vault::notify`; the server notifies about failed scheduled scripts |
+| `DELETE /api/notifications` | `vault notifications clear` | Panel, Clear read | |
+| `POST /api/notifications/read-all` | `vault notifications read --all` | Panel, Mark all read | |
+| `POST /api/notifications/{id}/read` | `vault notifications read <id>` | Panel, clicking a notification | |
+| `DELETE /api/notifications/{id}` | `vault notifications dismiss <id>` | Panel, × | |
 | `GET /api/tokens` | `vault token list` | Access | |
 | `POST /api/tokens` | `vault token create` | Access | |
 | `DELETE /api/tokens/{name}` | `vault token revoke` | Access | |
@@ -211,6 +233,7 @@ The listing has 69 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/tasks/{name}` | `vault task get` | Tasks | |
 | `PUT /api/tasks/{name}` | `vault task put` | Tasks | |
 | `DELETE /api/tasks/{name}` | `vault task delete` | Tasks | |
+| `GET /api/cron` | none | Scheduled editor, schedule preview | Gap: no CLI command (noticed while adding notifications; not filed) |
 | `GET /api/tasks/{name}/runs` | `vault task history` | Tasks | |
 | `GET /api/tasks/{name}/runs/{id}` | `vault task show-run` | not used | The runs list already carries each run's log |
 | `POST /api/tasks/{name}/run` | `vault task run` | Tasks | |

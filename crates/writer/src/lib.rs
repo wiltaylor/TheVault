@@ -37,6 +37,7 @@ mod daily;
 mod defs;
 mod fleeting;
 mod note;
+mod notify;
 mod refs;
 mod terms;
 mod time;
@@ -57,8 +58,8 @@ pub use builtin::{BUILT_IN_TYPES, is_built_in_type};
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
 pub use defs::ScriptProblem;
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
-pub use index::{Graph, GraphEdge, GraphNode};
-pub use note::{Input, block_to_json, doc_to_json, value_to_json};
+pub use index::{Archived, Graph, GraphEdge, GraphNode};
+pub use note::{ARCHIVED, Input, block_to_json, doc_to_json, is_archived, value_to_json};
 pub use refs::Referrer;
 pub use schema::NoteEdit;
 pub use types::{Flagged, Migration, PlannedNote, TypeChange, TypePlan};
@@ -310,6 +311,8 @@ pub struct Summary {
     pub created: Option<String>,
     pub updated: Option<String>,
     pub flagged: bool,
+    /// Whether the note is archived.
+    pub archived: bool,
     pub version: String,
 }
 
@@ -638,7 +641,17 @@ impl Writer {
             .ok_or_else(|| Error::NotInTrash(id.to_owned()))?;
         let doc = Input::Wcl(entry.content.clone()).parse(&note_path(&entry.note_type, id))?;
         let created = created_of(&doc);
-        let mut change = self.prepare_put(&inner, id, &entry.note_type, doc, None, author)?;
+        // A note archived when it was deleted comes back archived.
+        let archived = note::is_archived(&doc);
+        let mut change = self.prepare_put_as(
+            &inner,
+            id,
+            &entry.note_type,
+            doc,
+            None,
+            author,
+            Some(archived),
+        )?;
         // The note existed before; it keeps the time it was first created.
         if let (Some(created), Some(doc)) = (created, change.doc.as_mut()) {
             set_field(doc, "created", created);
@@ -646,6 +659,71 @@ impl Writer {
         change.event = Event::Create;
         self.apply(inner, vec![change], &|| Ok(()), author)
             .map(first)
+    }
+
+    /// Archive note `id`, or take it out of the archive, as a new version. The note must be at
+    /// `base`. The change is an update like any other: it is recorded in the history, stamps
+    /// `updated` and runs the type's update handlers. A note already in the state asked for is
+    /// left as it is, and its current version returned.
+    pub fn set_archived(
+        &self,
+        id: &str,
+        archived: bool,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
+        let _w = self.write_lock();
+        let inner = self.lock();
+        let (type_name, old) = self.existing(id)?;
+        self.check_base(id, &type_name, &old, base)?;
+        let doc = Input::Wcl(old.clone()).parse(&note_path(&type_name, id))?;
+        if note::is_archived(&doc) == archived {
+            let version = self.head(id, &type_name, &old)?;
+            return Ok(Saved {
+                id: id.to_owned(),
+                type_name,
+                event: Event::Update,
+                version,
+                wcl: old,
+                also: Vec::new(),
+            });
+        }
+        let change = self.prepare_put_as(
+            &inner,
+            id,
+            &type_name,
+            doc,
+            Some(&old),
+            author,
+            Some(archived),
+        )?;
+        let check = || self.check_base(id, &type_name, &old, base);
+        self.apply(inner, vec![change], &check, author).map(first)
+    }
+
+    /// [`Writer::set_archived`] inside the write in progress, for a `before_*` handler. See
+    /// [`Writer::stage_create`].
+    pub fn stage_set_archived(
+        &self,
+        id: &str,
+        archived: bool,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<NoteChange> {
+        self.check_staging()?;
+        let (type_name, old) = self.existing(id)?;
+        self.check_base(id, &type_name, &old, base)?;
+        let doc = Input::Wcl(old.clone()).parse(&note_path(&type_name, id))?;
+        let change = self.prepare_put_as(
+            &self.lock(),
+            id,
+            &type_name,
+            doc,
+            Some(&old),
+            author,
+            Some(archived),
+        )?;
+        self.stage(change, author)
     }
 
     /// Create a note of `type_name` inside the write in progress, for a `before_*` handler
@@ -782,15 +860,21 @@ impl Writer {
         Ok(rows.next().transpose().map_err(index::Error::from)?)
     }
 
-    /// Every indexed note, or every note of one type, oldest first.
+    /// Every indexed note that is not archived, or every such note of one type, oldest first.
     pub fn list(&self, type_name: Option<&str>) -> Result<Vec<Summary>> {
+        self.list_with(type_name, Archived::Exclude)
+    }
+
+    /// [`Writer::list`], with archived notes left out, kept or the only ones listed.
+    pub fn list_with(&self, type_name: Option<&str>, archived: Archived) -> Result<Vec<Summary>> {
         let inner = self.lock();
         let conn = inner.index.connection();
         let mut stmt = conn
-            .prepare(
-                "SELECT id, type, title, created, updated, flagged FROM notes
-                 WHERE ?1 IS NULL OR type = ?1 ORDER BY id",
-            )
+            .prepare(&format!(
+                "SELECT id, type, title, created, updated, flagged, archived FROM notes
+                 WHERE (?1 IS NULL OR type = ?1) AND {} ORDER BY id",
+                archived.sql("archived")
+            ))
             .map_err(index::Error::from)?;
         let rows = stmt
             .query_map([type_name], |r| {
@@ -801,12 +885,13 @@ impl Writer {
                     r.get::<_, Option<String>>(3)?,
                     r.get::<_, Option<String>>(4)?,
                     r.get::<_, bool>(5)?,
+                    r.get::<_, bool>(6)?,
                 ))
             })
             .map_err(index::Error::from)?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, type_name, title, created, updated, flagged) =
+            let (id, type_name, title, created, updated, flagged, archived) =
                 row.map_err(index::Error::from)?;
             let wcl = self.vault.read_text(&note_path(&type_name, &id))?;
             let version = self.head(&id, &type_name, &wcl)?;
@@ -817,6 +902,7 @@ impl Writer {
                 created,
                 updated,
                 flagged,
+                archived,
                 version,
             });
         }
@@ -924,8 +1010,24 @@ impl Writer {
     }
 
     /// Steps 3 and the canonical layout: arrange the submitted doc, stamp `created` and
-    /// `updated`, and validate it. `old` is the note's current text for an update.
+    /// `updated`, and validate it. `old` is the note's current text for an update. The note keeps
+    /// the archived state it has: a client cannot archive a note by writing it.
     fn prepare_put(
+        &self,
+        inner: &Inner,
+        id: &str,
+        type_name: &str,
+        doc: Doc,
+        old: Option<&str>,
+        author: &Author,
+    ) -> Result<NoteChange> {
+        self.prepare_put_as(inner, id, type_name, doc, old, author, None)
+    }
+
+    /// [`Writer::prepare_put`] that sets the note's archived state to `archived`, or keeps the
+    /// state the note has when `None`. A new note is not archived.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_put_as(
         &self,
         inner: &Inner,
         id: &str,
@@ -933,6 +1035,7 @@ impl Writer {
         mut doc: Doc,
         old: Option<&str>,
         author: &Author,
+        archived: Option<bool>,
     ) -> Result<NoteChange> {
         let ty = inner
             .schema
@@ -961,6 +1064,8 @@ impl Writer {
                 }
             }
         }
+        let archived = archived.unwrap_or_else(|| old_doc.as_ref().is_some_and(note::is_archived));
+        note::set_archived(&mut doc, archived);
         let doc = note::arrange(ty, doc, &created, &now);
         Ok(NoteChange {
             id: id.to_owned(),
@@ -1079,6 +1184,21 @@ impl Writer {
             Some((schema, taxonomies)) => (Some(schema), [extra_files, taxonomies].concat()),
             None => (None, extra_files),
         };
+        // A change of archived state always gets a version of its own, so the history shows it
+        // even when the same session saved the note a moment before.
+        let mut flips = HashSet::new();
+        for r in &rendered {
+            if let (Event::Update, Some((doc, _))) = (r.change.event, &r.doc) {
+                let path = note_path(&r.change.type_name, &r.change.id);
+                let was = self
+                    .vault
+                    .read_text(&path)
+                    .is_ok_and(|t| t.lines().any(|l| l == "archived = true"));
+                if was != note::is_archived(doc) {
+                    flips.insert(r.change.id.clone());
+                }
+            }
+        }
         files.reserve(rendered.len());
         for r in &rendered {
             let path = note_path(&r.change.type_name, &r.change.id);
@@ -1104,7 +1224,12 @@ impl Writer {
             let by = authors.get(&id).unwrap_or(author);
             match (r.text, r.doc) {
                 (Some(text), Some((doc, report))) => {
-                    let v = self.state.record_version(&id, &type_name, by, &text)?;
+                    let v = if flips.contains(&id) {
+                        self.state
+                            .record_distinct_version(&id, &type_name, by, &text)?
+                    } else {
+                        self.state.record_version(&id, &type_name, by, &text)?
+                    };
                     updates.push(Update::Put {
                         id: id.clone(),
                         type_name: type_name.clone(),
@@ -1178,8 +1303,9 @@ impl Writer {
     }
 
     /// Run the `before_*` handlers of one change. A note a handler changed keeps its `created`
-    /// and `updated` times and is put back in canonical order.
+    /// and `updated` times and its archived state, and is put back in canonical order.
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
+        let archived = change.doc.as_ref().is_some_and(note::is_archived);
         let stamps = change.doc.as_ref().map(|d| {
             (
                 created_of(d),
@@ -1196,9 +1322,10 @@ impl Writer {
         let Some((Some(created), Some(updated))) = stamps else {
             return Ok(());
         };
-        let Some(doc) = change.doc.take() else {
+        let Some(mut doc) = change.doc.take() else {
             return Ok(());
         };
+        note::set_archived(&mut doc, archived);
         let inner = self.lock();
         let ty = inner
             .schema

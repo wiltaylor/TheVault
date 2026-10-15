@@ -35,6 +35,24 @@ fn today(now_ms: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Who a notification from the run in progress is from: `task:<name>` for a scheduled script,
+/// `handler:<type>.<event>` for a handler, `script:<name>` otherwise.
+fn notify_source() -> String {
+    crate::current_job(|j| {
+        if let Some(state::Author::Task(task)) = &j.author {
+            return format!("task:{task}");
+        }
+        let note = j.args.first();
+        let text = |k: &str| note.and_then(|n| n.get(k)).and_then(Json::as_str);
+        match (j.kind, text("type"), text("event")) {
+            (crate::Kind::Task, _, _) => format!("task:{}", j.name),
+            (_, Some(t), Some(e)) => format!("handler:{t}.{e}"),
+            _ => format!("script:{}", j.name),
+        }
+    })
+    .unwrap_or_else(|| "script".to_owned())
+}
+
 /// Paragraph blocks for `text`: one per run of text between blank lines.
 fn paragraphs(text: &str) -> Vec<Json> {
     text.replace("\r\n", "\n")
@@ -83,7 +101,21 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
         ["text", "limit"],
         move |text: String, limit: i64| -> Reply<Vec<DynValue>> {
             Fault(host_call(|_, _| {
-                vv.search(&text, size(limit)).map(to_dyn_list)
+                vv.search(&text, size(limit), writer::Archived::Exclude)
+                    .map(to_dyn_list)
+            }))
+        },
+    );
+    let vv = v.clone();
+    m.fn_named(
+        "search_archived",
+        ["text", "limit", "archived"],
+        move |text: String, limit: i64, archived: String| -> Reply<Vec<DynValue>> {
+            Fault(host_call(|_, _| {
+                let mode = writer::Archived::parse(&archived).ok_or_else(|| {
+                    format!("archived is {archived:?}: it must be exclude, include or only")
+                })?;
+                vv.search(&text, size(limit), mode).map(to_dyn_list)
             }))
         },
     );
@@ -164,6 +196,18 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
     let vv = v.clone();
     m.fn_named("restore", ["id"], move |id: String| -> Reply<DynValue> {
         Fault(host_call(|a, _| vv.restore(&id, a).map(convert::to_dyn)))
+    });
+    let vv = v.clone();
+    m.fn_named("archive", ["id"], move |id: String| -> Reply<DynValue> {
+        Fault(host_call(|a, _| {
+            vv.set_archived(&id, true, a).map(convert::to_dyn)
+        }))
+    });
+    let vv = v.clone();
+    m.fn_named("unarchive", ["id"], move |id: String| -> Reply<DynValue> {
+        Fault(host_call(|a, _| {
+            vv.set_archived(&id, false, a).map(convert::to_dyn)
+        }))
     });
     let vv = v.clone();
     m.fn_named("links", ["id"], move |id: String| -> Reply<Vec<DynValue>> {
@@ -256,6 +300,17 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
             vv.daily(&date, a).map(convert::to_dyn)
         }))
     });
+    let vv = v.clone();
+    m.fn_named(
+        "notify",
+        ["title", "body", "note"],
+        move |title: String, body: String, note: String| -> Reply<DynValue> {
+            Fault(host_call(|_, _| {
+                vv.notify(&notify_source(), &title, &body, &note)
+                    .map(convert::to_dyn)
+            }))
+        },
+    );
     let vv = v.clone();
     m.fn_("today", move || -> String { today(vv.now_ms()) });
     m.fn_("now", move || -> i64 { v.now_ms() });

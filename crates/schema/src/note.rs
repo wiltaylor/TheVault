@@ -80,6 +80,14 @@ pub(crate) fn validate(
                     "must be a UTC datetime such as \"2026-10-12T09:15:00Z\"",
                 ),
             },
+            "archived" => {
+                if !matches!(value, Value::Bool(_)) {
+                    c.fail(
+                        name,
+                        format!("must be true or false, not {}", value.describe()),
+                    );
+                }
+            }
             _ => match ty.field(name) {
                 Some(f) if f.kind.is_compound() => c.fail(
                     name,

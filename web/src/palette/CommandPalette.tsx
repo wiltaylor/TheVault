@@ -4,16 +4,37 @@
 
 import { For, type JSX, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { type Row, api } from "../api";
-import { CalendarIcon, CaptureIcon, GearIcon, InboxIcon, SearchIcon, TrashIcon, TypeIcon } from "../components/Icon";
-import { knowTitle } from "../editor/titles";
+import { activeNote } from "../archive";
+import {
+  ArchiveIcon,
+  CalendarIcon,
+  CaptureIcon,
+  GearIcon,
+  InboxIcon,
+  SearchIcon,
+  TrashIcon,
+  TypeIcon,
+  UnarchiveIcon,
+} from "../components/Icon";
+import { knowTitle, noteArchived } from "../editor/titles";
 import { typeDef, types } from "../session";
 import { theme } from "../theme";
 import { openInBackground } from "../workspace/events";
 import * as M from "../workspace/model";
 import { scrollPaneTop } from "../workspace/pane";
 import { navigatePane, workspace } from "../workspace/store";
-import { type Action, type Glyph, generalActions, typeActions } from "./actions";
-import { type NoteHit, type RankedNote, notesQuery, parseInput, rankActions, rankNotes, resolveType, segments } from "./model";
+import { type Action, type Glyph, generalActions, noteActions, typeActions } from "./actions";
+import {
+  type NoteHit,
+  type RankedNote,
+  notesQuery,
+  parseInput,
+  rankActions,
+  rankNotes,
+  resolveType,
+  segments,
+  withoutArchived,
+} from "./model";
 import { recents, recordRecent } from "./recents";
 import { closePalette } from "./store";
 import "./palette.css";
@@ -75,7 +96,11 @@ export function CommandPalette() {
     if (p.mode === "type") return filterType() ? notesQuery(p.text, filterType()!.name) : null;
     return notesQuery(p.text, null);
   });
-  const actions = createMemo(() => [...generalActions({ phone, dark: theme() === "dark" }), ...typeActions(types())]);
+  const actions = createMemo(() => [
+    ...noteActions(activeNote()),
+    ...generalActions({ phone, dark: theme() === "dark" }),
+    ...typeActions(types()),
+  ]);
 
   // The notes search: debounced, and a newer query cancels the one in flight.
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -110,7 +135,11 @@ export function CommandPalette() {
 
   const sections = createMemo((): Section[] => {
     const p = parsed();
-    const recent = recents().filter((r) => r.title);
+    // Recent notes the user has since archived are left out, as the notes search leaves them out.
+    const recent = withoutArchived(
+      recents().filter((r) => r.title),
+      noteArchived,
+    );
     const out: Section[] = [];
     const noteItems = (notes: RankedNote[], section: string): Item[] =>
       notes.map((note) => ({ kind: "note", key: `note:${note.id}`, section, note }));
@@ -487,6 +516,8 @@ const GLYPHS: Partial<Record<Glyph, () => JSX.Element>> = {
   calendar: CalendarIcon,
   search: SearchIcon,
   trash: TrashIcon,
+  archive: ArchiveIcon,
+  unarchive: UnarchiveIcon,
   gear: GearIcon,
   files: () => (
     <Svg>

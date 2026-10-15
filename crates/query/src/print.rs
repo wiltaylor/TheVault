@@ -12,6 +12,9 @@ impl Display for Query {
             From::All => f.write_str("*")?,
             From::Types(t) => f.write_str(&t.join(", "))?,
         }
+        if self.include_archived {
+            f.write_str(" include archived")?;
+        }
         if let Some(e) = &self.filter {
             write!(f, " where {e}")?;
         }

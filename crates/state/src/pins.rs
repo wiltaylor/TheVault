@@ -542,7 +542,7 @@ mod tests {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, crate::SCHEMA_VERSION);
         let old: bool = conn
             .query_row(
                 "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'pins')",

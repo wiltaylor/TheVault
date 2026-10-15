@@ -2,6 +2,7 @@
 
 import { Navigate, Route } from "@solidjs/router";
 import { Secrets, Tokens } from "./pages/Access";
+import { Archive } from "./pages/Archive";
 import { Assets } from "./pages/Assets";
 import { DailyNotes } from "./pages/DailyNotes";
 import { Inbox } from "./pages/Inbox";
@@ -54,6 +55,7 @@ export function paneRoutes() {
         <Route path="/tokens" component={Tokens} />
       </Route>
       <Route path="/trash" component={Trash} />
+      <Route path="/archive" component={Archive} />
       <Route path="/search" component={Search} />
       <Route path="/inbox" component={Inbox} />
       <Route path="*" component={() => <p class="error">There is no page here.</p>} />

@@ -26,7 +26,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/schema",
         "Every type with its fields, kinds, relationships, templates and handlers, and every taxonomy",
     ),
-    ("GET", "/api/notes", "List notes, optionally of one ?type="),
+    (
+        "GET",
+        "/api/notes",
+        "List notes, optionally of one ?type=; archived notes only with ?archived=include or only",
+    ),
     ("POST", "/api/notes", "Create a note from WCL or JSON"),
     ("GET", "/api/notes/{id}", "Read a note as JSON or WCL"),
     (
@@ -54,6 +58,16 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "POST",
         "/api/notes/{id}/restore",
         "Write an earlier version of a note back as a new version",
+    ),
+    (
+        "POST",
+        "/api/notes/{id}/archive",
+        "Archive a note at its base version, as a new version",
+    ),
+    (
+        "POST",
+        "/api/notes/{id}/unarchive",
+        "Take a note out of the archive at its base version, as a new version",
     ),
     (
         "GET",
@@ -91,7 +105,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/query/text",
         "Turn a builder model into query text",
     ),
-    ("GET", "/api/search", "Full-text search, a page at a time"),
+    (
+        "GET",
+        "/api/search",
+        "Full-text search, a page at a time; archived notes only with ?archived=include or only",
+    ),
     ("GET", "/api/trash", "Every note in the trash"),
     (
         "POST",
@@ -224,6 +242,36 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "POST",
         "/api/pins/move",
         "Move a pinned note or folder: {id, parent, index}; a move into itself is a 409",
+    ),
+    (
+        "GET",
+        "/api/notifications",
+        "Notifications, newest first (?unread=true, ?limit=, ?cursor=), with the unread count",
+    ),
+    (
+        "POST",
+        "/api/notifications",
+        "Notify the user: {title, body?, note?, url?}; a missing or trashed note is a 400",
+    ),
+    (
+        "DELETE",
+        "/api/notifications",
+        "Remove every read notification",
+    ),
+    (
+        "POST",
+        "/api/notifications/read-all",
+        "Mark every notification read",
+    ),
+    (
+        "POST",
+        "/api/notifications/{id}/read",
+        "Mark one notification read",
+    ),
+    (
+        "DELETE",
+        "/api/notifications/{id}",
+        "Dismiss one notification, read or not",
     ),
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),

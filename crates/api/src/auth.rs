@@ -32,10 +32,11 @@ pub const SESSION_COOKIE: &str = "tv_session";
 /// How long a session lasts after login.
 const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// Paths whose non-read requests need `write`: notes and assets, and batches and upserts of notes
-/// (D11). Any other change needs `admin`, so a new endpoint is admin-only until it is listed here.
-const WRITE_PATHS: [&str; 7] = [
+/// Paths whose non-read requests need `write`: notes and assets, batches and upserts of notes,
+/// and notifications (D11). Any other change needs `admin`, so a new endpoint is admin-only until it is listed here.
+const WRITE_PATHS: [&str; 8] = [
     "/api/notes",
+    "/api/notifications",
     "/api/daily",
     "/api/pins",
     "/api/trash",
@@ -300,6 +301,20 @@ mod tests {
             (Method::DELETE, "/api/pins/folders/x", Some(Scope::Write)),
             (Method::POST, "/api/pins/move", Some(Scope::Write)),
             (Method::POST, "/api/pinsx", Some(Scope::Admin)),
+            (Method::GET, "/api/notifications", Some(Scope::Read)),
+            (Method::POST, "/api/notifications", Some(Scope::Write)),
+            (
+                Method::POST,
+                "/api/notifications/x/read",
+                Some(Scope::Write),
+            ),
+            (
+                Method::POST,
+                "/api/notifications/read-all",
+                Some(Scope::Write),
+            ),
+            (Method::DELETE, "/api/notifications/x", Some(Scope::Write)),
+            (Method::DELETE, "/api/notifications", Some(Scope::Write)),
             (Method::POST, "/api/notesx", Some(Scope::Admin)),
             (Method::GET, "/api/types/task", Some(Scope::Read)),
             (Method::PUT, "/api/types/task", Some(Scope::Admin)),

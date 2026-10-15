@@ -23,6 +23,14 @@ pub struct TypeQuery {
 }
 
 #[derive(Deserialize)]
+pub struct ListQuery {
+    #[serde(rename = "type")]
+    type_name: Option<String>,
+    /// `exclude` (the default), `include` or `only`.
+    archived: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct BaseQuery {
     base_version: Option<String>,
 }
@@ -191,14 +199,15 @@ fn saved_response(status: StatusCode, headers: &HeaderMap, s: Saved) -> Response
     )
 }
 
-pub async fn list(State(w): Shared, Query(q): Query<TypeQuery>) -> Result<Json<Value>, ApiError> {
+pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
+    let archived = crate::query::archived_param(q.archived.as_deref())?;
     let notes = blocking(w, move |w| {
         if let Some(t) = &q.type_name
             && w.schema().type_def(t).is_none()
         {
             return Err(writer::Error::UnknownType(t.clone()));
         }
-        w.list(q.type_name.as_deref())
+        w.list_with(q.type_name.as_deref(), archived)
     })
     .await?;
     let notes: Vec<Value> = notes
@@ -211,6 +220,7 @@ pub async fn list(State(w): Shared, Query(q): Query<TypeQuery>) -> Result<Json<V
                 "created": n.created,
                 "updated": n.updated,
                 "flagged": n.flagged,
+                "archived": n.archived,
                 "version": n.version,
             })
         })
@@ -280,6 +290,44 @@ pub async fn delete(
 ) -> Result<Response, ApiError> {
     let base = q.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| w.delete(&id, base.as_deref(), &author)).await?;
+    Ok(saved_response(StatusCode::OK, &headers, saved))
+}
+
+/// `POST /api/notes/{id}/archive`: archive a note at its base version, as a new version.
+pub async fn archive(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(id): Path<String>,
+    Query(q): Query<BaseQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    set_archived(w, author, id, q, headers, true).await
+}
+
+/// `POST /api/notes/{id}/unarchive`: take a note out of the archive at its base version.
+pub async fn unarchive(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(id): Path<String>,
+    Query(q): Query<BaseQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    set_archived(w, author, id, q, headers, false).await
+}
+
+async fn set_archived(
+    w: Arc<Writer>,
+    author: Author,
+    id: String,
+    q: BaseQuery,
+    headers: HeaderMap,
+    archived: bool,
+) -> Result<Response, ApiError> {
+    let base = q.base_version.or_else(|| if_match(&headers));
+    let saved = blocking(w, move |w| {
+        w.set_archived(&id, archived, base.as_deref(), &author)
+    })
+    .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 

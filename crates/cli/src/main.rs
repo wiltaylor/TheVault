@@ -98,10 +98,12 @@ enum Command {
     /// Every type with its fields, kinds, relationships, templates and handlers, and every
     /// taxonomy.
     Schema,
-    /// List notes, optionally of one type.
+    /// List notes, optionally of one type. Archived notes are left out unless --archived asks.
     List {
         #[arg(long = "type")]
         type_name: Option<String>,
+        #[command(flatten)]
+        archived: ArchivedArg,
     },
     /// Read a note: its canonical WCL, its JSON form and its version.
     Get {
@@ -126,6 +128,19 @@ enum Command {
     },
     /// Delete a note, moving it to the trash.
     Delete {
+        id: String,
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// Archive a note: it stays readable and editable, but lists, queries and searches leave it
+    /// out unless they ask for archived notes.
+    Archive {
+        id: String,
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// Take a note out of the archive.
+    Unarchive {
         id: String,
         #[arg(long)]
         base: Option<String>,
@@ -178,6 +193,8 @@ enum Command {
         #[arg(long)]
         this: Option<String>,
         #[command(flatten)]
+        archived: ArchivedArg,
+        #[command(flatten)]
         page: Paging,
     },
     /// Turn query text into the visual builder's model.
@@ -194,6 +211,8 @@ enum Command {
     Search {
         text: String,
         #[command(flatten)]
+        archived: ArchivedArg,
+        #[command(flatten)]
         page: Paging,
     },
     /// Notes holding data their type no longer describes.
@@ -207,6 +226,24 @@ enum Command {
     /// Notes pinned to the web sidebar.
     #[command(subcommand)]
     Pin(Pin),
+    /// Notify the user: add a notification under the web app's bell, optionally opening a note
+    /// or a page of the app when clicked.
+    Notify {
+        /// What to tell the user, in at most 200 characters.
+        title: String,
+        /// More detail, in at most 2000 characters. The app shows the first two lines.
+        #[arg(long)]
+        body: Option<String>,
+        /// The note the notification opens.
+        #[arg(long)]
+        note: Option<String>,
+        /// The page of the app it opens instead, such as /settings/scheduled/digest. (`--url`
+        /// is the server's address.)
+        #[arg(long, conflicts_with = "note")]
+        link: Option<String>,
+    },
+    /// The user's notifications, newest first, with the unread count.
+    Notifications(Notifications),
     /// Uploaded files.
     #[command(subcommand)]
     Asset(Asset),
@@ -281,6 +318,14 @@ struct NoteInput {
 }
 
 #[derive(Args)]
+struct ArchivedArg {
+    /// Archived notes: `include` them with the rest, or list `only` them. Left out, they are
+    /// left out.
+    #[arg(long, value_parser = ["exclude", "include", "only"])]
+    archived: Option<String>,
+}
+
+#[derive(Args)]
 struct Paging {
     /// The cursor of the page to fetch.
     #[arg(long)]
@@ -330,6 +375,45 @@ enum Pin {
         #[arg(long)]
         index: Option<usize>,
     },
+}
+
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
+struct Notifications {
+    #[command(subcommand)]
+    action: Option<NotificationAction>,
+    #[command(flatten)]
+    list: NotificationList,
+}
+
+#[derive(Args)]
+struct NotificationList {
+    /// Only the unread ones.
+    #[arg(long)]
+    unread: bool,
+    /// The most to return; the server's default is 50.
+    #[arg(long)]
+    limit: Option<u32>,
+    /// The `next` of the page before.
+    #[arg(long)]
+    cursor: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum NotificationAction {
+    /// The user's notifications, newest first, with the unread count.
+    List(NotificationList),
+    /// Mark one notification read, or every one with --all.
+    Read {
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Dismiss one notification, read or not.
+    Dismiss { id: String },
+    /// Remove every read notification.
+    Clear,
 }
 
 #[derive(Subcommand)]
@@ -569,9 +653,31 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
     match command {
         Command::Health => api.get(&["api", "health"]),
         Command::Schema => api.get(&["api", "schema"]),
-        Command::List { type_name } => {
-            let query: Vec<_> = type_name.map(|t| ("type", t)).into_iter().collect();
+        Command::List {
+            type_name,
+            archived,
+        } => {
+            let mut query: Vec<_> = type_name.map(|t| ("type", t)).into_iter().collect();
+            query.extend(archived.archived.map(|a| ("archived", a)));
             api.call(Method::GET, &["api", "notes"], &query, Body::None)
+        }
+        Command::Archive { id, base } => {
+            let query: Vec<_> = base.map(|b| ("base_version", b)).into_iter().collect();
+            api.call(
+                Method::POST,
+                &["api", "notes", &id, "archive"],
+                &query,
+                Body::None,
+            )
+        }
+        Command::Unarchive { id, base } => {
+            let query: Vec<_> = base.map(|b| ("base_version", b)).into_iter().collect();
+            api.call(
+                Method::POST,
+                &["api", "notes", &id, "unarchive"],
+                &query,
+                Body::None,
+            )
         }
         Command::Get { id, version } => match version {
             Some(v) => api.get(&["api", "notes", &id, "history", &v]),
@@ -659,10 +765,21 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
             }
             api.post(&["api", "upsert"], Value::Object(body))
         }
-        Command::Query { query, this, page } => page.fetch(|cursor, size| {
+        Command::Query {
+            query,
+            this,
+            archived,
+            page,
+        } => page.fetch(|cursor, size| {
             api.post(
                 &["api", "query"],
-                json!({ "query": query, "this": this, "cursor": cursor, "page_size": size }),
+                json!({
+                    "query": query,
+                    "this": this,
+                    "archived": archived.archived,
+                    "cursor": cursor,
+                    "page_size": size,
+                }),
             )
         }),
         Command::QueryParse { query } => {
@@ -677,8 +794,13 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
             };
             api.post(&["api", "query", "text"], json!({ "model": model }))
         }
-        Command::Search { text, page } => page.fetch(|cursor, size| {
+        Command::Search {
+            text,
+            archived,
+            page,
+        } => page.fetch(|cursor, size| {
             let mut query = vec![("q", text.clone())];
+            query.extend(archived.archived.clone().map(|a| ("archived", a)));
             query.extend(cursor.map(|c| ("cursor", c)));
             query.extend(size.map(|s| ("page_size", s.to_string())));
             api.call(Method::GET, &["api", "search"], &query, Body::None)
@@ -728,6 +850,16 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
             &[],
             Body::Json(json!({ "id": id, "parent": parent, "index": index })),
         ),
+        Command::Notify {
+            title,
+            body,
+            note,
+            link,
+        } => api.post(
+            &["api", "notifications"],
+            json!({ "title": title, "body": body, "note": note, "url": link }),
+        ),
+        Command::Notifications(n) => notifications(api, n),
         Command::Asset(a) => asset(api, a),
         Command::Type(t) => type_cmd(api, t),
         Command::Template(t) => match t {
@@ -858,6 +990,41 @@ fn commands() -> Value {
     let mut out = Vec::new();
     walk(&Cli::command(), "", &mut out);
     json!({ "commands": out })
+}
+
+fn notifications(api: &Api, n: Notifications) -> Result<Value, Fail> {
+    let list = |l: NotificationList| {
+        let mut query = Vec::new();
+        if l.unread {
+            query.push(("unread", "true".to_owned()));
+        }
+        query.extend(l.limit.map(|n| ("limit", n.to_string())));
+        query.extend(l.cursor.map(|c| ("cursor", c)));
+        api.call(Method::GET, &["api", "notifications"], &query, Body::None)
+    };
+    match n.action {
+        None => list(n.list),
+        Some(NotificationAction::List(l)) => list(l),
+        Some(NotificationAction::Read { all: true, .. }) => api.call(
+            Method::POST,
+            &["api", "notifications", "read-all"],
+            &[],
+            Body::None,
+        ),
+        Some(NotificationAction::Read { id, .. }) => api.call(
+            Method::POST,
+            &[
+                "api",
+                "notifications",
+                id.as_deref().unwrap_or_default(),
+                "read",
+            ],
+            &[],
+            Body::None,
+        ),
+        Some(NotificationAction::Dismiss { id }) => api.delete(&["api", "notifications", &id]),
+        Some(NotificationAction::Clear) => api.delete(&["api", "notifications"]),
+    }
 }
 
 fn asset(api: &Api, a: Asset) -> Result<Value, Fail> {

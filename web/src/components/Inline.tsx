@@ -1,6 +1,6 @@
 import { For, type JSX, Match, Show, Switch, createMemo, createSignal, useContext } from "solid-js";
 import { type InlineNode, type Mark, parseInline } from "../editor/markup";
-import { mentionText } from "../editor/titles";
+import { mentionText, noteArchived } from "../editor/titles";
 import { followPlaceholder, resolvePlaceholder } from "../placeholders";
 import { useThisNote } from "../views/thisNote";
 import { wantsNewTab } from "../workspace/events";
@@ -61,7 +61,14 @@ function Node(props: { node: InlineNode }) {
         </Match>
         <Match when={n.type === "mention" && n}>
           {(m) => (
-            <a class="mention" href={`/notes/${m().attrs.id}`} data-testid="mention" data-id={m().attrs.id}>
+            <a
+              class="mention"
+              classList={{ archived: noteArchived(m().attrs.id) === true }}
+              href={`/notes/${m().attrs.id}`}
+              data-testid="mention"
+              data-id={m().attrs.id}
+              title={noteArchived(m().attrs.id) ? "Archived" : undefined}
+            >
               {mentionText(m().attrs.id, m().attrs.label)}
             </a>
           )}

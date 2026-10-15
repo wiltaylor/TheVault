@@ -529,6 +529,7 @@ fn field_definition_rules() {
     let cases: &[(&str, &str)] = &[
         ("field a {\n  kind = \"colour\"\n}", "is not one of"),
         ("field title {\n  kind = \"string\"\n}", "reserved"),
+        ("field archived {\n  kind = \"bool\"\n}", "reserved"),
         (
             "field Bad {\n  kind = \"string\"\n}",
             "not a valid field name",
@@ -689,6 +690,15 @@ fn note_level_rules() {
         wrong_block.to_string().contains("is a ink field"),
         "{wrong_block}"
     );
+    let bad_archived = check("title = \"t\"\narchived = \"yes\"\n").unwrap_err();
+    assert!(
+        bad_archived
+            .to_string()
+            .contains("archived: must be true or false"),
+        "{bad_archived}"
+    );
+    let archived = check("title = \"t\"\narchived = true\n").unwrap();
+    assert!(!archived.is_flagged(), "archived is built in, not unknown");
     let not_data = check("title = \"t\"\ni = 1 + 2\n").unwrap_err();
     assert!(not_data.to_string().contains("expression"), "{not_data}");
 

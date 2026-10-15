@@ -120,6 +120,29 @@ impl State {
         author: &Author,
         content: &str,
     ) -> Result<Version> {
+        self.record(note_id, note_type, author, content, true)
+    }
+
+    /// [`State::record_version`] that always adds a version, never merging into the current one:
+    /// for a change that should stay visible in the history whoever made it, such as archiving.
+    pub fn record_distinct_version(
+        &self,
+        note_id: &str,
+        note_type: &str,
+        author: &Author,
+        content: &str,
+    ) -> Result<Version> {
+        self.record(note_id, note_type, author, content, false)
+    }
+
+    fn record(
+        &self,
+        note_id: &str,
+        note_type: &str,
+        author: &Author,
+        content: &str,
+        merge: bool,
+    ) -> Result<Version> {
         let mut raw = [0u8; 16];
         random_bytes(&mut raw);
         let token = to_hex(&raw);
@@ -128,7 +151,7 @@ impl State {
 
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        let merge_into: Option<i64> = if matches!(author, Author::Session(_)) {
+        let merge_into: Option<i64> = if merge && matches!(author, Author::Session(_)) {
             tx.query_row(
                 "SELECT v.seq FROM heads h JOIN versions v ON v.token = h.token
                  WHERE h.note_id = ?1 AND v.note_type = ?2 AND v.author_kind = ?3
@@ -291,6 +314,15 @@ impl State {
         )?;
         let rows = stmt.query_map([], trash_row)?;
         rows.map(|r| finish_trash(r?)).collect()
+    }
+
+    /// Whether note `note_id` is in the trash.
+    pub fn in_trash(&self, note_id: &str) -> Result<bool> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM trash WHERE note_id = ?1)",
+            [note_id],
+            |r| r.get(0),
+        )?)
     }
 
     /// Takes a note out of the trash and returns its last content. The caller writes the

@@ -24,7 +24,7 @@ mod print;
 mod run;
 mod value;
 
-pub use ast::{BinOp, Dir, Expr, FUNCTIONS, From, Lit, Path, Query, SortKey, UnOp};
+pub use ast::{ARCHIVED, BinOp, Dir, Expr, FUNCTIONS, From, Lit, Path, Query, SortKey, UnOp};
 pub use model::{Condition, Group, Item, Join, Model, ModelError, Op, Operand, Order, Sort};
 pub use parser::{ParseError, parse};
 #[doc(hidden)]

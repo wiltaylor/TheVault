@@ -33,7 +33,7 @@ pub struct Graph {
     /// The note the graph is around.
     pub center: GraphNode,
     /// The notes it links to or that link to it, most recently updated first. A note in the trash
-    /// is not indexed, so it is never one.
+    /// is not indexed, so it is never one, and an archived note is left out.
     pub neighbours: Vec<GraphNode>,
     /// Every link between two notes of the graph, the centre included, sorted.
     pub edges: Vec<GraphEdge>,
@@ -65,10 +65,11 @@ pub(crate) fn graph(conn: &Connection, id: &str, limit: usize) -> Result<Option<
         return Ok(None);
     };
     // Every note linked either way, newest first. A link to a note that is not indexed (deleted,
-    // or never created) has no row in `notes` and drops out of the join.
+    // or never created) has no row in `notes` and drops out of the join. Archived notes are left
+    // out, as every listing leaves them out.
     let mut stmt = conn.prepare(
         "SELECT n.id, n.type, n.title, n.updated FROM notes n
-         WHERE n.id != ?1 AND n.id IN (
+         WHERE n.id != ?1 AND n.archived = 0 AND n.id IN (
            SELECT dst FROM links WHERE src = ?1
            UNION SELECT src FROM links WHERE dst = ?1)
          ORDER BY n.updated_at IS NULL, n.updated_at DESC, n.id",

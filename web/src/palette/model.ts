@@ -227,6 +227,11 @@ function tier(q: string, ws: string[], title: string, recent: boolean): number {
  * note: exact title matches first, then titles that start with the text, then titles whose words
  * start with its words, then recent notes, then the rest. Recent notes come first within a rank.
  */
+/** `notes` without those known to be archived, which the palette leaves out as search does. */
+export function withoutArchived<T extends { id: string }>(notes: readonly T[], archived: (id: string) => boolean | undefined): T[] {
+  return notes.filter((n) => archived(n.id) !== true);
+}
+
 export function rankNotes(
   text: string,
   found: readonly NoteHit[],

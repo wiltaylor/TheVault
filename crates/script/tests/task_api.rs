@@ -586,3 +586,58 @@ fn every_example_in_the_scripts_reference_compiles_as_a_task() {
     }
     assert!(examples >= 6, "{examples}");
 }
+
+#[test]
+fn archive_and_unarchive_change_what_queries_and_search_read() {
+    let f = fixture();
+    let a = f.make(json!({ "title": "Shelved zucchini" }));
+    f.make(json!({ "title": "Fresh zucchini" }));
+    let src = r#"use vault
+fn run() -> Result[Value, string] {
+    let archived = vault::archive("$ID")?
+    let default_hits = vault::search("zucchini", 10)?
+    let only = vault::search_archived("zucchini", 10, "only")?
+    let every = vault::search_archived("zucchini", 10, "include")?
+    let listed = vault::query("from item where archived")?
+    let all = vault::query("from item include archived")?
+    let bad = match vault::search_archived("zucchini", 10, "maybe") {
+        Ok(_) => "accepted",
+        Err(e) => e,
+    }
+    Ok(Value::Map(#{
+        "archived": archived,
+        "default": Value::Int(default_hits.len()),
+        "only": Value::List(only),
+        "every": Value::Int(every.len()),
+        "listed": Value::Int(listed.len()),
+        "all": Value::Int(all.len()),
+        "bad": Value::String(bad),
+    }))
+}
+"#
+    .replace("$ID", &a.id);
+    let out = ok(f.task(&src));
+    assert_eq!(out["archived"]["note"]["fields"]["archived"], true, "{out}");
+    assert_eq!(out["default"], 1);
+    assert_eq!(out["only"][0]["id"], a.id.as_str());
+    assert_eq!(out["every"], 2);
+    assert_eq!(out["listed"], 1);
+    assert_eq!(out["all"], 2);
+    assert!(
+        out["bad"]
+            .as_str()
+            .unwrap()
+            .contains("exclude, include or only"),
+        "{out}"
+    );
+    assert_eq!(f.note(&a.id)["fields"]["archived"], true);
+
+    let back = r#"use vault
+fn run() -> Result[Value, string] {
+    vault::unarchive("$ID")
+}
+"#
+    .replace("$ID", &a.id);
+    ok(f.task(&back));
+    assert_eq!(f.note(&a.id)["fields"].get("archived"), None);
+}

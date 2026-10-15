@@ -7,7 +7,11 @@ import { termColour } from "../defs/taxonomyModel";
 /** The clauses that may follow `from`, in grammar order (PRD Appendix B). */
 const CLAUSES = new Set(["where", "search", "sort", "group", "select", "limit"]);
 
-/** Each top-level clause word in `query` and where it starts. Strings and member names are skipped. */
+/**
+ * Each top-level clause word in `query` and where it starts. Strings and member names are skipped.
+ * `include` (as in `include archived`) is a clause only straight after the type list, before any
+ * other clause, since a field may be called `include`.
+ */
 function clauses(query: string): { word: string; at: number }[] {
   const out: { word: string; at: number }[] = [];
   let i = 0;
@@ -23,7 +27,7 @@ function clauses(query: string): { word: string; at: number }[] {
       const start = i;
       while (i < query.length && /[A-Za-z0-9_]/.test(query[i]!)) i++;
       const word = query.slice(start, i);
-      if (CLAUSES.has(word) && query[start - 1] !== ".") out.push({ word, at: start });
+      if ((CLAUSES.has(word) || (word === "include" && out.length === 0)) && query[start - 1] !== ".") out.push({ word, at: start });
       continue;
     }
     i++;
@@ -42,7 +46,8 @@ export function narrow(query: string, condition: string): string {
     const rest = query.slice(end).trim();
     return `${query.slice(0, found[where]!.at)}where (${expr}) && (${condition})${rest ? ` ${rest}` : ""}`;
   }
-  const at = found[0]?.at ?? query.length;
+  // A new `where` goes after `include archived`, which follows the type list.
+  const at = found.find((c) => c.word !== "include")?.at ?? query.length;
   const rest = query.slice(at).trim();
   return `${query.slice(0, at).trimEnd()} where ${condition}${rest ? ` ${rest}` : ""}`;
 }

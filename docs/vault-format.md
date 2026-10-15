@@ -48,7 +48,7 @@ The example vault under `docs/vault-format/vault/` is self-consistent: its notes
 | Taxonomy name | Same rule as a type name | The file stem of `taxonomies/<taxonomy>.wcl` |
 | Task name | Same rule as a type name | The file stem of `tasks/<task>.wcl` |
 | Script name | Same rule as a type name | The file stem of `scripts/<script>.ws` |
-| Field name | Same rule as a type name. `title`, `created` and `updated` are reserved | The label of a `field` block |
+| Field name | Same rule as a type name. `title`, `created`, `updated` and `archived` are reserved | The label of a `field` block |
 | Template, view, canvas item name | `[A-Za-z_][A-Za-z0-9_]*` | A block label |
 | Note id | A ULID | The file stem of `notes/<type>/<ULID>.wcl` |
 | Asset id | A ULID | The folder name of `assets/<ULID>/` |
@@ -829,8 +829,11 @@ A schema change can name a migration: a function, `migrate` by default, of a scr
    | `title` | string | the client | Required, not empty. Shown wherever the note is listed or mentioned |
    | `created` | datetime, UTC (`Z`) | the server | When the note was created |
    | `updated` | datetime, UTC (`Z`) | the server | When any write last changed the file, including a reverse-side reference update |
+   | `archived` | bool, only ever `true` | the server | Present only on an archived note. A note that is not archived does not hold it |
 
    Clients cannot set `created` or `updated`. The server ignores either value on a write and writes its own.
+
+   Clients cannot set `archived` by writing the note either. A write keeps the archived state the note already has, whatever the submitted note holds, and a new note is never archived. Only archiving changes it: `POST /api/notes/{id}/archive` and `/unarchive`, `vault archive` and `vault unarchive`, or `vault::archive` and `vault::unarchive` in a script. See [Archived notes](#archived-notes).
 2. One field per non-compound field of the type that has a value, in type-file order. An optional field with no value is left out.
 3. One block per compound field (`content`, `dict`, `ink`, `canvas`) that has a value, in type-file order, labelled with the field name.
 
@@ -853,6 +856,23 @@ content body {
   }
 }
 ```
+
+### Archived notes
+
+Archiving takes a note out of the way without deleting it. An archived note holds `archived = true` after `updated`:
+
+```wcl
+title    = "Ship the importer"
+created  = "2026-10-12T09:15:00Z"
+updated  = "2026-11-03T16:20:41Z"
+archived = true
+estimate = 3
+```
+
+- **A normal write.** Archiving and unarchiving are updates at a base version, like any other write (D12). Each records a version of its own in the history, even straight after the same session's autosave, sets `updated`, and runs the type's `before_update` and `after_update` handlers. Archiving a note that is already archived, or unarchiving one that is not, changes nothing and returns the current version.
+- **Still a note.** An archived note opens by id, can be edited, and its references and mentions still resolve. A write keeps it archived. Restoring an earlier version keeps the state the note has now, and a note deleted while archived comes back from the trash archived.
+- **Left out of listings.** `index.db` keeps the flag in the `archived` column of `notes`, and the full-text index keeps it beside each document. Every query, full-text search and note listing leaves archived notes out unless it asks for them; see [Archived notes in queries](#archived-notes-in-queries). The link graph leaves archived neighbours out.
+- **Daily notes.** An archived daily note is still the note for its day: opening the day opens it, and no second note is created.
 
 `vault/notes/specimen/01JB8Z4K2MQ7V3X9T5R6W8Y2ZA.wcl` uses every field kind and every content block kind. `vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` is a note that is mostly one canvas, using both canvas node kinds.
 
@@ -1214,7 +1234,7 @@ A `query_view` block runs one query and shows its results through one or more sa
 | Item | Form | Meaning |
 |------|------|---------|
 | `title` | string | Heading shown above the view |
-| `query` | string | Required. A query in the grammar of PRD Appendix B. `this` is the note that holds the block |
+| `query` | string | Required. A query in the grammar of PRD Appendix B, with the `include archived` clause of [Archived notes in queries](#archived-notes-in-queries). `this` is the note that holds the block |
 | `default_view` | string | The view shown first. Default: the first view |
 | `view <name> { ... }` | block | At least one. `<name>` is unique within the block |
 
@@ -1287,6 +1307,24 @@ query_view {
   }
 }
 ```
+
+### Archived notes in queries
+
+A query leaves archived notes out unless it asks for them. It asks in one of two ways:
+
+| Query | Reads |
+|-------|-------|
+| `from task` | Notes that are not archived |
+| `from task where archived` | Archived notes only |
+| `from task where !archived` | Notes that are not archived, as with no condition |
+| `from task where archived \|\| done` | Any condition that names `archived` decides for itself |
+| `from task include archived` | Every note, archived or not |
+
+`archived` is a built-in bool field of every note: `true` for an archived note and `false` for any other. A `where` expression that names it, outside a closure that binds the name, takes over from the default. Otherwise the query reads as if it ended its `where` with `&& !archived`.
+
+`include archived` is a clause that follows the type list: `from <types> include archived where ...`. The full clause order is `from`, `include archived`, `where`, `search`, `sort`, `group by`, `select`, `limit`. `include` is not reserved: it only has this meaning straight after the type list, so a field may still be called `include`.
+
+The API's `/api/query` takes an optional `archived` of `include` or `only`, which adds `include archived` or `&& archived` to the query. `/api/search` and `/api/notes` take the same parameter, with `exclude` as the default.
 
 ## Ink
 
@@ -1600,7 +1638,7 @@ A vault file is checked in three layers. Each catches what the one before cannot
 A note's top-level fields depend on its type, so its `@document` is generated from `types/<type>.wcl` by these rules. `schema/notes/specimen.wcl` and `schema/notes/board.wcl` are generated from the example types.
 
 - The document type is named after the type in PascalCase with a `Note` suffix, for example `SpecimenNote`.
-- `title`, `created` and `updated` are `utf8`.
+- `title`, `created` and `updated` are `utf8`. `archived` is `bool?`.
 - Each non-compound field is declared under its own name, in type-file order, with the WCL type below. It is optional (`?`) unless `required = true`. If `multiple = true`, the field is `list<T>?` instead.
 
   | Field kind | WCL type |

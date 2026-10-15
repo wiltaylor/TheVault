@@ -1,6 +1,7 @@
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import { For, type JSX, Show, batch, createEffect, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
-import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, type TypeDef, api } from "../api";
+import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, type TypeDef, api, isArchived } from "../api";
+import { clearActiveNote, setActiveNote } from "../archive";
 import { type Autosave, type SaveState, createAutosave } from "../autosave";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { ConflictView } from "../components/ConflictView";
@@ -11,7 +12,7 @@ import { refText } from "../components/refText";
 import { BlockView, Blocks, ColumnsView, formatValue } from "../components/Render";
 import { slotOfBlock } from "../blocks/columns";
 import { ContentEditor } from "../editor/ContentEditor";
-import { knowTitle, noteTitle } from "../editor/titles";
+import { knowArchived, knowTitle, noteTitle } from "../editor/titles";
 import { InkSurface } from "../ink/InkSurface";
 import {
   applyBlocks,
@@ -39,7 +40,7 @@ import { workspace } from "../workspace/store";
 import { ThisNote } from "../views/thisNote";
 import { offerPlaceholders, replacePlaceholderInDoc, resolvePlaceholder } from "../placeholders";
 import { PlaceholdersInert } from "../components/PlaceholderLink";
-import { TrashIcon, TypeIcon } from "../components/Icon";
+import { ArchiveIcon, TrashIcon, TypeIcon, UnarchiveIcon } from "../components/Icon";
 
 /** How long after the last change a note saves itself. */
 export const AUTOSAVE_MS = 1500;
@@ -253,6 +254,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
           if (loadedId !== (id ?? "")) return;
           const loadedTitle = loaded.note.fields.title;
           if (typeof loadedTitle === "string") knowTitle(loaded.id, loadedTitle, loaded.type);
+          knowArchived(loaded.id, isArchived(loaded.note.fields));
           batch(() => {
             setDoc(loaded.note);
             setNote(loaded);
@@ -480,6 +482,47 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     }
   }
 
+  /** Whether the stored note is archived. */
+  const archived = () => !props.newType && isArchived(note()?.note.fields);
+
+  /** Archive the note, or take it out of the archive: a new version, after any pending save. */
+  async function toggleArchive() {
+    const n = note();
+    if (!n || props.newType || busy()) return;
+    const archiving = !isArchived(n.note.fields);
+    setBusy(true);
+    setSaveError(null);
+    try {
+      await autosave?.flush();
+      const base = note()?.version ?? n.version;
+      const saved = archiving ? await api.archiveNote(n.id, base) : await api.unarchiveNote(n.id, base);
+      knowArchived(saved.id, isArchived(saved.note.fields));
+      if (note()?.id !== saved.id) return;
+      batch(() => {
+        setNote(saved);
+        // The edited note follows the stored one unless it has edits of its own, which the
+        // next save sends over the new version.
+        if (!autosave?.dirty()) setDoc(saved.note);
+      });
+    } catch (e) {
+      setSaveError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // The command palette archives the note the active pane shows, through this page.
+  const owner = `${uid}${Math.random().toString(36).slice(2)}`;
+  createEffect(() => {
+    const n = note();
+    if (n && n.id && !props.newType && isActive()) {
+      setActiveNote({ owner, id: n.id, archived: archived(), toggle: toggleArchive });
+    } else {
+      clearActiveNote(owner);
+    }
+  });
+  onCleanup(() => clearActiveNote(owner));
+
   async function remove() {
     const n = note();
     if (!n || !confirm("Move this note to the trash?")) return;
@@ -666,6 +709,11 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                       <TypeIcon name={type()?.icon} size={14} />
                       <span>{type()?.label ?? n().type}</span>
                     </a>
+                    <Show when={archived()}>
+                      <span class="archived-chip" title="This note is archived" data-testid="archived-chip">
+                        Archived
+                      </span>
+                    </Show>
                     <button
                       type="button"
                       class="icon-button properties-toggle"
@@ -698,6 +746,19 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                         onClick={toggleHistory}
                       >
                         <HistoryIcon />
+                      </button>
+                      <button
+                        type="button"
+                        class="icon-button archive-button"
+                        aria-label={archived() ? "Unarchive" : "Archive"}
+                        title={archived() ? "Unarchive note" : "Archive note"}
+                        aria-pressed={archived()}
+                        onClick={() => void toggleArchive()}
+                        disabled={busy()}
+                      >
+                        <Show when={archived()} fallback={<ArchiveIcon />}>
+                          <UnarchiveIcon />
+                        </Show>
                       </button>
                       <button
                         type="button"
@@ -740,6 +801,18 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                 </Show>
               </div>
             </header>
+            <Show when={archived()}>
+              <div class="archived-banner" role="region" aria-label="Archived">
+                <ArchiveIcon />
+                <span class="archived-banner-text">
+                  <strong>Archived</strong>
+                  <span class="muted"> · left out of search and lists</span>
+                </span>
+                <button type="button" class="link" onClick={() => void toggleArchive()} disabled={busy()}>
+                  Unarchive
+                </button>
+              </div>
+            </Show>
             <Show when={saveError() && (props.newType || conflict())}>
               <p class="error" role="alert">
                 {saveError()}

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use schema::{FieldKind, Taxonomy, Term};
 use serde_json::{Value as Json, json};
 use state::Author;
-use writer::{Input, Saved, Writer, doc_to_json};
+use writer::{Archived, Input, Saved, Writer, doc_to_json};
 
 /// The vault as scripts see it. Every error is a message the script receives as an `Err`.
 ///
@@ -25,8 +25,9 @@ pub trait Vault: Send + Sync {
     /// or `null` on the last. `cursor` is `None` for the first page.
     fn query_page(&self, text: &str, size: usize, cursor: Option<String>) -> Result<Json, String>;
 
-    /// Full-text search over every note, best match first, at most `limit` rows.
-    fn search(&self, text: &str, limit: usize) -> Result<Vec<Json>, String>;
+    /// Full-text search over every note, best match first, at most `limit` rows. `archived` says
+    /// whether archived notes are left out, kept or the only ones searched.
+    fn search(&self, text: &str, limit: usize, archived: Archived) -> Result<Vec<Json>, String>;
 
     /// Create a note of `type_name` from its JSON form.
     fn create(&self, type_name: &str, note: Json, author: &Author) -> Result<Json, String>;
@@ -106,6 +107,9 @@ pub trait Vault: Send + Sync {
     /// Take note `id` out of the trash.
     fn restore(&self, id: &str, author: &Author) -> Result<Json, String>;
 
+    /// Archive note `id` as it is now, or take it out of the archive when `archived` is false.
+    fn set_archived(&self, id: &str, archived: bool, author: &Author) -> Result<Json, String>;
+
     /// The notes note `id` links to: `[{ id, type, title, via, field }]`, where `via` is `field`
     /// for a reference field and `mention` for a `[[link]]` in text. `type` and `title` are
     /// `null` for a link to a note that does not exist.
@@ -141,6 +145,18 @@ pub trait Vault: Send + Sync {
 
     /// The value of secret `name`, or `None` when there is none (D10).
     fn secret(&self, name: &str) -> Result<Option<String>, String>;
+
+    /// Notify the user: store a notification from `source`, such as `task:<name>`, opening note
+    /// `note` when it is not empty. Returns `{ id, title, body, note, source }`.
+    fn notify(
+        &self,
+        _source: &str,
+        _title: &str,
+        _body: &str,
+        _note: &str,
+    ) -> Result<Json, String> {
+        Err("notifications are not available here".into())
+    }
 
     /// Directories no script may reach through `fs`, whatever its task allows: the vault.
     fn protected(&self) -> Vec<PathBuf> {
@@ -303,19 +319,11 @@ impl Vault for Writer {
         }))
     }
 
-    fn search(&self, text: &str, limit: usize) -> Result<Vec<Json>, String> {
+    fn search(&self, text: &str, limit: usize, archived: Archived) -> Result<Vec<Json>, String> {
         if text.trim().is_empty() {
             return Err("the search text is empty".into());
         }
-        let q = query::Query {
-            from: query::From::All,
-            filter: None,
-            search: Some(text.to_owned()),
-            sort: Vec::new(),
-            group_by: None,
-            select: Vec::new(),
-            limit: None,
-        };
+        let q = query::Query::search_all(text, archived);
         let page = run_page(
             self,
             &q,
@@ -350,6 +358,16 @@ impl Vault for Writer {
 
     fn restore(&self, id: &str, author: &Author) -> Result<Json, String> {
         self.restore_from_trash(id, author).map(saved).map_err(err)
+    }
+
+    fn set_archived(&self, id: &str, archived: bool, author: &Author) -> Result<Json, String> {
+        let version = self
+            .current_version(id)
+            .map_err(err)?
+            .ok_or_else(|| format!("note {id} does not exist"))?;
+        Writer::set_archived(self, id, archived, Some(&version), author)
+            .map(saved)
+            .map_err(err)
     }
 
     fn links(&self, id: &str) -> Result<Vec<Json>, String> {
@@ -472,6 +490,27 @@ impl Vault for Writer {
 
     fn secret(&self, name: &str) -> Result<Option<String>, String> {
         self.state().get_secret(name).map_err(err)
+    }
+
+    fn notify(&self, source: &str, title: &str, body: &str, note: &str) -> Result<Json, String> {
+        let n = Writer::notify(
+            self,
+            &state::NewNotification {
+                title: title.to_owned(),
+                body: (!body.is_empty()).then(|| body.to_owned()),
+                note_id: (!note.is_empty()).then(|| note.to_owned()),
+                url: None,
+                source: source.to_owned(),
+            },
+        )
+        .map_err(err)?;
+        Ok(json!({
+            "id": n.id,
+            "title": n.title,
+            "body": n.body,
+            "note": n.note_id,
+            "source": n.source,
+        }))
     }
 
     fn protected(&self) -> Vec<PathBuf> {

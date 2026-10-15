@@ -213,9 +213,11 @@ fn is_identifier(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Put a note's items in canonical order: `title`, `created`, `updated`, then the type's fields in
-/// type-file order, then fields the type does not describe; compound blocks in type-file order,
-/// then the rest. Any `created` or `updated` the client sent is replaced by the server's.
+/// Put a note's items in canonical order: `title`, `created`, `updated`, `archived`, then the
+/// type's fields in type-file order, then fields the type does not describe; compound blocks in
+/// type-file order, then the rest. Any `created` or `updated` the client sent is replaced by the
+/// server's. `archived` is kept only as `archived = true`: a note that is not archived does not
+/// hold it.
 pub(crate) fn arrange(ty: &TypeDef, doc: Doc, created: &str, updated: &str) -> Doc {
     let mut fields: Vec<Option<(String, Value)>> = doc.fields.into_iter().map(Some).collect();
     let mut take = |name: &str, out: &mut Vec<(String, Value)>| {
@@ -232,6 +234,11 @@ pub(crate) fn arrange(ty: &TypeDef, doc: Doc, created: &str, updated: &str) -> D
     take("updated", &mut dropped);
     ordered.push(("created".to_owned(), Value::Str(created.to_owned())));
     ordered.push(("updated".to_owned(), Value::Str(updated.to_owned())));
+    let mut flag = Vec::new();
+    take(ARCHIVED, &mut flag);
+    if flag.last().is_some_and(|(_, v)| v == &Value::Bool(true)) {
+        ordered.push((ARCHIVED.to_owned(), Value::Bool(true)));
+    }
     for f in ty.fields.iter().filter(|f| !f.kind.is_compound()) {
         take(&f.name, &mut ordered);
     }
@@ -251,6 +258,22 @@ pub(crate) fn arrange(ty: &TypeDef, doc: Doc, created: &str, updated: &str) -> D
     Doc {
         fields: ordered,
         blocks: ordered_blocks,
+    }
+}
+
+/// The top-level item that marks a note archived.
+pub const ARCHIVED: &str = "archived";
+
+/// Whether a note is archived: it holds `archived = true`.
+pub fn is_archived(doc: &Doc) -> bool {
+    doc.field(ARCHIVED) == Some(&Value::Bool(true))
+}
+
+/// Mark `doc` archived or not. [`arrange`] puts the item in its place.
+pub(crate) fn set_archived(doc: &mut Doc, archived: bool) {
+    doc.fields.retain(|(n, _)| n != ARCHIVED);
+    if archived {
+        doc.fields.push((ARCHIVED.to_owned(), Value::Bool(true)));
     }
 }
 

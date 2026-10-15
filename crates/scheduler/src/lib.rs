@@ -12,6 +12,8 @@
 //!   the moment the failed run ended. A new scheduled firing replaces a retry still waiting.
 //! - A task never runs twice at once. A paused task never fires on its schedule but can still be
 //!   triggered by hand.
+//! - A run that fails with no retry to follow, the last of its retries or one that allowed none,
+//!   leaves the user a notification linking to the task's editor.
 //! - Every run, retries included, is recorded in `state.db` with its attempt number, start and
 //!   end times, outcome and log.
 //!
@@ -377,16 +379,56 @@ impl Scheduler {
             eprintln!("task {:?}: recording the run failed: {e}", def.name);
         }
         let mut plan = self.plan();
+        let mut retrying = false;
         if let Some(slot) = plan.slots.get_mut(&def.name) {
             slot.running = false;
             if failed && attempt <= def.retries && slot.def.as_ref() == Ok(def) {
                 let delay = i64::try_from(def.backoff(attempt).as_millis()).unwrap_or(i64::MAX);
                 slot.retry = Some((attempt + 1, self.clock.now_ms().saturating_add(delay)));
+                retrying = true;
             }
         }
         drop(plan);
         self.wake.notify_all();
+        if let Ok(TaskRun {
+            outcome: RunOutcome::Failed(message),
+            ..
+        }) = &record
+            && !retrying
+        {
+            self.notify_failure(def, message);
+        }
         record.ok()
+    }
+
+    /// Tell the user that `def` failed and will not be retried, with a link to its editor.
+    fn notify_failure(&self, def: &TaskDef, message: &str) {
+        let message = message.trim();
+        let (first, rest) = message.split_once('\n').unwrap_or((message, ""));
+        let title = match first.trim() {
+            "" => format!("Scheduled script \u{2018}{}\u{2019} failed", def.label),
+            line => format!(
+                "Scheduled script \u{2018}{}\u{2019} failed: {line}",
+                def.label
+            ),
+        };
+        // The body carries what the title leaves out: the lines after the first, or the whole
+        // message when the title had to be cut.
+        let clipped = title.chars().count() > state::MAX_TITLE;
+        let body = if clipped { message } else { rest.trim() };
+        let n = state::NewNotification {
+            title: clip(&title, state::MAX_TITLE),
+            body: Some(clip(body, state::MAX_BODY)).filter(|b| !b.is_empty()),
+            note_id: None,
+            url: Some(format!("/settings/scheduled/{}", def.name)),
+            source: "system".to_owned(),
+        };
+        if let Err(e) = self.writer.state().add_notification(&n) {
+            eprintln!(
+                "task {:?}: recording the failure notification: {e}",
+                def.name
+            );
+        }
     }
 
     fn attempt(&self, def: &TaskDef, attempt: u32) -> Result<TaskRun> {
@@ -419,6 +461,16 @@ impl Scheduler {
             .run(id)?
             .ok_or(Error::State(state::Error::UnknownRun(id)))
     }
+}
+
+/// `s` cut to at most `max` characters, ending in an ellipsis when cut.
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_owned();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('\u{2026}');
+    out
 }
 
 /// Refuse a task whose file access reaches into the vault: scripts change notes through `vault`,

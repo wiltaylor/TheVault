@@ -42,7 +42,9 @@ impl ApiError {
             | S::UnknownSecret(_)
             | S::UnknownNote(_)
             | S::NotInTrash(_)
-            | S::UnknownPin(_) => (StatusCode::NOT_FOUND, "not_found"),
+            | S::UnknownPin(_)
+            | S::UnknownNotification(_) => (StatusCode::NOT_FOUND, "not_found"),
+            S::InvalidNotification(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             S::PinCycle { .. } => (StatusCode::CONFLICT, "pin_cycle"),
             S::EmptyFolderName => (StatusCode::BAD_REQUEST, "bad_request"),
             S::UnknownScope(_) => (StatusCode::BAD_REQUEST, "bad_request"),

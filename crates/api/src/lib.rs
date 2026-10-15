@@ -15,6 +15,9 @@
 //! each have their own routes, `/api/schema` describes every type and taxonomy, and
 //! `/api/openapi.json` lists every endpoint.
 //!
+//! Notifications for the user, from scripts, agents and the server, live under
+//! `/api/notifications`.
+//!
 //! Scheduled tasks live under `/api/tasks`, with their run history and a route to run one now;
 //! the secrets they read are written, never read back, under `/api/secrets` (D10).
 //!
@@ -28,6 +31,7 @@ mod defs;
 mod error;
 mod inspect;
 mod notes;
+mod notifications;
 mod openapi;
 mod pins;
 mod query;
@@ -132,6 +136,8 @@ fn build() -> Built {
         .get("/api/notes/{id}/graph", notes::graph)
         .get("/api/notes/{id}/history/{version}", notes::version)
         .post("/api/notes/{id}/restore", notes::restore_version)
+        .post("/api/notes/{id}/archive", notes::archive)
+        .post("/api/notes/{id}/unarchive", notes::unarchive)
         .get("/api/notes/{id}/canvas/{name}", defs::canvas)
         .put("/api/notes/{id}/canvas/{name}", defs::put_canvas)
         .post_up_to("/api/batch", MAX_BATCH, batch::run)
@@ -150,6 +156,12 @@ fn build() -> Built {
         .put("/api/pins/folders/{id}", pins::rename_folder)
         .delete("/api/pins/folders/{id}", pins::delete_folder)
         .post("/api/pins/move", pins::move_entry)
+        .get("/api/notifications", notifications::list)
+        .post("/api/notifications", notifications::create)
+        .delete("/api/notifications", notifications::clear_read)
+        .post("/api/notifications/read-all", notifications::read_all)
+        .post("/api/notifications/{id}/read", notifications::read)
+        .delete("/api/notifications/{id}", notifications::delete)
         .get("/api/trash", notes::trash)
         .post("/api/trash/{id}/restore", notes::restore_from_trash)
         .get("/api/types", types::list)

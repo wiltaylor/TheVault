@@ -2,6 +2,7 @@
 // type's notes, open a settings section, and act on the workspace's panes, tabs and sidebars.
 
 import type { TypeDef } from "../api";
+import type { ActiveNote } from "../archive";
 import { openCapture } from "../capture/store";
 import { toggleSidebar } from "../sidebars";
 import { typeNavLabel } from "../sidebarTypes";
@@ -16,6 +17,8 @@ export type Glyph =
   | "calendar"
   | "search"
   | "trash"
+  | "archive"
+  | "unarchive"
   | "gear"
   | "files"
   | "tab"
@@ -30,7 +33,7 @@ export type ActionIcon = { glyph: Glyph } | { type: string | null };
 
 export interface Action extends ActionLike {
   id: string;
-  section: "Create" | "Go to" | "Settings" | "Workspace";
+  section: "Create" | "Go to" | "Note" | "Settings" | "Workspace";
   icon: ActionIcon;
   /** The key that does the same, to show beside it. */
   shortcut?: string;
@@ -77,6 +80,30 @@ export function typeActions(types: readonly TypeDef[]): Action[] {
   return out;
 }
 
+/** What can be done to the note the active pane shows: archive it, or take it out of the archive. */
+export function noteActions(note: ActiveNote | null): Action[] {
+  if (!note) return [];
+  const action: Action = note.archived
+    ? {
+        id: "note:unarchive",
+        section: "Note",
+        label: "Unarchive this note",
+        keywords: ["Restore from archive", "Take out of the archive"],
+        icon: { glyph: "unarchive" },
+        run: () => void note.toggle(),
+      }
+    : {
+        id: "note:archive",
+        section: "Note",
+        label: "Archive this note",
+        keywords: ["Archive note", "Hide note", "Put away"],
+        icon: { glyph: "archive" },
+        run: () => void note.toggle(),
+      };
+  action.general = true;
+  return [action];
+}
+
 /** The actions that do not depend on the vault's types. `phone` drops what a phone cannot do. */
 export function generalActions(opts: { phone: boolean; dark: boolean }): Action[] {
   const pane = () => M.activePane(workspace());
@@ -94,6 +121,7 @@ export function generalActions(opts: { phone: boolean; dark: boolean }): Action[
     { id: "daily", section: "Go to", label: "Go to Today", keywords: ["Daily notes", "Journal", "Daily note"], icon: { glyph: "calendar" }, href: "/daily" },
     { id: "search", section: "Go to", label: "Go to Search", keywords: ["Find", "Filter notes"], icon: { glyph: "search" }, href: "/search" },
     { id: "trash", section: "Go to", label: "Go to Trash", keywords: ["Deleted notes", "Restore"], icon: { glyph: "trash" }, href: "/trash" },
+    { id: "archive", section: "Go to", label: "Go to Archive", keywords: ["Archived notes", "Unarchive"], icon: { glyph: "archive" }, href: "/archive" },
     { id: "assets", section: "Go to", label: "Go to Assets", keywords: ["Files", "Uploads", "Images"], icon: { glyph: "files" }, href: "/assets" },
   ];
   for (const [href, name, keywords] of SETTINGS) {

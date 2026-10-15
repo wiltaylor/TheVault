@@ -4860,18 +4860,35 @@ input.canvas-caption-input {
   font-size: 1.15rem;
 }
 
-/* The command palette, from the end of the tab bar; it stays in view while the tabs scroll. */
-.ws-tab-palette {
+/* The command palette and the notifications bell, at the end of the tab bar; they stay in view
+   while the tabs scroll. */
+.ws-tab-tools {
   position: sticky;
   right: 0;
   flex: none;
   align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin-left: auto;
+  padding-left: 0.25rem;
+  background: var(--hover);
+}
+
+/* With the right sidebar collapsed, its reopen strip covers the window's right edge. */
+.shell.right-collapsed .ws-tab-tools {
+  right: 0.9rem;
+  margin-right: 0.9rem;
+}
+
+.ws-tab-palette {
+  position: relative;
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 1.75rem;
   height: 1.75rem;
-  margin-left: auto;
   padding: 0;
   border: none;
   border-radius: 0.3rem;
@@ -7491,4 +7508,188 @@ button.toast-action {
 .scheduled-actions .hint {
   white-space: normal;
   max-width: 14rem;
+}
+
+/* Archived notes: a muted chip beside the title, a slim banner on the note, links drawn muted,
+   and the Archive page's list. */
+.archived-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 1.4rem;
+  padding: 0 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.note-title-tools .archived-chip {
+  height: 1.7rem;
+  padding: 0 0.7rem;
+  font-size: 0.85rem;
+}
+
+.archived-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  margin: 0 0 1rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.archived-banner > .icon {
+  flex: none;
+}
+
+.archived-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.archived-banner-text strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.archive-button[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.mention.archived {
+  color: var(--muted);
+  background: var(--hover);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+
+.type-note-card.archived {
+  opacity: 0.75;
+}
+
+.type-note-card .archived-chip,
+.type-table-title .archived-chip {
+  margin-left: 0.4rem;
+}
+
+.type-table-title .archived-chip {
+  vertical-align: middle;
+}
+
+.type-list-archived {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.type-list-archived:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.type-list-archived[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.archive-page .type-list-title .icon {
+  width: 24px;
+  height: 24px;
+}
+
+.archive-intro {
+  margin: -0.25rem 0 1rem;
+  font-size: 0.9rem;
+}
+
+.archive-type {
+  flex: none;
+}
+
+.archive-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+}
+
+.archive-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.9rem;
+  padding: 0.55rem 0.9rem;
+}
+
+.archive-row + .archive-row {
+  border-top: 1px solid var(--line);
+}
+
+.archive-link {
+  display: inline-flex;
+  flex: 1 1 14rem;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.archive-link .icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.archive-link .note-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-link:hover .note-title {
+  text-decoration: underline;
+}
+
+.archive-row .note-type,
+.archive-row .note-date {
+  flex: none;
+  font-size: 0.85rem;
+}
+
+.archive-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 0.4rem;
+}
+
+.archive-actions button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.archive-more {
+  margin-top: 0.75rem;
+}
+
+.archive-empty {
+  margin: 1rem 0;
 }

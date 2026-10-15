@@ -13,6 +13,8 @@ pub(crate) struct Note {
     pub created_at: Option<f64>,
     pub updated_at: Option<f64>,
     pub flagged: bool,
+    /// Whether the note holds `archived = true`.
+    pub archived: bool,
     /// Every top-level field, as a JSON object in file order.
     pub data: String,
     pub values: Vec<FieldValue>,
@@ -51,11 +53,13 @@ pub(crate) struct SearchDoc {
     pub type_name: String,
     pub title: String,
     pub body: String,
+    pub archived: bool,
 }
 
 pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) -> Note {
     let str_field = |name: &str| doc.field(name).and_then(Value::as_str).map(str::to_owned);
     let title = str_field("title").unwrap_or_default();
+    let archived = doc.field("archived") == Some(&Value::Bool(true));
     let mut values = Vec::new();
     let mut links = Vec::new();
     let mut body = Vec::new();
@@ -144,6 +148,7 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
             type_name: ty.name.clone(),
             title: title.clone(),
             body: body.join("\n"),
+            archived,
         },
         title,
         created: str_field("created"),
@@ -151,6 +156,7 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
         created_at: str_field("created").as_deref().and_then(time::datetime),
         updated_at: str_field("updated").as_deref().and_then(time::datetime),
         flagged: report.is_flagged(),
+        archived,
         data: data.to_string(),
         values,
         links,

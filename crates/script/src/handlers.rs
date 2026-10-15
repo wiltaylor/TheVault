@@ -639,8 +639,32 @@ impl Vault for HandlerVault {
         Vault::query_page(&*bound(&self.binding)?, text, size, cursor)
     }
 
-    fn search(&self, text: &str, limit: usize) -> Result<Vec<Json>, String> {
-        Vault::search(&*bound(&self.binding)?, text, limit)
+    fn search(
+        &self,
+        text: &str,
+        limit: usize,
+        archived: writer::Archived,
+    ) -> Result<Vec<Json>, String> {
+        Vault::search(&*bound(&self.binding)?, text, limit, archived)
+    }
+
+    fn set_archived(&self, id: &str, archived: bool, author: &Author) -> Result<Json, String> {
+        let w = bound(&self.binding)?;
+        match route() {
+            Route::Stage => {
+                let version = w
+                    .current_version(id)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("note {id} does not exist"))?;
+                w.stage_set_archived(id, archived, Some(&version), author)
+                    .map(staged)
+                    .map_err(|e| e.to_string())
+            }
+            Route::Refuse => Err(MIGRATION_WRITE.into()),
+            Route::Write(chain) => {
+                with_chain(chain, || Vault::set_archived(&*w, id, archived, author))
+            }
+        }
     }
 
     fn restore(&self, id: &str, author: &Author) -> Result<Json, String> {
@@ -689,6 +713,13 @@ impl Vault for HandlerVault {
 
     fn secret(&self, name: &str) -> Result<Option<String>, String> {
         Vault::secret(&*bound(&self.binding)?, name)
+    }
+
+    fn notify(&self, source: &str, title: &str, body: &str, note: &str) -> Result<Json, String> {
+        // Inside the write path, which a dry run also takes, nothing may outlast the write.
+        self.side_write("vault::notify", |w| {
+            Vault::notify(w, source, title, body, note)
+        })
     }
 
     fn protected(&self) -> Vec<std::path::PathBuf> {

@@ -72,12 +72,14 @@ export function listColumns(type: TypeDef): FieldDef[] {
 
 /**
  * The query for a type's notes: by title, or by relevance when there is search text. As on the
- * Search page, the last word matches as a prefix until a space follows it.
+ * Search page, the last word matches as a prefix until a space follows it. Archived notes are
+ * left out unless `archived` is true.
  */
-export function typeQuery(type: string, text: string): string {
+export function typeQuery(type: string, text: string, archived = false): string {
+  const from = `from ${type}${archived ? " include archived" : ""}`;
   const t = text.trim();
-  if (!t) return `from ${type} sort title asc`;
-  return `from ${type} search ${lit(/\s$/.test(text) ? `${t} ` : t)}`;
+  if (!t) return `${from} sort title asc`;
+  return `${from} search ${lit(/\s$/.test(text) ? `${t} ` : t)}`;
 }
 
 export type SortDir = "asc" | "desc";

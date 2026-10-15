@@ -237,6 +237,7 @@ describe("search to query text", () => {
       ],
       sort: "updated",
       dir: "asc",
+      archived: "exclude",
     };
     expect(toQuery(s, TYPES)).toBe(
       'from task, project where (status == "todo" || status == "doing") && due < "2026-11-01" search "plan" sort updated asc',
@@ -270,6 +271,20 @@ describe("search to query text", () => {
     expect(toQuery(s, TYPES)).toBe("from project sort updated desc");
   });
 
+  it("leaves archived notes out unless the archived filter asks for them", () => {
+    expect(toQuery({ ...EMPTY, archived: "include" }, TYPES)).toBe("from * include archived sort updated desc");
+    expect(toQuery({ ...EMPTY, archived: "only" }, TYPES)).toBe("from * where archived sort updated desc");
+    expect(toQuery({ ...EMPTY, text: "plan", types: ["task"], archived: "include" }, TYPES)).toBe(
+      'from task include archived search "plan"',
+    );
+    const f: Filter = { section: "prop", owner: null, field: "done", op: "true", values: [] };
+    expect(toQuery({ ...EMPTY, types: ["task"], filters: [f], archived: "only" }, TYPES)).toBe(
+      "from task where done && archived sort updated desc",
+    );
+    expect(filterCount({ ...EMPTY, archived: "only" })).toBe(1);
+    expect(filterCount({ ...EMPTY, archived: "exclude" })).toBe(0);
+  });
+
   it("counts the type filter once", () => {
     expect(filterCount({ ...EMPTY, types: ["a", "b"], filters: [] })).toBe(1);
     expect(
@@ -291,6 +306,7 @@ describe("URL", () => {
     ],
     sort: "title",
     dir: "desc",
+    archived: "include",
   };
 
   it("round-trips every part of a search", () => {
@@ -325,6 +341,16 @@ describe("URL", () => {
 
   it("reads like a short address", () => {
     expect(encodeSearch({ ...EMPTY, text: "zebra", types: ["task"] })).toBe("q=zebra&type=task");
+  });
+
+  it("writes the archived filter only when it asks for archived notes", () => {
+    expect(encodeSearch({ ...EMPTY, archived: "exclude" })).toBe("");
+    expect(encodeSearch({ ...EMPTY, text: "x", archived: "include" })).toBe("q=x&archived=include");
+    expect(encodeSearch({ ...EMPTY, archived: "only", sort: "title" })).toBe("archived=only&sort=title");
+    expect(decodeSearch("archived=only").archived).toBe("only");
+    expect(decodeSearch("archived=include").archived).toBe("include");
+    expect(decodeSearch("archived=exclude").archived).toBe("exclude");
+    expect(decodeSearch("archived=maybe")).toEqual(EMPTY);
   });
 });
 

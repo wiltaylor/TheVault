@@ -6,6 +6,7 @@
   title:       utf8
   created:     utf8
   updated:     utf8
+  archived:    bool?
   subtitle:    utf8?
   estimate:    i64
   word_count:  i64?

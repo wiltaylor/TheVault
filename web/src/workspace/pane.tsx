@@ -43,6 +43,7 @@ const NAMES: [RegExp, string][] = [
   [/^\/inbox/, "Inbox"],
   [/^\/assets/, "Assets"],
   [/^\/trash/, "Trash"],
+  [/^\/archive/, "Archive"],
 ];
 
 /** A name for the page at `url`, from the location alone. Reactive: note titles load. */

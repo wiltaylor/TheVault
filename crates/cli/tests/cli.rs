@@ -1069,6 +1069,40 @@ fn every_command_prints_json() {
     let parsed = run("query-parse", &["from task sort title asc"], "");
     run("query-text", &[], &parsed["model"].to_string());
     run("search", &["A2"], "");
+
+    // Archiving: a versioned write, left out of every listing unless --archived asks.
+    let old = run("put", &["--type", "task"], "title = \"Shelved plan\"\n");
+    let old_id = s(&old["id"]).to_owned();
+    let shelved = run("archive", &[&old_id, "--base", s(&old["version"])], "");
+    assert!(s(&shelved["wcl"]).contains("archived = true"), "{shelved}");
+    assert_eq!(shelved["note"]["fields"]["archived"], true);
+    let ids = |v: &Value, key: &str| -> Vec<String> {
+        v[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| s(&n["id"]).to_owned())
+            .collect()
+    };
+    let listed = run("list", &["--type", "task"], "");
+    assert!(!ids(&listed, "notes").contains(&old_id), "{listed}");
+    let only = run("list", &["--type", "task", "--archived", "only"], "");
+    assert_eq!(ids(&only, "notes"), [old_id.as_str()]);
+    assert_eq!(only["notes"][0]["archived"], true);
+    assert!(ids(&run("search", &["Shelved"], ""), "rows").is_empty());
+    let found = run("search", &["Shelved", "--archived", "include"], "");
+    assert_eq!(ids(&found, "rows"), [old_id.as_str()]);
+    let queried = run("query", &["from task", "--archived", "only"], "");
+    assert_eq!(ids(&queried, "rows"), [old_id.as_str()]);
+    let back = run(
+        "unarchive",
+        &[&old_id, "--base", s(&shelved["version"])],
+        "",
+    );
+    assert!(!s(&back["wcl"]).contains("archived"), "{back}");
+    let listed = run("list", &["--type", "task"], "");
+    assert!(ids(&listed, "notes").contains(&old_id), "{listed}");
+
     run("flagged", &[], "");
 
     let file = tmp_path(&scratch, "f.txt");
@@ -1143,6 +1177,16 @@ fn every_command_prints_json() {
     assert!(token["secret"].is_string());
     run("token list", &[], "");
     run("token revoke", &["agent"], "");
+
+    let told = run(
+        "notify",
+        &["Done", "--body", "All of it.", "--note", &id],
+        "",
+    );
+    run("notifications list", &["--unread"], "");
+    run("notifications read", &[s(&told["id"])], "");
+    run("notifications dismiss", &[s(&told["id"])], "");
+    run("notifications clear", &[], "");
 
     run("secret set", &["api_key"], "s3cret\n");
     run("secret list", &[], "");
@@ -1236,4 +1280,72 @@ fn asset_delete_is_refused_while_a_note_names_it_and_unlink_takes_it_out() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn notify_lists_and_marks_notifications_read() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    let task = vault.ok(&["put", "--type", "task"], "title = \"Pay rent\"\n");
+    let made = vault.ok(
+        &[
+            "notify",
+            "Rent is due",
+            "--body",
+            "Pay it today.",
+            "--note",
+            s(&task["id"]),
+        ],
+        "",
+    );
+    assert_eq!(made["title"], "Rent is due");
+    assert_eq!(made["note"], task["id"]);
+    assert!(s(&made["source"]).starts_with("token:"));
+    let other = vault.ok(
+        &[
+            "notify",
+            "Backup done",
+            "--link",
+            "/settings/scheduled/backup",
+        ],
+        "",
+    );
+    let refused = vault.fails(&["notify", "x", "--note", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZZ"], "");
+    assert_eq!(refused["status"], 400);
+
+    let list = vault.ok(&["notifications"], "");
+    assert_eq!(list["unread"], 2);
+    assert_eq!(list["items"][0]["title"], "Backup done");
+    assert_eq!(list["items"][1]["title"], "Rent is due");
+    let page = vault.ok(&["notifications", "list", "--limit", "1"], "");
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert!(page["next"].is_string());
+
+    let read = vault.ok(&["notifications", "read", s(&made["id"])], "");
+    assert_eq!(read["unread"], 1);
+    let unread = vault.ok(&["notifications", "--unread"], "");
+    assert_eq!(unread["items"].as_array().unwrap().len(), 1);
+    assert_eq!(unread["items"][0]["id"], other["id"]);
+    vault.ok(&["notifications", "read", "--all"], "");
+    assert_eq!(vault.ok(&["notifications"], "")["unread"], 0);
+    let cleared = vault.ok(&["notifications", "clear"], "");
+    assert_eq!(cleared["cleared"], 2);
+    assert_eq!(vault.ok(&["notifications"], "")["items"], json!([]));
+
+    let commands = vault.ok(&["commands"], "");
+    let names: Vec<&str> = commands["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| s(&c["command"]))
+        .collect();
+    for name in [
+        "notify",
+        "notifications list",
+        "notifications read",
+        "notifications dismiss",
+        "notifications clear",
+    ] {
+        assert!(names.contains(&name), "{name} is not listed: {names:?}");
+    }
 }

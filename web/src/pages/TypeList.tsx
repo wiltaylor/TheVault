@@ -1,10 +1,10 @@
 import { A, useParams } from "@solidjs/router";
 import { For, Match, Show, Switch, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
-import { type Row, type TypeDef, api } from "../api";
+import { type Row, type TypeDef, api, isArchived } from "../api";
 import { changes } from "../changes";
-import { SearchIcon, TypeIcon } from "../components/Icon";
+import { ArchiveIcon, SearchIcon, TypeIcon } from "../components/Icon";
 import { formatValue } from "../components/Render";
-import { knowTitle } from "../editor/titles";
+import { knowArchived, knowTitle } from "../editor/titles";
 import { typeDef } from "../session";
 import {
   type ListSort,
@@ -53,6 +53,7 @@ function TypeNotes(props: { type: TypeDef }) {
   const [view, setView] = createSignal<TypeListView>(loadTypeView(name()));
   const [draft, setDraft] = createSignal("");
   const [text, setText] = createSignal("");
+  const [showArchived, setShowArchived] = createSignal(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(timer));
 
@@ -65,6 +66,7 @@ function TypeNotes(props: { type: TypeDef }) {
         setView(loadTypeView(n));
         setDraft("");
         setText("");
+        setShowArchived(false);
       },
       { defer: true },
     ),
@@ -89,8 +91,8 @@ function TypeNotes(props: { type: TypeDef }) {
 
   // How many notes the type has: one row asked for, the total read off the page.
   const [count] = createResource(
-    () => [name(), changes()] as const,
-    async ([n]) => (await api.query(`from ${n}`, null, 1)).total,
+    () => [name(), showArchived(), changes()] as const,
+    async ([n, archived]) => (await api.query(`from ${n}${archived ? " include archived" : ""}`, null, 1)).total,
   );
   const big = () => (count.latest ?? 0) > MAX_LISTED;
 
@@ -99,11 +101,15 @@ function TypeNotes(props: { type: TypeDef }) {
       if (count.latest === undefined) return false;
       // A big type loads nothing until there is something to search for.
       if (big() && !text().trim()) return false;
-      return [typeQuery(name(), text()), changes()] as const;
+      return [typeQuery(name(), text(), showArchived()), changes()] as const;
     },
     async ([query]) => {
       const p = await api.query(query, null, MAX_LISTED);
-      for (const r of p.rows) knowTitle(r.id, r.title, r.type);
+      // Rows hold every stored field, `archived` among them.
+      for (const r of p.rows) {
+        knowTitle(r.id, r.title, r.type);
+        knowArchived(r.id, isArchived(r.fields));
+      }
       return p;
     },
   );
@@ -155,6 +161,16 @@ function TypeNotes(props: { type: TypeDef }) {
             }}
           />
         </div>
+        <button
+          type="button"
+          class="type-list-archived"
+          aria-pressed={showArchived()}
+          title={showArchived() ? "Hide archived notes" : "Show archived notes"}
+          onClick={() => setShowArchived(!showArchived())}
+        >
+          <ArchiveIcon />
+          <span>Show archived</span>
+        </button>
         <div class="segmented type-list-views" role="group" aria-label="View">
           <button type="button" aria-pressed={view() === "cards"} onClick={() => choose("cards")}>
             <TypeIcon name="layout-grid" size={16} />
@@ -206,10 +222,13 @@ function CardsGrid(props: { type: TypeDef; rows: Row[] }) {
     <ul class="type-note-grid" aria-label={props.type.plural} data-testid="type-cards">
       <For each={props.rows}>
         {(row) => (
-          <li class="query-card type-note-card" data-testid="note-card">
+          <li class="query-card type-note-card" classList={{ archived: isArchived(row.fields) }} data-testid="note-card">
             <A class="query-title type-note-link" href={`/notes/${row.id}`} data-testid="query-title">
               {row.title || "Untitled"}
             </A>
+            <Show when={isArchived(row.fields)}>
+              <span class="archived-chip">Archived</span>
+            </Show>
             <Show when={template()}>{(t) => <TemplateBody row={row} template={t()} />}</Show>
           </li>
         )}
@@ -272,6 +291,9 @@ function ListTable(props: { type: TypeDef; rows: Row[] }) {
                     <TypeIcon name={props.type.icon} size={16} />
                     <span>{row.title || "Untitled"}</span>
                   </A>
+                  <Show when={isArchived(row.fields)}>
+                    <span class="archived-chip">Archived</span>
+                  </Show>
                 </td>
                 <For each={columns()}>{(f) => <td>{formatValue(row.fields[f.name])}</td>}</For>
                 <td class="type-table-updated">

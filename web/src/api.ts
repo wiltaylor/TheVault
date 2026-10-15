@@ -108,6 +108,14 @@ export interface TypePlan {
   flagged: string[];
 }
 
+/** Which notes a listing reads by archive state. Listings leave archived notes out by default. */
+export type ArchivedFilter = "exclude" | "include" | "only";
+
+/** Whether a note's fields mark it archived (`archived = true`). */
+export function isArchived(fields: Record<string, Json> | undefined): boolean {
+  return fields?.archived === true;
+}
+
 export interface Row {
   id: string;
   type: string;
@@ -145,6 +153,31 @@ export interface PinFolderItem {
 }
 
 export type PinItem = PinNoteItem | PinFolderItem;
+
+/** A message for the user from a script, an agent or the server, shown under the bell. */
+export interface AppNotification {
+  id: string;
+  /** Milliseconds since the Unix epoch. */
+  created: number;
+  title: string;
+  body: string | null;
+  /** The note it opens, with that note's type and title as they are now (null once it is gone). */
+  note: string | null;
+  note_type: string | null;
+  note_title: string | null;
+  /** The page of the app it opens when it names no note. */
+  url: string | null;
+  /** `task:<name>`, `handler:<type>.<event>`, `token:<name>`, `api` or `system`. */
+  source: string;
+  /** When it was read, or null while unread. */
+  read: number | null;
+}
+
+export interface NotificationPage {
+  items: AppNotification[];
+  next: string | null;
+  unread: number;
+}
 
 /** A stored pinned entry, as the folder and move endpoints return it. */
 export interface PinEntry {
@@ -418,14 +451,22 @@ export const api = {
     request<{ text: string }>("POST", "/api/query/parse", {
       query,
     }),
-  search: (q: string, cursor: string | null, pageSize: number) => {
+  /** Full-text search. Archived notes are left out unless `archived` is `include` or `only`. */
+  search: (q: string, cursor: string | null, pageSize: number, archived?: ArchivedFilter) => {
     const params = new URLSearchParams({ q, page_size: String(pageSize) });
     if (cursor) params.set("cursor", cursor);
+    if (archived && archived !== "exclude") params.set("archived", archived);
     return request<Page>("GET", `/api/search?${params}`);
   },
   /** Move a note to the trash, over version `base`. A stale base is a conflict. */
   deleteNote: (id: string, base: string) =>
     request<unknown>("DELETE", `/api/notes/${enc(id)}?base_version=${enc(base)}`),
+  /** Archive a note over version `base`: a new version holding `archived = true`. */
+  archiveNote: (id: string, base: string) =>
+    request<Note>("POST", `/api/notes/${enc(id)}/archive?base_version=${enc(base)}`),
+  /** Take a note out of the archive over version `base`. */
+  unarchiveNote: (id: string, base: string) =>
+    request<Note>("POST", `/api/notes/${enc(id)}/unarchive?base_version=${enc(base)}`),
   /** The notes linked to or from note `id`, with every link among them. */
   graph: (id: string, limit?: number) =>
     request<NoteGraph>("GET", `/api/notes/${enc(id)}/graph${limit ? `?limit=${limit}` : ""}`),
@@ -438,6 +479,22 @@ export const api = {
   restoreVersion: (id: string, version: string, base: string) =>
     request<Note>("POST", `/api/notes/${enc(id)}/restore`, { version, base_version: base }),
   /** The sidebar's pinned tree. Pins live on the server, shared by every device. */
+  /** A page of notifications, newest first, with the unread count. */
+  notifications: (opts: { limit?: number; cursor?: string | null; unread?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.limit) q.set("limit", String(opts.limit));
+    if (opts.cursor) q.set("cursor", opts.cursor);
+    if (opts.unread) q.set("unread", "true");
+    const qs = q.toString();
+    return request<NotificationPage>("GET", `/api/notifications${qs ? `?${qs}` : ""}`);
+  },
+  readNotification: (id: string) =>
+    request<AppNotification & { unread: number }>("POST", `/api/notifications/${enc(id)}/read`),
+  readAllNotifications: () => request<{ marked: number; unread: number }>("POST", "/api/notifications/read-all"),
+  dismissNotification: (id: string) =>
+    request<{ id: string; deleted: boolean; unread: number }>("DELETE", `/api/notifications/${enc(id)}`),
+  /** Remove every read notification. */
+  clearReadNotifications: () => request<{ cleared: number; unread: number }>("DELETE", "/api/notifications"),
   pins: async () => (await request<{ pins: PinItem[] }>("GET", "/api/pins")).pins,
   pin: (id: string) => request<Pin & { added: boolean }>("PUT", `/api/pins/${enc(id)}`),
   /** Unpin a note; the entries nested under it move up into its place. */

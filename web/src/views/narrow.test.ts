@@ -44,11 +44,27 @@ describe("narrow", () => {
   });
 });
 
+describe("include archived", () => {
+  it("keeps a new where clause after include archived", () => {
+    expect(narrow("from task include archived", "a")).toBe("from task include archived where a");
+    expect(narrow("from task include archived sort due", "a")).toBe("from task include archived where a sort due");
+    expect(narrow("from task include archived where b limit 3", "a")).toBe(
+      "from task include archived where (b) && (a) limit 3",
+    );
+  });
+
+  it("is a clause only after the type list, so a field may be called include", () => {
+    expect(narrow("from task where include sort title", "a")).toBe("from task where (include) && (a) sort title");
+  });
+});
+
 describe("fromTypes", () => {
   it("reads the from clause, or null for every type", () => {
     expect(fromTypes("from task, project where a")).toEqual(["task", "project"]);
     expect(fromTypes("from * sort title")).toBeNull();
     expect(fromTypes("from task")).toEqual(["task"]);
+    expect(fromTypes("from task, project include archived where a")).toEqual(["task", "project"]);
+    expect(fromTypes("from * include archived")).toBeNull();
   });
 });
 

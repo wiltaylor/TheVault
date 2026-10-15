@@ -342,6 +342,16 @@ impl Parser {
             }
             From::Types(types)
         };
+        // `include` is not a clause word: it can only follow the type list, where a field name
+        // cannot, so a field may still be called `include`.
+        let include_archived = if self.eat_word("include") {
+            if !self.eat_word("archived") {
+                return Err(self.unexpected("`archived` after `include`"));
+            }
+            true
+        } else {
+            false
+        };
         let filter = if self.eat_word("where") {
             Some(self.expr()?)
         } else {
@@ -404,8 +414,9 @@ impl Parser {
         if *self.tok() != Tok::Eof {
             let wanted = match self.tok() {
                 Tok::Ident(w) if CLAUSES.contains(&w.as_str()) => format!(
-                    "the end of the query: clauses come in the order from, where, search, sort, \
-                     group by, select, limit, and `{w}` is out of order or repeated"
+                    "the end of the query: clauses come in the order from, include archived, \
+                     where, search, sort, group by, select, limit, and `{w}` is out of order or \
+                     repeated"
                 ),
                 _ => "an operator, the next clause or the end of the query".to_owned(),
             };
@@ -413,6 +424,7 @@ impl Parser {
         }
         Ok(Query {
             from,
+            include_archived,
             filter,
             search,
             sort,

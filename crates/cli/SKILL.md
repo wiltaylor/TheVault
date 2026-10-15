@@ -1,6 +1,6 @@
 ---
 name: thevault
-description: Read and write notes in a TheVault vault with the `vault` CLI. Inspect the types first, write notes as WCL or JSON, import many notes with a dry-run batch, upsert by a key field, run queries and full-text search, and fix validation errors from the error JSON. Use whenever a task involves TheVault notes, types or queries.
+description: Read and write notes in a TheVault vault with the `vault` CLI. Inspect the types first, write notes as WCL or JSON, import many notes with a dry-run batch, upsert by a key field, run queries and full-text search, fix validation errors from the error JSON, and notify the user when work is done. Use whenever a task involves TheVault notes, types or queries.
 ---
 
 # TheVault with the `vault` CLI
@@ -91,9 +91,11 @@ vault search "dashboard"
 
 `graph` returns the notes linked to or from a note. `nodes` starts with the note itself; each other node has a `direction` of `out` (the note links to it), `in` (it links to the note) or `both`. `edges` lists every link among the nodes as `from`, `to`, `via` (`field` or `mention`) and `field`. Only the 60 most recently updated neighbours are returned unless you pass `--limit`; `truncated` counts the rest.
 
+`list`, `query` and `search` leave archived notes out. Add `--archived include` to keep them or `--archived only` to read nothing else. In query text, `from task include archived` reads every task and `from task where archived` only the archived ones.
+
 `list`, `query` and `search` return `rows`. Each row has the note's `id`, `type` and `title`, and its field values under `fields`. A row never holds `content` fields, so to read a note's body, `get` the note by its `id`.
 
-A query is a `from` clause followed by optional clauses in this order: `where`, `search`, `sort`, `group by`, `select`, `limit`. A `where` expression uses `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||` and `!`, and these functions:
+A query is a `from` clause followed by optional clauses in this order: `include archived`, `where`, `search`, `sort`, `group by`, `select`, `limit`. A `where` expression uses `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||` and `!`, and these functions:
 
 | Function | True when |
 |----------|-----------|
@@ -164,6 +166,15 @@ vault delete "$ID" --base "$VERSION"
 vault trash list
 vault trash restore "$ID"
 ```
+
+Archiving keeps a note but takes it out of lists, queries and search. The note stays readable and editable by id, and links to it still work. Archive instead of deleting when the user wants a note out of the way rather than gone:
+
+```sh
+vault archive "$ID" --base "$VERSION"
+vault list --type task --archived only
+```
+
+`vault unarchive <id> --base <version>` brings it back, with the `version` that `archive` returned. Archiving is a normal write: it needs the current version and shows in `vault history`.
 
 ## 4. Import many notes
 
@@ -335,6 +346,18 @@ vault get "$ID"
 ```
 
 Mark one processed by sending the whole note back with `processed = true` and the version you read, as in step 3. To turn one into another kind of note, `put` the new note (copy the title and body), then `vault delete` the fleeting note. Only process captures when the user asks you to.
+
+## 9. Notify the user
+
+`vault notify` puts a notification under the bell in the web app. Use it to tell the user that long work has finished, or that something needs them. Clicking it opens the note given with `--note`, or the app page given with `--link`, such as `/settings/scheduled/<task>`. It needs a `write` token.
+
+```sh
+vault notify "Imported 12 invoices" --body "Two have no category yet." --note "$ID"
+vault notifications --unread
+vault notifications read --all
+```
+
+The title is required and at most 200 characters; the body is at most 2000, and the app shows its first two lines. A `--note` that does not exist, or is in the trash, is refused with status 400. A notification made with a token records `token:<name>` as its `source`. `vault notifications` lists them newest first with `unread`, the count of unread ones, and `next`, the cursor for `--cursor`. `vault notifications read <id>` marks one read, `vault notifications dismiss <id>` removes one, and `vault notifications clear` removes every read one. Notify only when the user would want to know; do not notify for each step of a task.
 
 ## Setting up a vault
 

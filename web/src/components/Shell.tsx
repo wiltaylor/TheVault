@@ -30,7 +30,8 @@ import { isActiveLink } from "../workspace/links";
 import { activePane } from "../workspace/model";
 import { workspace } from "../workspace/store";
 import { Workspace } from "../workspace/Workspace";
-import { CalendarIcon, CaptureIcon, GearIcon, InboxIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
+import { ArchiveIcon, CalendarIcon, CaptureIcon, GearIcon, InboxIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
+import { NotificationsBell, NotificationsLive } from "../notifications/NotificationsPanel";
 import { PinnedTree } from "./PinnedTree";
 import { Toasts } from "./Toasts";
 import { TypesNav } from "./TypesNav";
@@ -340,6 +341,16 @@ export function Shell() {
             <SearchIcon />
             <span>Search or run a command</span>
           </button>
+          <Show when={rightIsDrawer()}>
+            <NotificationsBell
+              class="menu-button topbar-bell"
+              sheet
+              beforeOpen={() => {
+                setLeftDrawer(false);
+                setRightDrawer(false);
+              }}
+            />
+          </Show>
           <button
             type="button"
             class="menu-button right-button"
@@ -440,6 +451,16 @@ export function Shell() {
               </span>
             </button>
             <a
+              href="/archive"
+              class="footer-button"
+              classList={{ active: isActiveLink("/archive") }}
+              aria-label="Archive"
+              title="Archive"
+              onClick={() => setLeftDrawer(false)}
+            >
+              <ArchiveIcon />
+            </a>
+            <a
               href="/trash"
               class="footer-button"
               classList={{ active: isActiveLink("/trash") }}
@@ -508,6 +529,7 @@ export function Shell() {
           <CommandPalette />
         </Show>
         <Toasts />
+        <NotificationsLive />
       </div>
     </Show>
   );

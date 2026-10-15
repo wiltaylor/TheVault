@@ -10,7 +10,7 @@ use crate::rebuild::Failure;
 
 /// Bump when the tables change. An index of another version is dropped and recreated empty, and
 /// the next rebuild fills it.
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 
 const TABLES: &str = "
 CREATE TABLE notes (
@@ -24,6 +24,8 @@ CREATE TABLE notes (
   created_at REAL,
   updated_at REAL,
   flagged INTEGER NOT NULL,
+  -- 1 when the note holds `archived = true`. Queries leave archived notes out unless asked.
+  archived INTEGER NOT NULL,
   data    TEXT NOT NULL
 );
 CREATE INDEX notes_by_type ON notes(type, id);
@@ -156,8 +158,9 @@ pub(crate) fn note_path(type_name: &str, id: &str) -> String {
 pub(crate) fn insert_note(conn: &Connection, n: &Note) -> Result<()> {
     conn.execute(
         "INSERT INTO notes
-           (id, type, path, title, created, updated, created_at, updated_at, flagged, data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+           (id, type, path, title, created, updated, created_at, updated_at, flagged, archived,
+            data)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             n.id,
             n.type_name,
@@ -168,6 +171,7 @@ pub(crate) fn insert_note(conn: &Connection, n: &Note) -> Result<()> {
             n.created_at,
             n.updated_at,
             n.flagged,
+            n.archived,
             n.data
         ],
     )?;

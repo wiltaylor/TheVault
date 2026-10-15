@@ -13,6 +13,7 @@ import {
   untrack,
 } from "solid-js";
 import { SearchIcon, TypeIcon } from "../components/Icon";
+import { NotificationsBell } from "../notifications/NotificationsPanel";
 import { PALETTE_KEYS, openPalette } from "../palette/store";
 import { paneRoutes } from "../routes";
 import * as M from "./model";
@@ -275,15 +276,18 @@ function TabBar(props: { phone: boolean }) {
         +
       </button>
       <Show when={!props.phone}>
-        <button
-          type="button"
-          class="ws-tab-palette"
-          aria-label="Search or run a command"
-          title={`Search or run a command (${PALETTE_KEYS})`}
-          onClick={() => openPalette()}
-        >
-          <SearchIcon />
-        </button>
+        <div class="ws-tab-tools">
+          <button
+            type="button"
+            class="ws-tab-palette"
+            aria-label="Search or run a command"
+            title={`Search or run a command (${PALETTE_KEYS})`}
+            onClick={() => openPalette()}
+          >
+            <SearchIcon />
+          </button>
+          <NotificationsBell class="ws-tab-palette ws-tab-bell" />
+        </div>
       </Show>
       <Show when={markX() !== null}>
         <span class="ws-tab-mark" style={{ left: `${markX()}px` }} />

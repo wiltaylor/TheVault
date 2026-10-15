@@ -71,6 +71,8 @@ describe("type list", () => {
     expect(typeQuery("book", "dune")).toBe('from book search "dune"');
     expect(typeQuery("book", "dune ")).toBe('from book search "dune "');
     expect(typeQuery("book", 'say "hi"')).toBe('from book search "say \\"hi\\""');
+    expect(typeQuery("book", "", true)).toBe("from book include archived sort title asc");
+    expect(typeQuery("book", "dune", true)).toBe('from book include archived search "dune"');
   });
 
   it("sorts a column both ways with empty values last, and cycles off", () => {

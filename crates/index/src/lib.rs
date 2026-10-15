@@ -16,7 +16,7 @@
 //!
 //! | Table | One row per |
 //! |-------|-------------|
-//! | `notes` | Note: id, type, path, title, created, updated, both again as Unix time, flagged, and its fields as JSON |
+//! | `notes` | Note: id, type, path, title, created, updated, both again as Unix time, flagged, archived, and its fields as JSON |
 //! | `field_values` | Scalar inside a field value, including `title`, `created` and `updated`, with the type of its note |
 //! | `links` | Note reference in a field, or mention in inline text, from `src` to `dst` |
 //! | `terms` | Taxonomy term, with its parent, depth and display position |
@@ -73,6 +73,48 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Which notes a listing or search reads, by whether they are archived. A note is archived when
+/// it holds `archived = true`; listings leave archived notes out unless they ask for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Archived {
+    /// Only notes that are not archived: the default.
+    #[default]
+    Exclude,
+    /// Every note, archived or not.
+    Include,
+    /// Only archived notes.
+    Only,
+}
+
+impl Archived {
+    /// `exclude`, `include` or `only`.
+    pub fn parse(s: &str) -> Option<Archived> {
+        Some(match s {
+            "exclude" => Archived::Exclude,
+            "include" => Archived::Include,
+            "only" => Archived::Only,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Archived::Exclude => "exclude",
+            Archived::Include => "include",
+            Archived::Only => "only",
+        }
+    }
+
+    /// An SQL condition on `column`, the `archived` column of `notes`.
+    pub fn sql(self, column: &str) -> String {
+        match self {
+            Archived::Exclude => format!("{column} = 0"),
+            Archived::Include => "1".to_owned(),
+            Archived::Only => format!("{column} = 1"),
+        }
+    }
+}
 
 /// One note change to apply to the index.
 #[derive(Debug, Clone)]
@@ -165,7 +207,8 @@ impl Index {
     }
 
     /// The notes linked to or from note `id`, at most `limit` of them, most recently updated
-    /// first, with every link among them and the note. `None` when the index does not hold `id`.
+    /// first, with every link among them and the note. Archived neighbours are left out, but an
+    /// archived note has a graph of its own. `None` when the index does not hold `id`.
     pub fn graph(&self, id: &str, limit: usize) -> Result<Option<Graph>> {
         graph::graph(&self.conn, id, limit)
     }
@@ -230,12 +273,14 @@ impl Index {
     /// except the last, which also matches as a prefix: `meet` finds `meeting`. A last word
     /// followed by a space, or of one character, matches whole words only. A prefix stands for
     /// at most the 50 most frequent words it starts in each of the title and the body.
+    /// Archived notes are hits too: [`Index::search_page_where`] can leave them out.
     pub fn search(&self, text: &str, limit: Option<usize>) -> Result<Vec<Hit>> {
         self.search.search(text, limit)
     }
 
     /// Every hit of a full-text search among notes of `types`, or of every type when `None`, in
-    /// no order. A hit's score is the one [`Index::search`] gives it.
+    /// no order. A hit's score is the one [`Index::search`] gives it. Archived notes are hits
+    /// too.
     pub fn search_hits(&self, text: &str, types: Option<&[String]>) -> Result<Vec<Hit>> {
         self.search.hits(text, types)
     }
@@ -261,6 +306,19 @@ impl Index {
         size: usize,
     ) -> Result<SearchPage> {
         self.search.page(text, Some(types), after, size)
+    }
+
+    /// [`Index::search_page`] among notes of `types`, or of every type when `None`, that are
+    /// archived or not as `archived` says. Scores are the same whichever notes it reads.
+    pub fn search_page_where(
+        &self,
+        text: &str,
+        types: Option<&[String]>,
+        archived: Archived,
+        after: Option<(f32, &str)>,
+        size: usize,
+    ) -> Result<SearchPage> {
+        self.search.page_where(text, types, archived, after, size)
     }
 
     /// The files the last rebuild could not index.

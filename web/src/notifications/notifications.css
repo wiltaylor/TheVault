@@ -1,0 +1,265 @@
+/* The notifications bell and its panel: a dropdown under the bell, a full-width sheet on a phone. */
+.notif-bell {
+  position: relative;
+}
+
+.notif-bell[aria-expanded="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.notif-badge {
+  position: absolute;
+  top: -0.2rem;
+  right: -0.3rem;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1rem;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px var(--hover);
+}
+
+:root[data-theme="dark"] .notif-badge {
+  color: #0b1120;
+}
+
+.topbar-bell .notif-badge {
+  top: 0.05rem;
+  right: 0.2rem;
+  box-shadow: 0 0 0 2px var(--panel);
+}
+
+.notif-panel {
+  position: fixed;
+  z-index: 1900;
+  width: min(24rem, calc(100vw - 1rem));
+  max-height: min(34rem, calc(100vh - 5rem));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 14px 36px rgb(0 0 0 / 0.22);
+  overflow: hidden;
+}
+
+.notif-panel:focus {
+  outline: none;
+}
+
+.notif-panel.notif-sheet {
+  left: 0;
+  right: 0;
+  width: auto;
+  border-width: 0 0 1px;
+  border-radius: 0 0 0.6rem 0.6rem;
+}
+
+.notif-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.6rem 0.55rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.notif-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+.notif-actions {
+  display: flex;
+  gap: 0.15rem;
+}
+
+.notif-action {
+  padding: 0.2rem 0.45rem;
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.8rem;
+}
+
+.notif-action:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.notif-action:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.notif-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.notif-empty {
+  margin: 0;
+  padding: 2rem 1rem;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.notif-list {
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+}
+
+.notif-item {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.notif-item + .notif-item {
+  border-top: 1px solid var(--line);
+}
+
+.notif-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.6rem 2.1rem 0.6rem 0.7rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.notif-open:hover,
+.notif-open:focus-visible {
+  background: var(--hover);
+}
+
+.notif-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.notif-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: 0.45rem;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.notif-item.unread .notif-dot {
+  background: var(--accent);
+}
+
+.notif-icon {
+  flex: none;
+  display: inline-flex;
+  margin-top: 0.1rem;
+  color: var(--muted);
+}
+
+.notif-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.notif-title {
+  font-size: 0.9rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.notif-item.unread .notif-title {
+  font-weight: 600;
+}
+
+.notif-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.83rem;
+  line-height: 1.35;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.notif-meta {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.notif-dismiss {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.4rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  opacity: 0;
+}
+
+.notif-item:hover .notif-dismiss,
+.notif-item:focus-within .notif-dismiss,
+.notif-dismiss:focus-visible {
+  opacity: 1;
+}
+
+.notif-dismiss:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+
+/* A touch screen has no hover: the × always shows. */
+@media (hover: none) {
+  .notif-dismiss {
+    opacity: 1;
+  }
+}
+
+.notif-more {
+  display: block;
+  width: calc(100% - 1rem);
+  margin: 0.25rem 0.5rem 0.5rem;
+  padding: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.notif-more:hover:not(:disabled) {
+  background: var(--hover);
+}

@@ -95,13 +95,13 @@ export function applyDict(doc: NoteDoc, f: FieldDef, entries: Json | undefined):
 
 /**
  * The fields to compare in a conflict: the title and the type's fields in type order, then any
- * other stored field. `created` and `updated` are the server's, so they are left out.
+ * other stored field. `created`, `updated` and `archived` are the server's, so they are left out.
  */
 export function comparedFields(type: TypeDef | undefined, a: NoteDoc, b: NoteDoc): FieldDef[] {
   const known = [TITLE_FIELD, ...(type?.fields ?? [])];
   const names = new Set(known.map((f) => f.name));
   const extra = [...Object.keys(a.fields), ...Object.keys(b.fields)]
-    .filter((n) => !names.has(n) && n !== "created" && n !== "updated")
+    .filter((n) => !names.has(n) && n !== "created" && n !== "updated" && n !== "archived")
     .filter((n, i, all) => all.indexOf(n) === i)
     .map((n) => ({ ...TITLE_FIELD, name: n, label: n, required: false }));
   return [...known, ...extra];

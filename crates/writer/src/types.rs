@@ -446,9 +446,10 @@ fn rebuild_schema(current: &Schema, types: Vec<TypeDef>) -> Result<Schema> {
     Schema::new(types, current.taxonomies().cloned().collect()).map_err(Error::InvalidType)
 }
 
-/// `migrated` with the `created` and `updated` times of `before` where the script left them out.
+/// `migrated` with the `created` and `updated` times and the archived flag of `before` where the
+/// script left them out.
 fn keep_stamps(before: &Doc, mut migrated: Doc) -> Doc {
-    for stamp in ["created", "updated"] {
+    for stamp in ["created", "updated", note::ARCHIVED] {
         if migrated.field(stamp).is_none()
             && let Some(v) = before.field(stamp)
         {
