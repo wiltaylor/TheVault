@@ -6,8 +6,8 @@ blocked_by:
 - '66'
 - '57'
 - '69'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Android two-way contact sync and device commands execution
@@ -23,3 +23,23 @@ Acceptance criteria (S5, plus S4 for the script side):
 Decisions: D16, D22, D23, D24.
 
 ## Worklog
+
+### 2026-10-15T08:47:07Z — /work
+
+Claimed.
+
+### 2026-10-15T09:14:34Z — wil
+
+Verified set to verified.
+
+### 2026-10-15T09:14:34Z — wil
+
+Branch ticket/thevault-clients-70: 3d3e900 is a cherry-pick of ticket 69 (9e7c4d1, unmerged when 70 started), conflicts with 66 resolved as a union; merge 69 before 70. f2cd359 is this ticket. Contacts: ContactsReader writes a custom data row (vnd.android.cursor.item/vnd.dev.wiltaylor.thevault.person; data1 = person id, data2 = JSON of the fields last agreed) and rewrites only kinds that differ; reads expose person and synced. device_contacts.ws settles name/phones/addresses per field against that base (most recent wins when both changed); a contact whose stored person was deleted in the vault is left alone. Person -> contact: DeviceRuntime::queue_person_changes (tracks person versions in device_people, gated on contacts_write) runs after each sync round in Core::sync_now and queues contact_changed for linked persons. Commands: plugin commands.rs + Core::run_commands + JNI runCommands + CommandWorker (device.command push, app open, 15-min fallback beside NotificationWorker). AndroidDeviceData skips divideMessage for bodies <= 70 chars (Robolectric has no ISms service). Not done: 'deletion syncing' opt-in from D16 has no setting anywhere in the spec or server; deletes always unlink, and deleting a phone contact from the vault side is only through the explicit delete_contact command. Tests: ./dev just check; ./dev just android-test (GRADLE_OPTS=-Dorg.gradle.daemon=false avoids a shared-daemon setcwd failure when other worktrees run gradle at once).
+
+### 2026-10-15T09:14:34Z — wil
+
+Status set to done.
+
+### 2026-10-15T09:20:04Z — wil
+
+Merged to main as befb436 (fast-forward). Rebased onto f9a4958, dropping the 69 cherry-pick since 69 landed as f2a8bb6. Conflicts: jni.rs (kept runCommands only), VaultDevicePlugin.kt doc, docs/android-manual-checks.md (71 renumbered it; added non-duplicate checks 44-48 and coverage). Rerun on the rebased branch: just check, plugin fmt+clippy, android-test all pass.

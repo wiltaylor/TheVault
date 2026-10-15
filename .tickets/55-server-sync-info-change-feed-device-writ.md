@@ -4,8 +4,8 @@ title: 'Server: sync info, change feed, device-write versions, base retention'
 plan: thevault-clients
 blocked_by:
 - '53'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Server: sync info, change feed, device-write versions, base retention
@@ -23,3 +23,23 @@ Acceptance criteria (S1):
 Decisions: D20, D27, D29.
 
 ## Worklog
+
+### 2026-10-15T06:48:59Z — /work
+
+Claimed.
+
+### 2026-10-15T07:03:20Z — wil
+
+Verified set to verified.
+
+### 2026-10-15T07:03:20Z — wil
+
+Status set to done.
+
+### 2026-10-15T07:03:20Z — wil
+
+Commit c1201ab on ticket/thevault-clients-55, which also merges ticket/thevault-clients-53 (unmerged on main at claim time; one doc-comment conflict in crates/api/src/lib.rs resolved). Feed cursor is a new state.db 'changes' journal (schema 9), not versions.seq: merged browser saves rewrite their versions row in place and definitions/deletions have no versions. devices/ is not in store::LAYOUT_DIRS (ticket 57's job); the feed reads synced files from disk via Writer::read_synced so devices/*.wcl already works. Pruning has no server trigger yet; S1 prunes by opening state.db beside the running server. Bases protect exactly the recorded version (not later ones). Notes copied in by hand and never adopted into state.db are not in the feed until first written. Schema bump 8->9 will conflict with any other ticket bumping it.
+
+### 2026-10-15T07:23:23Z — wil
+
+Merged to main as 05fb185 (rebased onto 3b1f4d4; one conflict in Writer::put_type resolved to self.commit(changes)); ./dev just check passed on the rebased branch.

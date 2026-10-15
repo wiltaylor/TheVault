@@ -5,8 +5,8 @@ title: 'Vault format: devices/<platform>.wcl, device event catalogue, device com
 plan: thevault-clients
 blocked_by:
 - '53'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Vault format: devices/<platform>.wcl, device event catalogue, device commands API
@@ -22,3 +22,23 @@ Acceptance criteria (S1):
 Decisions: D5, D22.
 
 ## Worklog
+
+### 2026-10-15T07:13:23Z — /work
+
+Claimed.
+
+### 2026-10-15T07:32:41Z — wil
+
+Verified set to verified.
+
+### 2026-10-15T07:32:41Z — wil
+
+Status set to done.
+
+### 2026-10-15T07:32:41Z — wil
+
+Done on ticket/thevault-clients-57 (d360e05). Evidence: crates/server/tests/device_commands.rs (S1: device files round-trip byte for byte, unknown events/commands/platforms/missing scripts refused with 400 invalid; task queues declared+enabled send_sms, disabled delete_contact and undeclared show_notification refused, before_create cannot queue, after_create can, results stored, PT25H makes pending expired and reports 409). crates/state/tests/commands.rs and schema devices unit tests. ./dev just check exit 0. Assumptions: command labels limited to the 4 built-ins; script required, function defaults to the label; device named by id or name; TTL fixed 24h; GET commands has no side effects (device POSTs delivered); commands endpoints for own token or admin; API at /api/device-files/{platform}; payloads in docs/scripts.md (handler value {event, device, at, data}, command value {id, command, payload}) for S4 to pin. Not done: WebPush dispatch (ticket 56), change-feed coverage of devices/*.wcl (ticket 55), CLI commands for device files. Merge note: state SCHEMA_VERSION goes to 9 and store LAYOUT_DIRS gains devices; other tickets that bump either will conflict.
+
+### 2026-10-15T07:36:14Z — wil
+
+Merged into main as 51f9586 after rebasing onto 3a99c93. Rebase changes: device_commands moved to state schema v10 (ticket 55 took v9), with a v9->v10 migration test; device file writes now go through Writer::commit so they reach the change feed; auth/route/openapi entries merged with the sync routes. ./dev just check and check.sh pass on the rebased branch.

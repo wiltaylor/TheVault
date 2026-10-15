@@ -8,8 +8,8 @@ blocked_by:
 - '53'
 - '59'
 - '60'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Linux desktop app: Tauri shell, custom scheme to embedded server, setup and pairing, keyring, sync loop
@@ -24,3 +24,19 @@ Acceptance criteria:
 Decisions: D2, D18, D19, D21, D26, D27.
 
 ## Worklog
+
+### 2026-10-15T07:50:17Z — /work
+
+Claimed.
+
+### 2026-10-15T08:14:07Z — wil
+
+Verified set to verified.
+
+### 2026-10-15T08:14:07Z — wil
+
+Status set to done.
+
+### 2026-10-15T08:14:07Z — wil
+
+Branch ticket/thevault-clients-62 at 66b1a57 sits on top of ticket 60's 261f4da (crates/sync was not on main when claimed): merge 60 first. S6 green 7/7 runs after fixing one test bug (the web client sends / on to /daily). Not covered here, left for 63: tray, badge, notifications, autostart, portal hotkey, thevault:// links, update check. The single-instance path of --capture (forwarding to a running app) is wired but not driven by S6; S6 covers --capture on a fresh launch. Network regain is detected by probing /api/sync/info every 3 s while offline, not through NetworkManager. The dev image gains gnome-keyring and libnss-wrapper (dbus-daemon refuses the passwd-less ./dev uid).

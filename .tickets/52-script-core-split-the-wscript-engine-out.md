@@ -3,8 +3,8 @@ id: '52'
 title: 'script-core: split the wscript engine out of crates/script'
 plan: thevault-clients
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # script-core: split the wscript engine out of crates/script
@@ -20,3 +20,19 @@ Acceptance criteria (S1 and existing tests):
 Decisions: D6.
 
 ## Worklog
+
+### 2026-10-15T06:06:06Z — /work
+
+Claimed.
+
+### 2026-10-15T06:22:10Z — wil
+
+Verified set to verified.
+
+### 2026-10-15T06:22:10Z — wil
+
+Status set to done.
+
+### 2026-10-15T06:22:10Z — wil
+
+Committed dc0caad on ticket/thevault-clients-52. Two deviations from the ticket's literal shape, forced by the type system: (1) Author and Archived moved to a new dependency-free crate crates/vocab (state and index re-export them) because the Vault trait names both and their old homes pull rusqlite; (2) impl Vault for Writer moved to crates/writer/src/script_vault.rs because the orphan rule forbids it in crates/script once the trait lives in script-core; writer now depends on script-core and query. script::Host is a newtype over script_core::Host (Deref) that registers http/secrets/fs and vault::upload_asset_file via the Extensions trait. Kind::Device has its own registration with no extra modules yet; the device module ticket adds it through Extensions::modules(Kind::Device). First just check run hit a load-induced reqwest timeout in server/tests/completeness.rs; reran clean twice and the full gate passed.
