@@ -13,6 +13,7 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
+import org.json.JSONArray
 
 /**
  * Runs the commands server scripts queued for this phone (D22): the core takes the device's
@@ -33,7 +34,8 @@ class CommandWorker(context: Context, params: WorkerParameters) : Worker(context
         }
         if (!paired) return Result.success()
         return try {
-            VaultCore.runCommands()
+            // A command's handler may write notes, as a sent SMS does: have them reach the server.
+            if (JSONArray(VaultCore.runCommands()).length() > 0) SyncWorker.soon(applicationContext)
             Result.success()
         } catch (e: IllegalStateException) {
             if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.failure(workDataOf(ERROR to e.message))

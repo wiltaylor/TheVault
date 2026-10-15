@@ -20,6 +20,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONObject
 
 /**
  * The background side of capture (D7, D17): WorkManager jobs that run with no activity and no
@@ -90,10 +91,17 @@ object CaptureWork {
     }
 }
 
-/** Runs the queued device events' handlers in the Rust core. Before pairing they wait. */
+/**
+ * Runs the queued device events' handlers in the Rust core, then has the notes they wrote reach
+ * the home server soon ([SyncWorker.soon]). Before pairing the events wait.
+ */
 class RunEventsWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
     override fun doWork(): Result = try {
-        if (Device.openCore(applicationContext) && Device.deviceId(applicationContext) != null) VaultCore.runPending()
+        val app = applicationContext
+        if (Device.openCore(app) && Device.deviceId(app) != null) {
+            VaultCore.runPending()
+            if (JSONObject(VaultCore.status()).optInt("pending") > 0) SyncWorker.soon(app)
+        }
         Result.success()
     } catch (e: Exception) {
         Log.w(TAG, "running device events failed", e)

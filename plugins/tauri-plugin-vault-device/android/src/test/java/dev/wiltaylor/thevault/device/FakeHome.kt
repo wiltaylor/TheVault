@@ -8,7 +8,7 @@ import okhttp3.mockwebserver.RecordedRequest
 import org.json.JSONObject
 
 /**
- * A home server just big enough for pairing, one empty sync round, the notification list, the
+ * A home server just big enough for pairing, a sync round that takes pushed notes as sent, the notification list, the
  * push endpoint, and the device's settings and commands, on a free port (OkHttp's MockWebServer). It records each request as
  * `METHOD /path` (query included) and its body.
  */
@@ -40,6 +40,9 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
     fun read(id: String) {
         synchronized(notifications) { notifications.find { it.getString("id") == id }?.put("read", 1L) }
     }
+
+    /** The notes the device pushed, by id, as their WCL. */
+    val notes: MutableMap<String, String> = Collections.synchronizedMap(mutableMapOf())
 
     /** This device's settings, as `GET /api/devices` lists them. */
     @Volatile
@@ -106,6 +109,14 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
         method == "PUT" && path == "/api/devices/$DEVICE_ID/bases" -> 200 to """{"bases":{}}"""
         path.startsWith("/api/sync/changes") -> 200 to """{"changes":[],"next":0,"latest":0}"""
         path == "/api/assets" -> 200 to """{"assets":[]}"""
+        method == "PUT" && path.startsWith("/api/notes/") -> {
+            // A note the device pushes, stored as sent, at version 1.
+            val id = path.removePrefix("/api/notes/").substringBefore('?')
+            val type = path.substringAfter("type=", "")
+            val wcl = JSONObject(body).getString("wcl")
+            notes[id] = wcl
+            201 to JSONObject().put("id", id).put("type", type).put("version", "1").put("wcl", wcl).toString()
+        }
         method == "GET" && path.startsWith("/api/notifications?") -> {
             val items = org.json.JSONArray(unread())
             200 to JSONObject().put("items", items).put("next", JSONObject.NULL).put("unread", items.length()).toString()

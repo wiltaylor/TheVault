@@ -128,11 +128,14 @@ class FakePhone(private val context: Context) {
 
     fun notify(uri: Uri) = context.contentResolver.notifyChange(uri, null)
 
-    /** A capture over these providers, as Australian numbers, with this phone's number `+61400000000`. */
-    fun capture(prefs: String = "cursors"): DeviceCapture = DeviceCapture(
+    /**
+     * A capture over these providers into [into], as Australian numbers, with this phone's number
+     * `+61400000000`.
+     */
+    fun capture(prefs: String = "cursors", into: EventSink = sink): DeviceCapture = DeviceCapture(
         context.contentResolver,
         PhoneNumbers("AU"),
-        sink,
+        into,
         Cursors(context.getSharedPreferences(prefs, Context.MODE_PRIVATE)),
         assets,
         { setOf(SELF) },
@@ -142,9 +145,9 @@ class FakePhone(private val context: Context) {
     fun rcs(prefs: String = "rcs"): RcsCapture =
         RcsCapture(context.contentResolver, sink, SeenRefs(context.getSharedPreferences(prefs, Context.MODE_PRIVATE)))
 
-    /** Route the process's capture through this phone, on the calling thread. */
-    fun install(): DeviceCapture {
-        val capture = capture()
+    /** Route the process's capture through this phone into [into], on the calling thread. */
+    fun install(into: EventSink = sink): DeviceCapture {
+        val capture = capture(into = into)
         Device.reset()
         Device.factory = { capture }
         Device.rcsFactory = { rcs() }

@@ -47,7 +47,11 @@ object ShareImporter {
     fun import(context: Context, intent: Intent): JSONObject? {
         val shared = read(context, intent) ?: return null
         Device.ensureCore(context)
-        return JSONObject(VaultCore.share(shared.toString()))
+        val outcome = JSONObject(VaultCore.share(shared.toString()))
+        // The share target closes at once, and the process may then be frozen: WorkManager
+        // pushes the note rather than the core's foreground loop.
+        SyncWorker.soon(context)
+        return outcome
     }
 
     private fun streams(intent: Intent): List<Uri> {

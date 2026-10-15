@@ -40,7 +40,14 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
 
     override fun onResume() {
         super.onResume()
+        SyncWorker.foreground = true
         openAndSync()
+    }
+
+    /** Out of the front: background writes sync through WorkManager ([SyncWorker.soon]). */
+    override fun onPause() {
+        super.onPause()
+        SyncWorker.foreground = false
     }
 
     override fun onNewIntent(intent: Intent) {

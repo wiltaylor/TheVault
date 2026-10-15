@@ -280,6 +280,76 @@ fn a_write_kicks_the_foreground_loop() {
     admin.send("GET", &format!("/api/notes/{id}"), None);
 }
 
+/// Ticket 78: what the background capture path does once a receiver has queued an SMS and a
+/// call. `RunEventsWorker` runs the handlers, and the prompt `SyncWorker` round it schedules runs
+/// `sync_now`, which pushes the notes the handlers wrote and empties the queue.
+#[test]
+fn background_captures_reach_the_server_in_one_round() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let admin = Admin::start();
+    let paired = admin.pair("Pixel");
+    core.set_link(Some(link(&paired, 64)));
+    let runtime = core
+        .device(&paired.device_id, || Arc::new(NoPhone))
+        .unwrap();
+
+    runtime
+        .enqueue(
+            "sms_received",
+            json!({
+                "device_ref": "sms:1",
+                "thread_ref": "7",
+                "number": "+61400000001",
+                "number_raw": "0400 000 001",
+                "contact": null,
+                "body": "Captured in the background",
+                "sent": "2026-10-15T09:30:00+11:00",
+            }),
+            1_760_000_000_000,
+        )
+        .unwrap();
+    runtime
+        .enqueue(
+            "call_ended",
+            json!({
+                "device_ref": "call:1",
+                "number": "+61400000001",
+                "number_raw": "0400 000 001",
+                "contact": null,
+                "direction": "in",
+                "duration": 30,
+                "started": "2026-10-15T09:31:00+11:00",
+            }),
+            1_760_000_000_000,
+        )
+        .unwrap();
+    for e in runtime.run_pending().unwrap() {
+        assert_eq!(e.status.as_str(), "done", "{e:?}");
+    }
+    let queued = core.queued().unwrap();
+    let types: Vec<&str> = queued
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["type"].as_str().unwrap())
+        .collect();
+    assert!(types.contains(&"message"), "{types:?}");
+    assert!(types.contains(&"call"), "{types:?}");
+    let waiting = core.status().unwrap()["pending"].as_u64().unwrap();
+    assert_eq!(waiting as usize, types.len());
+
+    let report = core.sync_now().unwrap();
+    assert_eq!(report.pushed.len(), types.len(), "{report:?}");
+    assert_eq!(core.status().unwrap()["pending"], 0);
+    for note in queued.as_array().unwrap() {
+        let id = note["id"].as_str().unwrap();
+        let on_server = admin.send("GET", &format!("/api/notes/{id}"), None);
+        assert_eq!(on_server["type"], note["type"], "{on_server}");
+    }
+}
+
 #[test]
 fn unpaired_sync_is_refused_and_assets_come_on_demand() {
     let _turn = turn();
