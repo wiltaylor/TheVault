@@ -43,6 +43,7 @@ script-core = { path = "crates/script-core" }
 vocab = { path = "crates/vocab" }
 scheduler = { path = "crates/scheduler" }
 api = { path = "crates/api" }
+clients = { path = "crates/clients" }
 embedded = { path = "crates/embedded" }
 push = { path = "crates/push" }
 sync = { path = "crates/sync" }

@@ -3013,6 +3013,186 @@ button.link {
   flex: 1;
 }
 
+/* Get the apps: Settings > Devices and the public /apps page. */
+
+.client-downloads {
+  max-width: 56rem;
+  margin: 0 0 1.5rem;
+}
+
+.client-downloads h2 {
+  font-size: 1.25rem;
+}
+
+.client-cards {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.client-card h3 {
+  margin: 0.5rem 0;
+  font-size: 1.1rem;
+}
+
+.client-card-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  align-items: flex-start;
+}
+
+.client-card-body > p {
+  margin-top: 0;
+}
+
+.client-qr {
+  margin: 0;
+  display: grid;
+  gap: 0.35rem;
+  justify-items: center;
+  width: 12rem;
+}
+
+.client-qr img {
+  width: 12rem;
+  height: 12rem;
+  background: #fff;
+  border-radius: 0.35rem;
+}
+
+.client-qr figcaption {
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.client-qr-missing {
+  width: 12rem;
+  height: 12rem;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.client-builds {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+.client-builds > p {
+  margin: 0 0 0.5rem;
+}
+
+.client-build {
+  border-top: 1px solid var(--line);
+  padding: 0.6rem 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.client-build-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+  align-items: baseline;
+}
+
+.client-badge {
+  font-size: 0.75rem;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.client-badge.release {
+  color: var(--palette-green);
+  border-color: color-mix(in srgb, var(--palette-green) 45%, transparent);
+}
+
+.client-badge.debug {
+  color: var(--palette-orange);
+  border-color: color-mix(in srgb, var(--palette-orange) 45%, transparent);
+}
+
+.client-build-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  align-items: center;
+}
+
+a.button.client-download {
+  display: inline-block;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.9rem;
+  text-decoration: none;
+}
+
+a.button.client-download.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.client-filename {
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.client-sha {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.8rem;
+  min-width: 0;
+}
+
+.client-sha code {
+  overflow-wrap: anywhere;
+  min-width: 0;
+  flex: 1;
+}
+
+.client-copy {
+  padding: 0.15rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.client-empty {
+  border: 1px dashed var(--line);
+  border-radius: 0.5rem;
+  padding: 0.25rem 1rem;
+}
+
+.apps-page {
+  max-width: 58rem;
+  margin: 0 auto;
+  padding: calc(1rem + var(--safe-top)) 1rem calc(2rem + var(--safe-bottom));
+}
+
+.apps-page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.apps-page-brand {
+  font-weight: 600;
+}
+
+.login-apps {
+  justify-self: center;
+  font-size: 0.9rem;
+}
+
 .hint {
   margin: 0.25rem 0 0;
   font-size: 0.85rem;

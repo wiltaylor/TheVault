@@ -277,11 +277,21 @@ fn start_update_checks(app: AppHandle, found: Arc<Mutex<Option<Release>>>) {
         .spawn(move || {
             std::thread::sleep(UPDATE_FIRST);
             loop {
-                let on = app
-                    .try_state::<App>()
-                    .is_some_and(|s| s.settings().update_check);
+                let state = app.try_state::<App>();
+                let on = state.as_ref().is_some_and(|s| s.settings().update_check);
+                // The paired server's own AppImage comes first; it is read each time, since the
+                // app may have paired since the last check.
+                let server = state
+                    .as_ref()
+                    .and_then(|s| device::load(&s.dir).ok().flatten())
+                    .map(|d| d.server_url);
+                drop(state);
                 if on {
-                    match update::check(&url, env!("CARGO_PKG_VERSION")) {
+                    match update::check_preferring_server(
+                        server.as_deref(),
+                        &url,
+                        env!("CARGO_PKG_VERSION"),
+                    ) {
                         Ok(release) => *lock(&found) = release,
                         Err(e) => eprintln!("thevault: update check: {e}"),
                     }

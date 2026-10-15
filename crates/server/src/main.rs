@@ -25,6 +25,11 @@ struct Args {
     #[arg(long)]
     web: Option<PathBuf>,
 
+    /// The folder of app builds `/api/clients` hands out, with the `manifest.json` that
+    /// `vault clients publish` writes. Defaults to `<vault>/.vault/clients`.
+    #[arg(long, env = "VAULT_CLIENTS_DIR", value_name = "DIR")]
+    clients: Option<PathBuf>,
+
     /// Start a clock that only `/api/test/clock` moves, at this RFC 3339 time or count of
     /// milliseconds since the epoch. Only test builds accept it (S7).
     #[arg(long, value_name = "TIME")]
@@ -47,6 +52,10 @@ fn main() -> anyhow::Result<()> {
     }
     let vault = store::Vault::init(&args.vault)
         .with_context(|| format!("opening vault {}", args.vault.display()))?;
+    let clients = args
+        .clients
+        .clone()
+        .unwrap_or_else(|| vault.server_dir().join("clients"));
     let clock: Arc<dyn Clock> = match &test_clock {
         Some(c) => c.clone(),
         None => Arc::new(SystemClock),
@@ -79,7 +88,7 @@ fn main() -> anyhow::Result<()> {
     if test_clock.is_none() {
         scheduler.start();
     }
-    let app = api::router(writer.clone(), scheduler, test_clock);
+    let app = api::router(writer.clone(), scheduler, test_clock, Some(clients));
 
     let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
     // Paired devices hear about notifications and their commands by push (D4, D9).

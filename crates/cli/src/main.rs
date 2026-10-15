@@ -274,6 +274,9 @@ enum Command {
     /// The canvases inside a note.
     #[command(subcommand)]
     Canvas(Canvas),
+    /// The desktop and Android app builds the server hands out.
+    #[command(subcommand)]
+    Clients(Clients),
     /// Create a vault folder, its secret key file and its login password.
     Init {
         /// The folder to create.
@@ -626,6 +629,31 @@ enum Secret {
 }
 
 #[derive(Subcommand)]
+enum Clients {
+    /// Every app build the server hands out, with its version, size, SHA-256 and download URL.
+    List,
+    /// Copy app builds (.apk, .AppImage, .deb, .rpm) into a server's clients folder and rewrite
+    /// its manifest.json. Each replaces the build before it of the same kind and architecture.
+    Publish {
+        /// The clients folder: the server's --clients. Defaults to <vault>/.vault/clients.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// The builds' version. Read from each file name when left out.
+        #[arg(long)]
+        version: Option<String>,
+        /// `release` or `debug`. Left out, a file whose name says debug is a debug build.
+        #[arg(long, value_parser = ["release", "debug"])]
+        build: Option<String>,
+        /// The builds' architecture, such as aarch64 or x86_64. Read from each file name when left out.
+        #[arg(long)]
+        arch: Option<String>,
+        /// The built files.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
 enum Canvas {
     /// Read one canvas of a note.
     Get { id: String, name: String },
@@ -672,6 +700,19 @@ fn run(cli: Cli) -> Result<Value, Fail> {
         Command::Reindex => local::reindex(vault),
         Command::Backup { out, include_key } => backup::backup(vault, &out, include_key),
         Command::RestoreBackup { archive, dir } => backup::restore(&archive, &dir),
+        Command::Clients(Clients::Publish {
+            dir,
+            version,
+            build,
+            arch,
+            files,
+        }) => publish_clients(
+            &dir.unwrap_or_else(|| vault.join(".vault").join("clients")),
+            &files,
+            version,
+            build,
+            arch,
+        ),
         command => {
             let api = Api::new(&cli.url, cli.token)?;
             remote(&api, &cli.url, command)
@@ -1014,7 +1055,9 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
                 json!({ "wcl": read_text(file.as_deref())?, "base_version": base }),
             ),
         },
+        Command::Clients(Clients::List) => api.get(&["api", "clients"]),
         Command::Commands
+        | Command::Clients(Clients::Publish { .. })
         | Command::Skill { .. }
         | Command::Init { .. }
         | Command::Passwd { .. }
@@ -1022,6 +1065,33 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
         | Command::Backup { .. }
         | Command::RestoreBackup { .. } => unreachable!("local commands are handled in run"),
     }
+}
+
+/// `vault clients publish`: copy `files` into the clients folder `dir` and print its manifest.
+fn publish_clients(
+    dir: &Path,
+    files: &[PathBuf],
+    version: Option<String>,
+    build: Option<String>,
+    arch: Option<String>,
+) -> Result<Value, Fail> {
+    let items: Vec<clients::Publish> = files
+        .iter()
+        .map(|path| clients::Publish {
+            path: path.clone(),
+            version: version.clone(),
+            build: build.clone(),
+            arch: arch.clone(),
+        })
+        .collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let manifest = clients::publish(dir, &items, now).map_err(Fail::from_display("publish"))?;
+    let mut out = json!(manifest);
+    out["dir"] = json!(dir.display().to_string());
+    Ok(out)
 }
 
 /// The agent skill document that ships with the binary (D32).

@@ -120,7 +120,10 @@
         return;
       }
       prompt.dataset.version = update.version;
-      text.textContent = `TheVault ${update.version} is available.`;
+      text.textContent =
+        update.source === "server"
+          ? `TheVault ${update.version} is available from your server.`
+          : `TheVault ${update.version} is available.`;
       show(true);
     }
 

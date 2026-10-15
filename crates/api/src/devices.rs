@@ -256,7 +256,7 @@ struct PairCodeBody {
 
 /// The server's URL as the caller reached it: the browser's `Origin`, else the forwarded or plain
 /// `Host` with the forwarded scheme.
-fn server_url_from(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn server_url_from(headers: &HeaderMap) -> Option<String> {
     let get = |name: &str| {
         headers
             .get(name)
@@ -290,7 +290,7 @@ fn check_server_url(url: &str) -> Result<String, ApiError> {
 }
 
 /// The pairing QR code as an SVG image.
-fn qr_svg(payload: &str) -> Result<String, ApiError> {
+pub(crate) fn qr_svg(payload: &str) -> Result<String, ApiError> {
     let code = QrCode::new(payload.as_bytes()).map_err(|e| {
         ApiError::bad_request(format!("the pairing payload does not fit a QR code: {e}"))
     })?;

@@ -96,17 +96,22 @@ On either desktop, if step 3 fails, read `hotkey` in `/_desktop/status` (from th
 
 ## Updates
 
-About 10 seconds after it starts, and once a day after that, the app asks GitHub Releases for the latest release of `wiltaylor/thevault` (D27). Drafts and pre-releases are skipped. When the release is newer than the app, by semver order, the window shows a prompt in its bottom right corner:
+About 10 seconds after it starts, and once a day after that, the app checks for a newer version (D27):
 
-- **Download** opens the release page in the browser.
+1. It asks the server it is paired with for `/api/clients`, the builds the server hands out (see [`docs/clients.md`](clients.md)). When the server publishes an AppImage for this machine's architecture, that AppImage's version is the one compared, and GitHub is not asked.
+2. When the server publishes no AppImage, cannot be reached, or the app is not paired yet, it asks GitHub Releases for the latest release of `wiltaylor/thevault`. Drafts and pre-releases are skipped.
+
+When the version found is newer than the app, by semver order, the window shows a prompt in its bottom right corner. A build from the server says "available from your server".
+
+- **Download** opens the server's AppImage download, or the GitHub release page, in the browser.
 - **Skip this version** stops offering that version.
 - **Later** hides the prompt until the app starts again.
 
-The tray's **Check for updates** item turns the check off. `THEVAULT_UPDATE_URL` replaces the GitHub address, and `THEVAULT_UPDATE_URL=off` turns the check off. A build can name another repository with `THEVAULT_RELEASES_REPO` at compile time.
+The tray's **Check for updates** item turns the check off. `THEVAULT_UPDATE_URL` replaces the GitHub address, and `THEVAULT_UPDATE_URL=off` turns the whole check off, the server's part too. A build can name another repository with `THEVAULT_RELEASES_REPO` at compile time.
 
 ## Installing
 
-Each GitHub Release carries the app as an AppImage, a deb and an rpm, with their `SHA256SUMS` (D11). There is no Flatpak: its sandbox gets in the way of the global hotkey and the keyring. The app keeps its device token in the Secret Service, so the desktop needs one running, such as GNOME Keyring or KWallet.
+Each GitHub Release carries the app as an AppImage, a deb and an rpm, with their `SHA256SUMS` (D11). A server can hand out the same files itself: they are on its log-in page under **Get the apps**, and on Settings > Devices (see [`docs/clients.md`](clients.md)). There is no Flatpak: its sandbox gets in the way of the global hotkey and the keyring. The app keeps its device token in the Secret Service, so the desktop needs one running, such as GNOME Keyring or KWallet.
 
 ### Arch Linux and CachyOS
 

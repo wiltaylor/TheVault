@@ -29,12 +29,17 @@
 //! every note and definition file, and record the base versions they hold under
 //! `/api/devices/{id}/bases` (D20, D27, D29).
 //!
-//! Every route but health, login, device pairing and the sync handshake needs a session cookie or a bearer token,
+//! `/api/clients` lists the desktop and Android app builds the server hands out, and
+//! `/api/clients/{filename}` downloads one; both are public, so a phone can fetch the app before
+//! it pairs.
+//!
+//! Every route but health, login, device pairing, the sync handshake and the app downloads needs a session cookie or a bearer token,
 //! and the scope [`auth::required_scope`] names for it (D11). [`owner_router`] serves the same
 //! routes to an in-process caller that is always the owner (D26).
 //!
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
+mod apps;
 mod assets;
 mod auth;
 mod batch;
@@ -54,6 +59,7 @@ mod tokens;
 mod types;
 pub mod web;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
@@ -151,6 +157,8 @@ struct Built {
     login: Routes<Arc<auth::Sessions>>,
     /// The task routes, which take the scheduler.
     tasks: Routes<Arc<Scheduler>>,
+    /// The app downloads, which take the clients folder.
+    apps: Routes<Arc<apps::Folder>>,
 }
 
 fn build() -> Built {
@@ -259,28 +267,45 @@ fn build() -> Built {
         .get("/api/tasks/{name}/runs", tasks::runs)
         .get("/api/tasks/{name}/runs/{id}", tasks::run)
         .post("/api/tasks/{name}/run", tasks::trigger);
-    Built { api, login, tasks }
+    let apps = Routes::new()
+        .get("/api/clients", apps::list)
+        .get("/api/clients/{filename}", apps::download)
+        .get("/api/clients/latest/{kind}", apps::latest);
+    Built {
+        api,
+        login,
+        tasks,
+        apps,
+    }
 }
 
 /// Every method and path the router registers, in registration order.
 pub fn routes() -> Vec<(Method, &'static str)> {
-    let Built { api, login, tasks } = build();
+    let Built {
+        api,
+        login,
+        tasks,
+        apps,
+    } = build();
     api.seen
         .into_iter()
         .chain(login.seen)
         .chain(tasks.seen)
+        .chain(apps.seen)
         .collect()
 }
 
 /// Builds the router for every `/api` route. `test_clock` is the clock `scheduler` reads when the
 /// server runs with `--test-clock`; it adds `/api/test/clock`, which [`routes`] does not list (S7).
+/// `clients` is the folder of app builds `/api/clients` hands out, or `None` for none.
 pub fn router(
     writer: Arc<Writer>,
     scheduler: Arc<Scheduler>,
     test_clock: Option<Arc<TestClock>>,
+    clients: Option<PathBuf>,
 ) -> Router {
     let sessions = Arc::new(auth::Sessions::new(writer.clone()));
-    assemble(writer, scheduler, test_clock, sessions.clone())
+    assemble(writer, scheduler, test_clock, sessions.clone(), clients)
         .layer(middleware::from_fn_with_state(sessions, auth::authenticate))
 }
 
@@ -289,7 +314,7 @@ pub fn router(
 /// its custom URI scheme, which nothing else can reach (D26). Never serve it on a port.
 pub fn owner_router(writer: Arc<Writer>, scheduler: Arc<Scheduler>) -> Router {
     let sessions = Arc::new(auth::Sessions::new(writer.clone()));
-    assemble(writer, scheduler, None, sessions).layer(middleware::from_fn(auth::as_owner))
+    assemble(writer, scheduler, None, sessions, None).layer(middleware::from_fn(auth::as_owner))
 }
 
 fn assemble(
@@ -297,13 +322,20 @@ fn assemble(
     scheduler: Arc<Scheduler>,
     test_clock: Option<Arc<TestClock>>,
     sessions: Arc<auth::Sessions>,
+    clients: Option<PathBuf>,
 ) -> Router {
-    let Built { api, login, tasks } = build();
+    let Built {
+        api,
+        login,
+        tasks,
+        apps,
+    } = build();
     let mut app = api
         .router
         .with_state(writer)
         .merge(login.router.with_state(sessions))
-        .merge(tasks.router.with_state(scheduler.clone()));
+        .merge(tasks.router.with_state(scheduler.clone()))
+        .merge(apps.router.with_state(Arc::new(apps::Folder(clients))));
     if let Some(clock) = test_clock {
         app = app.merge(
             Router::new()

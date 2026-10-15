@@ -10,7 +10,7 @@
 // within seconds while the app is open. A newer release is offered in the window.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { Desktop, HomeServer, appBinary, removeRoot, tempRoot } from "./harness.mjs";
@@ -256,4 +256,40 @@ test("a newer release is offered in the window, and Later hides the offer", asyn
   await app.click(await app.find("#thevault-update [data-action='later']"));
   await waitFor("the prompt to hide", async () => (await updatePrompt()) === null);
   desktop.releases.tag = "v0.1.0";
+});
+
+test("an AppImage the paired server publishes is offered before GitHub's release", async () => {
+  await app.quit();
+  // GitHub has 99.0.0 and the server 98.0.0: the server's wins because the app asks it first.
+  desktop.releases.tag = "v99.0.0";
+  const clients = join(home.vault, ".vault", "clients");
+  const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+  const filename = `TheVault_98.0.0_${arch}.AppImage`;
+  mkdirSync(clients, { recursive: true });
+  writeFileSync(join(clients, filename), "appimage");
+  const entry = {
+    platform: "linux",
+    kind: "appimage",
+    arch,
+    version: "98.0.0",
+    build: "release",
+    size: 8,
+    sha256: "0".repeat(64),
+    filename,
+    published: 0,
+  };
+  writeFileSync(join(clients, "manifest.json"), JSON.stringify({ clients: [entry] }));
+  try {
+    app = await launch();
+    await waitFor("the web client", inWebClient);
+    const offer = await waitFor("the update prompt", updatePrompt, 60_000);
+    assert.match(offer, /TheVault 98\.0\.0 is available from your server/);
+    const update = (await status()).update;
+    assert.equal(update.source, "server");
+    assert.equal(update.url, `${home.url}/api/clients/${filename}`);
+    await app.click(await app.find("#thevault-update [data-action='later']"));
+  } finally {
+    rmSync(clients, { recursive: true, force: true });
+    desktop.releases.tag = "v0.1.0";
+  }
 });

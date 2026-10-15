@@ -159,3 +159,52 @@ android-test: (require-tool "java") android-build
 	cd apps/android/src-tauri && VAULT_SERVER_BIN="$PWD/../../../target/debug/vault-server" cargo test -p tauri-plugin-vault-device -p thevault-android
 	cd apps/android/src-tauri && cargo rustc -p tauri-plugin-vault-device --lib --crate-type cdylib
 	cd apps/android/src-tauri/gen/android && VAULT_CORE_LIBRARY="$PWD/../../target/debug/libtauri_plugin_vault_device.so" ./gradlew --no-daemon testDebugUnitTest
+
+# Copy the newest app builds into a server's clients folder (its --clients, by default <vault>/.vault/clients) and rewrite its manifest.json; build='missing' builds what is not built yet, build='none' publishes only what is there
+[group('clients')]
+publish-clients dir build='missing': (require-tool "cargo") (require-tool "jq")
+	#!/usr/bin/env bash
+	set -euo pipefail
+	case "{{build}}" in missing|none) ;; *) echo "build must be missing or none, not {{build}}" >&2; exit 1 ;; esac
+	cargo build -q -p cli --bin vault
+	vault=target/debug/vault
+	dir="{{dir}}"
+	mkdir -p "$dir"
+	shopt -s nullglob
+	newest() { if [ $# -gt 0 ]; then ls -t -- "$@" | head -n 1; fi; }
+	# Android: the signed release APK, or else the debug APK of the last phone build, labelled debug.
+	apks=apps/android/src-tauri/gen/android/app/build/outputs/apk
+	debug_apk() { newest "$apks"/arm64/debug/*-debug.apk "$apks"/universal/debug/*-debug.apk; }
+	release_apk=$(newest target/android-release/*.apk)
+	debug=$(debug_apk)
+	if [ -z "$release_apk" ] && [ -z "$debug" ] && [ "{{build}}" = missing ]; then
+		if command -v cargo-ndk > /dev/null 2>&1; then
+			just android-build aarch64
+			debug=$(debug_apk)
+		else
+			echo "no APK is built and there is no Android toolchain here; skipping Android" >&2
+		fi
+	fi
+	if [ -n "$release_apk" ]; then
+		"$vault" clients publish --dir "$dir" --build release "$release_apk" > /dev/null
+		echo "published $release_apk"
+	elif [ -n "$debug" ]; then
+		version=$(jq -r .version apps/android/src-tauri/tauri.conf.json)
+		"$vault" clients publish --dir "$dir" --build debug --version "$version" "$debug" > /dev/null
+		echo "published $debug as a debug build: there is no signed release APK (just android-release)"
+	fi
+	# Linux: the AppImage, deb and rpm of the last desktop release build.
+	desktop=(target/desktop-release/*.AppImage target/desktop-release/*.deb target/desktop-release/*.rpm)
+	if [ ${#desktop[@]} -eq 0 ] && [ "{{build}}" = missing ]; then
+		just desktop-release
+		desktop=(target/desktop-release/*.AppImage target/desktop-release/*.deb target/desktop-release/*.rpm)
+	fi
+	if [ ${#desktop[@]} -gt 0 ]; then
+		"$vault" clients publish --dir "$dir" --build release "${desktop[@]}" > /dev/null
+		printf 'published %s\n' "${desktop[@]}"
+	fi
+	if [ -f "$dir/manifest.json" ]; then
+		jq -r '.clients[] | "\(.platform)\t\(.kind)\t\(.arch)\t\(.version)\t\(.build)\t\(.size)\t\(.filename)"' "$dir/manifest.json"
+	else
+		echo "nothing is published in $dir"
+	fi

@@ -13,7 +13,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 api.workspace = true
 axum.workspace = true
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
 push.workspace = true
 scheduler.workspace = true
 script.workspace = true
@@ -25,6 +25,7 @@ writer.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
+clients.workspace = true
 embedded.workspace = true
 p256 = { version = "0.13", default-features = false, features = ["ecdh"] }
 reqwest.workspace = true

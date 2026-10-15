@@ -338,6 +338,25 @@ export interface Device {
   settings: DeviceSettings;
 }
 
+/** An app build the server hands out at `/api/clients`, from its clients folder's manifest. */
+export interface ClientBuild {
+  platform: "android" | "linux";
+  kind: "apk" | "appimage" | "deb" | "rpm";
+  arch: string;
+  version: string;
+  build: "release" | "debug";
+  size: number;
+  sha256: string;
+  filename: string;
+  published: number;
+  /** Where to download it, relative to the server. */
+  path: string;
+  /** The absolute download address, as this request reached the server. */
+  url?: string;
+  /** An APK's QR code of `url`, as an SVG document. */
+  qr_svg?: string;
+}
+
 /** A single-use pairing code, with the QR code an app scans to pair (D2). */
 export interface PairCode {
   code: string;
@@ -649,6 +668,8 @@ export const api = {
   putSecret: (name: string, value: string) => request<Secret>("PUT", `/api/secrets/${enc(name)}`, { value }),
   deleteSecret: (name: string) => request<unknown>("DELETE", `/api/secrets/${enc(name)}`),
   devices: async () => (await request<{ devices: Device[] }>("GET", "/api/devices")).devices,
+  /** The app builds the server hands out. Public: it needs no session. */
+  clients: () => request<{ clients: ClientBuild[]; enabled: boolean }>("GET", "/api/clients"),
   /** A pairing code whose QR payload names `serverUrl`, the address this page was loaded from. */
   createPairCode: (serverUrl: string) =>
     request<PairCode>("POST", "/api/devices/pair-codes", { server_url: serverUrl }),

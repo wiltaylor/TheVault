@@ -358,6 +358,21 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/device-files/{platform}",
         "Delete a device file",
     ),
+    (
+        "GET",
+        "/api/clients",
+        "Every published app build (Android APK, Linux AppImage, deb, rpm) with its version, size, SHA-256 and download URL; public",
+    ),
+    (
+        "GET",
+        "/api/clients/{filename}",
+        "Download one app build the manifest lists, with Range support; public",
+    ),
+    (
+        "GET",
+        "/api/clients/latest/{kind}",
+        "Download the newest build of a kind (apk, appimage, deb, rpm), optionally for ?arch=; public",
+    ),
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),
     ("DELETE", "/api/tokens/{name}", "Revoke an API token"),

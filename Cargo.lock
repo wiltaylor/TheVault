@@ -138,6 +138,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "clients",
  "futures-util",
  "qrcode",
  "query",
@@ -538,6 +539,7 @@ name = "cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "clients",
  "index",
  "reqwest",
  "rusqlite",
@@ -548,6 +550,16 @@ dependencies = [
  "tempfile",
  "testkit",
  "writer",
+]
+
+[[package]]
+name = "clients"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -2496,6 +2508,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
+ "clients",
  "embedded",
  "p256",
  "push",

@@ -1,4 +1,4 @@
-import { Navigate, useNavigate, useSearchParams } from "@solidjs/router";
+import { A, Navigate, useNavigate, useSearchParams } from "@solidjs/router";
 import { Show, createSignal } from "solid-js";
 import { ApiError } from "../api";
 import { logIn, sessionState } from "../session";
@@ -56,6 +56,9 @@ export function Login() {
         <button type="submit" class="primary" disabled={busy()}>
           Log in
         </button>
+        <A class="login-apps" href="/apps">
+          Get the apps
+        </A>
       </form>
     </main>
   );

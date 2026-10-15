@@ -94,9 +94,13 @@ fn is_device_command_result(path: &str) -> bool {
         })
 }
 
+/// Paths a GET or HEAD reads without credentials, with everything under them: the app builds,
+/// which a phone downloads before the app is installed or paired. They hold no vault data.
+const PUBLIC_READ_PATHS: [&str; 1] = ["/api/clients"];
+
 /// The scope a request needs, or `None` for the public endpoints: health, login, device pairing,
-/// which checks the password or a pairing code itself, and the sync handshake, which an app reads
-/// before it pairs (D27).
+/// which checks the password or a pairing code itself, the sync handshake, which an app reads
+/// before it pairs (D27), and the app downloads under [`PUBLIC_READ_PATHS`].
 pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     let under = |prefix: &str| {
         path == prefix
@@ -104,8 +108,10 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
                 .strip_prefix(prefix)
                 .is_some_and(|rest| rest.starts_with('/'))
     };
+    let reads = matches!(*method, Method::GET | Method::HEAD);
     if path == "/api/health"
         || (method == Method::GET && path == "/api/sync/info")
+        || (reads && PUBLIC_READ_PATHS.iter().any(|p| under(p)))
         || (method == Method::POST && (path == "/api/login" || path == "/api/devices/pair"))
     {
         return None;
@@ -419,6 +425,16 @@ mod tests {
                 "/api/device-files/android",
                 Some(Scope::Admin),
             ),
+            (Method::GET, "/api/clients", None),
+            (
+                Method::HEAD,
+                "/api/clients/TheVault_0.1.0_aarch64.apk",
+                None,
+            ),
+            (Method::GET, "/api/clients/latest/apk", None),
+            (Method::PUT, "/api/clients/x.apk", Some(Scope::Admin)),
+            (Method::DELETE, "/api/clients/x.apk", Some(Scope::Admin)),
+            (Method::GET, "/api/clientsx", Some(Scope::Read)),
             (Method::GET, "/anything", Some(Scope::Read)),
         ];
         for (method, path, want) in cases {

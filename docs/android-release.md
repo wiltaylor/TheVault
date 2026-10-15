@@ -88,14 +88,27 @@ To release:
 
 `-r` replaces an installed copy and keeps its data.
 
+### From your server
+
+When the server hands out the APK (see [`docs/clients.md`](clients.md)), open `https://<server>/apps` in the phone's browser, or scan the QR code on Settings > Devices, and tap **Download APK**. Open the downloaded file to install it. Allow the browser to install unknown apps when Android asks.
+
 ### With Obtainium
 
-[Obtainium](https://github.com/ImranR98/Obtainium) installs apps from their GitHub Releases and checks for updates.
+[Obtainium](https://github.com/ImranR98/Obtainium) installs apps from their GitHub Releases, or from a direct link, and checks for updates.
+
+To follow the APK your own server hands out:
 
 1. Install Obtainium.
-2. Tap **Add App** and enter the URL of TheVault's GitHub repository.
-3. In **Filter APKs by regular expression**, enter `TheVault_.*_aarch64\.apk`, then tap **Add**.
-4. Tap **Install**. Allow Obtainium to install unknown apps when Android asks.
+2. Tap **Add App** and enter `https://<server>/api/clients/latest/apk`. This address always serves the newest APK the server publishes. Pick the **Direct APK Link** source if Obtainium does not choose it.
+3. Tap **Add**, then **Install**.
+
+Obtainium shows an update when the server publishes a new APK. The download needs no log-in.
+
+To follow GitHub Releases instead:
+
+1. Tap **Add App** and enter the URL of TheVault's GitHub repository.
+2. In **Filter APKs by regular expression**, enter `TheVault_.*_aarch64\.apk`, then tap **Add**.
+3. Tap **Install**. Allow Obtainium to install unknown apps when Android asks.
 
 Obtainium shows an update when a newer release appears. Android installs it over the old copy only when the same keystore signed both.
 

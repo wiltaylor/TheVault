@@ -148,6 +148,9 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Pair a device: show the QR code and the code | `Devices.tsx` | `POST /api/devices/pair-codes` with `server_url` | `vault device pair-code [--server-url] [--ttl]` | |
 | Rename a device, set its switches, enabled commands, exclusion list and skip pattern | `Devices.tsx` | `PATCH /api/devices/{id}` | `vault device rename <id> <name>`, `vault device settings <id>` (JSON on stdin) | |
 | Revoke a device | `Devices.tsx` | `DELETE /api/devices/{id}` | `vault device revoke <id>` | |
+| Get the apps: list the published builds, with the APK's QR code (Settings > Devices, and `/apps` without signing in) | `pages/Apps.tsx` | `GET /api/clients` | `vault clients list` | |
+| Download an app build | `Apps.tsx` | `GET /api/clients/{filename}` | none | Explained: a plain download; `curl -OJ <url>` with the `url` that `vault clients list` prints |
+| Publish app builds | none | none | `vault clients publish`, `just publish-clients` | Explained: publishing copies files into the server's clients folder on the server's own disk, like `vault backup` (see `docs/clients.md`) |
 | Pair with the password or a code | none: the desktop and Android apps do | `POST /api/devices/pair` | none | Explained: an app pairs itself and keeps the token it gets; the CLI uses API tokens |
 | Register a push endpoint | none: the Android app does | `PUT /api/devices/{id}/push` | none | Explained: only the device's own token, or the owner, sets it |
 | Record the base versions a device holds | none: the apps' sync engine does | `PUT /api/devices/{id}/bases` | none | Explained: only the device's own token, or the owner, sets them (see `docs/sync.md`) |
@@ -248,6 +251,9 @@ The listing has 85 routes. `/api/test/clock` is left out of the listing on purpo
 | `PUT /api/devices/{id}/bases` | none | not used | The apps' sync engine records its bases |
 | `GET /api/sync/info` | none | not used | The apps check it before they sync |
 | `GET /api/sync/changes` | none | not used | The apps' sync engine pulls it |
+| `GET /api/clients` | `vault clients list` | Devices and `/apps`, Get the apps | Public: no credentials. The desktop app's update check reads it too |
+| `GET /api/clients/{filename}` | none | Devices and `/apps`, Download | Public. A plain download, with Range and an SHA-256 ETag |
+| `GET /api/clients/latest/{kind}` | none | not used | Public. A fixed address for Obtainium and scripts (see `docs/clients.md`) |
 | `GET /api/tokens` | `vault token list` | Access | |
 | `POST /api/tokens` | `vault token create` | Access | |
 | `DELETE /api/tokens/{name}` | `vault token revoke` | Access | |
@@ -277,6 +283,7 @@ The CLI adds no behaviour of its own except these, as SPEC.md allows (D25, D28, 
 | `vault reindex` | Rebuilds the index from the files and reports invalid files (D28) |
 | `vault backup [--include-key]` | Writes one archive of the vault files and `state.db` (D25, OQ-S2) |
 | `vault restore-backup` | Unpacks a backup into a new folder |
+| `vault clients publish` | Copies app builds into a server's clients folder and rewrites its `manifest.json` (see `docs/clients.md`) |
 
 ## Gaps filed
 

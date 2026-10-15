@@ -1,6 +1,7 @@
 import { For, Index, Show, createResource, createSignal } from "solid-js";
 import { type Device, type DeviceExclusion, type PairCode, api } from "../api";
 import { when } from "../admin/format";
+import { ClientDownloads } from "./Apps";
 import { errorText } from "./TypeEditor";
 
 /** The commands every device app implements (D22). A device's own `devices/<platform>.wcl` may add more. */
@@ -22,7 +23,8 @@ const PLATFORM_LABELS: Record<Device["platform"], string> = { linux: "Linux desk
 /**
  * Paired desktop and Android apps (D2, D3). Each device has a name, switches for what its scripts
  * may do, the commands server scripts may send it, and what it never captures (D22, D23, D25).
- * "Pair a device" shows a single-use code and its QR code for the app to scan.
+ * "Pair a device" shows a single-use code and its QR code for the app to scan. Above them, "Get
+ * the apps" offers the builds the server hands out.
  */
 export function Devices() {
   const [devices, { refetch }] = createResource(api.devices);
@@ -52,6 +54,8 @@ export function Devices() {
       <header class="note-header">
         <h1>Devices</h1>
       </header>
+      <ClientDownloads />
+      <h2>Paired devices</h2>
       <p class="muted">
         The desktop and Android apps pair once with the password or a pairing code. Revoking a device stops its access at
         once.

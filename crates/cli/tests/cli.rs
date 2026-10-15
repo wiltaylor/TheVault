@@ -1263,6 +1263,22 @@ fn every_command_prints_json() {
         "",
     );
 
+    // App builds: published into a folder, then listed by the server (which has none of its own).
+    let build = tmp_path(&scratch, "app-arm64-debug.apk");
+    std::fs::write(&build, b"apk").unwrap();
+    run(
+        "clients publish",
+        &[
+            "--dir",
+            &tmp_path(&scratch, "clients"),
+            "--version",
+            "0.1.0",
+            &build,
+        ],
+        "",
+    );
+    run("clients list", &[], "");
+
     let all: BTreeSet<String> = listing["commands"]
         .as_array()
         .unwrap()
@@ -1393,4 +1409,91 @@ fn notify_lists_and_marks_notifications_read() {
     ] {
         assert!(names.contains(&name), "{name} is not listed: {names:?}");
     }
+}
+
+#[test]
+fn clients_publish_writes_the_manifest_the_server_serves() {
+    let scratch = TempDir::new().unwrap();
+    let vault_dir = scratch.path().join("vault");
+    std::fs::create_dir_all(vault_dir.join(".vault")).unwrap();
+    let apk = scratch.path().join("app-arm64-debug.apk");
+    let image = scratch.path().join("TheVault_0.4.1_amd64.AppImage");
+    std::fs::write(&apk, b"debug apk").unwrap();
+    std::fs::write(&image, b"abc").unwrap();
+    let vault = Vault::offline();
+
+    // A debug APK names no version, so it needs one.
+    let refused = vault.fails(
+        &[
+            "clients",
+            "publish",
+            "--vault",
+            vault_dir.to_str().unwrap(),
+            apk.to_str().unwrap(),
+        ],
+        "",
+    );
+    assert_eq!(refused["error"], "publish");
+    assert!(s(&refused["message"]).contains("--version"), "{refused}");
+
+    let out = vault.ok(
+        &[
+            "clients",
+            "publish",
+            "--vault",
+            vault_dir.to_str().unwrap(),
+            "--version",
+            "0.4.1",
+            apk.to_str().unwrap(),
+        ],
+        "",
+    );
+    assert_eq!(out["clients"][0]["build"], "debug");
+    assert_eq!(
+        out["clients"][0]["filename"],
+        "TheVault_0.4.1_aarch64-debug.apk"
+    );
+    let out = vault.ok(
+        &[
+            "clients",
+            "publish",
+            "--vault",
+            vault_dir.to_str().unwrap(),
+            image.to_str().unwrap(),
+        ],
+        "",
+    );
+    let dir = vault_dir.join(".vault/clients");
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["clients"], out["clients"]);
+    let image_entry = &manifest["clients"][1];
+    assert_eq!(image_entry["kind"], "appimage");
+    assert_eq!(image_entry["version"], "0.4.1");
+    assert_eq!(image_entry["size"], 3);
+    // sha256("abc")
+    assert_eq!(
+        image_entry["sha256"],
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("TheVault_0.4.1_x86_64.AppImage")).unwrap(),
+        b"abc"
+    );
+
+    // The server lists what was published, to anyone.
+    let server = TestServer::start_with_args(
+        |_| {},
+        &[std::ffi::OsStr::new("--clients"), dir.as_os_str()],
+    );
+    let listed = Vault {
+        token: None,
+        ..Vault::against(&server)
+    }
+    .ok(&["clients", "list"], "");
+    assert_eq!(listed["clients"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        listed["clients"][0]["sha256"],
+        manifest["clients"][0]["sha256"]
+    );
 }

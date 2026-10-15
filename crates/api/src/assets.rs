@@ -154,7 +154,7 @@ pub async fn download(
 
 /// What a `Range` header asks of a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Part {
+pub(crate) enum Part {
     /// The whole file: no header, several ranges, or one that does not parse.
     Whole,
     /// Bytes `start..=end`, inside the file.
@@ -165,7 +165,7 @@ enum Part {
 
 /// Read a `Range` header for a file of `size` bytes (RFC 9110, section 14.1.2). Only one range
 /// of bytes is served on its own.
-fn parse_range(header: &str, size: u64) -> Part {
+pub(crate) fn parse_range(header: &str, size: u64) -> Part {
     let Some(spec) = header.trim().strip_prefix("bytes=") else {
         return Part::Whole;
     };
@@ -258,7 +258,7 @@ fn content_type(filename: &str) -> &'static str {
 }
 
 /// RFC 8187 encoding for `filename*`: unreserved ASCII as is, every other byte as `%XX`.
-fn percent_encode(s: &str) -> String {
+pub(crate) fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
