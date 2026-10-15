@@ -2,10 +2,12 @@
 // have editors of their own; a computed field is never given one.
 
 import { For, Match, Show, Switch, createEffect, createResource, createSignal, on } from "solid-js";
-import { type FieldDef, type Json, type Row, type Term, api } from "../api";
+import { type Asset, type FieldDef, type Json, type Row, type Term, api } from "../api";
 import { FilePicker, upload } from "../blocks/MediaBlocks";
 import { knowTitle, noteTitle } from "../editor/titles";
 import { MapCanvas } from "../map/MapCanvas";
+import { isPdfFile } from "../pdf/model";
+import { PdfThumbButton } from "../pdf/PdfPreview";
 import { geoPoint, imagePoint, mapKind } from "../map/model";
 import { taxonomyDef, typeDef } from "../session";
 import { ChipPicker, matches } from "./ChipPicker";
@@ -467,6 +469,13 @@ function AssetInput(props: FieldInputProps) {
     }
     return list;
   };
+  // The field's PDFs, each shown as a thumbnail that opens the viewer.
+  const pdfs = () => {
+    const byId = new Map((assets() ?? []).map((a) => [a.id, a]));
+    return asStrings(props.value)
+      .map((id) => byId.get(id))
+      .filter((a): a is Asset => !!a && isPdfFile(a.filename));
+  };
   async function uploadInto(file: File) {
     setUploading(true);
     setUploadError(null);
@@ -506,6 +515,11 @@ function AssetInput(props: FieldInputProps) {
         text={uploading() ? "Uploading…" : "Upload"}
         onFile={(file) => void uploadInto(file)}
       />
+      <Show when={pdfs().length > 0}>
+        <div class="pdf-thumbs" data-testid="asset-pdf-thumbs">
+          <For each={pdfs()}>{(a) => <PdfThumbButton id={a.id} filename={a.filename} width={56} named />}</For>
+        </div>
+      </Show>
       <Show when={uploadError()}>
         {(e) => (
           <p class="error" role="alert">

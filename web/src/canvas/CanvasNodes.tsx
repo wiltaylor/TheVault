@@ -4,6 +4,7 @@
 
 import { Show, createResource } from "solid-js";
 import { type Json, type Row, api } from "../api";
+import { AssetCards } from "../blocks/MediaBlocks";
 import { changes } from "../changes";
 import { Blocks } from "../components/Render";
 import { typeDef } from "../session";
@@ -27,7 +28,10 @@ function CardNode(props: { node: CanvasNode }) {
     <div class="canvas-card-blocks" data-testid="canvas-card">
       <Show when={(props.node.block.blocks ?? []).length > 0} fallback={<p class="muted canvas-card-empty">Empty card</p>}>
         <QueryPoll.Provider value={CARD_QUERY_POLL_MS}>
-          <Blocks blocks={props.node.block.blocks ?? []} />
+          {/* A card is too small for a PDF viewer: a PDF shows as its file card with a thumbnail. */}
+          <AssetCards.Provider value={true}>
+            <Blocks blocks={props.node.block.blocks ?? []} />
+          </AssetCards.Provider>
         </QueryPoll.Provider>
       </Show>
     </div>

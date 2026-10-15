@@ -1,0 +1,289 @@
+/* The PDF viewer's chrome (PdfViewer.tsx). The pages keep their own colours in either theme. */
+
+.pdf-viewer {
+  container-type: inline-size;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--bg) 90%, var(--ink) 10%);
+  overflow: hidden;
+  /* Text selection inside a page must not start the editor's own. */
+  user-select: none;
+}
+
+.pdf-viewer.fill {
+  height: 100%;
+}
+
+.pdf-viewer:fullscreen,
+.pdf-viewer.pseudo-full {
+  border: 0;
+  border-radius: 0;
+  height: 100%;
+}
+
+.pdf-viewer.pseudo-full {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+
+.pdf-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pdf-viewer.fill .pdf-stage,
+.pdf-viewer.full .pdf-stage {
+  height: 100%;
+}
+
+.pdf-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  outline: none;
+}
+
+.pdf-scroll:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.pdf-pages {
+  position: relative;
+}
+
+.pdf-page {
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  position: absolute;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgb(15 23 42 / 0.25);
+  overflow: hidden;
+}
+
+.pdf-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.pdf-page .textLayer {
+  user-select: text;
+}
+
+.pdf-message {
+  position: absolute;
+  top: 3.2rem;
+  left: 0;
+  right: 0;
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  z-index: 1;
+}
+
+.pdf-controls {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  right: 0.4rem;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.3rem;
+  pointer-events: none;
+  user-select: none;
+}
+
+.pdf-controls a.ink-action {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.pdf-page-label,
+.pdf-zoom-label {
+  min-width: 3.4rem;
+  padding: 0 0.2rem;
+  text-align: center;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.pdf-zoom-label {
+  min-width: 2.8rem;
+}
+
+.pdf-actions {
+  margin-left: auto;
+}
+
+.pdf-find-row {
+  flex-basis: 100%;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pdf-find input {
+  width: 11rem;
+  max-width: 40vw;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+}
+
+.pdf-find-count {
+  min-width: 4.5rem;
+  padding: 0 0.3rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.pdf-height-handle {
+  margin-top: 0;
+  background: transparent;
+}
+
+/* A thumbnail of a PDF's first page, and the button that opens the viewer from it. */
+.pdf-thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+  background: #ffffff;
+  color: #64748b;
+  flex: none;
+}
+
+.pdf-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.pdf-thumb-button {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: var(--ink);
+  max-width: 9rem;
+  vertical-align: top;
+}
+
+.pdf-thumb-button:hover {
+  background: var(--hover);
+}
+
+.pdf-thumb-name {
+  font-size: 0.75rem;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+/* The viewer over the whole app, opened from a thumbnail. */
+.pdf-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 3vh 4vw;
+  background: rgb(15 23 42 / 0.6);
+}
+
+.pdf-overlay-panel {
+  width: min(64rem, 100%);
+  height: 100%;
+}
+
+.pdf-overlay .pdf-viewer {
+  box-shadow: 0 10px 40px rgb(0 0 0 / 0.35);
+}
+
+.block-pdf .pdf-viewer {
+  margin-bottom: 0.2rem;
+}
+
+.asset-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .pdf-controls .ink-action {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .pdf-overlay {
+    padding: 0;
+  }
+
+  .pdf-overlay .pdf-viewer {
+    border-radius: 0;
+    border: 0;
+  }
+}
+
+.asset-input > .pdf-thumbs {
+  flex-basis: 100%;
+  margin-top: 0;
+}
+
+.asset-file-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* A narrow viewer, as on a phone: smaller buttons and no zoom figure, so the controls take two
+   rows at most. */
+@container (max-width: 34rem) {
+  .pdf-controls .ink-action {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  .pdf-zoom-label {
+    display: none;
+  }
+
+  .pdf-page-label {
+    min-width: 2.8rem;
+  }
+
+  .pdf-find input {
+    width: 7rem;
+  }
+}

@@ -907,6 +907,29 @@ fn edges_take_four_arrow_values_and_canvases_a_height() {
 }
 
 #[test]
+fn an_asset_block_takes_a_viewer_height_and_a_card_flag() {
+    let block = |items: &str| {
+        format!(
+            "content body {{\n  asset {{\n    asset = \"01JB9A0C3D4E5F6G7H8J9K0M1N\"\n{items}  }}\n}}"
+        )
+    };
+    check_kinds(&block("")).unwrap();
+    check_kinds(&block("    height = 640\n    card = true\n")).unwrap();
+    let issues = check_kinds(&block("    height = 100\n")).unwrap_err();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.contains("must be from 160 to 4000")),
+        "{issues:?}"
+    );
+    let issues = check_kinds(&block("    card = \"yes\"\n")).unwrap_err();
+    assert!(
+        issues.iter().any(|i| i.contains("must be true or false")),
+        "{issues:?}"
+    );
+}
+
+#[test]
 fn a_canvas_in_the_old_format_reads_as_cards_and_validates() {
     let old = plan(&format!(
         "  node t {{\n    kind = \"text\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    colour = \"blue\"\n    text = \"Hello **you**\"\n  }}\n  node a {{\n    kind = \"asset\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    asset = \"{ASSET}\"\n  }}\n  node l {{\n    kind = \"link\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    url = \"https://example.com\"\n  }}\n  node q {{\n    kind = \"query\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    query = \"from box\"\n    view = \"table\"\n  }}\n  node i {{\n    kind = \"ink\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n  }}\n  edge e {{\n    from = \"t\"\n    to = \"q\"\n    arrow = \"both\"\n  }}\n"

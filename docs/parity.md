@@ -41,6 +41,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Choose an existing asset for an asset field | `FieldInput.tsx` | `GET /api/assets` | `vault asset list` | |
 | Place or drag a location pin, edit ink, edit a canvas field | `FieldInput.tsx`, `ink/InkSurface.tsx`, `canvas/CanvasSurface.tsx` | — then `PUT /api/notes/{id}` | `vault put <id>` | |
 | Open history | `pages/History.tsx` | `GET /api/notes/{id}/history` | `vault history <id>` | |
+| See a note's link graph | `graph/GraphPanel.tsx` (right sidebar) | `GET /api/notes/{id}/graph` | `vault graph <id> [--limit <n>]` | |
 | View an earlier version | `History.tsx` | `GET /api/notes/{id}/history/{version}` | `vault get <id> --version <version>` | |
 | Restore an earlier version | `History.tsx` | `POST /api/notes/{id}/restore` | `vault restore <id> <version> --base <version>` | |
 | List the trash | `History.tsx` (`Trash`) | `GET /api/trash` | `vault trash list` | |
@@ -155,6 +156,7 @@ The listing has 69 routes. `/api/test/clock` is left out of the listing on purpo
 | `DELETE /api/notes/{id}` | `vault delete` | Note delete | |
 | `GET /api/notes/{id}/history` | `vault history` | History | |
 | `GET /api/notes/{id}/history/{version}` | `vault get --version` | History | |
+| `GET /api/notes/{id}/graph` | `vault graph` | Right sidebar, Graph | |
 | `POST /api/notes/{id}/restore` | `vault restore` | History | |
 | `GET /api/notes/{id}/canvas/{name}` | `vault canvas get` | not used | Explained: the UI already holds the canvas in the note it opened |
 | `PUT /api/notes/{id}/canvas/{name}` | `vault canvas put` | not used | Explained: the UI saves canvases inside the note `PUT`, through the same writer |

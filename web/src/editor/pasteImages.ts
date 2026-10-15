@@ -1,5 +1,6 @@
-// Images pasted or dropped into the block editor. Each image file is uploaded as an asset and
-// becomes an `image` block where the caret (or the drop) was. While it uploads, an `imageUpload`
+// Images and PDFs pasted or dropped into the block editor. Each file is uploaded as an asset and
+// becomes a block where the caret (or the drop) was: an `image` block for an image, an `asset`
+// block, which shows a PDF in its viewer, for a PDF. While it uploads, an `imageUpload`
 // placeholder node holds its place, so the image lands there however the document changes in the
 // meantime. The placeholder is never saved: `docToBlocks` keeps no node it does not know.
 //
@@ -39,6 +40,27 @@ const EXTENSIONS: Record<string, string> = {
 };
 
 const EXT_RE = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
+
+/** Whether `f` is a PDF, by its type or its name. */
+export function isPdf(f: File): boolean {
+  return f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+}
+
+/**
+ * The image and PDF files among `files`, in order, images named as `imageFiles` names them and a
+ * PDF named without the extension given one, so the server serves it as a PDF.
+ */
+export function pastedFiles(files: Iterable<File>): File[] {
+  const out: File[] = [];
+  for (const f of files) {
+    if (isPdf(f)) {
+      out.push(/\.pdf$/i.test(f.name) ? f : new File([f], `${f.name || "pasted"}.pdf`, { type: "application/pdf" }));
+    } else {
+      out.push(...imageFiles([f]));
+    }
+  }
+  return out;
+}
 
 /**
  * The image files among `files`, each named so the server serves it as an image: a file named
@@ -121,7 +143,7 @@ export function placeholdersTr(state: EditorState, from: number, to: number, fil
   const tr = state.tr;
   if (to > from) tr.delete(from, to);
   const { at, split } = blockInsertPos(tr, tr.mapping.map(from, -1));
-  const nodes = files.map((f) => schema.nodes.imageUpload!.create({ id: register(f), split }));
+  const nodes = files.map((f) => schema.nodes.imageUpload!.create({ id: register(f), split, kind: isPdf(f) ? "asset" : "image" }));
   tr.insert(at, nodes);
   const end = at + nodes.length;
   // At the end of the document or a column, a line to type on after the images.
@@ -155,11 +177,14 @@ function placeholders(doc: PMNode): { pos: number; node: PMNode }[] {
   return out;
 }
 
-/** The transaction that turns placeholder `id` into an image block of `asset`, or null when it has gone. */
+/**
+ * The transaction that turns placeholder `id` into a block of `asset`, or null when it has gone:
+ * an `image` block, or an `asset` block for a PDF.
+ */
 export function finishTr(state: EditorState, id: string, asset: string): Transaction | null {
   const at = find(state.doc, id);
   if (!at) return null;
-  const block: Block = { kind: "image", fields: { asset } };
+  const block: Block = { kind: at.node.attrs.kind === "asset" ? "asset" : "image", fields: { asset } };
   const node = state.schema.nodes.vaultBlock!.create({ block: fresh(block) });
   return state.tr.replaceWith(at.pos, at.pos + at.node.nodeSize, node).setMeta("addToHistory", false);
 }
@@ -276,8 +301,8 @@ export function pastesFiles(html: string, text: string): boolean {
   return html ? /<img[\s>]/i.test(html) : text.trim() === "";
 }
 
-/** The image files of a paste or a drop, or none. */
-function transferImages(data: DataTransfer | null): File[] {
+/** The image and PDF files of a paste or a drop, or none. */
+function transferFiles(data: DataTransfer | null): File[] {
   if (!data) return [];
   const files = Array.from(data.files ?? []);
   if (!files.length) {
@@ -286,7 +311,7 @@ function transferImages(data: DataTransfer | null): File[] {
       if (f) files.push(f);
     }
   }
-  return imageFiles(files);
+  return pastedFiles(files);
 }
 
 /** A placeholder standing where an image being uploaded will go. Only the editor has it. */
@@ -305,6 +330,8 @@ export const ImageUpload = Node.create<ImageUploadOptions>({
     return {
       id: { default: "", parseHTML: (el) => el.getAttribute("data-image-upload") },
       split: { default: false, rendered: false },
+      // The block the upload becomes: `image`, or `asset` for a PDF.
+      kind: { default: "image", rendered: false },
     };
   },
   parseHTML() {
@@ -315,13 +342,13 @@ export const ImageUpload = Node.create<ImageUploadOptions>({
     return ["div", { "data-image-upload": node.attrs.id }];
   },
   addNodeView() {
-    return () => {
+    return ({ node }) => {
       const dom = document.createElement("div");
       dom.className = "field-image-placeholder image-upload";
       dom.setAttribute("data-testid", "image-upload");
       dom.setAttribute("contenteditable", "false");
       dom.setAttribute("role", "status");
-      dom.textContent = "Uploading image…";
+      dom.textContent = node.attrs.kind === "asset" ? "Uploading PDF…" : "Uploading image…";
       return { dom };
     };
   },
@@ -339,9 +366,10 @@ export const ImageUpload = Node.create<ImageUploadOptions>({
           transformPastedHTML: (html) => htmlWithPlaceholders(html),
           handlePaste(view, event) {
             const data = event.clipboardData;
-            const files = transferImages(data);
+            const files = transferFiles(data);
             if (!files.length || !view.editable) return false;
-            if (!pastesFiles(data?.getData("text/html") ?? "", data?.getData("text/plain") ?? "")) return false;
+            // A PDF is never a picture of the text beside it, so it always pastes as a file.
+            if (!files.some(isPdf) && !pastesFiles(data?.getData("text/html") ?? "", data?.getData("text/plain") ?? "")) return false;
             for (const id of fromHtml) pending.delete(id);
             fromHtml = [];
             const { from, to } = view.state.selection;
@@ -350,7 +378,7 @@ export const ImageUpload = Node.create<ImageUploadOptions>({
           },
           handleDrop(view, event, _slice, moved) {
             if (moved || !view.editable) return false;
-            const files = transferImages(event.dataTransfer);
+            const files = transferFiles(event.dataTransfer);
             if (!files.length) return false;
             const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
             if (!at) return false;

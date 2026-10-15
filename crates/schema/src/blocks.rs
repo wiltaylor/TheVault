@@ -145,6 +145,10 @@ pub const CANVAS_HEIGHT_DEFAULT: i64 = 480;
 pub const CANVAS_HEIGHT_MIN: i64 = 160;
 pub const CANVAS_HEIGHT_MAX: i64 = 4000;
 
+/// An `asset` block's `height`, the height of its PDF viewer in screen pixels: the bounds.
+pub const ASSET_HEIGHT_MIN: i64 = 160;
+pub const ASSET_HEIGHT_MAX: i64 = 4000;
+
 /// The kinds of a `query_view`'s `view`.
 pub const VIEW_KINDS: [&str; 9] = [
     "table", "cards", "list", "details", "kanban", "calendar", "timeline", "map", "canvas",
@@ -378,7 +382,12 @@ impl Check<'_> {
             "asset" => {
                 self.items(
                     d,
-                    &[req("asset", Form::Ulid), opt("caption", Form::Str)],
+                    &[
+                        req("asset", Form::Ulid),
+                        opt("caption", Form::Str),
+                        opt("height", Form::Int(ASSET_HEIGHT_MIN, ASSET_HEIGHT_MAX)),
+                        opt("card", Form::Bool),
+                    ],
                     &[],
                     at,
                 );

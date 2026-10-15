@@ -25,11 +25,12 @@ export interface SidebarState {
 
 export interface Sidebars {
   left: SidebarState;
-  right: SidebarState & { panel: Panel };
+  /** `graph`: whether the graph at the top of the right sidebar is expanded. */
+  right: SidebarState & { panel: Panel; graph: boolean };
 }
 
 export function defaultSidebars(): Sidebars {
-  return { left: { open: true, width: LEFT_DEFAULT }, right: { open: false, width: RIGHT_DEFAULT, panel: "properties" } };
+  return { left: { open: true, width: LEFT_DEFAULT }, right: { open: false, width: RIGHT_DEFAULT, panel: "properties", graph: true } };
 }
 
 export function clampWidth(w: number): number {
@@ -72,7 +73,8 @@ export function readSidebars(raw: unknown): Sidebars {
   const o = data as Record<string, unknown>;
   const right = o.right as Record<string, unknown> | undefined;
   const panel = PANELS.find((p) => p === right?.panel) ?? d.right.panel;
-  return { left: side(o.left, d.left), right: { ...side(o.right, d.right), panel } };
+  const graph = typeof right?.graph === "boolean" ? right.graph : d.right.graph;
+  return { left: side(o.left, d.left), right: { ...side(o.right, d.right), panel, graph } };
 }
 
 function load(): Sidebars {
@@ -145,6 +147,11 @@ export function resizeSidebar(side: Side, width: number) {
 /** Show `panel` in the right sidebar, open or not. */
 export function setPanel(panel: Panel) {
   if (state.sidebars().right.panel !== panel) update((s) => ({ ...s, right: { ...s.right, panel } }));
+}
+
+/** Expand or collapse the graph at the top of the right sidebar. */
+export function setGraphOpen(graph: boolean) {
+  if (state.sidebars().right.graph !== graph) update((s) => ({ ...s, right: { ...s.right, graph } }));
 }
 
 /** Open the right sidebar on `panel` (its drawer on a phone) and move focus to it. */

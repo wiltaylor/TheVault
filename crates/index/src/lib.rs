@@ -29,6 +29,8 @@
 //! when `text` is empty or only white space. Both follow Rust's Unicode rules, as the note by
 //! note evaluator does.
 
+mod asset_text;
+mod graph;
 mod project;
 mod rebuild;
 mod search;
@@ -39,6 +41,10 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use schema::{Doc, NoteReport, Schema};
 
+pub use asset_text::{
+    EXTRACT_TIMEOUT, Extracted, MAX_PDF_BYTES, MAX_RUNNING, MAX_TEXT, extract_pdf_text, is_pdf,
+};
+pub use graph::{Graph, GraphEdge, GraphNode};
 pub use project::mentions;
 pub use rebuild::{Failure, RebuildReport};
 pub use search::{Hit, SearchPage};
@@ -87,6 +93,7 @@ pub enum Update {
 pub struct Index {
     conn: Connection,
     search: search::Search,
+    assets: asset_text::AssetTexts,
 }
 
 impl Index {
@@ -99,7 +106,7 @@ impl Index {
 
     /// Open an index at explicit paths. A full-text index that is missing, or was written with
     /// another schema, is created empty, and the index is then behind whatever generation
-    /// `index.db` recorded.
+    /// `index.db` recorded. PDF text is kept in `asset-text/v1/` beside `search_dir`.
     pub fn open_at(db: &Path, search_dir: &Path) -> Result<Index> {
         let conn = Connection::open(db)?;
         sql::init(&conn)?;
@@ -109,7 +116,34 @@ impl Index {
         if missing || reset {
             sql::forget_generation(&conn)?;
         }
-        Ok(Index { conn, search })
+        let assets =
+            asset_text::AssetTexts::open(&search_dir.with_file_name("asset-text").join("v1"))?;
+        Ok(Index {
+            conn,
+            search,
+            assets,
+        })
+    }
+
+    /// Whether asset `id`'s text has been extracted, or found to have none.
+    pub fn has_asset_text(&self, id: &str) -> bool {
+        self.assets.has(id)
+    }
+
+    /// Keep what extracting asset `id`'s text came to. Notes indexed from now on take the text
+    /// in; notes already indexed do so when next saved or rebuilt. [`Extracted::Busy`] keeps
+    /// nothing, so a later rebuild tries again.
+    pub fn set_asset_text(&mut self, id: &str, extracted: &Extracted) -> Result<()> {
+        match extracted {
+            Extracted::Text(t) => self.assets.set(id, t),
+            Extracted::Failed => self.assets.set(id, ""),
+            Extracted::Busy => Ok(()),
+        }
+    }
+
+    /// Forget the text of asset `id`, which has been deleted.
+    pub fn forget_asset_text(&mut self, id: &str) {
+        self.assets.forget(id);
     }
 
     /// The vault generation the index holds every change up to, or `None` when it has never
@@ -128,6 +162,12 @@ impl Index {
     /// moves only from the generation before, so missing one commit leaves it behind.
     pub fn advance(&mut self, generation: u64) -> Result<()> {
         sql::advance_generation(&self.conn, generation)
+    }
+
+    /// The notes linked to or from note `id`, at most `limit` of them, most recently updated
+    /// first, with every link among them and the note. `None` when the index does not hold `id`.
+    pub fn graph(&self, id: &str, limit: usize) -> Result<Option<Graph>> {
+        graph::graph(&self.conn, id, limit)
     }
 
     /// The SQLite connection, for `query` to read from.
@@ -161,7 +201,8 @@ impl Index {
                             id: id.clone(),
                             type_name: type_name.clone(),
                         })?;
-                    let note = project::project(ty, id, doc, report);
+                    let mut note = project::project(ty, id, doc, report);
+                    append_text(&mut note.search.body, &self.assets.of_doc(doc));
                     sql::delete_note(&tx, id)?;
                     sql::insert_note(&tx, &note)?;
                     docs.push(search::Change::Put(note.search));
@@ -232,6 +273,17 @@ impl Index {
     pub fn dump(&self) -> Result<String> {
         sql::dump(&self.conn)
     }
+}
+
+/// Add the text of a note's PDFs to its full-text body.
+fn append_text(body: &mut String, extra: &str) {
+    if extra.is_empty() {
+        return;
+    }
+    if !body.is_empty() {
+        body.push('\n');
+    }
+    body.push_str(extra);
 }
 
 fn io_err(path: impl Into<PathBuf>) -> impl FnOnce(std::io::Error) -> Error {

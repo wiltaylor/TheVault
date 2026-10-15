@@ -1,7 +1,11 @@
 import { Navigate, useLocation } from "@solidjs/router";
 import { For, type JSX, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { CaptureModal } from "../capture/CaptureModal";
+import { CommandPalette } from "../palette/CommandPalette";
+import { trackRecents } from "../palette/recents";
+import { PALETTE_KEYS, closePalette, isPaletteKey, openPalette, paletteOpen } from "../palette/store";
 import { captureOpen, inboxCount, isCaptureKey, openCapture, refreshInboxCount } from "../capture/store";
+import { GraphView } from "../graph/GraphPanel";
 import { HistoryPanel } from "../history/HistoryPanel";
 import { endPreviews } from "../history/preview";
 import { sessionState } from "../session";
@@ -15,6 +19,7 @@ import {
   resizeSidebar,
   rightDrawer,
   setLeftDrawer,
+  setGraphOpen,
   setPanel,
   setRightDrawer,
   sidebars,
@@ -109,12 +114,30 @@ function Resizer(props: { side: Side }) {
   );
 }
 
+/** The button that hides the right sidebar, in whichever of its headers is at the top. */
+function HideRight() {
+  return (
+    <button
+      type="button"
+      class="sidebar-toggle"
+      aria-label="Hide right sidebar"
+      title="Hide right sidebar (Ctrl+Shift+\)"
+      onClick={() => toggleSidebar("right", false)}
+    >
+      <Chevron dir="right" />
+    </button>
+  );
+}
+
 const PANEL_TABS: { panel: Panel; label: string }[] = [
   { panel: "properties", label: "Properties" },
   { panel: "history", label: "History" },
 ];
 
-/** The right sidebar: context for the active pane, one panel at a time (Properties, History). */
+/**
+ * The right sidebar: context for the active pane. The graph of its note's links sits at the top;
+ * below it, one panel at a time (Properties, History).
+ */
 function RightSidebar(props: { shown: boolean }) {
   const pane = () => activePane(workspace());
   const source = () => noteOf(pane());
@@ -133,9 +156,37 @@ function RightSidebar(props: { shown: boolean }) {
     setPanel(next.panel);
     document.getElementById(`${next.panel}-tab`)?.focus();
   }
+  // The graph follows the active pane's note, once it has been created.
+  const graphOf = createMemo(() => source()?.noteId() || "");
+  const graphOpen = () => sidebars().right.graph;
   return (
     <div id="right-sidebar" class="right-sidebar">
       <Resizer side="right" />
+      <Show when={graphOf()}>
+        <section class="graph-section" aria-label="Graph">
+          <div class="sidebar-head graph-head">
+            <button
+              type="button"
+              class="graph-toggle"
+              aria-expanded={graphOpen()}
+              aria-controls="graph-body"
+              title={graphOpen() ? "Collapse the graph" : "Expand the graph"}
+              onClick={() => setGraphOpen(!graphOpen())}
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 6 6 6-6 6" />
+              </svg>
+              Graph
+            </button>
+            <HideRight />
+          </div>
+          <Show when={graphOpen() && props.shown}>
+            <div id="graph-body" class="graph-body">
+              <GraphView noteId={graphOf()} />
+            </div>
+          </Show>
+        </section>
+      </Show>
       <div class="sidebar-head right-head">
         <div class="panel-tabs" role="tablist" aria-label="Panels" onKeyDown={onTabKey}>
           <For each={PANEL_TABS}>
@@ -154,15 +205,9 @@ function RightSidebar(props: { shown: boolean }) {
             )}
           </For>
         </div>
-        <button
-          type="button"
-          class="sidebar-toggle"
-          aria-label="Hide right sidebar"
-          title="Hide right sidebar (Ctrl+Shift+\)"
-          onClick={() => toggleSidebar("right", false)}
-        >
-          <Chevron dir="right" />
-        </button>
+        <Show when={!graphOf()}>
+          <HideRight />
+        </Show>
       </div>
       <Show when={panel() === "properties"}>
         <aside id="properties-panel" class="side-panel" aria-label="Properties" tabindex={-1}>
@@ -209,6 +254,9 @@ export function Shell() {
     setRightDrawer(false);
   };
 
+  // Every note a pane comes to show joins the palette's recent notes.
+  trackRecents();
+
   onMount(() => {
     // Ctrl/Cmd+\ shows or hides the left sidebar, with Shift the right; Alt+\ does too, where a
     // browser keeps the Ctrl form.
@@ -228,6 +276,15 @@ export function Shell() {
     };
     document.addEventListener("keydown", onCaptureKey);
     onCleanup(() => document.removeEventListener("keydown", onCaptureKey));
+    // Ctrl/Cmd+K opens the command palette from anywhere, and closes it again.
+    const onPaletteKey = (e: KeyboardEvent) => {
+      if (!isPaletteKey(e) || e.defaultPrevented || captureOpen()) return;
+      e.preventDefault();
+      if (paletteOpen()) closePalette();
+      else openPalette();
+    };
+    document.addEventListener("keydown", onPaletteKey);
+    onCleanup(() => document.removeEventListener("keydown", onPaletteKey));
     // The inbox's count, now and whenever the window comes back, for captures made elsewhere.
     void refreshInboxCount();
     const onVisible = () => {
@@ -298,6 +355,21 @@ export function Shell() {
           </div>
           <nav aria-label="Main">
             <ul>
+              <li>
+                <button
+                  type="button"
+                  class="nav-link nav-button palette-open"
+                  title={`Search or run a command (${PALETTE_KEYS})`}
+                  onClick={() => {
+                    setLeftDrawer(false);
+                    openPalette();
+                  }}
+                >
+                  <SearchIcon />
+                  <span>Search or run a command</span>
+                  <kbd aria-hidden="true">{PALETTE_KEYS}</kbd>
+                </button>
+              </li>
               <For each={NAV}>
                 {(item) => (
                   <li>
@@ -418,6 +490,9 @@ export function Shell() {
         </button>
         <Show when={captureOpen()}>
           <CaptureModal />
+        </Show>
+        <Show when={paletteOpen()}>
+          <CommandPalette />
         </Show>
         <Toasts />
       </div>

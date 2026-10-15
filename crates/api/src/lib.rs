@@ -129,6 +129,7 @@ fn build() -> Built {
         .put("/api/notes/{id}", notes::update)
         .delete("/api/notes/{id}", notes::delete)
         .get("/api/notes/{id}/history", notes::history)
+        .get("/api/notes/{id}/graph", notes::graph)
         .get("/api/notes/{id}/history/{version}", notes::version)
         .post("/api/notes/{id}/restore", notes::restore_version)
         .get("/api/notes/{id}/canvas/{name}", defs::canvas)

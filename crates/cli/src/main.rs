@@ -132,6 +132,14 @@ enum Command {
     },
     /// Every version of a note.
     History { id: String },
+    /// The notes linked to or from a note, most recently updated first, with every link among
+    /// them: the graph the web app draws beside the note.
+    Graph {
+        id: String,
+        /// The most neighbours to return. The server's default is 60.
+        #[arg(long)]
+        limit: Option<u32>,
+    },
     /// Write an earlier version of a note back as a new version.
     Restore {
         id: String,
@@ -601,6 +609,18 @@ fn remote(api: &Api, command: Command) -> Result<Value, Fail> {
             api.call(Method::DELETE, &["api", "notes", &id], &query, Body::None)
         }
         Command::History { id } => api.get(&["api", "notes", &id, "history"]),
+        Command::Graph { id, limit } => {
+            let query: Vec<_> = limit
+                .map(|l| ("limit", l.to_string()))
+                .into_iter()
+                .collect();
+            api.call(
+                Method::GET,
+                &["api", "notes", &id, "graph"],
+                &query,
+                Body::None,
+            )
+        }
         Command::Restore { id, version, base } => api.post(
             &["api", "notes", &id, "restore"],
             json!({ "version": version, "base_version": base }),

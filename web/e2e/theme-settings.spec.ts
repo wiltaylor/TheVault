@@ -36,7 +36,7 @@ test("the sidebar holds Daily notes, Search, Inbox and Capture, with trash and s
   const main = page.getByRole("navigation", { name: "Main" });
   // The Inbox link counts the fleeting notes waiting in it, when there are any.
   await expect(main.getByRole("link")).toHaveText(["Daily notes", "Search", /^Inbox\d*$/]);
-  await expect(main.getByRole("button")).toHaveText(["Capture"]);
+  await expect(main.getByRole("button")).toHaveText([/^Search or run a command/, "Capture"]);
 
   const trash = page.locator(".sidebar-footer").getByRole("link", { name: "Trash" });
   await trash.click();

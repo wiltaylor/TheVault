@@ -81,12 +81,15 @@ A `reference` field with `relation = "two_way"` names its `inverse`, a field on 
 vault list --type task
 vault get "$ID"
 vault history "$ID"
+vault graph "$ID"
 vault query 'from task where status == "Todo" sort due asc limit 20'
 vault query 'from task sort due asc' --all
 vault search "dashboard"
 ```
 
 `get` returns the note as `wcl`, the stored WCL text, and as `note`, its JSON form, with the `version` to send back when you change it.
+
+`graph` returns the notes linked to or from a note. `nodes` starts with the note itself; each other node has a `direction` of `out` (the note links to it), `in` (it links to the note) or `both`. `edges` lists every link among the nodes as `from`, `to`, `via` (`field` or `mention`) and `field`. Only the 60 most recently updated neighbours are returned unless you pass `--limit`; `truncated` counts the rest.
 
 `list`, `query` and `search` return `rows`. Each row has the note's `id`, `type` and `title`, and its field values under `fields`. A row never holds `content` fields, so to read a note's body, `get` the note by its `id`.
 

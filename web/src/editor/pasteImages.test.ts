@@ -1,9 +1,9 @@
 import { Editor } from "@tiptap/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { Block } from "../api";
 import { blocksToDoc, docToBlocks } from "./doc";
 import { editorExtensions } from "./extensions";
-import { dataUrlFile, htmlWithPlaceholders, imageFiles, pastesFiles, placeholdersTr } from "./pasteImages";
+import { dataUrlFile, htmlWithPlaceholders, imageFiles, pastedFiles, pastesFiles, placeholdersTr } from "./pasteImages";
 
 const p = (text: string): Block => ({ kind: "paragraph", fields: { text } });
 const png = (name = "shot.png") => new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" });
@@ -63,6 +63,31 @@ describe("pasted and dropped images", () => {
   it("keeps image files, naming one without an image extension after its type", () => {
     const files = imageFiles([png("image"), new File(["x"], "a.txt", { type: "text/plain" }), png("b.PNG"), new File(["x"], "c", { type: "image/jpeg" })]);
     expect(files.map((f) => f.name)).toEqual(["image.png", "b.PNG", "c.jpg"]);
+  });
+
+  it("keeps PDFs beside images, naming one without the extension", () => {
+    const pdf = (name: string, type = "application/pdf") => new File(["%PDF-1.4"], name, { type });
+    const files = pastedFiles([pdf("report.pdf"), new File(["x"], "a.txt", { type: "text/plain" }), png("image"), pdf("scan"), pdf("Notes.PDF", "")]);
+    expect(files.map((f) => f.name)).toEqual(["report.pdf", "image.png", "scan.pdf", "Notes.PDF"]);
+  });
+
+  it("turns a pasted PDF into an asset block, and an image beside it into an image block", async () => {
+    // The asset block looks its file up in the asset listing.
+    const fetched = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ assets: [] })));
+    onTestFinished(() => fetched.mockRestore());
+    const { editor, calls } = setup([p("text")]);
+    const at = posIn(editor, "text", 4);
+    const pdf = new File(["%PDF-1.4"], "report.pdf", { type: "application/pdf" });
+    editor.view.dispatch(placeholdersTr(editor.state, at, at, [pdf, png()]));
+    expect(editor.view.dom.querySelector("[data-testid=image-upload]")?.textContent).toBe("Uploading PDF…");
+    calls[0]!.done.resolve("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    calls[1]!.done.resolve("01ARZ3NDEKTSV4RRFFQ69G5FAW");
+    await flush();
+    expect(docToBlocks(editor.getJSON()).slice(0, 3)).toEqual([
+      p("text"),
+      { kind: "asset", fields: { asset: "01ARZ3NDEKTSV4RRFFQ69G5FAV" } },
+      { kind: "image", fields: { asset: "01ARZ3NDEKTSV4RRFFQ69G5FAW" } },
+    ]);
   });
 
   it("pastes a clipboard's image files when it has no text or its HTML is an image, else its text", () => {

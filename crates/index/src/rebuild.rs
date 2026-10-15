@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use schema::{Doc, Invalid, NoteLookup, Schema, SchemaError, Taxonomy, TypeDef};
 
-use crate::{Index, Result, io_err, project, sql};
+use crate::{Index, Result, asset_text, io_err, project, sql};
 
 /// A vault file that a rebuild could not index, and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,8 @@ pub(crate) fn rebuild(index: &mut Index, vault: &store::Vault) -> Result<Rebuild
         vault,
     };
 
+    extract_missing(index, vault)?;
+
     let mut notes = Vec::new();
     for f in &files {
         let checked = vault
@@ -62,7 +64,9 @@ pub(crate) fn rebuild(index: &mut Index, vault: &store::Vault) -> Result<Rebuild
             Ok((doc, report)) => {
                 // validate_note refused any note whose type is missing, so this always holds.
                 if let Some(ty) = schema.type_def(&f.type_name) {
-                    notes.push(project::project(ty, &f.id, &doc, &report));
+                    let mut note = project::project(ty, &f.id, &doc, &report);
+                    crate::append_text(&mut note.search.body, &index.assets.of_doc(&doc));
+                    notes.push(note);
                 }
             }
             Err(diagnostic) => failures.push(Failure {
@@ -89,6 +93,45 @@ pub(crate) fn rebuild(index: &mut Index, vault: &store::Vault) -> Result<Rebuild
         .replace_all(notes.into_iter().map(|n| n.search).collect())?;
     tx.commit()?;
     Ok(RebuildReport { indexed, failures })
+}
+
+/// Extract the text of every PDF asset that has none kept yet. A PDF that cannot be read keeps
+/// no text, so it is not tried again.
+fn extract_missing(index: &mut Index, vault: &store::Vault) -> Result<()> {
+    let root = vault.root().join("assets");
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Ok(());
+    };
+    let mut ids: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|id| schema::is_ulid(id) && !index.assets.has(id))
+        .collect();
+    ids.sort();
+    for id in ids {
+        let Ok(files) = std::fs::read_dir(root.join(&id)) else {
+            continue;
+        };
+        let Some(file) = files.flatten().find(|e| e.path().is_file()) else {
+            continue;
+        };
+        if !asset_text::is_pdf(&file.file_name().to_string_lossy()) {
+            continue;
+        }
+        let too_big = file
+            .metadata()
+            .is_ok_and(|m| m.len() > asset_text::MAX_PDF_BYTES as u64);
+        let extracted = if too_big {
+            asset_text::Extracted::Failed
+        } else {
+            match std::fs::read(file.path()) {
+                Ok(bytes) => asset_text::extract_pdf_text(bytes),
+                Err(_) => continue,
+            }
+        };
+        index.set_asset_text(&id, &extracted)?;
+    }
+    Ok(())
 }
 
 /// The issues of an invalid file, without the file name the failure already carries.

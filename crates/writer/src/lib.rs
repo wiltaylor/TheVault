@@ -57,6 +57,7 @@ pub use builtin::{BUILT_IN_TYPES, is_built_in_type};
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
 pub use defs::ScriptProblem;
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
+pub use index::{Graph, GraphEdge, GraphNode};
 pub use note::{Input, block_to_json, doc_to_json, value_to_json};
 pub use refs::Referrer;
 pub use schema::NoteEdit;
@@ -753,6 +754,16 @@ impl Writer {
             .query_map([id], |r| r.get::<_, String>(0))
             .map_err(index::Error::from)?;
         Ok(rows.next().transpose().map_err(index::Error::from)?)
+    }
+
+    /// The link graph around note `id`: the notes it links to and that link to it, at most
+    /// `limit` of them, most recently updated first, and every link among them.
+    pub fn graph(&self, id: &str, limit: usize) -> Result<index::Graph> {
+        let inner = self.lock();
+        inner
+            .index
+            .graph(id, limit)?
+            .ok_or_else(|| Error::NotFound(id.to_owned()))
     }
 
     /// The type and indexed title of note `id`, if the index holds the note. A note in the trash

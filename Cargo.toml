@@ -26,6 +26,7 @@ rusqlite = { version = "0.37", features = ["bundled", "functions"] }
 rustix = { version = "1", features = ["termios", "fs"] }
 sha2 = "0.10"
 tantivy = "0.26"
+pdf-extract = "0.12"
 thiserror = "2"
 ulid = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }

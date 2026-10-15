@@ -52,20 +52,36 @@ fn check_filename(name: &str) -> Result<()> {
 }
 
 impl Writer {
-    /// Store `bytes` as a new asset called `filename`.
+    /// Store `bytes` as a new asset called `filename`. A PDF's text is then extracted for
+    /// full-text search, with no lock held, before this returns: a note saved naming the asset
+    /// afterwards is found by words inside it. A PDF whose text cannot be read is stored all
+    /// the same.
     pub fn put_asset(&self, filename: &str, bytes: Vec<u8>) -> Result<Asset> {
         check_filename(filename)?;
-        let _w = self.write_lock();
-        let mut inner = self.lock();
-        let asset = Asset {
-            id: ulid::Ulid::new().to_string(),
-            filename: filename.to_owned(),
-            size: bytes.len() as u64,
+        let pdf =
+            (index::is_pdf(filename) && bytes.len() <= index::MAX_PDF_BYTES).then(|| bytes.clone());
+        let asset = {
+            let _w = self.write_lock();
+            let mut inner = self.lock();
+            let asset = Asset {
+                id: ulid::Ulid::new().to_string(),
+                filename: filename.to_owned(),
+                size: bytes.len() as u64,
+            };
+            let generation = self
+                .vault
+                .commit(vec![Change::write(asset.path(), bytes)])?;
+            inner.index.advance(generation)?;
+            asset
         };
-        let generation = self
-            .vault
-            .commit(vec![Change::write(asset.path(), bytes)])?;
-        inner.index.advance(generation)?;
+        if index::is_pdf(filename) {
+            let extracted = match pdf {
+                Some(bytes) => index::extract_pdf_text(bytes),
+                None => index::Extracted::Failed,
+            };
+            // The asset is stored; text that cannot be kept only means search misses it.
+            let _ = self.lock().index.set_asset_text(&asset.id, &extracted);
+        }
         Ok(asset)
     }
 
@@ -92,6 +108,18 @@ impl Writer {
         let asset = self.find_asset(id).ok_or_else(|| missing(id))?;
         let bytes = self.vault.read(&asset.path())?;
         Ok((asset, bytes))
+    }
+
+    /// Asset `id` and at most `len` of its bytes from byte `start`.
+    pub fn asset_range(&self, id: &str, start: u64, len: u64) -> Result<(Asset, Vec<u8>)> {
+        let asset = self.find_asset(id).ok_or_else(|| missing(id))?;
+        let bytes = self.vault.read_range(&asset.path(), start, len)?;
+        Ok((asset, bytes))
+    }
+
+    /// Asset `id`, without its bytes.
+    pub fn asset_info(&self, id: &str) -> Result<Asset> {
+        self.find_asset(id).ok_or_else(|| missing(id))
     }
 
     /// Delete asset `id`. A type file naming it refuses the delete. Notes naming it refuse it
@@ -148,6 +176,8 @@ impl Writer {
             });
         }
 
+        // Before the notes that lose the asset are indexed again, so they lose its text too.
+        inner.index.forget_asset_text(id);
         let delete = vec![Change::delete(asset.path())];
         let saved = if changes.is_empty() {
             let generation = self.vault.commit(delete)?;

@@ -170,5 +170,6 @@ export const SHORTCUTS: [string, string][] = [
   ["Alt+PageDown  /  Alt+]", "Next tab"],
   ["Alt+PageUp  /  Alt+[", "Previous tab"],
   ["Ctrl+click, middle-click", "Open a link in a new tab"],
+  ["Ctrl+K", "Search or run a command"],
   ["Ctrl+Shift+K", "Capture a fleeting note"],
 ];

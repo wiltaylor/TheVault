@@ -72,6 +72,25 @@ impl Vault {
         })
     }
 
+    /// Read at most `len` bytes of a vault file, from byte `start`.
+    pub fn read_range(&self, path: &str, start: u64, len: u64) -> Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let full = self.resolve(path)?;
+        let real = self.contain(&full)?;
+        let fail = |e: std::io::Error| match e.kind() {
+            std::io::ErrorKind::NotFound => Error::NotFound(path.to_owned()),
+            _ => Error::Io {
+                path: full.clone(),
+                source: e,
+            },
+        };
+        let mut file = std::fs::File::open(&real).map_err(fail)?;
+        file.seek(SeekFrom::Start(start)).map_err(fail)?;
+        let mut out = Vec::new();
+        file.take(len).read_to_end(&mut out).map_err(fail)?;
+        Ok(out)
+    }
+
     /// Read a vault file as text.
     pub fn read_text(&self, path: &str) -> Result<String> {
         String::from_utf8(self.read(path)?).map_err(|_| Error::NotUtf8(path.to_owned()))

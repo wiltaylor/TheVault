@@ -962,12 +962,14 @@ image {
 
 ### `asset`
 
-An attached file, shown as a download card with the file name from `assets/<ULID>/<filename>`.
+An attached file, shown as a download card with the file name from `assets/<ULID>/<filename>`. A PDF (a file name ending in `.pdf`) is shown in an inline viewer instead, unless `card` is true.
 
 | Item | Form | Meaning |
 |------|------|---------|
 | `asset` | asset reference | Required |
 | `caption` | string | Caption shown with the file |
+| `height` | int, 160 to 4000 | Height of the PDF viewer in screen pixels. Default: 560 |
+| `card` | bool | Show a PDF as the download card rather than the viewer. Default: false |
 
 ```wcl
 asset {

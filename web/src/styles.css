@@ -340,6 +340,200 @@ a {
   border-bottom-color: var(--accent);
 }
 
+/* The graph at the top of the right sidebar: the active note in the middle, its links around it. */
+.graph-section {
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  --graph-out: var(--accent);
+  --graph-in: color-mix(in srgb, var(--palette-green) 75%, var(--muted));
+  --graph-side: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.graph-head {
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem 0;
+  margin: 0;
+}
+
+.graph-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: none;
+  background: transparent;
+  padding: 0.35rem 0.4rem;
+  border-radius: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.graph-toggle:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.graph-toggle svg {
+  transition: transform 0.15s ease-out;
+}
+
+.graph-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.graph-view {
+  position: relative;
+  min-height: 2.5rem;
+  overflow: hidden;
+}
+
+.graph-svg {
+  display: block;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.graph-svg:active {
+  cursor: grabbing;
+}
+
+.graph-message {
+  margin: 0;
+  padding: 0.5rem 1rem 0.85rem;
+  font-size: 0.85rem;
+}
+
+.graph-line {
+  fill: none;
+  stroke-linecap: round;
+  transition: opacity 0.12s;
+}
+
+.graph-line-out,
+.graph-line-both {
+  stroke: var(--graph-out);
+  stroke-opacity: 0.75;
+}
+
+.graph-line-in {
+  stroke: var(--graph-in);
+  stroke-opacity: 0.85;
+}
+
+.graph-line-side {
+  stroke: var(--graph-side);
+  stroke-dasharray: 3 3;
+}
+
+.graph-arrow-out path,
+.graph-arrow-both path {
+  fill: var(--graph-out);
+}
+
+.graph-arrow-in path {
+  fill: var(--graph-in);
+}
+
+.graph-arrow-side path {
+  fill: var(--graph-side);
+}
+
+.graph-line.hl {
+  stroke-opacity: 1;
+}
+
+.graph-line.dim,
+.graph-node-wrap.dim {
+  opacity: 0.18;
+}
+
+.graph-node-wrap {
+  transition: opacity 0.12s;
+}
+
+.graph-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.graph-node.graph-centre {
+  cursor: default;
+}
+
+.graph-dot {
+  stroke: var(--panel);
+  stroke-width: 1.5;
+}
+
+.graph-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.graph-icon {
+  color: var(--panel);
+  pointer-events: none;
+}
+
+.graph-label {
+  fill: var(--ink);
+  font-family: inherit;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.graph-centre .graph-label {
+  font-weight: 600;
+}
+
+.graph-node:hover .graph-dot,
+.graph-node:focus-visible .graph-dot {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.graph-node:focus-visible .graph-dot {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.graph-more {
+  position: absolute;
+  left: 0.6rem;
+  bottom: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.graph-reset {
+  position: absolute;
+  right: 0.4rem;
+  bottom: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.graph-reset:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
 .side-panel {
   flex: 1;
   min-height: 0;
@@ -886,7 +1080,8 @@ blockquote {
   }
 
   .right-sidebar .sidebar-resizer,
-  .right-head .sidebar-toggle {
+  .right-head .sidebar-toggle,
+  .graph-head .sidebar-toggle {
     display: none;
   }
 }

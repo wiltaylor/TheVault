@@ -1,6 +1,8 @@
 import { For, Show, createResource, createSignal } from "solid-js";
 import { type Asset, ApiError, type UsingNote, api, assetUrl, usingNotes } from "../api";
 import { UsingNotes } from "../components/UsingNotes";
+import { isPdfFile } from "../pdf/model";
+import { PdfThumbButton } from "../pdf/PdfPreview";
 import { errorText } from "./TypeEditor";
 
 /** A size in bytes, in the largest unit that keeps it at least 1. */
@@ -101,9 +103,14 @@ export function Assets() {
                   {(a) => (
                     <tr data-asset={a.id}>
                       <td>
-                        <a href={assetUrl(a.id)} target="_blank" rel="noopener">
-                          {a.filename}
-                        </a>
+                        <div class="asset-file-cell">
+                          <Show when={isPdfFile(a.filename)}>
+                            <PdfThumbButton id={a.id} filename={a.filename} width={40} />
+                          </Show>
+                          <a href={assetUrl(a.id)} target="_blank" rel="noopener">
+                            {a.filename}
+                          </a>
+                        </div>
                       </td>
                       <td>{sizeText(a.size)}</td>
                       <td class="actions">

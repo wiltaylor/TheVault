@@ -345,6 +345,62 @@ pub async fn restore_version(
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 
+/// The most neighbours a graph holds when the request does not say.
+const GRAPH_LIMIT: usize = 60;
+/// The most neighbours a graph holds whatever the request says.
+const GRAPH_MAX: usize = 500;
+
+#[derive(Deserialize)]
+pub struct GraphQuery {
+    limit: Option<usize>,
+}
+
+fn graph_node(n: &writer::GraphNode, direction: &str) -> Value {
+    json!({
+        "id": n.id,
+        "type": n.type_name,
+        "title": n.title,
+        "updated": n.updated,
+        "direction": direction,
+    })
+}
+
+/// `GET /api/notes/{id}/graph`: the note, the notes it links to or that link to it, and every link
+/// among them. Each neighbour's `direction` says how it links to the note: `out` (the note links
+/// to it), `in` (it links to the note) or `both`. Placeholder links are not links, and notes in
+/// the trash are left out.
+pub async fn graph(
+    State(w): Shared,
+    Path(id): Path<String>,
+    Query(q): Query<GraphQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let limit = q.limit.unwrap_or(GRAPH_LIMIT).min(GRAPH_MAX);
+    let g = blocking(w, move |w| w.graph(&id, limit)).await?;
+    let c = &g.center.id;
+    let direction = |n: &str| {
+        let out = g.edges.iter().any(|e| &e.from == c && e.to == n);
+        let inc = g.edges.iter().any(|e| e.from == n && &e.to == c);
+        match (out, inc) {
+            (true, true) => "both",
+            (true, false) => "out",
+            _ => "in",
+        }
+    };
+    let mut nodes = vec![graph_node(&g.center, "center")];
+    nodes.extend(g.neighbours.iter().map(|n| graph_node(n, direction(&n.id))));
+    let edges: Vec<Value> = g
+        .edges
+        .iter()
+        .map(|e| json!({ "from": e.from, "to": e.to, "via": e.via, "field": e.field }))
+        .collect();
+    Ok(Json(json!({
+        "id": g.center.id,
+        "nodes": nodes,
+        "edges": edges,
+        "truncated": g.truncated,
+    })))
+}
+
 pub async fn trash(State(w): Shared) -> Result<Json<Value>, ApiError> {
     let entries = blocking(w, |w| w.trash()).await?;
     let notes: Vec<Value> = entries

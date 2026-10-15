@@ -1017,6 +1017,8 @@ fn every_command_prints_json() {
     run("list", &["--type", "task"], "");
     run("get", &[&id, "--version", s(&a["version"])], "");
     run("history", &[&id], "");
+    let graph = run("graph", &[&id, "--limit", "5"], "");
+    assert_eq!(graph["nodes"][0]["id"], id.as_str());
     let c = run(
         "restore",
         &[&id, s(&a["version"]), "--base", s(&b["version"])],

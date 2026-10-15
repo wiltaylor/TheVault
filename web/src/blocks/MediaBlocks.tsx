@@ -1,10 +1,14 @@
 // Image and asset blocks. Both name an uploaded file by its asset ULID; the file itself lives at
 // `assets/<ULID>/<filename>` and is uploaded through the assets API (D22).
 
-import { For, Show, createResource, createSignal, useContext } from "solid-js";
+import { For, Show, createContext, createResource, createSignal, useContext } from "solid-js";
 import { type Asset, type Block, type FieldDef, type Json, api, assetUrl } from "../api";
 import { FieldRefs, fillFieldRefs } from "../components/fieldRefs";
 import { useControlBinding } from "../controls/binding";
+import { VIEWER_HEIGHT, isPdfFile } from "../pdf/model";
+import { CardIcon } from "../pdf/PdfIcons";
+import { PdfThumbButton } from "../pdf/PdfPreview";
+import { PdfViewer } from "../pdf/PdfViewer";
 import { text, withItem, withText } from "./fields";
 
 let known: Promise<Map<string, Asset>> | undefined;
@@ -308,35 +312,106 @@ function FieldImageAdd(props: { label: string; busy: boolean; onFile: (file: Fil
   );
 }
 
+/**
+ * Set by a surface too small for a PDF viewer, such as a canvas card: there an `asset` block of a
+ * PDF shows its file card with a thumbnail that opens the viewer over the app.
+ */
+export const AssetCards = createContext(false);
+
+/**
+ * An `asset` block: the file's download card. A PDF shows in an inline viewer instead, unless the
+ * block's `card` item is set; the viewer's height is its `height` item. Changes to either are
+ * kept in the block when it is editable, and only on the page otherwise.
+ */
 export function AssetBlock(props: { block: Block; onChange?: (block: Block) => void }) {
   const asset = () => text(props.block, "asset");
   const [info] = createResource(asset, async (id) => (await assetsById()).get(id) ?? null);
   const name = () => info()?.filename ?? (info.loading ? "…" : asset());
+  const compact = useContext(AssetCards);
+  const pdf = () => isPdfFile(info()?.filename ?? "");
+  const [localCard, setLocalCard] = createSignal<boolean | null>(null);
+  const [localHeight, setLocalHeight] = createSignal<number | null>(null);
+  const card = () => compact || (localCard() ?? props.block.fields?.card === true);
+  const height = () => {
+    const h = props.block.fields?.height;
+    return localHeight() ?? (typeof h === "number" ? h : VIEWER_HEIGHT.initial);
+  };
+
+  function setCard(on: boolean) {
+    setLocalCard(on);
+    props.onChange?.(withItem(props.block, "card", on ? true : undefined));
+  }
+
+  function setHeight(h: number) {
+    setLocalHeight(h);
+    props.onChange?.(withItem(props.block, "height", h === VIEWER_HEIGHT.initial ? undefined : h));
+  }
+
+  const caption = () => (
+    <Show
+      when={props.onChange}
+      fallback={
+        <Show when={text(props.block, "caption")}>
+          <p class="asset-caption">{text(props.block, "caption")}</p>
+        </Show>
+      }
+    >
+      <div class="block-fields">
+        <input
+          aria-label="Caption"
+          placeholder="Caption"
+          value={text(props.block, "caption")}
+          onInput={(e) => props.onChange?.(withText(props.block, "caption", e.currentTarget.value))}
+        />
+      </div>
+    </Show>
+  );
 
   return (
-    <div class="block-asset">
-      <a href={assetUrl(asset())} download={info()?.filename ?? ""} class="asset-card">
-        {name()}
-      </a>
-      <Show when={info()}>{(a) => <span class="muted"> {formatSize(a().size)}</span>}</Show>
-      <Show
-        when={props.onChange}
-        fallback={
-          <Show when={text(props.block, "caption")}>
-            <p class="asset-caption">{text(props.block, "caption")}</p>
-          </Show>
-        }
-      >
-        <div class="block-fields">
-          <input
-            aria-label="Caption"
-            placeholder="Caption"
-            value={text(props.block, "caption")}
-            onInput={(e) => props.onChange?.(withText(props.block, "caption", e.currentTarget.value))}
-          />
+    <Show
+      when={pdf() && !card()}
+      fallback={
+        <div class="block-asset">
+          <div class="asset-card-row">
+            <Show when={pdf() && info()}>{(a) => <PdfThumbButton id={a().id} filename={a().filename} width={48} />}</Show>
+            <span>
+              <a href={assetUrl(asset())} download={info()?.filename ?? ""} class="asset-card">
+                {name()}
+              </a>
+              <Show when={info()}>{(a) => <span class="muted"> {formatSize(a().size)}</span>}</Show>
+            </span>
+            <Show when={pdf() && !compact}>
+              <button type="button" aria-label="Show the PDF inline" data-node-view-interactive="" onClick={() => setCard(false)}>
+                Show PDF
+              </button>
+            </Show>
+          </div>
+          {caption()}
         </div>
-      </Show>
-    </div>
+      }
+    >
+      <div class="block-asset block-pdf">
+        <Show when={info()} keyed>
+          {(a) => (
+            <PdfViewer
+              url={assetUrl(a.id)}
+              filename={a.filename}
+              height={height()}
+              onHeight={setHeight}
+              extra={
+                <>
+                  <span class="ink-divider" aria-hidden="true" />
+                  <button type="button" class="ink-action" aria-label="Show as file card" title="Show as file card" onClick={() => setCard(true)}>
+                    <CardIcon />
+                  </button>
+                </>
+              }
+            />
+          )}
+        </Show>
+        {caption()}
+      </div>
+    </Show>
   );
 }
 

@@ -266,6 +266,33 @@ export interface Token {
 }
 
 /** A response other than 2xx, with the API's JSON error body when it sent one. */
+/** How a neighbour in a note's graph links to the note: it is linked to, links to it, or both. */
+export type GraphDirection = "center" | "out" | "in" | "both";
+
+export interface GraphNode {
+  id: string;
+  type: string;
+  title: string;
+  updated: string | null;
+  direction: GraphDirection;
+}
+
+/** A link between two notes of a graph: through a reference `field`, or a `mention` in it. */
+export interface GraphEdge {
+  from: string;
+  to: string;
+  via: "field" | "mention";
+  field: string;
+}
+
+/** A note's link neighbourhood. `nodes[0]` is the note; `truncated` counts neighbours left out. */
+export interface NoteGraph {
+  id: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  truncated: number;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -290,11 +317,12 @@ export function setUnauthorizedHandler(handler: () => void) {
 /** Requests other than GET to these paths change notes. */
 const NOTE_WRITES = /^\/api\/(notes|batch|upsert|trash)(\/|\?|$)/;
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const init: RequestInit = {
     method,
     credentials: "same-origin",
     headers: { Accept: "application/json" },
+    ...(signal ? { signal } : {}),
   };
   if (body instanceof Blob) {
     init.headers = { ...init.headers, "Content-Type": "application/octet-stream" };
@@ -372,14 +400,19 @@ export const api = {
     request<Taxonomy & { notes: { id: string }[] }>("PUT", `/api/taxonomies/${enc(name)}`, { wcl, renames }),
   /** Delete a taxonomy. One a field uses answers 409 `taxonomy_in_use`, listing the notes. */
   deleteTaxonomy: (name: string) => request<unknown>("DELETE", `/api/taxonomies/${enc(name)}`),
-  /** One page of `query`. `thisId` is the note that holds the query, bound to `this`. */
-  query: (query: string, cursor: string | null, pageSize: number, thisId?: string) =>
-    request<Page>("POST", "/api/query", {
-      query,
-      ...(thisId ? { this: thisId } : {}),
-      ...(cursor ? { cursor } : {}),
-      page_size: pageSize,
-    }),
+  /** One page of `query`. `thisId` is the note that holds the query, bound to `this`; `signal` cancels it. */
+  query: (query: string, cursor: string | null, pageSize: number, thisId?: string, signal?: AbortSignal) =>
+    request<Page>(
+      "POST",
+      "/api/query",
+      {
+        query,
+        ...(thisId ? { this: thisId } : {}),
+        ...(cursor ? { cursor } : {}),
+        page_size: pageSize,
+      },
+      signal,
+    ),
   /** Check `query`. A query that does not parse is a 400 naming the line and column. */
   parseQuery: (query: string) =>
     request<{ text: string }>("POST", "/api/query/parse", {
@@ -393,6 +426,9 @@ export const api = {
   /** Move a note to the trash, over version `base`. A stale base is a conflict. */
   deleteNote: (id: string, base: string) =>
     request<unknown>("DELETE", `/api/notes/${enc(id)}?base_version=${enc(base)}`),
+  /** The notes linked to or from note `id`, with every link among them. */
+  graph: (id: string, limit?: number) =>
+    request<NoteGraph>("GET", `/api/notes/${enc(id)}/graph${limit ? `?limit=${limit}` : ""}`),
   history: async (id: string) =>
     (await request<{ versions: Version[] }>("GET", `/api/notes/${enc(id)}/history`)).versions,
   /** A stored version of a note, in the same form as the note itself. */

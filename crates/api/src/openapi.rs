@@ -42,6 +42,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ("GET", "/api/notes/{id}/history", "Every version of a note"),
     (
         "GET",
+        "/api/notes/{id}/graph",
+        "The notes linked to or from a note, most recently updated first (?limit=, default 60), with every link among them",
+    ),
+    (
+        "GET",
         "/api/notes/{id}/history/{version}",
         "One version of a note",
     ),
@@ -169,7 +174,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/assets",
         "Upload a file as a new asset, named with ?filename=",
     ),
-    ("GET", "/api/assets/{id}", "Download an asset's bytes"),
+    (
+        "GET",
+        "/api/assets/{id}",
+        "Download an asset's bytes, or one byte range of them with a Range header",
+    ),
     (
         "DELETE",
         "/api/assets/{id}",
