@@ -193,9 +193,18 @@ impl Vault {
             .write(true)
             .open(&path)
             .map_err(io_err(&path))?;
-        file.lock().map_err(io_err(&path))?;
+        lock_exclusive(&file).map_err(io_err(&path))?;
         Ok(file)
     }
+}
+
+/// Block until this process holds `file`'s exclusive advisory lock, released when the file is
+/// closed.
+///
+/// This is flock(2) on every target rather than `std::fs::File::lock`, which std leaves
+/// `Unsupported` on Android, where the app's local vault would then fail to open.
+fn lock_exclusive(file: &File) -> std::io::Result<()> {
+    rustix::fs::flock(file, rustix::fs::FlockOperation::LockExclusive).map_err(Into::into)
 }
 
 /// Finish or discard a commit an earlier process left behind.
@@ -295,4 +304,31 @@ fn sync_dir(dir: &Path) -> Result<()> {
     File::open(dir)
         .and_then(|d| d.sync_all())
         .map_err(io_err(dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustix::fs::{FlockOperation, flock};
+
+    #[test]
+    fn the_journal_lock_excludes_other_opens_until_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(LOCK_FILE);
+        let open = || {
+            File::options()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .unwrap()
+        };
+        let held = open();
+        lock_exclusive(&held).unwrap();
+        let other = open();
+        let busy = flock(&other, FlockOperation::NonBlockingLockShared).unwrap_err();
+        assert_eq!(busy, rustix::io::Errno::WOULDBLOCK);
+        drop(held);
+        flock(&other, FlockOperation::NonBlockingLockExclusive).unwrap();
+    }
 }

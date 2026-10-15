@@ -1,0 +1,9 @@
+# std's file locks return `Unsupported` on Android, so the app's local vault would fail to open
+# (ticket 76). Lock with rustix::fs::flock instead.
+disallowed-methods = [
+    { path = "std::fs::File::lock", reason = "Unsupported on Android; use rustix::fs::flock" },
+    { path = "std::fs::File::lock_shared", reason = "Unsupported on Android; use rustix::fs::flock" },
+    { path = "std::fs::File::try_lock", reason = "Unsupported on Android; use rustix::fs::flock" },
+    { path = "std::fs::File::try_lock_shared", reason = "Unsupported on Android; use rustix::fs::flock" },
+    { path = "std::fs::File::unlock", reason = "Unsupported on Android; use rustix::fs::flock" },
+]

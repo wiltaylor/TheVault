@@ -15,6 +15,7 @@ use std::sync::Arc;
 use http_body_util::BodyExt;
 use tauri::http::{Method, Request, Response, StatusCode, header};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_vault_device::CoreFailure;
 use tauri_plugin_vault_device::core::Core;
 
 /// The custom URI scheme the webview loads the app from.
@@ -49,6 +50,9 @@ pub fn run() {
 
 /// Answers one request on [`SCHEME`]: `/api` from the embedded server, the rest from `web/dist`.
 async fn serve(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+    if let Some(failure) = app.try_state::<CoreFailure>() {
+        return failure_page(&failure.0);
+    }
     let path = request.uri().path();
     if path != "/api" && !path.starts_with("/api/") {
         return asset(app, path);
@@ -152,6 +156,31 @@ fn asset(app: &AppHandle, path: &str) -> Response<Vec<u8>> {
         .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
+/// The page every request gets when the local vault failed to open: the error, rather than an app
+/// that cannot load or save anything.
+fn failure_page(error: &str) -> Response<Vec<u8>> {
+    let error = error
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let body = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <title>TheVault</title></head>\
+         <body style=\"font-family: sans-serif; padding: 1.5rem\">\
+         <h1>TheVault could not start</h1>\
+         <p>The app could not open its local vault.</p><pre style=\"white-space: pre-wrap\">{error}</pre>\
+         </body></html>"
+    );
+    let mut res = Response::new(body.into_bytes());
+    *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    res.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    res
+}
+
 fn status(code: StatusCode) -> Response<Vec<u8>> {
     let mut res = Response::new(Vec::new());
     *res.status_mut() = code;
@@ -171,5 +200,14 @@ mod tests {
         assert_eq!(note_id(&format!("/api/notes/{id}")), Some(id));
         assert_eq!(note_id(&format!("/api/notes/{id}/history")), None);
         assert_eq!(note_id("/api/notes/new"), None);
+    }
+
+    #[test]
+    fn the_failure_page_shows_the_error_escaped() {
+        let res = failure_page("opening /data/vault: <lock> not supported");
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = String::from_utf8(res.into_body()).unwrap();
+        assert!(body.contains("TheVault could not start"));
+        assert!(body.contains("opening /data/vault: &lt;lock&gt; not supported"));
     }
 }

@@ -67,6 +67,11 @@ async fn capture_status<R: Runtime>(app: AppHandle<R>) -> Result<Json, String> {
     run_kotlin(&app, "captureStatus", json!({}))
 }
 
+/// Why the core failed to open in the plugin's setup, managed instead of the core so the app can
+/// show it.
+#[derive(Debug, Clone)]
+pub struct CoreFailure(pub String);
+
 /// The plugin, registered on the app's builder. Its setup opens the process's core on the vault
 /// in the app's data folder, where the Kotlin side opens it too.
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
@@ -79,7 +84,19 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let data = app.path().data_dir()?;
             #[cfg(not(target_os = "android"))]
             let data = app.path().app_data_dir()?;
-            app.manage(core::open(&core::vault_dir(&data))?);
+            let vault = core::vault_dir(&data);
+            match core::open(&vault) {
+                Ok(core) => {
+                    app.manage(core);
+                }
+                // The app shows this instead of aborting: a panic here takes the process down
+                // before any window can say why.
+                Err(e) => {
+                    let failure = CoreFailure(format!("opening {}: {e:#}", vault.display()));
+                    eprintln!("TheVault could not open its local vault: {}", failure.0);
+                    app.manage(failure);
+                }
+            }
             #[cfg(target_os = "android")]
             {
                 let handle = api.register_android_plugin(ANDROID_PACKAGE, "VaultDevicePlugin")?;
