@@ -1,0 +1,55 @@
+label       = "Person"
+plural      = "People"
+description = "Someone you know."
+icon        = "user"
+colour      = "purple"
+
+field email {
+  kind  = "string"
+  label = "Email"
+}
+
+field phones {
+  kind        = "list"
+  label       = "Phones"
+  description = "Phone numbers in international (E.164) form, such as +61400000000."
+  items       = "string"
+}
+
+field addresses {
+  kind  = "list"
+  label = "Addresses"
+  items = "string"
+}
+
+field device_contacts {
+  kind        = "dict"
+  label       = "Device contacts"
+  description = "The phone contact linked to this person, by device id."
+  values      = "string"
+  hidden      = true
+}
+
+field body {
+  kind  = "content"
+  label = "Notes"
+}
+
+template default {
+  tab "Person" {
+    slot "title" {
+      label = "Name"
+    }
+    slot "email"
+    slot "phones"
+    slot "addresses"
+    slot "body"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "email"
+  }
+}

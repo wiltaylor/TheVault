@@ -131,6 +131,16 @@ handler "before_update" {
 `);
   });
 
+  it("keeps a hidden field hidden when the type is written back", () => {
+    const person: SchemaType = {
+      ...stored,
+      fields: [{ name: "device_contacts", kind: "dict", label: "device_contacts", required: false, computed: false, hidden: true, multiple: false, values: "string" }],
+    };
+    const m = typeFromSchema(person);
+    expect(m.fields[0]?.hidden).toBe(true);
+    expect(typeWcl(m)).toContain('field device_contacts {\n  kind = "dict"\n  hidden = true\n  values = "string"\n}');
+  });
+
   it("reads a list of terms back as a list whose items are a taxonomy, and writes it so", () => {
     const tagged: SchemaType = {
       ...stored,
@@ -237,6 +247,10 @@ handler "before_update" {
     c.required = true;
     c.computed = true;
     m.fields.push(c);
+    const h = newField("h");
+    h.required = true;
+    h.hidden = true;
+    m.fields.push(h);
     expect(problems(m)).toEqual([
       '"Bad" is not a field name: use a-z, 0-9 and _.',
       "title is reserved.",
@@ -244,6 +258,7 @@ handler "before_update" {
       "a is used twice.",
       "a: choose a target type.",
       "c: a computed field cannot be required.",
+      "h: a hidden field cannot be required.",
     ]);
   });
 

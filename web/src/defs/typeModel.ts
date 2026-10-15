@@ -85,6 +85,7 @@ export interface FieldModel {
   description: string;
   required: boolean;
   computed: boolean;
+  hidden: boolean;
   multiple: boolean;
   default?: Json;
   options: string[];
@@ -157,6 +158,7 @@ export function newField(name = "", kind: FieldKind = "string"): FieldModel {
     description: "",
     required: false,
     computed: false,
+    hidden: false,
     multiple: false,
     options: [],
     taxonomy: "",
@@ -182,6 +184,7 @@ function fieldFromSchema(f: Record<string, Json>): FieldModel {
   m.description = str(f.description);
   m.required = f.required === true;
   m.computed = f.computed === true;
+  m.hidden = f.hidden === true;
   m.multiple = f.multiple === true;
   if (f.default !== undefined && f.default !== null) m.default = f.default;
   if (Array.isArray(f.options)) m.options = f.options.map(String);
@@ -252,6 +255,7 @@ export function problems(m: TypeModel): string[] {
     else if (seen.has(f.name)) out.push(`${f.name} is used twice.`);
     seen.add(f.name);
     if (f.required && f.computed) out.push(`${who}: a computed field cannot be required.`);
+    if (f.required && f.hidden) out.push(`${who}: a hidden field cannot be required.`);
     if (f.kind === "select" && f.options.length === 0) out.push(`${who}: a select field needs options.`);
     if ((f.kind === "taxonomy" || isTermList(f)) && !f.taxonomy) out.push(`${who}: choose a taxonomy.`);
     if (f.kind === "reference") {
@@ -295,6 +299,7 @@ function fieldWcl(f: FieldModel): string {
     out += wclField("default", f.default, i, float);
   }
   if (f.computed) out += wclField("computed", true, i);
+  if (f.hidden) out += wclField("hidden", true, i);
   if (f.multiple && MULTIPLE_KINDS.has(f.kind)) out += wclField("multiple", true, i);
   switch (f.kind) {
     case "date_range":

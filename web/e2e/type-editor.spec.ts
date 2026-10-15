@@ -66,7 +66,7 @@ test("fields are a grid with one row per field and settings that open underneath
   await logIn(page, `/settings/types/${name}/edit`);
 
   const grid = page.getByRole("table", { name: "Fields" });
-  await expect(grid.getByRole("columnheader")).toHaveText(["Order", "Name", "Kind", "Label", "Required", "Computed", "Several", "Actions"]);
+  await expect(grid.getByRole("columnheader")).toHaveText(["Order", "Name", "Kind", "Label", "Required", "Computed", "Hidden", "Several", "Actions"]);
   const size = page.getByTestId("field-row-0");
   await expect(size.getByLabel("Name", { exact: true })).toHaveValue("size");
   await expect(size.getByLabel("Kind", { exact: true })).toHaveValue("int");

@@ -69,7 +69,19 @@ fn lists_every_type_with_its_fields_and_templates() {
     let mut names: Vec<&str> = types.iter().map(|t| t["name"].as_str().unwrap()).collect();
     names.sort();
     // The seeded type, and the built-in types every vault has.
-    assert_eq!(names, ["dailynote", "fleeting", "task"]);
+    // `person` comes with the phone types, which reference it.
+    assert_eq!(
+        names,
+        [
+            "call",
+            "conversation",
+            "dailynote",
+            "fleeting",
+            "message",
+            "person",
+            "task"
+        ]
+    );
     let task = types.iter().find(|t| t["name"] == "task").unwrap();
     assert_eq!(task["name"], "task");
     assert_eq!(task["plural"], "Tasks");
@@ -78,7 +90,8 @@ fn lists_every_type_with_its_fields_and_templates() {
         task["fields"][0],
         json!({
             "name": "status", "label": "Status", "description": null, "kind": "select",
-            "required": false, "computed": false, "multiple": false, "compound": false,
+            "required": false, "computed": false, "hidden": false, "multiple": false,
+            "compound": false,
             "default": "todo", "options": ["todo", "done"],
         })
     );

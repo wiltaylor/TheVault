@@ -169,14 +169,91 @@ template default {
 
 ### Built-in types
 
-Every vault has two types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it. `vault init --starter` writes both too. The files it writes are `crates/writer/defaults/dailynote.wcl` and `crates/writer/defaults/fleeting.wcl`. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks both with `"builtin": true`.
+Every vault has five types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it. `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`.
 
 | Type | Label | For | Must keep |
 |------|-------|-----|-----------|
 | `dailynote` | Daily note | One note for each day. The app opens today's note and finds a day's note by its date | `date`, one required `date` field |
 | `fleeting` | Fleeting note | A quick capture of text or images, made from the app's capture dialog. Unprocessed ones wait in the Inbox (`from fleeting where !processed`) until they are marked done, converted into a note of another type, or deleted | `processed`, one `bool` field that handlers do not compute |
+| `message` | Message | One SMS, MMS or RCS message from a phone, written by the default device scripts (D15) | nothing |
+| `call` | Call | One phone call, made, received or missed (D15) | nothing |
+| `conversation` | Conversation | One message thread. Its page lists the thread's messages (D15) | nothing |
 
 A change that removes a "must keep" field, or changes its kind, is refused with `invalid_type`.
+
+The phone data types reference `person`, which is a starter type and not a built-in one. When the server adds any of the three to a vault that has no `person` type, it adds `crates/writer/defaults/person.wcl` with them, in the same commit. That `person` can be customised and, once nothing references it, deleted. A vault that already has a `person` type keeps it as it is.
+
+The fields of the phone data types, as a new vault gets them:
+
+| Type | Field | Kind | Meaning |
+|------|-------|------|---------|
+| `message` | `channel` | `select`: `sms`, `mms`, `rcs` | How the message travelled |
+| | `direction` | `select`: `in`, `out` | Received or sent |
+| | `from` | `reference` to `person` | The sender, when a person matches |
+| | `to` | `reference` to `person`, `multiple` | The recipients that match a person |
+| | `from_raw` | `string` | The sender's number or display name, as the phone gave it |
+| | `to_raw` | `list` of `string` | Each recipient's number or display name, as the phone gave it |
+| | `conversation` | `reference` to `conversation` | The thread the message belongs to |
+| | `sent` | `datetime` | When it was sent |
+| | `body` | `content` | The text |
+| | `attachments` | `asset`, `multiple` | MMS attachments |
+| | `partial` | `bool`, default `false` | Captured from a notification, so it may be incomplete (RCS) |
+| | `device_ref` | `string` | The phone's id for the message: a provider row id or a notification key. The device scripts use it to capture a message once |
+| `call` | `direction` | `select`: `in`, `out`, `missed` | |
+| | `person` | `reference` to `person` | The other party, when a person matches |
+| | `number` | `string` | The other party's number |
+| | `started` | `datetime` | When the call started |
+| | `duration` | `int` | Its length in seconds |
+| | `device_ref` | `string` | The phone's call log id, so a call is captured once |
+| `conversation` | `participants` | `reference` to `person`, `multiple` | The people in the thread |
+| | `channel` | `select`: `sms`, `mms`, `rcs` | |
+| | `thread_ref` | `string` | The phone's id for the thread |
+
+The `conversation` type's default template shows its messages, oldest first:
+
+```wcl
+template default {
+  tab "Messages" {
+    slot "participants"
+    query_view {
+      title = "Messages"
+      query = "from message where conversation == this sort sent asc"
+
+      view table {
+        kind    = "table"
+        columns = ["sent", "direction", "from_raw", "title"]
+      }
+    }
+  }
+}
+```
+
+The `person` type, both the starter pack's and the one added with the phone data types, holds a person's phone numbers and addresses (D24):
+
+```wcl
+field phones {
+  kind        = "list"
+  label       = "Phones"
+  description = "Phone numbers in international (E.164) form, such as +61400000000."
+  items       = "string"
+}
+
+field addresses {
+  kind  = "list"
+  label = "Addresses"
+  items = "string"
+}
+
+field device_contacts {
+  kind        = "dict"
+  label       = "Device contacts"
+  description = "The phone contact linked to this person, by device id."
+  values      = "string"
+  hidden      = true
+}
+```
+
+`device_contacts` maps a device id to the id of the contact on that device that is linked to the person. It is hidden: the device scripts write it, and the app does not show it.
 
 The `fleeting` type as a new vault gets it. Its page shows the images and the body; `processed` is set from the Properties panel or the Inbox:
 
@@ -237,6 +314,7 @@ Every `field` block takes these items. The next section lists the extra items ea
 | `required` | bool | `false` | A note must have a value. A newly added required field must have a `default` (D6) |
 | `default` | value | none | The value a new note gets, and the value a schema change writes into existing notes. It uses the note encoding of the field's kind |
 | `computed` | bool | `false` | Only handlers write the field. The UI shows it read-only, and a client write is rejected (D3). A computed field cannot also be `required` |
+| `hidden` | bool | `false` | The properties sidebar does not show the field. The value is still stored, validated, queried, and written by the API and scripts, and a slot in a template still shows it. A hidden field cannot also be `required` |
 | `multiple` | bool | `false` | Allowed on `select`, `taxonomy`, `reference` and `asset`. The note holds a list |
 
 `default` is allowed on `string`, `int`, `float`, `bool`, `date`, `datetime`, `url`, `select`, `taxonomy` and `list` fields.
@@ -1374,7 +1452,7 @@ A canvas is TheVault's own WCL format, not JSON Canvas (D15, D26). It is a `canv
 | `node <id> { ... }` | block | Items on the canvas, in z-order. Later nodes draw on top |
 | `edge <id> { ... }` | block | Connections between nodes |
 
-`<id>` is an identifier, unique across the groups, nodes and edges of one canvas. Coordinates are canvas units, floats, with `y` increasing downwards. A canvas in a template's fixed content shows at the template's `height` on every note.
+`<id>` is an identifier, unique across the groups, nodes and edges of one canvas. The app names a new item after its kind, or an edge after the nodes it joins, then adds an underscore and five random lower-case letters and digits, as in `card_k3f9x`, `group_0m2ad` or `card_k3f9x_to_note_7tq4z_p1c8w`. The suffix keeps ids made on two devices offline from clashing when the canvases sync (D30). An item keeps the id it was given, so ids made before the suffix existed stay as they are. Coordinates are canvas units, floats, with `y` increasing downwards. A canvas in a template's fixed content shows at the template's `height` on every note.
 
 ### `viewport`
 

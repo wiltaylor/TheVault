@@ -55,7 +55,10 @@ use store::{Change, CommitStep, Vault};
 
 pub use assets::Asset;
 pub use batch::{Item, Op, Outcome, Report};
-pub use builtin::{BUILT_IN_TYPES, is_built_in_type};
+pub use builtin::{
+    BUILT_IN_TYPES, CALL_TYPE, CONVERSATION_TYPE, DEFAULT_CALL_TYPE, DEFAULT_CONVERSATION_TYPE,
+    DEFAULT_MESSAGE_TYPE, DEFAULT_PERSON_TYPE, MESSAGE_TYPE, PERSON_TYPE, is_built_in_type,
+};
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
 pub use defs::ScriptProblem;
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
@@ -132,7 +135,8 @@ pub enum Error {
     /// (D6).
     #[error("type {0:?} has notes, so changing it needs a planned schema change")]
     TypeInUse(String),
-    /// A built-in type (`dailynote`, `fleeting`) can be changed but not deleted.
+    /// A built-in type (`dailynote`, `fleeting`, `message`, `call`, `conversation`) can be changed
+    /// but not deleted.
     #[error("{0:?} is built in: it can be customised but not deleted")]
     BuiltInType(String),
     /// A request that is malformed in a way the other variants do not cover.
@@ -499,45 +503,55 @@ impl Writer {
     /// Create type `name`, or replace it while it has no notes, and reload the schema. Changing a
     /// type that has notes goes through a planned schema change instead (D6).
     pub fn put_type(&self, name: &str, source: &str) -> Result<String> {
+        let mut texts = self.put_types(&[(name, source)])?;
+        Ok(texts.remove(0))
+    }
+
+    /// Write several type files in one commit, checked as one schema, so types that name each
+    /// other can arrive together. Returns each canonical text, in order.
+    pub(crate) fn put_types(&self, sources: &[(&str, &str)]) -> Result<Vec<String>> {
         let _w = self.write_lock();
         let mut inner = self.lock();
-        let path = type_path(name);
-        let invalid = |message: String| {
-            Error::InvalidType(schema::SchemaError(vec![Invalid {
-                file: path.clone(),
-                issues: vec![Issue::new("type", message)],
-            }]))
-        };
-        if !schema::is_name(name) {
-            return Err(invalid(format!("{name:?} is not a type name")));
-        }
-        let text = store::canonical(source, &path)?;
-        if inner_has_type(&inner, name) {
-            let has_notes = inner
-                .index
-                .connection()
-                .query_row(
-                    "SELECT EXISTS (SELECT 1 FROM notes WHERE type = ?1)",
-                    [name],
-                    |r| r.get::<_, bool>(0),
-                )
-                .map_err(index::Error::from)?;
-            if has_notes {
-                return Err(Error::TypeInUse(name.to_owned()));
-            }
-        }
         let mut types = self.definitions("types")?;
-        types.retain(|(n, _)| n != name);
-        types.push((name.to_owned(), text.clone()));
+        let mut changes = Vec::new();
+        let mut texts = Vec::new();
+        for &(name, source) in sources {
+            let path = type_path(name);
+            if !schema::is_name(name) {
+                return Err(Error::InvalidType(schema::SchemaError(vec![Invalid {
+                    file: path,
+                    issues: vec![Issue::new("type", format!("{name:?} is not a type name"))],
+                }])));
+            }
+            let text = store::canonical(source, &path)?;
+            if inner_has_type(&inner, name) {
+                let has_notes = inner
+                    .index
+                    .connection()
+                    .query_row(
+                        "SELECT EXISTS (SELECT 1 FROM notes WHERE type = ?1)",
+                        [name],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .map_err(index::Error::from)?;
+                if has_notes {
+                    return Err(Error::TypeInUse(name.to_owned()));
+                }
+            }
+            types.retain(|(n, _)| n != name);
+            types.push((name.to_owned(), text.clone()));
+            changes.push(Change::write(path, text.clone()));
+            texts.push(text);
+        }
         let taxonomies = self.definitions("taxonomies")?;
         let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
             .map_err(Error::InvalidType)?;
         builtin::check_built_in_types(&schema)?;
-        let generation = self.vault.commit(vec![Change::write(path, text.clone())])?;
+        let generation = self.vault.commit(changes)?;
         inner.index.set_schema(&schema)?;
         inner.index.advance(generation)?;
         inner.schema = schema;
-        Ok(text)
+        Ok(texts)
     }
 
     /// The `(stem, text)` of every definition file in `dir`.

@@ -189,6 +189,9 @@ pub struct FieldDef {
     pub required: bool,
     /// Only handlers write a computed field (D3).
     pub computed: bool,
+    /// Kept off the note page and the properties sidebar. The value is still stored, queried and
+    /// written through the API and scripts.
+    pub hidden: bool,
     /// The note holds a list.
     pub multiple: bool,
     /// Written as `kind = "list"` with `items = "taxonomy"`. Such a field is read as a `taxonomy`
@@ -207,6 +210,7 @@ pub(crate) fn title_field() -> FieldDef {
         kind: FieldKind::String,
         required: true,
         computed: false,
+        hidden: false,
         multiple: false,
         term_list: false,
         default: None,
@@ -416,6 +420,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         opt("description", Form::Str),
         opt("required", Form::Bool),
         opt("computed", Form::Bool),
+        opt("hidden", Form::Bool),
         opt("multiple", Form::Bool),
     ];
     let kind_name = d.field("kind").and_then(Value::as_str).unwrap_or("");
@@ -451,6 +456,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
     let flag = |n: &str| d.field(n) == Some(&Value::Bool(true));
     let s = |n: &str| string(d, n);
     let (required, computed, multiple) = (flag("required"), flag("computed"), flag("multiple"));
+    let hidden = flag("hidden");
     let term_list = kind_name == "list" && s("items").as_deref() == Some("taxonomy");
 
     let kind = match kind_name {
@@ -531,6 +537,9 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
     if computed && required {
         c.fail(at, "a computed field cannot also be required");
     }
+    if hidden && required {
+        c.fail(at, "a hidden field cannot also be required");
+    }
 
     let def = FieldDef {
         label: s("label").unwrap_or_else(|| name.clone()),
@@ -539,6 +548,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         kind,
         required,
         computed,
+        hidden,
         // A list of terms holds several terms, as a multiple taxonomy field does.
         multiple: multiple || term_list,
         term_list,

@@ -189,13 +189,22 @@ export function withHeight(block: Block | undefined, height: number): Block {
   return next;
 }
 
-/** An id no group, node or edge of `block` has yet: `prefix`, then `prefix_2` and so on. */
+const ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
+const ID_SUFFIX_LENGTH = 5;
+
+/**
+ * An id no group, node or edge of `block` has yet: `prefix` and a short random suffix, such as
+ * `card_k3f9x`. The suffix keeps ids made on two devices offline from clashing when they sync
+ * (D30); ids already in the canvas are never changed.
+ */
 export function freeId(block: Block | undefined, prefix: string): string {
   const taken = new Set((block?.blocks ?? []).map((b) => b.labels?.[0]));
-  if (!taken.has(prefix)) return prefix;
-  let n = 2;
-  while (taken.has(`${prefix}_${n}`)) n++;
-  return `${prefix}_${n}`;
+  for (;;) {
+    let suffix = "";
+    for (let i = 0; i < ID_SUFFIX_LENGTH; i++) suffix += ID_ALPHABET[Math.floor(Math.random() * ID_ALPHABET.length)];
+    const id = `${prefix}_${suffix}`;
+    if (!taken.has(id)) return id;
+  }
 }
 
 /**

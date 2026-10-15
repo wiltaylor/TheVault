@@ -121,12 +121,12 @@ export function slottedFields(type: TypeDef): Set<string> {
  * The type's fields the note page has no slot or editable control for, in type order: the
  * properties sidebar edits these. A control in the template or in the note's own content places
  * its field as a slot does; a read-only control on a computed field and a `{{name}}` reference
- * do not count as a place.
+ * do not count as a place. A hidden field is left out.
  */
 export function unplacedFields(type: TypeDef, doc?: NoteDoc): FieldDef[] {
   const placed = slottedFields(type);
   for (const name of controlledFields(type, doc)) placed.add(name);
-  return type.fields.filter((f) => !placed.has(f.name));
+  return type.fields.filter((f) => !placed.has(f.name) && !f.hidden);
 }
 
 /**

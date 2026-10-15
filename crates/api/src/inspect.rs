@@ -49,6 +49,7 @@ fn field_json(f: &FieldDef) -> Value {
     out.insert("description".into(), json!(f.description));
     out.insert("required".into(), json!(f.required));
     out.insert("computed".into(), json!(f.computed));
+    out.insert("hidden".into(), json!(f.hidden));
     out.insert("multiple".into(), json!(f.multiple));
     out.insert(
         "default".into(),

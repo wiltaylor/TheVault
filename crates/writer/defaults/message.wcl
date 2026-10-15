@@ -1,0 +1,92 @@
+label       = "Message"
+plural      = "Messages"
+description = "One SMS, MMS or RCS message, sent or received on a phone."
+icon        = "message-square"
+colour      = "blue"
+
+field channel {
+  kind    = "select"
+  label   = "Channel"
+  options = ["sms", "mms", "rcs"]
+}
+
+field direction {
+  kind    = "select"
+  label   = "Direction"
+  options = ["in", "out"]
+}
+
+field from {
+  kind   = "reference"
+  label  = "From"
+  target = "person"
+}
+
+field to {
+  kind     = "reference"
+  label    = "To"
+  target   = "person"
+  multiple = true
+}
+
+field from_raw {
+  kind        = "string"
+  label       = "From (number or name)"
+  description = "The sender's number or display name, as the phone gave it."
+}
+
+field to_raw {
+  kind        = "list"
+  label       = "To (numbers or names)"
+  description = "Each recipient's number or display name, as the phone gave it."
+  items       = "string"
+}
+
+field conversation {
+  kind   = "reference"
+  label  = "Conversation"
+  target = "conversation"
+}
+
+field sent {
+  kind  = "datetime"
+  label = "Sent"
+}
+
+field body {
+  kind  = "content"
+  label = "Text"
+}
+
+field attachments {
+  kind     = "asset"
+  label    = "Attachments"
+  multiple = true
+}
+
+field partial {
+  kind        = "bool"
+  label       = "Partial"
+  description = "Captured from a notification, so the text or attachments may be incomplete."
+  default     = false
+}
+
+field device_ref {
+  kind        = "string"
+  label       = "Device reference"
+  description = "The phone's id for the message, so it is captured once."
+}
+
+template default {
+  tab "Message" {
+    slot "body"
+    slot "attachments"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "sent"
+  }
+}

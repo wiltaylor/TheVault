@@ -35,6 +35,8 @@ export interface FieldDef {
   kind: string;
   required: boolean;
   computed: boolean;
+  /** Kept off the note page and the properties sidebar; still stored, queried and scripted. */
+  hidden?: boolean;
   multiple: boolean;
   compound: boolean;
   default?: Json;

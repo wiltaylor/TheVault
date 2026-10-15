@@ -85,6 +85,7 @@ fn field_json(f: &FieldDef) -> Value {
         "kind": f.kind.name(),
         "required": f.required,
         "computed": f.computed,
+        "hidden": f.hidden,
         "multiple": f.multiple,
         "compound": f.kind.is_compound(),
     });

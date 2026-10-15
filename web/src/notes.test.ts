@@ -109,6 +109,11 @@ describe("the inline note page", () => {
     expect(unplacedFields(typed).map((f) => f.name)).toEqual(["estimate", "due", "owner", "size"]);
   });
 
+  it("leaves a hidden field out of the sidebar", () => {
+    const fields = typed.fields.map((f) => (f.name === "owner" ? { ...f, hidden: true } : f));
+    expect(unplacedFields({ ...typed, fields }).map((f) => f.name)).toEqual(["estimate", "due", "size"]);
+  });
+
   it("resolves {{name}} to the title, a field, or null for no such field", () => {
     const doc = { fields: { title: "T", due: "2026-01-02" }, blocks: [] };
     expect(refValue(typed, doc, "title")).toBe("T");

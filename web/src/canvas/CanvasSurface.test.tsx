@@ -56,7 +56,7 @@ describe("CanvasSurface", () => {
     expect(canvasOf(block()).nodes.map((n) => [n.id, n.kind])).toEqual([
       ["a", "card"],
       ["b", "card"],
-      ["card", "card"],
+      [expect.stringMatching(/^card_[a-z0-9]{5}$/), "card"],
     ]);
 
     // Dragging from a's right port and dropping on b joins them, with the closest sides saved.
@@ -66,7 +66,7 @@ describe("CanvasSurface", () => {
     fireEvent.pointerMove(getByTestId("canvas-view"), at(200, 25));
     expect(getByTestId("canvas-edge-preview")).toBeTruthy();
     fireEvent.pointerUp(getByTestId("canvas-view"), at(310, 10));
-    expect(canvasOf(block()).edges).toMatchObject([{ id: "a_to_b", from: "a", to: "b", fromSide: "right", toSide: "left" }]);
+    expect(canvasOf(block()).edges).toMatchObject([{ id: expect.stringMatching(/^a_to_b_[a-z0-9]{5}$/), from: "a", to: "b", fromSide: "right", toSide: "left" }]);
     expect(getAllByTestId("canvas-edge")).toHaveLength(1);
 
     drag(getAllByTestId("canvas-node")[0]!, [10, 10], [50, 30]);

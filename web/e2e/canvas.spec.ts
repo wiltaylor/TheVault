@@ -201,7 +201,10 @@ test("+ offers Card, Note and Group; a card's blocks are edited in place with / 
   await expect(nodes.first()).toHaveClass(/selected/);
   await expect(nodes.first().getByRole("heading", { name: "Plan" })).toBeVisible();
   await saveAndWait(p);
-  const blocks = () => savedItem(admin, note.id, "card").then((n) => n?.blocks);
+  // A new id is the kind and a short random suffix (D30).
+  const first = (await nodes.first().getAttribute("data-id"))!;
+  expect(first).toMatch(/^card_[a-z0-9]{5}$/);
+  const blocks = () => savedItem(admin, note.id, first).then((n) => n?.blocks);
   expect(await blocks()).toEqual([
     { kind: "heading", fields: { level: 2, text: "Plan" } },
     { kind: "code", fields: { source: "" } },
@@ -244,11 +247,19 @@ test("+ offers Card, Note and Group; a card's blocks are edited in place with / 
   await p.mouse.down();
   await p.mouse.move(box.x + 160, box.y + 90, { steps: 5 });
   await p.mouse.up();
-  await connect(p, canvas, "card", "right", "card_2");
+  const secondId = (await second.getAttribute("data-id"))!;
+  expect(secondId).toMatch(/^card_[a-z0-9]{5}$/);
+  expect(secondId).not.toBe(first);
+  await connect(p, canvas, first, "right", secondId);
   await expect(canvas.getByTestId("canvas-edge")).toHaveCount(1);
   await saveAndWait(p);
   const saved = boardCanvas(await stored(admin, note.id))!;
-  expect(saved.blocks?.map((b) => `${b.kind} ${b.labels?.[0] ?? ""}`)).toEqual(["viewport ", "node card", "node card_2", "edge card_to_card_2"]);
+  expect(saved.blocks?.map((b) => `${b.kind} ${b.labels?.[0] ?? ""}`)).toEqual([
+    "viewport ",
+    `node ${first}`,
+    `node ${secondId}`,
+    expect.stringMatching(new RegExp(`^edge ${first}_to_${secondId}_[a-z0-9]{5}$`)),
+  ]);
   expect(saved.blocks?.[2]?.blocks).toEqual([para("Second")]);
   const shown = await drawn(canvas);
   await p.reload();
@@ -800,7 +811,7 @@ test("dragging from a port to another node draws an orthogonal edge and saves it
   await expect(canvas.getByTestId("canvas-edge")).toHaveCount(1);
   await saveAndWait(p);
   expect(await savedEdges(admin, note.id)).toEqual([
-    { kind: "edge", labels: ["a_to_b"], fields: { from: "a", to: "b", from_side: "right", to_side: "left" } },
+    { kind: "edge", labels: [expect.stringMatching(/^a_to_b_[a-z0-9]{5}$/)], fields: { from: "a", to: "b", from_side: "right", to_side: "left" } },
   ]);
 
   // Every segment is horizontal or vertical, leaving a's right side and entering b's left.

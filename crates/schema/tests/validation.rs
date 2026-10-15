@@ -539,6 +539,14 @@ fn field_definition_rules() {
             "computed field cannot also be required",
         ),
         (
+            "field a {\n  kind = \"int\"\n  required = true\n  hidden = true\n}",
+            "hidden field cannot also be required",
+        ),
+        (
+            "field a {\n  kind = \"int\"\n  hidden = \"yes\"\n}",
+            "hidden",
+        ),
+        (
             "field a {\n  kind = \"int\"\n  multiple = true\n}",
             "not allowed on a int field",
         ),
@@ -1118,4 +1126,19 @@ fn a_placeholder_link_in_template_text_must_name_a_type() {
             && err.contains("names type \"nope\", which does not exist"),
         "{err}"
     );
+}
+
+#[test]
+fn a_hidden_field_is_read_and_defaults_to_shown() {
+    let schema = Schema::from_sources(
+        &[(
+            "person",
+            "label = \"Person\"\n\nfield phones {\n  kind  = \"list\"\n  items = \"string\"\n}\n\nfield device_contacts {\n  kind   = \"dict\"\n  values = \"string\"\n  hidden = true\n}\n\ntemplate default {\n  tab \"P\" {\n    slot \"title\"\n  }\n}\n",
+        )],
+        &[],
+    )
+    .unwrap();
+    let person = schema.type_def("person").unwrap();
+    assert!(person.field("device_contacts").unwrap().hidden);
+    assert!(!person.field("phones").unwrap().hidden);
 }

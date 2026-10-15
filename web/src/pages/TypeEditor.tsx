@@ -405,7 +405,7 @@ export function TypeEditor() {
               type="checkbox"
               aria-label="Required"
               checked={f().required}
-              disabled={f().computed}
+              disabled={f().computed || f().hidden}
               onChange={(e) => set((x) => (x.required = e.currentTarget.checked))}
             />
           </td>
@@ -416,6 +416,16 @@ export function TypeEditor() {
               checked={f().computed}
               disabled={f().required}
               onChange={(e) => set((x) => (x.computed = e.currentTarget.checked))}
+            />
+          </td>
+          <td class="field-flag">
+            <input
+              type="checkbox"
+              aria-label="Hidden"
+              title="Keep this field off the note page and the properties sidebar"
+              checked={f().hidden}
+              disabled={f().required}
+              onChange={(e) => set((x) => (x.hidden = e.currentTarget.checked))}
             />
           </td>
           <td class="field-flag">
@@ -456,7 +466,7 @@ export function TypeEditor() {
         </tr>
         <Show when={open()}>
           <tr class="field-details">
-            <td colSpan={8}>
+            <td colSpan={9}>
               <div class="form-grid">
                 <label for={id("description")}>Description</label>
                 <input
@@ -802,6 +812,7 @@ export function TypeEditor() {
                   <th scope="col">Label</th>
                   <th scope="col">Required</th>
                   <th scope="col">Computed</th>
+                  <th scope="col">Hidden</th>
                   <th scope="col">Several</th>
                   <th scope="col">
                     <span class="visually-hidden">Actions</span>

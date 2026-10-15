@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Block } from "../api";
 import {
   addEdge,
@@ -91,20 +91,21 @@ describe("canvas edits", () => {
     let { block, id: a } = addNode(undefined, "card", { x: 10.123, y: 20 }, {}, one);
     const second = addNode(block, "note", { x: 400, y: 20 }, { note: "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA" });
     block = second.block;
-    expect([a, second.id]).toEqual(["card", "note"]);
+    expect(a).toMatch(/^card_[a-z0-9]{5}$/);
+    expect(second.id).toMatch(/^note_[a-z0-9]{5}$/);
     const edge = addEdge(block, a, second.id);
-    expect(edge.id).toBe("card_to_note");
+    expect(edge.id).toMatch(new RegExp(`^${a}_to_${second.id}_[a-z0-9]{5}$`));
     expect(edge.block).toEqual({
       kind: "canvas",
       blocks: [
         { kind: "viewport", fields: { x: 0, y: 0, zoom: 1 } },
-        { kind: "node", labels: ["card"], fields: { kind: "card", x: 10.12, y: 20, width: 240, height: 140 }, blocks: one },
+        { kind: "node", labels: [a], fields: { kind: "card", x: 10.12, y: 20, width: 240, height: 140 }, blocks: one },
         {
           kind: "node",
-          labels: ["note"],
+          labels: [second.id],
           fields: { kind: "note", x: 400, y: 20, width: 240, height: 140, note: "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA" },
         },
-        { kind: "edge", labels: ["card_to_note"], fields: { from: "card", to: "note" } },
+        { kind: "edge", labels: [edge.id], fields: { from: a, to: second.id } },
       ],
     });
     // A card made empty holds no blocks at all.
@@ -157,8 +158,40 @@ describe("canvas edits", () => {
 
   it("adds a group with a free id", () => {
     const { block, id } = addGroup(board, { x: 0, y: 600 }, "Later");
-    expect(id).toBe("group");
-    expect(freeId(block, "group")).toBe("group_2");
+    expect(id).toMatch(/^group_[a-z0-9]{5}$/);
+    expect(canvasOf(block).groups.map((g) => g.id)).toEqual(["plan", id]);
+  });
+
+  it("gives new ids a short random suffix that does not repeat across many generations", () => {
+    // In one canvas, every id is free when it is made.
+    let block: Block | undefined;
+    const ids = new Set<string>();
+    for (let i = 0; i < 2000; i++) {
+      const made = addNode(block, "card", { x: 0, y: 0 });
+      block = made.block;
+      expect(made.id).toMatch(/^card_[a-z0-9]{5}$/);
+      ids.add(made.id);
+    }
+    expect(ids.size).toBe(2000);
+    // Across canvases, as on two devices editing offline, fresh ids still differ.
+    const fresh = new Set(Array.from({ length: 200 }, () => freeId(undefined, "group")));
+    expect(fresh.size).toBe(200);
+    // An id that is taken is never handed out, even when the random suffix would repeat it.
+    const taken: Block = { kind: "canvas", blocks: [{ kind: "group", labels: ["group_00000"] }] };
+    const random = vi.spyOn(Math, "random");
+    for (let i = 0; i < 5; i++) random.mockReturnValueOnce(0);
+    const id = freeId(taken, "group");
+    random.mockRestore();
+    expect(id).toMatch(/^group_[a-z0-9]{5}$/);
+    expect(id).not.toBe("group_00000");
+  });
+
+  it("leaves existing ids as they are", () => {
+    const { block } = addEdge(addNode(addGroup(board, { x: 0, y: 600 }, "Later").block, "card", { x: 0, y: 0 }).block, "sketch", "goal");
+    const c = canvasOf(block);
+    expect(c.groups[0]?.id).toBe("plan");
+    expect(c.nodes.slice(0, 2).map((n) => n.id)).toEqual(["goal", "sketch"]);
+    expect(c.edges[0]?.id).toBe("goal_to_sketch");
   });
 });
 
