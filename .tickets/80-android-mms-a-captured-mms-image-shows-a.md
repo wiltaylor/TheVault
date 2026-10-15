@@ -4,8 +4,8 @@ title: 'Android MMS: a captured MMS image shows as a file chip in the message no
   not as the image'
 plan: thevault-clients
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: unmet
 ---
 
 # Android MMS: a captured MMS image shows as a file chip in the message note, not as the image
@@ -23,3 +23,19 @@ Fix direction: either render image assets in asset fields as thumbnails (web cli
 Evidence: .scratch/emulator/run-workaround/shots/31-mms-note.png.
 
 ## Worklog
+
+### 2026-10-15T13:05:55Z — wil
+
+Status set to claimed.
+
+### 2026-10-15T13:05:55Z — wil
+
+Fixed in 7e76612: message templates show images from attachments (image { field = "attachments" }) and keep the slot for editing; MMS parts and shared files get an extension from their content type. check and android-test pass. Known side effects: every message note without attachments shows an empty add-image box; existing vaults keep the old message.wcl; HEIC is not in the web image list. Emulator confirmation pending.
+
+### 2026-10-15T13:05:55Z — wil
+
+Verified set to unmet.
+
+### 2026-10-15T13:05:55Z — wil
+
+Status set to done.
