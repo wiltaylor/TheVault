@@ -1,0 +1,27 @@
+[package]
+name = "thevault-android"
+version = "0.1.0"
+description = "TheVault's Android app"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Its own workspace: the app and its plugin build for Android with the Tauri CLI, apart from the
+# server workspace's `just check`.
+[workspace]
+members = [".", "../../../plugins/tauri-plugin-vault-device"]
+
+[lib]
+# The Android activity loads `libapp_lib.so`.
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.3", features = [] }
+
+[dependencies]
+axum = "0.8"
+embedded = { path = "../../../crates/embedded" }
+http-body-util = "0.1"
+tauri = { version = "2.12.4", features = [] }
+tauri-plugin-vault-device = { path = "../../../plugins/tauri-plugin-vault-device" }

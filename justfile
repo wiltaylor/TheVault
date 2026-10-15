@@ -64,12 +64,13 @@ desktop-test: (require-path "apps/desktop/e2e" "ticket 62") (require-tool "tauri
 	cargo build -p server -p testkit --bins
 	xvfb-run -a pnpm -C apps/desktop/e2e test
 
-# Build the Android debug APK for aarch64. Needs apps/android, which lands with ticket 65
+# Build the Android debug APK for aarch64 into apps/android/src-tauri/gen/android/app/build/outputs/apk
 [group('android')]
-android-build: (require-path "apps/android/src-tauri" "ticket 65") (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
+android-build: (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
 	cd apps/android && cargo tauri android build --debug --apk --target aarch64
 
-# Run the S5 Kotlin unit tests with Robolectric on the JVM. Needs the Gradle project, which lands with ticket 65
+# Run the S5 Kotlin unit tests with Robolectric on the JVM, and the JNI round trip against a host build of the plugin's Rust library
 [group('android')]
-android-test: (require-path "apps/android/src-tauri/gen/android/gradlew" "ticket 65") (require-tool "java")
-	cd apps/android/src-tauri/gen/android && ./gradlew --no-daemon testDebugUnitTest
+android-test: (require-tool "java") android-build
+	cd apps/android/src-tauri && cargo rustc -p tauri-plugin-vault-device --lib --crate-type cdylib
+	cd apps/android/src-tauri/gen/android && VAULT_CORE_LIBRARY="$PWD/../../target/debug/libtauri_plugin_vault_device.so" ./gradlew --no-daemon testDebugUnitTest

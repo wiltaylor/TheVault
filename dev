@@ -27,6 +27,7 @@ exec docker run --rm "${tty_flags[@]}" \
   --network host \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp/home \
+  -e ANDROID_USER_HOME=/tmp/home/.android \
   -e CARGO_TERM_COLOR=always \
   -v thevault-cargo:/cargo \
   -v thevault-pnpm:/pnpm-store \

@@ -1,0 +1,17 @@
+[package]
+name = "tauri-plugin-vault-device"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "TheVault's Android device plugin: the Kotlin side and its JNI entry points into the Rust core"
+links = "tauri-plugin-vault-device"
+# Built with the Android app, in its workspace, not the server's.
+workspace = "../../apps/android/src-tauri"
+
+[dependencies]
+jni = "0.21"
+tauri = "2.12.4"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
