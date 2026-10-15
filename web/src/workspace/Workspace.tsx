@@ -12,7 +12,8 @@ import {
   onMount,
   untrack,
 } from "solid-js";
-import { TypeIcon } from "../components/Icon";
+import { SearchIcon, TypeIcon } from "../components/Icon";
+import { PALETTE_KEYS, openPalette } from "../palette/store";
 import { paneRoutes } from "../routes";
 import * as M from "./model";
 import { SHORTCUTS, installWorkspaceEvents } from "./events";
@@ -273,6 +274,17 @@ function TabBar(props: { phone: boolean }) {
       <button type="button" class="ws-tab-new" aria-label="New tab" title="New tab" onClick={() => openTab(M.HOME)}>
         +
       </button>
+      <Show when={!props.phone}>
+        <button
+          type="button"
+          class="ws-tab-palette"
+          aria-label="Search or run a command"
+          title={`Search or run a command (${PALETTE_KEYS})`}
+          onClick={() => openPalette()}
+        >
+          <SearchIcon />
+        </button>
+      </Show>
       <Show when={markX() !== null}>
         <span class="ws-tab-mark" style={{ left: `${markX()}px` }} />
       </Show>

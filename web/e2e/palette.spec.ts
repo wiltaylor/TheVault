@@ -197,6 +197,30 @@ test("on a phone the palette opens from the sidebar as a full-width sheet", asyn
   await expect(palette(page)).toHaveCount(0);
 });
 
+test("a button at the top of the window opens the palette: the top bar on a phone, the tab bar on a desktop", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await logIn(page, "/daily");
+  const top = page.locator("header.topbar").getByRole("button", { name: "Search or run a command" });
+  await expect(top).toBeVisible();
+  const r = (await top.boundingBox())!;
+  expect(r.y).toBeLessThan(60);
+  await top.click();
+  await expect(palette(page)).toBeVisible();
+  await expect(box(page)).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(palette(page)).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(top).toBeHidden();
+  const tabbar = page.getByRole("tablist", { name: "Open tabs" }).getByRole("button", { name: "Search or run a command" });
+  await expect(tabbar).toBeVisible();
+  await tabbar.click();
+  await expect(palette(page)).toBeVisible();
+  await expect(box(page)).toBeFocused();
+});
+
 test("screenshots of the palette with notes and actions", async ({ page, admin }) => {
   const dir = process.env.E2E_SHOTS;
   test.skip(!dir, "E2E_SHOTS is not set");

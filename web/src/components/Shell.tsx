@@ -329,6 +329,19 @@ export function Shell() {
           </button>
           <button
             type="button"
+            class="topbar-palette"
+            aria-label="Search or run a command"
+            onClick={() => {
+              setLeftDrawer(false);
+              setRightDrawer(false);
+              openPalette();
+            }}
+          >
+            <SearchIcon />
+            <span>Search or run a command</span>
+          </button>
+          <button
+            type="button"
             class="menu-button right-button"
             aria-label="Right sidebar"
             aria-expanded={rightShown()}

@@ -4860,6 +4860,53 @@ input.canvas-caption-input {
   font-size: 1.15rem;
 }
 
+/* The command palette, from the end of the tab bar; it stays in view while the tabs scroll. */
+.ws-tab-palette {
+  position: sticky;
+  right: 0;
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  border-radius: 0.3rem;
+  background: var(--hover);
+  color: var(--muted);
+}
+
+.ws-tab-palette:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+
+/* On a phone the top bar holds a search box that opens the command palette. */
+.topbar-palette {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 2rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-align: left;
+}
+
+.topbar-palette span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .ws-tab-mark {
   position: absolute;
   top: 0.3rem;
