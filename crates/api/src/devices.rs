@@ -602,7 +602,8 @@ pub struct ResultBody {
 }
 
 /// `POST /api/devices/{id}/commands/{cid}/result`: the device reports `delivered`, or `done` or
-/// `failed` with a result. A command that is finished or expired answers 409.
+/// `failed` with a result. A command that is finished or expired answers 409. An `upsert_contact`
+/// reported done links its person to the contact in the result.
 pub async fn command_result(
     State(w): Shared,
     Caller(author): Caller,
@@ -637,7 +638,12 @@ pub async fn command_result(
             scope,
             "report on its commands",
         )?;
-        Ok::<_, ApiError>(state.report_device_command(&id, &cid, status, result.as_deref())?)
+        let command = state.report_device_command(&id, &cid, status, result.as_deref())?;
+        // An `upsert_contact` done links its person to the contact the phone reported (D24).
+        if let Err(e) = w.link_upserted_contact(&command) {
+            eprintln!("person of command {cid} not linked to its contact: {e}");
+        }
+        Ok::<_, ApiError>(command)
     })
     .await?;
     Ok(Json(writer::command_json(&command)))

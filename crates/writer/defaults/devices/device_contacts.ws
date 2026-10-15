@@ -8,8 +8,9 @@ use device
 // a field changed on one side only takes that side, and a field changed on both takes the side
 // changed most recently. Deleting either side only unlinks the other.
 //
-// A person changing reaches the phone as a `contact_changed` event for its contact, queued after
-// a sync round, so this one handler settles both directions.
+// A linked person changing reaches the phone as a `contact_changed` event for its contact, queued
+// after a sync round, so this one handler settles both directions. A person with no contact here
+// yet reaches the phone as an `upsert_contact` command the home server queues.
 //
 // The `upsert_contact` and `delete_contact` commands change the phone's contacts when the device's
 // contacts write switch is on (D23).
@@ -263,19 +264,25 @@ fn contact_deleted(event: Value) -> Result[(), string] {
 }
 
 // The `upsert_contact` command: `{ contact_id, name, phones, addresses, person }`. The person is
-// linked to the contact it mirrors.
+// linked to the contact it mirrors. The home server queues one for a person no contact here
+// mirrors yet, which may run before the person has synced to the phone: the contact still holds
+// the person's id, and the server links the person when the command reports done.
 fn upsert_contact(command: Value) -> Result[Value, string] {
     let payload = command.get("payload").unwrap()
     let saved = device::contacts_upsert(payload)?
     let contact_id = text_of(saved, "contact_id")
     let id = text_of(payload, "person")
     if id != "" && contact_id != "" {
-        let person = vault::get(id)?
-        let links = links_of(person)
-        let key = slot(device::id())
-        if text_of(Value::Map(links), key) != contact_id {
-            links[key] = Value::String(contact_id);
-            save(person, #{}, links)?
+        match vault::get(id) {
+            Ok(person) => {
+                let links = links_of(person)
+                let key = slot(device::id())
+                if text_of(Value::Map(links), key) != contact_id {
+                    links[key] = Value::String(contact_id);
+                    save(person, #{}, links)?
+                }
+            }
+            Err(_) => vault::log("person " + id + " has not synced here yet; the home server links it"),
         }
     }
     Ok(Value::Map(#{ "contact_id": Value::String(contact_id) }))

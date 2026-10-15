@@ -1051,6 +1051,33 @@ fn switches_block_contact_writes_and_sending_sms() {
 }
 
 #[test]
+fn an_upsert_for_a_person_not_synced_here_yet_still_adds_the_contact() {
+    // The home server queues upsert_contact as a person is saved there, and the phone may run it
+    // before the person reaches it: the contact is added, holding the person's id, and reported
+    // done, so the server links the person.
+    let d = Device::open();
+    d.settings(json!({ "commands": ["upsert_contact"], "contacts_write": true }));
+    let report = d.runtime.run_command(&json!({
+        "id": "cmd1",
+        "name": "upsert_contact",
+        "payload": {
+            "contact_id": null,
+            "name": "Carla Created",
+            "phones": ["+16502530005"],
+            "addresses": [],
+            "person": "01PERSONNOTHEREYET00000000",
+        },
+        "status": "pending",
+    }));
+    assert!(report.done, "{report:?}");
+    assert_eq!(report.result, json!({ "contact_id": "c-new" }));
+    let upsert = last_upsert(&d.phone);
+    assert_eq!(upsert["person"], "01PERSONNOTHEREYET00000000");
+    assert_eq!(upsert["name"], "Carla Created");
+    assert!(d.query("from person").is_empty());
+}
+
+#[test]
 fn queued_events_survive_a_restart_and_failures_are_retried() {
     let dir = TempDir::new().unwrap();
     let open = || {

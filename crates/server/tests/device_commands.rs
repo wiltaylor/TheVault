@@ -1,5 +1,6 @@
 //! S1: device files (`devices/<platform>.wcl`) through the API, and the commands server scripts
-//! queue for a device: allowlisting, availability by kind of run, results and expiry (D5, D22).
+//! queue for a device: allowlisting, availability by kind of run, results and expiry (D5, D22),
+//! and the `upsert_contact` the server queues itself for a `person` (D16, D24).
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -145,6 +146,10 @@ struct Api {
 
 impl Api {
     fn start() -> Api {
+        Api::start_seeded(seed)
+    }
+
+    fn start_seeded(seed: fn(&Path)) -> Api {
         let server =
             TestServer::start_with_args(seed, &[OsStr::new("--test-clock"), OsStr::new(START)]);
         let admin = client(server.admin_token());
@@ -475,4 +480,202 @@ fn scripts_queue_only_declared_and_enabled_commands_and_devices_report_on_them()
         api.admin("GET", &format!("/api/devices/{device}/commands")),
         404,
     );
+}
+
+/// The default device file and scripts, as the starter vault has them.
+fn seed_defaults(vault: &Path) {
+    let mut files = vec![(
+        "devices/android.wcl".to_owned(),
+        writer::DEFAULT_ANDROID_DEVICE_FILE,
+    )];
+    for (name, source) in writer::DEFAULT_DEVICE_SCRIPTS {
+        files.push((format!("scripts/{name}.ws"), source));
+    }
+    for (path, body) in files {
+        let path = vault.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+}
+
+impl Api {
+    fn settings(&self, device: &str, settings: Value) {
+        send(
+            self.admin("PATCH", &format!("/api/devices/{device}"))
+                .json(&json!({ "settings": settings })),
+            200,
+        );
+    }
+
+    fn upserts(&self, device: &str) -> Vec<Value> {
+        self.commands(&self.admin, device, "")
+            .into_iter()
+            .filter(|c| c["name"] == "upsert_contact")
+            .collect()
+    }
+
+    fn create_person(&self, c: &Client, fields: Value) -> Value {
+        send(
+            self.req(c, "POST", "/api/notes?type=person")
+                .json(&json!({ "note": { "fields": fields } })),
+            201,
+        )
+    }
+
+    fn update_note(&self, c: &Client, note: &Value) -> Value {
+        let id = note["id"].as_str().unwrap();
+        send(
+            self.req(c, "PUT", &format!("/api/notes/{id}"))
+                .json(&json!({
+                    "note": note["note"],
+                    "base_version": note["version"],
+                })),
+            200,
+        )
+    }
+
+    fn note(&self, id: &str) -> Value {
+        send(self.admin("GET", &format!("/api/notes/{id}")), 200)
+    }
+}
+
+/// The person's `device_contacts`, `null` when it has none.
+fn links(note: &Value) -> Value {
+    note["note"]["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["kind"] == "dict" && b["labels"] == json!(["device_contacts"]))
+        .map_or(Value::Null, |b| b["fields"].clone())
+}
+
+#[test]
+fn a_person_saved_on_the_server_queues_upsert_contact_for_each_phone_without_its_contact() {
+    let api = Api::start_seeded(seed_defaults);
+    let (pixel, pixel_client) = api.pair("Pixel");
+    let (tablet, _) = api.pair("Tablet");
+    let (laptop, _) = api.pair("Laptop");
+    let (quiet, _) = api.pair("Quiet");
+    let on = json!({ "contacts_write": true, "commands": ["upsert_contact", "delete_contact"] });
+    api.settings(&pixel, on.clone());
+    api.settings(&tablet, on);
+    // The contacts-write switch off, or the command not enabled, queues nothing for the device.
+    api.settings(
+        &laptop,
+        json!({ "contacts_write": false, "commands": ["upsert_contact"] }),
+    );
+    api.settings(
+        &quiet,
+        json!({ "contacts_write": true, "commands": ["delete_contact"] }),
+    );
+
+    // A person made in the web app becomes one upsert_contact for each phone that may take it.
+    let carla = api.create_person(
+        &api.admin,
+        json!({ "title": "Carla Created", "phones": ["+16502530005"] }),
+    );
+    let id = carla["id"].as_str().unwrap().to_owned();
+    let expected = json!({
+        "contact_id": null,
+        "name": "Carla Created",
+        "phones": ["+16502530005"],
+        "addresses": [],
+        "person": id,
+    });
+    for device in [&pixel, &tablet] {
+        let queued = api.upserts(device);
+        assert_eq!(queued.len(), 1, "{queued:?}");
+        assert_eq!(queued[0]["payload"], expected);
+        assert_eq!(queued[0]["source"], "contacts");
+        assert_eq!(queued[0]["status"], "pending");
+    }
+    assert!(api.commands(&api.admin, &laptop, "").is_empty());
+    assert!(api.commands(&api.admin, &quiet, "").is_empty());
+
+    // A person with nothing a contact holds stays off the phones, and a change to a field no
+    // contact holds queues nothing more.
+    api.create_person(&api.admin, json!({ "title": "No Number" }));
+    let mut edited = carla.clone();
+    edited["note"]["fields"]["email"] = json!("carla@example.com");
+    let carla = api.update_note(&api.admin, &edited);
+    assert_eq!(api.upserts(&pixel).len(), 1);
+    assert_eq!(api.upserts(&tablet).len(), 1);
+
+    // The Pixel adds the contact and reports it; the server links the person to it, as the
+    // Pixel, which queues nothing back to the Pixel and, the contact's fields being unchanged,
+    // nothing for the Tablet.
+    let command = api.upserts(&pixel)[0]["id"].as_str().unwrap().to_owned();
+    api.report(
+        &pixel_client,
+        &pixel,
+        &command,
+        json!({ "status": "delivered" }),
+        200,
+    );
+    api.report(
+        &pixel_client,
+        &pixel,
+        &command,
+        json!({ "status": "done", "result": { "contact_id": "42" } }),
+        200,
+    );
+    let linked = api.note(&id);
+    assert_eq!(
+        links(&linked),
+        json!({ format!("device_{pixel}"): "42" }),
+        "{linked}"
+    );
+    assert_ne!(linked["version"], carla["version"]);
+    let history = send(api.admin("GET", &format!("/api/notes/{id}/history")), 200);
+    assert_eq!(
+        history["versions"][0]["author"]["kind"], "token",
+        "{history}"
+    );
+    assert_eq!(api.upserts(&pixel).len(), 1);
+    assert_eq!(api.upserts(&tablet).len(), 1);
+
+    // Renaming the person in the web app queues an upsert_contact for the Tablet, which has no
+    // contact for it yet. The Pixel's contact is linked: the Pixel settles it field by field
+    // against what the two last agreed on once it syncs, so no command overwrites it.
+    let mut renamed = linked.clone();
+    renamed["note"]["fields"]["title"] = json!("Carla Renamed");
+    api.update_note(&api.admin, &renamed);
+    assert_eq!(api.upserts(&pixel).len(), 1);
+    let tablet_upserts = api.upserts(&tablet);
+    assert_eq!(tablet_upserts.len(), 2, "{tablet_upserts:?}");
+    assert_eq!(tablet_upserts[1]["payload"]["name"], "Carla Renamed");
+    assert_eq!(tablet_upserts[1]["payload"]["contact_id"], Value::Null);
+
+    // A person the Pixel itself makes or changes, from a contact captured there, does not come
+    // back to the Pixel as a command; the Tablet still hears of it.
+    let from_phone = api.create_person(
+        &pixel_client,
+        json!({ "title": "Dana Phone", "phones": ["+16502530006"] }),
+    );
+    let mut changed = api.note(&id);
+    changed["note"]["fields"]["phones"] = json!(["+16502530005", "+16502530007"]);
+    api.update_note(&pixel_client, &changed);
+    assert_eq!(api.upserts(&pixel).len(), 1);
+    let tablet_upserts = api.upserts(&tablet);
+    assert_eq!(tablet_upserts.len(), 4, "{tablet_upserts:?}");
+    assert_eq!(tablet_upserts[2]["payload"]["person"], from_phone["id"]);
+    assert_eq!(
+        tablet_upserts[3]["payload"]["phones"],
+        json!(["+16502530005", "+16502530007"])
+    );
+
+    // Deleting a person deletes no phone contact (D16).
+    let version = api.note(&id)["version"].as_str().unwrap().to_owned();
+    send(
+        api.admin("DELETE", &format!("/api/notes/{id}"))
+            .header("if-match", format!("\"{version}\"")),
+        200,
+    );
+    for device in [&pixel, &tablet, &laptop, &quiet] {
+        let commands = api.commands(&api.admin, device, "");
+        assert!(
+            commands.iter().all(|c| c["name"] != "delete_contact"),
+            "{commands:?}"
+        );
+    }
 }

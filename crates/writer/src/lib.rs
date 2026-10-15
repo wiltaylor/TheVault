@@ -33,6 +33,7 @@
 mod assets;
 mod batch;
 mod builtin;
+mod contacts;
 mod daily;
 mod defs;
 mod devices;
@@ -62,6 +63,7 @@ pub use builtin::{
     BUILT_IN_TYPES, CALL_TYPE, CONVERSATION_TYPE, DEFAULT_CALL_TYPE, DEFAULT_CONVERSATION_TYPE,
     DEFAULT_MESSAGE_TYPE, DEFAULT_PERSON_TYPE, MESSAGE_TYPE, PERSON_TYPE, is_built_in_type,
 };
+pub use contacts::{CONTACTS_SOURCE, UPSERT_CONTACT, contact_link_key};
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
 pub use defs::ScriptProblem;
 pub use devices::{
@@ -1256,6 +1258,7 @@ impl Writer {
 
         let mut saved = Vec::with_capacity(rendered.len());
         let mut updates = Vec::with_capacity(rendered.len());
+        let mut people = Vec::new();
         for r in rendered {
             let NoteChange {
                 id,
@@ -1266,6 +1269,26 @@ impl Writer {
             let by = authors.get(&id).unwrap_or(author);
             match (r.text, r.doc) {
                 (Some(text), Some((doc, report))) => {
+                    if type_name == PERSON_TYPE {
+                        let before = match event {
+                            Event::Update => self
+                                .state
+                                .head(&id)?
+                                .and_then(|v| {
+                                    Input::Wcl(v.content)
+                                        .parse(&note_path(&type_name, &id))
+                                        .ok()
+                                })
+                                .map(|d| doc_to_json(&d)),
+                            _ => None,
+                        };
+                        people.push(contacts::PersonChange {
+                            id: id.clone(),
+                            author: by.clone(),
+                            before,
+                            after: doc_to_json(&doc),
+                        });
+                    }
                     let v = if flips.contains(&id) {
                         self.state
                             .record_distinct_version(&id, &type_name, by, &text)?
@@ -1310,6 +1333,7 @@ impl Writer {
         inner.index.advance(generation)?;
         self.announce(&saved);
         self.hooks.after(&saved, author, &inner.schema);
+        self.people_to_contacts(&people);
         Ok(saved)
     }
 

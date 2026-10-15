@@ -174,6 +174,52 @@ class ContactSyncTest {
     }
 
     @Test
+    fun aPersonMadeOnTheServerBecomesAContactLinkedBothWays() {
+        // A person made in the web app reaches the phone with the next round, and the server
+        // queues an upsert_contact for it, since no contact here mirrors it yet.
+        val carla = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC"
+        home.saved(
+            carla,
+            "person",
+            """
+            title   = "Carla Created"
+            created = "2026-10-12T09:15:00Z"
+            updated = "2026-10-12T09:15:00Z"
+            phones  = ["+16502530005"]
+            """.trimIndent() + "\n",
+        )
+        VaultCore.sync()
+        assertTrue("nothing waits to sync yet", people().isEmpty())
+        home.command(
+            "01CMDCARLA0000000000000000",
+            "upsert_contact",
+            JSONObject()
+                .put("contact_id", JSONObject.NULL)
+                .put("name", "Carla Created")
+                .put("phones", JSONArray().put("+16502530005"))
+                .put("addresses", JSONArray())
+                .put("person", carla),
+        )
+        VaultCore.runCommands()
+
+        // The phone has a new contact, holding the person's id in the app's own row.
+        val done = home.command("01CMDCARLA0000000000000000")
+        assertEquals("done", done.getString("status"))
+        val contact = done.getJSONObject("result").getString("contact_id").toLong()
+        assertEquals(listOf(3L, contact), phone.contactIds())
+        assertEquals("Carla Created", phone.name(contact))
+        assertEquals(listOf("+16502530005 2"), phone.rows(contact, FakePhone.PHONE))
+        val row = vaultRow(contact)
+        assertTrue(row, row.startsWith("$carla "))
+        assertEquals("Carla Created", JSONObject(row.substringAfter(" ")).getString("name"))
+
+        // The person holds the contact's id for this device, waiting to sync to the server.
+        val person = person()
+        assertEquals(carla, person.getString("id"))
+        assertEquals(contact.toString(), links(person)!!.getString("device_${FakeHome.DEVICE_ID}"))
+    }
+
+    @Test
     fun deletingTheContactUnlinksThePersonAndKeepsIt() {
         changed(3)
         val id = person().getString("id")

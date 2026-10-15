@@ -44,6 +44,27 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
     /** The notes the device pushed, by id, as their WCL. */
     val notes: MutableMap<String, String> = Collections.synchronizedMap(mutableMapOf())
 
+    /** The change feed a sync round pulls, oldest first. */
+    private val feed: MutableList<JSONObject> = Collections.synchronizedList(mutableListOf())
+
+    /** Adds note [id] of [type] to the change feed, as a save on the server does, at version [version]. */
+    fun saved(id: String, type: String, wcl: String, version: String = "v1") {
+        synchronized(feed) {
+            feed.add(
+                JSONObject()
+                    .put("seq", feed.size + 1L)
+                    .put("at", 1_760_000_000_000L)
+                    .put("kind", "note")
+                    .put("id", id)
+                    .put("type", type)
+                    .put("version", version)
+                    .put("wcl", wcl)
+                    .put("deleted", false)
+                    .put("trashed", false),
+            )
+        }
+    }
+
     /** This device's settings, as `GET /api/devices` lists them. */
     @Volatile
     var settings: JSONObject = JSONObject()
@@ -107,7 +128,13 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
         path == "/api/sync/info" ->
             200 to """{"protocol":$protocol,"format_version":1,"server_version":"fake"}"""
         method == "PUT" && path == "/api/devices/$DEVICE_ID/bases" -> 200 to """{"bases":{}}"""
-        path.startsWith("/api/sync/changes") -> 200 to """{"changes":[],"next":0,"latest":0}"""
+        path.startsWith("/api/sync/changes") -> {
+            val since = path.substringAfter("since=", "0").substringBefore('&').toLongOrNull() ?: 0L
+            val all = synchronized(feed) { feed.toList() }
+            val latest = all.size.toLong()
+            val page = all.filter { it.getLong("seq") > since }
+            200 to JSONObject().put("changes", org.json.JSONArray(page)).put("next", latest).put("latest", latest).toString()
+        }
         path == "/api/assets" -> 200 to """{"assets":[]}"""
         method == "PUT" && path.startsWith("/api/notes/") -> {
             // A note the device pushes, stored as sent, at version 1.
