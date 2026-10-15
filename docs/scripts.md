@@ -349,6 +349,13 @@ These conventions hold in every payload:
 | `contact_deleted` | `{ contact_id }` |
 | `share_received` | `{ text, subject, url, attachments }`. What another app shared: `text` and `subject` are `""` when it sent none, `url` is the first link in `text` or `null`, and `attachments` lists the shared files |
 
+On Android the app captures these events itself, with no window open (D7, D17):
+
+- An SMS when Android announces it, an MMS when it appears in the phone's message store, a call when the phone goes back to idle, and a contact edit when the contacts store changes. The app reads each from the phone's own store, so `device_ref` is the store's row: `sms:<id>`, `mms:<id>` or `call:<id>`. `thread_ref` is the store's thread id, shared by the SMS and MMS of one conversation.
+- Every hour, a catch-up reads each store from where capture last stopped, so nothing is missed while the app is stopped, and nothing is captured twice.
+- Capture starts from the newest items when the app is set up. Earlier messages, calls and contact changes arrive only when the user turns on the import in the capture setup, which is off by default, and picks a range of dates.
+- Only received MMS are captured, since no event carries a sent one. A group MMS's `to` leaves out this phone's own numbers when Android tells the app what they are.
+
 ## Device commands
 
 A command runs on the device through the script function its `command` block names (`docs/vault-format.md` "Device files"). The function takes one `Value`:

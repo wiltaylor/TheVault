@@ -47,6 +47,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.work:work-runtime-ktx:2.10.5")
+    // E.164 numbers in device event payloads (D24).
+    implementation("com.googlecode.libphonenumber:libphonenumber:8.13.52")
     // QR scanning without Google Play services (D10).
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation(project(":tauri-android"))

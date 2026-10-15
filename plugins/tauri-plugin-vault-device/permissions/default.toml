@@ -1,0 +1,5 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Lets the webview open the capture setup screen and read the capture status."
+permissions = ["allow-open-capture-setup", "allow-capture-status"]

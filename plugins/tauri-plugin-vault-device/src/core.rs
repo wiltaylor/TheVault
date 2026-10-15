@@ -15,12 +15,16 @@
 //! - in the background, from WorkManager's periodic worker, through [`Core::sync_now`];
 //! - for assets, on demand: [`Core::fetch_asset`] when a note shows an asset the device does not
 //!   hold, and [`Core::note_opened`] when a note is opened, so its assets are prefetched next time.
+//!
+//! Device capture (D7, D17) hands events to the device runtime [`Core::device`] opens, whose
+//! device module reaches the phone through the Kotlin bridge.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use embedded::device::{DeviceConfig, DeviceData, DeviceRuntime};
 use embedded::{Config, Embedded};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -93,7 +97,12 @@ pub struct Core {
     /// Wakes the foreground loop; `None` until the first kick starts it.
     kicks: Mutex<Option<Sender<()>>>,
     last: Mutex<Option<Last>>,
+    /// The device runtime and the device id it opened with, once Kotlin opens it.
+    device: Mutex<Option<(String, Arc<DeviceRuntime>)>>,
 }
+
+/// The platform the device runtime runs as, which names its device file.
+pub const PLATFORM: &str = "android";
 
 static CORE: Mutex<Option<Arc<Core>>> = Mutex::new(None);
 
@@ -130,6 +139,7 @@ pub fn open(vault: &Path) -> anyhow::Result<Arc<Core>> {
         round: Mutex::new(()),
         kicks: Mutex::new(None),
         last: Mutex::new(None),
+        device: Mutex::new(None),
     });
     *current = Some(core.clone());
     Ok(core)
@@ -148,6 +158,39 @@ impl Core {
     /// The in-process server the webview talks to.
     pub fn server(&self) -> &Embedded {
         &self.server
+    }
+
+    /// The device runtime of device `id`, opened with `data` unless one is open for `id` already.
+    /// Another id, after pairing, replaces it; the queue lives in `state.db`, so queued events
+    /// carry over.
+    pub fn device(
+        &self,
+        id: &str,
+        data: impl FnOnce() -> Arc<dyn DeviceData>,
+    ) -> anyhow::Result<Arc<DeviceRuntime>> {
+        let mut device = lock(&self.device);
+        if let Some((open_id, runtime)) = device.as_ref()
+            && open_id == id
+        {
+            return Ok(runtime.clone());
+        }
+        let runtime = Arc::new(self.server.device(DeviceConfig {
+            id: id.to_owned(),
+            platform: PLATFORM.to_owned(),
+            data: data(),
+        })?);
+        *device = Some((id.to_owned(), runtime.clone()));
+        Ok(runtime)
+    }
+
+    /// The device runtime [`Core::device`] opened.
+    pub fn runtime(&self) -> anyhow::Result<Arc<DeviceRuntime>> {
+        lock(&self.device)
+            .as_ref()
+            .map(|(_, runtime)| runtime.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!("the device runtime is not open: call VaultCore.openDevice")
+            })
     }
 
     /// Set the pairing Kotlin holds, or clear it when the device is not paired.

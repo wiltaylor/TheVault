@@ -7,13 +7,19 @@
 //! Values cross as strings, JSON where they are structured. A failure throws
 //! `java.lang.IllegalStateException` with the error's message, and a panic is caught and thrown
 //! the same way rather than unwinding into the JVM.
+//!
+//! The other way, the device module reaches the phone through [`JniDeviceData`], which calls the
+//! Kotlin `DeviceBridge` passed to `VaultCore.openDevice`.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
+use std::sync::Arc;
 
-use jni::JNIEnv;
-use jni::objects::{JClass, JString};
-use jni::sys::jstring;
+use embedded::device::{DeviceData, QueuedEvent};
+use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString};
+use jni::sys::{jlong, jstring};
+use jni::{JNIEnv, JavaVM};
+use serde_json::{Value as Json, json};
 
 use crate::core::{self, Core, Link};
 use crate::pair::{self, Secret};
@@ -198,6 +204,212 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_status<'loca
     _class: JClass<'local>,
 ) -> jstring {
     answer(&mut env, |_| Ok(Some(core()?.status()?.to_string())))
+}
+
+/// A queued event as Kotlin reads it, with its payload when `data` is set.
+pub fn event_json(e: &QueuedEvent, data: bool) -> Json {
+    let mut out = json!({
+        "id": e.id,
+        "event": e.event,
+        "at": e.at_ms,
+        "status": e.status.as_str(),
+        "attempts": e.attempts,
+        "message": e.message,
+    });
+    if data {
+        out["data"] = e.data.clone();
+    }
+    out
+}
+
+/// `VaultCore.openDevice(deviceId: String, bridge: DeviceBridge)`: open the device runtime of
+/// `deviceId` on the open vault, whose device module reaches the phone through `bridge`. Safe to
+/// call again; another device id reopens the runtime on the same queue.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_openDevice<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    device_id: JString<'local>,
+    bridge: JObject<'local>,
+) -> jstring {
+    answer(&mut env, |env| {
+        let device_id = required(env, &device_id, "deviceId")?;
+        if bridge.is_null() {
+            anyhow::bail!("bridge is null");
+        }
+        let vm = env.get_java_vm()?;
+        let bridge = env.new_global_ref(&bridge)?;
+        core()?.device(&device_id, || Arc::new(JniDeviceData { vm, bridge }))?;
+        Ok(None)
+    })
+}
+
+/// `VaultCore.enqueue(event: String, data: String, atMs: Long): Long`: store a device event, its
+/// payload as JSON text, in the durable queue. Answers its id in the queue.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_enqueue<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    event: JString<'local>,
+    data: JString<'local>,
+    at_ms: jlong,
+) -> jlong {
+    let mut id = -1;
+    answer(&mut env, |env| {
+        let event = required(env, &event, "event")?;
+        let data: Json = serde_json::from_str(&required(env, &data, "data")?)?;
+        id = core()?.runtime()?.enqueue(&event, data, at_ms)?;
+        Ok(None)
+    });
+    id
+}
+
+/// `VaultCore.runPending(): String`: run every queued event's handlers. Answers the events the
+/// pass took, as a JSON list of `{ id, event, at, status, attempts, message }`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_runPending<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    answer(&mut env, |_| {
+        let events = core()?.runtime()?.run_pending()?;
+        Ok(Some(
+            Json::from_iter(events.iter().map(|e| event_json(e, false))).to_string(),
+        ))
+    })
+}
+
+/// `VaultCore.events(): String`: every event in the queue, oldest first, as a JSON list of
+/// `{ id, event, at, status, attempts, message, data }`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_events<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    answer(&mut env, |_| {
+        let events = core()?.runtime()?.events()?;
+        Ok(Some(
+            Json::from_iter(events.iter().map(|e| event_json(e, true))).to_string(),
+        ))
+    })
+}
+
+/// `VaultCore.putAsset(filename: String, bytes: ByteArray): String`: store a file in the local
+/// vault, such as an MMS part. Answers `{ asset, filename, size }`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_putAsset<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    filename: JString<'local>,
+    bytes: JByteArray<'local>,
+) -> jstring {
+    answer(&mut env, |env| {
+        let filename = required(env, &filename, "filename")?;
+        let bytes = env.convert_byte_array(&bytes)?;
+        let asset = core()?
+            .server()
+            .writer()
+            .put_asset(&filename, bytes)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(Some(
+            json!({ "asset": asset.id, "filename": asset.filename, "size": asset.size })
+                .to_string(),
+        ))
+    })
+}
+
+/// The phone's data and actions for the device module, through the Kotlin `DeviceBridge`:
+/// `call(method: String, args: String): String`, where `args` is a JSON map of the arguments and
+/// the answer is `{ "ok": value }` or `{ "err": message }`.
+pub struct JniDeviceData {
+    vm: JavaVM,
+    bridge: GlobalRef,
+}
+
+impl JniDeviceData {
+    fn call(&self, method: &str, args: Json) -> Result<Json, String> {
+        let answer = self
+            .call_bridge(method, &args)
+            .map_err(|e| format!("the device could not answer {method}: {e:#}"))?;
+        let answer: Json = serde_json::from_str(&answer)
+            .map_err(|e| format!("the device answered {method} with bad JSON: {e}"))?;
+        match answer.get("err") {
+            Some(err) => Err(err.as_str().unwrap_or("the device refused").to_owned()),
+            None => Ok(answer.get("ok").cloned().unwrap_or(Json::Null)),
+        }
+    }
+
+    fn call_bridge(&self, method: &str, args: &Json) -> anyhow::Result<String> {
+        // Script runs happen on the host's own threads, which Java has never seen.
+        let mut env = self.vm.attach_current_thread_permanently()?;
+        let method = env.new_string(method)?;
+        let args = env.new_string(args.to_string())?;
+        let answer = env.call_method(
+            &self.bridge,
+            "call",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+            &[(&method).into(), (&args).into()],
+        );
+        if env.exception_check()? {
+            env.exception_describe()?;
+            env.exception_clear()?;
+            anyhow::bail!("the bridge threw");
+        }
+        let answer = JString::from(answer?.l()?);
+        Ok(env.get_string(&answer)?.into())
+    }
+
+    fn list(&self, method: &str, args: Json) -> Result<Vec<Json>, String> {
+        match self.call(method, args)? {
+            Json::Array(rows) => Ok(rows),
+            other => Err(format!(
+                "the device answered {method} with {other}, not a list"
+            )),
+        }
+    }
+}
+
+impl DeviceData for JniDeviceData {
+    fn sms_list(&self, filter: &Json) -> Result<Vec<Json>, String> {
+        self.list("sms_list", json!({ "filter": filter }))
+    }
+
+    fn sms_get(&self, device_ref: &str) -> Result<Json, String> {
+        self.call("sms_get", json!({ "device_ref": device_ref }))
+    }
+
+    fn calls_list(&self, filter: &Json) -> Result<Vec<Json>, String> {
+        self.list("calls_list", json!({ "filter": filter }))
+    }
+
+    fn contacts_list(&self, filter: &Json) -> Result<Vec<Json>, String> {
+        self.list("contacts_list", json!({ "filter": filter }))
+    }
+
+    fn contacts_get(&self, contact_id: &str) -> Result<Json, String> {
+        self.call("contacts_get", json!({ "contact_id": contact_id }))
+    }
+
+    fn contacts_upsert(&self, contact: &Json) -> Result<Json, String> {
+        self.call("contacts_upsert", json!({ "contact": contact }))
+    }
+
+    fn contacts_delete(&self, contact_id: &str) -> Result<(), String> {
+        self.call("contacts_delete", json!({ "contact_id": contact_id }))
+            .map(|_| ())
+    }
+
+    fn sms_send(&self, to: &str, body: &str) -> Result<Json, String> {
+        self.call("sms_send", json!({ "to": to, "body": body }))
+    }
+
+    fn show_notification(&self, title: &str, body: &str, note: &str) -> Result<(), String> {
+        self.call(
+            "show_notification",
+            json!({ "title": title, "body": body, "note": note }),
+        )
+        .map(|_| ())
+    }
 }
 
 #[cfg(test)]

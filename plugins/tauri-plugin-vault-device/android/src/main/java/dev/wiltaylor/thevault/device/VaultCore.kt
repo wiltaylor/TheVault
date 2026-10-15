@@ -1,6 +1,15 @@
 package dev.wiltaylor.thevault.device
 
 /**
+ * What the Rust core's device module asks of the phone (`crates/script-core` `DeviceData`). The
+ * core calls [call] with a method such as `sms_list` and its arguments as a JSON map, and takes
+ * back `{"ok": value}` or `{"err": message}`. It may call from any thread.
+ */
+fun interface DeviceBridge {
+    fun call(method: String, args: String): String
+}
+
+/**
  * The Rust core, reached over plain JNI so that receivers and workers can call it with no
  * webview and no Tauri runtime (D17). The functions live in the plugin crate's `src/jni.rs`; a
  * failure throws [IllegalStateException] with the core's message.
@@ -59,4 +68,28 @@ object VaultCore {
     /** `{paired, pending, last_sync_ms, last_error}` as JSON. */
     @JvmStatic
     external fun status(): String
+
+    /**
+     * Opens the device runtime of [deviceId] on the open vault, whose device module reaches the
+     * phone through [bridge]. Calling it again is safe; another [deviceId] reopens the runtime on
+     * the same queue.
+     */
+    @JvmStatic
+    external fun openDevice(deviceId: String, bridge: DeviceBridge): String?
+
+    /** Stores device event [event] with its payload [data], JSON text, captured at [atMs]. Answers its queue id. */
+    @JvmStatic
+    external fun enqueue(event: String, data: String, atMs: Long): Long
+
+    /** Runs every queued event's handlers. Answers the events taken, as a JSON list. */
+    @JvmStatic
+    external fun runPending(): String
+
+    /** Every event in the queue, oldest first, with its payload, as a JSON list. */
+    @JvmStatic
+    external fun events(): String
+
+    /** Stores [bytes] as an asset called [filename] in the local vault. Answers `{ asset, filename, size }` as JSON. */
+    @JvmStatic
+    external fun putAsset(filename: String, bytes: ByteArray): String
 }

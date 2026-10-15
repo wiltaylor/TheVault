@@ -82,6 +82,10 @@ class PairingStore(context: Context, private val cipher: TokenCipher = defaultCi
     val isPaired: Boolean
         get() = prefs.contains(TOKEN)
 
+    /** The device id pairing gave this phone, or null before pairing. */
+    val deviceId: String?
+        get() = prefs.getString(DEVICE_ID, null)?.takeIf { isPaired && it.isNotEmpty() }
+
     var cacheMb: Long
         get() = prefs.getLong(CACHE_MB, DEFAULT_CACHE_MB)
         set(value) {

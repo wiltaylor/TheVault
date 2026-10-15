@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "The main window's permissions",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "vault-device:default"]
 }
