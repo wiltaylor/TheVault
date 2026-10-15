@@ -4,8 +4,8 @@ title: 'Android app: an open app never pulls server changes, so a person renamed
   the web app reaches the phone contact only after the app is reopened'
 plan: thevault-clients
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: unmet
 ---
 
 # Android app: an open app never pulls server changes, so a person renamed in the web app reaches the phone contact only after the app is reopened
@@ -23,3 +23,19 @@ Fix direction: have the server push a note.changed (or a generic sync) event to 
 Evidence: .scratch/emulator/RESULTS.md check 37.
 
 ## Worklog
+
+### 2026-10-15T13:22:09Z — wil
+
+Status set to claimed.
+
+### 2026-10-15T13:22:09Z — wil
+
+Fixed in 70490f8: the push dispatcher sends coalesced note.changed (1 s then at most every 10 s, skipping the originating device); the open Android app and the desktop app follow /api/events and pull 1 s after note.changed and on reconnect; a closed phone schedules SyncWorker.soon on the push. Shared parser in crates/sync/src/live.rs. check, android-test and desktop-test pass after rebase onto main. Emulator confirmation pending.
+
+### 2026-10-15T13:22:09Z — wil
+
+Verified set to unmet.
+
+### 2026-10-15T13:22:09Z — wil
+
+Status set to done.
