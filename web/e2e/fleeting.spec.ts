@@ -142,7 +142,13 @@ test("a text capture is saved to the inbox, counted in the sidebar, and opens fr
   expect(note.note.blocks[0].blocks[0].fields.text).toBe(`  ${title}  \nabout the leak under the sink`);
 
   // The badge shows the inbox's count.
-  await expect.poll(async () => (await inboxLink(page).textContent())?.replace("Inbox", "").trim()).toBe(String(await inboxTotal(admin)));
+  // Other specs capture in parallel, so compare the badge with the total read at the same moment.
+  await expect
+    .poll(async () => {
+      const badge = (await inboxLink(page).textContent())?.replace("Inbox", "").trim();
+      return badge === String(await inboxTotal(admin));
+    })
+    .toBe(true);
 
   await toast.getByRole("link", { name: "Open" }).click();
   await expect(page).toHaveURL(new RegExp(`/notes/${rows[0]!.id}$`));
@@ -157,7 +163,13 @@ test("a text capture is saved to the inbox, counted in the sidebar, and opens fr
 
 test("a pasted and an attached image are saved with a title from the date", async ({ page, admin }) => {
   await logIn(page, "/inbox");
-  const before = await inboxTotal(admin);
+  // Other specs capture fleeting notes in parallel, so find this test's note by excluding what existed before.
+  type Row = { id: string; title: string; fields: Record<string, unknown> };
+  const fleeting = async () =>
+    ((await (await admin.post("/api/query", { data: { query: "from fleeting sort created desc", page_size: 500 } })).json()) as {
+      rows: Row[];
+    }).rows;
+  const existing = new Set((await fleeting()).map((r) => r.id));
   await page.getByRole("button", { name: "Quick capture" }).click();
   await pasteImage(page, gradientPng(120, 80, [37, 99, 235], [236, 72, 153]));
   const thumbs = dialog(page).getByRole("list", { name: "Attached images" }).getByRole("img");
@@ -179,13 +191,17 @@ test("a pasted and an attached image are saved with a title from the date", asyn
   await expect(dialog(page).getByRole("button", { name: "Save" })).toBeEnabled();
   await dialog(page).getByRole("button", { name: "Save" }).click();
   await expect(dialog(page)).toHaveCount(0);
-  await expect.poll(() => inboxTotal(admin)).toBe(before + 1);
-
-  const res = await admin.post("/api/query", { data: { query: "from fleeting sort created desc", page_size: 1 } });
-  const row = ((await res.json()) as { rows: { id: string; title: string; fields: Record<string, unknown> }[] }).rows[0]!;
-  expect(row.title).toMatch(/^Image \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-  expect(row.fields.image).toHaveLength(2);
-  const item = activePane(page).locator(`[data-note="${row.id}"]`);
+  // The image-only capture is the one new fleeting note whose title comes from the date.
+  let row: Row | undefined;
+  await expect
+    .poll(async () => {
+      row = (await fleeting()).find((r) => !existing.has(r.id) && /^Image \d{4}-/.test(r.title));
+      return row?.id;
+    })
+    .toBeTruthy();
+  expect(row!.title).toMatch(/^Image \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  expect(row!.fields.image).toHaveLength(2);
+  const item = activePane(page).locator(`[data-note="${row!.id}"]`);
   await expect(item.locator(".inbox-thumbs img")).toHaveCount(2);
   await expect
     .poll(() => item.locator(".inbox-thumbs img").first().evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0))
