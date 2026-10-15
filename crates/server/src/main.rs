@@ -10,8 +10,6 @@ use clap::Parser;
 use scheduler::{Scheduler, TestClock};
 use state::{Clock, SecretKey, SystemClock};
 
-mod web;
-
 #[derive(Parser)]
 #[command(name = "vault-server", about = "Serve a TheVault vault over HTTP")]
 struct Args {
@@ -145,7 +143,7 @@ async fn serve(
 
     if let Some(web) = web {
         let root = Arc::new(web);
-        app = app.fallback(move |req| web::serve(root.clone(), req));
+        app = app.fallback(move |req| api::web::serve(root.clone(), req));
     }
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())

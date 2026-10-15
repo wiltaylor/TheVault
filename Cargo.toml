@@ -42,6 +42,7 @@ script-core = { path = "crates/script-core" }
 vocab = { path = "crates/vocab" }
 scheduler = { path = "crates/scheduler" }
 api = { path = "crates/api" }
+embedded = { path = "crates/embedded" }
 testkit = { path = "crates/testkit" }
 
 [workspace.lints.rust]

@@ -11,7 +11,7 @@ use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-/// Answers a request no `/api` route matched.
+/// Answers a request no `/api` route matched, with the file under `root` it names.
 pub async fn serve(root: Arc<PathBuf>, req: Request) -> Response {
     let method = req.method().clone();
     let path = req.uri().path();

@@ -22,7 +22,10 @@
 //! the secrets they read are written, never read back, under `/api/secrets` (D10).
 //!
 //! Every route but health and login needs a session cookie or a bearer token, and the scope
-//! [`auth::required_scope`] names for it (D11).
+//! [`auth::required_scope`] names for it (D11). [`owner_router`] serves the same routes to an
+//! in-process caller that is always the owner (D26).
+//!
+//! [`web::serve`] serves the built web client outside `/api` (D18).
 
 mod assets;
 mod auth;
@@ -38,6 +41,7 @@ mod query;
 mod tasks;
 mod tokens;
 mod types;
+pub mod web;
 
 use std::sync::Arc;
 
@@ -226,11 +230,29 @@ pub fn router(
     test_clock: Option<Arc<TestClock>>,
 ) -> Router {
     let sessions = Arc::new(auth::Sessions::new(writer.clone()));
+    assemble(writer, scheduler, test_clock, sessions.clone())
+        .layer(middleware::from_fn_with_state(sessions, auth::authenticate))
+}
+
+/// Builds the router for every `/api` route with no credentials checked: every request acts as
+/// the owner's session. Only for a caller in the same process, such as an app's webview through
+/// its custom URI scheme, which nothing else can reach (D26). Never serve it on a port.
+pub fn owner_router(writer: Arc<Writer>, scheduler: Arc<Scheduler>) -> Router {
+    let sessions = Arc::new(auth::Sessions::new(writer.clone()));
+    assemble(writer, scheduler, None, sessions).layer(middleware::from_fn(auth::as_owner))
+}
+
+fn assemble(
+    writer: Arc<Writer>,
+    scheduler: Arc<Scheduler>,
+    test_clock: Option<Arc<TestClock>>,
+    sessions: Arc<auth::Sessions>,
+) -> Router {
     let Built { api, login, tasks } = build();
     let mut app = api
         .router
         .with_state(writer)
-        .merge(login.router.with_state(sessions.clone()))
+        .merge(login.router.with_state(sessions))
         .merge(tasks.router.with_state(scheduler.clone()));
     if let Some(clock) = test_clock {
         app = app.merge(
@@ -239,7 +261,7 @@ pub fn router(
                 .with_state(tasks::TestTime { scheduler, clock }),
         );
     }
-    app.layer(middleware::from_fn_with_state(sessions, auth::authenticate))
+    app
 }
 
 async fn health() -> Json<Value> {

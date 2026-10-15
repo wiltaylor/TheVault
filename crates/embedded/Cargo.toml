@@ -1,0 +1,27 @@
+[package]
+name = "embedded"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+api.workspace = true
+axum.workspace = true
+scheduler.workspace = true
+schema.workspace = true
+script.workspace = true
+state.workspace = true
+store.workspace = true
+tower = { version = "0.5", features = ["util"] }
+writer.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+futures-util = "0.3"
+
+[lints]
+workspace = true

@@ -227,6 +227,13 @@ pub async fn authenticate(
     next.run(req).await
 }
 
+/// Middleware for [`crate::owner_router`]: every request is the owner's session.
+pub async fn as_owner(mut req: Request, next: Next) -> Response {
+    req.extensions_mut()
+        .insert(Caller(Author::Session(OWNER_SESSION.to_owned())));
+    next.run(req).await
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoginBody {
