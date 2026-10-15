@@ -5,7 +5,7 @@ title: 'Server: devices table, pairing (password and QR code), Settings > Device
 plan: thevault-clients
 blocked_by: []
 status: done
-verified: unmet
+verified: verified
 ---
 
 # Server: devices table, pairing (password and QR code), Settings > Devices, CLI
@@ -41,3 +41,11 @@ Branch ticket/thevault-clients-53, commit b2fa3e9. Verdict unmet only for '`./de
 ### 2026-10-15T06:59:22Z — wil
 
 Merged to main as 403c2c4 (fast-forward after rebase onto 5604462). Rebase conflict in crates/api/src/lib.rs module docs only; also made auth::as_owner (the new in-process owner router) insert GrantedScope(Admin) so PUT /api/devices/{id}/push works there. Rebased branch: ./dev just check exit 0; test-e2e 246 passed, 3 failed (archive.spec.ts:47 race, date-views kanban timeout, pins drag), all three pass on rerun; devices specs passed in the full run. test-e2e still not one clean run, so verified stays unmet (#72).
+
+### 2026-10-15T09:37:40Z — wil
+
+Full ./dev just test-e2e on main at befb436 after the fleet run: 255 passed, 2 skipped, 0 failed (run alone, no fleet load). The deferred criterion is now proven.
+
+### 2026-10-15T09:37:40Z — wil
+
+Verified set to verified.
