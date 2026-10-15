@@ -400,6 +400,72 @@ export function setUnauthorizedHandler(handler: () => void) {
 /** Requests other than GET to these paths change notes. */
 const NOTE_WRITES = /^\/api\/(notes|batch|upsert|trash)(\/|\?|$)/;
 
+/** The Tauri IPC entry point the app gives its pages. */
+interface AppIpc {
+  invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+/** The embedded server's answer to a request sent over IPC. */
+interface IpcAnswer {
+  status: number;
+  headers: [string, string][];
+  body: string;
+}
+
+/**
+ * The IPC to send request bodies through, inside the Android app only. Its webview drops the body
+ * of every request on the app's custom scheme, so the app's page script sets
+ * `__thevaultApiOverIpc` and its `api_request` command answers instead
+ * (apps/android/src-tauri/src/bridge.rs). In a browser and the desktop app this is null.
+ */
+function appIpc(): AppIpc | null {
+  const w = globalThis as { __thevaultApiOverIpc?: boolean; __TAURI_INTERNALS__?: AppIpc };
+  return w.__thevaultApiOverIpc && w.__TAURI_INTERNALS__ ? w.__TAURI_INTERNALS__ : null;
+}
+
+/** Bytes per IPC chunk of a body of bytes, before base64. */
+const IPC_CHUNK = 1024 * 1024;
+
+function base64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result);
+      resolve(url.slice(url.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** `fetch`, except that in the Android app a request with a body goes through IPC. */
+async function send(path: string, init: RequestInit): Promise<Response> {
+  const ipc = appIpc();
+  if (!ipc || init.body == null) return fetch(path, init);
+  init.signal?.throwIfAborted();
+  const headers = Object.entries((init.headers ?? {}) as Record<string, string>);
+  let text: string | undefined;
+  let upload: number | undefined;
+  if (typeof init.body === "string") {
+    text = init.body;
+  } else if (init.body instanceof Blob) {
+    const blob = init.body;
+    upload = await ipc.invoke<number>("api_upload_start");
+    for (let at = 0; at < blob.size; at += IPC_CHUNK) {
+      init.signal?.throwIfAborted();
+      const chunk = await base64(blob.slice(at, at + IPC_CHUNK));
+      await ipc.invoke("api_upload_append", { id: upload, chunk });
+    }
+  } else {
+    throw new TypeError("only a text or Blob body can be sent over IPC");
+  }
+  const answer = await ipc.invoke<IpcAnswer>("api_request", {
+    request: { method: init.method ?? "GET", path, headers, text, upload },
+  });
+  const empty = answer.status === 204 || answer.status === 205 || answer.status === 304;
+  return new Response(empty ? null : answer.body, { status: answer.status, headers: answer.headers });
+}
+
 async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const init: RequestInit = {
     method,
@@ -414,7 +480,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     init.headers = { ...init.headers, "Content-Type": "application/json" };
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(path, init);
+  const res = await send(path, init);
   if (res.status === 204) {
     if (method !== "GET" && NOTE_WRITES.test(path)) noteWritten();
     return undefined as T;

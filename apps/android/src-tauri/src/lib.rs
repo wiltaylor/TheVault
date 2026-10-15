@@ -9,12 +9,17 @@
 //! for background sync and the share target. The scheme handler feeds the sync loop (D19, D20):
 //! a local write asks for a round, an asset the device does not hold is fetched from the home
 //! server before it is answered, and an opened note is remembered so its assets are prefetched.
+//!
+//! Android's webview drops the body of a request on a custom scheme, so the web client sends
+//! every request with a body through IPC instead ([`bridge`]).
+
+mod bridge;
 
 use std::sync::Arc;
 
 use http_body_util::BodyExt;
 use tauri::http::{Method, Request, Response, StatusCode, header};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_vault_device::CoreFailure;
 use tauri_plugin_vault_device::core::Core;
 
@@ -38,14 +43,59 @@ pub fn run() {
                 responder.respond(serve(&app, request).await);
             });
         })
+        .invoke_handler(tauri::generate_handler![
+            api_request,
+            api_upload_start,
+            api_upload_append
+        ])
         .setup(|app| {
+            app.manage(bridge::Uploads::new(
+                app.path().app_cache_dir()?.join("uploads"),
+            ));
             WebviewWindowBuilder::new(app, "main", WebviewUrl::CustomProtocol(ORIGIN.parse()?))
                 .title("TheVault")
+                .initialization_script(bridge::PAGE_SCRIPT)
                 .build()?;
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("TheVault failed to start");
+}
+
+/// Answers one `/api` request the web client sent over IPC, body and all ([`bridge`]).
+#[tauri::command]
+async fn api_request(
+    app: AppHandle,
+    request: bridge::IpcRequest,
+) -> Result<bridge::IpcResponse, String> {
+    let core = app
+        .try_state::<Arc<Core>>()
+        .ok_or("the vault is not open yet")?
+        .inner()
+        .clone();
+    let uploads = app.state::<bridge::Uploads>();
+    Ok(bridge::forward(&core, &uploads, request).await)
+}
+
+/// Starts the body of bytes of an IPC request and returns its id.
+#[tauri::command]
+async fn api_upload_start(uploads: State<'_, bridge::Uploads>) -> Result<u64, String> {
+    uploads.start().map_err(|e| e.to_string())
+}
+
+/// Appends a base64 chunk to the body of bytes `id`.
+#[tauri::command]
+async fn api_upload_append(
+    uploads: State<'_, bridge::Uploads>,
+    id: u64,
+    chunk: String,
+) -> Result<(), String> {
+    uploads.append(id, &chunk).map_err(|e| e.to_string())
+}
+
+/// Whether a successful request of `method` may have changed the vault, so sync should run.
+fn is_write(method: &Method) -> bool {
+    !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
 /// Answers one request on [`SCHEME`]: `/api` from the embedded server, the rest from `web/dist`.
@@ -87,7 +137,7 @@ async fn serve(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
                 }
             });
         }
-    } else if method != Method::HEAD && method != Method::OPTIONS && res.status().is_success() {
+    } else if is_write(&method) && res.status().is_success() {
         core.kick();
     }
     res
