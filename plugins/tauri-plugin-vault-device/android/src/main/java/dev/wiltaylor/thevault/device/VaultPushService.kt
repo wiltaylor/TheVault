@@ -57,7 +57,9 @@ class VaultPushService : PushService() {
  * reconciles with the server's list, a device command has the pending commands fetched and run
  * (D22), and a note changed on the server (`{"event": "note.changed", "ids": [...]}`) has a sync
  * round pull it soon ([SyncWorker.soon]), so a change made elsewhere reaches the phone, and a
- * linked contact, without waiting for the periodic sync.
+ * linked contact, without waiting for the periodic sync. A change to the phone's settings in
+ * Settings > Devices (`{"event": "device.settings"}`) asks for the same round, which takes the
+ * settings first, so a switch turned on applies, and the contacts catch up, at once.
  */
 object PushHandler {
     /** Handles one decrypted message and answers its event, or null when it is not one. */
@@ -74,7 +76,7 @@ object PushHandler {
             "notification.read", "notification.dismissed" -> id?.let { NotificationMirror.cancel(context, it) }
             "notification.cleared" -> NotificationWorker.enqueue(context)
             "device.command" -> CommandWorker.enqueue(context)
-            "note.changed" -> SyncWorker.soon(context)
+            "note.changed", "device.settings" -> SyncWorker.soon(context)
             else -> return null
         }
         return event

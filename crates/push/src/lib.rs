@@ -14,6 +14,10 @@
 //! last one, `{"event": "note.changed", "ids": [...]}`, leaving out the changes its own token
 //! made; a device whose own writes are all there is gets nothing. Too many ids for one message
 //! send the first [`MAX_IDS`] and `"more": true`. The device runs a sync round on it.
+//!
+//! A device's settings changing in Settings > Devices is coalesced the same way, in a batch of
+//! its own: each device whose settings changed is sent `{"event": "device.settings"}`, and only
+//! that device. The device takes its settings again in the sync round it runs on it.
 
 pub mod webpush;
 
@@ -75,7 +79,7 @@ pub fn message(event: &LiveEvent) -> Option<Message> {
             "high",
         ),
         // Coalesced by the dispatcher instead: see [`Changes`].
-        LiveEvent::NoteChanged { .. } => return None,
+        LiveEvent::NoteChanged { .. } | LiveEvent::DeviceSettings { .. } => return None,
     };
     Some(Message {
         device,
@@ -150,12 +154,18 @@ impl Dispatcher {
         let this = Arc::new(self);
         tokio::spawn(async move {
             let mut changes = Changes::new(this.note_delay, this.note_window);
+            // The devices whose settings changed, as changes with no token.
+            let mut settings = Changes::new(this.note_delay, this.note_window);
             loop {
                 let due = changes.due();
+                let settings_due = settings.due();
                 tokio::select! {
                     got = events.recv() => match got {
                         Ok((_, LiveEvent::NoteChanged { id, token, .. })) => {
                             changes.add(id, token, Instant::now());
+                        }
+                        Ok((_, LiveEvent::DeviceSettings { device })) => {
+                            settings.add(device, None, Instant::now());
                         }
                         Ok((_, event)) => {
                             if let Some(message) = message(&event) {
@@ -168,12 +178,18 @@ impl Dispatcher {
                         Err(Missed::Closed) => {
                             let batch = changes.take(Instant::now());
                             this.send_changes(&owner, batch).await;
+                            let batch = settings.take(Instant::now());
+                            this.send_settings(&owner, batch).await;
                             return;
                         }
                     },
                     _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                         let batch = changes.take(Instant::now());
                         this.send_changes(&owner, batch).await;
+                    }
+                    _ = tokio::time::sleep_until(settings_due.unwrap_or_else(Instant::now)), if settings_due.is_some() => {
+                        let batch = settings.take(Instant::now());
+                        this.send_settings(&owner, batch).await;
                     }
                 }
             }
@@ -217,6 +233,34 @@ impl Dispatcher {
             let body = body.to_string().into_bytes();
             tokio::spawn(async move {
                 this.deliver(&owner, &device.id, &target, &body, "normal")
+                    .await;
+            });
+        }
+    }
+
+    /// Start telling each device in `batch`, a device id each, that its settings changed.
+    async fn send_settings<S: HasState>(self: &Arc<Self>, owner: &Arc<S>, batch: Vec<Change>) {
+        if batch.is_empty() {
+            return;
+        }
+        let Some(devices) = Self::devices(owner).await else {
+            return;
+        };
+        let body = Arc::new(
+            json!({ "event": "device.settings" })
+                .to_string()
+                .into_bytes(),
+        );
+        for (device, target) in devices
+            .into_iter()
+            .filter(|d| batch.iter().any(|c| c.id == d.id))
+            .filter_map(|d| d.push.map(|p| (d.id, p)))
+        {
+            let this = self.clone();
+            let owner = owner.clone();
+            let body = body.clone();
+            tokio::spawn(async move {
+                this.deliver(&owner, &device, &target, &body, "normal")
                     .await;
             });
         }

@@ -5,6 +5,8 @@
 //! deleted}` for every committed note change. [`SseParser`] splits the stream into events,
 //! [`NoteChanged::of`] reads a `note.changed`, and [`is_news`] tells a change the device does not
 //! hold yet from the echo of its own push, so the device's own writes do not start another round.
+//! The stream also sends `device.settings` with `{device}` when a device's settings change in
+//! Settings > Devices; [`settings_changed`] reads it, so the device can take its settings again.
 //! [`follow`] holds one connection open with the blocking client the engine uses; the caller
 //! reconnects. The desktop app follows the stream on its async runtime and uses only the parser
 //! and [`is_news`].
@@ -102,6 +104,16 @@ impl NoteChanged {
     }
 }
 
+/// The device whose settings `event` says changed, when it is a `device.settings` with the data
+/// it should carry.
+pub fn settings_changed(event: &Event) -> Option<String> {
+    if event.name != "device.settings" {
+        return None;
+    }
+    let data: Value = serde_json::from_str(&event.data).ok()?;
+    Some(data.get("device")?.as_str()?.to_owned())
+}
+
 /// Whether the device lacks `change`: it does unless its copy of the note already matches that
 /// version, as it does once its own push of the change has finished.
 pub fn is_news(queue: &Queue, change: &NoteChanged) -> bool {
@@ -118,6 +130,8 @@ pub enum Seen {
     Opened,
     /// A note changed on the server.
     NoteChanged(NoteChanged),
+    /// The settings of the device with this id changed on the server.
+    DeviceSettings(String),
 }
 
 /// Hold `GET /api/events` open on `remote`'s server and hand each [`Seen`] to `on`, until the
@@ -174,6 +188,8 @@ pub fn follow(
         for event in parser.push(&text) {
             if let Some(change) = NoteChanged::of(&event) {
                 on(Seen::NoteChanged(change));
+            } else if let Some(device) = settings_changed(&event) {
+                on(Seen::DeviceSettings(device));
             }
         }
     }
@@ -231,5 +247,20 @@ mod tests {
             data: event.data.clone(),
         };
         assert_eq!(NoteChanged::of(&other), None);
+    }
+
+    #[test]
+    fn a_settings_change_names_its_device() {
+        let event = Event {
+            name: "device.settings".into(),
+            data: r#"{"device":"01PHONE"}"#.into(),
+        };
+        assert_eq!(settings_changed(&event), Some("01PHONE".into()));
+        assert_eq!(NoteChanged::of(&event), None);
+        let command = Event {
+            name: "device.command".into(),
+            data: r#"{"device":"01PHONE","id":"c"}"#.into(),
+        };
+        assert_eq!(settings_changed(&command), None);
     }
 }

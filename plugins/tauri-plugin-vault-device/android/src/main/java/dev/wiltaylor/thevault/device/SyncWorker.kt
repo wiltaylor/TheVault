@@ -24,7 +24,8 @@ import java.util.concurrent.TimeUnit
  * capture asks for once a device event's handler has written notes, so a captured SMS, call or
  * contact change reaches the home server in seconds rather than at the next period. A
  * `note.changed` push from the home server asks for the prompt round too, so a change made
- * elsewhere reaches the phone while the app is closed.
+ * elsewhere reaches the phone while the app is closed, and so does a `device.settings` push: each
+ * round first takes the device's settings from the home server.
  *
  * The output carries the round's report as JSON under [REPORT], or the error under [ERROR]. A
  * server that cannot be reached retries later; a server newer than the app fails the run and
@@ -39,7 +40,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
             begun()
         }
         val paired = try {
-            Vault.open(applicationContext)
+            // With the device runtime open, the round takes the device's settings first and
+            // queues the person changes it pulls for their phone contacts.
+            Device.openCore(applicationContext)
         } catch (e: IllegalStateException) {
             return Result.failure(workDataOf(ERROR to e.message))
         }

@@ -64,14 +64,20 @@ The Android app runs one Rust core per process, shared by its webview and by the
 
 - when the app opens or returns to the foreground;
 - 1.5 seconds after the last local write, including a share from another app;
-- while the app is in the foreground, 1 second after the home server's event stream (`GET /api/events`, followed with the device token) reports a `note.changed` for a version the phone does not hold, and 1 second after the stream (re)connects. The stream reconnects with a pause that grows from 1 to 30 seconds, and closes within a heartbeat (15 seconds) once the app leaves the foreground. The echo of the phone's own pushed write is not news and runs no round;
-- in the background, when a `note.changed` push arrives over UnifiedPush: the app schedules the same prompt round a background capture schedules (`SyncWorker.soon`);
+- while the app is in the foreground, 1 second after the home server's event stream (`GET /api/events`, followed with the device token) reports a `note.changed` for a version the phone does not hold, 1 second after it reports a `device.settings` for this phone, and 1 second after the stream (re)connects. The stream reconnects with a pause that grows from 1 to 30 seconds, and closes within a heartbeat (15 seconds) once the app leaves the foreground. The echo of the phone's own pushed write is not news and runs no round;
+- in the background, when a `note.changed` or `device.settings` push arrives over UnifiedPush: the app schedules the same prompt round a background capture schedules (`SyncWorker.soon`);
 - every 15 minutes in the background through WorkManager, while the phone has a network. A server that cannot be reached is retried later. A server newer than the app stops background sync until the app is updated (D27).
 
-After each round, a `person` the round changed queues a `contact_changed` event for its linked phone contact, so a rename made in the web app reaches the contact (D16).
+Each round first takes the phone's settings from Settings > Devices (`GET /api/devices`): its contacts write and SMS send switches, its enabled commands, its exclusion list and its skip pattern (D22, D23, D25). So a setting changed in the web app applies on the phone by its next round, within seconds while the app is open or a push reaches it, and within 15 minutes otherwise.
+
+After each round, a `person` the round changed queues a `contact_changed` event for its linked phone contact, so a rename made in the web app reaches the contact (D16). While contacts write is off, nothing is queued and nothing is marked as seen, so the people changed in the meantime reach their contacts in the first round after it is turned on.
 
 ### The `note.changed` push
 
 The server's push dispatcher (`crates/push`) sends each device with a UnifiedPush endpoint `{"event": "note.changed", "ids": [...]}` when notes change, with `Urgency: normal`. It coalesces: the first change after a quiet spell goes out 1 second later, and no device gets more than one `note.changed` every 10 seconds; the changes in between go out together. A device is never told about the changes its own token made, so a device whose own writes are all that changed gets no push. At most 64 ids go in one message; a longer burst adds `"more": true`. The ids are a hint: the device pulls the change feed either way.
+
+### The `device.settings` push
+
+Changing a device's settings (`PATCH /api/devices/{id}` with `settings`) publishes `device.settings` with `{device}` on `GET /api/events`, and pushes `{"event": "device.settings"}` to that device alone, with `Urgency: normal`, coalesced as `note.changed` is: a burst of switches sends one push. A rename alone sends nothing.
 
 Only one round runs at a time. When a note shows an asset the phone does not hold, the app fetches it from the server before answering. Opening a note records it, so the next round prefetches its assets. The asset cache defaults to 512 MiB, and onboarding sets its size.

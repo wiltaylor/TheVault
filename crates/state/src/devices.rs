@@ -11,7 +11,7 @@
 use rusqlite::{OptionalExtension, Row, params};
 use sha2::{Digest, Sha256};
 
-use crate::{Error, Result, Scope, State, random_bytes};
+use crate::{Error, LiveEvent, Result, Scope, State, random_bytes};
 
 /// The platforms a device can be.
 pub const PLATFORMS: [&str; 2] = ["linux", "android"];
@@ -209,7 +209,8 @@ impl State {
             .optional()?)
     }
 
-    /// Change a device's name, its settings, or both.
+    /// Change a device's name, its settings, or both. A settings change publishes
+    /// `device.settings`, so the device takes the new settings at once.
     pub fn update_device(
         &self,
         id: &str,
@@ -223,6 +224,11 @@ impl State {
         )?;
         if changed == 0 {
             return Err(Error::UnknownDevice(id.to_owned()));
+        }
+        if settings.is_some() {
+            self.events.publish(LiveEvent::DeviceSettings {
+                device: id.to_owned(),
+            });
         }
         self.device(id)
     }

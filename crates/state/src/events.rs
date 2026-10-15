@@ -36,6 +36,8 @@ pub enum LiveEvent {
     },
     /// A command was queued for a device.
     DeviceCommand { device: String, id: String },
+    /// A device's settings changed in Settings > Devices, so the device should take them again.
+    DeviceSettings { device: String },
 }
 
 impl LiveEvent {
@@ -48,6 +50,7 @@ impl LiveEvent {
             LiveEvent::NotificationCleared { .. } => "notification.cleared",
             LiveEvent::NoteChanged { .. } => "note.changed",
             LiveEvent::DeviceCommand { .. } => "device.command",
+            LiveEvent::DeviceSettings { .. } => "device.settings",
         }
     }
 }

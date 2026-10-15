@@ -181,6 +181,27 @@ class PromptSyncTest {
         assertTrue("the round pulled: ${home.requests}", home.requests.any { it.startsWith("GET /api/sync/changes") })
     }
 
+    /**
+     * Ticket 84: settings changed in Settings > Devices while the app is closed are pushed as
+     * `device.settings`; the prompt round it schedules takes the settings before it syncs.
+     */
+    @Test
+    fun aDeviceSettingsPushHasTheNextRoundTakeTheSettingsFirst() {
+        pair()
+        home.settings = JSONObject().put("contacts_write", true)
+        val push = JSONObject().put("event", "device.settings").toString().toByteArray()
+        assertEquals("device.settings", PushHandler.handle(context, push))
+        val round = oneRoundWaiting()
+
+        WorkManagerTestInitHelper.getTestDriver(context)!!.setAllConstraintsMet(round.id)
+
+        assertEquals(WorkInfo.State.SUCCEEDED, rounds().single().state)
+        val requests = home.requests.toList()
+        val settings = requests.indexOf("GET /api/devices")
+        assertTrue("the round took the settings: $requests", settings >= 0)
+        assertTrue("before it synced: $requests", settings < requests.indexOf("GET /api/sync/info"))
+    }
+
     @Test
     fun aNoteChangedPushToAnUnpairedPhoneSchedulesNothing() {
         assertEquals("note.changed", notePush("01JB8Z4K2MQ7V3X9T5R6W8Y2ZA"))

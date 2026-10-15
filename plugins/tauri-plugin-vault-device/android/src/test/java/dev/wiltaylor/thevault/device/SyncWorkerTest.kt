@@ -60,9 +60,11 @@ class SyncWorkerTest {
         assertTrue("$result", result is ListenableWorker.Result.Success)
         val report = JSONObject(result.outputData.getString(SyncWorker.REPORT)!!)
         assertEquals(0, report.getInt("pulled"))
-        // The engine's round, in its order: handshake, bases, the feed, assets, bases again.
+        // The device's settings (ticket 84), then the engine's round, in its order: handshake,
+        // bases, the feed, assets, bases again.
         assertEquals(
             listOf(
+                "GET /api/devices",
                 "GET /api/sync/info",
                 "PUT /api/devices/${FakeHome.DEVICE_ID}/bases",
                 "GET /api/sync/changes?since=0&limit=500",
@@ -82,7 +84,7 @@ class SyncWorkerTest {
         val result = runWorker()
         assertTrue("$result", result is ListenableWorker.Result.Failure)
         assertTrue(result.outputData.getString(SyncWorker.ERROR)!!.contains("update the app"))
-        assertEquals(listOf("GET /api/sync/info"), home.requests.toList())
+        assertEquals(listOf("GET /api/devices", "GET /api/sync/info"), home.requests.toList())
         assertEquals(1, JSONObject(VaultCore.status()).getInt("pending"))
     }
 

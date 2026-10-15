@@ -13,6 +13,7 @@ export const LIVE_EVENTS = [
   "notification.cleared",
   "note.changed",
   "device.command",
+  "device.settings",
 ] as const;
 
 export type LiveEventName = (typeof LIVE_EVENTS)[number];

@@ -9,6 +9,7 @@
 //! | `notification.cleared` | `{cleared, unread}` |
 //! | `note.changed` | `{id, type, version, deleted}` |
 //! | `device.command` | `{device, id}` |
+//! | `device.settings` | `{device}` |
 //!
 //! Each event's SSE `id` is its sequence number since the server started. A comment line goes
 //! out every [`HEARTBEAT`] so proxies keep the connection open. A client that falls too far
@@ -48,6 +49,7 @@ fn sse(seq: u64, event: &LiveEvent) -> Event {
             ..
         } => json!({ "id": id, "type": type_name, "version": version, "deleted": deleted }),
         LiveEvent::DeviceCommand { device, id } => json!({ "device": device, "id": id }),
+        LiveEvent::DeviceSettings { device } => json!({ "device": device }),
     };
     Event::default()
         .event(event.name())

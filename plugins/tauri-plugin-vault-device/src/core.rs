@@ -15,11 +15,16 @@
 //! - in the foreground, when a note changes on the server: while Kotlin says the app is in front
 //!   ([`Core::set_foreground`]), a thread holds the home server's `GET /api/events` open with
 //!   the device token, reconnecting with a growing pause, and asks for a round a second after
-//!   each `note.changed` the device does not hold yet, and on each (re)connect;
+//!   each `note.changed` the device does not hold yet, after each `device.settings` for this
+//!   device, and on each (re)connect;
 //! - in the background, from WorkManager's periodic worker, and from the prompt worker a
-//!   `note.changed` push schedules, through [`Core::sync_now`];
+//!   `note.changed` or `device.settings` push schedules, through [`Core::sync_now`];
 //! - for assets, on demand: [`Core::fetch_asset`] when a note shows an asset the device does not
 //!   hold, and [`Core::note_opened`] when a note is opened, so its assets are prefetched next time.
+//!
+//! Every round first takes the device's settings from Settings > Devices on the home server
+//! (D22, D23, D25), so a switch turned on or off reaches the device runtime by the next round,
+//! and the `device.settings` event and push make that round come at once.
 //!
 //! Device capture (D7, D17) hands events to the device runtime [`Core::device`] opens, whose
 //! device module reaches the phone through the Kotlin bridge. After each round the runtime queues
@@ -240,11 +245,15 @@ impl Core {
         lock(&self.link).clone()
     }
 
-    /// Run one round now, waiting for any round already running. It blocks: never call it from
-    /// inside an async runtime.
+    /// Run one round now, waiting for any round already running: take the device's settings from
+    /// the home server, sync, then queue the person changes for their phone contacts. It blocks:
+    /// never call it from inside an async runtime.
     pub fn sync_now(&self) -> anyhow::Result<Report> {
         let link = self.linked()?;
         let _round = lock(&self.round);
+        if let Err(e) = self.refresh_settings(&link) {
+            eprintln!("the device settings were not refreshed: {e:#}");
+        }
         let result = self
             .server
             .sync_engine(link.remote(), link.assets())
@@ -258,6 +267,21 @@ impl Core {
             eprintln!("person changes not queued for the phone: {e:#}");
         }
         Ok(report)
+    }
+
+    /// Take the device's settings from the home server into the device runtime, when one is
+    /// open. The settings stay as they were when the server no longer lists the device.
+    fn refresh_settings(&self, link: &Link) -> anyhow::Result<()> {
+        let Ok(runtime) = self.runtime() else {
+            return Ok(());
+        };
+        if runtime.device_id() != link.device_id {
+            return Ok(());
+        }
+        if let Some(s) = commands::settings(link)?.filter(Value::is_object) {
+            runtime.set_settings(&s)?;
+        }
+        Ok(())
     }
 
     /// Queue the person changes the round brought for their phone contacts, and run them.
@@ -510,6 +534,8 @@ fn follow_events(core: Weak<Core>) {
                     true
                 }
                 Seen::NoteChanged(change) => live::is_news(core.server.queue(), &change),
+                // The round takes the new settings first, then catches up the contacts.
+                Seen::DeviceSettings(device) => device == link.device_id,
             };
             if news {
                 core.nudge(REMOTE_SETTLE);

@@ -251,7 +251,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
         "/api/events",
-        "Server-sent events: notification.created|read|dismissed|cleared, note.changed, device.command",
+        "Server-sent events: notification.created|read|dismissed|cleared, note.changed, device.command, device.settings",
     ),
     (
         "GET",

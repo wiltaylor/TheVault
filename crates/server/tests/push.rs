@@ -1,9 +1,11 @@
 //! S1: the server pushes notification events to each paired device's UnifiedPush endpoint as
 //! RFC 8291 WebPush messages that carry ids only, and forgets an endpoint the push service says
 //! is gone (D4, D9). Note changes are pushed too, coalesced, and never back to the device that
-//! made them.
+//! made them. A device's settings changing is pushed to that device alone, coalesced as well.
 
+use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -279,5 +281,87 @@ fn note_changes_are_pushed_coalesced_and_never_to_the_device_that_made_them() {
     assert_eq!(
         pushed(&service, &b, "/up/b")[2..],
         [json!({ "event": "note.changed", "ids": [alone] })]
+    );
+}
+
+/// The `device.settings` events on `/api/events`, as the device with `token` reads them, each as
+/// its data, on a thread of their own.
+fn settings_events(server: &TestServer, token: &str) -> mpsc::Receiver<Value> {
+    let res = client(token).get(server.url("/api/events")).send().unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut event = String::new();
+        for line in BufReader::new(res).lines() {
+            let Ok(line) = line else { return };
+            if line.is_empty() {
+                event.clear();
+            } else if let Some(v) = line.strip_prefix("event:") {
+                event = v.trim().to_owned();
+            } else if let Some(v) = line.strip_prefix("data:")
+                && event == "device.settings"
+            {
+                let data = serde_json::from_str(v.trim()).unwrap_or(Value::Null);
+                if tx.send(data).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    rx
+}
+
+/// Ticket 84: changing a device's settings in Settings > Devices tells that device at once, on
+/// the live event stream and by one coalesced push to it alone; a rename alone tells nobody.
+#[test]
+fn a_settings_change_is_streamed_and_pushed_to_its_device_only() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let service = StandIn::start();
+    service.route("/up/a", Reply::text(201, ""));
+    service.route("/up/b", Reply::text(201, ""));
+    let a = Phone::pair(&server, "Pixel", 8);
+    let b = Phone::pair(&server, "Tablet", 9);
+    a.register(&server, &service.url("/up/a"));
+    b.register(&server, &service.url("/up/b"));
+    let events = settings_events(&server, &a.token);
+
+    let patch = |id: &str, body: Value| {
+        send(
+            admin
+                .patch(server.url(&format!("/api/devices/{id}")))
+                .json(&body),
+            200,
+        )
+    };
+    // A burst, as the Settings > Devices switches send one by one.
+    patch(&a.id, json!({ "settings": { "contacts_write": true } }));
+    patch(
+        &a.id,
+        json!({ "settings": { "commands": ["upsert_contact"] } }),
+    );
+    patch(&a.id, json!({ "settings": { "sms_send": true } }));
+    patch(&b.id, json!({ "name": "Old tablet" }));
+
+    for _ in 0..3 {
+        let data = events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a device.settings event");
+        assert_eq!(data, json!({ "device": a.id }));
+    }
+    assert!(
+        events.recv_timeout(Duration::from_millis(500)).is_err(),
+        "a rename alone is no settings change"
+    );
+
+    let seen = wait_for(&service, 1);
+    assert_eq!(seen[0].path, "/up/a");
+    assert_eq!(seen[0].header("urgency"), Some("normal"));
+    assert_eq!(a.open(&seen[0].body), json!({ "event": "device.settings" }));
+    thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        service.requests().len(),
+        1,
+        "one push for the burst, to A only"
     );
 }

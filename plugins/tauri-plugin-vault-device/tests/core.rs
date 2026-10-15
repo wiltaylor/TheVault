@@ -585,3 +585,212 @@ fn with_no_share_handler_the_share_falls_back_to_a_fleeting_note() {
     assert_eq!(queued[0]["fields"]["title"], "nobody handles this");
     assert!(runtime.events().unwrap().is_empty(), "nothing queued");
 }
+
+/// A phone with one contact, that records the contacts it is asked to write.
+struct ContactPhone {
+    contact: Value,
+    upserts: Mutex<Vec<Value>>,
+}
+
+impl ContactPhone {
+    fn names(&self) -> Vec<String> {
+        self.upserts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+}
+
+impl embedded::device::DeviceData for ContactPhone {
+    fn sms_list(&self, _: &Value) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+    fn sms_get(&self, r: &str) -> Result<Value, String> {
+        Err(format!("no SMS {r}"))
+    }
+    fn calls_list(&self, _: &Value) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+    fn contacts_list(&self, _: &Value) -> Result<Vec<Value>, String> {
+        Ok(vec![self.contact.clone()])
+    }
+    fn contacts_get(&self, c: &str) -> Result<Value, String> {
+        if self.contact["contact_id"] == c {
+            Ok(self.contact.clone())
+        } else {
+            Err(format!("no contact {c}"))
+        }
+    }
+    fn contacts_upsert(&self, contact: &Value) -> Result<Value, String> {
+        self.upserts.lock().unwrap().push(contact.clone());
+        Ok(json!({ "contact_id": contact["contact_id"] }))
+    }
+    fn contacts_delete(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn sms_send(&self, _: &str, _: &str) -> Result<Value, String> {
+        Err("no SMS".into())
+    }
+    fn show_notification(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Admin {
+    /// Rename note `id` on the server, as the web app does.
+    fn rename(&self, id: &str, title: &str) {
+        let got = self.send("GET", &format!("/api/notes/{id}"), None);
+        let mut note = got["note"].clone();
+        note["fields"]["title"] = json!(title);
+        self.send(
+            "PUT",
+            &format!("/api/notes/{id}"),
+            Some(json!({ "note": note, "base_version": got["version"] })),
+        );
+    }
+
+    fn device_settings(&self, device: &str, settings: Value) {
+        self.send(
+            "PATCH",
+            &format!("/api/devices/{device}"),
+            Some(json!({ "settings": settings })),
+        );
+    }
+}
+
+/// Ticket 84: with the app in front, settings changed in Settings > Devices reach the device
+/// runtime within seconds, through the `device.settings` event, and a person renamed while the
+/// device could not write contacts reaches its contact once it can; a later rename follows.
+#[test]
+fn in_front_a_settings_change_applies_at_once_and_the_contacts_catch_up() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let admin = Admin::start();
+    let paired = admin.pair("Pixel");
+    core.set_link(Some(link(&paired, 64)));
+    let phone = Arc::new(ContactPhone {
+        contact: json!({
+            "contact_id": "c1",
+            "name": "Zed One",
+            "phones": ["+61400000009"],
+            "addresses": [],
+            "updated": "2020-01-01T00:00:00Z",
+        }),
+        upserts: Mutex::new(Vec::new()),
+    });
+    let data = phone.clone();
+    let runtime = core.device(&paired.device_id, || data).unwrap();
+    core.sync_now().unwrap();
+
+    // The phone's contact becomes a person, linked to it, and reaches the server.
+    runtime
+        .enqueue("contact_changed", phone.contact.clone(), 1_760_000_000_000)
+        .unwrap();
+    for e in runtime.run_pending().unwrap() {
+        assert_eq!(e.status.as_str(), "done", "{e:?}");
+    }
+    let queued = core.queued().unwrap();
+    let person = queued[0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(queued[0]["type"], "person", "{queued}");
+    core.sync_now().unwrap();
+    assert!(!runtime.settings().contacts_write);
+
+    core.set_foreground(true);
+    let wait = |what: &str, limit: Duration, ok: &dyn Fn() -> bool| {
+        let started = Instant::now();
+        while !ok() {
+            assert!(
+                started.elapsed() < limit,
+                "{what} within {limit:?}: {} {:?}",
+                core.status().unwrap(),
+                phone.names()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        started.elapsed()
+    };
+    wait("the stream opens", Duration::from_secs(30), &|| {
+        core.status().unwrap()["live"] == true
+    });
+
+    // Renamed on the server while the device may not write contacts: pulled, not written.
+    admin.rename(&person, "Zed Two");
+    let writer = core.server().writer();
+    let title = || {
+        writer
+            .read(&person)
+            .map(|n| writer::doc_to_json(&n.doc)["fields"]["title"].clone())
+            .unwrap_or(Value::Null)
+    };
+    wait("the rename is pulled", Duration::from_secs(30), &|| {
+        title() == "Zed Two"
+    });
+    assert!(phone.names().is_empty(), "{:?}", phone.names());
+
+    // Contacts write turned on in Settings > Devices: the open app takes it at once, and the
+    // contact catches up with the rename it missed.
+    admin.device_settings(
+        &paired.device_id,
+        json!({ "contacts_write": true, "commands": ["upsert_contact", "delete_contact"] }),
+    );
+    let took = wait("the settings are taken", Duration::from_secs(5), &|| {
+        runtime.settings().contacts_write
+    });
+    eprintln!("the settings were taken {took:?} after the change");
+    assert!(
+        took < Duration::from_millis(2500),
+        "the settings took {took:?}"
+    );
+    assert_eq!(
+        runtime.settings().commands,
+        ["upsert_contact", "delete_contact"]
+    );
+    wait("the contact catches up", Duration::from_secs(10), &|| {
+        phone.names().last().map(String::as_str) == Some("Zed Two")
+    });
+
+    // A later rename reaches the contact too.
+    admin.rename(&person, "Zed Three");
+    wait(
+        "the next rename reaches the contact",
+        Duration::from_secs(30),
+        &|| phone.names().last().map(String::as_str) == Some("Zed Three"),
+    );
+
+    // Switched off again: taken at once too.
+    admin.device_settings(&paired.device_id, json!({ "contacts_write": false }));
+    wait("the switch off is taken", Duration::from_secs(5), &|| {
+        !runtime.settings().contacts_write
+    });
+    core.set_foreground(false);
+}
+
+/// Ticket 84: every round takes the device's settings first, so a change the device was not told
+/// of applies by its next round.
+#[test]
+fn every_round_takes_the_device_settings_first() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let admin = Admin::start();
+    let paired = admin.pair("Pixel");
+    core.set_link(Some(link(&paired, 64)));
+    let runtime = core
+        .device(&paired.device_id, || Arc::new(NoPhone))
+        .unwrap();
+    assert!(!runtime.settings().sms_send);
+
+    admin.device_settings(
+        &paired.device_id,
+        json!({ "sms_send": true, "commands": ["send_sms"], "skip_pattern": "" }),
+    );
+    assert!(!runtime.settings().sms_send, "the app is closed: no stream");
+    core.sync_now().unwrap();
+    let s = runtime.settings();
+    assert!(s.sms_send);
+    assert_eq!(s.commands, ["send_sms"]);
+    assert_eq!(s.skip_pattern, "");
+}
