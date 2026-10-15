@@ -5,8 +5,8 @@ title: 'Android app: device settings changed in Settings > Devices (contacts wri
   until it is reopened'
 plan: thevault-clients
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Android app: device settings changed in Settings > Devices (contacts write, commands) do not reach an open app, so contact edits from the web app are dropped until it is reopened
@@ -26,3 +26,19 @@ Fix direction: refresh the device's settings from the server in every sync round
 Evidence: .scratch/emulator/RESULTS.md check 37; .scratch/emulator/run-final/logs/37-capture-state.txt (contact_changed events applied only at 13:37:57, the resume).
 
 ## Worklog
+
+### 2026-10-15T15:17:04Z — wil
+
+Status set to claimed.
+
+### 2026-10-15T15:17:05Z — wil
+
+Fixed in 8a7609d: PATCH of device settings publishes device.settings on /api/events and pushes it (coalesced) to that device only; every sync round fetches settings first; open apps run a round on the event; background SyncWorker opens the device runtime so contacts catch up. Emulator check 37 passes (contact renamed 5.2 s after the change); check and android-test pass after rebase.
+
+### 2026-10-15T15:17:05Z — wil
+
+Verified set to verified.
+
+### 2026-10-15T15:17:06Z — wil
+
+Status set to done.
