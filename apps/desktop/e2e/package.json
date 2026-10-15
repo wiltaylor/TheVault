@@ -1,0 +1,9 @@
+{
+  "name": "thevault-desktop-e2e",
+  "private": true,
+  "type": "module",
+  "description": "S6: the desktop app end to end, driven by tauri-driver under Xvfb",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-timeout=600000"
+  }
+}

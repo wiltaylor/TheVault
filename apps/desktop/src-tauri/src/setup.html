@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Set up TheVault</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+        --accent: #2f6fde;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: Canvas;
+        color: CanvasText;
+      }
+      main {
+        width: min(26rem, 90vw);
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0 0 0.25rem;
+      }
+      p {
+        margin: 0 0 1.25rem;
+        opacity: 0.75;
+        line-height: 1.4;
+      }
+      label {
+        display: block;
+        margin: 0.9rem 0 0.3rem;
+        font-weight: 600;
+      }
+      input[type="text"],
+      input[type="url"],
+      input[type="password"] {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 0.5rem 0.6rem;
+        font: inherit;
+        border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+        border-radius: 6px;
+        background: Field;
+        color: FieldText;
+      }
+      fieldset {
+        border: 0;
+        padding: 0;
+        margin: 0.9rem 0 0;
+        display: flex;
+        gap: 1.25rem;
+      }
+      fieldset label {
+        display: inline;
+        margin: 0;
+        font-weight: normal;
+      }
+      button {
+        margin-top: 1.25rem;
+        width: 100%;
+        padding: 0.6rem;
+        font: inherit;
+        font-weight: 600;
+        border: 0;
+        border-radius: 6px;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: progress;
+      }
+      [role="alert"] {
+        margin-top: 1rem;
+        color: #c62828;
+      }
+      [role="alert"]:empty {
+        display: none;
+      }
+      #progress {
+        margin-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Set up TheVault</h1>
+      <p>Pair this computer with your TheVault server. You sign in once; afterwards the app works offline and syncs when it can.</p>
+      <form id="pair">
+        <label for="server">Server URL</label>
+        <input id="server" name="server" type="url" placeholder="https://vault.example.net" required autocomplete="url" />
+
+        <fieldset>
+          <legend hidden>Sign in with</legend>
+          <span><input type="radio" id="with-password" name="with" value="password" checked /> <label for="with-password">Password</label></span>
+          <span><input type="radio" id="with-code" name="with" value="code" /> <label for="with-code">Pairing code</label></span>
+        </fieldset>
+
+        <div id="password-row">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" />
+        </div>
+        <div id="code-row" hidden>
+          <label for="code">Pairing code</label>
+          <input id="code" name="code" type="text" autocomplete="off" placeholder="From Settings &gt; Devices on the web app" />
+        </div>
+
+        <label for="name">Device name</label>
+        <input id="name" name="name" type="text" autocomplete="off" />
+
+        <button id="submit" type="submit">Pair</button>
+        <div id="error" role="alert"></div>
+        <div id="progress" role="status"></div>
+      </form>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const form = $("pair");
+
+      function mode() {
+        return form.elements.with.value;
+      }
+      function showMode() {
+        $("password-row").hidden = mode() !== "password";
+        $("code-row").hidden = mode() !== "code";
+      }
+      for (const radio of form.elements.with) radio.addEventListener("change", showMode);
+
+      // A QR code's payload pasted as the code fills in the server too.
+      $("code").addEventListener("input", () => {
+        try {
+          const payload = JSON.parse($("code").value);
+          if (payload && typeof payload.code === "string") {
+            $("code").value = payload.code;
+            if (typeof payload.server_url === "string") $("server").value = payload.server_url;
+          }
+        } catch {}
+      });
+
+      fetch("/_desktop/status")
+        .then((r) => r.json())
+        .then((s) => {
+          if (!$("name").value) $("name").value = s.default_name || "";
+        })
+        .catch(() => {});
+
+      async function waitForFirstSync() {
+        $("progress").textContent = "Paired. Downloading your notes…";
+        for (;;) {
+          const s = await (await fetch("/_desktop/status")).json();
+          if (s.last_sync_ms) break;
+          if (s.phase === "update_required" || s.phase === "revoked" || s.phase === "error") {
+            $("error").textContent = s.message || "Sync failed.";
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        location.replace("/");
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        $("error").textContent = "";
+        const body = { server_url: $("server").value, name: $("name").value };
+        if (mode() === "password") body.password = $("password").value;
+        else body.code = $("code").value;
+        $("submit").disabled = true;
+        $("progress").textContent = "Pairing…";
+        try {
+          const res = await fetch("/_desktop/pair", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const answer = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            $("error").textContent = answer.message || `Pairing failed (${res.status}).`;
+            $("progress").textContent = "";
+            $("submit").disabled = false;
+            return;
+          }
+          await waitForFirstSync();
+        } catch (err) {
+          $("error").textContent = String(err);
+          $("progress").textContent = "";
+          $("submit").disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

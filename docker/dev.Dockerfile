@@ -68,3 +68,10 @@ RUN npx -y playwright@1.56.1 install --with-deps chromium \
 
 ENV CARGO_HOME=/cargo PNPM_HOME=/pnpm-store GRADLE_USER_HOME=/gradle
 RUN mkdir -p /cargo /pnpm-store /gradle && chmod 1777 /cargo /pnpm-store /gradle
+
+# The Secret Service the desktop app keeps its device token in, for its S6 tests, and nss_wrapper,
+# which gives ./dev's host uid the passwd entry the session bus needs. A layer of its own, so
+# adding it rebuilds nothing above.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gnome-keyring libnss-wrapper \
+ && rm -rf /var/lib/apt/lists/*

@@ -53,14 +53,15 @@ web-e2e-test: web-build (require-tool "cargo")
 	cargo build -p server -p testkit --bins
 	pnpm -C web e2e
 
-# Build the Linux desktop app (debug, no bundles). Needs apps/desktop, which lands with ticket 62
+# Build the Linux desktop app (debug, no bundles) into apps/desktop/src-tauri/target/debug/thevault
 [group('desktop')]
-desktop-build: (require-path "apps/desktop/src-tauri" "ticket 62") (require-tool "cargo-tauri") web-build
+desktop-build: (require-tool "cargo-tauri") web-build
 	cd apps/desktop && cargo tauri build --debug --no-bundle
 
-# Run the S6 desktop end-to-end tests with tauri-driver under Xvfb. Needs apps/desktop/e2e, which lands with ticket 62
+# Run the desktop app's unit tests, then the S6 end-to-end tests with tauri-driver under Xvfb
 [group('desktop')]
-desktop-test: (require-path "apps/desktop/e2e" "ticket 62") (require-tool "tauri-driver") (require-tool "xvfb-run") desktop-build
+desktop-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-tool "gnome-keyring-daemon") desktop-build
+	cd apps/desktop/src-tauri && cargo test
 	cargo build -p server -p testkit --bins
 	xvfb-run -a pnpm -C apps/desktop/e2e test
 
