@@ -120,6 +120,30 @@ class ReadersTest {
     }
 
     @Test
+    fun mmsPartsWithoutAnExtensionAreStoredWithTheOneOfTheirContentType() {
+        phone.mms(7, "0412345678", emptyList())
+        phone.part(20, 7, "image/jpeg", name = "image000001", bytes = byteArrayOf(1))
+        phone.part(21, 7, "image/png", bytes = byteArrayOf(2))
+        phone.part(22, 7, "image/jpeg", name = "IMG_1.JPEG", bytes = byteArrayOf(3))
+        phone.part(23, 7, "text/x-vcard", name = "contact", bytes = byteArrayOf(4))
+        phone.part(24, 7, "application/octet-stream", name = "blob", bytes = byteArrayOf(5))
+
+        val attachments = capture.mms.since(0).single().data.getJSONArray("attachments")
+        val names = listOf("image000001.jpg", "part-21.png", "IMG_1.JPEG", "contact.vcf", "blob")
+        assertEquals(names, phone.assets.stored.map { it.first })
+        assertEquals(names, (0 until attachments.length()).map { attachments.getJSONObject(it).getString("filename") })
+        assertEquals("image/jpeg", attachments.getJSONObject(0).getString("mime"))
+    }
+
+    @Test
+    fun fileNamesTakeTheExtensionOfTheirContentType() {
+        assertEquals("image000001.jpg", FileNames.withExtension("image000001", "image/jpeg"))
+        assertEquals("photo.dat.png", FileNames.withExtension("photo.dat", "image/png"))
+        assertEquals("photo.png", FileNames.withExtension("photo.png", "IMAGE/PNG; name=photo.png"))
+        assertEquals("blob", FileNames.withExtension("blob", "application/x-unknown-thing"))
+    }
+
+    @Test
     fun callLogReaderMapsDirectionsAndLeavesOutVoicemail() {
         phone.call(1, "0412345678", Calls.INCOMING_TYPE, 65)
         phone.call(2, "+61499999999", Calls.OUTGOING_TYPE, 30)

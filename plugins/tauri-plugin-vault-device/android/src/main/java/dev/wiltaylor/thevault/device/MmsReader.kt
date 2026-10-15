@@ -3,7 +3,6 @@ package dev.wiltaylor.thevault.device
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.provider.Telephony.Mms
-import android.webkit.MimeTypeMap
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -19,7 +18,8 @@ fun interface AssetStore {
  * is its `_id`; sent MMS are left out, since no device event carries them.
  *
  * Text parts join into `body`; every other part except the SMIL layout is stored through
- * [assets] and listed in `attachments`. `to` lists the other recipients of a group message,
+ * [assets] and listed in `attachments`, named with the extension of its content type
+ * ([FileNames.withExtension]), so an image part named `image000001` shows as an image. `to` lists the other recipients of a group message,
  * leaving out this phone's own numbers ([selfNumbers], E.164).
  */
 class MmsReader(
@@ -94,7 +94,7 @@ class MmsReader(
                     }
                 }
                 else -> read(part.id)?.let { bytes ->
-                    val filename = part.filename ?: "part-${part.id}" + extension(part.mime)
+                    val filename = FileNames.withExtension(part.filename ?: "part-${part.id}", part.mime)
                     val stored = assets.put(filename, bytes)
                     attachments.put(
                         JSONObject()
@@ -122,9 +122,6 @@ class MmsReader(
     private fun read(partId: Long): ByteArray? =
         resolver.openInputStream(ContentUris.withAppendedId(Mms.Part.CONTENT_URI, partId))?.use { it.readBytes() }
 
-    private fun extension(mime: String): String =
-        MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)?.let { ".$it" } ?: ""
-
     private data class Part(val id: Long, val mime: String, val filename: String?, val text: String?)
 
     companion object {
@@ -136,5 +133,58 @@ class MmsReader(
 
         /** What the provider holds instead of this phone's number on an MMS it sent. */
         private const val INSERT_ADDRESS_TOKEN = "insert-address-token"
+    }
+}
+
+/**
+ * File names for stored parts. MMS parts are often named without an extension (`image000001`)
+ * or not at all, and the vault tells an image by its file name, so a stored part's name gets the
+ * extension of its content type. The share path does the same in Rust (`share::with_extension`),
+ * with the same table.
+ */
+object FileNames {
+    /** The endings of each content type, the usual one first. */
+    private val EXTENSIONS = mapOf(
+        "image/jpeg" to listOf("jpg", "jpeg"),
+        "image/jpg" to listOf("jpg", "jpeg"),
+        "image/pjpeg" to listOf("jpg", "jpeg"),
+        "image/png" to listOf("png"),
+        "image/gif" to listOf("gif"),
+        "image/webp" to listOf("webp"),
+        "image/avif" to listOf("avif"),
+        "image/heic" to listOf("heic"),
+        "image/heif" to listOf("heif"),
+        "image/bmp" to listOf("bmp"),
+        "image/svg+xml" to listOf("svg"),
+        "application/pdf" to listOf("pdf"),
+        "text/plain" to listOf("txt", "md"),
+        "text/csv" to listOf("csv"),
+        "text/x-vcard" to listOf("vcf"),
+        "text/vcard" to listOf("vcf"),
+        "application/json" to listOf("json"),
+        "application/zip" to listOf("zip"),
+        "audio/mpeg" to listOf("mp3"),
+        "audio/amr" to listOf("amr"),
+        "audio/aac" to listOf("aac"),
+        "audio/mp4" to listOf("m4a"),
+        "audio/ogg" to listOf("ogg"),
+        "audio/wav" to listOf("wav"),
+        "video/mp4" to listOf("mp4"),
+        "video/3gpp" to listOf("3gp"),
+        "video/3gpp2" to listOf("3g2"),
+        "video/quicktime" to listOf("mov"),
+        "video/webm" to listOf("webm"),
+    )
+
+    /**
+     * [filename] with the extension of [mime] added when it lacks one of that type's endings:
+     * `image000001` as `image/jpeg` is `image000001.jpg`. A type with no known ending leaves it.
+     */
+    fun withExtension(filename: String, mime: String): String {
+        val type = mime.substringBefore(';').trim().lowercase()
+        val wanted = EXTENSIONS[type] ?: return filename
+        val dot = filename.lastIndexOf('.')
+        val ext = if (dot > 0) filename.substring(dot + 1).lowercase() else null
+        return if (ext != null && ext in wanted) filename else "$filename.${wanted.first()}"
     }
 }

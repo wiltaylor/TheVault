@@ -303,3 +303,38 @@ fn a_conversation_page_queries_its_messages() {
         .collect();
     assert_eq!(titles, ["Running late", "See you soon"], "{res}");
 }
+
+/// A message's pictures show on its page and its card: both templates of the message type have an
+/// image block showing the `attachments` field, and the page keeps the field's slot, where every
+/// attachment, a picture or not, is a file.
+#[test]
+fn a_message_shows_the_images_in_its_attachments() {
+    let api = Api::new(TestServer::start());
+    let types = api.types();
+    let message = find(&types, "message");
+    let items = |template: &str| -> Vec<Value> {
+        message["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == template)
+            .unwrap_or_else(|| panic!("no {template} template: {message}"))["tabs"][0]["items"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    for template in ["default", "card"] {
+        let items = items(template);
+        assert!(
+            items
+                .iter()
+                .any(|i| i["block"]["kind"] == "image"
+                    && i["block"]["fields"]["field"] == "attachments"),
+            "the {template} template shows the attachments' images: {items:?}"
+        );
+    }
+    assert!(
+        items("default").iter().any(|i| i["slot"] == "attachments"),
+        "the page keeps the attachments slot"
+    );
+}

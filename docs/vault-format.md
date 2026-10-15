@@ -199,7 +199,7 @@ The fields of the phone data types, as a new vault gets them:
 | | `conversation` | `reference` to `conversation` | The thread the message belongs to |
 | | `sent` | `datetime` | When it was sent |
 | | `body` | `content` | The text |
-| | `attachments` | `asset`, `multiple` | MMS attachments |
+| | `attachments` | `asset`, `multiple` | MMS attachments. The default template shows the ones that are images on the note page and its card |
 | | `partial` | `bool`, default `false` | Captured from a notification, so it may be incomplete (RCS) |
 | | `device_ref` | `string` | The phone's id for the message: a provider row id or a notification key. The device scripts use it to capture a message once |
 | `call` | `direction` | `select`: `in`, `out`, `missed` | |

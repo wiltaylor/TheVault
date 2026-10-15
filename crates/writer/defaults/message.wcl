@@ -80,12 +80,20 @@ field device_ref {
 template default {
   tab "Message" {
     slot "body"
+    image {
+      field = "attachments"
+      alt   = "Picture sent with the message"
+    }
     slot "attachments"
   }
 }
 
 template card {
   tab "Card" {
+    image {
+      field = "attachments"
+      alt   = "Picture sent with the message"
+    }
     slot "title"
     slot "sent"
   }

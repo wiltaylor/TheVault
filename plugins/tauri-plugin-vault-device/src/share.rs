@@ -102,6 +102,59 @@ pub fn mime(file: &SharedFile) -> String {
     .to_owned()
 }
 
+/// The file name endings of a media type, the usual one first, or none for a type not listed.
+/// The Android MMS reader (`MmsReader.kt`, `FileNames`) keeps the same table.
+fn extensions(mime: &str) -> &'static [&'static str] {
+    let base = mime.split(';').next().unwrap_or_default().trim();
+    match base.to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" | "image/pjpeg" => &["jpg", "jpeg"],
+        "image/png" => &["png"],
+        "image/gif" => &["gif"],
+        "image/webp" => &["webp"],
+        "image/avif" => &["avif"],
+        "image/heic" => &["heic"],
+        "image/heif" => &["heif"],
+        "image/bmp" => &["bmp"],
+        "image/svg+xml" => &["svg"],
+        "application/pdf" => &["pdf"],
+        "text/plain" => &["txt", "md"],
+        "text/csv" => &["csv"],
+        "text/x-vcard" | "text/vcard" => &["vcf"],
+        "application/json" => &["json"],
+        "application/zip" => &["zip"],
+        "audio/mpeg" => &["mp3"],
+        "audio/amr" => &["amr"],
+        "audio/aac" => &["aac"],
+        "audio/mp4" => &["m4a"],
+        "audio/ogg" => &["ogg"],
+        "audio/wav" => &["wav"],
+        "video/mp4" => &["mp4"],
+        "video/3gpp" => &["3gp"],
+        "video/3gpp2" => &["3g2"],
+        "video/quicktime" => &["mov"],
+        "video/webm" => &["webm"],
+        _ => &[],
+    }
+}
+
+/// `filename` with the extension of its media type `mime` added when it lacks one of its
+/// endings, so a part named `image000001` sent as `image/jpeg` is kept as `image000001.jpg` and
+/// shows as an image. A type with no known ending leaves the name as it is.
+pub fn with_extension(filename: &str, mime: &str) -> String {
+    let wanted = extensions(mime);
+    let Some(first) = wanted.first() else {
+        return filename.to_owned();
+    };
+    let has = filename.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty() && wanted.contains(&ext.to_ascii_lowercase().as_str())
+    });
+    if has {
+        filename.to_owned()
+    } else {
+        format!("{filename}.{first}")
+    }
+}
+
 /// The first `http://` or `https://` link in `text`, without trailing punctuation.
 pub fn first_url(text: &str) -> Option<String> {
     text.split_whitespace().find_map(|word| {
@@ -197,18 +250,21 @@ pub fn title(shared: &Shared) -> String {
     format!("{}…", cut.trim_end())
 }
 
-/// Store each shared file as an asset of the local vault, and answer them as the payload's
+/// Store each shared file as an asset of the local vault, named with the extension of its media
+/// type ([`with_extension`]), and answer them as the payload's
 /// `attachments`: `[{ asset, filename, mime, size }]`, in the order they were shared.
 pub fn store(writer: &Writer, shared: &Shared) -> anyhow::Result<Vec<Value>> {
     let mut attachments = Vec::new();
     for file in &shared.files {
         let bytes = std::fs::read(&file.path)
             .map_err(|e| anyhow::anyhow!("reading shared file {}: {e}", file.path.display()))?;
-        let asset = writer.put_asset(&safe_filename(&file.filename), bytes)?;
+        let mime = mime(file);
+        let filename = with_extension(&safe_filename(&file.filename), &mime);
+        let asset = writer.put_asset(&filename, bytes)?;
         attachments.push(json!({
             "asset": asset.id,
             "filename": asset.filename,
-            "mime": mime(file),
+            "mime": mime,
             "size": asset.size,
         }));
     }
@@ -353,6 +409,46 @@ mod tests {
         assert_eq!(mime(&f("a.bin", "image/png")), "image/png");
         assert_eq!(mime(&f("report.pdf", "*/*")), "application/pdf");
         assert_eq!(mime(&f("noext", "")), "application/octet-stream");
+    }
+
+    #[test]
+    fn stored_names_carry_the_extension_of_their_media_type() {
+        assert_eq!(
+            with_extension("image000001", "image/jpeg"),
+            "image000001.jpg"
+        );
+        assert_eq!(with_extension("photo.JPEG", "image/jpeg"), "photo.JPEG");
+        assert_eq!(with_extension("photo.png", "image/png"), "photo.png");
+        assert_eq!(with_extension("photo.dat", "image/png"), "photo.dat.png");
+        assert_eq!(with_extension("shared", "image/png; name=x"), "shared.png");
+        assert_eq!(with_extension("contact", "text/x-vcard"), "contact.vcf");
+        assert_eq!(with_extension("blob", "application/octet-stream"), "blob");
+    }
+
+    #[test]
+    fn a_shared_image_without_an_extension_is_stored_with_one() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let server = embedded::Embedded::open(embedded::Config {
+            vault: dir.path().to_owned(),
+            web: None,
+            secret_key: None,
+        })
+        .unwrap();
+        let writer = server.writer();
+        let copies = tempfile::TempDir::new().unwrap();
+        let path = copies.path().join("copy");
+        std::fs::write(&path, b"\x89PNG").unwrap();
+        let shared = Shared {
+            files: vec![SharedFile {
+                path,
+                filename: "IMG_0001".into(),
+                mime: "image/png".into(),
+            }],
+            ..Shared::default()
+        };
+        let stored = store(writer, &shared).unwrap();
+        assert_eq!(stored[0]["filename"], "IMG_0001.png");
+        assert_eq!(stored[0]["mime"], "image/png");
     }
 
     #[test]

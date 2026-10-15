@@ -346,6 +346,47 @@ fn a_group_mms_links_every_known_recipient_and_keeps_its_attachments() {
     assert_eq!(d.query("from person").len(), 2);
 }
 
+/// An MMS with a picture and a contact card keeps both, in order, in `attachments`, whose images
+/// the message type's templates show; the contact card stays a file.
+#[test]
+fn an_mms_keeps_its_image_and_its_other_parts_in_attachments() {
+    let d = Device::open();
+    let photo = d
+        .writer()
+        .put_asset("image000001.jpg", b"\xff\xd8\xff".to_vec())
+        .unwrap()
+        .id;
+    let card = d
+        .writer()
+        .put_asset("contact.vcf", b"BEGIN:VCARD".to_vec())
+        .unwrap()
+        .id;
+    d.send(
+        "mms_received",
+        json!({
+            "device_ref": "mms:90",
+            "thread_ref": "t9",
+            "number": "+61400000009",
+            "number_raw": "0400 000 009",
+            "contact": null,
+            "to": [],
+            "subject": "",
+            "body": "",
+            "attachments": [
+                { "asset": photo, "filename": "image000001.jpg", "mime": "image/jpeg", "size": 3 },
+                { "asset": card, "filename": "contact.vcf", "mime": "text/x-vcard", "size": 11 },
+            ],
+            "sent": "2026-10-20T10:00:00+11:00",
+        }),
+    );
+    let m = d.query("from message");
+    assert_eq!(m.len(), 1);
+    let f = &m[0]["fields"];
+    assert_eq!(f["attachments"], json!([photo, card]));
+    assert_eq!(m[0]["title"], "MMS from +61400000009");
+    // The templates that show the image are checked in crates/server/tests/phone_types.rs.
+}
+
 #[test]
 fn rcs_senders_match_by_name_or_by_the_phone_contact_and_are_partial() {
     let d = Device::open();
