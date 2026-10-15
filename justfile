@@ -103,7 +103,7 @@ aur-release: (require-tool "makepkg") (require-tool "jq")
 # Build the Android debug APK for aarch64 into apps/android/src-tauri/gen/android/app/build/outputs/apk
 [group('android')]
 android-build: (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
-	cd apps/android && cargo tauri android build --debug --apk --target aarch64
+	cd apps/android && GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --debug --apk --target aarch64
 
 # Build the signed release APK for aarch64 into target/android-release with its SHA256SUMS, signed with the keystore THEVAULT_ANDROID_KEYSTORE names (D10)
 [group('android')]
