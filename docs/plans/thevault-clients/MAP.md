@@ -1,6 +1,6 @@
 ---
 slug: thevault-clients
-status: specified
+status: building
 created: 2026-10-15
 ---
 
