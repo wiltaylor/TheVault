@@ -93,11 +93,16 @@ class FakePhone(private val context: Context) {
         { setOf(SELF) },
     )
 
+    /** An RCS capture over these providers, into [sink], remembering what it saw in [prefs]. */
+    fun rcs(prefs: String = "rcs"): RcsCapture =
+        RcsCapture(context.contentResolver, sink, SeenRefs(context.getSharedPreferences(prefs, Context.MODE_PRIVATE)))
+
     /** Route the process's capture through this phone, on the calling thread. */
     fun install(): DeviceCapture {
         val capture = capture()
         Device.reset()
         Device.factory = { capture }
+        Device.rcsFactory = { rcs() }
         Device.executor = Executor { it.run() }
         Device.retryDelayMs = 0
         return capture

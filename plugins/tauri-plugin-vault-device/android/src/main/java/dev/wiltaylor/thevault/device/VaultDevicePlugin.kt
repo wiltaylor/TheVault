@@ -95,6 +95,7 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
         status.put("setupDone", Device.setupDone(activity))
         status.put("deviceId", Device.deviceId(activity))
         status.put("permissions", permissions)
+        status.put("notificationAccess", RcsListenerService.enabled(activity))
         invoke.resolve(status)
     }
 

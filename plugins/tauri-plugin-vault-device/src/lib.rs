@@ -59,7 +59,8 @@ async fn open_capture_setup<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
     run_kotlin(&app, "openCaptureSetup", json!({})).map(|_| ())
 }
 
-/// `{ setupDone, deviceId, permissions }`: whether capture is set up, and what Android granted.
+/// `{ setupDone, deviceId, permissions, notificationAccess }`: whether capture is set up, what Android
+/// granted, and whether notification access for RCS is on.
 #[tauri::command]
 async fn capture_status<R: Runtime>(app: AppHandle<R>) -> Result<Json, String> {
     run_kotlin(&app, "captureStatus", json!({}))

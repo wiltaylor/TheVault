@@ -1,0 +1,34 @@
+{
+  "description": "Another messaging app's conversation notification, in the same MessagingStyle shape.",
+  "package": "com.whatsapp",
+  "key": "0|com.whatsapp|5|null|10203",
+  "shortcut_id": "alex@s.whatsapp.net",
+  "group_summary": false,
+  "extras": {
+    "android.template": "android.app.Notification$MessagingStyle",
+    "android.title": "Alex Doe",
+    "android.text": "hello",
+    "android.selfDisplayName": "You",
+    "android.messagingUser": {
+      "$person": {
+        "name": "You",
+        "key": "self"
+      }
+    },
+    "android.isGroupConversation": false,
+    "android.messages": [
+      {
+        "text": "hello",
+        "time": 1792454400000,
+        "sender": "Alex Doe",
+        "sender_person": {
+          "$person": {
+            "name": "Alex Doe",
+            "key": "lookup:alex"
+          }
+        }
+      }
+    ]
+  },
+  "expect": []
+}

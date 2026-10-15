@@ -1,0 +1,14 @@
+{
+  "description": "A Google Messages notification that is not a conversation: the Messages for web session notice.",
+  "package": "com.google.android.apps.messaging",
+  "key": "0|com.google.android.apps.messaging|9|null|10187",
+  "shortcut_id": null,
+  "group_summary": false,
+  "extras": {
+    "android.template": "android.app.Notification$BigTextStyle",
+    "android.title": "Messages for web",
+    "android.text": "Connected on Firefox on Linux",
+    "android.bigText": "Connected on Firefox on Linux"
+  },
+  "expect": []
+}

@@ -3,6 +3,7 @@ package dev.wiltaylor.thevault.device
 import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -22,7 +23,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/** S5: onboarding's capture setup asks for each permission in turn, then offers the import, off by default. */
+/**
+ * S5: onboarding's capture setup asks for each permission in turn, including notification access
+ * for RCS with the Allow restricted settings steps, then offers the import, off by default.
+ */
 @RunWith(RobolectricTestRunner::class)
 class CaptureSetupActivityTest {
     private val app: Application = ApplicationProvider.getApplicationContext()
@@ -46,6 +50,16 @@ class CaptureSetupActivityTest {
 
     private fun View.button(label: String) = all().filterIsInstance<Button>().first { it.isShown && it.text == label }
 
+    /** What Settings > Notification access writes when the user turns TheVault on. */
+    private fun enableListener() {
+        Settings.Secure.putString(app.contentResolver, "enabled_notification_listeners", RcsListenerService.component(app).flattenToString())
+    }
+
+    private fun grantEverything() {
+        shadowOf(app).grantPermissions(*CaptureSetupActivity.STEPS.flatMap { it.permissions }.toTypedArray())
+        enableListener()
+    }
+
     @Test
     @Config(sdk = [35])
     fun smsRefusedOnAndroid15ShowsTheAllowRestrictedSettingsSteps() {
@@ -66,9 +80,39 @@ class CaptureSetupActivityTest {
             assertTrue(root.texts().contains(CaptureSetupActivity.RESTRICTED_GUIDANCE))
             assertTrue(root.texts().contains("Open App info"))
 
-            // Allowed from App info, then back: the next permission.
+            // Allowed from App info, then back: the next step.
             shadowOf(app).grantPermissions(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS)
             controller.pause().resume()
+            assertTrue(root.texts().contains("RCS messages"))
+        }
+    }
+
+    @Test
+    @Config(sdk = [33])
+    fun notificationAccessForRcsShowsTheRestrictedStepsAndOpensItsSettingsPage() {
+        shadowOf(app).grantPermissions(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS)
+        Robolectric.buildActivity(CaptureSetupActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val root = activity.window.decorView
+            assertTrue(root.texts().contains("RCS messages"))
+            assertTrue(root.texts().contains(CaptureSetupActivity.LISTENER_GUIDANCE))
+            assertTrue(root.texts().contains("Open App info"))
+
+            root.button("Open notification access").performClick()
+            val opened = shadowOf(activity).nextStartedActivity
+            assertEquals(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS, opened.action)
+            assertEquals(
+                RcsListenerService.component(app).flattenToString(),
+                opened.getStringExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME),
+            )
+
+            root.button("Open App info").performClick()
+            assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, shadowOf(activity).nextStartedActivity.action)
+
+            // Turned on in Settings, then back: the next step.
+            enableListener()
+            controller.pause().resume()
+            assertTrue(RcsListenerService.enabled(app))
             assertTrue(root.texts().contains("Calls"))
         }
     }
@@ -76,7 +120,7 @@ class CaptureSetupActivityTest {
     @Test
     @Config(sdk = [33])
     fun withEveryPermissionTheImportIsOfferedOffAndFinishingStartsCaptureWithoutIt() {
-        shadowOf(app).grantPermissions(*CaptureSetupActivity.STEPS.flatMap { it.permissions }.toTypedArray())
+        grantEverything()
         Robolectric.buildActivity(CaptureSetupActivity::class.java).setup().use { controller ->
             val activity = controller.get()
             assertTrue(activity.window.decorView.texts().contains("Earlier messages"))
@@ -95,7 +139,7 @@ class CaptureSetupActivityTest {
     @Test
     @Config(sdk = [33])
     fun turningTheImportOnQueuesItOverTheChosenRange() {
-        shadowOf(app).grantPermissions(*CaptureSetupActivity.STEPS.flatMap { it.permissions }.toTypedArray())
+        grantEverything()
         Robolectric.buildActivity(CaptureSetupActivity::class.java).setup().use { controller ->
             val activity = controller.get()
             activity.importSwitch.isChecked = true

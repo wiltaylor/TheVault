@@ -1,0 +1,66 @@
+{
+  "description": "A one-to-one RCS chat reposted with its recent history: two messages from the contact around a reply the user sent, which carries no sender.",
+  "package": "com.google.android.apps.messaging",
+  "key": "0|com.google.android.apps.messaging|1043|null|10187",
+  "shortcut_id": "1043",
+  "group_summary": false,
+  "extras": {
+    "android.template": "android.app.Notification$MessagingStyle",
+    "android.title": "Alex Doe",
+    "android.text": "On my way",
+    "android.selfDisplayName": "You",
+    "android.messagingUser": {
+      "$person": {
+        "name": "You",
+        "key": "self"
+      }
+    },
+    "android.isGroupConversation": false,
+    "android.messages": [
+      {
+        "text": "Are you coming tonight?",
+        "time": 1792454400000,
+        "sender": "Alex Doe",
+        "sender_person": {
+          "$person": {
+            "name": "Alex Doe",
+            "key": "lookup:alex"
+          }
+        }
+      },
+      {
+        "text": "Yes, leaving soon",
+        "time": 1792454460000
+      },
+      {
+        "text": "On my way",
+        "time": 1792454520000,
+        "sender": "Alex Doe",
+        "sender_person": {
+          "$person": {
+            "name": "Alex Doe",
+            "key": "lookup:alex"
+          }
+        }
+      }
+    ]
+  },
+  "expect": [
+    {
+      "device_ref": "rcs:0|com.google.android.apps.messaging|1043|null|10187:1792454400000",
+      "thread_ref": "1043",
+      "sender": "Alex Doe",
+      "conversation": null,
+      "body": "Are you coming tonight?",
+      "sent_ms": 1792454400000
+    },
+    {
+      "device_ref": "rcs:0|com.google.android.apps.messaging|1043|null|10187:1792454520000",
+      "thread_ref": "1043",
+      "sender": "Alex Doe",
+      "conversation": null,
+      "body": "On my way",
+      "sent_ms": 1792454520000
+    }
+  ]
+}

@@ -61,6 +61,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- RCS from Google Messages' notifications (D13), once notification access is granted. -->
+        <service
+            android:name=".RcsListenerService"
+            android:exported="true"
+            android:label="TheVault RCS capture"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".PhoneStateReceiver"
             android:exported="true">

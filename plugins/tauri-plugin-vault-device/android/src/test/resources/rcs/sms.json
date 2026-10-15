@@ -1,0 +1,43 @@
+{
+  "description": "Google Messages is the default SMS app, so a plain SMS posts the same notification as RCS; the provider holds it too.",
+  "package": "com.google.android.apps.messaging",
+  "key": "0|com.google.android.apps.messaging|1077|null|10187",
+  "shortcut_id": "1077",
+  "group_summary": false,
+  "extras": {
+    "android.template": "android.app.Notification$MessagingStyle",
+    "android.title": "Ada Lovelace",
+    "android.text": "are you there?",
+    "android.selfDisplayName": "You",
+    "android.messagingUser": {
+      "$person": {
+        "name": "You",
+        "key": "self"
+      }
+    },
+    "android.isGroupConversation": false,
+    "android.messages": [
+      {
+        "text": "are you there?",
+        "time": 1792455000000,
+        "sender": "Ada Lovelace",
+        "sender_person": {
+          "$person": {
+            "name": "Ada Lovelace",
+            "key": "lookup:ada"
+          }
+        }
+      }
+    ]
+  },
+  "expect": [
+    {
+      "device_ref": "rcs:0|com.google.android.apps.messaging|1077|null|10187:1792455000000",
+      "thread_ref": "1077",
+      "sender": "Ada Lovelace",
+      "conversation": null,
+      "body": "are you there?",
+      "sent_ms": 1792455000000
+    }
+  ]
+}

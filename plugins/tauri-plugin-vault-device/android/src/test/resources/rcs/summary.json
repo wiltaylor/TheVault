@@ -1,0 +1,34 @@
+{
+  "description": "Google Messages' group summary for several conversations, which repeats what the conversations' own notifications carry.",
+  "package": "com.google.android.apps.messaging",
+  "key": "0|com.google.android.apps.messaging|0|g:messages|10187",
+  "shortcut_id": null,
+  "group_summary": true,
+  "extras": {
+    "android.template": "android.app.Notification$MessagingStyle",
+    "android.title": "2 new messages",
+    "android.text": "Alex Doe, Climbing crew",
+    "android.selfDisplayName": "You",
+    "android.messagingUser": {
+      "$person": {
+        "name": "You",
+        "key": "self"
+      }
+    },
+    "android.isGroupConversation": false,
+    "android.messages": [
+      {
+        "text": "On my way",
+        "time": 1792454520000,
+        "sender": "Alex Doe",
+        "sender_person": {
+          "$person": {
+            "name": "Alex Doe",
+            "key": "lookup:alex"
+          }
+        }
+      }
+    ]
+  },
+  "expect": []
+}

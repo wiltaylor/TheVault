@@ -14,6 +14,7 @@ import java.util.concurrent.Executors
 object Device {
     private const val PREFS = "thevault.device"
     private const val CURSORS = "thevault.device.cursors"
+    private const val RCS = "thevault.device.rcs"
     private const val SETUP_DONE = "capture_setup_done"
 
     /** The device id the runtime opens with before pairing; events queue, but handlers wait. */
@@ -40,6 +41,20 @@ object Device {
     fun capture(context: Context): DeviceCapture =
         capture ?: synchronized(this) { capture ?: factory(context.applicationContext).also { capture = it } }
 
+    @Volatile
+    private var rcs: RcsCapture? = null
+
+    /** Builds the RCS capture for a context; tests swap in fakes. */
+    @VisibleForTesting
+    @Volatile
+    var rcsFactory: (Context) -> RcsCapture = { app ->
+        RcsCapture(app.contentResolver, CoreSink(app), SeenRefs(app.getSharedPreferences(RCS, Context.MODE_PRIVATE)))
+    }
+
+    /** The process's RCS capture from Google Messages notifications (D13). */
+    fun rcs(context: Context): RcsCapture =
+        rcs ?: synchronized(this) { rcs ?: rcsFactory(context.applicationContext).also { rcs = it } }
+
     /** The device id the runtime was last opened with in this process. */
     @Volatile
     private var openedFor: String? = null
@@ -47,6 +62,7 @@ object Device {
     @VisibleForTesting
     fun reset() {
         capture = null
+        rcs = null
         openedFor = null
     }
 

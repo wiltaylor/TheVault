@@ -1,0 +1,93 @@
+{
+  "description": "The same group notification reposted when a third message arrives, carrying the two earlier ones again.",
+  "package": "com.google.android.apps.messaging",
+  "key": "0|com.google.android.apps.messaging|2210|null|10187",
+  "shortcut_id": "2210",
+  "group_summary": false,
+  "extras": {
+    "android.template": "android.app.Notification$MessagingStyle",
+    "android.title": "Climbing crew",
+    "android.text": "Sam Lee: Meet at 8 at the gym",
+    "android.selfDisplayName": "You",
+    "android.messagingUser": {
+      "$person": {
+        "name": "You",
+        "key": "self"
+      }
+    },
+    "android.isGroupConversation": true,
+    "android.messages": [
+      {
+        "text": "Who's in for Saturday?",
+        "time": 1792458000000,
+        "sender": "Sam Lee",
+        "sender_person": {
+          "$person": {
+            "name": "Sam Lee",
+            "key": "lookup:sam"
+          }
+        }
+      },
+      {
+        "text": "Count me in",
+        "time": 1792458010000,
+        "sender": "You",
+        "sender_person": {
+          "$person": {
+            "name": "You",
+            "key": "self"
+          }
+        }
+      },
+      {
+        "text": "Me!",
+        "time": 1792458030000,
+        "sender": "Priya Shah",
+        "sender_person": {
+          "$person": {
+            "name": "Priya Shah",
+            "key": "lookup:priya"
+          }
+        }
+      },
+      {
+        "text": "Meet at 8 at the gym",
+        "time": 1792458300000,
+        "sender": "Sam Lee",
+        "sender_person": {
+          "$person": {
+            "name": "Sam Lee",
+            "key": "lookup:sam"
+          }
+        }
+      }
+    ],
+    "android.conversationTitle": "Climbing crew"
+  },
+  "expect": [
+    {
+      "device_ref": "rcs:0|com.google.android.apps.messaging|2210|null|10187:1792458000000",
+      "thread_ref": "2210",
+      "sender": "Sam Lee",
+      "conversation": "Climbing crew",
+      "body": "Who's in for Saturday?",
+      "sent_ms": 1792458000000
+    },
+    {
+      "device_ref": "rcs:0|com.google.android.apps.messaging|2210|null|10187:1792458030000",
+      "thread_ref": "2210",
+      "sender": "Priya Shah",
+      "conversation": "Climbing crew",
+      "body": "Me!",
+      "sent_ms": 1792458030000
+    },
+    {
+      "device_ref": "rcs:0|com.google.android.apps.messaging|2210|null|10187:1792458300000",
+      "thread_ref": "2210",
+      "sender": "Sam Lee",
+      "conversation": "Climbing crew",
+      "body": "Meet at 8 at the gym",
+      "sent_ms": 1792458300000
+    }
+  ]
+}

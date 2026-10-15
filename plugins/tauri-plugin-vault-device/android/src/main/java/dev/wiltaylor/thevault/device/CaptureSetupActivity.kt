@@ -3,6 +3,7 @@ package dev.wiltaylor.thevault.device
 import android.Manifest
 import android.app.Activity
 import android.app.DatePickerDialog
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -20,12 +21,23 @@ import java.time.ZoneId
 
 /**
  * The device capture part of onboarding (D7, note 02): each permission in turn, with the Allow
- * restricted settings steps when Android 15 blocks SMS for a sideloaded app, then the first-run
- * import, off by default, over a date range the user picks.
+ * restricted settings steps when Android 15 blocks SMS for a sideloaded app, then notification
+ * access for RCS (D13), then the first-run import, off by default, over a date range the user
+ * picks.
  */
 class CaptureSetupActivity : Activity() {
-    /** One permission screen. [restricted] permissions need Allow restricted settings on Android 15. */
-    data class Step(val title: String, val why: String, val permissions: List<String>, val restricted: Boolean = false)
+    /**
+     * One permission screen. [restricted] permissions need Allow restricted settings on Android 15.
+     * A [listener] step is notification-listener access, which is granted in Settings rather than
+     * by a permission dialog.
+     */
+    data class Step(
+        val title: String,
+        val why: String,
+        val permissions: List<String>,
+        val restricted: Boolean = false,
+        val listener: Boolean = false,
+    )
 
     private var step = 0
     private lateinit var title: TextView
@@ -63,7 +75,9 @@ class CaptureSetupActivity : Activity() {
         if (step < STEPS.size && granted(STEPS[step])) next()
     }
 
-    private fun granted(s: Step) = s.permissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+    private fun granted(s: Step) =
+        s.permissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED } &&
+            (!s.listener || RcsListenerService.enabled(this))
 
     private fun next() {
         step++
@@ -81,6 +95,16 @@ class CaptureSetupActivity : Activity() {
         val s = STEPS[step]
         title.text = s.title
         body.text = s.why
+        if (s.listener) {
+            // Android 13 and later grey out notification access for a sideloaded app until the
+            // user allows restricted settings, so the steps show from the start.
+            guidance.text = LISTENER_GUIDANCE
+            guidance.visibility = View.VISIBLE
+            appInfo.visibility = View.VISIBLE
+            primary.text = "Open notification access"
+            primary.setOnClickListener { startActivity(listenerSettings(this)) }
+            return
+        }
         guidance.visibility = View.GONE
         appInfo.visibility = View.GONE
         primary.text = "Allow"
@@ -192,12 +216,30 @@ class CaptureSetupActivity : Activity() {
                 "2. Tap the three-dot menu at the top right, then Allow restricted settings, and confirm.\n" +
                 "3. Come back here and tap Try again."
 
+        const val LISTENER_GUIDANCE =
+            "Android greys out notification access for apps installed from outside Google Play until you allow it:\n" +
+                "1. Tap Open App info.\n" +
+                "2. Tap the three-dot menu at the top right, then Allow restricted settings, and confirm.\n" +
+                "3. Come back here, tap Open notification access, and turn on TheVault."
+
+        /** Android's page for this app's notification-listener access. */
+        fun listenerSettings(context: Context): Intent =
+            Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, RcsListenerService.component(context).flattenToString())
+
         val STEPS = listOf(
             Step(
                 "Messages",
                 "TheVault reads SMS and MMS as they arrive, so device scripts can file them as notes.",
                 listOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS),
                 restricted = true,
+            ),
+            Step(
+                "RCS messages",
+                "Google Messages keeps RCS messages to itself, so TheVault reads them from its notifications. " +
+                    "Messages you read in an open chat, messages you send and attachments are not captured.",
+                emptyList(),
+                listener = true,
             ),
             Step(
                 "Calls",
