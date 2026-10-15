@@ -177,7 +177,7 @@ function Panel(props: { anchor: HTMLButtonElement; sheet: boolean }) {
       classList={{ "notif-sheet": props.sheet }}
       style={
         props.sheet
-          ? { top: `${place().top}px`, "max-height": `calc(100dvh - ${place().top}px)` }
+          ? { top: `${place().top}px`, "max-height": `calc(100dvh - ${place().top}px - var(--safe-bottom))` }
           : { top: `${place().top}px`, right: `${place().right}px` }
       }
       role="dialog"

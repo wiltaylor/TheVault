@@ -26,7 +26,8 @@
 
 .pdf-viewer.pseudo-full {
   position: fixed;
-  inset: 0;
+  inset: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  height: auto;
   z-index: 1000;
 }
 
@@ -216,7 +217,8 @@
   display: flex;
   align-items: stretch;
   justify-content: center;
-  padding: 3vh 4vw;
+  padding: calc(3vh + var(--safe-top)) calc(4vw + var(--safe-right)) calc(3vh + var(--safe-bottom))
+    calc(4vw + var(--safe-left));
   background: rgb(15 23 42 / 0.6);
 }
 

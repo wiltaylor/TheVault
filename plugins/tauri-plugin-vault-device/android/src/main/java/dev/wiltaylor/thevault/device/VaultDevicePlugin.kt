@@ -18,6 +18,7 @@ import app.tauri.plugin.Plugin
  * workers with no webview. A paired app also starts UnifiedPush once per process, and each time
  * it comes to the front reconciles the mirrored notifications and runs pending device commands; a
  * tapped notification opens its note here (D9, D22). The notification listener code lands here too.
+ * It also keeps the page clear of the system bars and the keyboard ([SystemBars], ticket 79).
  *
  * Commands for the webview: `open_capture_setup` and `capture_status`.
  */
@@ -30,6 +31,7 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
     override fun load(webView: WebView) {
         super.load(webView)
         this.webView = webView
+        SystemBars(activity, webView).install()
         if (!openAndSync()) {
             activity.startActivity(Intent(activity, OnboardingActivity::class.java))
         }

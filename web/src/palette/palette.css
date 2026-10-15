@@ -6,7 +6,8 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 12vh 1rem 1rem;
+  padding: calc(12vh + var(--safe-top)) calc(1rem + var(--safe-right)) calc(1rem + var(--safe-bottom))
+    calc(1rem + var(--safe-left));
   background: rgb(15 23 42 / 0.45);
 }
 
@@ -231,7 +232,7 @@
     height: 100%;
     border: none;
     border-radius: 0;
-    padding-top: env(safe-area-inset-top);
+    padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
   }
 
   .palette-option {

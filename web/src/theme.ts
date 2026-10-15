@@ -1,6 +1,7 @@
 // The colour theme, kept in this browser. It starts from the system preference until the
 // user picks one, and is applied as `data-theme` on <html> so CSS variables switch with it.
 import { createSignal } from "solid-js";
+import { systemBarsTheme } from "./systemBars";
 
 export type Theme = "light" | "dark";
 
@@ -24,6 +25,7 @@ const [theme, setThemeSignal] = createSignal<Theme>(stored() ?? systemTheme());
 function apply(t: Theme) {
   document.documentElement.dataset.theme = t;
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", t === "dark" ? "#0b1120" : "#1e293b");
+  systemBarsTheme(t === "dark");
 }
 
 /** Apply the current theme to the page. Call once before the app renders. */

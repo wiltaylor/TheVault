@@ -35,6 +35,13 @@
   --palette-red: #dc2626;
   --sidebar: 15rem;
   --topbar: 3.25rem;
+  /* The system bars over the page (ticket 79): the Android app draws edge to edge and hands
+     the bar insets in as --sat/--sar/--sab/--sal, since its webview reports env() only in some
+     versions. Both are 0 in a browser and the desktop app. */
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--sat, 0px));
+  --safe-right: max(env(safe-area-inset-right, 0px), var(--sar, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--sab, 0px));
+  --safe-left: max(env(safe-area-inset-left, 0px), var(--sal, 0px));
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--ink);
   background: var(--bg);
@@ -189,6 +196,9 @@ a {
   --left-col: min(var(--sidebar), 45vw);
   --right-col: min(var(--right-sidebar), 45vw);
   height: 100%;
+  /* Clear of the system bars; the strip under the status bar takes the top bar's colour. */
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  background: linear-gradient(var(--panel), var(--panel)) top / 100% var(--safe-top) no-repeat;
   display: grid;
   grid-template-columns: var(--left-col) minmax(0, 1fr) var(--right-col);
   grid-template-rows: minmax(0, 1fr);
@@ -285,7 +295,9 @@ a {
 
 .sidebar-resizer-left {
   position: fixed;
-  left: calc(var(--left-col) - 3px);
+  top: var(--safe-top);
+  bottom: var(--safe-bottom);
+  left: calc(var(--safe-left) + var(--left-col) - 3px);
   right: auto;
 }
 
@@ -1021,10 +1033,12 @@ blockquote {
 
   .sidebar {
     position: fixed;
-    top: var(--topbar);
+    top: calc(var(--safe-top) + var(--topbar));
     bottom: 0;
     left: 0;
     width: min(18rem, 80vw);
+    padding-left: calc(0.5rem + var(--safe-left));
+    padding-bottom: calc(1rem + var(--safe-bottom));
     z-index: 20;
     transform: translateX(-100%);
     transition: transform 0.15s ease-out;
@@ -1043,7 +1057,7 @@ blockquote {
   .right-open .scrim {
     display: block;
     position: fixed;
-    inset: var(--topbar) 0 0 0;
+    inset: calc(var(--safe-top) + var(--topbar)) 0 0 0;
     background: rgb(15 23 42 / 0.35);
     z-index: 10;
   }
@@ -1060,10 +1074,12 @@ blockquote {
 
   .right-sidebar {
     position: fixed;
-    top: var(--topbar);
+    top: calc(var(--safe-top) + var(--topbar));
     bottom: 0;
     right: 0;
     width: min(22rem, 88vw);
+    padding-right: var(--safe-right);
+    padding-bottom: var(--safe-bottom);
     z-index: 20;
     transform: translateX(100%);
     transition: transform 0.15s ease-out;
@@ -7044,8 +7060,8 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 
 .capture-fab {
   position: fixed;
-  right: max(1.25rem, env(safe-area-inset-right));
-  bottom: max(1.25rem, env(safe-area-inset-bottom));
+  right: calc(1.25rem + var(--safe-right));
+  bottom: calc(1.25rem + var(--safe-bottom));
   z-index: 900;
   width: 3.25rem;
   height: 3.25rem;
@@ -7077,7 +7093,7 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 /* Beside an open right sidebar, the button stays over the workspace. */
 @media (min-width: 601px) {
   .capture-fab {
-    right: calc(var(--right-col) + 1.25rem);
+    right: calc(var(--right-col) + 1.25rem + var(--safe-right));
   }
 }
 
@@ -7094,7 +7110,8 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 12vh 1rem 1rem;
+  padding: calc(12vh + var(--safe-top)) calc(1rem + var(--safe-right)) calc(1rem + var(--safe-bottom))
+    calc(1rem + var(--safe-left));
   background: rgb(15 23 42 / 0.45);
 }
 
@@ -7249,10 +7266,10 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 
   .capture-dialog {
     width: 100%;
-    max-height: 92vh;
+    max-height: calc(92vh - var(--safe-top));
     border-radius: 0.9rem 0.9rem 0 0;
     border-bottom: none;
-    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+    padding-bottom: calc(1rem + var(--safe-bottom));
   }
 
   .capture-keys {
@@ -7263,7 +7280,7 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 .toasts {
   position: fixed;
   left: 50%;
-  bottom: 1.25rem;
+  bottom: calc(1.25rem + var(--safe-bottom));
   z-index: 2100;
   transform: translateX(-50%);
   display: flex;
@@ -7278,7 +7295,7 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
 /* Above the capture button on a phone. */
 @media (max-width: 600px) {
   .toasts {
-    bottom: 5.25rem;
+    bottom: calc(5.25rem + var(--safe-bottom));
   }
 }
 
