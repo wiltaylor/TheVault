@@ -4,8 +4,8 @@ title: 'Android app: captured SMS, MMS, RCS, calls and contact changes are not s
   until the next app open or 15-minute job'
 plan: thevault-clients
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: unmet
 ---
 
 # Android app: captured SMS, MMS, RCS, calls and contact changes are not synced until the next app open or 15-minute job
@@ -25,3 +25,19 @@ Fix direction: after run_pending writes anything, kick the core (and, since the 
 Evidence: .scratch/emulator/RESULTS.md checks 29 to 36.
 
 ## Worklog
+
+### 2026-10-15T12:11:08Z — wil
+
+Status set to claimed.
+
+### 2026-10-15T12:11:09Z — wil
+
+Fixed in f9b9e17: background captures (RunEventsWorker, shares, device commands) call SyncWorker.soon, which kicks the foreground loop when the app is in front or enqueues one unique expedited network-constrained sync round (2 s in-worker debounce, bursts coalesce). PromptSyncTest and a Rust testkit round-trip prove it; check and android-test pass after rebase onto main. Emulator confirmation pending.
+
+### 2026-10-15T12:11:09Z — wil
+
+Verified set to unmet.
+
+### 2026-10-15T12:11:09Z — wil
+
+Status set to done.
