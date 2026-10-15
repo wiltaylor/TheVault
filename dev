@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # Run a command inside the thevault-dev container, in the current directory.
 # Usage: ./dev cargo test    ./dev pnpm -C web test    ./dev just check
+#
+# The image tag is a hash of docker/dev.Dockerfile, so editing the Dockerfile
+# builds a new image on the next call, and checkouts with different Dockerfiles
+# each keep their own image.
 set -euo pipefail
 
-image=thevault-dev
+repo_root=$(cd "$(dirname "$0")" && pwd)
+dockerfile="$repo_root/docker/dev.Dockerfile"
+hash=$(sha256sum "$dockerfile" | cut -c1-12)
+image="thevault-dev:$hash"
 workdir=$(pwd)
 
 if ! docker image inspect "$image" >/dev/null 2>&1; then
-  repo_root=$(cd "$(dirname "$0")" && pwd)
-  docker build -t "$image" -f "$repo_root/docker/dev.Dockerfile" "$repo_root/docker" >&2
+  docker build -t "$image" --label "thevault.dockerfile-hash=$hash" \
+    -f "$dockerfile" "$repo_root/docker" >&2
 fi
 
 tty_flags=()
@@ -23,6 +30,7 @@ exec docker run --rm "${tty_flags[@]}" \
   -e CARGO_TERM_COLOR=always \
   -v thevault-cargo:/cargo \
   -v thevault-pnpm:/pnpm-store \
+  -v thevault-gradle:/gradle \
   -v "$workdir:$workdir" \
   -w "$workdir" \
   "$image" "$@"

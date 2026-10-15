@@ -8,3 +8,7 @@ require-tool tool:
 [group('web')]
 web-deps-install: (require-tool "pnpm")
 	pnpm -C web install --frozen-lockfile
+
+[private]
+require-path path ticket:
+	@test -e {{path}} || (echo "{{path}} does not exist yet; it lands with {{ticket}}" >&2 && exit 1)
