@@ -113,6 +113,20 @@ impl<S: Clone + Send + Sync + 'static> Routes<S> {
         self.add(Method::PATCH, path, patch(h))
     }
 
+    /// A PUT whose body may be up to `limit` bytes.
+    fn put_up_to<H: Handler<T, S>, T: 'static>(
+        self,
+        path: &'static str,
+        limit: usize,
+        h: H,
+    ) -> Self {
+        self.add(
+            Method::PUT,
+            path,
+            put(h).layer(DefaultBodyLimit::max(limit)),
+        )
+    }
+
     /// A POST whose body may be up to `limit` bytes.
     fn post_up_to<H: Handler<T, S>, T: 'static>(
         self,
@@ -208,6 +222,7 @@ fn build() -> Built {
         .get("/api/assets", assets::list)
         .post_up_to("/api/assets", assets::MAX_UPLOAD, assets::upload)
         .get("/api/assets/{id}", assets::download)
+        .put_up_to("/api/assets/{id}", assets::MAX_UPLOAD, assets::put)
         .delete("/api/assets/{id}", assets::delete)
         .post("/api/devices/pair", devices::pair)
         .post("/api/devices/pair-codes", devices::create_pair_code)

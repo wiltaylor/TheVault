@@ -45,6 +45,35 @@ pub async fn upload(
     Ok((StatusCode::CREATED, Json(asset_json(&asset))).into_response())
 }
 
+/// `PUT /api/assets/{id}?filename=<name>`: store the body as asset `id`, an id the client chose,
+/// so a device keeps the id of an asset it stored offline when it syncs (D19, D20). Sending the
+/// same file again answers 200; anything else already under the id is 409 `id_taken`.
+pub async fn put(
+    State(w): Shared,
+    Path(id): Path<String>,
+    Query(q): Query<UploadQuery>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let filename = q
+        .filename
+        .ok_or_else(|| ApiError::bad_request("name the file with ?filename="))?;
+    let id2 = id.clone();
+    let (existed, asset) = blocking(w, move |w| {
+        let existed = w.asset_info(&id2).is_ok();
+        Ok::<_, writer::Error>((
+            existed,
+            w.put_asset_with_id(&id2, &filename, body.to_vec())?,
+        ))
+    })
+    .await?;
+    let status = if existed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((status, Json(asset_json(&asset))).into_response())
+}
+
 /// `GET /api/assets`.
 pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
     let assets = blocking(w, |w| w.assets()).await?;

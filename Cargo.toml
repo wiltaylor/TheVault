@@ -45,6 +45,7 @@ scheduler = { path = "crates/scheduler" }
 api = { path = "crates/api" }
 embedded = { path = "crates/embedded" }
 push = { path = "crates/push" }
+sync = { path = "crates/sync" }
 testkit = { path = "crates/testkit" }
 
 [workspace.lints.rust]

@@ -1,6 +1,6 @@
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import { For, type JSX, Show, batch, createEffect, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
-import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, type TypeDef, api, isArchived } from "../api";
+import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc, type Tab, type TypeDef, api, conflictOf, isArchived } from "../api";
 import { clearActiveNote, setActiveNote } from "../archive";
 import { type Autosave, type SaveState, createAutosave } from "../autosave";
 import { CanvasSurface } from "../canvas/CanvasSurface";
@@ -489,6 +489,8 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
 
   /** Whether the stored note is archived. */
   const archived = () => !props.newType && isArchived(note()?.note.fields);
+  /** The note this one is a sync conflict copy of, if it is one. */
+  const original = () => (props.newType ? undefined : conflictOf(note()?.note.fields));
 
   /** Archive the note, or take it out of the archive: a new version, after any pending save. */
   async function toggleArchive() {
@@ -817,6 +819,17 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                   Unarchive
                 </button>
               </div>
+            </Show>
+            <Show when={original()}>
+              {(id) => (
+                <div class="conflict-copy-banner" role="region" aria-label="Conflict copy">
+                  <span class="conflict-copy-text">
+                    <strong>Conflict copy</strong>
+                    <span class="muted"> · sync kept another device's version as the original: </span>
+                  </span>
+                  <a href={`/notes/${id()}`}>{noteTitle(id()) ?? "Original note"}</a>
+                </div>
+              )}
             </Show>
             <Show when={saveError() && (props.newType || conflict())}>
               <p class="error" role="alert">

@@ -817,6 +817,7 @@ dependencies = [
  "serde_json",
  "state",
  "store",
+ "sync",
  "tempfile",
  "tokio",
  "tower",
@@ -2669,6 +2670,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "sync"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "embedded",
+ "reqwest",
+ "rusqlite",
+ "schema",
+ "serde_json",
+ "state",
+ "tempfile",
+ "testkit",
+ "thiserror",
+ "tokio",
+ "vocab",
+ "writer",
 ]
 
 [[package]]

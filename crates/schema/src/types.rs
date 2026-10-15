@@ -10,8 +10,9 @@ use crate::note::check_value;
 use crate::{Invalid, Issue};
 
 /// Built-in note fields. A type may not define a field with one of these names. `archived` is
-/// the archive flag, which the server writes (see `docs/vault-format.md` "Note files").
-pub const RESERVED_FIELDS: [&str; 4] = ["title", "created", "updated", "archived"];
+/// the archive flag, which the server writes, and `conflict_of` names the note a sync conflict
+/// copy was made from (see `docs/vault-format.md` "Note files").
+pub const RESERVED_FIELDS: [&str; 5] = ["title", "created", "updated", "archived", "conflict_of"];
 
 /// The handler events.
 pub const EVENTS: [&str; 6] = [

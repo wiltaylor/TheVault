@@ -12,12 +12,16 @@
 //! when the write arrives. `after_*` handlers are not queued at all, and a request to run a task
 //! now answers 409.
 //!
+//! Every local note write is queued for the home server in [`sync::Queue`], beside the server
+//! tables in the local `state.db`. [`Embedded::sync_engine`] builds the engine that pushes the
+//! queue and pulls the server's changes (D19, D20); what it pulls is not queued back.
+//!
 //! [`Embedded::handle`] takes and returns streaming bodies, so an upload is never held twice and a
 //! `Range` request on an asset answers `206 Partial Content` with just that range (pdf.js). It
 //! must be awaited inside a Tokio runtime, which Tauri's async runtime is.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use anyhow::Context;
 use axum::Router;
@@ -53,6 +57,7 @@ pub struct Embedded {
 struct Parts {
     app: Router,
     writer: Arc<Writer>,
+    queue: Arc<sync::Queue>,
     /// Keeps the `before_*` handler host alive; it holds only a weak link to the writer.
     _handlers: script::Handlers,
 }
@@ -88,14 +93,22 @@ impl Embedded {
         }
         let vault = store::Vault::init(&config.vault)
             .with_context(|| format!("opening vault {}", config.vault.display()))?;
-        let state = state::State::open(&vault.server_dir().join("state.db"), config.secret_key)
-            .context("opening state.db")?;
+        let state_path = vault.server_dir().join("state.db");
+        let state =
+            state::State::open(&state_path, config.secret_key).context("opening state.db")?;
+        let queue = Arc::new(sync::Queue::open(&state_path).context("opening the sync queue")?);
         let handlers = script::Handlers::new(script::Limits::default());
+        let bound = Arc::new(OnceLock::new());
         let writer = Arc::new(
             writer::Writer::open(vault, state)
                 .context("loading the vault")?
-                .with_hooks(Box::new(LocalHooks(handlers.hooks()))),
+                .with_hooks(Box::new(LocalHooks {
+                    inner: handlers.hooks(),
+                    queue: queue.clone(),
+                    writer: bound.clone(),
+                })),
         );
+        let _ = bound.set(Arc::downgrade(&writer));
         writer
             .ensure_built_in_types()
             .context("adding the built-in types")?;
@@ -120,6 +133,7 @@ impl Embedded {
             parts: Some(Parts {
                 app,
                 writer,
+                queue,
                 _handlers: handlers,
             }),
         })
@@ -128,6 +142,21 @@ impl Embedded {
     /// The local vault's writer, for in-process callers such as device scripts and sync.
     pub fn writer(&self) -> &Arc<Writer> {
         &self.parts().writer
+    }
+
+    /// The queue of local writes waiting for the home server.
+    pub fn queue(&self) -> &Arc<sync::Queue> {
+        &self.parts().queue
+    }
+
+    /// The sync engine of this vault with its home server (D19, D20). It blocks: run it on a
+    /// thread of its own, not inside an async runtime.
+    pub fn sync_engine(
+        &self,
+        remote: sync::Remote,
+        assets: sync::AssetPolicy,
+    ) -> sync::Result<sync::Engine> {
+        sync::Engine::new(self.writer().clone(), self.queue().clone(), remote, assets)
     }
 
     fn parts(&self) -> &Parts {
@@ -173,19 +202,35 @@ async fn refuse_task_runs(req: Request<Body>, next: axum::middleware::Next) -> R
     res
 }
 
-/// The writer hooks of a device: the script handlers' with `after_*` dropped (D17).
-struct LocalHooks(Box<dyn Hooks>);
+/// The writer hooks of a device: the script handlers' with `after_*` dropped (D17), and every
+/// committed note change queued for the home server.
+struct LocalHooks {
+    inner: Box<dyn Hooks>,
+    queue: Arc<sync::Queue>,
+    /// The writer these hooks belong to, set once it exists, for the base texts of the queue.
+    writer: Arc<OnceLock<Weak<Writer>>>,
+}
 
 impl Hooks for LocalHooks {
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<(), String> {
-        self.0.before(change, author)
+        self.inner.before(change, author)
     }
 
     fn side_effects(&self, changes: &[NoteChange]) -> writer::Result<Vec<NoteChange>> {
-        self.0.side_effects(changes)
+        self.inner.side_effects(changes)
     }
 
-    fn after(&self, _saved: &[Saved], _author: &Author, _schema: &Schema) {}
+    /// No `after_*` handlers run on a device (D17); the change is queued for the home server
+    /// instead. A queue that cannot be written loses nothing yet, since the note is saved, but
+    /// would leave the change behind, so it is reported.
+    fn after(&self, saved: &[Saved], _author: &Author, _schema: &Schema) {
+        let Some(writer) = self.writer.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        if let Err(e) = self.queue.record(writer.state(), saved) {
+            eprintln!("queueing a local change for sync failed: {e}");
+        }
+    }
 
     fn migrate(
         &self,
@@ -194,10 +239,14 @@ impl Hooks for LocalHooks {
         id: &str,
         doc: &Doc,
     ) -> Result<Option<Doc>, String> {
-        self.0.migrate(type_name, migration, id, doc)
+        self.inner.migrate(type_name, migration, id, doc)
+    }
+
+    fn asset_known(&self, id: &str) -> bool {
+        self.queue.asset_on_server(id)
     }
 
     fn check_script(&self, role: ScriptRole, name: &str, source: &str) -> Result<(), String> {
-        self.0.check_script(role, name, source)
+        self.inner.check_script(role, name, source)
     }
 }

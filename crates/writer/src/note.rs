@@ -213,7 +213,8 @@ fn is_identifier(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Put a note's items in canonical order: `title`, `created`, `updated`, `archived`, then the
+/// Put a note's items in canonical order: `title`, `created`, `updated`, `archived`,
+/// `conflict_of`, then the
 /// type's fields in type-file order, then fields the type does not describe; compound blocks in
 /// type-file order, then the rest. Any `created` or `updated` the client sent is replaced by the
 /// server's. `archived` is kept only as `archived = true`: a note that is not archived does not
@@ -239,6 +240,7 @@ pub(crate) fn arrange(ty: &TypeDef, doc: Doc, created: &str, updated: &str) -> D
     if flag.last().is_some_and(|(_, v)| v == &Value::Bool(true)) {
         ordered.push((ARCHIVED.to_owned(), Value::Bool(true)));
     }
+    take(CONFLICT_OF, &mut ordered);
     for f in ty.fields.iter().filter(|f| !f.kind.is_compound()) {
         take(&f.name, &mut ordered);
     }
@@ -263,6 +265,9 @@ pub(crate) fn arrange(ty: &TypeDef, doc: Doc, created: &str, updated: &str) -> D
 
 /// The top-level item that marks a note archived.
 pub const ARCHIVED: &str = "archived";
+
+/// The top-level item of a sync conflict copy that names the note it was copied from (D20).
+pub const CONFLICT_OF: &str = "conflict_of";
 
 /// Whether a note is archived: it holds `archived = true`.
 pub fn is_archived(doc: &Doc) -> bool {

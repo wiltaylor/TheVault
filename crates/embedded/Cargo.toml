@@ -14,6 +14,7 @@ schema.workspace = true
 script.workspace = true
 state.workspace = true
 store.workspace = true
+sync.workspace = true
 tower = { version = "0.5", features = ["util"] }
 writer.workspace = true
 

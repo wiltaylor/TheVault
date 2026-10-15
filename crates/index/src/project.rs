@@ -68,6 +68,8 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
         let kind = match name.as_str() {
             "title" => Kind::Text,
             "created" | "updated" => Kind::Datetime,
+            // A conflict copy links to the note it was copied from (D20).
+            "conflict_of" => Kind::Reference,
             _ => match ty.field(name) {
                 Some(f) => Kind::of(&f.kind),
                 None => continue,

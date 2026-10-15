@@ -57,6 +57,44 @@ impl Writer {
     /// afterwards is found by words inside it. A PDF whose text cannot be read is stored all
     /// the same.
     pub fn put_asset(&self, filename: &str, bytes: Vec<u8>) -> Result<Asset> {
+        self.put_asset_as(&ulid::Ulid::new().to_string(), filename, bytes)
+    }
+
+    /// Store `bytes` as asset `id`, an id the caller chose: a device that stored the asset
+    /// offline keeps its id when it syncs (D19, D20). Storing the same file under an id again
+    /// changes nothing; anything else already under the id is [`Error::IdTaken`].
+    pub fn put_asset_with_id(&self, id: &str, filename: &str, bytes: Vec<u8>) -> Result<Asset> {
+        if !schema::is_ulid(id) {
+            return Err(Error::BadRequest(format!("{id:?} is not an asset id")));
+        }
+        if let Some(asset) = self.find_asset(id) {
+            let same = asset.filename == filename
+                && self.vault.read(&asset.path()).is_ok_and(|b| b == bytes);
+            return if same {
+                Ok(asset)
+            } else {
+                Err(Error::IdTaken(id.to_owned()))
+            };
+        }
+        self.put_asset_as(id, filename, bytes)
+    }
+
+    /// Remove asset `id`'s file and nothing else, leaving the notes that name it as they are. A
+    /// device evicts an asset from its cache this way: the home server still holds it (D19).
+    pub fn evict_asset(&self, id: &str) -> Result<()> {
+        let _w = self.write_lock();
+        let mut inner = self.lock();
+        let Some(asset) = self.find_asset(id) else {
+            return Ok(());
+        };
+        inner.index.forget_asset_text(id);
+        let generation = self.commit(vec![Change::delete(asset.path())])?;
+        inner.index.advance(generation)?;
+        let _ = std::fs::remove_dir(self.vault.root().join("assets").join(id));
+        Ok(())
+    }
+
+    fn put_asset_as(&self, id: &str, filename: &str, bytes: Vec<u8>) -> Result<Asset> {
         check_filename(filename)?;
         let pdf =
             (index::is_pdf(filename) && bytes.len() <= index::MAX_PDF_BYTES).then(|| bytes.clone());
@@ -64,7 +102,7 @@ impl Writer {
             let _w = self.write_lock();
             let mut inner = self.lock();
             let asset = Asset {
-                id: ulid::Ulid::new().to_string(),
+                id: id.to_owned(),
                 filename: filename.to_owned(),
                 size: bytes.len() as u64,
             };

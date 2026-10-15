@@ -118,6 +118,12 @@ export function isArchived(fields: Record<string, Json> | undefined): boolean {
   return fields?.archived === true;
 }
 
+/** The id of the note a sync conflict copy was made from, from its `conflict_of` field (D20). */
+export function conflictOf(fields: Record<string, Json> | undefined): string | undefined {
+  const id = fields?.conflict_of;
+  return typeof id === "string" && id !== "" ? id : undefined;
+}
+
 export interface Row {
   id: string;
   type: string;

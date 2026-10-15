@@ -911,6 +911,7 @@ A schema change can name a migration: a function, `migrate` by default, of a scr
    | `created` | datetime, UTC (`Z`) | the server | When the note was created |
    | `updated` | datetime, UTC (`Z`) | the server | When any write last changed the file, including a reverse-side reference update |
    | `archived` | bool, only ever `true` | the server | Present only on an archived note. A note that is not archived does not hold it |
+   | `conflict_of` | string, a note ULID | the device's sync engine | Present only on a sync conflict copy: the id of the note it was copied from. See [Conflict copies](#conflict-copies) |
 
    Clients cannot set `created` or `updated`. The server ignores either value on a write and writes its own.
 
@@ -937,6 +938,22 @@ content body {
   }
 }
 ```
+
+### Conflict copies
+
+When a device and the server both changed a note and their changes overlap, the device's sync engine keeps the server's version and saves the device's as a new note of the same type, a conflict copy (D20, D28). The copy is titled `<title> (conflict, <device name>)` and holds `conflict_of`, the id of the original, after `archived`:
+
+```wcl
+title       = "Ship the importer (conflict, Pixel)"
+created     = "2026-11-03T16:20:41Z"
+updated     = "2026-11-03T16:20:41Z"
+conflict_of = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"
+estimate    = 5
+```
+
+- **A field of every note.** `conflict_of` is built in, like `title`, so a copy of any type can hold it, whether or not the type has a content field to mention the original in. A type cannot define a field of that name.
+- **A link.** The index records it as a link from the copy to the original, so the original's link graph shows its copies. The note page of a copy shows a banner that links to the original.
+- **Kept by writes.** A write keeps whatever `conflict_of` the submitted note holds. Removing it makes the copy an ordinary note.
 
 ### Archived notes
 

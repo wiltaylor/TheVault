@@ -7625,6 +7625,25 @@ button.toast-action {
   font-weight: 600;
 }
 
+.conflict-copy-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  margin: 0 0 1rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.conflict-copy-text strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .archive-button[aria-pressed="true"] {
   color: var(--accent);
 }

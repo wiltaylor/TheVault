@@ -152,6 +152,8 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Register a push endpoint | none: the Android app does | `PUT /api/devices/{id}/push` | none | Explained: only the device's own token, or the owner, sets it |
 | Record the base versions a device holds | none: the apps' sync engine does | `PUT /api/devices/{id}/bases` | none | Explained: only the device's own token, or the owner, sets them (see `docs/sync.md`) |
 | Check the server's sync versions; pull the change feed | none: the apps' sync engine does | `GET /api/sync/info`, `GET /api/sync/changes` | none | Explained: device sync, not a user action (see `docs/sync.md`) |
+| Push a note or asset made offline under its own id | none: the apps' sync engine does | `PUT /api/notes/{id}` with `If-None-Match: *`, `PUT /api/assets/{id}` | none | Explained: device sync keeps the ids a device made (see `docs/sync.md`) |
+| Open the original of a sync conflict copy | `pages/NoteView.tsx` (Conflict copy banner) | `GET /api/notes/{id}` | `vault get <id>` | |
 
 ### Notifications
 
@@ -228,6 +230,7 @@ The listing has 85 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/assets` | `vault asset list` | Asset field, asset block | |
 | `POST /api/assets` | `vault asset upload` | Image and file blocks, canvas | |
 | `GET /api/assets/{id}` | `vault asset get` | Images, downloads | |
+| `PUT /api/assets/{id}` | none | not used | The apps' sync engine sends assets a device stored offline |
 | `DELETE /api/assets/{id}` | `vault asset delete [--unlink]` | Assets | |
 | `GET /api/events` | none | Bell badge and panel, open notes | Explained: a stream for open clients (D4); a CLI command runs once and reads what it needs |
 | `GET /api/notifications` | `vault notifications [--unread]` | Bell badge and panel | |

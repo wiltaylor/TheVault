@@ -41,6 +41,7 @@ mod fleeting;
 mod note;
 mod notify;
 mod refs;
+mod remote;
 mod script_vault;
 mod terms;
 mod time;
@@ -67,8 +68,11 @@ pub use devices::{COMMAND_TTL_MS, MAX_COMMAND_PAYLOAD, command_json, device_file
 pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
 pub use index::{Archived, Graph, GraphEdge, GraphNode};
-pub use note::{ARCHIVED, Input, block_to_json, doc_to_json, is_archived, value_to_json};
+pub use note::{
+    ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, value_to_json,
+};
 pub use refs::Referrer;
+pub use remote::{REMOTE_AUTHOR, Remote};
 pub use schema::NoteEdit;
 pub use types::{Flagged, Migration, PlannedNote, TypeChange, TypePlan};
 
@@ -143,6 +147,10 @@ pub enum Error {
     /// but not deleted.
     #[error("{0:?} is built in: it can be customised but not deleted")]
     BuiltInType(String),
+    /// A client chose an id for a new note or asset that is already in use, or that a note in
+    /// the trash or the history once had.
+    #[error("id {0} is already taken")]
+    IdTaken(String),
     /// A request that is malformed in a way the other variants do not cover.
     #[error("{0}")]
     BadRequest(String),
@@ -281,6 +289,14 @@ pub trait Hooks: Send + Sync {
             "this vault runs no scripts, so migration {:?} cannot run",
             migration.script
         ))
+    }
+
+    /// Whether asset `id`, which is not in the vault folder, exists all the same: a device keeps
+    /// only some assets and fetches the rest from the home server (D19). A note may name such an
+    /// asset.
+    fn asset_known(&self, id: &str) -> bool {
+        let _ = id;
+        false
     }
 
     /// Check that `source`, the text of script `name`, compiles when run as `role`, without
@@ -1451,7 +1467,7 @@ impl NoteLookup for Lookup<'_> {
     }
 
     fn asset_exists(&self, id: &str) -> bool {
-        self.writer.find_asset(id).is_some()
+        self.writer.find_asset(id).is_some() || self.writer.hooks.asset_known(id)
     }
 }
 

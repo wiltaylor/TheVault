@@ -166,6 +166,10 @@ impl From<Error> for ApiError {
                 StatusCode::CONFLICT,
                 json!({ "error": "type_in_use", "type": t }),
             ),
+            Error::IdTaken(id) => (
+                StatusCode::CONFLICT,
+                json!({ "error": "id_taken", "id": id }),
+            ),
             Error::BadRequest(_) => (StatusCode::BAD_REQUEST, json!({ "error": "bad_request" })),
             Error::Missing(_) => (StatusCode::NOT_FOUND, json!({ "error": "not_found" })),
             Error::KeyNotUnique {

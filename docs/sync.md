@@ -10,7 +10,12 @@ The desktop and Android apps keep a copy of the vault and sync it with the home 
 | `GET /api/sync/changes?since=<seq>&limit=<n>` | any token or session | Returns every note and synced file whose latest change comes after `since`, oldest first, with `next` and `latest`. |
 | `PUT /api/devices/{id}/bases` | the device's own token, or `admin` | Replaces the base versions the device holds: `{"bases": {"<note id>": "<version>"}}`. |
 
-A device pushes its own changes through the normal notes API, with the base version in `If-Match`.
+A device pushes its own changes through the normal notes API, with the base version in `If-Match`. Two more writes keep the ids a device made offline (D19, D20):
+
+| Endpoint | Credentials | What it does |
+|---|---|---|
+| `PUT /api/notes/{id}?type=<type>` with `If-None-Match: *` | `write` | Creates the note under `id`, which must be a ULID no note has ever had, live, in the trash or in the history. Otherwise 409 `id_taken`. |
+| `PUT /api/assets/{id}?filename=<name>` | `write` | Stores the body as asset `id`. The same file again answers 200; anything else under the id is 409 `id_taken`. |
 
 ## The change feed
 
@@ -40,3 +45,15 @@ A device pairs with a `write` token (D2). With it, a device:
 - creates, updates and deletes notes, restores them from the trash, uploads assets, and writes pins and notifications, like any `write` token;
 - sets the push endpoint and bases of its own device only;
 - **cannot** write types, templates, taxonomies, scripts or tasks. All of those need `admin`, so the server answers 403. The device reads them, and receives them in the feed, like any other token. Definitions are edited online through a session or an `admin` token, and never through device sync (D20).
+
+## The sync engine on the device
+
+`crates/sync` is the device side, used by both apps through `crates/embedded`. Its crate documentation describes one round step by step; in short:
+
+- **The queue.** Every local note write is queued in the local `state.db` (tables `sync_*`), one row per note in the order of its first change, with the base it started from: the server version and its WCL text. A note changed again before it syncs keeps its first base. What the pull writes is never queued.
+- **Handshake.** A round starts with `GET /api/sync/info` and stops, keeping the queue, when the server's protocol or format version is newer than the app's (D27).
+- **Push.** Assets the device stored go first, then each queued note in order. A 409 starts a three-way merge of base, device and server: fields one by one, and the top-level blocks of a content field by a diff3 over each block's canonical text. A clash, or blocks that cannot be aligned (a block repeated in the base, or blocks moved on one side), keeps the server's version and makes a conflict copy titled `<title> (conflict, <device name>)` whose built-in `conflict_of` field names the original (see `docs/vault-format.md` "Conflict copies"), and a notification that opens it (D20, D28). A device's delete loses to a server change made since its base; a device's change to a note the server deleted restores the note first.
+- **Pull.** The change feed from the stored cursor, a page at a time, written to the local vault exactly as the server holds it and indexed. A note with a change still queued waits for the next push to merge it.
+- **Bases.** The engine records the base of every queued change with `PUT /api/devices/{id}/bases` at the start and the end of each round (D29).
+- **Assets.** The desktop keeps every asset. Android fetches an asset when a note needs it, prefetches the assets of pinned and recently opened notes, and evicts the least recently used ones beyond its cache size; a note may name an asset the device does not hold while the server does (D19).
+- **Definitions** are never queued, so types, templates, taxonomies, scripts and tasks changed on a device stay there until the server's version replaces them (D20).

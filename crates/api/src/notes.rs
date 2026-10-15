@@ -266,14 +266,45 @@ pub async fn read(
     ))
 }
 
+/// Whether the request carries `If-None-Match: *`: write only if the note does not exist.
+fn if_none_match_any(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim() == "*")
+}
+
+/// `PUT /api/notes/{id}`: replace the note at the base version in `If-Match` or `base_version`.
+/// With `If-None-Match: *` and the type in `?type=` or the body, create the note under `id`
+/// instead, which must be a ULID no note has ever had (409 `id_taken` otherwise): a device keeps
+/// the id of a note it created offline when it syncs (D20).
 pub async fn update(
     State(w): Shared,
     Caller(author): Caller,
     Path(id): Path<String>,
+    Query(q): Query<TypeQuery>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
     let sub = submitted(&headers, &body)?;
+    if if_none_match_any(&headers) {
+        let type_name = match (q.type_name, sub.type_name) {
+            (Some(a), Some(b)) if a != b => {
+                return Err(ApiError::bad_request(format!(
+                    "the type is {a:?} in the URL but {b:?} in the body"
+                )));
+            }
+            (Some(t), _) | (None, Some(t)) => t,
+            (None, None) => {
+                return Err(ApiError::bad_request("name the note's type with ?type="));
+            }
+        };
+        let saved = blocking(w, move |w| {
+            w.create_with_id(&id, &type_name, &sub.input, &author)
+        })
+        .await?;
+        return Ok(saved_response(StatusCode::CREATED, &headers, saved));
+    }
     let saved = blocking(w, move |w| {
         w.update(&id, &sub.input, sub.base.as_deref(), &author)
     })

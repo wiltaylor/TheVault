@@ -36,7 +36,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "PUT",
         "/api/notes/{id}",
-        "Replace a note at its base version",
+        "Replace a note at its base version; with If-None-Match: * and ?type=, create it under this id",
     ),
     (
         "DELETE",
@@ -196,6 +196,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "GET",
         "/api/assets/{id}",
         "Download an asset's bytes, or one byte range of them with a Range header",
+    ),
+    (
+        "PUT",
+        "/api/assets/{id}",
+        "Store a file as the asset with this id, named with ?filename=",
     ),
     (
         "DELETE",

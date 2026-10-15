@@ -80,6 +80,14 @@ pub(crate) fn validate(
                     "must be a UTC datetime such as \"2026-10-12T09:15:00Z\"",
                 ),
             },
+            "conflict_of" => {
+                if !value.as_str().is_some_and(is_ulid) {
+                    c.fail(
+                        name,
+                        "must be the id of the note this is a conflict copy of",
+                    );
+                }
+            }
             "archived" => {
                 if !matches!(value, Value::Bool(_)) {
                     c.fail(
