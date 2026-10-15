@@ -30,6 +30,9 @@ android {
             val robolectricHome = File(gradle.gradleUserHomeDir, "robolectric-home")
             test.systemProperty("user.home", robolectricHome.path)
             test.doFirst { robolectricHome.mkdirs() }
+            // The Rust core is loaded once per JVM, into one class loader: plain JUnit and each
+            // Robolectric sandbox load it separately, so every test class gets a JVM of its own.
+            test.forkEvery = 1
         }
     }
 }
@@ -42,8 +45,14 @@ kotlin {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("androidx.work:work-runtime-ktx:2.10.5")
+    // QR scanning without Google Play services (D10).
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation(project(":tauri-android"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("org.robolectric:robolectric:4.16")
+    testImplementation("androidx.work:work-testing:2.10.5")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

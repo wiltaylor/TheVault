@@ -1091,11 +1091,17 @@ dependencies = [
  "anyhow",
  "api",
  "axum",
+ "regex",
+ "rusqlite",
  "scheduler",
  "schema",
  "script",
+ "script-core",
+ "serde",
+ "serde_json",
  "state",
  "store",
+ "sync",
  "tower",
  "writer",
 ]
@@ -4283,6 +4289,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "rusqlite",
+ "schema",
+ "serde_json",
+ "state",
+ "thiserror 2.0.21",
+ "vocab",
+ "writer",
+]
+
+[[package]]
 name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4655,9 +4675,20 @@ dependencies = [
 name = "tauri-plugin-vault-device"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "embedded",
  "jni",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sync",
  "tauri",
  "tauri-plugin",
+ "tempfile",
+ "testkit",
+ "tokio",
+ "vocab",
+ "writer",
 ]
 
 [[package]]
@@ -4783,15 +4814,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "testkit"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "state",
+ "tempfile",
+]
+
+[[package]]
 name = "thevault-android"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
- "embedded",
  "http-body-util",
  "tauri",
  "tauri-build",
  "tauri-plugin-vault-device",
+ "tokio",
 ]
 
 [[package]]

@@ -57,3 +57,13 @@ A device pairs with a `write` token (D2). With it, a device:
 - **Bases.** The engine records the base of every queued change with `PUT /api/devices/{id}/bases` at the start and the end of each round (D29).
 - **Assets.** The desktop keeps every asset. Android fetches an asset when a note needs it, prefetches the assets of pinned and recently opened notes, and evicts the least recently used ones beyond its cache size; a note may name an asset the device does not hold while the server does (D19).
 - **Definitions** are never queued, so types, templates, taxonomies, scripts and tasks changed on a device stay there until the server's version replaces them (D20).
+
+## When the Android app syncs
+
+The Android app runs one Rust core per process, shared by its webview and by the Kotlin code that runs with no webview (`plugins/tauri-plugin-vault-device`). The core holds the pairing in memory. Kotlin stores the server address, device id and name in preferences, and keeps the token sealed under a key in the Android Keystore (D2). A round runs:
+
+- when the app opens or returns to the foreground;
+- 1.5 seconds after the last local write, including a share from another app;
+- every 15 minutes in the background through WorkManager, while the phone has a network. A server that cannot be reached is retried later. A server newer than the app stops background sync until the app is updated (D27).
+
+Only one round runs at a time. When a note shows an asset the phone does not hold, the app fetches it from the server before answering. Opening a note records it, so the next round prefetches its assets. The asset cache defaults to 512 MiB, and onboarding sets its size.

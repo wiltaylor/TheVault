@@ -4,13 +4,18 @@
 //! ([`embedded::Embedded`]). The webview reaches it through the `vault` custom URI scheme, so no
 //! network port is opened: `/api` goes to the embedded server and every other path serves the
 //! bundled `web/dist`, so the web client stays same-origin and unchanged.
+//!
+//! The device plugin opens that server as the process's [`Core`], which the Kotlin side shares
+//! for background sync and the share target. The scheme handler feeds the sync loop (D19, D20):
+//! a local write asks for a round, an asset the device does not hold is fetched from the home
+//! server before it is answered, and an opened note is remembered so its assets are prefetched.
 
 use std::sync::Arc;
 
-use embedded::{Config, Embedded};
 use http_body_util::BodyExt;
-use tauri::http::{Request, Response, StatusCode, header};
+use tauri::http::{Method, Request, Response, StatusCode, header};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_vault_device::core::Core;
 
 /// The custom URI scheme the webview loads the app from.
 const SCHEME: &str = "vault";
@@ -33,14 +38,6 @@ pub fn run() {
             });
         })
         .setup(|app| {
-            let vault = app.path().app_data_dir()?.join("vault");
-            std::fs::create_dir_all(&vault)?;
-            let server = Embedded::open(Config {
-                vault,
-                web: None,
-                secret_key: None,
-            })?;
-            app.manage(Arc::new(server));
             WebviewWindowBuilder::new(app, "main", WebviewUrl::CustomProtocol(ORIGIN.parse()?))
                 .title("TheVault")
                 .build()?;
@@ -56,11 +53,46 @@ async fn serve(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
     if path != "/api" && !path.starts_with("/api/") {
         return asset(app, path);
     }
-    let Some(server) = app.try_state::<Arc<Embedded>>() else {
+    let Some(core) = app.try_state::<Arc<Core>>() else {
         return status(StatusCode::SERVICE_UNAVAILABLE);
     };
-    let server = server.inner().clone();
-    let (parts, body) = server
+    let core = core.inner().clone();
+    let method = request.method().clone();
+    let path = path.to_owned();
+    let retry = (method == Method::GET).then(|| request.clone());
+    let mut res = call(&core, request).await;
+    if method == Method::GET {
+        if let (Some(id), Some(retry)) = (asset_id(&path), retry)
+            && res.status() == StatusCode::NOT_FOUND
+        {
+            let fetched = {
+                let (core, id) = (core.clone(), id.to_owned());
+                off_runtime(move || core.fetch_asset(&id)).await
+            };
+            if matches!(fetched, Ok(true)) {
+                res = call(&core, retry).await;
+            }
+        }
+        if let Some(id) = note_id(&path)
+            && res.status().is_success()
+        {
+            let (core, id) = (core.clone(), id.to_owned());
+            std::thread::spawn(move || {
+                if let Err(e) = core.note_opened(&id) {
+                    eprintln!("prefetching the assets of note {id} failed: {e}");
+                }
+            });
+        }
+    } else if method != Method::HEAD && method != Method::OPTIONS && res.status().is_success() {
+        core.kick();
+    }
+    res
+}
+
+/// One request to the in-process server, its body collected.
+async fn call(core: &Core, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let (parts, body) = core
+        .server()
         .handle(request.map(axum::body::Body::from))
         .await
         .into_parts();
@@ -68,6 +100,35 @@ async fn serve(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
         Ok(body) => Response::from_parts(parts, body.to_bytes().to_vec()),
         Err(_) => status(StatusCode::INTERNAL_SERVER_ERROR),
     }
+}
+
+/// Run blocking sync work on a thread of its own: its blocking HTTP client must never run, or be
+/// dropped, on an async runtime's thread.
+async fn off_runtime<T: Send + 'static>(
+    f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.await
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("the sync thread stopped")))
+}
+
+/// The asset a `GET /api/assets/{id}...` request reads.
+fn asset_id(path: &str) -> Option<&str> {
+    let id = path.strip_prefix("/api/assets/")?.split('/').next()?;
+    is_ulid(id).then_some(id)
+}
+
+/// The note a `GET /api/notes/{id}` request opens.
+fn note_id(path: &str) -> Option<&str> {
+    let id = path.strip_prefix("/api/notes/")?;
+    is_ulid(id).then_some(id)
+}
+
+fn is_ulid(s: &str) -> bool {
+    s.len() == 26 && s.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// The bundled web client's file at `path`, or `index.html` for a client-side route: a path whose
@@ -95,4 +156,20 @@ fn status(code: StatusCode) -> Response<Vec<u8>> {
     let mut res = Response::new(Vec::new());
     *res.status_mut() = code;
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_asset_and_note_ids_in_api_paths() {
+        let id = "01J9Z3K8Q2W6E4R5T7Y8U9I0OP";
+        assert_eq!(asset_id(&format!("/api/assets/{id}")), Some(id));
+        assert_eq!(asset_id(&format!("/api/assets/{id}/thumb")), Some(id));
+        assert_eq!(asset_id("/api/assets"), None);
+        assert_eq!(note_id(&format!("/api/notes/{id}")), Some(id));
+        assert_eq!(note_id(&format!("/api/notes/{id}/history")), None);
+        assert_eq!(note_id("/api/notes/new"), None);
+    }
 }

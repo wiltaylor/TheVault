@@ -10,8 +10,21 @@ links = "tauri-plugin-vault-device"
 workspace = "../../apps/android/src-tauri"
 
 [dependencies]
+anyhow = "1"
+embedded = { path = "../../crates/embedded" }
 jni = "0.21"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sync = { path = "../../crates/sync" }
 tauri = "2.12.4"
+tokio = { version = "1", features = ["sync"] }
+vocab = { path = "../../crates/vocab" }
+writer = { path = "../../crates/writer" }
+
+[dev-dependencies]
+tempfile = "3"
+testkit = { path = "../../crates/testkit" }
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }

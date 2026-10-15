@@ -70,8 +70,10 @@ desktop-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-t
 android-build: (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
 	cd apps/android && cargo tauri android build --debug --apk --target aarch64
 
-# Run the S5 Kotlin unit tests with Robolectric on the JVM, and the JNI round trip against a host build of the plugin's Rust library
+# Run the app's Rust tests (the core against a vault-server), then the S5 Kotlin unit tests with Robolectric on the JVM against a host build of the plugin's Rust library
 [group('android')]
 android-test: (require-tool "java") android-build
+	cargo build -p server --bin vault-server
+	cd apps/android/src-tauri && VAULT_SERVER_BIN="$PWD/../../../target/debug/vault-server" cargo test -p tauri-plugin-vault-device -p thevault-android
 	cd apps/android/src-tauri && cargo rustc -p tauri-plugin-vault-device --lib --crate-type cdylib
 	cd apps/android/src-tauri/gen/android && VAULT_CORE_LIBRARY="$PWD/../../target/debug/libtauri_plugin_vault_device.so" ./gradlew --no-daemon testDebugUnitTest
