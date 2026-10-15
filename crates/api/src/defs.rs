@@ -66,7 +66,7 @@ pub(crate) fn text_or_json(headers: &HeaderMap, text: String, json: Value) -> Re
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WclBody {
-    wcl: String,
+    pub(crate) wcl: String,
 }
 
 // ---- templates ------------------------------------------------------------------------------

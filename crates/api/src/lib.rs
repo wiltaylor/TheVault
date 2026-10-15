@@ -218,6 +218,15 @@ fn build() -> Built {
         .put("/api/devices/{id}/bases", sync::put_bases)
         .get("/api/sync/info", sync::info)
         .get("/api/sync/changes", sync::changes)
+        .get("/api/devices/{id}/commands", devices::commands)
+        .post(
+            "/api/devices/{id}/commands/{cid}/result",
+            devices::command_result,
+        )
+        .get("/api/device-files", devices::files)
+        .get("/api/device-files/{platform}", devices::file)
+        .put("/api/device-files/{platform}", devices::put_file)
+        .delete("/api/device-files/{platform}", devices::delete_file)
         .get("/api/tokens", tokens::list)
         .post("/api/tokens", tokens::create)
         .delete("/api/tokens/{name}", tokens::revoke)

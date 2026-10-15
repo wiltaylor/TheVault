@@ -8,6 +8,7 @@
 
 mod blocks;
 mod change;
+mod devices;
 mod doc;
 mod encoding;
 mod inline;
@@ -25,6 +26,7 @@ pub use blocks::{
     RATING_MAX_LIMIT, VIEW_KINDS, control_fits,
 };
 pub use change::{FieldChanges, NoteEdit};
+pub use devices::{DEVICE_COMMANDS, DEVICE_EVENTS, DEVICE_PLATFORMS, DeviceFile, DeviceHook};
 pub use doc::{Doc, DocBlock, Value};
 pub use encoding::{
     PALETTE, is_date, is_datetime, is_duration, is_ident, is_ink_colour, is_name, is_palette,

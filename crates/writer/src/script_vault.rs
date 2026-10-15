@@ -339,6 +339,17 @@ impl Vault for Writer {
         }))
     }
 
+    fn device_command(
+        &self,
+        source: &str,
+        device: &str,
+        name: &str,
+        payload: Json,
+    ) -> Result<Json, String> {
+        let c = Writer::device_command(self, device, name, &payload, source).map_err(err)?;
+        Ok(crate::command_json(&c))
+    }
+
     fn protected(&self) -> Vec<PathBuf> {
         vec![self.vault().root().to_path_buf()]
     }

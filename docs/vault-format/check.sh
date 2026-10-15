@@ -45,6 +45,9 @@ done
 for f in "$vault"/tasks/*.wcl; do
   check "$f" "$schema/task.wcl"
 done
+for f in "$vault"/devices/*.wcl; do
+  check "$f" "$schema/device.wcl"
+done
 for dir in "$vault"/notes/*/; do
   type=$(basename "$dir")
   for f in "$dir"*.wcl; do

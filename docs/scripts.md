@@ -1,6 +1,6 @@
 # Scripts reference
 
-Scripts are wscript files, `scripts/<name>.ws`. They run as type handlers (`docs/vault-format.md` "Handlers"), schema-change migrations, and scheduled scripts (`docs/vault-format.md` "Task files", Settings > Scheduled in the web client). This page lists every host function a script can call.
+Scripts are wscript files, `scripts/<name>.ws`. They run as type handlers (`docs/vault-format.md` "Handlers"), schema-change migrations, scheduled scripts (`docs/vault-format.md` "Task files", Settings > Scheduled in the web client), and on a paired phone as device event handlers and device commands (`docs/vault-format.md` "Device files"). This page lists every host function a script can call, and the payload of every device event and command.
 
 ## What each kind of run can use
 
@@ -156,6 +156,30 @@ fn run() -> Result[(), string] {
 
 A scheduled script that fails and has no retry left notifies the user itself, with a link to the task's editor; it need not notify about its own failure.
 
+### Commanding a device
+
+| Function | Returns |
+|----------|---------|
+| `vault::device_command(device: string, name: string, payload: Value)` | `Result[Value, string]`: queue command `name` for a paired device, named by its id or its name, as `{ id, device, name, payload, status, result, source, created, expires, updated }` with `status` `"pending"` |
+
+The command must be one the device's `devices/<platform>.wcl` declares, and one the user enabled for that device in Settings > Devices; anything else is an error and queues nothing. A device name two devices share is an error too: name the device by its id. `payload` is the command's payload from [Device commands](#device-commands), at most 64 KiB as JSON. The command's source is the run, as for `vault::notify`.
+
+The device fetches the command, runs it, and reports `done` or `failed` with a result. A command the device has not finished within a day expires. Follow a command through `GET /api/devices/<id>/commands`. `device_command` works in `after_*` handlers and scheduled scripts; a `before_*` handler, a migration or a script running on a device gets an error.
+
+```rust
+use vault
+
+fn after_create(note: Value) -> Result[(), string] {
+    let title = note.get("note").unwrap().get("fields").unwrap().get("title").unwrap()
+    let sms = Value::Map(#{
+        "to": Value::String("+61400000000"),
+        "body": Value::String("Invoice filed: " + title.as_string().unwrap()),
+    })
+    vault::device_command("Pixel", "send_sms", sms)?
+    Ok(())
+}
+```
+
 ### Time and the log
 
 | Function | Returns |
@@ -241,3 +265,59 @@ fn run() -> Result[int, string] {
     Ok(rows.len())
 }
 ```
+
+## Device events
+
+A device runs the handlers its platform's `devices/<platform>.wcl` names for each event, in file order (`docs/vault-format.md` "Device files"). A handler function takes one `Value`:
+
+```text
+{ event, device, at, data }
+```
+
+| Member | Meaning |
+|--------|---------|
+| `event` | The event name, such as `"sms_received"` |
+| `device` | The id of the device the event happened on |
+| `at` | When the device captured the event, in milliseconds since the Unix epoch |
+| `data` | The event's payload, below |
+
+What a handler returns is ignored, except that `Err(message)` records the run as failed. Before a handler runs, the device drops events from anyone on its exclusion list and SMS whose body matches its skip pattern (Settings > Devices).
+
+These conventions hold in every payload:
+
+- A phone number is in two members: `number`, normalised to E.164 with the phone's region, such as `"+61400000000"`, and `number_raw`, as the phone holds it. `number` is `null` when the raw value is not a phone number, such as a short code or a sender name.
+- A time is a string in the form a `datetime` field takes, RFC 3339 with an offset, such as `"2026-10-20T09:30:00+11:00"`.
+- `contact` is the phone contact the number belongs to, as `{ id, name }`, or `null` when no contact has it. `id` is the phone's contact id.
+- `device_ref` identifies the item in the phone's own store, such as `"sms:4412"`, `"mms:87"`, `"call:1203"`, or a notification key for RCS. A handler de-duplicates on it: the device can deliver an event again after a restart or a catch-up.
+- `thread_ref` identifies the conversation in the phone's own store.
+- An attachment is `{ asset, filename, mime, size }`, where `asset` is the id of the asset the device stored it as in the vault.
+
+| Event | `data` |
+|-------|--------|
+| `sms_received` | `{ device_ref, thread_ref, number, number_raw, contact, body, sent }`. `sent` is when the sender sent it |
+| `sms_sent` | `{ device_ref, thread_ref, number, number_raw, contact, body, sent }`. `number` is the recipient |
+| `mms_received` | `{ device_ref, thread_ref, number, number_raw, contact, to, subject, body, attachments, sent }`. `number` is the sender. `to` lists every recipient of a group message, other than this phone, as `{ number, number_raw, contact }`. `subject` and `body` are `""` when the message has none |
+| `rcs_received` | `{ device_ref, thread_ref, sender, conversation, body, sent, partial }`. Read from a Google Messages notification: `sender` is the display name it shows, `conversation` the conversation title or `null` for a one-to-one chat, and `thread_ref` the notification's conversation key. There is no number. `partial` is always `true` |
+| `call_ended` | `{ device_ref, direction, number, number_raw, contact, started, duration }`. `direction` is `"in"`, `"out"` or `"missed"`; `duration` is in whole seconds, `0` for a missed call |
+| `contact_changed` | `{ contact_id, name, phones, addresses, updated }`. `phones` lists every number as E.164, the ones that cannot be normalised left out; `addresses` lists every email address. `updated` is when the phone last changed the contact |
+| `contact_deleted` | `{ contact_id }` |
+| `share_received` | `{ text, subject, url, attachments }`. What another app shared: `text` and `subject` are `""` when it sent none, `url` is the first link in `text` or `null`, and `attachments` lists the shared files |
+
+## Device commands
+
+A command runs on the device through the script function its `command` block names (`docs/vault-format.md` "Device files"). The function takes one `Value`:
+
+```text
+{ id, command, payload }
+```
+
+`id` is the command's id and `payload` what `vault::device_command` queued. `Ok(value)` reports the command `done` with `value` as its result; `Err(message)` reports it `failed` with `message` as its result.
+
+| Command | `payload` | Result when `done` |
+|---------|-----------|--------------------|
+| `send_sms` | `{ to, body }`. `to` is a number, E.164 or as dialled | `{ device_ref }` of the sent message. Needs the device's SMS-send switch |
+| `upsert_contact` | `{ contact_id, name, phones, addresses, person }`. `contact_id` is `null` to add a contact. `person` is the id of the `person` note the contact mirrors | `{ contact_id }`. Needs the device's contacts-write switch |
+| `delete_contact` | `{ contact_id }` | `{}`. Needs the device's contacts-write switch |
+| `show_notification` | `{ title, body, note }`. `body` and `note` are `""` for none; tapping the notification opens `note` | `{}` |
+
+A device reports on a command at `POST /api/devices/<id>/commands/<cid>/result` with `{ "status": "delivered" }` once it has the command, then `{ "status": "done" | "failed", "result": ... }`. A command that is finished or expired answers 409.

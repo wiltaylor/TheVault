@@ -35,6 +35,7 @@ mod batch;
 mod builtin;
 mod daily;
 mod defs;
+mod devices;
 mod feed;
 mod fleeting;
 mod note;
@@ -62,6 +63,7 @@ pub use builtin::{
 };
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
 pub use defs::ScriptProblem;
+pub use devices::{COMMAND_TTL_MS, MAX_COMMAND_PAYLOAD, command_json, device_file_path};
 pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
 pub use index::{Archived, Graph, GraphEdge, GraphNode};

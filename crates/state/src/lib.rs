@@ -6,6 +6,7 @@
 
 mod auth;
 mod changes;
+mod commands;
 mod devices;
 mod events;
 mod history;
@@ -23,6 +24,9 @@ use rusqlite::Connection;
 
 pub use auth::{Scope, TokenInfo};
 pub use changes::{ChangeKey, ChangePage, Journaled};
+pub use commands::{
+    CommandStatus, DeviceCommand, NewCommand, RETENTION_MS as COMMAND_RETENTION_MS,
+};
 pub use devices::{Device, NewDevice, PLATFORMS, PairCode, PushTarget};
 pub use events::{CAPACITY as EVENT_CAPACITY, Events, LiveEvent, Missed, Subscription};
 pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, Version};
@@ -65,6 +69,12 @@ pub enum Error {
     UnknownVersion { note: String, version: String },
     #[error("no device {0}")]
     UnknownDevice(String),
+    #[error("no device command {0}")]
+    UnknownCommand(String),
+    #[error("command {id} is {status} and can no longer be reported on")]
+    CommandClosed { id: String, status: &'static str },
+    #[error("{0}")]
+    InvalidCommandReport(String),
     #[error("unknown device platform {0:?}; expected linux or android")]
     UnknownPlatform(String),
     #[error("no secret named {0:?}")]
@@ -116,7 +126,7 @@ pub struct State {
     events: Events,
 }
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -304,6 +314,23 @@ CREATE TABLE IF NOT EXISTS device_bases (
 CREATE INDEX IF NOT EXISTS device_bases_version ON device_bases (version);
 ";
 
+/// What version 10 adds: the commands server scripts queue for a device, removed with it (D22).
+const SCHEMA_V10: &str = "
+CREATE TABLE IF NOT EXISTS device_commands (
+    id         TEXT PRIMARY KEY,
+    device_id  TEXT NOT NULL REFERENCES devices (id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    payload    TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    expires_ms INTEGER NOT NULL,
+    status     TEXT NOT NULL,
+    result     TEXT,
+    source     TEXT NOT NULL,
+    updated_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS device_commands_by_device ON device_commands (device_id, status, id);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -393,7 +420,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=8 => {
+        0..=9 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -426,6 +453,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 8 {
                 tx.execute_batch(SCHEMA_V9)?;
+            }
+            if version <= 9 {
+                tx.execute_batch(SCHEMA_V10)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

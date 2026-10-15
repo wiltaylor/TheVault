@@ -323,6 +323,36 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/sync/changes",
         "Every note and definition file changed after ?since=, oldest first, paged by ?limit=, with next and latest",
     ),
+    (
+        "GET",
+        "/api/devices/{id}/commands",
+        "The commands queued for a device, oldest first, optionally of one ?status=",
+    ),
+    (
+        "POST",
+        "/api/devices/{id}/commands/{cid}/result",
+        "Report a command delivered, or done or failed with a result",
+    ),
+    (
+        "GET",
+        "/api/device-files",
+        "Every devices/<platform>.wcl with its handlers and commands, and the event and command lists",
+    ),
+    (
+        "GET",
+        "/api/device-files/{platform}",
+        "Read a device file as JSON or WCL",
+    ),
+    (
+        "PUT",
+        "/api/device-files/{platform}",
+        "Create or replace a device file",
+    ),
+    (
+        "DELETE",
+        "/api/device-files/{platform}",
+        "Delete a device file",
+    ),
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),
     ("DELETE", "/api/tokens/{name}", "Revoke an API token"),

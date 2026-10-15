@@ -966,7 +966,7 @@ fn a_version_6_state_db_gains_notifications() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
 }
 
 /// Every event waiting on `sub`, in order, with their sequence numbers.

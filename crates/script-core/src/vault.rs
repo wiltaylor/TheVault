@@ -155,6 +155,19 @@ pub trait Vault: Send + Sync {
         Err("notifications are not available here".into())
     }
 
+    /// Queue command `name` with `payload` for `device`, a device id or name, from `source`
+    /// (D22). Returns the command as `{ id, device, name, payload, status, result, source,
+    /// created, expires, updated }`.
+    fn device_command(
+        &self,
+        _source: &str,
+        _device: &str,
+        _name: &str,
+        _payload: Json,
+    ) -> Result<Json, String> {
+        Err("device commands are not available here".into())
+    }
+
     /// Directories no script may reach through `fs`, whatever its task allows: the vault.
     fn protected(&self) -> Vec<PathBuf> {
         Vec::new()

@@ -10,7 +10,15 @@ use crate::{Error, Result, commit, io_err, parse_data_only};
 
 /// The folders a vault holds files in, in the order `init` creates them. `.vault/` is the server's
 /// own folder and is not listed.
-pub const LAYOUT_DIRS: [&str; 6] = ["notes", "types", "taxonomies", "scripts", "tasks", "assets"];
+pub const LAYOUT_DIRS: [&str; 7] = [
+    "notes",
+    "types",
+    "taxonomies",
+    "scripts",
+    "tasks",
+    "devices",
+    "assets",
+];
 
 /// The server's own folder: `index.db`, `state.db` and the commit journal.
 pub(crate) const SERVER_DIR: &str = ".vault";
@@ -203,10 +211,12 @@ pub(crate) fn check_path(path: &str) -> Result<()> {
     }
     let top = segments[0];
     if !LAYOUT_DIRS.contains(&top) {
-        return fail("it is not under notes/, types/, taxonomies/, scripts/, tasks/ or assets/");
+        return fail(
+            "it is not under notes/, types/, taxonomies/, scripts/, tasks/, devices/ or assets/",
+        );
     }
     let wants = match top {
-        "notes" | "types" | "taxonomies" | "tasks" => Some(".wcl"),
+        "notes" | "types" | "taxonomies" | "tasks" | "devices" => Some(".wcl"),
         "scripts" => Some(".ws"),
         _ => None,
     };

@@ -44,7 +44,10 @@ impl ApiError {
             | S::NotInTrash(_)
             | S::UnknownPin(_)
             | S::UnknownNotification(_)
-            | S::UnknownDevice(_) => (StatusCode::NOT_FOUND, "not_found"),
+            | S::UnknownDevice(_)
+            | S::UnknownCommand(_) => (StatusCode::NOT_FOUND, "not_found"),
+            S::CommandClosed { .. } => (StatusCode::CONFLICT, "command_closed"),
+            S::InvalidCommandReport(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             S::InvalidNotification(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             S::PinCycle { .. } => (StatusCode::CONFLICT, "pin_cycle"),
             S::EmptyFolderName => (StatusCode::BAD_REQUEST, "bad_request"),

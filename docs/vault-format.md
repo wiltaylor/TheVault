@@ -1,6 +1,6 @@
 # Vault file format
 
-This document defines the WCL vocabulary of every file in a vault: notes, types with their templates and handlers, taxonomies, scheduled tasks, and the content, ink and canvas blocks that notes and templates contain. It settles OQ-S1 and overrides the illustrative note example in `docs/plans/thevault-prd/SPEC.md`.
+This document defines the WCL vocabulary of every file in a vault: notes, types with their templates and handlers, taxonomies, scheduled tasks, device files, and the content, ink and canvas blocks that notes and templates contain. It settles OQ-S1 and overrides the illustrative note example in `docs/plans/thevault-prd/SPEC.md`.
 
 The `store`, `schema`, `writer`, `index`, `query`, `script`, `scheduler`, `api`, `cli` and `web` components all read and write this format, and S3 expected files use it. When this document and the code disagree, the code is wrong.
 
@@ -24,6 +24,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 - [Canvas](#canvas)
 - [Taxonomy files](#taxonomy-files)
 - [Task files](#task-files)
+- [Device files](#device-files)
 - [Validating vault files](#validating-vault-files)
 
 ## Files at a glance
@@ -34,11 +35,12 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 | Type | `types/<type>.wcl` | `schema/common.wcl` plus `schema/type.wcl` | `vault/types/specimen.wcl` |
 | Taxonomy | `taxonomies/<taxonomy>.wcl` | `schema/taxonomy.wcl` | `vault/taxonomies/status.wcl` |
 | Task | `tasks/<task>.wcl` | `schema/task.wcl` | `vault/tasks/daily_digest.wcl` |
+| Device file | `devices/<platform>.wcl` | `schema/device.wcl` | `vault/devices/android.wcl` |
 | Canvas | A `canvas` content block, or a `canvas` field value in a note | `schema/common.wcl` | `vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` |
 
 Paths in the last two columns are relative to `docs/vault-format/`. Scripts (`scripts/*.ws`) are wscript, not WCL, and this document does not define them. Assets (`assets/<ULID>/<filename>`) are stored byte for byte.
 
-The example vault under `docs/vault-format/vault/` is self-consistent: its notes use its types, and its types use its taxonomies. Notes that the examples reference but do not need (the parent, child and peer specimens) are left out. The scripts named by the example handlers and task are left out too.
+The example vault under `docs/vault-format/vault/` is self-consistent: its notes use its types, and its types use its taxonomies. Notes that the examples reference but do not need (the parent, child and peer specimens) are left out. The scripts named by the example handlers, task and device file are left out too.
 
 ## Names and identifiers
 
@@ -48,6 +50,7 @@ The example vault under `docs/vault-format/vault/` is self-consistent: its notes
 | Taxonomy name | Same rule as a type name | The file stem of `taxonomies/<taxonomy>.wcl` |
 | Task name | Same rule as a type name | The file stem of `tasks/<task>.wcl` |
 | Script name | Same rule as a type name | The file stem of `scripts/<script>.ws` |
+| Device platform | `linux` or `android` | The file stem of `devices/<platform>.wcl` |
 | Field name | Same rule as a type name. `title`, `created`, `updated` and `archived` are reserved | The label of a `field` block |
 | Template, view, canvas item name | `[A-Za-z_][A-Za-z0-9_]*` | A block label |
 | Note id | A ULID | The file stem of `notes/<type>/<ULID>.wcl` |
@@ -1691,13 +1694,60 @@ read_paths    = ["/srv/inbox"]
 write_paths   = ["/srv/exports"]
 ```
 
+## Device files
+
+`devices/<platform>.wcl` says what a paired device of the platform does with its device events, and which commands it accepts from server scripts (D5, D22). The platform is `linux` or `android`. Device events happen on the device and their handlers run there; note events and scheduled tasks stay on the server. A platform with no file runs no device handlers and accepts no commands.
+
+The file holds `handler` and `command` blocks and nothing else.
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `handler "<event>" { ... }` | block | A script function to run on a device event. Several handlers may name the same event; they run in file order |
+| `command "<name>" { ... }` | block | A command the device accepts, and the script function that runs it. Each command appears at most once |
+
+The device events are a closed list: `sms_received`, `sms_sent`, `mms_received`, `rcs_received`, `call_ended`, `contact_changed`, `contact_deleted` and `share_received`. The commands are a closed list too, the ones the device module implements: `send_sms`, `upsert_contact`, `delete_contact` and `show_notification`. Any other label is a validation error.
+
+Each `handler` and `command` block holds:
+
+| Item | Form | Default | Meaning |
+|------|------|---------|---------|
+| `script` | string | required | The script name, the stem of `scripts/<script>.ws`. The script must exist when the file is saved |
+| `function` | string | the event or command name | The function in that script to call |
+
+```wcl
+handler "sms_received" {
+  script = "device_messages"
+}
+
+handler "call_ended" {
+  script = "device_calls"
+}
+
+handler "contact_changed" {
+  script   = "device_contacts"
+  function = "changed"
+}
+
+command "send_sms" {
+  script = "device_messages"
+}
+
+command "show_notification" {
+  script = "device_notify"
+}
+```
+
+A server script queues a command with `vault::device_command`. The server refuses a command the device's platform file does not declare, and one the user has not enabled for that device in Settings > Devices. So declaring a command makes it available, and enabling it is a choice made per device. `docs/scripts.md` gives the value each handler and command function takes, the payload of every event and command, and what a command reports back.
+
+A script that a device file names cannot be deleted. Device scripts reach the `vault` module and the `device` module, and no `http`, `secrets` or `fs`.
+
 ## Validating vault files
 
 A vault file is checked in three layers. Each catches what the one before cannot.
 
 1. **Data-only.** `store` parses the file and rejects anything outside [the data-only subset](#the-data-only-subset). `docs/vault-format/data-only.mjs` is a reference implementation of this check.
 2. **Structure.** `wcl_lang` validates the file against the WCL schema for its file kind. This catches unknown fields and blocks, wrong value types, missing block items, out-of-range heading levels, and canvas edges that name no node.
-3. **Semantics.** `schema` checks what WCL cannot express. That covers required top-level fields, the encodings in [Value encodings](#value-encodings), and closed vocabularies such as kinds, styles and colours. It also checks that references and terms exist, and the cross-file rules: inverse fields, template slots and handler events.
+3. **Semantics.** `schema` checks what WCL cannot express. That covers required top-level fields, the encodings in [Value encodings](#value-encodings), and closed vocabularies such as kinds, styles and colours. It also checks that references and terms exist, and the cross-file rules: inverse fields, template slots and handler events, and the events and commands a device file names.
 
 ### The schema files
 
@@ -1709,6 +1759,7 @@ A vault file is checked in three layers. Each catches what the one before cannot
 | `type.wcl` | The `@document` of a type file, with `field`, `template`, `tab` and `handler` |
 | `taxonomy.wcl` | The `@document` of a taxonomy file |
 | `task.wcl` | The `@document` of a task file |
+| `device.wcl` | The `@document` of a device file, with `handler` and `command` |
 | `notes/<type>.wcl` | A generated `@document` for the notes of one type |
 
 ### Generated note schemas

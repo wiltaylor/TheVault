@@ -1,0 +1,20 @@
+# Schema for devices/<platform>.wcl: the handlers of device events and the commands a device of
+# the platform accepts (D5, D22). Check a device file with this file alone. See
+# docs/vault-format.md. The schema crate checks that every label is a known event or command.
+
+@block("handler") type DeviceHandler {
+  @inline(0) event: utf8
+  script:   utf8
+  function: utf8?
+}
+
+@block("command") type DeviceCommand {
+  @inline(0) name: utf8
+  script:   utf8
+  function: utf8?
+}
+
+@document type DeviceFile {
+  @children("handler") handlers: list<DeviceHandler>
+  @children("command") commands: list<DeviceCommand>
+}

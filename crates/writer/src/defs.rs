@@ -488,7 +488,7 @@ impl Writer {
             .collect())
     }
 
-    /// Delete `scripts/<name>.ws`, unless a type's handler or a task names it.
+    /// Delete `scripts/<name>.ws`, unless a type's handler, a task or a device file names it.
     pub fn delete_script(&self, name: &str) -> Result<()> {
         let _w = self.write_lock();
         let mut inner = self.lock();
@@ -511,6 +511,7 @@ impl Writer {
                 by.push(file);
             }
         }
+        by.extend(self.device_files_naming(name)?);
         if !by.is_empty() {
             return Err(Error::InUse {
                 code: "script_in_use",

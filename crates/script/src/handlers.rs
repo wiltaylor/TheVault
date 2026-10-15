@@ -722,6 +722,18 @@ impl Vault for HandlerVault {
         })
     }
 
+    fn device_command(
+        &self,
+        source: &str,
+        device: &str,
+        name: &str,
+        payload: Json,
+    ) -> Result<Json, String> {
+        self.side_write("vault::device_command", |w| {
+            Vault::device_command(w, source, device, name, payload)
+        })
+    }
+
     fn protected(&self) -> Vec<std::path::PathBuf> {
         bound(&self.binding)
             .map(|w| Vault::protected(&*w))

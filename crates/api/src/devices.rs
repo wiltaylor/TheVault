@@ -5,11 +5,16 @@
 //! lists, renames and revokes devices, and holds each device's settings: the commands it accepts,
 //! its contacts-write and SMS-send switches, its exclusion list and its skip pattern (D22, D23,
 //! D25). Revoking deletes the device's token and its push endpoint.
+//!
+//! `/api/device-files/{platform}` reads and writes `devices/<platform>.wcl`, the device events'
+//! handlers and the commands devices of the platform accept (D5). A device fetches the commands
+//! server scripts queued for it from `GET /api/devices/{id}/commands?status=pending` and reports
+//! on each at `POST /api/devices/{id}/commands/{cid}/result` (D22).
 
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -17,12 +22,14 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use qrcode::QrCode;
 use qrcode::render::svg;
+use schema::{DEVICE_COMMANDS, DEVICE_EVENTS, DEVICE_PLATFORMS, DeviceFile, DeviceHook};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use state::{Author, Device, NewDevice, PushTarget, Scope};
+use state::{Author, CommandStatus, Device, NewDevice, PushTarget, Scope};
 use writer::Writer;
 
 use crate::auth::GrantedScope;
+use crate::defs::{WclBody, body, text_or_json};
 use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
@@ -445,19 +452,195 @@ pub async fn put_push(
     let target = push_target(body)?;
     let device = blocking(w, move |w| {
         let state = w.state();
-        let device = state.device(&id)?;
-        let own = matches!(&author, Author::Token(name) if *name == device.token_id);
-        if !own && !scope.allows(Scope::Admin) {
-            return Err(ApiError::new(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "only the device itself or an admin may set its push endpoint",
-            ));
-        }
-        Ok(state.set_device_push(&id, target.as_ref())?)
+        own_or_admin(&state.device(&id)?, &author, scope, "set its push endpoint")?;
+        Ok::<_, ApiError>(state.set_device_push(&id, target.as_ref())?)
     })
     .await?;
     Ok(Json(device_json(&device)))
+}
+
+// ---- device files ---------------------------------------------------------------------------
+
+fn hooks_json(hooks: &[DeviceHook], key: &str) -> Value {
+    hooks
+        .iter()
+        .map(|h| json!({ key: h.name, "script": h.script, "function": h.function }))
+        .collect()
+}
+
+/// A device file as JSON: its handlers and commands, or the error that stops it parsing.
+fn device_file_json(platform: &str, text: &str) -> Value {
+    match DeviceFile::parse(platform, text) {
+        Ok(f) => json!({
+            "platform": platform,
+            "handlers": hooks_json(&f.handlers, "event"),
+            "commands": hooks_json(&f.commands, "name"),
+        }),
+        Err(e) => json!({ "platform": platform, "error": e.to_string() }),
+    }
+}
+
+/// `GET /api/device-files`: every `devices/<platform>.wcl` with its handlers and commands, and
+/// the closed lists of platforms, events and commands it may name.
+pub async fn files(State(w): Shared) -> Result<Json<Value>, ApiError> {
+    let files = blocking(w, |w| w.device_files()).await?;
+    let files: Vec<Value> = files
+        .iter()
+        .map(|(platform, text)| device_file_json(platform, text))
+        .collect();
+    Ok(Json(json!({
+        "files": files,
+        "platforms": DEVICE_PLATFORMS,
+        "events": DEVICE_EVENTS,
+        "commands": DEVICE_COMMANDS,
+    })))
+}
+
+/// `GET /api/device-files/{platform}`: the file as JSON with its `wcl`, or as WCL text.
+pub async fn file(
+    State(w): Shared,
+    Path(platform): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let p = platform.clone();
+    let wcl = blocking(w, move |w| w.read_device_file(&p)).await?;
+    let mut json = device_file_json(&platform, &wcl);
+    json["wcl"] = json!(wcl);
+    Ok(text_or_json(&headers, wcl, json))
+}
+
+/// `PUT /api/device-files/{platform}`: create or replace the file from WCL text, or JSON
+/// `{ "wcl": "..." }`. Stored in canonical form.
+pub async fn put_file(
+    State(w): Shared,
+    Path(platform): Path<String>,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Result<Response, ApiError> {
+    let b: WclBody = body(&headers, &raw, |wcl| WclBody { wcl })?;
+    let p = platform.clone();
+    let wcl = blocking(w, move |w| w.put_device_file(&p, &b.wcl)).await?;
+    let mut json = device_file_json(&platform, &wcl);
+    json["wcl"] = json!(wcl);
+    Ok(text_or_json(&headers, wcl, json))
+}
+
+/// `DELETE /api/device-files/{platform}`.
+pub async fn delete_file(
+    State(w): Shared,
+    Path(platform): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let p = platform.clone();
+    blocking(w, move |w| w.delete_device_file(&p)).await?;
+    Ok(Json(json!({ "platform": platform, "deleted": true })))
+}
+
+// ---- device commands ------------------------------------------------------------------------
+
+/// Refuse a caller that is neither the device itself nor an admin.
+fn own_or_admin(
+    device: &Device,
+    author: &Author,
+    scope: Scope,
+    what: &str,
+) -> Result<(), ApiError> {
+    let own = matches!(author, Author::Token(name) if *name == device.token_id);
+    if own || scope.allows(Scope::Admin) {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            format!("only the device itself or an admin may {what}"),
+        ))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandsQuery {
+    #[serde(default)]
+    status: Option<String>,
+}
+
+/// `GET /api/devices/{id}/commands?status=`: the device's commands, oldest first, only those
+/// with `status` when it is given. Only the device itself or an admin may list them.
+pub async fn commands(
+    State(w): Shared,
+    Caller(author): Caller,
+    Extension(GrantedScope(scope)): Extension<GrantedScope>,
+    Path(id): Path<String>,
+    Query(q): Query<CommandsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let status = q
+        .status
+        .as_deref()
+        .map(|s| {
+            CommandStatus::parse(s).ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "status {s:?} must be pending, delivered, done, failed or expired"
+                ))
+            })
+        })
+        .transpose()?;
+    let list = blocking(w, move |w| {
+        let state = w.state();
+        own_or_admin(&state.device(&id)?, &author, scope, "list its commands")?;
+        Ok::<_, ApiError>(state.device_commands(&id, status)?)
+    })
+    .await?;
+    let list: Vec<Value> = list.iter().map(writer::command_json).collect();
+    Ok(Json(json!({ "commands": list })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResultBody {
+    status: String,
+    #[serde(default)]
+    result: Option<Value>,
+}
+
+/// `POST /api/devices/{id}/commands/{cid}/result`: the device reports `delivered`, or `done` or
+/// `failed` with a result. A command that is finished or expired answers 409.
+pub async fn command_result(
+    State(w): Shared,
+    Caller(author): Caller,
+    Extension(GrantedScope(scope)): Extension<GrantedScope>,
+    Path((id, cid)): Path<(String, String)>,
+    Json(body): Json<ResultBody>,
+) -> Result<Json<Value>, ApiError> {
+    let status = match CommandStatus::parse(&body.status) {
+        Some(s @ (CommandStatus::Delivered | CommandStatus::Done | CommandStatus::Failed)) => s,
+        _ => {
+            return Err(ApiError::bad_request(format!(
+                "status {:?} must be delivered, done or failed",
+                body.status
+            )));
+        }
+    };
+    let result = body.result.map(|r| r.to_string());
+    if result
+        .as_ref()
+        .is_some_and(|r| r.len() > writer::MAX_COMMAND_PAYLOAD)
+    {
+        return Err(ApiError::bad_request(format!(
+            "the result is larger than {} bytes",
+            writer::MAX_COMMAND_PAYLOAD
+        )));
+    }
+    let command = blocking(w, move |w| {
+        let state = w.state();
+        own_or_admin(
+            &state.device(&id)?,
+            &author,
+            scope,
+            "report on its commands",
+        )?;
+        Ok::<_, ApiError>(state.report_device_command(&id, &cid, status, result.as_deref())?)
+    })
+    .await?;
+    Ok(Json(writer::command_json(&command)))
 }
 
 #[cfg(test)]

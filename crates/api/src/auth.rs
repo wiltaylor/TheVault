@@ -84,6 +84,16 @@ fn is_device_own(path: &str) -> bool {
         .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
 
+/// Whether `path` is `/api/devices/{id}/commands/{cid}/result`.
+fn is_device_command_result(path: &str) -> bool {
+    path.strip_prefix("/api/devices/")
+        .and_then(|rest| rest.strip_suffix("/result"))
+        .and_then(|rest| rest.split_once("/commands/"))
+        .is_some_and(|(id, cid)| {
+            !id.is_empty() && !id.contains('/') && !cid.is_empty() && !cid.contains('/')
+        })
+}
+
 /// The scope a request needs, or `None` for the public endpoints: health, login, device pairing,
 /// which checks the password or a pairing code itself, and the sync handshake, which an app reads
 /// before it pairs (D27).
@@ -109,9 +119,12 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     {
         return Some(Scope::Read);
     }
-    // A device sets its own push endpoint and bases with its `write` token; the handler checks it
-    // is its own.
-    if WRITE_PATHS.iter().any(|p| under(p)) || (method == Method::PUT && is_device_own(path)) {
+    // A device sets its own push endpoint and bases, and reports on its own commands, with its
+    // `write` token; the handler checks it is its own.
+    if WRITE_PATHS.iter().any(|p| under(p))
+        || (method == Method::PUT && is_device_own(path))
+        || (method == Method::POST && is_device_command_result(path))
+    {
         Some(Scope::Write)
     } else {
         Some(Scope::Admin)
@@ -388,6 +401,24 @@ mod tests {
             (Method::GET, "/api/sync/info", None),
             (Method::POST, "/api/sync/info", Some(Scope::Admin)),
             (Method::GET, "/api/sync/changes", Some(Scope::Read)),
+            (Method::GET, "/api/devices/x/commands", Some(Scope::Read)),
+            (
+                Method::POST,
+                "/api/devices/x/commands/c/result",
+                Some(Scope::Write),
+            ),
+            (
+                Method::POST,
+                "/api/devices/x/commands//result",
+                Some(Scope::Admin),
+            ),
+            (Method::GET, "/api/device-files/android", Some(Scope::Read)),
+            (Method::PUT, "/api/device-files/android", Some(Scope::Admin)),
+            (
+                Method::DELETE,
+                "/api/device-files/android",
+                Some(Scope::Admin),
+            ),
             (Method::GET, "/anything", Some(Scope::Read)),
         ];
         for (method, path, want) in cases {

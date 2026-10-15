@@ -1,0 +1,20 @@
+handler "sms_received" {
+  script = "device_messages"
+}
+
+handler "call_ended" {
+  script = "device_calls"
+}
+
+handler "contact_changed" {
+  script   = "device_contacts"
+  function = "changed"
+}
+
+command "send_sms" {
+  script = "device_messages"
+}
+
+command "show_notification" {
+  script = "device_notify"
+}

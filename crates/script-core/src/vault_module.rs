@@ -292,6 +292,24 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
         },
     );
     let vv = v.clone();
+    m.fn_named(
+        "device_command",
+        ["device", "name", "payload"],
+        move |device: String, name: String, payload: DynValue| -> Reply<DynValue> {
+            Fault(host_call(|_, _| {
+                let kind = crate::current_job(|j| j.kind);
+                if !matches!(kind, Some(crate::Kind::After | crate::Kind::Task)) {
+                    return Err(
+                        "vault::device_command works only in after_* handlers and scheduled scripts"
+                            .into(),
+                    );
+                }
+                vv.device_command(&notify_source(), &device, &name, convert::from_dyn(payload))
+                    .map(convert::to_dyn)
+            }))
+        },
+    );
+    let vv = v.clone();
     m.fn_("today", move || -> String { today(vv.now_ms()) });
     m.fn_("now", move || -> i64 { v.now_ms() });
     m.fn_named("log", ["message"], |message: String| -> Fault<()> {
