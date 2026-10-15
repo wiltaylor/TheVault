@@ -103,7 +103,8 @@ aur-release: (require-tool "makepkg") (require-tool "jq")
 # Build the Android debug APK, for aarch64 or x86_64 (the emulator), into apps/android/src-tauri/gen/android/app/build/outputs/apk
 [group('android')]
 android-build target='aarch64': (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
-	cd apps/android && GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --debug --apk --target {{target}}
+	# Debug symbols make the APK about 500 MB; leave them out unless CARGO_PROFILE_DEV_DEBUG/STRIP say otherwise.
+	cd apps/android && CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}" CARGO_PROFILE_DEV_STRIP="${CARGO_PROFILE_DEV_STRIP:-symbols}" GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --debug --apk --target {{target}}
 
 # Run docs/android-manual-checks.md on a headless Android 15 emulator, and write the results to .scratch/emulator/RESULTS.generated.md; THEVAULT_APK tests another APK
 [group('android')]
