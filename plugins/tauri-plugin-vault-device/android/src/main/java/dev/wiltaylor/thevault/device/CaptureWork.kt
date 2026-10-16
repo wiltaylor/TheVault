@@ -61,13 +61,23 @@ object CaptureWork {
         )
     }
 
-    /** The first-run import of [fromMs]..[toMs], in a worker. */
-    fun importHistory(context: Context, fromMs: Long, toMs: Long) {
+    /** The first-run import of every kind over [fromMs]..[toMs], in a worker. */
+    fun importHistory(context: Context, fromMs: Long, toMs: Long) =
+        importHistory(context, DeviceCapture.HISTORY_KINDS, fromMs, toMs)
+
+    /**
+     * Import [kinds] of history from [fromMs] to [toMs], null for no bound, in a worker, as the
+     * first-run import and "Import from phone" in Settings > Devices do (D7). An import already
+     * waiting is replaced; [ImportState] says how it goes.
+     */
+    fun importHistory(context: Context, kinds: List<String>, fromMs: Long?, toMs: Long?) {
+        val request = ImportWorker.request(kinds, fromMs, toMs)
+        ImportState.queued(request)
         WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
             IMPORT,
             ExistingWorkPolicy.REPLACE,
             OneTimeWorkRequestBuilder<ImportWorker>()
-                .setInputData(workDataOf(ImportWorker.FROM to fromMs, ImportWorker.TO to toMs))
+                .setInputData(workDataOf(ImportWorker.REQUEST to request.toString()))
                 .build(),
         )
     }
@@ -135,19 +145,75 @@ class ProviderChangeWorker(context: Context, params: WorkerParameters) : Worker(
     }
 }
 
-/** The first-run import over the date range the user picked (D7). */
+/**
+ * An import of history over the kinds and dates the user picked (D7): at first run, or from
+ * Settings > Devices. The Rust core reads the providers through the device bridge and files each
+ * message and call that has no note yet; [ImportState] holds how it goes, for the page to show.
+ */
 class ImportWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
-    override fun doWork(): Result = try {
-        Device.capture(applicationContext).importHistory(inputData.getLong(FROM, 0), inputData.getLong(TO, 0))
-        Result.success()
-    } catch (e: Exception) {
-        Log.w(TAG, "import failed", e)
-        Result.failure()
+    override fun doWork(): Result {
+        val app = applicationContext
+        val request = inputData.getString(REQUEST) ?: return Result.failure()
+        return try {
+            Device.capture(app).begin()
+            Device.openCore(app)
+            ImportState.started(request)
+            val report = VaultCore.importHistory(request) { ImportState.progress(it) }
+            ImportState.finished(report)
+            if (JSONObject(VaultCore.status()).optInt("pending") > 0) SyncWorker.soon(app)
+            Result.success()
+        } catch (e: Exception) {
+            Log.w(TAG, "import failed", e)
+            ImportState.failed(e.message ?: e.toString())
+            Result.failure()
+        }
     }
 
     companion object {
-        const val FROM = "from"
-        const val TO = "to"
+        const val REQUEST = "request"
+
+        /** The core's import request, `{ kinds, since, until }`, times in milliseconds or null. */
+        fun request(kinds: List<String>, fromMs: Long?, toMs: Long?): JSONObject = JSONObject()
+            .put("kinds", org.json.JSONArray(kinds))
+            .put("since", fromMs ?: JSONObject.NULL)
+            .put("until", toMs ?: JSONObject.NULL)
+    }
+}
+
+/**
+ * How the last import this process started is going, for Settings > Devices to show: `{ running,
+ * request, report, error }`, where `report` is the core's report as it last heard it.
+ */
+object ImportState {
+    @Volatile
+    private var state: JSONObject = JSONObject().put("running", false)
+
+    /** Hears every update too; tests watch the progress through it. */
+    @Volatile
+    var listener: ((JSONObject) -> Unit)? = null
+
+    fun current(): JSONObject = JSONObject(state.toString())
+
+    @Synchronized
+    private fun set(next: JSONObject) {
+        state = next
+        listener?.invoke(current())
+    }
+
+    fun queued(request: JSONObject) = set(JSONObject().put("running", true).put("request", request))
+
+    fun started(request: String) = set(JSONObject().put("running", true).put("request", JSONObject(request)))
+
+    fun progress(report: String) = set(current().put("running", true).put("report", JSONObject(report)))
+
+    fun finished(report: String) = set(current().put("running", false).put("report", JSONObject(report)))
+
+    fun failed(error: String) = set(current().put("running", false).put("error", error))
+
+    @VisibleForTesting
+    fun reset() {
+        state = JSONObject().put("running", false)
+        listener = null
     }
 }
 

@@ -83,6 +83,8 @@ Wait a few seconds after each one, then look in the web app.
 | 32 | Receive an RCS message in Google Messages, with the conversation not open on screen. | A `message` note with the sender's name, linked to the person of that name, and `partial` set. |
 | 33 | Receive a call and answer it. Then miss a call. Then place a call. | Three `call` notes, with `direction` `in`, `missed` and `out`, linked to the person holding the number. The missed call has `duration` 0. |
 | 34 | Restart the phone, then open the app. | No message or call from checks 29 to 33 appears twice. |
+| 51 | Delete the `message` note of the SMS from check 29 in the web app. In the app, open Settings > Devices, and under **This device** choose **SMS and MMS messages**, **Last 7 days**, then tap **Import from phone**. | Progress shows per kind, then "Import finished." with how many were found, how many new notes were made and how many were already in the vault. The deleted SMS has a `message` note again, exactly one. No other message appears twice. |
+| 52 | Under **This device**, turn off the SMS permission in Android's App info first, then tap **Import from phone** with messages chosen. Then tap **Check for new messages and calls now**. | The import does not start. The page says Android has not given TheVault READ_SMS and offers **Open the permission step**, which opens the capture setup. The check reports how many new items it found. |
 
 ## Contacts
 
@@ -137,3 +139,4 @@ Every check in S7 of the implementation specification, and the checks that cover
 | Onboarding, including Allow restricted settings | 1 to 6, 24 to 28 |
 | A UnifiedPush notification shown and cleared from the web app within seconds | 16 to 20 |
 | Offline capture synced later | 9, 15, 40, 41 |
+| Import from the phone at any time, recreating a deleted note once | 51, 52 |

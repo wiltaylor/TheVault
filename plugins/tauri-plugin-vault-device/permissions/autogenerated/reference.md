@@ -1,11 +1,14 @@
 ## Default Permission
 
-Lets the webview open the capture setup screen and read the capture status.
+Lets the webview open the capture setup screen, read the capture status, import the phone's history and check for new messages and calls.
 
 #### This default permission set includes the following:
 
 - `allow-open-capture-setup`
 - `allow-capture-status`
+- `allow-import-history`
+- `allow-import-status`
+- `allow-check-now`
 
 ## Permission Table
 
@@ -38,6 +41,84 @@ Enables the capture_status command without any pre-configured scope.
 <td>
 
 Denies the capture_status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`vault-device:allow-check-now`
+
+</td>
+<td>
+
+Enables the check_now command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`vault-device:deny-check-now`
+
+</td>
+<td>
+
+Denies the check_now command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`vault-device:allow-import-history`
+
+</td>
+<td>
+
+Enables the import_history command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`vault-device:deny-import-history`
+
+</td>
+<td>
+
+Denies the import_history command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`vault-device:allow-import-status`
+
+</td>
+<td>
+
+Enables the import_status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`vault-device:deny-import-status`
+
+</td>
+<td>
+
+Denies the import_status command without any pre-configured scope.
 
 </td>
 </tr>

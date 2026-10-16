@@ -307,6 +307,42 @@
           "markdownDescription": "Denies the capture_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the check_now command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-now",
+          "markdownDescription": "Enables the check_now command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_now command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-now",
+          "markdownDescription": "Denies the check_now command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-history",
+          "markdownDescription": "Enables the import_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-history",
+          "markdownDescription": "Denies the import_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-status",
+          "markdownDescription": "Enables the import_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-status",
+          "markdownDescription": "Denies the import_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_capture_setup command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-capture-setup",
@@ -319,10 +355,10 @@
           "markdownDescription": "Denies the open_capture_setup command without any pre-configured scope."
         },
         {
-          "description": "Lets the webview open the capture setup screen and read the capture status.\n#### This default permission set includes:\n\n- `allow-open-capture-setup`\n- `allow-capture-status`",
+          "description": "Lets the webview open the capture setup screen, read the capture status, import the phone's history and check for new messages and calls.\n#### This default permission set includes:\n\n- `allow-open-capture-setup`\n- `allow-capture-status`\n- `allow-import-history`\n- `allow-import-status`\n- `allow-check-now`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Lets the webview open the capture setup screen and read the capture status.\n#### This default permission set includes:\n\n- `allow-open-capture-setup`\n- `allow-capture-status`"
+          "markdownDescription": "Lets the webview open the capture setup screen, read the capture status, import the phone's history and check for new messages and calls.\n#### This default permission set includes:\n\n- `allow-open-capture-setup`\n- `allow-capture-status`\n- `allow-import-history`\n- `allow-import-status`\n- `allow-check-now`"
         }
       ]
     }

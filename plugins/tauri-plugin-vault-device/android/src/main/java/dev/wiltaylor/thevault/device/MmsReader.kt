@@ -31,8 +31,18 @@ class MmsReader(
 ) {
     private val columns = arrayOf(Mms._ID, Mms.THREAD_ID, Mms.DATE, Mms.DATE_SENT, Mms.SUBJECT, Mms.MESSAGE_BOX)
 
-    /** Received MMS with a key above [after], oldest first. With [range], only those within it (ms). */
-    fun since(after: Long, range: LongRange? = null, atMost: Long = Long.MAX_VALUE): List<Captured> {
+    /**
+     * Received MMS with a key above [after], oldest first, at most [limit] of them. With [range],
+     * only those within it (ms). An MMS [known] says already has a note comes as its `device_ref`
+     * alone, marked [Captured.known], so its parts are not read or stored again.
+     */
+    fun since(
+        after: Long,
+        range: LongRange? = null,
+        atMost: Long = Long.MAX_VALUE,
+        limit: Int = Int.MAX_VALUE,
+        known: (String) -> Boolean = { false },
+    ): List<Captured> {
         val where = StringBuilder("${Mms._ID} > ? AND ${Mms._ID} <= ? AND ${Mms.MESSAGE_BOX} = ${Mms.MESSAGE_BOX_INBOX}")
         val args = mutableListOf(after.toString(), atMost.toString())
         if (range != null) {
@@ -40,9 +50,12 @@ class MmsReader(
             where.append(" AND ${Mms.DATE} >= ? AND ${Mms.DATE} <= ?")
             args += listOf((range.first / 1000).toString(), (range.last / 1000).toString())
         }
-        return resolver.rows(Mms.CONTENT_URI, columns, where.toString(), args.toTypedArray(), "${Mms._ID} ASC") { c ->
+        return resolver.rows(Mms.CONTENT_URI, columns, where.toString(), args.toTypedArray(), "${Mms._ID} ASC", limit) { c ->
             val id = c.long(Mms._ID)
             val date = c.long(Mms.DATE) * 1000
+            if (known(PREFIX + id)) {
+                return@rows Captured("mms_received", JSONObject().put("device_ref", PREFIX + id), id, date, known = true)
+            }
             val sent = c.long(Mms.DATE_SENT).takeIf { it > 0 }?.times(1000) ?: date
             Captured("mms_received", payload(id, c.long(Mms.THREAD_ID), c.string(Mms.SUBJECT), sent), id, date)
         }

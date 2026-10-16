@@ -3031,6 +3031,38 @@ button.link {
   flex: 1;
 }
 
+/* Import from phone: a phone's card, and "This device" in the Android app. */
+
+.device-import {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  margin: 0.75rem 0 0;
+  padding: 0.5rem 0.75rem;
+}
+
+.this-device-import {
+  max-width: 48rem;
+  margin: 0 0 1.5rem;
+}
+
+.this-device-import h2 {
+  margin: 0.25rem 0;
+  font-size: 1.25rem;
+}
+
+.import-choices .form-grid {
+  margin: 0.5rem 0;
+}
+
+.import-report {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+
+.import-permissions {
+  margin: 0.5rem 0;
+}
+
 /* Get the apps: Settings > Devices and the public /apps page. */
 
 .client-downloads {

@@ -9,8 +9,9 @@
 //! commands (D17). [`jni`] holds those entry points and [`core`] the core they share with the
 //! app's webview.
 //!
-//! The commands here are for the webview: `open_capture_setup` and `capture_status`. They
-//! forward to the Kotlin plugin, and fail anywhere but Android.
+//! The commands here are for the webview: `open_capture_setup`, `capture_status`, and Settings >
+//! Devices' "This device" actions `import_history`, `import_status` and `check_now`. They forward
+//! to the Kotlin plugin, and fail anywhere but Android.
 
 use serde_json::{Value as Json, json};
 use tauri::plugin::{Builder, TauriPlugin};
@@ -67,6 +68,37 @@ async fn capture_status<R: Runtime>(app: AppHandle<R>) -> Result<Json, String> {
     run_kotlin(&app, "captureStatus", json!({}))
 }
 
+/// Start importing the phone's history in a background worker (D7): `kinds` of `sms`, `mms`,
+/// `calls` and `contacts`, from `since` to `until`, RFC 3339 times or null for no bound. Answers
+/// `{ started, missing }`: when a permission a kind needs is not granted, nothing starts and
+/// `missing` lists `[{ kind, permission }]`, so the page can offer the permission step.
+#[tauri::command]
+async fn import_history<R: Runtime>(
+    app: AppHandle<R>,
+    kinds: Vec<String>,
+    since: Option<String>,
+    until: Option<String>,
+) -> Result<Json, String> {
+    run_kotlin(
+        &app,
+        "importHistory",
+        json!({ "kinds": kinds, "since": since, "until": until }),
+    )
+}
+
+/// `{ running, report, error }`: the import this process last started, or `{ running: false }`.
+#[tauri::command]
+async fn import_status<R: Runtime>(app: AppHandle<R>) -> Result<Json, String> {
+    run_kotlin(&app, "importStatus", json!({}))
+}
+
+/// Read every provider from where capture stopped, now, rather than at the next hourly catch-up.
+/// Answers `{ captured, missing }`: how many new items it found, and the permissions not granted.
+#[tauri::command]
+async fn check_now<R: Runtime>(app: AppHandle<R>) -> Result<Json, String> {
+    run_kotlin(&app, "checkNow", json!({}))
+}
+
 /// Why the core failed to open in the plugin's setup, managed instead of the core so the app can
 /// show it.
 #[derive(Debug, Clone)]
@@ -76,7 +108,13 @@ pub struct CoreFailure(pub String);
 /// in the app's data folder, where the Kotlin side opens it too.
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("vault-device")
-        .invoke_handler(tauri::generate_handler![open_capture_setup, capture_status])
+        .invoke_handler(tauri::generate_handler![
+            open_capture_setup,
+            capture_status,
+            import_history,
+            import_status,
+            check_now
+        ])
         .setup(|app, api| {
             // Android's data folder is the app's own (`Context.getDataDir`); elsewhere it is
             // shared, so the app's folder inside it.

@@ -51,6 +51,27 @@ pub trait DeviceData: Send + Sync {
 
     /// Show a notification that opens note `note` when tapped, or the app when `note` is empty.
     fn show_notification(&self, title: &str, body: &str, note: &str) -> Result<(), String>;
+
+    /// One page of what the phone holds of `kind` (`sms`, `mms`, `calls` or `contacts`), as the
+    /// device events capture would have made of it, for an import of history. Not a `device`
+    /// module function: the device runtime's import calls it.
+    ///
+    /// `request` is `{ kind, since, until, after, limit }`: `since` and `until` bound the item's
+    /// time in milliseconds, either may be null; `after` is the key the last page ended at, null
+    /// for the first page.
+    ///
+    /// The answer is `{ events, next, missing_permission }`. `events` is `[{ event, data, at }]`,
+    /// oldest first, where `at` is the item's time in milliseconds and `data` the event payload.
+    /// `next` is the key to ask for the next page with, or null on the last page.
+    /// `missing_permission` names the Android permission the kind needs when it is not granted,
+    /// and `events` is then empty. An MMS that already has a note may come back as its
+    /// `device_ref` alone, so its parts are never stored a second time.
+    ///
+    /// A device that cannot read its history refuses.
+    fn history(&self, request: &Json) -> Result<Json, String> {
+        let _ = request;
+        Err("this device cannot import its history".into())
+    }
 }
 
 /// The device's switches for what changes the phone or reaches other people (D23).

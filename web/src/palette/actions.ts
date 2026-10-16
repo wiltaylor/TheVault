@@ -104,8 +104,11 @@ export function noteActions(note: ActiveNote | null): Action[] {
   return [action];
 }
 
-/** The actions that do not depend on the vault's types. `phone` drops what a phone cannot do. */
-export function generalActions(opts: { phone: boolean; dark: boolean }): Action[] {
+/**
+ * The actions that do not depend on the vault's types. `phone` drops what a phone cannot do;
+ * `androidApp` adds what only the Android app can do, on the phone it runs on.
+ */
+export function generalActions(opts: { phone: boolean; dark: boolean; androidApp?: boolean }): Action[] {
   const pane = () => M.activePane(workspace());
   const out: Action[] = [
     {
@@ -124,6 +127,16 @@ export function generalActions(opts: { phone: boolean; dark: boolean }): Action[
     { id: "archive", section: "Go to", label: "Go to Archive", keywords: ["Archived notes", "Unarchive"], icon: { glyph: "archive" }, href: "/archive" },
     { id: "assets", section: "Go to", label: "Go to Assets", keywords: ["Files", "Uploads", "Images"], icon: { glyph: "files" }, href: "/assets" },
   ];
+  if (opts.androidApp) {
+    out.push({
+      id: "device:import",
+      section: "Settings",
+      label: "Import messages and calls",
+      keywords: ["Import from phone", "Import SMS", "Call log", "Re-import", "Check for new messages"],
+      icon: { glyph: "inbox" },
+      href: "/settings/devices#this-device",
+    });
+  }
   for (const [href, name, keywords] of SETTINGS) {
     out.push({
       id: `settings:${href}`,

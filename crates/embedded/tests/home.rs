@@ -73,9 +73,14 @@ struct Device {
 impl Device {
     /// A device paired with `server` under `name`, its embedded server told so.
     fn pair(server: &TestServer, name: &str) -> Device {
+        Device::pair_as(server, name, "linux")
+    }
+
+    /// [`Device::pair`] as a device of `platform`.
+    fn pair_as(server: &TestServer, name: &str, platform: &str) -> Device {
         let out: Value = Client::new()
             .post(server.url("/api/devices/pair"))
-            .json(&json!({ "password": PASSWORD, "name": name, "platform": "linux" }))
+            .json(&json!({ "password": PASSWORD, "name": name, "platform": platform }))
             .send()
             .unwrap()
             .json()
@@ -466,4 +471,64 @@ fn the_history_is_the_servers_and_a_server_version_restores_as_a_local_write() {
     );
     let refused = device.call("POST", "/api/tasks/nothing/run", None, 403);
     assert_eq!(refused["error"], "needs_web_app", "{refused}");
+}
+
+/// The default device file and scripts, as the starter vault holds them, beside the test type.
+fn seed_devices(vault: &std::path::Path) {
+    seed(vault);
+    std::fs::create_dir_all(vault.join("devices")).unwrap();
+    std::fs::create_dir_all(vault.join("scripts")).unwrap();
+    std::fs::write(
+        vault.join("devices/android.wcl"),
+        writer::DEFAULT_ANDROID_DEVICE_FILE,
+    )
+    .unwrap();
+    for (name, source) in writer::DEFAULT_DEVICE_SCRIPTS {
+        std::fs::write(vault.join(format!("scripts/{name}.ws")), source).unwrap();
+    }
+}
+
+#[test]
+fn a_phone_asks_itself_to_import_through_the_home_server() {
+    let server = TestServer::start_seeded(seed_devices);
+    let admin = Admin::of(&server);
+    let phone = Device::pair_as(&server, "Pixel", "android");
+    let tablet = Device::pair_as(&server, "Tablet", "android");
+    let own = format!("/api/devices/{}/commands", phone.remote.device_id);
+    let ask = json!({ "name": "import_history", "payload": { "kinds": ["sms"] } });
+
+    // Not enabled yet: the home server's refusal comes back as it is.
+    let off = phone.call("POST", &own, Some(ask.clone()), 400);
+    assert!(
+        off["message"].as_str().unwrap().contains("is not enabled"),
+        "{off}"
+    );
+
+    for d in [&phone, &tablet] {
+        admin.call(
+            "PATCH",
+            &format!("/api/devices/{}", d.remote.device_id),
+            Some(json!({ "settings": { "commands": ["import_history", "show_notification"] } })),
+            200,
+        );
+    }
+    let queued = phone.call("POST", &own, Some(ask.clone()), 201);
+    assert_eq!(queued["name"], "import_history", "{queued}");
+    let on_server = admin.call("GET", &own, None, 200);
+    assert_eq!(
+        ids(&on_server, "commands"),
+        [queued["id"].as_str().unwrap()]
+    );
+    assert_eq!(on_server["commands"][0]["payload"], ask["payload"]);
+
+    // Another device, or another command, needs the web app.
+    let other = format!("/api/devices/{}/commands", tablet.remote.device_id);
+    phone.call("POST", &other, Some(ask), 403);
+    phone.call(
+        "POST",
+        &own,
+        Some(json!({ "name": "show_notification", "payload": {} })),
+        403,
+    );
+    assert!(ids(&admin.call("GET", &other, None, 200), "commands").is_empty());
 }

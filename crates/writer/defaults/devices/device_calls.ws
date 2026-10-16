@@ -25,7 +25,7 @@ fn call_ended(event: Value) -> Result[(), string] {
     let data = event.get("data").unwrap()
     let device_ref = text_of(data, "device_ref")
     if device_ref != "" {
-        if first("from call where device_ref == " + quoted(device_ref) + " limit 1")?.is_some() {
+        if first("from call include archived where device_ref == " + quoted(device_ref) + " limit 1")?.is_some() {
             return Ok(())
         }
     }

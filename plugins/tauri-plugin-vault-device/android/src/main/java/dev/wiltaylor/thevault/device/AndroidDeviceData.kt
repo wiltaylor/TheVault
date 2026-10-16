@@ -18,7 +18,11 @@ import org.json.JSONObject
  * switches before it gets here; Android enforces its permissions, and a missing one comes back as
  * an error the script receives.
  */
-class AndroidDeviceData(private val context: Context, private val capture: DeviceCapture) : DeviceBridge {
+class AndroidDeviceData(
+    private val context: Context,
+    private val capture: DeviceCapture,
+    private val noted: (String) -> Boolean = { VaultCore.noted(it) == "true" },
+) : DeviceBridge {
     override fun call(method: String, args: String): String = try {
         val a = JSONObject(args)
         val ok: Any = when (method) {
@@ -33,6 +37,7 @@ class AndroidDeviceData(private val context: Context, private val capture: Devic
             "show_notification" -> JSONObject().also {
                 showNotification(a.optString("title"), a.optString("body"), a.optString("note"))
             }
+            "history" -> history(a)
             else -> throw IllegalArgumentException("the device has no $method")
         }
         JSONObject().put("ok", ok).toString()
@@ -43,6 +48,24 @@ class AndroidDeviceData(private val context: Context, private val capture: Devic
     }
 
     private fun err(message: String) = JSONObject().put("err", message).toString()
+
+    /**
+     * One page of an import (`DeviceData::history`): `{ kind, since, until, after, limit }` in,
+     * `{ events, next, missing_permission }` out. A kind whose permission Android has not granted
+     * answers nothing but the permission, so the import can say what to allow.
+     */
+    private fun history(a: JSONObject): JSONObject {
+        val kind = a.getString("kind")
+        val permission = DeviceCapture.HISTORY_PERMISSIONS[kind]
+            ?: throw IllegalArgumentException("$kind cannot be imported")
+        if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            return DeviceCapture.HistoryPage(emptyList(), null, permission).toJson()
+        }
+        fun time(name: String, otherwise: Long) = if (a.isNull(name)) otherwise else a.getLong(name)
+        val range = time("since", 0L)..time("until", Long.MAX_VALUE)
+        val after = if (a.isNull("after")) null else a.getLong("after")
+        return capture.history(kind, range, after, a.optInt("limit", DeviceCapture.HISTORY_PAGE), noted).toJson()
+    }
 
     private fun sendSms(to: String, body: String): JSONObject {
         if (context.checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {

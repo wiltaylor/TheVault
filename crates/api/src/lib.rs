@@ -248,6 +248,7 @@ fn build() -> Built {
         .get("/api/sync/info", sync::info)
         .get("/api/sync/changes", sync::changes)
         .get("/api/devices/{id}/commands", devices::commands)
+        .post("/api/devices/{id}/commands", devices::queue_command)
         .post(
             "/api/devices/{id}/commands/{cid}/result",
             devices::command_result,

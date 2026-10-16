@@ -20,15 +20,18 @@ class CallLogReader(
     private val captured = "${Calls.TYPE} IN (${Calls.INCOMING_TYPE}, ${Calls.OUTGOING_TYPE}, " +
         "${Calls.MISSED_TYPE}, ${Calls.REJECTED_TYPE}, ${Calls.ANSWERED_EXTERNALLY_TYPE})"
 
-    /** Calls with a key above [after], oldest first. With [range], only those started within it. */
-    fun since(after: Long, range: LongRange? = null, atMost: Long = Long.MAX_VALUE): List<Captured> {
+    /**
+     * Calls with a key above [after], oldest first, at most [limit] of them. With [range], only
+     * those started within it.
+     */
+    fun since(after: Long, range: LongRange? = null, atMost: Long = Long.MAX_VALUE, limit: Int = Int.MAX_VALUE): List<Captured> {
         val where = StringBuilder("${Calls._ID} > ? AND ${Calls._ID} <= ? AND $captured")
         val args = mutableListOf(after.toString(), atMost.toString())
         if (range != null) {
             where.append(" AND ${Calls.DATE} >= ? AND ${Calls.DATE} <= ?")
             args += listOf(range.first.toString(), range.last.toString())
         }
-        return resolver.rows(Calls.CONTENT_URI, columns, where.toString(), args.toTypedArray(), "${Calls._ID} ASC") { c ->
+        return resolver.rows(Calls.CONTENT_URI, columns, where.toString(), args.toTypedArray(), "${Calls._ID} ASC", limit) { c ->
             Captured("call_ended", payload(c), c.long(Calls._ID), c.long(Calls.DATE))
         }
     }

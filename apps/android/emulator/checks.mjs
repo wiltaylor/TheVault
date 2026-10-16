@@ -969,6 +969,85 @@ async function main() {
     return [ok ? "pass" : "fail", `in: ${desc(inCall)}; missed: ${desc(missed)}; out (to ${OUTGOING}, a number no person holds): ${desc(outCall)}.`, [outShot]];
   });
 
+  // 51, 52: import from the phone, through Settings > Devices > This device in the app.
+  const KNOWN_TEXT = "Hello from a known contact";
+  /** The app's Settings > Devices page, scrolled to This device. */
+  async function thisDevice() {
+    wakeAndUnlock();
+    openApp();
+    const p = await page();
+    await p.goto("http://vault.localhost/settings/devices#this-device");
+    const section = p.getByRole("region", { name: "This device" });
+    await section.waitFor({ timeout: 30_000 });
+    return { p, section };
+  }
+  await check(51, async () => {
+    const [sms] = await notesOf("message", (f) => JSON.stringify(f).includes(KNOWN_TEXT));
+    if (!sms) throw new Error("no message note from check 29 to delete");
+    const before = (await rows("from message")).length;
+    await srv.del(`/api/notes/${sms.id}?base_version=${encodeURIComponent((await note(sms.id)).version)}`);
+    // The deletion reaches the phone before it imports, or the phone's copy would still count.
+    await foreground();
+    await until("the deletion on the phone", async () => (await local("GET", `/api/notes/${sms.id}`)).status === 404, { timeout: 60_000 });
+    const { p, section } = await thisDevice();
+    const choose = async (label, on) => {
+      const box = section.getByLabel(label, { exact: true });
+      if ((await box.isChecked()) !== on) await box.click();
+    };
+    await choose("SMS and MMS messages", true);
+    await choose("Calls", false);
+    await choose("Contacts", false);
+    await section.getByLabel("Dates").selectOption("7d");
+    const t0 = Date.now();
+    await section.getByRole("button", { name: "Import from phone" }).click();
+    const progress = section.getByRole("status", { name: "Import progress" });
+    await progress.getByText("Import finished.").waitFor({ timeout: 120_000 });
+    const summary = (await progress.innerText()).replace(/\s+/g, " ");
+    const shot = snap("51-import-finished");
+    const back = await capturedUntil("the deleted SMS's note again", async () => {
+      const found = await notesOf("message", (f) => JSON.stringify(f).includes(KNOWN_TEXT));
+      return found.length > 0 && found;
+    });
+    await sleep(10_000);
+    const again = await notesOf("message", (f) => JSON.stringify(f).includes(KNOWN_TEXT));
+    // The range also holds the SMS sent before pairing, which only an import brings in; nothing
+    // may be filed twice.
+    const all = await notesOf("message");
+    const byRef = new Map();
+    for (const n of all) if (n.note.fields.device_ref) byRef.set(n.note.fields.device_ref, (byRef.get(n.note.fields.device_ref) ?? 0) + 1);
+    const twice = [...byRef].filter(([, c]) => c > 1).map(([r]) => r);
+    const ok = again.length === 1 && again[0].id !== sms.id && twice.length === 0 && /SMS: \d+ found, [1-9]\d* new notes?/.test(summary);
+    await p.goto("http://vault.localhost/");
+    return [ok ? "pass" : "fail", `Deleted message ${sms.id}; the import took ${elapsed(t0)} and said "${summary}". The server now holds ${again.length} note(s) with that SMS (${back.map((n) => n.id).join(", ")}), ${all.length} message notes in all (${before} before the delete), and ${twice.length ? `these refs twice: ${twice.join(", ")}` : "no device_ref twice"}.`, [shot]];
+  });
+
+  await check(52, async () => {
+    // Revoking a permission ends the app's process; the next open starts it again.
+    shell(`pm revoke ${PKG} android.permission.READ_SMS`);
+    try {
+      const { p, section } = await thisDevice();
+      const box = section.getByLabel("SMS and MMS messages", { exact: true });
+      if (!(await box.isChecked())) await box.click();
+      await section.getByRole("button", { name: "Import from phone" }).click();
+      const alert = section.getByText("Android has not given TheVault READ_SMS");
+      await alert.waitFor({ timeout: 20_000 });
+      const offered = await section.getByRole("button", { name: "Open the permission step" }).isVisible();
+      const shot = snap("52-permission-missing");
+      await section.getByRole("button", { name: "Check for new messages and calls now" }).click();
+      const checked = await section.getByText(/^Found \d+ new items?\.$/).first().innerText({ timeout: 30_000 });
+      await section.getByRole("button", { name: "Open the permission step" }).click();
+      await sleep(3_000);
+      const setup = L.find(/^Messages$/) || L.find(/^Allow$/);
+      const setupShot = snap("52-permission-step");
+      shell("input keyevent KEYCODE_BACK");
+      await p.goto("http://vault.localhost/").catch(() => {});
+      const ok = offered && Boolean(setup) && Boolean(checked);
+      return [ok ? "pass" : "fail", `With READ_SMS revoked the import did not start and the page said so; "Open the permission step" ${offered ? "was offered" : "was missing"} and ${setup ? "opened the capture setup" : "did not open the capture setup"}. The check said "${checked}".`, [shot, setupShot]];
+    } finally {
+      shell(`pm grant ${PKG} android.permission.READ_SMS`);
+    }
+  });
+
   // 35 to 39, 44, 45: contacts, with the app open.
   openApp();
   await sleep(2_000);

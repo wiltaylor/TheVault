@@ -9,7 +9,8 @@
 //! `/api/device-files/{platform}` reads and writes `devices/<platform>.wcl`, the device events'
 //! handlers and the commands devices of the platform accept (D5). A device fetches the commands
 //! server scripts queued for it from `GET /api/devices/{id}/commands?status=pending` and reports
-//! on each at `POST /api/devices/{id}/commands/{cid}/result` (D22).
+//! on each at `POST /api/devices/{id}/commands/{cid}/result` (D22). Settings > Devices queues one
+//! itself at `POST /api/devices/{id}/commands`, as "Import from phone" does.
 
 use std::sync::Arc;
 
@@ -591,6 +592,48 @@ pub async fn commands(
     .await?;
     let list: Vec<Value> = list.iter().map(writer::command_json).collect();
     Ok(Json(json!({ "commands": list })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueueBody {
+    name: String,
+    #[serde(default)]
+    payload: Option<Value>,
+}
+
+/// The command a device may queue for itself with its own `write` token, from the app's Settings >
+/// Devices: asking itself to import its history. Every other command needs an admin.
+const SELF_QUEUED_COMMANDS: [&str; 1] = ["import_history"];
+
+/// `POST /api/devices/{id}/commands`: queue command `name` with `payload` for the device, from
+/// Settings > Devices, such as asking a phone to import its history. Refused, as a script's
+/// `vault::device_command` is, unless the device's platform file declares the command and the
+/// device has it enabled. An admin may queue any command; a device, through its app, only
+/// `import_history`, and only for itself. Answers 201 with the command.
+pub async fn queue_command(
+    State(w): Shared,
+    Caller(author): Caller,
+    Extension(GrantedScope(scope)): Extension<GrantedScope>,
+    Path(id): Path<String>,
+    Json(body): Json<QueueBody>,
+) -> Result<Response, ApiError> {
+    let command = blocking(w, move |w| {
+        // The device by its id only: a name in the path is not found.
+        let device = w.state().device(&id)?;
+        if !scope.allows(Scope::Admin) && !SELF_QUEUED_COMMANDS.contains(&body.name.as_str()) {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                format!("only an admin may queue command {:?}", body.name),
+            ));
+        }
+        own_or_admin(&device, &author, scope, "queue its commands")?;
+        let payload = body.payload.unwrap_or_else(|| json!({}));
+        Ok::<_, ApiError>(w.device_command(&id, &body.name, &payload, "settings")?)
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(writer::command_json(&command))).into_response())
 }
 
 #[derive(Deserialize)]

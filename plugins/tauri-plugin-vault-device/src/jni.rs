@@ -9,13 +9,14 @@
 //! the same way rather than unwinding into the JVM.
 //!
 //! The other way, the device module reaches the phone through [`JniDeviceData`], which calls the
-//! Kotlin `DeviceBridge` passed to `VaultCore.openDevice`.
+//! Kotlin `DeviceBridge` passed to `VaultCore.openDevice`, including the pages of history an
+//! import reads (`history`).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::Arc;
 
-use embedded::device::{DeviceData, QueuedEvent};
+use embedded::device::{DeviceData, ImportReport, QueuedEvent};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString};
 use jni::sys::{jboolean, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
@@ -233,6 +234,59 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_runCommands<
     _class: JClass<'local>,
 ) -> jstring {
     answer(&mut env, |_| Ok(Some(core()?.run_commands()?.to_string())))
+}
+
+/// `VaultCore.importHistory(request: String, progress: ImportProgress?): String`: import the
+/// phone's history as `request` says, `{ kinds, since, until }` as JSON ([`Core::import_history`]).
+/// `progress.update(report)` hears the report as JSON as it goes, on the calling thread. Answers
+/// the final report as JSON. It blocks for the whole import: call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_importHistory<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    request: JString<'local>,
+    progress: JObject<'local>,
+) -> jstring {
+    answer(&mut env, |env| {
+        let request: Json = serde_json::from_str(&required(env, &request, "request")?)?;
+        let core = core()?;
+        let mut hear = |r: &ImportReport| {
+            if progress.is_null() {
+                return;
+            }
+            let Ok(text) = env.new_string(r.to_json().to_string()) else {
+                return;
+            };
+            let _ = env.call_method(
+                &progress,
+                "update",
+                "(Ljava/lang/String;)V",
+                &[(&text).into()],
+            );
+            // A listener that threw is not the import's problem.
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+            }
+            let _ = env.delete_local_ref(text);
+        };
+        let report = core.import_history(&request, &mut hear)?;
+        Ok(Some(report.to_json().to_string()))
+    })
+}
+
+/// `VaultCore.noted(deviceRef: String): String`: `"true"` when the vault holds the `message` or
+/// `call` note of `deviceRef`, archived or not, else `"false"`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_noted<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    device_ref: JString<'local>,
+) -> jstring {
+    answer(&mut env, |env| {
+        let device_ref = required(env, &device_ref, "deviceRef")?;
+        Ok(Some(core()?.noted(&device_ref)?.to_string()))
+    })
 }
 
 /// A queued event as Kotlin reads it, with its payload when `data` is set.
@@ -491,6 +545,10 @@ impl DeviceData for JniDeviceData {
             json!({ "title": title, "body": body, "note": note }),
         )
         .map(|_| ())
+    }
+
+    fn history(&self, request: &Json) -> Result<Json, String> {
+        self.call("history", request.clone())
     }
 }
 

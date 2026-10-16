@@ -18,15 +18,18 @@ class SmsReader(
     private val columns = arrayOf(Sms._ID, Sms.THREAD_ID, Sms.ADDRESS, Sms.BODY, Sms.DATE, Sms.DATE_SENT, Sms.TYPE)
     private val captured = "${Sms.TYPE} IN (${Sms.MESSAGE_TYPE_INBOX}, ${Sms.MESSAGE_TYPE_SENT})"
 
-    /** Messages with a key above [after], oldest first. With [range], only those sent within it. */
-    fun since(after: Long, range: LongRange? = null, atMost: Long = Long.MAX_VALUE): List<Captured> {
+    /**
+     * Messages with a key above [after], oldest first, at most [limit] of them. With [range], only
+     * those sent within it.
+     */
+    fun since(after: Long, range: LongRange? = null, atMost: Long = Long.MAX_VALUE, limit: Int = Int.MAX_VALUE): List<Captured> {
         val where = StringBuilder("${Sms._ID} > ? AND ${Sms._ID} <= ? AND $captured")
         val args = mutableListOf(after.toString(), atMost.toString())
         if (range != null) {
             where.append(" AND ${Sms.DATE} >= ? AND ${Sms.DATE} <= ?")
             args += listOf(range.first.toString(), range.last.toString())
         }
-        return resolver.rows(Sms.CONTENT_URI, columns, where.toString(), args.toTypedArray(), "${Sms._ID} ASC") { c ->
+        return resolver.rows(Sms.CONTENT_URI, columns, where.toString(), args.toTypedArray(), "${Sms._ID} ASC", limit) { c ->
             val (event, data) = payload(c)
             Captured(event, data, c.long(Sms._ID), c.long(Sms.DATE))
         }

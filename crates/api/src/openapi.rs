@@ -364,6 +364,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
+        "/api/devices/{id}/commands",
+        "Queue a command the device's platform file declares and the device has enabled, from Settings > Devices",
+    ),
+    (
+        "POST",
         "/api/devices/{id}/commands/{cid}/result",
         "Report a command delivered, or done or failed with a result",
     ),

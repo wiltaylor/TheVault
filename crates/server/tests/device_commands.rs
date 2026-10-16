@@ -221,7 +221,8 @@ fn device_files_round_trip_and_reject_unknown_events_and_commands() {
             "send_sms",
             "upsert_contact",
             "delete_contact",
-            "show_notification"
+            "show_notification",
+            "import_history"
         ])
     );
     send(api.admin("GET", "/api/device-files/android"), 404);
@@ -678,4 +679,133 @@ fn a_person_saved_on_the_server_queues_upsert_contact_for_each_phone_without_its
             "{commands:?}"
         );
     }
+}
+
+#[test]
+fn settings_queues_import_history_only_when_declared_and_enabled_and_sees_its_progress() {
+    // No device file: nothing is declared.
+    let bare = Api::start();
+    let (pixel, _) = bare.pair("Pixel");
+    let path = format!("/api/devices/{pixel}/commands");
+    let refused = send(
+        bare.admin("POST", &path)
+            .json(&json!({ "name": "import_history", "payload": { "kinds": ["sms"] } })),
+        400,
+    );
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("accepts no commands"),
+        "{refused}"
+    );
+
+    let api = Api::start_seeded(seed_defaults);
+    let (pixel, phone) = api.pair("Pixel");
+    let path = format!("/api/devices/{pixel}/commands");
+    let ask = json!({
+        "name": "import_history",
+        "payload": { "kinds": ["sms", "calls"], "since": "2026-10-01T00:00:00Z", "until": null },
+    });
+
+    // Declared by the default file, but not enabled for this phone.
+    let off = send(api.admin("POST", &path).json(&ask), 400);
+    assert!(
+        off["message"].as_str().unwrap().contains("is not enabled"),
+        "{off}"
+    );
+    // A command the file does not declare.
+    api.settings(&pixel, json!({ "commands": ["import_history"] }));
+    let undeclared = send(
+        api.admin("POST", &path)
+            .json(&json!({ "name": "ring", "payload": {} })),
+        400,
+    );
+    assert!(
+        undeclared["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not declare it")
+    );
+    // A phone's own token queues nothing but an import, and only for itself.
+    api.settings(
+        &pixel,
+        json!({ "commands": ["import_history", "show_notification"] }),
+    );
+    let other = send(
+        api.req(&phone, "POST", &path)
+            .json(&json!({ "name": "show_notification", "payload": {} })),
+        403,
+    );
+    assert!(other["message"].as_str().unwrap().contains("only an admin"));
+    let (tablet, _) = api.pair("Tablet");
+    api.settings(&tablet, json!({ "commands": ["import_history"] }));
+    send(
+        api.req(&phone, "POST", &format!("/api/devices/{tablet}/commands"))
+            .json(&ask),
+        403,
+    );
+    // An unknown device, and a device named rather than given by id.
+    send(
+        api.admin("POST", "/api/devices/nope/commands").json(&ask),
+        404,
+    );
+    send(
+        api.admin("POST", "/api/devices/Pixel/commands").json(&ask),
+        404,
+    );
+
+    let queued = send(api.admin("POST", &path).json(&ask), 201);
+    assert_eq!(queued["name"], "import_history");
+    assert_eq!(queued["status"], "pending");
+    assert_eq!(queued["source"], "settings");
+    assert_eq!(queued["payload"], ask["payload"]);
+    let id = queued["id"].as_str().unwrap();
+
+    // The phone sees it pending, reports progress as it goes, then the result.
+    let pending = api.commands(&phone, &pixel, "?status=pending");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0]["id"], id);
+    api.report(&phone, &pixel, id, json!({ "status": "delivered" }), 200);
+    let progress = json!({
+        "progress": { "kinds": [{ "kind": "sms", "found": 120, "done": false }], "done": false },
+    });
+    let mid = api.report(
+        &phone,
+        &pixel,
+        id,
+        json!({ "status": "delivered", "result": progress }),
+        200,
+    );
+    assert_eq!(mid["status"], "delivered");
+    assert_eq!(mid["result"], progress);
+    let shown = api.commands(&api.admin, &pixel, "");
+    assert_eq!(shown[0]["result"]["progress"]["kinds"][0]["found"], 120);
+
+    let result = json!({
+        "kinds": [{ "kind": "sms", "found": 130, "notes": 4, "done": true }],
+        "done": true,
+        "message": "SMS: 130 found, 4 new notes",
+    });
+    let done = api.report(
+        &phone,
+        &pixel,
+        id,
+        json!({ "status": "done", "result": result }),
+        200,
+    );
+    assert_eq!(done["status"], "done");
+    assert_eq!(done["result"], result);
+    // The phone asks itself, as its app's Settings > Devices does through the home server.
+    let own = send(api.req(&phone, "POST", &path).json(&ask), 201);
+    assert_eq!(own["name"], "import_history");
+    assert_eq!(own["status"], "pending");
+    // Finished: no more reports.
+    api.report(
+        &phone,
+        &pixel,
+        id,
+        json!({ "status": "delivered", "result": progress }),
+        409,
+    );
 }

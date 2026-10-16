@@ -471,6 +471,7 @@ mod tests {
         let id = "01J9Z3K8Q2W6E4R5T7Y8U9I0OP";
         assert_eq!(route(&get, "/api/devices"), Route::Forward);
         assert_eq!(route(&Method::PATCH, "/api/devices/x"), Route::Forward);
+        assert_eq!(route(&post, "/api/devices/x/commands"), Route::Forward);
         assert_eq!(route(&post, "/api/devices/pair-codes"), Route::Forward);
         assert_eq!(route(&get, "/api/device-files"), Route::Local);
         assert_eq!(route(&get, "/api/notifications"), Route::Forward);

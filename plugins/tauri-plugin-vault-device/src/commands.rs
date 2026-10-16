@@ -9,7 +9,10 @@
 //!
 //! A command is reported `delivered` before it runs, so one whose run a crash cut short is never
 //! run a second time: it expires on the server instead. Sending an SMS twice is worse than not at
-//! all.
+//! all. A long command, an `import_history`, reports `delivered` again while it runs, with
+//! `{ progress }` as its result, so Settings > Devices can show how far it got.
+
+use std::time::{Duration, Instant};
 
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -18,6 +21,9 @@ use embedded::device::DeviceRuntime;
 
 use crate::core::Link;
 use crate::notify::{client, refused, send};
+
+/// How often a long command reports its progress, as `delivered` with `{ progress }`.
+const PROGRESS_EVERY: Duration = Duration::from_secs(2);
 
 /// This device's settings from Settings > Devices, as `GET /api/devices` lists them, or `None`
 /// when the server no longer lists the device.
@@ -86,7 +92,19 @@ pub fn run(link: &Link, runtime: &DeviceRuntime) -> anyhow::Result<Value> {
         if !report(link, id, &json!({ "status": "delivered" }))? {
             continue;
         }
-        let ran = runtime.run_command(&command);
+        // A long command, such as an import, reports how it is going as it goes, at most every
+        // PROGRESS_EVERY; a report that fails is left for the next one.
+        let mut last: Option<Instant> = None;
+        let ran = runtime.run_command_with(&command, &mut |progress| {
+            if last.is_some_and(|at| at.elapsed() < PROGRESS_EVERY) {
+                return;
+            }
+            last = Some(Instant::now());
+            let body = json!({ "status": "delivered", "result": { "progress": progress } });
+            if let Err(e) = report(link, id, &body) {
+                eprintln!("progress of command {id} not reported: {e:#}");
+            }
+        });
         let body = ran.body();
         report(link, id, &body)?;
         out.push(json!({

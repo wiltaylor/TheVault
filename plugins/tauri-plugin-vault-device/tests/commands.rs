@@ -248,3 +248,127 @@ fn commands_run_only_when_declared_and_switched_on_and_every_result_is_reported(
     assert_eq!(list("pending"), 0);
     assert_eq!(list("delivered"), 0);
 }
+
+/// A phone whose call log holds two calls, which it hands an import of history.
+struct CallLog;
+
+impl DeviceData for CallLog {
+    fn sms_list(&self, _: &Value) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+    fn sms_get(&self, r: &str) -> Result<Value, String> {
+        Err(format!("no SMS {r}"))
+    }
+    fn calls_list(&self, _: &Value) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+    fn contacts_list(&self, _: &Value) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+    fn contacts_get(&self, id: &str) -> Result<Value, String> {
+        Err(format!("no contact {id}"))
+    }
+    fn contacts_upsert(&self, _: &Value) -> Result<Value, String> {
+        Err("not in this test".into())
+    }
+    fn contacts_delete(&self, _: &str) -> Result<(), String> {
+        Err("not in this test".into())
+    }
+    fn sms_send(&self, _: &str, _: &str) -> Result<Value, String> {
+        Err("not in this test".into())
+    }
+    fn show_notification(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Err("not in this test".into())
+    }
+    fn history(&self, request: &Value) -> Result<Value, String> {
+        if request["kind"] != "calls" {
+            return Ok(json!({ "events": [], "next": null, "missing_permission": null }));
+        }
+        let call = |key: i64| {
+            json!({
+                "event": "call_ended",
+                "at": 1_767_225_600_000_i64 + key,
+                "data": {
+                    "device_ref": format!("call:{key}"),
+                    "direction": "in",
+                    "number": "+61400000001",
+                    "number_raw": "0400 000 001",
+                    "contact": null,
+                    "started": "2026-01-01T11:00:00+11:00",
+                    "duration": 30,
+                },
+            })
+        };
+        Ok(json!({ "events": [call(1), call(2)], "next": null, "missing_permission": null }))
+    }
+}
+
+#[test]
+fn import_history_from_settings_runs_on_the_phone_and_reports_its_result() {
+    let server = TestServer::start_seeded(seed);
+    let p = pair::pair(
+        &server.base_url(),
+        &Secret::Password(PASSWORD.to_owned()),
+        "Pixel",
+    )
+    .unwrap();
+    let link = Link {
+        server_url: p.server_url,
+        token: p.token,
+        device_id: p.device_id,
+        device_name: p.device_name,
+        cache_mb: 64,
+    };
+    let dir = TempDir::new().unwrap();
+    let local = Embedded::open(Config {
+        vault: dir.path().to_owned(),
+        web: None,
+        secret_key: None,
+    })
+    .unwrap();
+    let runtime = local
+        .device(DeviceConfig {
+            id: link.device_id.clone(),
+            platform: "android".into(),
+            data: Arc::new(CallLog),
+        })
+        .unwrap();
+    admin(
+        &server,
+        "PATCH",
+        &format!("/api/devices/{}", link.device_id),
+        Some(json!({ "settings": { "commands": ["import_history"] } })),
+    );
+    let queued = admin(
+        &server,
+        "POST",
+        &format!("/api/devices/{}/commands", link.device_id),
+        Some(json!({ "name": "import_history", "payload": { "kinds": ["calls"] } })),
+    );
+
+    let ran = commands::run(&link, &runtime).unwrap();
+    let import = by_name(&ran, "import_history");
+    assert_eq!(import["status"], "done", "{import}");
+    assert_eq!(import["result"]["kinds"][0]["imported"], 2);
+
+    let id = queued["id"].as_str().unwrap();
+    let on_server = admin(
+        &server,
+        "GET",
+        &format!("/api/devices/{}/commands?status=done", link.device_id),
+        None,
+    )["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == id)
+        .cloned()
+        .unwrap();
+    assert_eq!(on_server["result"]["kinds"][0]["kind"], "calls");
+    assert_eq!(on_server["result"]["done"], true);
+    assert_eq!(
+        on_server["result"]["message"],
+        "calls: 2 found, 2 new notes"
+    );
+    assert_eq!(local.writer().list(Some("call")).unwrap().len(), 2);
+}

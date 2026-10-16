@@ -1728,7 +1728,7 @@ The file holds `handler` and `command` blocks and nothing else.
 | `handler "<event>" { ... }` | block | A script function to run on a device event. Several handlers may name the same event; they run in file order |
 | `command "<name>" { ... }` | block | A command the device accepts, and the script function that runs it. Each command appears at most once |
 
-The device events are a closed list: `sms_received`, `sms_sent`, `mms_received`, `rcs_received`, `call_ended`, `contact_changed`, `contact_deleted` and `share_received`. The commands are a closed list too, the ones the device module implements: `send_sms`, `upsert_contact`, `delete_contact` and `show_notification`. Any other label is a validation error.
+The device events are a closed list: `sms_received`, `sms_sent`, `mms_received`, `rcs_received`, `call_ended`, `contact_changed`, `contact_deleted` and `share_received`. The commands are a closed list too, the ones the device app implements: `send_sms`, `upsert_contact`, `delete_contact`, `show_notification` and `import_history`. Any other label is a validation error.
 
 Each `handler` and `command` block holds:
 
@@ -1772,8 +1772,9 @@ A vault with no `devices/android.wcl` runs the built-in default on an Android de
 | `device_calls` | `call_ended`: one `call` note per call, linked to the `person` holding the number |
 | `device_contacts` | `contact_changed` and `contact_deleted`: phone contacts and `person` notes kept in step, linked through `device_contacts`; the side changed most recently wins, and a delete only unlinks. The commands `upsert_contact` and `delete_contact` |
 | `device_share` | `share_received`: a fleeting note with the shared text, link, images and files |
+| `device_import` | The command `import_history`: answers the import to run, by default the command's payload. The app then reads the phone's history and runs each item that has no note yet as its device event |
 
-Each script captures an item once, by its `device_ref`. A device file in the vault names the scripts it runs; a script it names that the vault does not hold runs from the built-in defaults. `vault init --starter` writes the default device file and scripts into the vault, so they can be edited.
+Each script captures an item once, by its `device_ref`, archived notes included. A device file in the vault names the scripts it runs; a script it names that the vault does not hold runs from the built-in defaults. `vault init --starter` writes the default device file and scripts into the vault, so they can be edited.
 
 ## Validating vault files
 

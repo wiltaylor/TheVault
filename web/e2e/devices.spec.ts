@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { type APIRequestContext, request } from "@playwright/test";
 import { expect, logIn, password, test } from "./fixtures";
 
@@ -130,4 +132,86 @@ test("pair a device shows a QR code and a code that pairs once", async ({ page, 
   const card = page.locator(`[data-device="${first.body.device_id}"]`);
   await expect(card.getByRole("heading", { name })).toBeVisible();
   await expect(card).toContainText("Linux desktop");
+});
+
+/** The default `device_import` script, as the starter vault holds it. */
+const DEVICE_IMPORT = readFileSync(
+  fileURLToPath(new URL("../../crates/writer/defaults/devices/device_import.ws", import.meta.url)),
+  "utf8",
+);
+
+test("Import from phone queues import_history with the chosen options once it is enabled", async ({ page, admin }) => {
+  // The vault's Android device file declares the command, with the default script.
+  expect((await admin.put("/api/scripts/device_import", { data: { source: DEVICE_IMPORT } })).status()).toBe(200);
+  const file = await admin.put("/api/device-files/android", {
+    data: { wcl: 'command "import_history" {\n  script = "device_import"\n}\n' },
+  });
+  expect(file.status(), await file.text()).toBe(200);
+  const name = `Pixel ${unique()}`;
+  const paired = await pair({ password: password(), name, platform: "android", capabilities: ["sms"] });
+  expect(paired.status).toBe(201);
+  const id = paired.body.device_id;
+
+  await logIn(page, "/settings/devices");
+  const card = page.locator(`[data-device="${id}"]`);
+  const importer = card.getByRole("group", { name: "Import from phone" });
+  const button = importer.getByRole("button", { name: "Import from phone" });
+
+  // Declared, but not enabled for this phone: the button explains instead.
+  await expect(button).toBeDisabled();
+  await expect(importer).toContainText("Turn on import_history under Enabled commands above and save");
+  await expect(importer).toContainText("RCS chats cannot be imported");
+
+  await card.getByRole("group", { name: "Enabled commands" }).getByLabel("import_history").check();
+  await card.getByRole("button", { name: "Save" }).click();
+  await expect(card.getByRole("status").first()).toHaveText("Saved.");
+  await expect(button).toBeEnabled();
+
+  // SMS and MMS and contacts, over September.
+  await importer.getByLabel("Calls", { exact: true }).uncheck();
+  await importer.getByLabel("Contacts", { exact: true }).check();
+  await importer.getByLabel("Dates").selectOption("custom");
+  await importer.getByLabel("From", { exact: true }).fill("2026-09-01");
+  await importer.getByLabel("To", { exact: true }).fill("2026-09-30");
+  await button.click();
+  const progress = importer.getByRole("status", { name: "Import progress" });
+  await expect(progress).toContainText("Waiting for the phone");
+
+  const listed = await admin.get(`/api/devices/${id}/commands`);
+  const { commands } = (await listed.json()) as { commands: { id: string; name: string; status: string; payload: Record<string, unknown> }[] };
+  expect(commands).toHaveLength(1);
+  const command = commands[0]!;
+  expect(command.name).toBe("import_history");
+  expect(command.status).toBe("pending");
+  const [since, until] = await page.evaluate(() => [
+    new Date(2026, 8, 1).toISOString(),
+    new Date(new Date(2026, 9, 1).getTime() - 1).toISOString(),
+  ]);
+  expect(command.payload).toEqual({ kinds: ["sms", "mms", "contacts"], since, until });
+
+  // The phone reports its progress, then its result, and the card follows.
+  const phone = await request.newContext({
+    baseURL: process.env.E2E_BASE_URL,
+    extraHTTPHeaders: { Authorization: `Bearer ${paired.body.token}` },
+  });
+  const report = (body: unknown) => phone.post(`/api/devices/${id}/commands/${command.id}/result`, { data: body });
+  const sms = { kind: "sms", found: 120, imported: 3, notes: 3, existing: 117, skipped: 0, failed: 0, missing_permission: null, error: null };
+  expect((await report({ status: "delivered" })).status()).toBe(200);
+  const running = { kinds: [{ ...sms, done: false }], since: null, until: null, done: false };
+  expect((await report({ status: "delivered", result: { progress: running } })).status()).toBe(200);
+  await expect(progress).toContainText("The phone is importing");
+  await expect(progress).toContainText("SMS: 120 found, 3 new notes, 117 already in the vault…");
+
+  const contacts = { ...sms, kind: "contacts", found: 0, imported: 0, notes: 0, existing: 0, missing_permission: "android.permission.READ_CONTACTS" };
+  const result = { kinds: [{ ...sms, done: true }, { ...contacts, done: true }], since: null, until: null, done: true, message: "" };
+  expect((await report({ status: "done", result })).status()).toBe(200);
+  await expect(progress).toContainText("Import finished.");
+  await expect(progress).toContainText("Contacts: not read. Android has not given TheVault READ_CONTACTS.");
+  await expect(progress).toContainText("Open TheVault on the phone and allow it");
+  await phone.dispose();
+
+  // Without the command enabled again, the button says so once more.
+  await card.getByRole("group", { name: "Enabled commands" }).getByLabel("import_history").uncheck();
+  await card.getByRole("button", { name: "Save" }).click();
+  await expect(button).toBeDisabled();
 });

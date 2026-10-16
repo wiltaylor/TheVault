@@ -9,6 +9,11 @@ fun interface DeviceBridge {
     fun call(method: String, args: String): String
 }
 
+/** Hears how an import of history is going: its report as JSON, after each page and each kind. */
+fun interface ImportProgress {
+    fun update(report: String)
+}
+
 /**
  * The Rust core, reached over plain JNI so that receivers and workers can call it with no
  * webview and no Tauri runtime (D17). The functions live in the plugin crate's `src/jni.rs`; a
@@ -134,4 +139,20 @@ object VaultCore {
     /** Stores [bytes] as an asset called [filename] in the local vault. Answers `{ asset, filename, size }` as JSON. */
     @JvmStatic
     external fun putAsset(filename: String, bytes: ByteArray): String
+
+    /**
+     * Imports the phone's history as [request] says, `{ kinds, since, until }` as JSON: the core
+     * reads each kind page by page through the device runtime's bridge (`history`), and runs each
+     * message and call that has no note yet as its device event, so the device file's handlers
+     * decide the notes. One whose note exists is left alone, whatever capture's cursors say.
+     * [progress] hears the report as it goes. Answers the final report, `{ kinds: [{ kind, found,
+     * imported, notes, existing, skipped, failed, missing_permission, error, done }], since,
+     * until, done }`, as JSON. It blocks for the whole import: never call it on the main thread.
+     */
+    @JvmStatic
+    external fun importHistory(request: String, progress: ImportProgress?): String
+
+    /** `"true"` when the local vault holds the `message` or `call` note of [deviceRef], archived or not. */
+    @JvmStatic
+    external fun noted(deviceRef: String): String
 }

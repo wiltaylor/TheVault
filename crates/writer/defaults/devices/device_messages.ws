@@ -42,7 +42,7 @@ fn captured(device_ref: string) -> Result[bool, string] {
     if device_ref == "" {
         return Ok(false)
     }
-    let id = first_id("from message where device_ref == " + quoted(device_ref) + " limit 1")?
+    let id = first_id("from message include archived where device_ref == " + quoted(device_ref) + " limit 1")?
     Ok(id != "")
 }
 

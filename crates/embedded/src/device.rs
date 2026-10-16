@@ -43,6 +43,11 @@ use script_core::{
 };
 pub use script_core::{DeviceData, Switches};
 
+mod import;
+pub use import::{
+    IMPORT_COMMAND, IMPORT_KINDS, ImportReport, ImportRequest, KindReport, RCS_NOT_IMPORTABLE,
+};
+
 /// Passes over a failing event before it is marked failed and left alone.
 pub const MAX_ATTEMPTS: i64 = 3;
 
@@ -229,6 +234,8 @@ pub struct DeviceRuntime {
     queue: Mutex<Connection>,
     /// Held for a whole pass, so two passes never run the same event.
     pass: Mutex<()>,
+    /// Held while an import of history runs, so only one runs at a time.
+    importing: Mutex<()>,
 }
 
 impl DeviceRuntime {
@@ -292,6 +299,7 @@ impl DeviceRuntime {
             settings: RwLock::new(settings),
             queue: Mutex::new(conn),
             pass: Mutex::new(()),
+            importing: Mutex::new(()),
         })
     }
 
@@ -568,6 +576,21 @@ impl DeviceRuntime {
     /// ... }`. It runs only when the device file declares it and the settings enable it;
     /// otherwise it fails without running. Blocks while it runs.
     pub fn run_command(&self, command: &Json) -> CommandReport {
+        self.run_command_with(command, &mut |_| {})
+    }
+
+    /// [`DeviceRuntime::run_command`], telling `progress` how a long command is going: an
+    /// `import_history` reports its [`ImportReport`] after each page it reads, as JSON.
+    ///
+    /// `import_history` is built in: its script function answers the import to run, by default
+    /// the command's payload, `{ kinds, since, until }`, and the runtime then runs it
+    /// ([`DeviceRuntime::import_history`]). It reports `done` with the import's report, or
+    /// `failed` with the report and a `message` when nothing could be read at all.
+    pub fn run_command_with(
+        &self,
+        command: &Json,
+        progress: &mut dyn FnMut(&Json),
+    ) -> CommandReport {
         let id = command["id"].as_str().unwrap_or_default().to_owned();
         let name = command["name"].as_str().unwrap_or_default();
         let failed = |message: String| CommandReport {
@@ -595,13 +618,49 @@ impl DeviceRuntime {
             "command": name,
             "payload": command.get("payload").cloned().unwrap_or(Json::Null),
         });
-        match self.run(&hook.script, &hook.function, value, Json::Null) {
+        let ran = self.run(&hook.script, &hook.function, value, Json::Null);
+        match ran {
+            Ok(asked) if name == IMPORT_COMMAND => self.import_command(&id, &asked, progress),
             Ok(result) => CommandReport {
                 id: id.clone(),
                 done: true,
                 result,
             },
             Err(message) => failed(message),
+        }
+    }
+
+    /// Run the import an `import_history` script function asked for.
+    fn import_command(
+        &self,
+        id: &str,
+        asked: &Json,
+        progress: &mut dyn FnMut(&Json),
+    ) -> CommandReport {
+        let failed = |result: Json| CommandReport {
+            id: id.to_owned(),
+            done: false,
+            result,
+        };
+        let req = match ImportRequest::from_json(asked) {
+            Ok(req) => req,
+            Err(message) => return failed(Json::String(message)),
+        };
+        match self.import_history(&req, &mut |r| progress(&r.to_json())) {
+            Ok(report) => {
+                let mut result = report.to_json();
+                result["message"] = Json::String(report.summary());
+                if report.nothing_read() {
+                    failed(result)
+                } else {
+                    CommandReport {
+                        id: id.to_owned(),
+                        done: true,
+                        result,
+                    }
+                }
+            }
+            Err(e) => failed(Json::String(format!("{e:#}"))),
         }
     }
 

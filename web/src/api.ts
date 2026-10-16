@@ -406,6 +406,26 @@ export interface Device {
   settings: DeviceSettings;
 }
 
+/** A command queued for a device, and what became of it (D22). */
+export interface DeviceCommand {
+  id: string;
+  device: string;
+  name: string;
+  payload: unknown;
+  status: "pending" | "delivered" | "done" | "failed" | "expired";
+  /** What the device reported: its progress while `delivered`, its result once finished. */
+  result: unknown;
+  source: string;
+}
+
+/** A `devices/<platform>.wcl` as `GET /api/device-files` lists it. */
+export interface DeviceFileInfo {
+  platform: Device["platform"];
+  commands?: { name: string; script: string; function: string }[];
+  /** Why the file does not parse. */
+  error?: string;
+}
+
 /** An app build the server hands out at `/api/clients`, from its clients folder's manifest. */
 export interface ClientBuild {
   platform: "android" | "linux";
@@ -792,6 +812,14 @@ export const api = {
     request<Device>("PATCH", `/api/devices/${enc(id)}`, change),
   /** Revoke a device: its token stops working at once. */
   revokeDevice: (id: string) => request<void>("DELETE", `/api/devices/${enc(id)}`),
+  /** The commands queued for a device, oldest first. */
+  deviceCommands: async (id: string) =>
+    (await request<{ commands: DeviceCommand[] }>("GET", `/api/devices/${enc(id)}/commands`)).commands,
+  /** Queue a command the device's platform file declares and the device has enabled. */
+  queueDeviceCommand: (id: string, name: string, payload: unknown) =>
+    request<DeviceCommand>("POST", `/api/devices/${enc(id)}/commands`, { name, payload }),
+  /** Every device file, with the commands each declares. */
+  deviceFiles: async () => (await request<{ files: DeviceFileInfo[] }>("GET", "/api/device-files")).files,
   tokens: async () => (await request<{ tokens: Token[] }>("GET", "/api/tokens")).tokens,
   /** Create a token. The answer is the only time its secret is shown. */
   createToken: (name: string, scope: Scope) => request<Token>("POST", "/api/tokens", { name, scope }),

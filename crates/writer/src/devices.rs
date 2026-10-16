@@ -22,7 +22,7 @@ pub const DEFAULT_ANDROID_DEVICE_FILE: &str = include_str!("../defaults/devices/
 
 /// The default device scripts, as `(name, source)`: what the default device file names (D15, D16,
 /// D24).
-pub const DEFAULT_DEVICE_SCRIPTS: [(&str, &str); 4] = [
+pub const DEFAULT_DEVICE_SCRIPTS: [(&str, &str); 5] = [
     (
         "device_messages",
         include_str!("../defaults/devices/device_messages.ws"),
@@ -38,6 +38,10 @@ pub const DEFAULT_DEVICE_SCRIPTS: [(&str, &str); 4] = [
     (
         "device_share",
         include_str!("../defaults/devices/device_share.ws"),
+    ),
+    (
+        "device_import",
+        include_str!("../defaults/devices/device_import.ws"),
     ),
 ];
 

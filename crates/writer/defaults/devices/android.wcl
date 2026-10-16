@@ -45,3 +45,7 @@ command "delete_contact" {
 command "show_notification" {
   script = "device_messages"
 }
+
+command "import_history" {
+  script = "device_import"
+}

@@ -1,12 +1,19 @@
 import { For, Index, Show, createResource, createSignal } from "solid-js";
-import { type Device, type DeviceExclusion, type PairCode, api } from "../api";
+import { type Device, type DeviceExclusion, type DeviceFileInfo, type PairCode, api } from "../api";
 import { when } from "../admin/format";
-import { ClientDownloads } from "./Apps";
-import { errorText } from "./TypeEditor";
+import { inAndroidApp } from "../deviceImport";
 import { appInfo } from "../inApp";
+import { ClientDownloads } from "./Apps";
+import { PhoneImport, ThisDevice } from "./DeviceImport";
+import { errorText } from "./TypeEditor";
 
 /** The commands every device app implements (D22). A device's own `devices/<platform>.wcl` may add more. */
-export const BUILTIN_COMMANDS = ["send_sms", "upsert_contact", "delete_contact", "show_notification"];
+export const BUILTIN_COMMANDS = ["send_sms", "upsert_contact", "delete_contact", "show_notification", "import_history"];
+
+/** Whether the device file of `platform` declares `command`. */
+export function declares(files: readonly DeviceFileInfo[] | undefined, platform: string, command: string): boolean {
+  return (files ?? []).some((f) => f.platform === platform && (f.commands ?? []).some((c) => c.name === command));
+}
 
 /** The commands to offer as switches: the built-in ones, then any others the device already has enabled. */
 export function commandChoices(enabled: readonly string[]): string[] {
@@ -25,13 +32,16 @@ const PLATFORM_LABELS: Record<Device["platform"], string> = { linux: "Linux desk
  * Paired desktop and Android apps (D2, D3). Each device has a name, switches for what its scripts
  * may do, the commands server scripts may send it, and what it never captures (D22, D23, D25).
  * "Pair a device" shows a single-use code and its QR code for the app to scan. Above them, "Get
- * the apps" offers the builds the server hands out.
+ * the apps" offers the builds the server hands out. Inside the Android app, "This device" imports
+ * from the phone the app runs on; an Android phone's card asks that phone to import (D7).
  */
 export function Devices() {
   const [devices, { refetch }] = createResource(api.devices);
   // In an app the list is the home server's, and changing a device needs the web app (D2).
   const [app] = createResource(appInfo);
   const inApp = () => (app.state === "ready" ? app() : null);
+  // Which commands each platform's file declares; a vault with no files declares none.
+  const [files] = createResource(() => api.deviceFiles().catch(() => [] as DeviceFileInfo[]));
   const [pairing, setPairing] = createSignal<PairCode | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -58,6 +68,9 @@ export function Devices() {
       <header class="note-header">
         <h1>Devices</h1>
       </header>
+      <Show when={inAndroidApp()}>
+        <ThisDevice />
+      </Show>
       <ClientDownloads />
       <h2>Paired devices</h2>
       <Show
@@ -121,6 +134,7 @@ export function Devices() {
                   device={d}
                   thisDevice={inApp()?.device_id === d.id}
                   readOnly={!!inApp()}
+                  importDeclared={declares(files(), d.platform, "import_history")}
                   onChanged={() => void refetch()}
                 />
               )}
@@ -134,15 +148,24 @@ export function Devices() {
 
 /**
  * One paired device. `thisDevice` marks the app the page runs in; `readOnly` shows the settings
- * without letting them change, in an app.
+ * without letting them change, in an app. An Android phone's card can ask the phone to import its
+ * history; in an app only the app's own phone can be asked, through the home server.
  */
-function DeviceCard(props: { device: Device; thisDevice?: boolean; readOnly?: boolean; onChanged: () => void }) {
+function DeviceCard(props: {
+  device: Device;
+  thisDevice?: boolean;
+  readOnly?: boolean;
+  importDeclared: boolean;
+  onChanged: () => void;
+}) {
   const d = props.device;
   const [name, setName] = createSignal(d.name);
   const [title, setTitle] = createSignal(d.name);
   const [contactsWrite, setContactsWrite] = createSignal(d.settings.contacts_write);
   const [smsSend, setSmsSend] = createSignal(d.settings.sms_send);
   const [commands, setCommands] = createSignal<string[]>([...d.settings.commands]);
+  // What the server holds, which decides what the phone may be asked.
+  const [savedCommands, setSavedCommands] = createSignal<string[]>([...d.settings.commands]);
   const [exclusions, setExclusions] = createSignal<DeviceExclusion[]>(d.settings.exclusions.map((e) => ({ ...e })));
   const [skipPattern, setSkipPattern] = createSignal(d.settings.skip_pattern);
   const [error, setError] = createSignal<string | null>(null);
@@ -177,6 +200,7 @@ function DeviceCard(props: { device: Device; thisDevice?: boolean; readOnly?: bo
         },
       });
       setTitle(saved.name);
+      setSavedCommands([...saved.settings.commands]);
       setStatus("Saved.");
     } catch (e) {
       setError(errorText(e));
@@ -317,6 +341,14 @@ function DeviceCard(props: { device: Device; thisDevice?: boolean; readOnly?: bo
       </Show>
       <Show when={status()}>
         <p role="status">{status()}</p>
+      </Show>
+      <Show when={d.platform === "android"}>
+        <PhoneImport
+          device={d}
+          declared={props.importDeclared}
+          enabled={savedCommands().includes("import_history")}
+          otherDeviceInApp={!!props.readOnly && !props.thisDevice}
+        />
       </Show>
     </article>
   );

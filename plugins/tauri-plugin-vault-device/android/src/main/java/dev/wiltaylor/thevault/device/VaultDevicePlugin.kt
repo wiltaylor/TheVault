@@ -7,6 +7,7 @@ import android.webkit.WebView
 import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
@@ -21,7 +22,8 @@ import app.tauri.plugin.Plugin
  * server's live events, so a note changed elsewhere is pulled within seconds (D4). The notification listener code lands here too.
  * It also keeps the page clear of the system bars and the keyboard ([SystemBars], ticket 79).
  *
- * Commands for the webview: `open_capture_setup` and `capture_status`.
+ * Commands for the webview: `open_capture_setup`, `capture_status`, and for Settings > Devices'
+ * "This device" section `import_history`, `import_status` and `check_now`.
  */
 @TauriPlugin
 class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
@@ -123,6 +125,65 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(status)
     }
 
+    /**
+     * "Import from phone" in Settings > Devices (D7): `{ kinds, since, until }`, times RFC 3339 or
+     * null. Answers `{ started, missing: [{ kind, permission }] }`: when Android has not granted
+     * what a chosen kind needs, nothing starts, so the page can explain and offer the permission
+     * step. RCS is refused: Google Messages keeps it to itself.
+     */
+    @Command
+    fun importHistory(invoke: Invoke) {
+        val args = invoke.getArgs()
+        val asked = args.optJSONArray("kinds")
+        val kinds = (0 until (asked?.length() ?: 0)).map { asked!!.getString(it) }
+        if ("rcs" in kinds) return invoke.reject(RCS_NOT_IMPORTABLE)
+        val unknown = kinds.filter { it !in DeviceCapture.HISTORY_KINDS }
+        if (kinds.isEmpty() || unknown.isNotEmpty()) {
+            return invoke.reject("choose what to import: ${DeviceCapture.HISTORY_KINDS.joinToString(", ")}")
+        }
+        val missing = JSArray()
+        for (kind in kinds) {
+            val permission = DeviceCapture.HISTORY_PERMISSIONS.getValue(kind)
+            if (activity.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+                missing.put(JSObject().put("kind", kind).put("permission", permission))
+            }
+        }
+        val answer = JSObject().put("missing", missing)
+        if (missing.length() > 0) return invoke.resolve(answer.put("started", false))
+        fun time(name: String): Long? = args.optString(name).takeIf { it.isNotEmpty() && it != "null" }?.let {
+            java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli()
+        }
+        CaptureWork.importHistory(activity, kinds, time("since"), time("until"))
+        invoke.resolve(answer.put("started", true))
+    }
+
+    /** `{ running, request, report, error }`: how the last import is going ([ImportState]). */
+    @Command
+    fun importStatus(invoke: Invoke) {
+        invoke.resolve(JSObject(ImportState.current().toString()))
+    }
+
+    /**
+     * "Check for new messages and calls now": the hourly catch-up, run at once. Answers `{
+     * captured, missing }`: how many new items it found, and the capture permissions not granted.
+     */
+    @Command
+    fun checkNow(invoke: Invoke) {
+        val app = activity.applicationContext
+        val missing = JSArray()
+        DeviceCapture.HISTORY_PERMISSIONS.values.distinct().forEach {
+            if (app.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED) missing.put(it)
+        }
+        Device.executor.execute {
+            try {
+                val captured = Device.capture(app).catchUp()
+                invoke.resolve(JSObject().put("captured", captured).put("missing", missing))
+            } catch (e: Exception) {
+                invoke.reject(e.message ?: e.toString())
+            }
+        }
+    }
+
     /** A tapped notification: mark it read and show its note or page. */
     private fun opened(intent: Intent?) {
         val id = intent?.getStringExtra(NotificationMirror.EXTRA_ID) ?: return
@@ -139,5 +200,9 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
 
         /** UnifiedPush registers once per process; the endpoint survives the app closing. */
         private var pushStarted = false
+
+        /** Why RCS is not offered for import: `crates/embedded` says the same. */
+        const val RCS_NOT_IMPORTABLE =
+            "RCS messages cannot be imported: Google Messages keeps them to itself, and TheVault only sees them as their notifications arrive"
     }
 }

@@ -628,6 +628,7 @@ fn init_starter_writes_files_that_all_validate() {
         "scripts/device_calls.ws",
         "scripts/device_contacts.ws",
         "scripts/device_share.ws",
+        "scripts/device_import.ws",
     ] {
         assert!(dir.join(path).is_file(), "no {path}");
     }
@@ -641,7 +642,8 @@ fn init_starter_writes_files_that_all_validate() {
             "device_messages",
             "device_calls",
             "device_contacts",
-            "device_share"
+            "device_share",
+            "device_import"
         ])
     );
     assert_eq!(

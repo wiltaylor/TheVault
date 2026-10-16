@@ -1,8 +1,10 @@
 package dev.wiltaylor.thevault.device
 
+import android.Manifest
 import android.content.ContentResolver
 import android.content.SharedPreferences
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Where captured device events go: the device event queue, through JNI in the app. */
@@ -16,8 +18,7 @@ interface EventSink {
 
 /**
  * How far capture has read each provider. A key is a row id (SMS, MMS, calls) or a time in
- * milliseconds (contact changes and deletions). `<kind>.start` holds where capture started, the
- * ceiling of what a first-run import reads.
+ * milliseconds (contact changes and deletions). `<kind>.start` holds where capture started.
  */
 class Cursors(private val prefs: SharedPreferences) {
     fun get(kind: String): Long? = if (prefs.contains(kind)) prefs.getLong(kind, 0L) else null
@@ -51,8 +52,10 @@ class Cursors(private val prefs: SharedPreferences) {
  * so a row is captured once whichever path reads it first. The handlers de-duplicate on
  * `device_ref` as well, for the rare row read twice across a crash.
  *
- * Capture starts at the providers' newest rows ([begin]): history is only read by
- * [importHistory], which the user turns on at first run with a date range.
+ * Capture starts at the providers' newest rows ([begin]): history is only read by an import,
+ * which the user turns on at first run with a date range, or starts at any time from Settings >
+ * Devices. An import reads [history] page by page, whatever the cursors say, through the Rust
+ * core, which files each item that has no note yet ([ImportWorker]).
  */
 class DeviceCapture(
     resolver: ContentResolver,
@@ -113,24 +116,47 @@ class DeviceCapture(
         return n
     }
 
-    /**
-     * The first-run import: SMS, MMS and calls from within [fromMs]..[toMs], and contacts changed
-     * within it, up to where live capture started, so nothing is captured twice.
-     */
-    fun importHistory(fromMs: Long, toMs: Long): Int {
-        begin()
-        val range = fromMs..toMs
-        var n = 0
-        fun from(kind: String, read: (Long) -> List<Captured>) {
-            val ceiling = cursors.start(kind) ?: return
-            readable(kind) { read(ceiling).forEach { hand(it); n++ } }
+    /** One page of an import: the items read, the key to read on from, and a missing permission. */
+    data class HistoryPage(val items: List<Captured>, val next: Long?, val missingPermission: String? = null) {
+        /** The page as `DeviceData::history` answers it (`crates/script-core`). */
+        fun toJson(): JSONObject {
+            val events = JSONArray()
+            for (item in items) {
+                val e = JSONObject().put("event", item.event).put("data", item.data).put("at", item.atMs)
+                if (item.known) e.put("known", true)
+                events.put(e)
+            }
+            return JSONObject()
+                .put("events", events)
+                .put("next", next ?: JSONObject.NULL)
+                .put("missing_permission", missingPermission ?: JSONObject.NULL)
         }
-        from(Cursors.SMS) { sms.since(0, range, it) }
-        from(Cursors.MMS) { mms.since(0, range, it) }
-        from(Cursors.CALLS) { calls.since(0, range, it) }
-        from(Cursors.CONTACTS) { contacts.changedSince(maxOf(fromMs - 1, 0), minOf(toMs, it)) }
-        if (n > 0) sink.flush()
-        return n
+    }
+
+    /**
+     * One page of what the phone holds of [kind] ([HISTORY_KINDS]) within [range], as the events
+     * capture makes of it, whatever the cursors say: at most [limit] SMS, MMS or calls with a key
+     * above [after], or every contact changed within the range. [known] says which `device_ref`
+     * already has a note, so an MMS's parts are not stored again. The cursors do not move.
+     */
+    fun history(
+        kind: String,
+        range: LongRange,
+        after: Long?,
+        limit: Int = HISTORY_PAGE,
+        known: (String) -> Boolean = { false },
+    ): HistoryPage = try {
+        val start = after ?: 0L
+        fun paged(items: List<Captured>) = HistoryPage(items, if (items.size >= limit) items.last().key else null)
+        when (kind) {
+            HISTORY_SMS -> paged(sms.since(start, range, limit = limit))
+            HISTORY_MMS -> paged(mms.since(start, range, limit = limit, known = known))
+            HISTORY_CALLS -> paged(calls.since(start, range, limit = limit))
+            HISTORY_CONTACTS -> HistoryPage(contacts.changedSince(maxOf(range.first - 1, 0), range.last), null)
+            else -> throw IllegalArgumentException("$kind cannot be imported")
+        }
+    } catch (e: SecurityException) {
+        HistoryPage(emptyList(), null, HISTORY_PERMISSIONS.getValue(kind))
     }
 
     private fun capture(kind: String, read: (Long) -> List<Captured>): Int = synchronized(lockOf(kind)) {
@@ -165,5 +191,24 @@ class DeviceCapture(
 
     companion object {
         private const val TAG = "VaultDeviceCapture"
+
+        const val HISTORY_SMS = "sms"
+        const val HISTORY_MMS = "mms"
+        const val HISTORY_CALLS = "calls"
+        const val HISTORY_CONTACTS = "contacts"
+
+        /** What an import reads, in order. RCS is not among them: Google Messages keeps it (D13). */
+        val HISTORY_KINDS = listOf(HISTORY_SMS, HISTORY_MMS, HISTORY_CALLS, HISTORY_CONTACTS)
+
+        /** The permission each kind of import needs. */
+        val HISTORY_PERMISSIONS = mapOf(
+            HISTORY_SMS to Manifest.permission.READ_SMS,
+            HISTORY_MMS to Manifest.permission.READ_SMS,
+            HISTORY_CALLS to Manifest.permission.READ_CALL_LOG,
+            HISTORY_CONTACTS to Manifest.permission.READ_CONTACTS,
+        )
+
+        /** Items an import reads at a time. */
+        const val HISTORY_PAGE = 200
     }
 }

@@ -31,6 +31,9 @@
 //! a `contact_changed` event for each linked `person` that changed, so the change reaches the
 //! phone contact (D16). Commands from server scripts run through [`Core::run_commands`] (D22).
 //!
+//! An import of history ([`Core::import_history`]) reads the phone's messages, calls and contacts
+//! again over a range of dates, and files each that has no note yet (D7).
+//!
 //! A share from another app is a `share_received` device event too: [`Core::share`] queues it and
 //! runs it at once, before pairing as well, since its handler needs only the local vault.
 
@@ -39,7 +42,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use embedded::device::{DeviceConfig, DeviceData, DeviceRuntime};
+use embedded::device::{DeviceConfig, DeviceData, DeviceRuntime, ImportReport, ImportRequest};
 use embedded::{Config, Embedded};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -305,6 +308,26 @@ impl Core {
         let runtime = self.runtime()?;
         let _one = lock(&self.commands);
         commands::run(&link, &runtime)
+    }
+
+    /// Import the phone's history as `request` says, `{ kinds, since, until }`: each message and
+    /// call with no note yet runs as its device event now, so the device file's handlers decide
+    /// the notes; one that has a note is left alone ([`DeviceRuntime::import_history`]).
+    /// `progress` hears the report as it goes. Then ask for a round. It blocks.
+    pub fn import_history(
+        self: &Arc<Self>,
+        request: &Value,
+        progress: &mut dyn FnMut(&ImportReport),
+    ) -> anyhow::Result<ImportReport> {
+        let req = ImportRequest::from_json(request).map_err(anyhow::Error::msg)?;
+        let report = self.runtime()?.import_history(&req, progress)?;
+        self.kick();
+        Ok(report)
+    }
+
+    /// Whether the vault holds the `message` or `call` note of `device_ref`.
+    pub fn noted(&self, device_ref: &str) -> anyhow::Result<bool> {
+        self.runtime()?.noted(device_ref)
     }
 
     /// Ask the foreground loop for a round once writes settle. Nothing happens while unpaired.

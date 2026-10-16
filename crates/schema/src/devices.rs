@@ -25,12 +25,14 @@ pub const DEVICE_EVENTS: [&str; 8] = [
     "share_received",
 ];
 
-/// The commands a device implements, a closed list (D22).
-pub const DEVICE_COMMANDS: [&str; 4] = [
+/// The commands a device implements, a closed list (D22). `import_history` reads the phone's
+/// messages, calls and contacts again over a range of dates, as device events.
+pub const DEVICE_COMMANDS: [&str; 5] = [
     "send_sms",
     "upsert_contact",
     "delete_contact",
     "show_notification",
+    "import_history",
 ];
 
 /// One `devices/<platform>.wcl`.

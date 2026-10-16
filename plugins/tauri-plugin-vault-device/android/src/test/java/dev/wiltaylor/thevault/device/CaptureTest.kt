@@ -195,11 +195,15 @@ class CaptureTest {
         assertEquals(1, fresh.catchUp())
         assertEquals(listOf("sms:3"), history.sink.refs())
 
-        assertEquals(3, fresh.importHistory(40_000, 100_000))
-        assertEquals(
-            "only the range, and not what live capture took",
-            listOf("sms:3", "sms:2", "call:1", "5"),
-            history.sink.refs(),
-        )
+        // An import reads the range whatever the cursors say, and moves no cursor.
+        val range = 40_000L..100_000L
+        fun refs(kind: String) = fresh.history(kind, range, null).items.map {
+            it.data.optString("device_ref", it.data.optString("contact_id"))
+        }
+        assertEquals(listOf("sms:2"), refs("sms"))
+        assertEquals(listOf("call:1"), refs("calls"))
+        assertEquals(listOf("5"), refs("contacts"))
+        assertEquals("the import queued nothing itself", listOf("sms:3"), history.sink.refs())
+        assertEquals(0, fresh.catchUp())
     }
 }

@@ -13,9 +13,10 @@ import java.time.temporal.ChronoUnit
 
 /**
  * One row a reader turned into a device event: its name and payload (`docs/scripts.md` "Device
- * events"), the row's key that the capture cursor advances to, and when it happened.
+ * events"), the row's key that the capture cursor advances to, and when it happened. A [known]
+ * row, read for an import, already has a note, and its payload is its `device_ref` alone.
  */
-data class Captured(val event: String, val data: JSONObject, val key: Long, val atMs: Long)
+data class Captured(val event: String, val data: JSONObject, val key: Long, val atMs: Long, val known: Boolean = false)
 
 /** Device event payload conventions shared by every reader. */
 object Payloads {
