@@ -92,3 +92,15 @@ test("on a phone the Types section works in the drawer, and a click closes it", 
   await expect(page).toHaveURL(new RegExp(`/types/${phone.name}$`));
   await expect(page.getByRole("button", { name: "Menu" })).toHaveAttribute("aria-expanded", "false");
 });
+
+test("uploaded files are listed among the types as Images and files, opening the assets page", async ({ page }) => {
+  await logIn(page, "/daily");
+  const toggle = typesNav(page).getByRole("button", { name: "Types" });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  const entry = typesNav(page).getByRole("link", { name: "Images and files" });
+  await expect(entry).toBeVisible();
+  await expect(entry.locator("svg.icon")).toHaveCount(1);
+  await entry.click();
+  await expect(page).toHaveURL(/\/assets$/);
+  await expect(entry).toHaveClass(/active/);
+});
