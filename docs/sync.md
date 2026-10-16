@@ -46,6 +46,60 @@ A device pairs with a `write` token (D2). With it, a device:
 - sets the push endpoint and bases of its own device only;
 - **cannot** write types, templates, taxonomies, scripts or tasks. All of those need `admin`, so the server answers 403. The device reads them, and receives them in the feed, like any other token. Definitions are edited online through a session or an `admin` token, and never through device sync (D20).
 
+## What the apps answer locally
+
+Both apps run the server's `/api` router in-process (`crates/embedded`, D18), against the local copy of the vault and a local `state.db`. A route whose data is a vault file, or is computed from the vault files, is answered locally and works offline. A route backed by state that only the home server's `state.db` holds is not: the local `state.db` has none of it, so before this split Settings > Devices in the apps showed no devices at all. Once the app is paired (`Embedded::set_remote`), the embedded server sends those routes to the home server with the device token, streaming request and response bodies both ways and keeping the status code and headers. The desktop app sets the remote when its sync engine starts; Android sets it whenever Kotlin hands the core its pairing (`Core::set_link`). Requests the Android webview sends over IPC (`api_request`) reach the same `Embedded::handle`, so they are forwarded too.
+
+When a forwarded route cannot be answered, the embedded server says why instead of answering with an empty list:
+
+| Answer | When | The web client shows |
+|---|---|---|
+| 503 `{"error": "offline"}` | The home server cannot be reached: the connection fails within 5 seconds, or a proxy answers 502 to 504 without JSON. | "Needs a connection to your server" |
+| 503 `{"error": "not_paired"}` | The app is not paired, or the server answers 401: the device was revoked. | "Not paired" |
+| 403 `{"error": "needs_web_app"}` | The route needs `admin`, which a device token never has (D2). The server's own message is in `detail`. | "Manage this in the web app" |
+
+The device token is never widened to `admin`. In the apps, Settings hides the Secrets and API tokens sections, and Settings > Devices lists the devices read-only, marked "This device" for the app's own, and says to pair, rename, revoke and change settings in the web app. `GET /api/app`, answered only by the embedded server, tells the web client it runs in an app and which device it is; the home server answers it 404.
+
+### Every route
+
+| Routes | Backed by | Answered |
+|---|---|---|
+| `/api/notes` and below (read, create, update, delete, graph, archive, canvas), `/api/batch`, `/api/upsert`, `/api/daily` | Note files | Locally. Writes are queued for sync. |
+| `/api/query`, `/api/query/parse`, `/api/query/text`, `/api/search`, `/api/flagged`, `/api/schema` | The local index of the note files | Locally |
+| `/api/types`, templates, `/api/taxonomies`, `/api/scripts`, `/api/device-files` | Definition files | Locally. Edits made in an app stay on the device until the server's version replaces them (D20). |
+| `GET /api/tasks/{name}`, `PUT` and `DELETE /api/tasks/{name}`, `GET /api/cron` | Task files; the cron preview is a computation | Locally |
+| `/api/assets` and below | Asset files | Locally. Android fetches an asset it does not hold from the server first (D19). |
+| `/api/trash` and its restore | The local trash, kept in step by the change feed's deletes | Locally |
+| `/api/pins` and below | The local `state.db` | Locally. Pins are kept per device and are not synced. |
+| `/api/login`, `/api/logout`, `/api/health`, `/api/openapi.json`, `/api/sync/info`, `/api/sync/changes` | The embedded server itself | Locally |
+| `/api/devices` and below: the list, rename and settings, revoke, pairing, pair codes, push endpoint, bases, device commands and their results | The server's `devices`, `pair_codes`, `device_bases` and `device_commands` tables | Forwarded. Changing a device or making a pair code needs `admin`: 403 `needs_web_app`. |
+| `/api/notifications` and below: list, add, read, read all, dismiss, clear read | The server's `notifications` table | Forwarded, so the app's bell matches the web app's |
+| `GET /api/events` | The server's live events | Forwarded and merged, see below |
+| `GET /api/tasks/{name}/runs`, `GET /api/tasks/{name}/runs/{id}` | The server's `task_runs` table | Forwarded |
+| `POST /api/tasks/{name}/run` | The scheduler, which runs only on the server (D17) | Forwarded. It needs `admin`: 403 `needs_web_app`. |
+| `GET /api/tasks` | Task files, with each task's last and next run from the server | Forwarded; the local list, with no runs, while offline or unpaired |
+| `GET /api/notes/{id}/history` | The server's `versions` table | Forwarded, with `source: "server"`; see below |
+| `GET /api/notes/{id}/history/{version}` | The version's own copy | Locally when the device recorded that version, otherwise forwarded |
+| `POST /api/notes/{id}/restore` | A note write | Locally; see below |
+| `/api/clients` and below | The server's clients folder | Forwarded, `Range` included |
+| `/api/tokens`, `/api/secrets` and below | The server's `tokens` and `secrets` tables, which need `admin` even to read | Not forwarded: 403 `needs_web_app` at once |
+
+### The history
+
+The home server's history is authoritative: it holds every version from every device and the browser, while a device records only the versions it wrote or pulled, each under a version id of its own. So the History panel lists the server's versions while the app is online. Offline, unpaired, or for a note the server does not have yet, it lists the versions the device recorded, with `source: "device"`, and the panel says it shows only this device's versions.
+
+Restoring is always a local write, so it works like any edit and syncs. A version the device recorded is restored as on the server. A version only the server holds is read from the server as WCL and written locally as a new version over the request's base version, so a stale base is still a 409 conflict.
+
+### The event stream
+
+`GET /api/events` through the embedded server streams the home server's events with the device's own `note.changed` in place of the server's: a note changes on the device when the device writes or pulls it, under a version id of its own, so the server's `note.changed` would name versions the device does not hold. SSE ids are left out, since the two sources do not count together. The stream ends when the server's ends, and offline the request answers 503.
+
+The app shells answer their webview's custom scheme with whole bodies (Tauri cannot stream a custom scheme response), so both shells answer `/api/events` with 503 `no_stream` at once rather than hold a stream to the home server open that could never be answered. The web client then polls the bell every 30 seconds and on focus, as it does whenever the stream is down. The desktop app's tray and the Android app's sync each follow the home server's stream themselves.
+
+### Notifications made on the device
+
+A device script's `vault::notify` writes to the local `state.db`. Each sync round moves those notifications to the home server with `POST /api/notifications`, after pushing the notes they may open, and removes them locally, so they show in every bell.
+
 ## The sync engine on the device
 
 `crates/sync` is the device side, used by both apps through `crates/embedded`. Its crate documentation describes one round step by step; in short:

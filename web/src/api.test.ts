@@ -36,6 +36,36 @@ describe("api", () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
+  it("in an app, tells a route that needs the home server, or the web app, from other errors", async () => {
+    vi.stubGlobal("fetch", respond(503, { error: "offline", message: "Needs a connection to your server" }));
+    const offline = await api.devices().catch((e) => e);
+    expect(offline.needsServer).toBe(true);
+    expect(offline.message).toBe("Needs a connection to your server");
+    vi.stubGlobal("fetch", respond(503, { error: "not_paired", message: "Not paired" }));
+    expect((await api.notifications({ limit: 1 }).catch((e) => e)).needsServer).toBe(true);
+    vi.stubGlobal("fetch", respond(503, { error: "internal" }));
+    expect((await api.devices().catch((e) => e)).needsServer).toBe(false);
+    vi.stubGlobal("fetch", respond(403, { error: "needs_web_app", message: "Manage this in the web app" }));
+    const refused = await api.revokeDevice("d1").catch((e) => e);
+    expect(refused.needsWebApp).toBe(true);
+    expect(refused.needsServer).toBe(false);
+  });
+
+  it("asks the embedded server which app it is; the home server has no such route", async () => {
+    const info = { app: true, paired: true, device_id: "d1", device_name: "Laptop", server_url: "https://h" };
+    vi.stubGlobal("fetch", respond(200, info));
+    expect(await api.app()).toEqual(info);
+    vi.stubGlobal("fetch", respond(404, { error: "not_found" }));
+    expect(await api.app()).toBeNull();
+  });
+
+  it("reads where a history came from, the server's when it does not say", async () => {
+    vi.stubGlobal("fetch", respond(200, { id: "N1", versions: [], source: "device" }));
+    expect(await api.historyWithSource("N1")).toEqual({ versions: [], source: "device" });
+    vi.stubGlobal("fetch", respond(200, { id: "N1", versions: [] }));
+    expect((await api.historyWithSource("N1")).source).toBe("server");
+  });
+
   it("in the Android app, sends bodies over IPC and leaves bodiless requests on fetch", async () => {
     const fetch = respond(200, { types: [] });
     vi.stubGlobal("fetch", fetch);

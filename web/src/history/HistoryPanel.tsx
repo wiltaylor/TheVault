@@ -3,7 +3,7 @@
 // Arrow Up and Down step through them.
 
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
-import { type Author, type Note, type NoteDoc, type Version, api } from "../api";
+import { type Author, type HistorySource, type Note, type NoteDoc, type Version, api } from "../api";
 import { authorText, when } from "../admin/format";
 import { errorText } from "../pages/TypeEditor";
 import { type NoteSource, rightIsDrawer, setRightDrawer } from "../sidebars";
@@ -20,6 +20,8 @@ type Stored = Note & { author: Author; at: number };
 export function HistoryPanel(props: { pane: string; source: NoteSource }) {
   const noteId = props.source.noteId();
   const [versions, setVersions] = createSignal<Version[] | null>(null);
+  // In an app offline, the embedded server lists only the versions the app itself recorded.
+  const [source, setSource] = createSignal<HistorySource>("server");
   const [docs, setDocs] = createSignal<Record<string, Stored>>({});
   const [limit, setLimit] = createSignal(PAGE);
   const [error, setError] = createSignal<string | null>(null);
@@ -40,7 +42,9 @@ export function HistoryPanel(props: { pane: string; source: NoteSource }) {
       async () => {
         const mine = ++loads;
         try {
-          const list = [...(await api.history(noteId))].reverse();
+          const page = await api.historyWithSource(noteId);
+          const list = [...page.versions].reverse();
+          if (mine === loads) setSource(page.source);
           // Versions already listed keep their rows, so focus and selection stay put.
           if (mine === loads) setVersions((old) => list.map((v) => old?.find((o) => o.version === v.version && o.current === v.current) ?? v));
         } catch (e) {
@@ -125,6 +129,11 @@ export function HistoryPanel(props: { pane: string; source: NoteSource }) {
       <Show when={error()}>
         <p class="error" role="alert">
           {error()}
+        </p>
+      </Show>
+      <Show when={source() === "device"}>
+        <p class="muted history-source" role="note">
+          Showing only the versions this device saved. Connect to your server for the full history.
         </p>
       </Show>
       <Show when={versions()} fallback={<p class="muted">Loading…</p>}>

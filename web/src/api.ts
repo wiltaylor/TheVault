@@ -407,7 +407,35 @@ export class ApiError extends Error {
   get isConflict(): boolean {
     return this.status === 409 && this.body.error === "conflict";
   }
+
+  /**
+   * In an app: what was asked is the home server's, and the app cannot reach it (`offline`) or is
+   * not paired with one (`not_paired`). The message says which.
+   */
+  get needsServer(): boolean {
+    return this.status === 503 && (this.body.error === "offline" || this.body.error === "not_paired");
+  }
+
+  /** In an app: the app's device token may not do this; the web app can (D2). */
+  get needsWebApp(): boolean {
+    return this.status === 403 && this.body.error === "needs_web_app";
+  }
 }
+
+/**
+ * The app a page runs in, from its embedded server's `GET /api/app` (D18): whether it is paired,
+ * and which device it is. The home server has no such route.
+ */
+export interface AppInfo {
+  app: true;
+  paired: boolean;
+  device_id: string | null;
+  device_name: string | null;
+  server_url: string | null;
+}
+
+/** Where a note's history came from: the home server's, or in an app offline, the app's own. */
+export type HistorySource = "server" | "device";
 
 let onUnauthorized: () => void = () => {};
 
@@ -607,6 +635,14 @@ export const api = {
     request<NoteGraph>("GET", `/api/notes/${enc(id)}/graph${limit ? `?limit=${limit}` : ""}`),
   history: async (id: string) =>
     (await request<{ versions: Version[] }>("GET", `/api/notes/${enc(id)}/history`)).versions,
+  /**
+   * A note's history and where it came from. In an app the embedded server answers with the home
+   * server's history, or offline with the versions the app itself recorded (`source: "device"`).
+   */
+  historyWithSource: async (id: string) => {
+    const page = await request<{ versions: Version[]; source?: HistorySource }>("GET", `/api/notes/${enc(id)}/history`);
+    return { versions: page.versions, source: page.source ?? "server" };
+  },
   /** A stored version of a note, in the same form as the note itself. */
   version: (id: string, version: string) =>
     request<Note & { author: Author; at: number }>("GET", `/api/notes/${enc(id)}/history/${enc(version)}`),
@@ -670,6 +706,16 @@ export const api = {
   devices: async () => (await request<{ devices: Device[] }>("GET", "/api/devices")).devices,
   /** The app builds the server hands out. Public: it needs no session. */
   clients: () => request<{ clients: ClientBuild[]; enabled: boolean }>("GET", "/api/clients"),
+  /** The app this page runs in, or null in a browser: the home server answers 404. */
+  app: async (): Promise<AppInfo | null> => {
+    try {
+      const info = await request<AppInfo>("GET", "/api/app");
+      return info?.app === true ? info : null;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
   /** A pairing code whose QR payload names `serverUrl`, the address this page was loaded from. */
   createPairCode: (serverUrl: string) =>
     request<PairCode>("POST", "/api/devices/pair-codes", { server_url: serverUrl }),

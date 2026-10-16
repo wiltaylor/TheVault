@@ -260,6 +260,9 @@ export function ScheduledEditor() {
   const [problems, setProblems] = createSignal<ScriptProblem[]>([]);
   const [task, setTask] = createSignal<Task | null>(null);
   const [runs, setRuns] = createSignal<TaskRun[]>([]);
+  // In an app, the runs are the home server's: why they could not be listed, when it cannot be
+  // reached or the app is not paired.
+  const [runsUnavailable, setRunsUnavailable] = createSignal<string | null>(null);
   const [loaded, setLoaded] = createSignal(false);
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
@@ -277,9 +280,16 @@ export function ScheduledEditor() {
   const zoneList = zones();
 
   async function load(n: string) {
-    const [t, r] = await Promise.all([api.task(n), api.taskRuns(n)]);
+    const [t, r] = await Promise.all([
+      api.task(n),
+      api.taskRuns(n).catch((e: unknown) => {
+        if (e instanceof ApiError && e.needsServer) return e;
+        throw e;
+      }),
+    ]);
     setTask(t);
-    setRuns(r);
+    setRunsUnavailable(r instanceof ApiError ? r.message : null);
+    setRuns(r instanceof ApiError ? [] : r);
     return t;
   }
 
@@ -833,7 +843,15 @@ export function ScheduledEditor() {
         <Show when={!isNew()}>
           <h2>Run history</h2>
           <p class="muted hint">Newest first, up to the latest 50 runs. Open a run to see its log.</p>
-          <Show when={runs().length > 0} fallback={<p class="muted">No runs yet.</p>}>
+          <Show when={runsUnavailable()}>
+            <p class="muted" role="note">
+              The run history is your server's: {runsUnavailable()}.
+            </p>
+          </Show>
+          <Show
+            when={runs().length > 0}
+            fallback={<Show when={!runsUnavailable()}><p class="muted">No runs yet.</p></Show>}
+          >
             <ol class="run-list" aria-label="Runs">
               <For each={runs()}>{(r) => <RunItem run={r} open={r.id === justRan()} />}</For>
             </ol>

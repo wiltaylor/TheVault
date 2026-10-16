@@ -280,12 +280,16 @@ impl Worker {
             url: device.server_url.clone(),
             token: token.clone(),
         };
+        let paired = device.remote(token);
         match self
             .embedded
-            .sync_engine(device.remote(token), sync::AssetPolicy::desktop())
+            .sync_engine(paired.clone(), sync::AssetPolicy::desktop())
         {
             Ok(engine) => {
                 self.engine = Some(engine);
+                // The embedded server sends the home server's own routes, such as Settings >
+                // Devices and the notifications, to the same server.
+                self.embedded.set_remote(Some(paired));
                 self.remote.send_replace(Some(remote));
                 None
             }

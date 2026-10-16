@@ -9,8 +9,13 @@
 //!
 //! The device is not the home server, so it runs neither the scheduler nor `after_*` handlers
 //! (D17). Validation and `before_*` handlers run on every write here, and again on the home server
-//! when the write arrives. `after_*` handlers are not queued at all, and a request to run a task
-//! now answers 409.
+//! when the write arrives. `after_*` handlers are not queued at all.
+//!
+//! Routes backed by state only the home server holds, such as the paired devices, the
+//! notifications and the task runs, are not answered from the local `state.db`, which has none of
+//! it: once [`Embedded::set_remote`] pairs the server, they go to the home server with the device
+//! token, and answer 503 while it cannot be reached or the device is not paired (`home`). Running
+//! a task now is one of them, since tasks run only on the home server.
 //!
 //! Every local note write is queued for the home server in [`sync::Queue`], beside the server
 //! tables in the local `state.db`. [`Embedded::sync_engine`] builds the engine that pushes the
@@ -24,6 +29,9 @@
 //! events, their handlers, and the commands server scripts send the device (D5, D6, D22).
 
 pub mod device;
+mod home;
+
+pub use home::{NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE, OFFLINE_MESSAGE};
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, Weak};
@@ -32,7 +40,7 @@ use anyhow::Context;
 use axum::Router;
 use axum::body::{Body, HttpBody};
 use axum::http::{HeaderValue, Method, Request, Response, StatusCode, header};
-use axum::response::IntoResponse;
+use home::{Home, Route, Unavailable};
 use schema::{Doc, Schema};
 use state::{Author, SecretKey};
 use tower::ServiceExt;
@@ -63,6 +71,7 @@ struct Parts {
     app: Router,
     writer: Arc<Writer>,
     queue: Arc<sync::Queue>,
+    home: Home,
     /// Keeps the `before_*` handler host alive; it holds only a weak link to the writer.
     _handlers: script::Handlers,
 }
@@ -128,8 +137,7 @@ impl Embedded {
         let scheduler =
             scheduler::Scheduler::new(writer.clone(), host, Arc::new(state::SystemClock))
                 .context("loading the scheduled tasks")?;
-        let mut app = api::owner_router(writer.clone(), scheduler)
-            .layer(axum::middleware::from_fn(refuse_task_runs));
+        let mut app = api::owner_router(writer.clone(), scheduler);
         if let Some(web) = config.web {
             let root = Arc::new(web);
             app = app.fallback(move |req| api::web::serve(root.clone(), req));
@@ -139,6 +147,7 @@ impl Embedded {
                 app,
                 writer,
                 queue,
+                home: Home::new().context("building the home server's HTTP client")?,
                 _handlers: handlers,
             }),
         })
@@ -178,41 +187,168 @@ impl Embedded {
             .expect("an open embedded server has its parts")
     }
 
-    /// Answers one request as the owner. The body streams in and out.
+    /// Pair the embedded server with its home server, or unpair it with `None`. The routes backed
+    /// by the home server's own state go there with `remote`'s token ([`home`]).
+    pub fn set_remote(&self, remote: Option<sync::Remote>) {
+        self.parts().home.set_remote(remote);
+    }
+
+    /// The home server the embedded server forwards to, once paired.
+    pub fn remote(&self) -> Option<sync::Remote> {
+        self.parts().home.remote()
+    }
+
+    /// Answers one request as the owner. The body streams in and out. Routes backed by the home
+    /// server's own state, such as the paired devices and the notifications, are answered by the
+    /// home server (`docs/sync.md` lists them); the rest by the local vault.
     pub async fn handle<B>(&self, req: Request<B>) -> Response<Body>
     where
         B: HttpBody<Data = axum::body::Bytes> + Send + 'static,
         B::Error: Into<axum::BoxError>,
     {
         let req = req.map(Body::new);
+        let home = &self.parts().home;
+        match home::route(req.method(), req.uri().path()) {
+            Route::Local => self.local(req).await,
+            Route::Forward => home.forward(req).await,
+            Route::ForwardOrLocal => {
+                let (parts, _) = req.into_parts();
+                match home.send(again(&parts, Body::empty())).await {
+                    Ok(res) => home::translate(res).await,
+                    Err(_) => self.local(again(&parts, Body::empty())).await,
+                }
+            }
+            Route::History => self.history(req).await,
+            Route::Version { id, version } => {
+                if self.has_version(&id, &version).await {
+                    self.local(req).await
+                } else {
+                    home.forward(req).await
+                }
+            }
+            Route::Restore { id } => self.restore(&id, req).await,
+            Route::Events => home.events(self.writer(), req).await,
+            Route::App => {
+                let remote = home.remote();
+                home::json_response(
+                    StatusCode::OK,
+                    &serde_json::json!({
+                        "app": true,
+                        "paired": remote.is_some(),
+                        "device_id": remote.as_ref().map(|r| &r.device_id),
+                        "device_name": remote.as_ref().map(|r| &r.device_name),
+                        "server_url": remote.as_ref().map(|r| &r.url),
+                    }),
+                )
+            }
+            Route::NeedsWebApp => home::error(
+                StatusCode::FORBIDDEN,
+                "needs_web_app",
+                home::NEEDS_WEB_APP_MESSAGE,
+            ),
+        }
+    }
+
+    async fn local(&self, req: Request<Body>) -> Response<Body> {
         match self.parts().app.clone().oneshot(req).await {
             Ok(res) => res,
             Err(never) => match never {},
         }
     }
+
+    /// Whether the local history holds `version` of note `id`.
+    async fn has_version(&self, id: &str, version: &str) -> bool {
+        let (writer, id, version) = (self.writer().clone(), id.to_owned(), version.to_owned());
+        tokio::task::spawn_blocking(move || writer.version(&id, &version).is_ok())
+            .await
+            .unwrap_or(false)
+    }
+
+    /// `GET /api/notes/{id}/history`: the home server's history, which holds every version from
+    /// everywhere, with `source: "server"`. Unpaired, offline, or for a note the server does not
+    /// have yet, the versions this device recorded, with `source: "device"`.
+    async fn history(&self, req: Request<Body>) -> Response<Body> {
+        let (parts, _) = req.into_parts();
+        match self.parts().home.send(again(&parts, Body::empty())).await {
+            Ok(res) if res.status().is_success() => {
+                home::with_key(home::translate(res).await, "source", "server").await
+            }
+            Ok(res) if res.status() != StatusCode::NOT_FOUND => home::translate(res).await,
+            _ => {
+                let res = self.local(again(&parts, Body::empty())).await;
+                if res.status().is_success() {
+                    home::with_key(res, "source", "device").await
+                } else {
+                    res
+                }
+            }
+        }
+    }
+
+    /// `POST /api/notes/{id}/restore`. A version this device recorded is restored here. A version
+    /// only the home server holds is fetched from it and written here as a new version of the
+    /// note over the request's base, so it syncs like any local edit.
+    async fn restore(&self, id: &str, req: Request<Body>) -> Response<Body> {
+        #[derive(serde::Deserialize)]
+        struct Restore {
+            version: String,
+            base_version: Option<String>,
+        }
+        let (parts, body) = req.into_parts();
+        let Ok(bytes) = axum::body::to_bytes(body, 1024 * 1024).await else {
+            return home::error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "the body is too large",
+            );
+        };
+        let asked = serde_json::from_slice::<Restore>(&bytes).ok();
+        let local = match &asked {
+            None => true,
+            Some(r) => self.has_version(id, &r.version).await,
+        };
+        let Some(asked) = asked.filter(|_| !local) else {
+            return self.local(again(&parts, Body::from(bytes))).await;
+        };
+        let path = format!("/api/notes/{id}/history/{}", asked.version);
+        let mut fetch = Request::get(path.as_str())
+            .body(Body::empty())
+            .unwrap_or_default();
+        let (name, value) = home::accept_text();
+        fetch.headers_mut().insert(name, value);
+        let res = match self.parts().home.send(fetch).await {
+            Ok(res) if res.status().is_success() => res,
+            Ok(res) => return home::translate(res).await,
+            Err(why) => return why.response(),
+        };
+        let Some(text) = home::read_limited(res)
+            .await
+            .and_then(|b| String::from_utf8(b.to_vec()).ok())
+        else {
+            return Unavailable::Offline.response();
+        };
+        let mut body = serde_json::json!({ "wcl": text });
+        if let Some(base) = asked.base_version {
+            body["base_version"] = serde_json::json!(base);
+        }
+        let mut put = again(&parts, Body::from(body.to_string()));
+        *put.method_mut() = Method::PUT;
+        *put.uri_mut() = match format!("/api/notes/{id}").parse() {
+            Ok(uri) => uri,
+            Err(_) => return home::error(StatusCode::BAD_REQUEST, "bad_request", "bad note id"),
+        };
+        put.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        put.headers_mut().remove(header::CONTENT_LENGTH);
+        self.local(put).await
+    }
 }
 
-/// `POST /api/tasks/{name}/run` answers 409: tasks run only on the home server (D17).
-async fn refuse_task_runs(req: Request<Body>, next: axum::middleware::Next) -> Response<Body> {
-    let path = req.uri().path();
-    let is_run = req.method() == Method::POST
-        && path
-            .strip_prefix("/api/tasks/")
-            .and_then(|rest| rest.strip_suffix("/run"))
-            .is_some_and(|name| !name.is_empty() && !name.contains('/'));
-    if !is_run {
-        return next.run(req).await;
-    }
-    let mut res = (
-        StatusCode::CONFLICT,
-        r#"{"error":"home_server_only","message":"tasks run only on the home server"}"#,
-    )
-        .into_response();
-    res.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    res
+/// A request with the method, URI and headers of `parts`, and `body`.
+fn again(parts: &axum::http::request::Parts, body: Body) -> Request<Body> {
+    home::request(parts.method.clone(), &parts.uri, &parts.headers, body)
 }
 
 /// The writer hooks of a device: the script handlers' with `after_*` dropped (D17), and every

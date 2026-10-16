@@ -9,6 +9,7 @@ import { copyText } from "../blocks/CodeBlock";
 import { formatSize } from "../blocks/MediaBlocks";
 import { sessionState } from "../session";
 import { errorText } from "./TypeEditor";
+import { needsServer } from "../inApp";
 
 const KIND_LABELS: Record<ClientBuild["kind"], string> = {
   apk: "APK",
@@ -125,11 +126,14 @@ function PlatformCard(props: { title: string; blurb: string; builds: ClientBuild
  */
 export function ClientDownloads(props: { heading?: "h1" | "h2" }) {
   const [answer] = createResource(api.clients);
-  const builds = () => answer()?.clients;
+  // A resource that failed throws when read, so the answer is read only once it is ready.
+  const ready = () => (answer.state === "ready" ? answer() : undefined);
+  const builds = () => ready()?.clients;
   const heading = () => props.heading ?? "h2";
-  // An app's own embedded server hands out no builds: there is nothing to offer or explain.
+  // A server with no clients folder hands out no builds, and an app that cannot reach its home
+  // server has none to show: there is nothing to offer or explain.
   return (
-    <Show when={answer()?.enabled !== false}>
+    <Show when={ready()?.enabled !== false && !needsServer(answer.error)}>
       <section class="client-downloads" aria-label="Get the apps">
         <Show when={heading() === "h1"} fallback={<h2>Get the apps</h2>}>
           <h1>Get the apps</h1>

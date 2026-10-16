@@ -19,7 +19,7 @@ The device file holds no secret. Without the keyring the app still opens and edi
 
 The window loads `vault://localhost/` through a custom URI scheme, with no network port (D26). On that scheme:
 
-- `/api/...` goes to the in-process server (`crates/embedded`), acting as the owner.
+- `/api/...` goes to the in-process server (`crates/embedded`), acting as the owner. It answers from the local vault, and sends the routes backed by the home server's own state, such as Settings > Devices and the notifications, to the home server with the device token ([`docs/sync.md`](sync.md#what-the-apps-answer-locally)). `/api/events` answers 503 at once, since the scheme cannot stream; the web client polls instead.
 - `/_desktop/...` goes to the app itself: the setup page, `GET /_desktop/status`, `POST /_desktop/pair`, `POST /_desktop/sync`, `POST /_desktop/capture`, and the update prompt's `POST /_desktop/update/open` and `POST /_desktop/update/skip`.
 - Every other path serves the bundled `web/dist`, so the web client runs unchanged.
 

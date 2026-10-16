@@ -349,6 +349,15 @@ async fn serve(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
 
 /// `/api` from the embedded server. A write that succeeded wakes the sync loop.
 async fn api(state: &App, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+    // The custom scheme answers with whole bodies, so an event stream that never ends could never
+    // be answered: the web client is told at once and polls instead, and no stream to the home
+    // server is held open for nothing.
+    if request.uri().path() == "/api/events" {
+        return json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &json!({ "error": "no_stream", "message": "the app polls instead of streaming events" }),
+        );
+    }
     let writes = !matches!(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS

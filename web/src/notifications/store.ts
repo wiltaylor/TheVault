@@ -4,6 +4,7 @@
 
 import { createSignal } from "solid-js";
 import { api } from "../api";
+import { needsServer } from "../inApp";
 import { noteChangedElsewhere } from "../changes";
 import { connectLive } from "../live";
 import {
@@ -39,6 +40,7 @@ const [list, setList] = createSignal<ListState>({ items: [], next: null });
 const [loaded, setLoaded] = createSignal(false);
 const [loading, setLoading] = createSignal(false);
 const [failed, setFailed] = createSignal(false);
+const [failure, setFailure] = createSignal<string | null>(null);
 const [open, setOpen] = createSignal(false);
 const [said, setSaid] = createSignal("");
 
@@ -52,6 +54,16 @@ export const listLoaded = loaded;
 export const listLoading = loading;
 /** Reactive: whether the last load failed. */
 export const listFailed = failed;
+/**
+ * Reactive: why the last load failed, when it says something to show: in an app, that the bell
+ * needs the home server, which it cannot reach or is not paired with.
+ */
+export const listFailure = failure;
+
+function failedWith(e: unknown) {
+  setFailed(true);
+  setFailure(needsServer(e) && e instanceof Error ? e.message : null);
+}
 /** Reactive: whether the panel shows. */
 export const panelOpen = open;
 /** Reactive: the live region's text, announcing a notification that just came. */
@@ -147,6 +159,7 @@ async function loadFirst() {
   const mine = ++loads;
   setLoading(true);
   setFailed(false);
+  setFailure(null);
   try {
     const page = await api.notifications({ limit: PAGE_SIZE });
     if (mine !== loads) return;
@@ -154,8 +167,8 @@ async function loadFirst() {
     lastSeen = { newest: page.items[0]?.id ?? null, unread: page.unread };
     setList({ items: page.items, next: page.next });
     setLoaded(true);
-  } catch {
-    if (mine === loads) setFailed(true);
+  } catch (e) {
+    if (mine === loads) failedWith(e);
   } finally {
     if (mine === loads) setLoading(false);
   }
@@ -185,8 +198,8 @@ export async function loadMore(): Promise<void> {
     const page = await api.notifications({ limit: PAGE_SIZE, cursor });
     setUnread(page.unread);
     setList((s) => appendPage(s, page));
-  } catch {
-    setFailed(true);
+  } catch (e) {
+    failedWith(e);
   } finally {
     setLoading(false);
   }

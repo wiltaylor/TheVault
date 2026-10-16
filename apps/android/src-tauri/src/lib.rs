@@ -107,6 +107,21 @@ async fn serve(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
     if path != "/api" && !path.starts_with("/api/") {
         return asset(app, path);
     }
+    // The custom scheme answers with whole bodies, so an event stream that never ends could never
+    // be answered: the web client is told at once and polls instead, and no stream to the home
+    // server is held open for nothing.
+    if path == "/api/events" {
+        let mut res = Response::new(
+            br#"{"error":"no_stream","message":"the app polls instead of streaming events"}"#
+                .to_vec(),
+        );
+        *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        res.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        return res;
+    }
     let Some(core) = app.try_state::<Arc<Core>>() else {
         return status(StatusCode::SERVICE_UNAVAILABLE);
     };

@@ -98,6 +98,14 @@ async function scenario() {
   const listed = JSON.stringify(devices);
   assert.ok(listed.includes(deviceFile.device_id), `the server lists the device: ${listed}`);
 
+  // Settings > Devices in the app lists the home server's devices, this one marked, read-only:
+  // the device table is the server's, not the local vault's.
+  await app.navigate(`${ORIGIN}/settings/devices`);
+  const card = `[data-device='${deviceFile.device_id}']`;
+  await waitFor("this device in Settings > Devices", async () => /This device/.test((await app.text(`${card} h2`)) ?? ""));
+  assert.equal(await app.run(`return document.querySelector("${card} input[id$='-name']").matches(':disabled');`), true);
+  assert.equal(await app.run("return [...document.querySelectorAll('.settings-tabs a')].some((a) => a.textContent === 'API tokens');"), false);
+
   // The server's note was pulled into the local vault and shows.
   await app.navigate(`${ORIGIN}/notes/${created.id}`);
   await waitFor("the pulled note's title", async () => (await app.text("[aria-label='Title']")) === "Written on the server");

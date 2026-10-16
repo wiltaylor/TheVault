@@ -1,14 +1,15 @@
-import { For, Show, createResource, createSignal } from "solid-js";
+import { For, type JSX, Show, createResource, createSignal } from "solid-js";
 import { type Scope, type Token, api } from "../api";
 import { when } from "../admin/format";
 import { isName } from "../defs/typeModel";
 import { errorText } from "./TypeEditor";
+import { appInfo } from "../inApp";
 
 /**
  * Secrets that tasks and after handlers read (D10). A value is written here and never shown
  * again: the API has no way to read one back.
  */
-export function Secrets() {
+function SecretsPage() {
   const [secrets, { refetch }] = createResource(api.secrets);
   const [name, setName] = createSignal("");
   const [value, setValue] = createSignal("");
@@ -143,7 +144,7 @@ const SCOPES: { scope: Scope; label: string }[] = [
  * API tokens for agents and the CLI (D11). A new token's secret is shown once, on the page that
  * created it; it is not stored in the browser and the API never returns it again.
  */
-export function Tokens() {
+function TokensPage() {
   const [tokens, { refetch }] = createResource(api.tokens);
   const [name, setName] = createSignal("");
   const [scope, setScope] = createSignal<Scope>("read");
@@ -269,5 +270,45 @@ export function Tokens() {
         )}
       </Show>
     </section>
+  );
+}
+
+/**
+ * Credentials need `admin` on the home server, and an app's device token never has it (D2): in
+ * an app, a section that manages them says to use the web app instead.
+ */
+function WebAppOnly(props: { title: string; what: string; children: JSX.Element }) {
+  const [app] = createResource(appInfo);
+  return (
+    <Show when={app.state === "ready"}>
+      <Show when={app()} fallback={props.children}>
+        <section class="list-page">
+          <header class="note-header">
+            <h1>{props.title}</h1>
+          </header>
+          <p role="status">
+            Manage {props.what} in the web app. This app's link to your server cannot read or change them.
+          </p>
+        </section>
+      </Show>
+    </Show>
+  );
+}
+
+/** Settings > Secrets, or in an app, where to manage them. */
+export function Secrets() {
+  return (
+    <WebAppOnly title="Secrets" what="secrets">
+      <SecretsPage />
+    </WebAppOnly>
+  );
+}
+
+/** Settings > API tokens, or in an app, where to manage them. */
+export function Tokens() {
+  return (
+    <WebAppOnly title="API tokens" what="API tokens">
+      <TokensPage />
+    </WebAppOnly>
   );
 }

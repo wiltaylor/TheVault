@@ -3,6 +3,7 @@ import { type Device, type DeviceExclusion, type PairCode, api } from "../api";
 import { when } from "../admin/format";
 import { ClientDownloads } from "./Apps";
 import { errorText } from "./TypeEditor";
+import { appInfo } from "../inApp";
 
 /** The commands every device app implements (D22). A device's own `devices/<platform>.wcl` may add more. */
 export const BUILTIN_COMMANDS = ["send_sms", "upsert_contact", "delete_contact", "show_notification"];
@@ -28,6 +29,9 @@ const PLATFORM_LABELS: Record<Device["platform"], string> = { linux: "Linux desk
  */
 export function Devices() {
   const [devices, { refetch }] = createResource(api.devices);
+  // In an app the list is the home server's, and changing a device needs the web app (D2).
+  const [app] = createResource(appInfo);
+  const inApp = () => (app.state === "ready" ? app() : null);
   const [pairing, setPairing] = createSignal<PairCode | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -56,15 +60,24 @@ export function Devices() {
       </header>
       <ClientDownloads />
       <h2>Paired devices</h2>
-      <p class="muted">
-        The desktop and Android apps pair once with the password or a pairing code. Revoking a device stops its access at
-        once.
-      </p>
-      <div class="actions">
-        <button type="button" class="primary" disabled={busy()} onClick={() => void pair()}>
-          Pair a device
-        </button>
-      </div>
+      <Show
+        when={!inApp()}
+        fallback={
+          <p class="muted" role="note">
+            Pair, rename and revoke devices, and change their settings, in the web app.
+          </p>
+        }
+      >
+        <p class="muted">
+          The desktop and Android apps pair once with the password or a pairing code. Revoking a device stops its access
+          at once.
+        </p>
+        <div class="actions">
+          <button type="button" class="primary" disabled={busy()} onClick={() => void pair()}>
+            Pair a device
+          </button>
+        </div>
+      </Show>
       <Show when={pairing()}>
         {(p) => (
           <div class="pair-code" role="region" aria-label="Pair a device">
@@ -94,10 +107,24 @@ export function Devices() {
           {error()}
         </p>
       </Show>
-      <Show when={devices()}>
+      <Show when={devices.error}>
+        <p class="error" role="alert">
+          {errorText(devices.error)}
+        </p>
+      </Show>
+      <Show when={devices.state === "ready" && devices()}>
         {(list) => (
           <Show when={list().length > 0} fallback={<p class="muted">No devices are paired.</p>}>
-            <For each={list()}>{(d) => <DeviceCard device={d} onChanged={() => void refetch()} />}</For>
+            <For each={list()}>
+              {(d) => (
+                <DeviceCard
+                  device={d}
+                  thisDevice={inApp()?.device_id === d.id}
+                  readOnly={!!inApp()}
+                  onChanged={() => void refetch()}
+                />
+              )}
+            </For>
           </Show>
         )}
       </Show>
@@ -105,7 +132,11 @@ export function Devices() {
   );
 }
 
-function DeviceCard(props: { device: Device; onChanged: () => void }) {
+/**
+ * One paired device. `thisDevice` marks the app the page runs in; `readOnly` shows the settings
+ * without letting them change, in an app.
+ */
+function DeviceCard(props: { device: Device; thisDevice?: boolean; readOnly?: boolean; onChanged: () => void }) {
   const d = props.device;
   const [name, setName] = createSignal(d.name);
   const [title, setTitle] = createSignal(d.name);
@@ -168,7 +199,13 @@ function DeviceCard(props: { device: Device; onChanged: () => void }) {
   return (
     <article class="field-card device-card" data-device={d.id} aria-label={`Device ${title()}`}>
       <header class="device-head">
-        <h2>{title()}</h2>
+        <h2>
+          {title()}
+          <Show when={props.thisDevice}>
+            {" "}
+            <span class="this-device">This device</span>
+          </Show>
+        </h2>
         <span class="muted">
           {PLATFORM_LABELS[d.platform] ?? d.platform} · paired {when(d.created)} · last seen{" "}
           {d.last_seen === null ? "never" : when(d.last_seen)}
@@ -176,6 +213,7 @@ function DeviceCard(props: { device: Device; onChanged: () => void }) {
         </span>
       </header>
       <form aria-label={`Settings for ${title()}`} onSubmit={save}>
+        <fieldset class="device-settings" disabled={props.readOnly}>
         <div class="form-grid">
           <label for={id("name")}>Name</label>
           <input id={id("name")} value={name()} autocomplete="off" onInput={(e) => setName(e.currentTarget.value)} />
@@ -260,14 +298,17 @@ function DeviceCard(props: { device: Device; onChanged: () => void }) {
             Add exclusion
           </button>
         </fieldset>
-        <div class="actions">
-          <button type="submit" class="primary" disabled={busy() || !name().trim()}>
-            Save
-          </button>
-          <button type="button" class="danger" onClick={() => void revoke()}>
-            Revoke
-          </button>
-        </div>
+        </fieldset>
+        <Show when={!props.readOnly}>
+          <div class="actions">
+            <button type="submit" class="primary" disabled={busy() || !name().trim()}>
+              Save
+            </button>
+            <button type="button" class="danger" onClick={() => void revoke()}>
+              Revoke
+            </button>
+          </div>
+        </Show>
       </form>
       <Show when={error()}>
         <p class="error" role="alert">

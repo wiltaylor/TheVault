@@ -2985,6 +2985,24 @@ button.link {
   font-size: 1.1rem;
 }
 
+/* The app the page runs in, in its own Settings > Devices. */
+.this-device {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+/* The settings of a device, a plain group: in an app it is disabled, read-only. */
+.device-settings {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
 .device-switches {
   display: flex;
   flex-wrap: wrap;

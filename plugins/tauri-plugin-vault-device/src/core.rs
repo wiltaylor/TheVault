@@ -238,6 +238,9 @@ impl Core {
 
     /// Set the pairing Kotlin holds, or clear it when the device is not paired.
     pub fn set_link(&self, link: Option<Link>) {
+        // The embedded server sends the home server's own routes, such as Settings > Devices and
+        // the notifications, to the same server.
+        self.server.set_remote(link.as_ref().map(Link::remote));
         *lock(&self.link) = link;
     }
 

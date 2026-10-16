@@ -20,6 +20,8 @@
 //!    titled `<title> (conflict, <device name>)` whose `conflict_of` field names the original,
 //!    and adds a notification that opens the copy. Either way the device takes the server's
 //!    result as its own.
+//!    Then the notifications made on the device, such as by a device script, move to the server
+//!    with `POST /api/notifications`: the app's bell shows the server's.
 //! 5. **Pull.** `GET /api/sync/changes` from the stored cursor, a page at a time. Definitions and
 //!    `devices/*.wcl` are written first, then the notes, exactly as the server holds them, and
 //!    indexed. A note with a change still queued is left for the next push to merge.
@@ -176,6 +178,8 @@ pub struct Report {
     pub pulled: usize,
     pub assets_fetched: usize,
     pub assets_evicted: usize,
+    /// Notifications made on the device that moved to the server.
+    pub notifications_pushed: usize,
 }
 
 /// The sync engine of one device.
@@ -281,10 +285,44 @@ impl Engine {
         for p in self.queue.pending()? {
             self.push_one(&p, &mut report)?;
         }
+        self.push_notifications(&mut report)?;
         self.pull(&mut report)?;
         self.sync_assets(&mut report)?;
         self.report_bases()?;
         Ok(report)
+    }
+
+    /// Move the notifications made on the device, such as by a device script's `vault::notify`,
+    /// to the home server, whose notifications the app's bell shows. Each is added there, then
+    /// removed here. The notes they open were pushed before them.
+    fn push_notifications(&self, report: &mut Report) -> Result<()> {
+        let state = self.writer.state();
+        loop {
+            let page = state.notifications(false, 100, None)?;
+            if page.items.is_empty() {
+                return Ok(());
+            }
+            for n in page.items {
+                let mut body = json!({ "title": n.title });
+                if let Some(b) = &n.body {
+                    body["body"] = json!(b);
+                }
+                if let Some(note) = &n.note_id {
+                    body["note"] = json!(note);
+                }
+                if let Some(url) = &n.url {
+                    body["url"] = json!(url);
+                }
+                self.home
+                    .post_json("/api/notifications", &body)?
+                    .ok("moving a notification to the server")?;
+                match state.delete_notification(&n.id) {
+                    Ok(()) | Err(state::Error::UnknownNotification(_)) => {}
+                    Err(e) => return Err(e.into()),
+                }
+                report.notifications_pushed += 1;
+            }
+        }
     }
 
     /// Tell the server which base versions the queued changes depend on (D29). A base the server

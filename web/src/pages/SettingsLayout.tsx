@@ -1,5 +1,6 @@
 import { A, Navigate, useLocation } from "@solidjs/router";
-import { For, type ParentProps } from "solid-js";
+import { For, type ParentProps, createResource } from "solid-js";
+import { appInfo } from "../inApp";
 
 const SECTIONS: [string, string][] = [
   ["/settings", "General"],
@@ -11,12 +12,20 @@ const SECTIONS: [string, string][] = [
   ["/settings/devices", "Devices"],
 ];
 
+/**
+ * The sections the apps leave out: they hold credentials, which need `admin` on the home server,
+ * and an app's device token never has it (D2). They are managed in the web app.
+ */
+export const WEB_APP_ONLY = ["/settings/secrets", "/settings/tokens"];
+
 /** The settings area: tabs for each section above the section's own page. */
 export function SettingsLayout(props: ParentProps) {
+  const [app] = createResource(appInfo);
+  const sections = () => (app() ? SECTIONS.filter(([href]) => !WEB_APP_ONLY.includes(href)) : SECTIONS);
   return (
     <div class="settings-layout">
       <nav class="settings-tabs" aria-label="Settings sections">
-        <For each={SECTIONS}>
+        <For each={sections()}>
           {([href, label]) => (
             <A href={href} activeClass="active" end={href === "/settings"}>
               {label}

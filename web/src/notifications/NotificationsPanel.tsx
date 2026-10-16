@@ -18,6 +18,7 @@ import {
   closePanel,
   dismiss,
   listFailed,
+  listFailure,
   listLoaded,
   listLoading,
   loadMore,
@@ -201,7 +202,7 @@ function Panel(props: { anchor: HTMLButtonElement; sheet: boolean }) {
         <Show
           when={listLoaded()}
           fallback={
-            <p class="notif-empty muted">{listFailed() ? "Notifications could not be loaded." : "Loading…"}</p>
+            <p class="notif-empty muted">{listFailed() ? (listFailure() ?? "Notifications could not be loaded.") : "Loading…"}</p>
           }
         >
           <Show when={items().length} fallback={<p class="notif-empty muted">No notifications</p>}>

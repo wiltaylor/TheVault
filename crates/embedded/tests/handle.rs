@@ -198,8 +198,11 @@ async fn creates_reads_and_updates_notes_as_the_owner_with_no_session() {
     );
     assert_eq!(read["version"], saved["version"]);
 
-    // Admin routes answer too: the caller is the owner.
-    d.get("/api/tokens").await;
+    // Admin routes on the vault's files answer too: the caller is the owner. Tokens and secrets
+    // are the home server's, which a device token cannot reach (D2).
+    d.get("/api/device-files").await;
+    let refused = d.json("GET", "/api/tokens", None, 403).await;
+    assert_eq!(refused["error"], "needs_web_app", "{refused}");
 
     // A missing note is a 404, not a login prompt.
     d.json("GET", "/api/notes/01JZZZZZZZZZZZZZZZZZZZZZZZ", None, 404)
@@ -351,9 +354,12 @@ async fn runs_no_scheduler_and_no_after_handlers() {
     assert!(!names.iter().any(|n| n == "scheduler"), "{names:?}");
     assert!(!names.iter().any(|n| n == "handler-queue"), "{names:?}");
 
-    // The every-minute task is listed but has never run, and cannot be run by hand here.
-    let runs = d.get("/api/tasks/noop/runs").await;
-    assert_eq!(runs["runs"], json!([]), "{runs}");
-    let refused = d.json("POST", "/api/tasks/noop/run", None, 409).await;
-    assert_eq!(refused["error"], "home_server_only", "{refused}");
+    // The every-minute task is listed. Its runs, and running it now, are the home server's,
+    // and this device is not paired with one.
+    let tasks = d.get("/api/tasks").await;
+    assert_eq!(tasks["tasks"][0]["name"], "noop", "{tasks}");
+    let runs = d.json("GET", "/api/tasks/noop/runs", None, 503).await;
+    assert_eq!(runs["error"], "not_paired", "{runs}");
+    let refused = d.json("POST", "/api/tasks/noop/run", None, 503).await;
+    assert_eq!(refused["error"], "not_paired", "{refused}");
 }

@@ -81,7 +81,7 @@ With nothing published, both places explain how to publish.
 
 | Route | What it does |
 |---|---|
-| `GET /api/clients` | The manifest's builds, each with `path`, its download path, `url`, its absolute address as the request reached the server, and for an APK `qr_svg`, the QR code of `url`. `enabled` is false on an app's own embedded server, which hands out nothing |
+| `GET /api/clients` | The manifest's builds, each with `path`, its download path, `url`, its absolute address as the request reached the server, and for an APK `qr_svg`, the QR code of `url`. `enabled` is false on a server with no clients folder. An app's embedded server forwards these routes to its home server |
 | `GET /api/clients/{filename}` | One build's bytes, as an attachment with its media type (`application/vnd.android.package-archive` for an APK, `application/octet-stream` for an AppImage, `application/vnd.debian.binary-package`, `application/x-rpm`), `Content-Length`, one `Range` (206), and the SHA-256 as its `ETag` |
 | `GET /api/clients/latest/{kind}[?arch=]` | The newest build of `apk`, `appimage`, `deb` or `rpm`, for `arch` or the kind's usual architecture (`aarch64` for an APK, `x86_64` otherwise). The address never changes, so an updater can follow it |
 

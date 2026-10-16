@@ -9,7 +9,9 @@ publish.workspace = true
 anyhow.workspace = true
 api.workspace = true
 axum.workspace = true
+futures-util = { workspace = true, features = ["std"] }
 regex = "1"
+reqwest = { workspace = true, features = ["stream"] }
 rusqlite.workspace = true
 scheduler.workspace = true
 schema.workspace = true
@@ -20,13 +22,14 @@ serde_json.workspace = true
 state.workspace = true
 store.workspace = true
 sync.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
 tower = { version = "0.5", features = ["util"] }
 writer.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+testkit.workspace = true
 tokio.workspace = true
-futures-util = "0.3"
 
 [lints]
 workspace = true
