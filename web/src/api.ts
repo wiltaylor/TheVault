@@ -297,7 +297,7 @@ export interface TrashEntry {
 
 /** Why a script would not compile when the vault runs it in one role. */
 export interface ScriptProblem {
-  role: "before_handler" | "after_handler" | "task";
+  role: "before_handler" | "after_handler" | "task" | "device";
   message: string;
 }
 

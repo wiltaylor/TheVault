@@ -236,7 +236,7 @@ pub async fn script(
 }
 
 /// Why a script would not compile, once for each way the vault runs it.
-fn problems_json(problems: &[writer::ScriptProblem]) -> Value {
+pub(crate) fn problems_json(problems: &[writer::ScriptProblem]) -> Value {
     problems
         .iter()
         .map(|p| json!({ "role": p.role.as_str(), "message": p.message }))

@@ -30,7 +30,7 @@ use state::{Author, CommandStatus, Device, NewDevice, PushTarget, Scope};
 use writer::Writer;
 
 use crate::auth::GrantedScope;
-use crate::defs::{WclBody, body, text_or_json};
+use crate::defs::{WclBody, body, problems_json, text_or_json};
 use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
@@ -511,7 +511,8 @@ pub async fn file(
 }
 
 /// `PUT /api/device-files/{platform}`: create or replace the file from WCL text, or JSON
-/// `{ "wcl": "..." }`. Stored in canonical form.
+/// `{ "wcl": "..." }`. Stored in canonical form. The JSON answer re-checks every script the file
+/// names, now as a device script, in `scripts`: `[{ "name", "problems" }]`.
 pub async fn put_file(
     State(w): Shared,
     Path(platform): Path<String>,
@@ -520,9 +521,22 @@ pub async fn put_file(
 ) -> Result<Response, ApiError> {
     let b: WclBody = body(&headers, &raw, |wcl| WclBody { wcl })?;
     let p = platform.clone();
-    let wcl = blocking(w, move |w| w.put_device_file(&p, &b.wcl)).await?;
+    let (wcl, scripts) = blocking(w, move |w| {
+        let wcl = w.put_device_file(&p, &b.wcl)?;
+        let mut scripts = Vec::new();
+        if let Ok(file) = DeviceFile::parse(&p, &wcl) {
+            for name in file.scripts() {
+                let source = w.read_script(name)?;
+                let problems = w.script_problems(name, &source)?;
+                scripts.push(json!({ "name": name, "problems": problems_json(&problems) }));
+            }
+        }
+        Ok::<_, writer::Error>((wcl, scripts))
+    })
+    .await?;
     let mut json = device_file_json(&platform, &wcl);
     json["wcl"] = json!(wcl);
+    json["scripts"] = json!(scripts);
     Ok(text_or_json(&headers, wcl, json))
 }
 

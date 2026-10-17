@@ -9,6 +9,7 @@ const ROLE_LABELS: Record<ScriptProblem["role"], string> = {
   before_handler: "As a before handler",
   after_handler: "As an after handler",
   task: "As a task",
+  device: "As a device script",
 };
 
 const STARTER = `fn run() {

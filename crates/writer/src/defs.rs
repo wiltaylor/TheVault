@@ -26,6 +26,18 @@ pub struct ScriptProblem {
     pub message: String,
 }
 
+/// Whether `source` imports the `device` module, which only device scripts may use (D22).
+fn uses_device_module(source: &str) -> bool {
+    source.lines().any(|line| {
+        line.trim()
+            .strip_prefix("use")
+            .filter(|rest| rest.starts_with(char::is_whitespace))
+            .map(str::trim_start)
+            .and_then(|rest| rest.strip_prefix("device"))
+            .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+    })
+}
+
 /// The vault path of taxonomy `name`.
 pub fn taxonomy_path(name: &str) -> String {
     format!("taxonomies/{name}.wcl")
@@ -448,7 +460,8 @@ impl Writer {
 
     /// Why `source` would not compile as script `name`, once for each way the vault runs it: as
     /// a `before_*` or `after_*` handler of some type, as a task, or on a device. A script nothing
-    /// names yet is checked as a task. Empty when it compiles every way it runs. Nothing is stored.
+    /// names yet is checked as a task, unless it uses the `device` module: then the one problem is
+    /// that no device file names it. Empty when it compiles every way it runs. Nothing is stored.
     pub fn script_problems(&self, name: &str, source: &str) -> Result<Vec<ScriptProblem>> {
         check_name("script", name)?;
         let mut roles: Vec<ScriptRole> = self.read_index(|_, schema| {
@@ -476,6 +489,14 @@ impl Writer {
             roles.push(ScriptRole::Device);
         }
         if roles.is_empty() {
+            if uses_device_module(source) {
+                return Ok(vec![ScriptProblem {
+                    role: ScriptRole::Device,
+                    message: format!(
+                        "script {name:?} uses the device module but no devices/<platform>.wcl names it"
+                    ),
+                }]);
+            }
             roles.push(ScriptRole::Task);
         }
         roles.sort();
@@ -724,6 +745,15 @@ fn missing_canvas(id: &str, name: &str) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_script_uses_the_device_module_only_when_it_imports_it() {
+        assert!(uses_device_module("use vault\nuse device\n"));
+        assert!(uses_device_module("  use   device // phone\n"));
+        assert!(!uses_device_module("use vault\nfn run() {}\n"));
+        assert!(!uses_device_module("use devices\n"));
+        assert!(!uses_device_module("// use device\nuser device\n"));
+    }
 
     #[test]
     fn renames_take_their_children_and_prefer_the_longest_match() {

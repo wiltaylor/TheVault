@@ -809,3 +809,77 @@ fn settings_queues_import_history_only_when_declared_and_enabled_and_sees_its_pr
         409,
     );
 }
+
+fn put_script(api: &Api, name: &str, source: &str) -> Value {
+    send(
+        api.admin("PUT", &format!("/api/scripts/{name}"))
+            .json(&json!({ "source": source })),
+        200,
+    )
+}
+
+fn problems(api: &Api, name: &str) -> Value {
+    send(api.admin("GET", &format!("/api/scripts/{name}")), 200)["problems"].clone()
+}
+
+/// A vault whose `devices/android.wcl` is gone, however the server seeded it.
+fn without_device_file(api: &Api) {
+    let res = api
+        .admin("GET", "/api/device-files/android")
+        .send()
+        .unwrap();
+    if res.status().as_u16() == 200 {
+        send(api.admin("DELETE", "/api/device-files/android"), 200);
+    }
+}
+
+#[test]
+fn device_scripts_put_before_the_device_file_naming_them_report_one_clear_problem_until_it_does() {
+    let api = Api::start_seeded(|_| {});
+    without_device_file(&api);
+
+    // A script using `device` that no device file names reports exactly one clear problem, not
+    // the compile errors of checking it as a task.
+    // One that does not use it compiles as a task.
+    let mut used = 0;
+    for (name, source) in writer::DEFAULT_DEVICE_SCRIPTS {
+        let expected = if source.lines().any(|l| l.trim() == "use device") {
+            used += 1;
+            json!([{
+                "role": "device",
+                "message": format!(
+                    "script {name:?} uses the device module but no devices/<platform>.wcl names it"
+                ),
+            }])
+        } else {
+            json!([])
+        };
+        let out = put_script(&api, name, source);
+        assert_eq!(out["problems"], expected, "{name}: {out}");
+        assert_eq!(problems(&api, name), expected, "{name}");
+    }
+    assert!(used > 0, "no default device script uses the device module");
+
+    // Putting the device file re-checks every script it names as a device script.
+    let out = put_file(&api, "android", writer::DEFAULT_ANDROID_DEVICE_FILE, 200);
+    let checked = out["scripts"].as_array().expect("scripts").clone();
+    let names: Vec<&str> = checked
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    for (name, _) in writer::DEFAULT_DEVICE_SCRIPTS {
+        assert!(names.contains(&name), "{name} not re-checked: {out}");
+    }
+    for s in &checked {
+        assert_eq!(s["problems"], json!([]), "{s}");
+    }
+    for (name, _) in writer::DEFAULT_DEVICE_SCRIPTS {
+        assert_eq!(problems(&api, name), json!([]), "{name}");
+    }
+
+    // A script that does not use `device` and that nothing names is still checked as a task.
+    let out = put_script(&api, "broken", "fn run() -> Result[(), string] { nope }\n");
+    let p = out["problems"].as_array().unwrap();
+    assert_eq!(p.len(), 1, "{out}");
+    assert_eq!(p[0]["role"], "task", "{out}");
+}
