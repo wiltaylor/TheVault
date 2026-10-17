@@ -1,6 +1,6 @@
 [package]
 name = "thevault-android"
-version = "0.1.5"
+version = "0.1.6"
 description = "TheVault's Android app"
 edition = "2024"
 license = "MIT"
