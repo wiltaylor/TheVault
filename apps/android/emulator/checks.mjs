@@ -6,9 +6,16 @@
 //   node apps/android/emulator/checks.mjs       (inside ./dev, once the emulator is booted)
 //
 // Environment:
-//   THEVAULT_APK            the APK to test (default: the x86_64 debug APK `just android-build x86_64` writes)
+//   THEVAULT_APK            the APK to test (default: the x86_64 debug APK `just android-build x86_64` writes);
+//                           its package id, read with `aapt2 dump badging`, is the app the run drives,
+//                           so a release APK (dev.wiltaylor.thevault) runs too
 //   THEVAULT_EMULATOR_OUT   where results go (default .scratch/emulator)
 //   THEVAULT_CHECKS         comma-separated check numbers to report; the setup the others need still runs
+//   THEVAULT_CHECKS_ONLY    1: run only the THEVAULT_CHECKS checks and the onboarding they need (1, 3,
+//                           16 and 24 to 28, unreported); a listed check that needs an unlisted one fails
+//   THEVAULT_SMOKE          1: first run the release smoke test (docs/android-release.md): the app's
+//                           process lives 20 s after launch, shows onboarding, and no FATAL EXCEPTION
+//                           of the app is in logcat then or at the end of the run
 //   THEVAULT_PERIODIC_WAIT  minutes to wait for the 15-minute background work (default 17)
 //   THEVAULT_UPDATE_APK     the newer APK check 49 publishes, with THEVAULT_UPDATE_VERSION its version
 //                           (default: built here, the same app one patch version up)
@@ -28,12 +35,12 @@
 //     app from an untrusted installer (ACCESS_RESTRICTED_SETTINGS=deny) is set by hand first.
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as L from "./lib.mjs";
 
-const { repo, PKG, MAIN, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
+const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
 const out = join(repo, process.env.THEVAULT_EMULATOR_OUT ?? ".scratch/emulator");
 const shots = join(out, "shots");
@@ -43,8 +50,12 @@ mkdirSync(logs, { recursive: true });
 const cache = join(repo, "target/android-emulator");
 mkdirSync(cache, { recursive: true });
 
-const apk = process.env.THEVAULT_APK ?? join(repo, "apps/android/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk");
+const apk = L.APK;
 const only = process.env.THEVAULT_CHECKS ? new Set(process.env.THEVAULT_CHECKS.split(",").map(Number)) : null;
+const onlyListed = Boolean(only) && process.env.THEVAULT_CHECKS_ONLY === "1";
+/** The checks a THEVAULT_CHECKS_ONLY run still runs, unreported: pairing and the capture setup that ends onboarding. */
+const SETUP = new Set([1, 3, 16, 24, 25, 26, 27, 28]);
+const smoke = process.env.THEVAULT_SMOKE === "1";
 const periodicWait = Number(process.env.THEVAULT_PERIODIC_WAIT ?? 17) * 60_000;
 
 const NTFY_APK = "https://github.com/binwiederhier/ntfy-android/releases/download/v1.25.2/ntfy-1.25.2-fdroid-release.apk";
@@ -71,7 +82,11 @@ for (const line of readFileSync(join(repo, "docs/android-manual-checks.md"), "ut
 
 const results = {};
 function record(n, status, note, evidence = []) {
-  if (only && !only.has(n)) return;
+  if (only && !only.has(n)) {
+    // An unreported check is setup for the reported ones: say when it fails, since they will too.
+    if (status === "fail") console.log(`[${String(n).padStart(2)}] (setup, unreported) FAIL: ${note}`);
+    return;
+  }
   results[n] = { status, note, evidence: evidence.filter(Boolean).map((p) => p.replace(`${repo}/`, "")) };
   console.log(`[${String(n).padStart(2)}] ${status.toUpperCase()}: ${note}`);
   writeFileSync(join(out, "results.json"), JSON.stringify(results, null, 2));
@@ -103,6 +118,7 @@ async function capturedUntil(what, fn) {
 
 /** Runs check `n`: `body` answers [status, note, evidence] or throws, which is a fail. */
 async function check(n, body) {
+  if (onlyListed && !only.has(n) && !SETUP.has(n)) return;
   const t0 = Date.now();
   current = n;
   try {
@@ -311,6 +327,7 @@ async function updateNote(id, change) {
 /** The app's local API, through its WebView: what the phone's own vault holds. */
 let pw;
 async function page() {
+  if (!DEBUGGABLE) throw new Error(`this check drives the app's WebView with Playwright, which needs a debuggable build; ${PKG} from ${apk} is not one`);
   if (pw) {
     try {
       await pw.page.evaluate(() => 1);
@@ -352,6 +369,30 @@ async function local(method, path, body) {
     [method, path, body],
   );
 }
+
+/**
+ * Whether note `id` is in the phone's own vault: through its local API in a debuggable build, or
+ * as its file under the app's data folder (root shell) in a release build, whose WebView
+ * Playwright cannot reach.
+ */
+async function onPhone(id) {
+  if (DEBUGGABLE) return (await local("GET", `/api/notes/${id}`)).status === 200;
+  return shellTry(`find /data/user/0/${PKG} -name '${id}.wcl' 2>/dev/null`).includes(`${id}.wcl`);
+}
+
+/**
+ * Shows the app's page at `path`, as tapping a notification for it does: a server notification
+ * whose id the launch intent carries (so the app marks a real notification read) and the path.
+ */
+async function openPath(path, title) {
+  const n = await srv.post("/api/notifications", { title, url: path });
+  wakeAndUnlock();
+  shell(`am start -n ${MAIN} --es dev.wiltaylor.thevault.notification ${n.id} --es dev.wiltaylor.thevault.path '${path}'`);
+  await sleep(2_000);
+}
+
+/** The app's WebView on screen, from `uiautomator dump`; release builds are checked through it. */
+const webView = () => L.find((n) => n.pkg === PKG && n.cls === "android.webkit.WebView");
 
 /**
  * The newer APK check 49 publishes, and its version: THEVAULT_UPDATE_APK, or the app built again
@@ -538,10 +579,66 @@ async function pairWith(password, name = DEVICE_NAME) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The release smoke test (docs/android-release.md)
+
+/** The app's FATAL EXCEPTION reports in the log since the last clear, each with its next lines. */
+function fatalCrashes() {
+  const lines = adbTry("logcat", "-d", "-v", "time").split("\n");
+  const proc = new RegExp(`Process: ${PKG.replace(/\./g, "\\.")}, PID`);
+  const found = [];
+  lines.forEach((l, i) => {
+    if (l.includes("FATAL EXCEPTION") && lines.slice(i, i + 3).some((x) => proc.test(x))) found.push(lines.slice(i, i + 12).join("\n"));
+  });
+  return found;
+}
+
+const pidOf = () => shellTry(`pidof ${PKG}`).trim();
+
+/**
+ * A release build must start and stay up: R8 once stripped a constructor WorkManager creates by
+ * reflection, and the release app died at launch while every test of the debug build passed. The
+ * app is launched, its process must be the same one 20 s later, the onboarding screen must show,
+ * and logcat must hold no FATAL EXCEPTION of it. Pairing is checks 2 and 3. Throws on a failure,
+ * which stops the run.
+ */
+async function smokeTest() {
+  const t0 = Date.now();
+  const verdict = { apk, pkg: PKG, debuggable: DEBUGGABLE, started: new Date().toISOString() };
+  const write = () => writeFileSync(join(out, "smoke.json"), JSON.stringify(verdict, null, 2));
+  try {
+    wakeAndUnlock();
+    openApp();
+    const pid = await until("the app's process", pidOf, { timeout: 15_000, every: 250 });
+    await sleep(20_000);
+    const later = pidOf();
+    const crashes = fatalCrashes();
+    const onboarding = Boolean(L.find("Connect TheVault to your server"));
+    verdict.shot = trySnap("00-smoke");
+    Object.assign(verdict, { pid, pidAfter20s: later, crashes, onboarding });
+    const problems = [];
+    if (later !== pid) problems.push(later ? `the process changed from ${pid} to ${later}: it died and restarted` : `process ${pid} died`);
+    if (crashes.length) problems.push(`${crashes.length} FATAL EXCEPTION(s) of ${PKG} in logcat:\n${crashes[0]}`);
+    if (!onboarding) problems.push(`the onboarding screen ("Connect TheVault to your server") is not showing: ${L.texts().slice(0, 12).join(" / ")}`);
+    if (problems.length) throw new Error(problems.join("; "));
+    verdict.status = "pass";
+    console.log(`[smoke] PASS: ${PKG} pid ${pid} still up after 20 s, onboarding showing, no FATAL EXCEPTION (${elapsed(t0)})`);
+  } catch (e) {
+    verdict.status = "fail";
+    verdict.error = e.message;
+    L.logcatSave(join(logs, "smoke-logcat.txt"));
+    write();
+    throw new Error(`release smoke test failed: ${e.message}`);
+  }
+  write();
+}
+
+// ---------------------------------------------------------------------------------------------
 // The checks
 
 async function main() {
   console.log(`results in ${out}`);
+  // A verdict is only ever this run's: the release recipe reads it.
+  rmSync(join(out, "smoke.json"), { force: true });
   if (!existsSync(apk)) throw new Error(`${apk} is missing; run \`just android-build x86_64\` or set THEVAULT_APK`);
   const device = {
     release: shell("getprop ro.build.version.release").trim(),
@@ -550,6 +647,7 @@ async function main() {
     image: shell("getprop ro.build.fingerprint").trim(),
   };
   console.log(`device: ${JSON.stringify(device)}`);
+  console.log(`app: ${PKG} (${DEBUGGABLE ? "debuggable" : "release, not debuggable"}) from ${apk}`);
 
   await replaceGoogleMessages();
   await startServer();
@@ -561,7 +659,7 @@ async function main() {
   adbTry("uninstall", PKG);
   const installed = adb("install", apk);
   console.log(`installed ${apk}: ${installed.trim().split("\n").pop()}`);
-  writeFileSync(join(out, "run.json"), JSON.stringify({ started: new Date().toISOString(), apk, device, server: srv.base, ntfy: ntfyUrl }, null, 2));
+  writeFileSync(join(out, "run.json"), JSON.stringify({ started: new Date().toISOString(), apk, pkg: PKG, debuggable: DEBUGGABLE, device, server: srv.base, ntfy: ntfyUrl }, null, 2));
 
   // Things on the phone before pairing, which the import (left off) must not bring in (check 28).
   emu(`sms send ${OLD} Old message from before pairing`);
@@ -571,9 +669,13 @@ async function main() {
 
   L.logcatClear();
 
+  if (smoke) await smokeTest();
+
   // 1. First launch.
   await check(1, async () => {
-    openApp();
+    // After the smoke test the onboarding screen is already up. `am start -n` of the singleTask
+    // MainActivity would clear the onboarding activity above it, so launch only when it is not.
+    if (!L.find("Connect TheVault to your server")) openApp();
     await L.waitFor("Connect TheVault to your server", { timeout: 30_000 });
     return ["pass", "The onboarding screen opened over the app.", [snap("01-onboarding")]];
   });
@@ -686,8 +788,9 @@ async function main() {
     if (sw?.checked) throw new Error("the import switch is on by default");
     await L.tap(/^finish$/i);
     await sleep(3_000);
-    const p = await page();
-    const url = p.url();
+    let url;
+    if (DEBUGGABLE) url = (await page()).url();
+    else url = (await until("the app's WebView", webView, { timeout: 15_000 })) && "its WebView (a release build: no URL without WebView debugging)";
     const shot = snap("28-app-open");
     await sleep(20_000);
     const msgs = await rows("from message");
@@ -723,8 +826,13 @@ async function main() {
     const created = await createNote("note", { title: "Made in the web app" });
     const t0 = Date.now();
     openApp();
-    await until("the note in the app's vault", async () => (await local("GET", `/api/notes/${created.id}`)).status === 200, { timeout: 60_000, every: 500 });
+    await until("the note in the app's vault", () => onPhone(created.id), { timeout: 60_000, every: 500 });
     const took = elapsed(t0);
+    if (!DEBUGGABLE) {
+      await openPath(`/notes/${created.id}`, "Check 7 open");
+      await L.waitFor(/Made in the web app/, { timeout: 20_000 });
+      return ["pass", `The note's file was in the app's vault ${took} after the app opened, and the app shows its title (read from the screen: a release build's WebView takes no Playwright).`, [snap("07-note-in-app")]];
+    }
     const p = await page();
     await p.goto(`http://vault.localhost/notes/${created.id}`);
     await p.getByRole("heading", { name: "Made in the web app" }).first().waitFor({ timeout: 15_000 }).catch(() => p.getByText("Made in the web app").first().waitFor({ timeout: 15_000 }));
@@ -736,7 +844,21 @@ async function main() {
   await check(8, async () => {
     const created = await createNote("note", { title: "Edit me on the phone" });
     await foreground();
-    await until("the note in the app", async () => (await local("GET", `/api/notes/${created.id}`)).status === 200, { timeout: 60_000 });
+    await until("the note in the app", () => onPhone(created.id), { timeout: 60_000 });
+    if (!DEBUGGABLE) {
+      // Through the screen: the title field is an EditText in the WebView's accessibility tree.
+      await openPath(`/notes/${created.id}`, "Check 8 open");
+      const field = await L.waitFor((n) => n.pkg === PKG && n.cls === "android.widget.EditText" && n.text === "Edit me on the phone", { timeout: 20_000 });
+      await L.fill(field, "Edited on the phone");
+      L.key(61); // Tab: leaving the field saves it
+      const t0 = Date.now();
+      try {
+        await until("the edit on the server", async () => (await note(created.id)).note.fields.title === "Edited on the phone", { timeout: 60_000 });
+      } catch {
+        return ["fail", `Typed a new title into the app's editor; it never reached the server (60 s). Server title: "${(await note(created.id)).note.fields.title}".`, [snap("08-edit-failed")]];
+      }
+      return ["pass", `Typed a new title into the app's editor (through the screen, a release build); the server had it ${elapsed(t0)} after leaving the field.`, [snap("08-edited")]];
+    }
     const p = await page();
     await p.goto(`http://vault.localhost/notes/${created.id}`);
     const title = p.getByLabel("Title", { exact: true });
@@ -777,7 +899,7 @@ async function main() {
 
   // 11 to 14: the share target. The stand-in app shares, as Chrome, Photos or Files would.
   const share = async (extras) => {
-    const args = Object.entries(extras).map(([k, v]) => `--es ${k} '${v}'`).join(" ");
+    const args = Object.entries({ target: SHARE, ...extras }).map(([k, v]) => `--es ${k} '${v}'`).join(" ");
     shell(`am start -n ${MESSAGES}/.ShareSourceActivity ${args}`);
     const toast = await until("a toast", () => /TextToastRecord\{[^}]*text=([^}]*?) duration/.exec(shellTry("dumpsys notification"))?.[1], { timeout: 20_000, every: 150 });
     const shot = snap(`share-${Date.now()}`);
@@ -932,7 +1054,7 @@ async function main() {
   await sleep(3_000);
   const knownPerson = await createNote("person", { title: "Kim Known", phones: [KNOWN_E164] });
   await foreground();
-  await until("the person on the phone", async () => (await local("GET", `/api/notes/${knownPerson.id}`)).status === 200, { timeout: 60_000 });
+  await until("the person on the phone", () => onPhone(knownPerson.id), { timeout: 60_000 });
   const knownContact = addContact("Kim Known", KNOWN_E164);
   await until("the contact linked to the person", async () => Object.keys(linksOf(await note(knownPerson.id))).length > 0, { timeout: 60_000 }).catch(() => {});
 
@@ -1503,6 +1625,19 @@ try {
     shellTry("svc wifi enable");
     shellTry("svc data enable");
     L.logcatSave(join(logs, "logcat.txt"));
+    // The smoke test holds for the whole run: no check may have crashed the app either.
+    const smokePath = join(out, "smoke.json");
+    if (smoke && existsSync(smokePath)) {
+      const verdict = JSON.parse(readFileSync(smokePath, "utf8"));
+      verdict.crashesAtEnd = fatalCrashes();
+      if (verdict.crashesAtEnd.length) {
+        verdict.status = "fail";
+        verdict.error = `${verdict.crashesAtEnd.length} FATAL EXCEPTION(s) of ${PKG} during the checks:\n${verdict.crashesAtEnd[0]}`;
+        console.error(`[smoke] FAIL: ${verdict.error}`);
+        process.exitCode = 1;
+      }
+      writeFileSync(smokePath, JSON.stringify(verdict, null, 2));
+    }
   } catch {}
   await pw?.device.close().catch(() => {});
   writeReport();

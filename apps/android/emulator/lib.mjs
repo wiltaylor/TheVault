@@ -4,14 +4,38 @@
 
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
 export const repo = fileURLToPath(new URL("../../..", import.meta.url));
-export const PKG = "dev.wiltaylor.thevault.debug";
+
+/** The APK under test: THEVAULT_APK, or the x86_64 debug APK `just android-build x86_64` writes. */
+export const APK = process.env.THEVAULT_APK ?? join(repo, "apps/android/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk");
+
+/** `aapt2 dump badging` of `apk`: its package id, its version and whether it is a debuggable build. */
+export function badging(apk) {
+  const tools = join(process.env.ANDROID_HOME ?? "", "build-tools");
+  const versions = existsSync(tools) ? readdirSync(tools).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) : [];
+  const aapt2 = versions.length ? join(tools, versions.at(-1), "aapt2") : "aapt2";
+  const out = execFileSync(aapt2, ["dump", "badging", apk], { encoding: "utf8", maxBuffer: 64 << 20 });
+  const pkg = /^package: name='([^']+)'/m.exec(out)?.[1];
+  if (!pkg) throw new Error(`aapt2 dump badging ${apk} names no package`);
+  return { pkg, debuggable: /^application-debuggable/m.test(out), version: /versionName='([^']*)'/.exec(out)?.[1] ?? "" };
+}
+
+// The package id comes from the APK: dev.wiltaylor.thevault.debug for a debug build,
+// dev.wiltaylor.thevault for a release build. THEVAULT_PKG names it when the APK is not built.
+const badge = existsSync(APK) ? badging(APK) : null;
+export const PKG = process.env.THEVAULT_PKG ?? badge?.pkg ?? "dev.wiltaylor.thevault.debug";
+/**
+ * Whether the app under test is a debuggable build. Only a debuggable build's WebView can be
+ * driven with Playwright, since Tauri turns WebView debugging on in debug builds alone; the checks
+ * reach a release build's screen through `uiautomator dump` and its vault through the root shell.
+ */
+export const DEBUGGABLE = badge ? badge.debuggable : PKG.endsWith(".debug");
 export const MAIN = `${PKG}/dev.wiltaylor.thevault.MainActivity`;
 export const SHARE = `${PKG}/dev.wiltaylor.thevault.device.ShareActivity`;
 export const MESSAGES = "com.google.android.apps.messaging";

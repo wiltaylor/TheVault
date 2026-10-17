@@ -65,7 +65,7 @@ kvm_flags=()
 if [ -e /dev/kvm ]; then
   kvm_flags=(--device /dev/kvm)
 fi
-for var in THEVAULT_APK THEVAULT_EMULATOR_OUT THEVAULT_CHECKS THEVAULT_PERIODIC_WAIT; do
+for var in THEVAULT_APK THEVAULT_PKG THEVAULT_EMULATOR_OUT THEVAULT_CHECKS THEVAULT_CHECKS_ONLY THEVAULT_SMOKE THEVAULT_PERIODIC_WAIT; do
   if [ -n "${!var:-}" ]; then
     kvm_flags+=(-e "$var")
   fi

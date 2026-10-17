@@ -55,12 +55,12 @@ Build the apps, then publish them into the folder the server reads:
 
 `just publish-clients <dir>` publishes the newest builds it finds:
 
-- Android: the signed release APK in `target/android-release/` (`just android-release`). Without one, it publishes the debug APK of the last `just android-build` and labels it `debug`.
+- Android: the signed release APK in `target/android-release/`, only once it has passed `just android-release-smoke`, which builds it and runs it on the emulator ([`docs/android-release.md`](android-release.md#the-release-smoke-test)). A release APK that has not passed is not published, and the recipe fails after publishing the rest; `just publish-clients <dir> <build> skip` overrides this in an emergency. Without a release APK, it publishes the debug APK of the last `just android-build` and labels it `debug`.
 - Linux: the AppImage, with its updater signature `<file>.AppImage.sig`, the deb and the rpm in `target/desktop-release/` (`just desktop-release`).
 
 It reads the signing keys from `~/.config/thevault` when they are there and not set already: `android/keystore.env` for the Android release keystore ([`docs/android-release.md`](android-release.md#where-the-keystore-lives)) and `updater/updater.env` for the desktop updater key ([`docs/desktop.md`](desktop.md#the-updater-signing-key)). `./dev` reads them too and passes them into the container.
 
-With `build='missing'`, the default, it builds what is not built yet: the signed release APK when the release keystore and the Android toolchain are there, else the debug APK, and the desktop release bundles. `just publish-clients <dir> all` builds all of them again first, which is how to publish a new version. `just publish-clients <dir> none` publishes only what is already built. It prints what the folder holds when it is done, with `signed` beside an AppImage that carries its updater signature.
+With `build='missing'`, the default, it builds what is not built yet: the signed release APK, through `just android-release-smoke`, when the release keystore and the Android toolchain are there, else the debug APK, and the desktop release bundles. `just publish-clients <dir> all` builds all of them again first, which is how to publish a new version. `just publish-clients <dir> none` publishes only what is already built. It prints what the folder holds when it is done, with `signed` beside an AppImage that carries its updater signature.
 
 `./dev` only sees the checkout, so a `<dir>` outside it must be published from the host with the `vault` binary instead:
 

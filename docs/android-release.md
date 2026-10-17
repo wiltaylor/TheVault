@@ -69,6 +69,38 @@ The recipe builds the release APK for aarch64, checks its signature with `apksig
 
 The release app's id is `dev.wiltaylor.thevault`. The debug app from `just android-build` is `dev.wiltaylor.thevault.debug`, so both can be installed on one phone.
 
+### Release builds are not shrunk
+
+The release build type turns R8 code shrinking and optimisation off (`isMinifyEnabled = false` in `apps/android/src-tauri/gen/android/app/build.gradle.kts`). Leave it off.
+
+Release 0.1.1 was shrunk. R8 removed the constructor of `androidx.work.impl.WorkDatabase_Impl`, which Room creates by reflection, and the app crashed at start on every phone with a `NoSuchMethodException` from `androidx.startup.InitializationProvider`. Every test ran the debug build, which is never shrunk, so none of them saw it. With shrinking off, the release build runs the same code as the debug build the tests run; the APK is somewhat larger, which a sideloaded app can afford. The release build also allows cleartext http, like the debug build, because the home server is usually reached over plain http on a private network.
+
+## The release smoke test
+
+The release build differs from the debug build the other tests run: another package id, no WebView debugging, its own Gradle build type. So a release is tested as a release before any phone gets it:
+
+```bash
+./dev just android-release-smoke
+```
+
+The recipe:
+
+1. Builds the release APK for x86_64, the emulator's ABI, into `target/android-release-smoke/`. Gradle signs it with the release key when the keystore is set up; otherwise the recipe signs it with the debug key, so the test needs no release keystore.
+2. Builds the aarch64 release with `just android-release` from the same tree, when the release keystore is there.
+3. Boots the headless emulator from a wiped data partition, installs the x86_64 APK and launches it. The test fails when the app's process dies or restarts within 20 s, when logcat holds a `FATAL EXCEPTION` of `dev.wiltaylor.thevault`, or when the onboarding screen ("Connect TheVault to your server") does not show.
+4. Runs checks 1, 2, 3, 7, 8, 11, 17 and 29 of [`android-manual-checks.md`](android-manual-checks.md) against a throwaway home server: first launch, a wrong and then the right password, a note from the server and an edit from the phone, the share target, a push notification and an SMS capture. A crash during the checks fails the test too.
+5. When everything passes, writes `target/android-release/SMOKE_PASSED`, which lists the sha256 of the tested x86_64 APK and of the aarch64 APK built beside it.
+
+Results go to `.scratch/emulator-release/`: `smoke.json`, `RESULTS.generated.md`, screenshots and logs. The test takes the emulator, so run no other emulator run at the same time.
+
+A release APK cannot be driven with Playwright, because Tauri turns WebView debugging on only in debug builds. The release checks read the screen with `uiautomator dump` and the phone's vault through the emulator's root shell instead. Checks that drive the WebView with Playwright, such as 10, 13, 21, 42, 51 and 52 and the offline checks, need a debug APK. To run other checks against a release APK, set `THEVAULT_APK`, `THEVAULT_CHECKS` and `THEVAULT_CHECKS_ONLY=1` for `just android-emulator-checks`; the harness reads the package id from the APK.
+
+### Publishing needs the smoke test
+
+`just publish-clients` publishes a release APK only when its sha256 is in `target/android-release/SMOKE_PASSED`. When it builds the release itself, it runs `just android-release-smoke` rather than `just android-release`. A release APK that has not passed is not published, nor is a debug APK in its place; the desktop builds are still published, and the recipe exits with an error. A later `just android-release` deletes `SMOKE_PASSED`, so a rebuilt APK must pass again.
+
+In an emergency, `just publish-clients <dir> <build> skip` publishes the release APK without the test, with a warning. Do not use it for a normal release.
+
 ### The debug key
 
 Debug APKs are signed with the Android Gradle plugin's debug keystore, `$ANDROID_USER_HOME/debug.keystore`. `./dev` sets `ANDROID_USER_HOME=/gradle/android-user`, in the `thevault-gradle` Docker volume, so every debug build on this machine is signed with the same key and a new debug APK installs over the last one. Before this, the keystore lived in the container's temporary home, so each build had a new key and no debug APK could update another. Deleting the `thevault-gradle` volume makes a new debug key.
@@ -98,7 +130,7 @@ Set these repository secrets once, under Settings > Secrets and variables > Acti
 To release:
 
 1. Set `version` in `apps/android/src-tauri/tauri.conf.json` to the new version. Each release needs a higher version, because Android refuses an update whose version code is lower than the installed one.
-2. Run the checks in `docs/android-manual-checks.md` on a phone.
+2. Run `./dev just android-release-smoke` and fix anything it finds. Then run the checks in `docs/android-manual-checks.md` on a phone.
 3. Tag the commit as `v<version>`, for example `v0.2.0`, and push the tag. The workflow stops when the tag does not match the version.
 
 ## Install the app
@@ -122,7 +154,7 @@ When the server hands out the APK (see [`docs/clients.md`](clients.md)), open `h
 
 The app updates itself from the server it is paired with, once you allow it to install apps:
 
-1. Publish a newer build on the server: `./dev just publish-clients <clients dir>` (see [`docs/clients.md`](clients.md)). The version in `apps/android/src-tauri/tauri.conf.json` must be higher than the installed one.
+1. Publish a newer build on the server: `./dev just publish-clients <clients dir>` (see [`docs/clients.md`](clients.md)). The version in `apps/android/src-tauri/tauri.conf.json` must be higher than the installed one, and the release APK must have passed [the release smoke test](#the-release-smoke-test).
 2. The server pushes `clients.updated` to the phone over UnifiedPush. Without push, the app checks when it opens and once a day.
 3. The app reads `GET /api/clients`, and takes the APK for the phone's architecture when it is newer than the installed app and the same kind of build: a release app takes only release APKs, a debug app only debug APKs. It never installs the same or a lower version.
 4. It downloads the APK from the server and checks its SHA-256 against the server's list. A mismatch deletes the download and shows "TheVault update failed".
