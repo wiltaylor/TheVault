@@ -469,12 +469,14 @@ fn task_files_are_checked_and_changing_tasks_needs_admin() {
     );
     let res = api.get("/api/tasks/noop").send().unwrap();
     assert_eq!(res.status().as_u16(), 404);
-    assert!(
-        expect(api.get("/api/tasks").send().unwrap(), 200)["tasks"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    // Only the shipped, paused Gmail sync is left.
+    let left: Vec<Value> = expect(api.get("/api/tasks").send().unwrap(), 200)["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].clone())
+        .collect();
+    assert_eq!(left, [json!("google_gmail")]);
 }
 
 /// Debug builds are the test builds: they accept `--test-clock`. A release build refuses to

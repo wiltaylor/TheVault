@@ -54,8 +54,9 @@ pub struct ShippedFile {
     pub hashes: &'static [&'static str],
 }
 
-/// The shipped files, scripts before the device file that names them.
-pub const SHIPPED_FILES: [ShippedFile; 6] = [
+/// The shipped files: the default device scripts, then the device file that names them, then the
+/// Google sync's scripts, each before the task that names it (google-sync D19).
+pub const SHIPPED_FILES: [ShippedFile; 8] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -102,6 +103,16 @@ pub const SHIPPED_FILES: [ShippedFile; 6] = [
             "82f1e219cdc77ac5a8fb698a9ab15fa2d4795049ca1705877744135e220e21f0",
             "02a8b77d470a9740cfeaa0cbf1ccafff99ffc2447cd8edff79a95e853880c411",
         ],
+    },
+    ShippedFile {
+        path: "scripts/google_gmail.ws",
+        source: include_str!("../defaults/google/google_gmail.ws"),
+        hashes: &["40629abecc581c745657b98ad630af864b35e87eb287d0217103ea8dbd4288c7"],
+    },
+    ShippedFile {
+        path: "tasks/google_gmail.wcl",
+        source: include_str!("../defaults/google/google_gmail.wcl"),
+        hashes: &["aa11241f36d2c44865b144dc13b2fd0081a2e939da038fde89f3e8ef7cb3786c"],
     },
 ];
 
@@ -907,12 +918,14 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_files_are_the_default_device_file_and_scripts() {
+    fn the_shipped_files_are_the_default_device_file_and_scripts_then_the_google_sync() {
         let mut paths: Vec<String> = crate::DEFAULT_DEVICE_SCRIPTS
             .iter()
             .map(|(name, _)| crate::defs::script_path(name))
             .collect();
         paths.push(crate::device_file_path("android"));
+        paths.push(crate::defs::script_path("google_gmail"));
+        paths.push(crate::defs::task_path("google_gmail"));
         let shipped: Vec<String> = SHIPPED_FILES.iter().map(|f| f.path.to_owned()).collect();
         assert_eq!(shipped, paths);
         for (name, source) in crate::DEFAULT_DEVICE_SCRIPTS {
@@ -925,8 +938,9 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_device_file_is_canonical() {
-        let file = SHIPPED_FILES.last().unwrap();
-        assert_eq!(file.text().unwrap(), file.source);
+    fn the_shipped_wcl_files_are_canonical() {
+        for file in SHIPPED_FILES.iter().filter(|f| f.path.ends_with(".wcl")) {
+            assert_eq!(file.text().unwrap(), file.source, "{}", file.path);
+        }
     }
 }

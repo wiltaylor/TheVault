@@ -183,7 +183,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
     assert_eq!(fields["homepage"], "https://example.com");
     assert_eq!(w.history(&alex).unwrap().len(), versions_before + 1);
 
-    // The device file and the five device scripts.
+    // The device file, the five device scripts, and the Gmail sync's script and task.
     let paths: Vec<&str> = SHIPPED_FILES.iter().map(|f| f.path).collect();
     assert_eq!(done.files_added, paths);
     for path in paths {
@@ -196,7 +196,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "device_contacts",
             "device_import",
             "device_messages",
-            "device_share"
+            "device_share",
+            "google_gmail"
         ]
     );
     assert!(notification_titles(&w).is_empty());
