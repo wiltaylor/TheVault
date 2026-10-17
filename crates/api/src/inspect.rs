@@ -56,11 +56,8 @@ fn field_json(f: &FieldDef) -> Value {
         f.default.as_ref().map_or(Value::Null, value_to_json),
     );
     match &f.kind {
-        FieldKind::DateRange { datetime } => {
-            out.insert(
-                "of".into(),
-                json!(if *datetime { "datetime" } else { "date" }),
-            );
+        FieldKind::DateRange { of } => {
+            out.insert("of".into(), json!(of.name()));
         }
         FieldKind::Select { options } => {
             out.insert("options".into(), json!(options));

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use schema::{FieldKind, Issue, NoteLookup, OnDelete, Relation, Schema, TypeDef};
+use schema::{FieldKind, Issue, NoteLookup, OnDelete, RangeOf, Relation, Schema, TypeDef};
 
 const SPECIMEN_TYPE: &str = include_str!("../../../docs/vault-format/vault/types/specimen.wcl");
 const BOARD_TYPE: &str = include_str!("../../../docs/vault-format/vault/types/board.wcl");
@@ -132,6 +132,10 @@ field dr {
 field drt {
   kind = "date_range"
   of   = "datetime"
+}
+field dre {
+  kind = "date_range"
+  of   = "date_or_datetime"
 }
 field u {
   kind = "url"
@@ -358,6 +362,73 @@ fn every_field_kind_accepts_a_valid_value_and_rejects_an_invalid_one() {
             ),
         }
     }
+}
+
+/// `of = "date_or_datetime"`: both ends dates or both datetimes, never one of each, and the end
+/// never before the start (google-sync D15).
+#[test]
+fn a_date_or_datetime_range_takes_either_form_but_not_both() {
+    let schema = kinds();
+    let dre = schema.type_def("kinds").unwrap().field("dre").unwrap();
+    assert_eq!(
+        dre.kind,
+        FieldKind::DateRange {
+            of: RangeOf::DateOrDatetime
+        }
+    );
+    for ok in [
+        r#"dre = { start: "2026-10-20", end: "2026-10-20" }"#,
+        r#"dre = { start: "2026-10-20", end: "2026-10-22" }"#,
+        r#"dre = { start: "2026-10-20T09:00:00+11:00", end: "2026-10-19T23:00:00Z" }"#,
+        r#"dre = { start: "2026-10-20T09:00:00Z", end: "2026-10-20T09:00:00Z" }"#,
+    ] {
+        if let Err(issues) = check_kinds(ok) {
+            panic!("`{ok}` was rejected: {issues:?}");
+        }
+    }
+    for (bad, want) in [
+        (
+            r#"dre = { start: "2026-10-20", end: "2026-10-20T10:00:00Z" }"#,
+            "dre.end: must be a date, as start is",
+        ),
+        (
+            r#"dre = { start: "2026-10-20T10:00:00Z", end: "2026-10-21" }"#,
+            "dre.end: must be a datetime, as start is",
+        ),
+        (
+            r#"dre = { start: "2026-10-21", end: "2026-10-20" }"#,
+            "dre.end: is before start",
+        ),
+        (
+            r#"dre = { start: "2026-10-20T10:00:00Z", end: "2026-10-20T09:59:59Z" }"#,
+            "dre.end: is before start",
+        ),
+        (
+            r#"dre = { start: "2026-10-20T10:00", end: "2026-10-21" }"#,
+            "dre.start: must be an ISO 8601 date or datetime",
+        ),
+        (r#"dre = { start: "2026-10-20" }"#, "dre"),
+    ] {
+        let issues = check_kinds(bad).expect_err(bad);
+        assert!(
+            issues.iter().any(|i| i.starts_with(want)),
+            "`{bad}`: wanted `{want}`, got {issues:?}"
+        );
+    }
+    // The other two forms still refuse what they always refused.
+    assert!(
+        check_kinds(r#"dr = { start: "2026-10-20T10:00:00Z", end: "2026-10-20T11:00:00Z" }"#)
+            .is_err()
+    );
+    assert!(check_kinds(r#"drt = { start: "2026-10-20", end: "2026-10-21" }"#).is_err());
+}
+
+#[test]
+fn an_unknown_date_range_form_is_refused() {
+    let ty = "label = \"Bad\"\nfield when {\n  kind = \"date_range\"\n  of   = \"either\"\n}\n\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n";
+    let err = Schema::from_sources(&[("bad", ty)], &[]).unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("date_or_datetime"), "{text}");
 }
 
 #[test]

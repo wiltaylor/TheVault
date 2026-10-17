@@ -254,10 +254,12 @@ function localDate(d: Date): string {
  * compared as the local days on screen, times as instants.
  */
 export function visibleWindow(f: FieldDef, start: Date, end: Date): string {
-  const days = f.kind === "date" || (f.kind === "date_range" && f.of !== "datetime");
-  return days
-    ? dateWindow(f, localDate(start), localDate(end))
-    : dateWindow(f, start.toISOString(), end.toISOString());
+  const days = dateWindow(f, localDate(start), localDate(end));
+  const times = dateWindow(f, start.toISOString(), end.toISOString());
+  // A range of either form holds dates on some notes and datetimes on others: take the notes
+  // either reading finds, and let each value's own form place it.
+  if (f.kind === "date_range" && f.of === "date_or_datetime") return `(${days}) || (${times})`;
+  return f.kind === "date" || (f.kind === "date_range" && f.of !== "datetime") ? days : times;
 }
 
 /** The condition for notes that hold a date in `f` at all. */

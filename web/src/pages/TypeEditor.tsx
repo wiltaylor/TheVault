@@ -14,6 +14,7 @@ import {
   MULTIPLE_KINDS,
   ON_DELETE,
   PALETTE,
+  RANGE_OF,
   RELATIONS,
   SCALARS,
   type TypeModel,
@@ -586,12 +587,13 @@ export function TypeEditor() {
                       })
                     }
                   >
-                    <option value="date" selected={f().of === "date"}>
-                      Dates
-                    </option>
-                    <option value="datetime" selected={f().of === "datetime"}>
-                      Dates and times
-                    </option>
+                    <For each={RANGE_OF}>
+                      {(o) => (
+                        <option value={o.value} selected={f().of === o.value}>
+                          {o.label}
+                        </option>
+                      )}
+                    </For>
                   </select>
                 </Show>
                 <Show when={f().kind === "location"}>

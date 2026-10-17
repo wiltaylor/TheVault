@@ -8,7 +8,7 @@ use crate::doc::{Doc, Value};
 use crate::encoding::{
     is_date, is_datetime, is_ulid, is_url, is_utc_datetime, parse_date, parse_datetime,
 };
-use crate::types::{FieldDef, FieldKind, Scalar};
+use crate::types::{FieldDef, FieldKind, RangeOf, Scalar};
 use crate::{Issue, Schema};
 
 /// What validation needs to know about the rest of the vault.
@@ -225,7 +225,7 @@ fn check_single(f: &FieldDef, v: &Value, ctx: Option<&Context>, c: &mut Check, a
         FieldKind::Date => check_scalar(Scalar::Date, v, c, at),
         FieldKind::Datetime => check_scalar(Scalar::Datetime, v, c, at),
         FieldKind::Url => check_scalar(Scalar::Url, v, c, at),
-        FieldKind::DateRange { datetime } => date_range(*datetime, v, c, at),
+        FieldKind::DateRange { of } => date_range(*of, v, c, at),
         FieldKind::Select { options } => match v {
             Value::Str(s) if options.contains(s) => {}
             Value::Str(s) => c.fail(
@@ -358,21 +358,37 @@ pub(crate) fn check_scalar(kind: Scalar, v: &Value, c: &mut Check, at: &str) {
     }
 }
 
-fn date_range(datetime: bool, v: &Value, c: &mut Check, at: &str) {
+fn date_range(of: RangeOf, v: &Value, c: &mut Check, at: &str) {
     let Some([start, end]) = record(v, ["start", "end"], c, at) else {
         return;
     };
-    let parse = |v: &Value| -> Option<f64> {
+    // Each end as `(seconds, is a datetime)`, read in the forms `of` allows. A date is the start
+    // of its day, so the two forms order against each other.
+    let parse = |v: &Value| -> Option<(f64, bool)> {
         let s = v.as_str()?;
-        if datetime {
-            parse_datetime(s)
-        } else {
-            parse_date(s).map(|d| d as f64)
+        let date = || parse_date(s).map(|d| (d as f64 * 86_400.0, false));
+        let datetime = || parse_datetime(s).map(|t| (t, true));
+        match of {
+            RangeOf::Date => date(),
+            RangeOf::Datetime => datetime(),
+            RangeOf::DateOrDatetime => date().or_else(datetime),
         }
     };
-    let what = if datetime { "datetime" } else { "date" };
+    let what = match of {
+        RangeOf::Date => "date",
+        RangeOf::Datetime => "datetime",
+        RangeOf::DateOrDatetime => "date or datetime",
+    };
     match (parse(start), parse(end)) {
-        (Some(s), Some(e)) if e < s => c.fail(&format!("{at}.end"), "is before start"),
+        (Some((_, a)), Some((_, b))) if a != b => c.fail(
+            &format!("{at}.end"),
+            if a {
+                "must be a datetime, as start is: both ends are dates or both are datetimes"
+            } else {
+                "must be a date, as start is: both ends are dates or both are datetimes"
+            },
+        ),
+        (Some((s, _)), Some((e, _))) if e < s => c.fail(&format!("{at}.end"), "is before start"),
         (Some(_), Some(_)) => {}
         (s, e) => {
             if s.is_none() {

@@ -42,7 +42,7 @@ export interface FieldDef {
   default?: Json;
   options?: string[];
   /** `date_range`: whether the ends are dates or datetimes. */
-  of?: "date" | "datetime";
+  of?: "date" | "datetime" | "date_or_datetime";
   taxonomy?: string;
   target?: string;
   relation?: "one_way" | "two_way" | "peer";

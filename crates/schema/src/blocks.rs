@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use crate::Issue;
 use crate::doc::{Doc, DocBlock, Value};
 use crate::encoding::{PALETTE, is_ident, is_ink_colour, is_palette, is_ulid};
-use crate::types::{FieldDef, FieldKind, Scalar};
+use crate::types::{FieldDef, FieldKind, RangeOf, Scalar};
 
 /// The closed set of content block kinds.
 pub const CONTENT_KINDS: [&str; 13] = [
@@ -94,7 +94,7 @@ pub fn control_fits(kind: &str, f: &FieldDef) -> bool {
                     }
                 )
         }
-        "calendar" => matches!(f.kind, K::Date | K::DateRange { datetime: false }),
+        "calendar" => matches!(f.kind, K::Date | K::DateRange { of: RangeOf::Date }),
         "datetime" | "time" => matches!(f.kind, K::Datetime),
         "rating" => matches!(f.kind, K::Int),
         _ => false,
@@ -106,7 +106,12 @@ fn field_kind_text(f: &FieldDef) -> String {
     let what = match &f.kind {
         FieldKind::List { items } => format!("list of {} ", scalar_name(*items)),
         _ if f.term_list => "list of taxonomy terms ".to_owned(),
-        FieldKind::DateRange { datetime: true } => "date range of datetimes ".to_owned(),
+        FieldKind::DateRange {
+            of: RangeOf::Datetime,
+        } => "date range of datetimes ".to_owned(),
+        FieldKind::DateRange {
+            of: RangeOf::DateOrDatetime,
+        } => "date range of dates or datetimes ".to_owned(),
         k if f.multiple => format!("multiple {} ", k.name()),
         k => format!("{} ", k.name()),
     };

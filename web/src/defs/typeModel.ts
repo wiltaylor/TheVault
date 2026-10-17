@@ -44,6 +44,13 @@ export const EVENTS = [
   "after_delete",
 ] as const;
 
+/** What a date range's ends may be, as the type editor offers them. */
+export const RANGE_OF = [
+  { value: "date", label: "Dates" },
+  { value: "datetime", label: "Dates and times" },
+  { value: "date_or_datetime", label: "Dates or dates and times" },
+] as const;
+
 /** Kinds that may hold several values. */
 export const MULTIPLE_KINDS = new Set<string>(["select", "taxonomy", "reference", "asset"]);
 /** Kinds that may carry a `default`. */
@@ -96,7 +103,7 @@ export interface FieldModel {
   on_delete: (typeof ON_DELETE)[number];
   items: (typeof ITEM_KINDS)[number];
   values: (typeof SCALARS)[number];
-  of: "date" | "datetime";
+  of: (typeof RANGE_OF)[number]["value"];
   map: "geo" | "image";
   image: string;
 }

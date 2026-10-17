@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use schema::{FieldKind, Scalar};
+use schema::{FieldKind, RangeOf, Scalar};
 
 /// A value during evaluation. Dates and datetimes are typed by the schema, so they compare in
 /// time order rather than as text.
@@ -235,10 +235,16 @@ pub(crate) fn from_json(raw: &serde_json::Value, kind: &FieldKind) -> V {
         (FieldKind::Datetime, J::String(s)) => {
             time::datetime(s).map_or(V::Str(s.clone()), V::Datetime)
         }
-        (FieldKind::DateRange { datetime }, J::Object(m)) => V::Record(
+        (FieldKind::DateRange { of }, J::Object(m)) => V::Record(
             m.iter()
                 .map(|(k, v)| {
-                    let kind = if *datetime {
+                    // Either form reads by its shape: a date is ten characters.
+                    let datetime = match of {
+                        RangeOf::Date => false,
+                        RangeOf::Datetime => true,
+                        RangeOf::DateOrDatetime => v.as_str().is_some_and(|s| s.len() != 10),
+                    };
+                    let kind = if datetime {
                         FieldKind::Datetime
                     } else {
                         FieldKind::Date

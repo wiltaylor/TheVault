@@ -50,6 +50,8 @@ const FIELDS: FieldDef[] = [
   field("at", "datetime"),
   field("span", "date_range", { of: "date" }),
   field("slots", "date_range", { of: "datetime" }),
+  // A range of either form fits no control: the calendar control picks days only.
+  field("when", "date_range", { of: "date_or_datetime" }),
   field("size", "select", { options: ["s", "m"] }),
   field("sizes", "select", { options: ["s", "m"], multiple: true }),
   field("area", "taxonomy", { taxonomy: "area" }),

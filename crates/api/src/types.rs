@@ -97,9 +97,7 @@ fn field_json(f: &FieldDef) -> Value {
         out["default"] = doc_to_json(&doc)["fields"]["default"].take();
     }
     let extra = match &f.kind {
-        FieldKind::DateRange { datetime } => {
-            json!({ "of": if *datetime { "datetime" } else { "date" } })
-        }
+        FieldKind::DateRange { of } => json!({ "of": of.name() }),
         FieldKind::Select { options } => json!({ "options": options }),
         // A list of terms reads as a multiple taxonomy field; `items` says how it was declared.
         FieldKind::Taxonomy { taxonomy } if f.term_list => {

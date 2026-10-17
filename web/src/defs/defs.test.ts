@@ -9,6 +9,7 @@ import {
   termRenames,
 } from "./taxonomyModel";
 import {
+  RANGE_OF,
   type SchemaType,
   emptyType,
   followFields,
@@ -170,6 +171,20 @@ handler "before_update" {
 }`);
     m.fields[0]!.taxonomy = "";
     expect(problems(m)).toContain("tags: choose a taxonomy.");
+  });
+
+  it("offers a date range of dates, datetimes, or either, and writes and reads each back", () => {
+    expect(RANGE_OF.map((o) => o.value)).toEqual(["date", "datetime", "date_or_datetime"]);
+    expect(RANGE_OF.find((o) => o.value === "date_or_datetime")?.label).toBe("Dates or dates and times");
+    const event: SchemaType = {
+      ...stored,
+      fields: [{ name: "when", kind: "date_range", label: "when", required: false, computed: false, multiple: false, of: "date_or_datetime" }],
+      templates: [],
+      handlers: [],
+    };
+    const m = typeFromSchema(event);
+    expect(m.fields[0]?.of).toBe("date_or_datetime");
+    expect(typeWcl(m)).toContain('field when {\n  kind = "date_range"\n  of = "date_or_datetime"\n}');
   });
 
   it("tracks renames and makes slots follow renamed and removed fields", () => {
