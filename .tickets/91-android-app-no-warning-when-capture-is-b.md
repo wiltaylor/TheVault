@@ -4,8 +4,8 @@ title: 'Android app: no warning when capture is blocked by a missing permission,
   settings, battery optimisation or stalled background work'
 blocked_by:
 - '88'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Android app: no warning when capture is blocked by a missing permission, restricted settings, battery optimisation or stalled background work
@@ -26,3 +26,19 @@ Acceptance criteria:
 - `./dev just check` and the Android unit tests pass.
 
 ## Worklog
+
+### 2026-10-17T21:14:53Z — /work
+
+Claimed.
+
+### 2026-10-17T21:34:02Z — wil
+
+Verified set to verified.
+
+### 2026-10-17T21:34:02Z — wil
+
+Status set to done.
+
+### 2026-10-17T21:34:02Z — wil
+
+Implemented: CaptureHealth.kt (states, battery, liveness, daily notification, fix intents), plugin commands capture_health/open_capture_fix, core sends health with settings sync (only when changed; Kotlin's report() omits volatile timestamps so dedupe works), PUT /api/devices/{id}/health + devices.health/health_ms (schema v12, idempotent ALTER guarded by pragma_table_info since tests replay old user_versions), web CaptureHealth.tsx panel + device card warning. Decisions: command-check staleness is only watched while the 15-minute fallback schedule is on (no push distributor) since with push the fetch only runs when pushed; restricted for SMS/MMS needs SDK>=35 + sideloaded + a refusal-without-dialog recorded by CaptureSetupActivity, for RCS SDK>=33 + sideloaded + access off; a skipped setup step reads not_set_up and raises nothing. Manual checks 53-57 added to docs/android-manual-checks.md; not run on a real phone or emulator. SyncWorkerTest's exact request lists now include the health PUT.
