@@ -1249,3 +1249,129 @@ fn a_hidden_field_is_read_and_defaults_to_shown() {
     assert!(person.field("device_contacts").unwrap().hidden);
     assert!(!person.field("phones").unwrap().hidden);
 }
+
+/// A type with the given fields and a default template placing the title.
+fn type_with(fields: &str) -> String {
+    format!(
+        "label = \"T\"\n{fields}\ntemplate default {{\n  tab \"T\" {{\n    slot \"title\"\n  }}\n}}\n"
+    )
+}
+
+const STRINGS: &str = "  kind  = \"list\"\n  items = \"string\"";
+
+#[test]
+fn labels_names_another_list_of_strings() {
+    let source = type_with(&format!(
+        "field phones {{\n{STRINGS}\n  labels = \"phone_labels\"\n}}\nfield phone_labels {{\n{STRINGS}\n}}\n"
+    ));
+    let t = TypeDef::parse("t", &source).unwrap();
+    assert_eq!(
+        t.field("phones").unwrap().labels.as_deref(),
+        Some("phone_labels")
+    );
+    assert_eq!(t.field("phone_labels").unwrap().labels, None);
+}
+
+#[test]
+fn labels_is_refused_when_it_names_a_missing_field_a_non_list_itself_or_a_named_field() {
+    let cases = [
+        (
+            format!("field a {{\n{STRINGS}\n  labels = \"nope\"\n}}\n"),
+            "field a.labels: the type has no field \"nope\"",
+        ),
+        (
+            format!(
+                "field a {{\n{STRINGS}\n  labels = \"b\"\n}}\nfield b {{\n  kind = \"string\"\n}}\n"
+            ),
+            "field a.labels: \"b\" must be a list of strings, and it is a string field",
+        ),
+        (
+            format!(
+                "field a {{\n{STRINGS}\n  labels = \"b\"\n}}\nfield b {{\n  kind  = \"list\"\n  items = \"int\"\n}}\n"
+            ),
+            "field a.labels: \"b\" must be a list of strings",
+        ),
+        (
+            format!("field a {{\n{STRINGS}\n  labels = \"a\"\n}}\n"),
+            "field a.labels: cannot name the field itself",
+        ),
+        (
+            format!(
+                "field a {{\n{STRINGS}\n  labels = \"l\"\n}}\nfield b {{\n{STRINGS}\n  labels = \"l\"\n}}\nfield l {{\n{STRINGS}\n}}\n"
+            ),
+            "field b.labels: \"l\" already holds the labels of field \"a\"",
+        ),
+    ];
+    for (fields, want) in cases {
+        let issues = type_issues(&type_with(&fields));
+        assert!(
+            issues.iter().any(|i| i.contains(want)),
+            "{want}: {issues:?}"
+        );
+    }
+    // `labels` belongs to a list of strings only.
+    let issues = type_issues(&type_with(
+        "field a {\n  kind  = \"list\"\n  items = \"int\"\n  labels = \"l\"\n}\nfield l {\n  kind  = \"list\"\n  items = \"string\"\n}\n",
+    ));
+    assert!(
+        issues.iter().any(|i| i.starts_with("field a.labels")),
+        "{issues:?}"
+    );
+}
+
+/// Assets by id with their file names.
+struct Files(HashMap<String, String>);
+
+impl NoteLookup for Files {
+    fn note_type(&self, _id: &str) -> Option<String> {
+        None
+    }
+
+    fn asset_exists(&self, id: &str) -> bool {
+        self.0.contains_key(id)
+    }
+
+    fn asset_filename(&self, id: &str) -> Option<String> {
+        self.0.get(id).cloned()
+    }
+}
+
+#[test]
+fn an_image_asset_field_refuses_an_asset_that_is_not_an_image() {
+    const PDF: &str = "01JB9A0C3D4E5F6G7H8J9K0M1P";
+    let source = type_with(
+        "field photo {\n  kind   = \"asset\"\n  accept = \"image\"\n}\nfield file {\n  kind = \"asset\"\n}\n",
+    );
+    let schema = Schema::from_sources(&[("t", &source)], &[]).unwrap();
+    assert_eq!(
+        schema.type_def("t").unwrap().field("photo").unwrap().accept,
+        schema::Accept::Image
+    );
+    assert_eq!(
+        schema.type_def("t").unwrap().field("file").unwrap().accept,
+        schema::Accept::Any
+    );
+    let files = Files(HashMap::from([
+        (ASSET.to_owned(), "Face.JPG".to_owned()),
+        (PDF.to_owned(), "cv.pdf".to_owned()),
+    ]));
+    let note = |field: &str, id: &str| format!("title = \"t\"\n{field} = {id:?}\n");
+    schema
+        .validate_note_source("t", &note("photo", ASSET), "n", &files)
+        .unwrap();
+    schema
+        .validate_note_source("t", &note("file", PDF), "n", &files)
+        .unwrap();
+    let err = schema
+        .validate_note_source("t", &note("photo", PDF), "n", &files)
+        .unwrap_err();
+    assert!(err.to_string().contains("holds only images"), "{err}");
+
+    let issues = type_issues(&type_with(
+        "field photo {\n  kind   = \"asset\"\n  accept = \"video\"\n}\n",
+    ));
+    assert!(
+        issues.iter().any(|i| i.starts_with("field photo.accept")),
+        "{issues:?}"
+    );
+}

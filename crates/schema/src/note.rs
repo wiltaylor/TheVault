@@ -8,7 +8,7 @@ use crate::doc::{Doc, Value};
 use crate::encoding::{
     is_date, is_datetime, is_ulid, is_url, is_utc_datetime, parse_date, parse_datetime,
 };
-use crate::types::{FieldDef, FieldKind, Scalar};
+use crate::types::{Accept, FieldDef, FieldKind, Scalar, is_image_filename};
 use crate::{Issue, Schema};
 
 /// What validation needs to know about the rest of the vault.
@@ -18,6 +18,13 @@ pub trait NoteLookup {
 
     /// Whether `assets/<id>/` exists.
     fn asset_exists(&self, id: &str) -> bool;
+
+    /// The file name of asset `id`, when it is known. An asset field that takes only images
+    /// refuses an asset whose file name is known and is not an image's.
+    fn asset_filename(&self, id: &str) -> Option<String> {
+        let _ = id;
+        None
+    }
 }
 
 /// A note that passed validation. `unknown` names the items its type does not describe; the data
@@ -277,10 +284,18 @@ fn check_single(f: &FieldDef, v: &Value, ctx: Option<&Context>, c: &mut Check, a
         },
         FieldKind::Asset => match v {
             Value::Str(id) if is_ulid(id) => {
-                if let Some(ctx) = ctx
-                    && !ctx.lookup.asset_exists(id)
-                {
-                    c.fail(at, format!("asset {id} does not exist"));
+                if let Some(ctx) = ctx {
+                    if !ctx.lookup.asset_exists(id) {
+                        c.fail(at, format!("asset {id} does not exist"));
+                    } else if f.accept == Accept::Image
+                        && let Some(name) = ctx.lookup.asset_filename(id)
+                        && !is_image_filename(&name)
+                    {
+                        c.fail(
+                            at,
+                            format!("asset {id} is {name:?}, and this field holds only images"),
+                        );
+                    }
                 }
             }
             Value::Str(id) => c.fail(at, format!("{id:?} is not an asset ULID")),

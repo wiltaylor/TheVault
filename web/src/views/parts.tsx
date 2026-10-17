@@ -5,9 +5,9 @@ import { For, Show } from "solid-js";
 import type { NoteDoc, Row, Template } from "../api";
 import { FieldRefs } from "../components/fieldRefs";
 import { refText } from "../components/refText";
-import { BlockView, Blocks, ColumnsView, formatValue } from "../components/Render";
+import { BlockView, Blocks, ColumnsView, FieldValue } from "../components/Render";
 import { slotOfBlock } from "../blocks/columns";
-import { compoundBlock, fieldValue, slotField } from "../notes";
+import { compoundBlock, fieldValue, labelFields, slotField } from "../notes";
 import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { typeDef } from "../session";
 import { ThisNote } from "./thisNote";
@@ -25,13 +25,14 @@ function SlotValue(props: { row: Row; doc?: NoteDoc; slot: string; label: string
   if (props.slot === "title") return null;
   const t = typeDef(props.row.type);
   const f = t ? slotField(t, props.slot) : undefined;
-  if (!f) return null;
+  if (!f || labelFields(t!).has(f.name)) return null;
   const label = props.label ?? f.label;
+  const fields = () => (props.doc ? props.doc.fields : props.row.fields);
   return (
     <div class="query-slot" data-field={f.name}>
       <span class="query-slot-label">{label}</span>
       <span class="query-slot-value">
-        <Show when={f.compound} fallback={formatValue(props.doc ? props.doc.fields[f.name] : props.row.fields[f.name])}>
+        <Show when={f.compound} fallback={<FieldValue field={f} value={fields()[f.name]} fields={fields()} size="card" />}>
           <Show when={props.doc}>{(doc) => <Blocks blocks={compoundBlock(doc(), f)?.blocks ?? []} />}</Show>
         </Show>
       </span>

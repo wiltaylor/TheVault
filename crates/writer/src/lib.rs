@@ -1511,6 +1511,10 @@ impl NoteLookup for Lookup<'_> {
     fn asset_exists(&self, id: &str) -> bool {
         self.writer.find_asset(id).is_some() || self.writer.hooks.asset_known(id)
     }
+
+    fn asset_filename(&self, id: &str) -> Option<String> {
+        self.writer.find_asset(id).map(|a| a.filename)
+    }
 }
 
 /// `notes/<type>/<id>.wcl`.

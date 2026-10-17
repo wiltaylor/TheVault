@@ -19,6 +19,12 @@ const STARTER_PERSON: &str = include_str!("../../cli/starter/types/person.wcl");
 /// The starter's `person` type in 0.1.5, when `addresses` held email addresses beside `email`.
 const PERSON_0_1_5: &str = include_str!("fixtures/shipped/person_0_1_5_starter.wcl");
 
+/// The starter's `person` type in 0.1.6, before values and their labels were one chip.
+const PERSON_0_1_6: &str = include_str!("fixtures/shipped/person_0_1_6_starter.wcl");
+
+/// The built-in default `person` type in 0.1.6.
+const DEFAULT_PERSON_0_1_6: &str = include_str!("fixtures/shipped/person_0_1_6_default.wcl");
+
 /// `scripts/device_calls.ws` as the first release with device scripts shipped it.
 const OLD_DEVICE_CALLS: &str = include_str!("fixtures/shipped/device_calls_39d9091.ws");
 
@@ -99,7 +105,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
 
     // The step moved email into emails; the seeding added the rest.
-    assert_eq!(done.steps, ["0001_person_emails"]);
+    assert_eq!(done.steps, ["0001_person_emails", "0002_person_labels"]);
     let fields: Vec<&str> = done
         .fields_added
         .iter()
@@ -108,10 +114,10 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             f.as_str()
         })
         .collect();
+    // Step 0002 added email_labels with the labels of emails.
     assert_eq!(
         fields,
         [
-            "email_labels",
             "phones",
             "phone_labels",
             "addresses",
@@ -126,10 +132,15 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
         ]
     );
     // Laid out as the starter now writes it: organisation and homepage kept, the new fields
-    // in the shipped order, the card and the Work tab untouched.
+    // in the shipped order, the card and the Work tab untouched, so the card has no photo.
     assert_eq!(
         w.read_type("person").unwrap(),
-        store::canonical(STARTER_PERSON, "types/person.wcl").unwrap()
+        store::canonical(STARTER_PERSON, "types/person.wcl")
+            .unwrap()
+            .replace(
+                "  tab \"Card\" {\n    slot \"photo\"\n",
+                "  tab \"Card\" {\n"
+            )
     );
     let mut added = done.types_added.clone();
     added.sort();
@@ -363,7 +374,6 @@ fn a_field_the_user_changed_is_left_as_it_is() {
     assert_eq!(
         fields,
         [
-            "email_labels",
             "phone_labels",
             "addresses",
             "address_labels",
@@ -416,7 +426,7 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
 
     let w = open(root);
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
-    assert_eq!(done.steps, ["0001_person_emails"]);
+    assert_eq!(done.steps, ["0001_person_emails", "0002_person_labels"]);
     // Seeding added postal addresses after the step had moved the email addresses out of it.
     assert!(
         done.fields_added
@@ -546,4 +556,122 @@ fn a_failed_upgrade_step_is_not_recorded_and_runs_again() {
     assert!(w.run_upgrade_steps(&steps).is_err());
     assert!(w.state().applied_upgrades().unwrap().is_empty());
     assert_eq!(w.run_upgrade_steps(&steps).unwrap(), ["0001_fail_once"]);
+}
+
+/// A vault holding `person_type` with one labelled person whose photo is `photo_file`, uploaded.
+/// Returns the person's id.
+fn labelled_person(root: &Path, person_type: &str, photo_file: &str) -> String {
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/person.wcl"), person_type).unwrap();
+    let w = open(root);
+    let photo = w.put_asset(photo_file, vec![1, 2, 3]).unwrap();
+    w.create(
+        "person",
+        &writer::Input::Json(json!({ "fields": {
+            "title": "Sam",
+            "phones": ["+61400000020", "+61400000021", "+61400000020"],
+            "phone_labels": ["mobile", "home", "work"],
+            "emails": ["sam@example.com"],
+            "email_labels": ["home"],
+            "photo": photo.id,
+        }})),
+        &author(),
+    )
+    .unwrap()
+    .id
+}
+
+#[test]
+fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
+    for (name, person_type) in [("starter", PERSON_0_1_6), ("default", DEFAULT_PERSON_0_1_6)] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let sam = labelled_person(root, person_type, "face.JPG");
+        let note_path = format!("notes/person/{sam}.wcl");
+        let note_before = read(root, &note_path).unwrap();
+        let w = open(root);
+        let versions_before = w.history(&sam).unwrap().len();
+        let fields_before = fields_of(&w, &sam);
+
+        let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+        assert_eq!(
+            done.steps,
+            ["0001_person_emails", "0002_person_labels"],
+            "{name}"
+        );
+        assert!(
+            done.fields_added.is_empty(),
+            "{name}: {:?}",
+            done.fields_added
+        );
+
+        let schema = w.schema();
+        let person = schema.type_def("person").unwrap();
+        for (v, l) in [
+            ("emails", "email_labels"),
+            ("phones", "phone_labels"),
+            ("addresses", "address_labels"),
+        ] {
+            assert_eq!(
+                person.field(v).unwrap().labels.as_deref(),
+                Some(l),
+                "{name}"
+            );
+            assert!(person.field(l).is_some(), "{name}: {l} kept");
+        }
+        assert_eq!(person.field("photo").unwrap().accept, schema::Accept::Image);
+        let wcl = w.read_type("person").unwrap();
+        for l in ["email_labels", "phone_labels", "address_labels"] {
+            assert!(!wcl.contains(&format!("slot \"{l}\"")), "{name}: {wcl}");
+        }
+        // Everything else the type held is as it was: the starter keeps its homepage and Work
+        // tab, the slots keep their order.
+        let expect = store::canonical(person_type, "types/person.wcl")
+            .unwrap()
+            .replace("    slot \"email_labels\"\n", "")
+            .replace("    slot \"phone_labels\"\n", "")
+            .replace("    slot \"address_labels\"\n", "");
+        let strip = |t: &str| {
+            t.lines()
+                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|l| !l.starts_with("labels = ") && !l.starts_with("accept = "))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(strip(&wcl), strip(&expect), "{name}");
+
+        // No note changed.
+        assert_eq!(read(root, &note_path).unwrap(), note_before, "{name}");
+        assert_eq!(w.history(&sam).unwrap().len(), versions_before, "{name}");
+        assert_eq!(fields_of(&w, &sam), fields_before, "{name}");
+        assert!(w.flagged().unwrap().is_empty());
+        drop(w);
+
+        // A second start does nothing.
+        let gen_before = generation(root);
+        let w = open(root);
+        assert_eq!(
+            w.upgrade_shipped_defaults(Upkeep::Home).unwrap(),
+            Upgraded::default(),
+            "{name}"
+        );
+        assert_eq!(generation(root), gen_before, "{name}");
+    }
+}
+
+#[test]
+fn a_photo_that_is_not_an_image_keeps_the_photo_field_open_to_any_asset() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let sam = labelled_person(root, PERSON_0_1_6, "cv.pdf");
+    let w = open(root);
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert!(done.steps.iter().any(|s| s == "0002_person_labels"));
+    let schema = w.schema();
+    let person = schema.type_def("person").unwrap();
+    assert_eq!(person.field("photo").unwrap().accept, schema::Accept::Any);
+    assert_eq!(
+        person.field("phones").unwrap().labels.as_deref(),
+        Some("phone_labels")
+    );
+    assert!(fields_of(&w, &sam)["photo"].is_string());
 }

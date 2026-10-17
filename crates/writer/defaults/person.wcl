@@ -5,9 +5,10 @@ icon        = "user"
 colour      = "purple"
 
 field emails {
-  kind  = "list"
-  label = "Emails"
-  items = "string"
+  kind   = "list"
+  label  = "Emails"
+  items  = "string"
+  labels = "email_labels"
 }
 
 field email_labels {
@@ -22,6 +23,7 @@ field phones {
   label       = "Phones"
   description = "Phone numbers in international (E.164) form, such as +61400000000."
   items       = "string"
+  labels      = "phone_labels"
 }
 
 field phone_labels {
@@ -36,6 +38,7 @@ field addresses {
   label       = "Addresses"
   description = "Postal addresses, each on one line with its lines joined by commas."
   items       = "string"
+  labels      = "address_labels"
 }
 
 field address_labels {
@@ -79,8 +82,9 @@ field contact_note {
 }
 
 field photo {
-  kind  = "asset"
-  label = "Photo"
+  kind   = "asset"
+  label  = "Photo"
+  accept = "image"
 }
 
 field device_contacts {
@@ -98,16 +102,13 @@ field body {
 
 template default {
   tab "Person" {
+    slot "photo"
     slot "title" {
       label = "Name"
     }
-    slot "photo"
     slot "emails"
-    slot "email_labels"
     slot "phones"
-    slot "phone_labels"
     slot "addresses"
-    slot "address_labels"
     slot "organisation"
     slot "job_title"
     slot "nickname"
@@ -120,6 +121,7 @@ template default {
 
 template card {
   tab "Card" {
+    slot "photo"
     slot "title"
     slot "emails"
   }

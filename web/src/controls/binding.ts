@@ -12,6 +12,8 @@ export interface ControlBinding {
   value: (f: FieldDef) => Json | undefined;
   /** Write the field through the note's autosave. Without it, controls are read-only. */
   set?: (f: FieldDef, v: Json | undefined) => void;
+  /** Write several fields in one edit, such as a labelled list's values and labels. */
+  setMany?: (values: Record<string, Json | undefined>) => void;
   /** Why the controls are read-only, when they are. */
   reason?: string;
   /** The template editor: controls show what they will look like, with sample values. */

@@ -287,4 +287,14 @@ impl NoteLookup for Lookup<'_> {
     fn asset_exists(&self, id: &str) -> bool {
         schema::is_ulid(id) && self.vault.root().join("assets").join(id).is_dir()
     }
+
+    fn asset_filename(&self, id: &str) -> Option<String> {
+        if !schema::is_ulid(id) {
+            return None;
+        }
+        let dir = std::fs::read_dir(self.vault.root().join("assets").join(id)).ok()?;
+        dir.flatten()
+            .find(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+    }
 }

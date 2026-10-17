@@ -199,6 +199,41 @@ pub struct FieldDef {
     /// field with `multiple = true` everywhere else: in notes, queries and the index.
     pub term_list: bool,
     pub default: Option<Value>,
+    /// On a list of strings: another list-of-string field of the type that holds one label per
+    /// value, index-aligned. The named field is edited with this one and not shown on its own.
+    pub labels: Option<String>,
+    /// On an asset field: which assets it may hold.
+    pub accept: Accept,
+}
+
+/// The `accept` of an asset field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Accept {
+    #[default]
+    Any,
+    /// Only an asset whose file is an image, by its file name.
+    Image,
+}
+
+impl Accept {
+    pub fn name(self) -> &'static str {
+        match self {
+            Accept::Any => "any",
+            Accept::Image => "image",
+        }
+    }
+}
+
+/// Whether a file name names an image: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif` or
+/// `.svg`, in any case.
+pub fn is_image_filename(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.rsplit_once('.').is_some_and(|(_, ext)| {
+        matches!(
+            ext,
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "svg"
+        )
+    })
 }
 
 /// The built-in title, as a required string field, for what may name it as a field: a slot or
@@ -215,6 +250,8 @@ pub(crate) fn title_field() -> FieldDef {
         multiple: false,
         term_list: false,
         default: None,
+        labels: None,
+        accept: Accept::Any,
     }
 }
 
@@ -322,6 +359,8 @@ impl TypeDef {
                 }
             }
         }
+
+        check_labels(&mut c, &fields);
 
         // A control in a template binds a field of this type.
         c.fields = Some(&fields);
@@ -437,10 +476,13 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         ]),
         "list" => {
             items.push(req("items", Form::OneOf(&ITEM_NAMES)));
-            if d.field("items").and_then(Value::as_str) == Some("taxonomy") {
-                items.push(req("taxonomy", Form::Str));
+            match d.field("items").and_then(Value::as_str) {
+                Some("taxonomy") => items.push(req("taxonomy", Form::Str)),
+                Some("string") => items.push(opt("labels", Form::Str)),
+                _ => {}
             }
         }
+        "asset" => items.push(opt("accept", Form::OneOf(&["image", "any"]))),
         "dict" => items.push(req("values", Form::OneOf(&Scalar::NAMES))),
         "location" => items.extend([
             req("map", Form::OneOf(&["geo", "image"])),
@@ -554,6 +596,12 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         multiple: multiple || term_list,
         term_list,
         default: d.field("default").cloned(),
+        labels: s("labels"),
+        accept: if s("accept").as_deref() == Some("image") {
+            Accept::Image
+        } else {
+            Accept::Any
+        },
     };
     if let Some(v) = &def.default {
         let path = format!("{at}.default");
@@ -564,6 +612,48 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         }
     }
     Some(def)
+}
+
+/// Every `labels` names another list-of-string field of the type, and no field is named by two.
+fn check_labels(c: &mut Check, fields: &[FieldDef]) {
+    let mut named: Vec<(&str, &str)> = Vec::new();
+    for f in fields {
+        let Some(l) = &f.labels else { continue };
+        let at = format!("field {}.labels", f.name);
+        if l == &f.name {
+            c.fail(&at, "cannot name the field itself");
+            continue;
+        }
+        match fields.iter().find(|g| &g.name == l) {
+            None => c.fail(&at, format!("the type has no field {l:?}")),
+            Some(g)
+                if !matches!(
+                    g.kind,
+                    FieldKind::List {
+                        items: Scalar::String
+                    }
+                ) =>
+            {
+                c.fail(
+                    &at,
+                    format!(
+                        "{l:?} must be a list of strings, and it is a {} field",
+                        g.kind.name()
+                    ),
+                )
+            }
+            Some(_) => {
+                if let Some((other, _)) = named.iter().find(|(_, n)| *n == l.as_str()) {
+                    c.fail(
+                        &at,
+                        format!("{l:?} already holds the labels of field {other:?}"),
+                    );
+                } else {
+                    named.push((f.name.as_str(), l.as_str()));
+                }
+            }
+        }
+    }
 }
 
 fn reference(

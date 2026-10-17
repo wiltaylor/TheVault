@@ -236,9 +236,10 @@ The `person` type, both the starter pack's and the one added with the phone data
 
 ```wcl
 field emails {
-  kind  = "list"
-  label = "Emails"
-  items = "string"
+  kind   = "list"
+  label  = "Emails"
+  items  = "string"
+  labels = "email_labels"
 }
 
 field email_labels {
@@ -253,6 +254,7 @@ field phones {
   label       = "Phones"
   description = "Phone numbers in international (E.164) form, such as +61400000000."
   items       = "string"
+  labels      = "phone_labels"
 }
 
 field phone_labels {
@@ -267,6 +269,7 @@ field addresses {
   label       = "Addresses"
   description = "Postal addresses, each on one line with its lines joined by commas."
   items       = "string"
+  labels      = "address_labels"
 }
 
 field address_labels {
@@ -310,8 +313,9 @@ field contact_note {
 }
 
 field photo {
-  kind  = "asset"
-  label = "Photo"
+  kind   = "asset"
+  label  = "Photo"
+  accept = "image"
 }
 
 field device_contacts {
@@ -323,9 +327,11 @@ field device_contacts {
 }
 ```
 
-`phones`, `emails` and `addresses` each have a label list beside them, index-aligned: the label of `phones[0]` is `phone_labels[0]`. A label is `mobile`, `home`, `work`, `main`, `other`, or the phone's custom label text, and `""` for none. `phones` are E.164, so `has(phones, "+61400000000")` finds the person by a number. `addresses` are postal addresses, each the phone's formatted address with its line breaks joined by `", "`. `birthday` is `YYYY-MM-DD`, or `--MM-DD` when the year is not known. `contact_note` is the note on the phone contact, kept apart from `body`, which is the person's own content. `photo` is the contact photo. The starter's `person` also has `homepage` and a Work tab.
+`phones`, `emails` and `addresses` each have a label list beside them, index-aligned and named by their [`labels`](#list): the label of `phones[0]` is `phone_labels[0]`. The default template places `photo` first, then the name, and no slot of a label list; the card shows the photo and the title first. A label is `mobile`, `home`, `work`, `main`, `other`, or the phone's custom label text, and `""` for none. `phones` are E.164, so `has(phones, "+61400000000")` finds the person by a number. `addresses` are postal addresses, each the phone's formatted address with its line breaks joined by `", "`. `birthday` is `YYYY-MM-DD`, or `--MM-DD` when the year is not known. `contact_note` is the note on the phone contact, kept apart from `body`, which is the person's own content. `photo` is the contact photo. The starter's `person` also has `homepage` and a Work tab.
 
 A vault from before people carried every contact detail has `addresses` holding email addresses and a separate single `email`. The upgrade step `0001_person_emails` renames that `addresses` to `emails`, moves a non-empty `email` value to the front of `emails` (an equal address further on, ignoring case, is dropped), and removes `email`, as one planned type change that edits every person note it applies to; see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). The template slots of `email` and `addresses` become one slot of `emails`. Fields the user added stay, and the seeding that follows adds the other new fields, postal `addresses` among them. A device's local vault adds no field to such a `person` type, and waits for the home server's step to sync.
+
+A vault from before values and their labels were edited together has `emails`, `phones` and `addresses` with no `labels`, and slots for the three label lists in the default template. The upgrade step `0002_person_labels` gives each of the three that the type has its `labels`, adding the shipped label list after it when the type lacks one; gives `photo` `accept = "image"` when every photo in the vault is an image asset; and removes the slots of `email_labels`, `phone_labels` and `address_labels` from the `default` template. It is one planned type change that edits no note, and it changes nothing else the user changed in the type. It does nothing to a `person` type where any field already has `labels`.
 
 `device_contacts` maps each device to the id of the contact on that device that is linked to the person. The key is `device_` followed by the device id, as in `device_01JB8Z4K2MQ7V3X9T5R6W8Y2ZB`, because a dict key must be an identifier and a device id starts with a digit. It is hidden: the device scripts write it, and the app does not show it.
 
@@ -642,6 +648,7 @@ An ordered list of scalar values of one kind, or of taxonomy terms.
 |------|------|---------|
 | `items` | string | Required. One of `string`, `int`, `float`, `bool`, `date`, `datetime`, `url` and `taxonomy` |
 | `taxonomy` | string | Required with `items = "taxonomy"`, and allowed only with it. The taxonomy name, a file stem in `taxonomies/` |
+| `labels` | string | Allowed only with `items = "string"`. Another field of the type, a list of strings, that holds one label per value in the same order |
 
 ```wcl
 field aliases {
@@ -666,6 +673,26 @@ field tags {
 
 ```wcl
 tags = ["Gardening", "Gardening/Roses"]
+```
+
+A list of strings with `labels` names a second list that labels its values, index-aligned: the label of `phones[0]` is `phone_labels[0]`, and `""` is no label. The two lists are edited together: the app shows one chip per value with its label before it, each with Copy, Edit and Remove, and writes both lists in one save, so a value may appear twice and a label stays with its value. The field `labels` names is not shown on its own: the properties sidebar leaves it out and the note page shows no slot for it, even when a template places it. Cards and tables show the pairs as text, such as `mobile +61400000020, home +61400000021`. The schema rejects `labels` that names a field the type lacks ("the type has no field ..."), a field that is not a list of strings ("... must be a list of strings, and it is a ... field"), the field itself ("cannot name the field itself"), or a field another field already names ("... already holds the labels of field ...").
+
+```wcl
+field phones {
+  kind   = "list"
+  items  = "string"
+  labels = "phone_labels"
+}
+
+field phone_labels {
+  kind  = "list"
+  items = "string"
+}
+```
+
+```wcl
+phones       = ["+61400000020", "+61400000021"]
+phone_labels = ["mobile", "home"]
 ```
 
 ### `dict`
@@ -758,6 +785,19 @@ field attachments {
 ```wcl
 cover       = "01JB9A0C3D4E5F6G7H8J9K0M1N"
 attachments = ["01JB9A0C3D4E5F6G7H8J9K0M1P"]
+```
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `accept` | string | `"image"` or `"any"`. Default `"any"`. With `"image"`, a value must be an asset whose file is an image, by its file name (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif` or `.svg`); validation rejects another asset with "asset ... is "...", and this field holds only images" |
+
+A single asset field with `accept = "image"` is edited as a square image tile: the image, or a placeholder ("Add photo" for a field labelled Photo, else "Add image") when it is empty. The tile opens a dialog that uploads an image, by the file picker or by dropping one, or picks one of the vault's images; a set tile also offers Remove and Open full size. Cards and tables show the image as a thumbnail. Any other asset field keeps the picker of uploaded files.
+
+```wcl
+field photo {
+  kind   = "asset"
+  accept = "image"
+}
 ```
 
 ### `ink`
@@ -1897,7 +1937,8 @@ The app ships defaults into every vault: the built-in types (and the `person` ty
    | Step | Does |
    |------|------|
    | `0001_person_emails` | A `person` type with `addresses` or `email` and no `emails`: `addresses` becomes `emails`, `email` moves into it and goes (see [Built-in types](#built-in-types)). Its note versions are authored by `task server` |
-2. **Built-in types.** A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` template places an added field, the vault's `default` template gains that slot, after the nearest slot the shipped template puts before it, or at the end of its first tab. No other template, and nothing else in the `default` template, changes. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
+   | `0002_person_labels` | A `person` type whose `emails`, `phones` and `addresses` have no `labels`: each gains its `labels`, `photo` gains `accept = "image"` when every photo is an image, and the label lists' slots leave the `default` template (see [Built-in types](#built-in-types)). It edits no note |
+2. **Built-in types.** A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` template places an added field, the vault's `default` template gains that slot, after the nearest slot the shipped template puts before it, else before the nearest slot it puts after it, or at the end of its first tab. No other template, and nothing else in the `default` template, changes. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
 3. **Missing files.** Each default device script and the default device file the vault lacks is written, the scripts before the device file that names them. A deleted one comes back on the next start. That changes nothing on a device: a vault with no `devices/android.wcl` runs the same built-in default, and a script the device file names cannot be deleted while it does.
 4. **Newer shipped files.** `state.db` records the content hash of each default device file or script the server writes. The app carries the hash of every version of each that it has ever shipped. On start, a file whose content is still a version the app shipped, or still what the server wrote, is replaced by the current shipped version, so a vault that skipped releases is upgraded too. A file the user changed is left alone. When a newer shipped version exists than the one the user changed, the server adds one notification under the bell that names the file and says a newer version exists. It adds no other for that version, on any later start. A file the user changed with no record of what the server wrote, as in a vault from before these records, counts as based on an older version. A device's local vault never adds the notification, since the home server does.
 

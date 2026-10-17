@@ -141,6 +141,31 @@ handler "before_update" {
     expect(typeWcl(m)).toContain('field device_contacts {\n  kind = "dict"\n  hidden = true\n  values = "string"\n}');
   });
 
+  it("keeps a list's labels and an asset field's accept, and labels follows a renamed field", () => {
+    const person: SchemaType = {
+      ...stored,
+      fields: [
+        { name: "phones", kind: "list", label: "Phones", required: false, computed: false, multiple: false, items: "string", labels: "phone_labels" },
+        { name: "phone_labels", kind: "list", label: "Phone labels", required: false, computed: false, multiple: false, items: "string", labels: null },
+        { name: "photo", kind: "asset", label: "Photo", required: false, computed: false, multiple: false, accept: "image" },
+      ],
+      templates: [],
+      handlers: [],
+    };
+    const m = typeFromSchema(person);
+    expect(m.fields.map((f) => [f.labels, f.accept])).toEqual([
+      ["phone_labels", "any"],
+      ["", "any"],
+      ["", "image"],
+    ]);
+    m.fields[1]!.name = "labels_of_phones";
+    const text = typeWcl(m);
+    expect(text).toContain('field phones {\n  kind = "list"\n  label = "Phones"\n  items = "string"\n  labels = "labels_of_phones"\n}');
+    expect(text).toContain('field photo {\n  kind = "asset"\n  label = "Photo"\n  accept = "image"\n}');
+    m.fields[0]!.labels = "nope";
+    expect(problems(m)).toContain('phones: labels names no field "nope".');
+  });
+
   it("reads a list of terms back as a list whose items are a taxonomy, and writes it so", () => {
     const tagged: SchemaType = {
       ...stored,

@@ -6976,6 +6976,282 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   background: transparent;
 }
 
+/* A labelled list's chips: the label as a muted prefix, then the value, on one line. Copy, Edit
+   and Remove show on hover and on focus; they stay in the tab order, and on touch the chip opens
+   its popover, which has Copy and Remove too. */
+.labelled-list {
+  position: relative;
+}
+
+.chip-picker .labelled-chip {
+  padding: 0;
+  gap: 0;
+  white-space: nowrap;
+}
+
+.chip-picker .labelled-chip .chip-text {
+  flex: 0 1 auto;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  border-radius: 999px;
+  padding: 0 0.8rem;
+  opacity: 1;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.chip-picker .labelled-chip .chip-text:disabled {
+  cursor: default;
+}
+
+.chip-picker .labelled-chip .chip-text:hover:not(:disabled),
+.chip-picker .labelled-chip .chip-text:focus-visible {
+  color: inherit;
+  background: color-mix(in srgb, var(--chip-colour) 12%, transparent);
+}
+
+.chip-picker .labelled-chip .chip-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink);
+}
+
+.chip-picker .labelled-chip .chip-label {
+  flex: none;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chip-colour) 22%, transparent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.chip-picker .labelled-chip .chip-actions {
+  display: inline-flex;
+  align-self: stretch;
+  max-width: 0;
+  overflow: hidden;
+  transition: max-width 120ms ease;
+}
+
+.chip-picker .labelled-chip:hover .chip-actions,
+.chip-picker .labelled-chip:focus-within .chip-actions {
+  max-width: 7rem;
+}
+
+.chip-picker .labelled-chip:hover .chip-text,
+.chip-picker .labelled-chip:focus-within .chip-text {
+  padding-right: 0.3rem;
+}
+
+.chip-picker .labelled-chip .chip-action {
+  min-width: 1.6rem;
+  border-radius: 0;
+  padding: 0 0.3rem;
+}
+
+.chip-picker .labelled-chip .chip-action:last-child {
+  border-radius: 0 999px 999px 0;
+  padding-right: 0.55rem;
+}
+
+.chip-picker .labelled-chip .chip-action:not(.chip-remove):hover,
+.chip-picker .labelled-chip .chip-action:not(.chip-remove):focus-visible {
+  color: var(--accent);
+}
+
+.chip-picker .labelled-chip .chip-copied {
+  font-size: 0.75rem;
+}
+
+.labelled-popover {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 50;
+  display: grid;
+  gap: 0.5rem;
+  width: min(23rem, calc(100vw - 2rem));
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.18);
+}
+
+.labelled-popover-field {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.labelled-popover-field input {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.9rem;
+}
+
+.labelled-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.labelled-popover-actions button {
+  padding: 0.3rem 0.65rem;
+  font-size: 0.875rem;
+}
+
+.labelled-popover-spacer {
+  flex: 1;
+}
+
+/* An image field: a square tile with the image, or a placeholder that opens the picker. */
+.image-field {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.image-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 7.5rem;
+  height: 7.5rem;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--hover);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.image-tile.empty {
+  border-style: dashed;
+  background: transparent;
+}
+
+.image-tile:hover:not(:disabled),
+.image-tile:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.image-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-tile-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.image-tile-actions {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.image-tile-actions button {
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: inherit;
+}
+
+.image-tile-actions button:hover,
+.image-tile-actions button:focus-visible {
+  color: var(--danger);
+}
+
+.image-picker-upload {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.6rem;
+}
+
+.image-picker-search {
+  width: 100%;
+}
+
+.image-picker-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+.image-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.image-picker-item.current,
+.image-picker-item:hover,
+.image-picker-item:focus-visible {
+  border-color: var(--accent);
+}
+
+.image-picker-item img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 0.35rem;
+  background: var(--hover);
+}
+
+.image-picker-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* An image field's thumbnail on a card, in a table and read-only. */
+.image-thumb {
+  display: block;
+  width: 3.5rem;
+  height: 3.5rem;
+  object-fit: cover;
+  border-radius: 0.4rem;
+  border: 1px solid var(--line);
+}
+
+.image-thumb.image-thumb-small {
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.3rem;
+}
+
 /* Calendar: a month in place */
 
 .control-calendar {

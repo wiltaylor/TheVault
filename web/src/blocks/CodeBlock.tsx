@@ -13,6 +13,7 @@ import { basicSetup, minimalSetup } from "codemirror";
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import type { Block } from "../api";
 import { text, withItem, withText } from "./fields";
+import { copyText } from "../clipboard";
 
 /** The `language` of a code block that holds program output rather than code. */
 export const OUTPUT = "stdout";
@@ -253,36 +254,7 @@ export function CodeBlock(props: { block: Block; onChange?: (block: Block) => vo
   );
 }
 
-/**
- * Copy `text` to the clipboard. The Clipboard API needs a secure context (HTTPS or localhost), so
- * over plain HTTP, such as a phone on the tailnet, this falls back to a hidden textarea and
- * `execCommand("copy")`.
- */
-export async function copyText(text: string): Promise<boolean> {
-  if (navigator.clipboard && window.isSecureContext) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // Fall through to the older way.
-    }
-  }
-  const area = document.createElement("textarea");
-  area.value = text;
-  area.setAttribute("readonly", "");
-  area.style.position = "fixed";
-  area.style.opacity = "0";
-  document.body.appendChild(area);
-  area.select();
-  let ok = false;
-  try {
-    ok = document.execCommand("copy");
-  } catch {
-    ok = false;
-  }
-  area.remove();
-  return ok;
-}
+export { copyText } from "../clipboard";
 
 /** Copies the code block's source, then says so for a moment. */
 function CopyButton(props: { source: () => string }) {

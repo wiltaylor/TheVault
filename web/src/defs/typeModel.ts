@@ -99,6 +99,10 @@ export interface FieldModel {
   of: "date" | "datetime";
   map: "geo" | "image";
   image: string;
+  /** A list of strings: the list-of-strings field holding one label per value, or "". */
+  labels: string;
+  /** An asset field: which assets it takes. */
+  accept: "any" | "image";
 }
 
 export type TemplateItemModel = { slot: string; label: string | null } | { block: Block };
@@ -171,6 +175,8 @@ export function newField(name = "", kind: FieldKind = "string"): FieldModel {
     of: "date",
     map: "geo",
     image: "",
+    labels: "",
+    accept: "any",
   };
 }
 
@@ -198,6 +204,8 @@ function fieldFromSchema(f: Record<string, Json>): FieldModel {
   if (f.of) m.of = f.of as FieldModel["of"];
   m.image = str(f.image);
   m.map = f.map === "image" || m.image ? "image" : "geo";
+  m.labels = str(f.labels);
+  if (f.accept === "image") m.accept = "image";
   // A list of terms is described as the multiple taxonomy field it reads as.
   if (m.kind === "taxonomy" && f.items === "taxonomy") {
     m.kind = "list";
@@ -265,6 +273,12 @@ export function problems(m: TypeModel): string[] {
       if (f.relation !== "one_way" && f.target === "*") out.push(`${who}: only a one-way reference can target any type.`);
     }
     if (f.kind === "location" && f.map === "image" && !f.image) out.push(`${who}: choose the map image.`);
+    if (f.kind === "list" && f.items === "string" && f.labels) {
+      const l = m.fields.find((g) => g.name === f.labels || g.original === f.labels);
+      if (f.labels === f.name) out.push(`${who}: labels cannot name the field itself.`);
+      else if (!l) out.push(`${who}: labels names no field ${JSON.stringify(f.labels)}.`);
+      else if (l.kind !== "list" || l.items !== "string") out.push(`${who}: labels must name a list of strings.`);
+    }
   }
   m.handlers.forEach((h, i) => {
     const who = `Handler ${i + 1} (${h.event})`;
@@ -287,7 +301,7 @@ export function hasValue(v: Json | undefined): boolean {
   return v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && v.length === 0);
 }
 
-function fieldWcl(f: FieldModel): string {
+function fieldWcl(f: FieldModel, renamed: Record<string, string> = {}): string {
   const i = "  ";
   let out = `field ${f.name} {\n`;
   out += wclField("kind", f.kind, i);
@@ -320,6 +334,11 @@ function fieldWcl(f: FieldModel): string {
     case "list":
       out += wclField("items", f.items, i);
       if (f.items === "taxonomy") out += wclField("taxonomy", f.taxonomy, i);
+      // A renamed label field is followed.
+      if (f.items === "string" && f.labels) out += wclField("labels", renamed[f.labels] ?? f.labels, i);
+      break;
+    case "asset":
+      if (f.accept === "image") out += wclField("accept", "image", i);
       break;
     case "dict":
       out += wclField("values", f.values, i);
@@ -446,12 +465,17 @@ export function typeWcl(m: TypeModel): string {
   if (m.description.trim()) head += wclField("description", m.description.trim());
   if (m.icon.trim()) head += wclField("icon", m.icon.trim());
   if (m.colour) head += wclField("colour", m.colour);
-  const blocks = [...m.fields.map(fieldWcl), ...followFields(m).map(templateWcl), ...m.handlers.map(handlerWcl)];
+  const renamed = renames(m);
+  const blocks = [...m.fields.map((f) => fieldWcl(f, renamed)), ...followFields(m).map(templateWcl), ...m.handlers.map(handlerWcl)];
   return [head, ...blocks].join("\n");
 }
 
-/** Every field a template does not place yet, in type order, with `title` first. */
-export function unplaced(t: TemplateModel, fields: { name: string }[]): string[] {
+/**
+ * Every field a template does not place yet, in type order, with `title` first. A field holding
+ * another field's labels is edited with that field, so it is not offered.
+ */
+export function unplaced(t: TemplateModel, fields: { name: string; labels?: string | null }[]): string[] {
   const placed = new Set(t.tabs.flatMap((tab) => slotsOf(tab.items)));
-  return ["title", ...fields.map((f) => f.name)].filter((n) => !placed.has(n));
+  const labelFields = new Set(fields.map((f) => f.labels).filter(Boolean));
+  return ["title", ...fields.map((f) => f.name)].filter((n) => !placed.has(n) && !labelFields.has(n));
 }

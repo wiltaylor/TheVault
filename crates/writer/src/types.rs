@@ -466,7 +466,7 @@ impl Writer {
     }
 
     /// The ids of every note of type `name` on disk, sorted.
-    fn note_ids(&self, name: &str) -> Result<Vec<String>> {
+    pub(crate) fn note_ids(&self, name: &str) -> Result<Vec<String>> {
         let dir = self.vault.root().join("notes").join(name);
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
