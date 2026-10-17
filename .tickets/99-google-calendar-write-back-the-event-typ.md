@@ -4,7 +4,7 @@ title: 'Google Calendar write-back: the event type''s google_event handler creat
   patches with If-Match, deletes and recreates on restore'
 blocked_by:
 - '98'
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -24,3 +24,7 @@ Acceptance criteria (server tests through TestServer, vault edits through the no
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-17T23:52:28Z — /work
+
+Claimed.

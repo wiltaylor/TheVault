@@ -4,8 +4,8 @@ title: 'Gmail sync task: labelled or all mail into email and email_thread notes,
   cursor, back-fill, attachments'
 blocked_by:
 - '95'
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Gmail sync task: labelled or all mail into email and email_thread notes, history cursor, back-fill, attachments
@@ -29,3 +29,15 @@ Acceptance criteria (server tests through TestServer and POST /api/tasks/google_
 ### 2026-10-17T23:29:49Z — /work
 
 Claimed.
+
+### 2026-10-17T23:57:04Z — wil
+
+Verified set to verified.
+
+### 2026-10-17T23:57:04Z — wil
+
+Commit 302ef8f on ticket/97. google_gmail.ws decodes base64url in-script (no host base64 decode exists): ~19 instructions per base64 char measured, so a run stops after 1.2M decoded chars or 4 minutes and the next run carries on; a body part is cut at 120K base64 chars with a paragraph saying so. Body text has inline markup characters escaped. The first window listing records the profile historyId before listing and only writes gmail_history_id once the listing completes. Tests outside the ticket adjusted for the new shipped files: embedded handle.rs, server scheduler.rs and shipped_defaults.rs, writer shipped_defaults.rs, testkit fake_google.rs (the gmail-404 test became a Gmail HTTP test). Fake Gmail: builder gmail_page_size/history_not_found; FakeGoogle add_label, add_message(json spec), set_message_labels, delete_message, set_history_not_found, gmail_history_id; profile endpoint added. mod.rs untouched.
+
+### 2026-10-17T23:57:04Z — wil
+
+Status set to done.
