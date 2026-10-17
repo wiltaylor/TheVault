@@ -1,5 +1,6 @@
 //! Seam S1: start `vault-server` on a fresh temporary vault and a random port. Seam S7's local
-//! stand-in HTTP server is [`StandIn`].
+//! stand-in HTTP server is [`StandIn`], and the fake Google APIs the Google sync calls are
+//! [`FakeGoogle`].
 //!
 //! ```no_run
 //! let server = testkit::TestServer::start();
@@ -19,8 +20,12 @@
 //!
 //! A server gets 120 seconds to start. Set `TESTKIT_START_TIMEOUT_SECS` to change that.
 
+pub mod fake_google;
 mod standin;
 
+pub use fake_google::{
+    CALENDAR_PATH, FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, TOKEN_PATH, USERINFO_PATH,
+};
 pub use standin::{Reply, Request, StandIn};
 
 use std::io::{BufRead, BufReader, Read, Write};

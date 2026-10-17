@@ -7,7 +7,8 @@
 //! 1. **Upgrade steps** ([`UPGRADE_STEPS`]), on the home server only, each applied once in order
 //!    and recorded in `state.db`. They run first, because a step such as a field rename must see
 //!    the vault before the additive seeding below adds the field under its new name.
-//! 2. **Built-in types.** A type the vault lacks is added whole. A built-in type the vault has,
+//! 2. **Built-in taxonomies and types.** A built-in taxonomy the vault lacks is added whole, and
+//!    is never changed once the vault has it. A type the vault lacks is added whole. A built-in type the vault has,
 //!    and the `person` type the phone data types reference, gain every field the shipped default
 //!    declares and the vault's type lacks, as a planned schema change that edits no note. A field
 //!    the vault has is never removed, renamed or changed. The `default` template gains a slot for
@@ -30,9 +31,12 @@ use state::{Author, NewNotification};
 use store::Change;
 use wcl_lang::ast::{Block, Expr, Item, Source};
 
-use crate::builtin::{BUILT_IN_TYPES, DEFAULT_PERSON_TYPE, PERSON_TYPE};
+use crate::builtin::{
+    BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, DEFAULT_PERSON_TYPE, PERSON_TYPE, TYPES_NEEDING_PERSON,
+};
+use crate::defs::taxonomy_path;
 use crate::types::{NativeMigration, TypeChange, rebuild_schema};
-use crate::{CALL_TYPE, CONVERSATION_TYPE, MESSAGE_TYPE, Result, Writer, pairs, type_path};
+use crate::{Result, Writer, pairs, type_path};
 
 /// The author of the changes the server makes to keep its shipped defaults up to date.
 pub const SERVER_AUTHOR: &str = "server";
@@ -462,6 +466,8 @@ pub enum Upkeep {
 pub struct Upgraded {
     /// The upgrade steps that ran, in order.
     pub steps: Vec<String>,
+    /// The built-in taxonomies added because the vault lacked them.
+    pub taxonomies_added: Vec<String>,
     /// The types added whole.
     pub types_added: Vec<String>,
     /// `(type, field)` of every field added to a type the vault had.
@@ -538,7 +544,21 @@ impl Writer {
         let mut done = Upgraded::default();
         let mut current = self.schema();
 
-        // Built-in types the vault lacks, with `person` when a phone data type needs it.
+        // Built-in taxonomies the vault lacks, before the types that name them.
+        let mut new_taxonomies: Vec<(String, String)> = Vec::new();
+        for (name, source) in BUILT_IN_TAXONOMIES {
+            if current.taxonomy(name).is_some() {
+                continue;
+            }
+            let text = store::canonical(source, &taxonomy_path(name))?;
+            let taxonomy = schema::Taxonomy::parse(name, &text)
+                .map_err(|e| crate::Error::InvalidType(schema::SchemaError(vec![e])))?;
+            current.grow_taxonomy(taxonomy);
+            new_taxonomies.push((name.to_owned(), text));
+            done.taxonomies_added.push(name.to_owned());
+        }
+
+        // Built-in types the vault lacks, with `person` when a type being added needs it.
         let mut new_types: Vec<(String, String)> = Vec::new();
         let mut missing: Vec<(&str, &str)> = BUILT_IN_TYPES
             .into_iter()
@@ -546,7 +566,7 @@ impl Writer {
             .collect();
         let needs_person = missing
             .iter()
-            .any(|(name, _)| [MESSAGE_TYPE, CALL_TYPE, CONVERSATION_TYPE].contains(name));
+            .any(|(name, _)| TYPES_NEEDING_PERSON.contains(name));
         if needs_person && current.type_def(PERSON_TYPE).is_none() {
             missing.push((PERSON_TYPE, DEFAULT_PERSON_TYPE));
         }
@@ -638,6 +658,9 @@ impl Writer {
                 changes.push(Change::write(file.path, text.as_bytes()));
             }
         }
+        for (name, text) in &new_taxonomies {
+            changes.push(Change::write(taxonomy_path(name), text.as_bytes()));
+        }
         for (name, text) in new_types.iter().chain(&changed_types) {
             changes.push(Change::write(type_path(name), text.as_bytes()));
         }
@@ -649,20 +672,22 @@ impl Writer {
 
         if !changes.is_empty() {
             let mut inner = self.lock();
-            let schema = if new_types.is_empty() && changed_types.is_empty() {
-                None
-            } else {
-                let mut types = self.definitions("types")?;
-                for (name, text) in new_types.iter().chain(&changed_types) {
-                    types.retain(|(n, _)| n != name);
-                    types.push((name.clone(), text.clone()));
-                }
-                let taxonomies = self.definitions("taxonomies")?;
-                let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
-                    .map_err(crate::Error::InvalidType)?;
-                crate::builtin::check_built_in_types(&schema)?;
-                Some(schema)
-            };
+            let schema =
+                if new_types.is_empty() && changed_types.is_empty() && new_taxonomies.is_empty() {
+                    None
+                } else {
+                    let mut types = self.definitions("types")?;
+                    for (name, text) in new_types.iter().chain(&changed_types) {
+                        types.retain(|(n, _)| n != name);
+                        types.push((name.clone(), text.clone()));
+                    }
+                    let mut taxonomies = self.definitions("taxonomies")?;
+                    taxonomies.extend(new_taxonomies.iter().cloned());
+                    let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
+                        .map_err(crate::Error::InvalidType)?;
+                    crate::builtin::check_built_in_types(&schema)?;
+                    Some(schema)
+                };
             let generation = self.commit(changes)?;
             if let Some(schema) = schema {
                 inner.index.set_schema(&schema)?;

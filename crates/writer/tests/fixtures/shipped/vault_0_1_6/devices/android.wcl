@@ -1,0 +1,51 @@
+handler "sms_received" {
+  script = "device_messages"
+}
+
+handler "sms_sent" {
+  script = "device_messages"
+}
+
+handler "mms_received" {
+  script = "device_messages"
+}
+
+handler "rcs_received" {
+  script = "device_messages"
+}
+
+handler "call_ended" {
+  script = "device_calls"
+}
+
+handler "contact_changed" {
+  script = "device_contacts"
+}
+
+handler "contact_deleted" {
+  script = "device_contacts"
+}
+
+handler "share_received" {
+  script = "device_share"
+}
+
+command "send_sms" {
+  script = "device_messages"
+}
+
+command "upsert_contact" {
+  script = "device_contacts"
+}
+
+command "delete_contact" {
+  script = "device_contacts"
+}
+
+command "show_notification" {
+  script = "device_messages"
+}
+
+command "import_history" {
+  script = "device_import"
+}

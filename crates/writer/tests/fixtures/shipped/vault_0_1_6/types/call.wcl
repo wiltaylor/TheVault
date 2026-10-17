@@ -1,0 +1,56 @@
+label       = "Call"
+plural      = "Calls"
+description = "One phone call, made, received or missed."
+icon        = "phone"
+colour      = "green"
+
+field direction {
+  kind    = "select"
+  label   = "Direction"
+  options = ["in", "out", "missed"]
+}
+
+field person {
+  kind   = "reference"
+  label  = "Person"
+  target = "person"
+}
+
+field number {
+  kind  = "string"
+  label = "Number"
+}
+
+field started {
+  kind  = "datetime"
+  label = "Started"
+}
+
+field duration {
+  kind        = "int"
+  label       = "Duration"
+  description = "In seconds."
+}
+
+field device_ref {
+  kind        = "string"
+  label       = "Device reference"
+  description = "The phone's id for the call, so it is captured once."
+}
+
+template default {
+  tab "Call" {
+    slot "direction"
+    slot "person"
+    slot "number"
+    slot "started"
+    slot "duration"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "started"
+  }
+}

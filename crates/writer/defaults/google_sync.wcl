@@ -1,0 +1,131 @@
+label       = "Google sync"
+plural      = "Google sync"
+description = "The settings and progress of the Gmail and Google Calendar sync. A vault holds one."
+icon        = "refresh-cw"
+colour      = "green"
+
+field gmail_mode {
+  kind        = "select"
+  label       = "Gmail mode"
+  description = "Pull the labels listed below, or all mail."
+  options     = ["labels", "all"]
+  default     = "labels"
+}
+
+field gmail_labels {
+  kind        = "list"
+  label       = "Gmail labels"
+  description = "The Gmail labels to pull, by name."
+  items       = "string"
+}
+
+field gmail_window_days {
+  kind        = "int"
+  label       = "Gmail window (days)"
+  description = "How many days back the first pull reaches."
+  default     = 90
+}
+
+field gmail_backfill_to {
+  kind        = "date"
+  label       = "Gmail back-fill to"
+  description = "Pull older mail, a page each run, back to this date."
+}
+
+field calendars {
+  kind        = "list"
+  label       = "Calendars"
+  description = "The ids of the Google calendars to pull."
+  items       = "string"
+  default     = ["primary"]
+}
+
+field default_calendar {
+  kind        = "string"
+  label       = "Default calendar"
+  description = "The calendar a new event note goes to when it names none."
+  default     = "primary"
+}
+
+field account {
+  kind        = "string"
+  label       = "Account"
+  description = "The connected Google address."
+  computed    = true
+}
+
+field gmail_history_id {
+  kind     = "string"
+  label    = "Gmail history id"
+  computed = true
+}
+
+field gmail_backfill_page {
+  kind     = "string"
+  label    = "Gmail back-fill page"
+  computed = true
+}
+
+field calendar_sync_tokens {
+  kind     = "dict"
+  label    = "Calendar sync tokens"
+  values   = "string"
+  computed = true
+}
+
+field calendar_window_end {
+  kind     = "date"
+  label    = "Calendar window end"
+  computed = true
+}
+
+field last_gmail_run {
+  kind     = "datetime"
+  label    = "Last Gmail run"
+  computed = true
+}
+
+field last_gmail_error {
+  kind     = "string"
+  label    = "Last Gmail error"
+  computed = true
+}
+
+field last_calendar_run {
+  kind     = "datetime"
+  label    = "Last calendar run"
+  computed = true
+}
+
+field last_calendar_error {
+  kind     = "string"
+  label    = "Last calendar error"
+  computed = true
+}
+
+field endpoints {
+  kind        = "dict"
+  label       = "Endpoints"
+  description = "Where to reach Google: keys token, gmail, calendar and userinfo. Absent means Google's own hosts."
+  values      = "url"
+  hidden      = true
+}
+
+template default {
+  tab "Gmail" {
+    slot "account"
+    slot "gmail_mode"
+    slot "gmail_labels"
+    slot "gmail_window_days"
+    slot "gmail_backfill_to"
+    slot "last_gmail_run"
+    slot "last_gmail_error"
+  }
+  tab "Calendar" {
+    slot "calendars"
+    slot "default_calendar"
+    slot "calendar_window_end"
+    slot "last_calendar_run"
+    slot "last_calendar_error"
+  }
+}

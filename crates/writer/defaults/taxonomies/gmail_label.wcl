@@ -1,0 +1,19 @@
+label       = "Gmail labels"
+description = "The Gmail labels of pulled email. The Gmail sync adds each label it meets; nested labels nest here, and Gmail's own labels sit under system."
+allow_new   = true
+
+term "system" {
+  colour = "gray"
+
+  term "INBOX"
+
+  term "UNREAD"
+
+  term "STARRED"
+
+  term "IMPORTANT"
+
+  term "SENT"
+
+  term "DRAFT"
+}

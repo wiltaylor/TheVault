@@ -78,6 +78,31 @@ impl Request {
             .get(&name.to_ascii_lowercase())
             .map(String::as_str)
     }
+
+    /// The path without its query string.
+    pub fn route(&self) -> &str {
+        self.path.split('?').next().unwrap_or_default()
+    }
+
+    /// The first value of query parameter `name`, decoded.
+    pub fn query(&self, name: &str) -> Option<String> {
+        let (_, query) = self.path.split_once('?')?;
+        url_pairs(query)
+            .into_iter()
+            .find_map(|(k, v)| (k == name).then_some(v))
+    }
+
+    /// The first value of field `name` of a form-urlencoded body, decoded.
+    pub fn form(&self, name: &str) -> Option<String> {
+        url_pairs(&String::from_utf8_lossy(&self.body))
+            .into_iter()
+            .find_map(|(k, v)| (k == name).then_some(v))
+    }
+
+    /// The body as JSON, or `Null` when it is not JSON.
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::from_slice(&self.body).unwrap_or(serde_json::Value::Null)
+    }
 }
 
 #[derive(Default)]
@@ -152,6 +177,20 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 fn serve(conn: TcpStream, shared: &Shared) -> std::io::Result<()> {
+    let Some(request) = read_request(&conn)? else {
+        return Ok(());
+    };
+    let route = request.route().to_owned();
+    lock(&shared.requests).push(request);
+    let reply = lock(&shared.routes)
+        .get(&route)
+        .cloned()
+        .unwrap_or_else(|| Reply::text(404, "no route"));
+    write_reply(conn, &reply)
+}
+
+/// Read one request from `conn`. `None` when the connection carried none.
+pub(crate) fn read_request(conn: &TcpStream) -> std::io::Result<Option<Request>> {
     let mut reader = BufReader::new(conn.try_clone()?);
     let mut line = String::new();
     reader.read_line(&mut line)?;
@@ -159,7 +198,7 @@ fn serve(conn: TcpStream, shared: &Shared) -> std::io::Result<()> {
     let method = parts.next().unwrap_or_default().to_owned();
     let path = parts.next().unwrap_or_default().to_owned();
     if method.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let mut headers = HashMap::new();
     loop {
@@ -181,17 +220,16 @@ fn serve(conn: TcpStream, shared: &Shared) -> std::io::Result<()> {
         .unwrap_or(0);
     let mut body = vec![0; len];
     reader.read_exact(&mut body)?;
-    let route = path.split('?').next().unwrap_or_default().to_owned();
-    lock(&shared.requests).push(Request {
+    Ok(Some(Request {
         method,
         path,
         headers,
         body,
-    });
-    let reply = lock(&shared.routes)
-        .get(&route)
-        .cloned()
-        .unwrap_or_else(|| Reply::text(404, "no route"));
+    }))
+}
+
+/// Write `reply` to `conn`, after its delay, and close.
+pub(crate) fn write_reply(conn: TcpStream, reply: &Reply) -> std::io::Result<()> {
     thread::sleep(reply.delay);
     let mut out = conn;
     let mut head = format!(
@@ -206,4 +244,40 @@ fn serve(conn: TcpStream, shared: &Shared) -> std::io::Result<()> {
     out.write_all(head.as_bytes())?;
     out.write_all(&reply.body)?;
     out.flush()
+}
+
+/// Decode one `application/x-www-form-urlencoded` component: `+` is a space and `%XX` a byte.
+pub(crate) fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut k = 0;
+    while k < bytes.len() {
+        match bytes[k] {
+            b'+' => out.push(b' '),
+            b'%' if k + 2 < bytes.len() => {
+                let hex = |b: u8| (b as char).to_digit(16);
+                match (hex(bytes[k + 1]), hex(bytes[k + 2])) {
+                    (Some(hi), Some(lo)) => {
+                        out.push((hi * 16 + lo) as u8);
+                        k += 2;
+                    }
+                    _ => out.push(b'%'),
+                }
+            }
+            b => out.push(b),
+        }
+        k += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The pairs of a query string or form body, decoded, in order.
+pub(crate) fn url_pairs(s: &str) -> Vec<(String, String)> {
+    s.split('&')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let (k, v) = p.split_once('=').unwrap_or((p, ""));
+            (url_decode(k), url_decode(v))
+        })
+        .collect()
 }
