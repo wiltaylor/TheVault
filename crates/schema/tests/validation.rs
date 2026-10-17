@@ -974,6 +974,46 @@ fn an_ink_drawing_takes_an_optional_height_up_to_4000() {
 }
 
 #[test]
+fn an_ink_drawing_takes_an_optional_viewport_and_strokes_anywhere_on_its_plane() {
+    let stroke = "    stroke {\n      tool = \"pen\"\n      colour = \"#1f2937\"\n      size = 4.0\n      points = [-1200.5, -40.25, 0.5, 98000.0, 12.0, 0.6]\n    }\n";
+    let block = |items: &str| format!("content body {{\n  ink {{\n{items}{stroke}  }}\n}}");
+    // No width and no viewport: an endless drawing at its default view.
+    check_kinds(&block("")).unwrap();
+    check_kinds(&block("    width = 800\n    height = 300\n")).unwrap();
+    check_kinds(&block(
+        "    viewport {\n      x = -1500.0\n      y = -80.5\n      zoom = 0.25\n    }\n",
+    ))
+    .unwrap();
+    check_kinds(&format!(
+        "ink sketch {{\n  viewport {{\n    x = 10.0\n    y = 20.0\n    zoom = 8.0\n  }}\n{stroke}}}"
+    ))
+    .unwrap();
+
+    let bad = |items: &str, want: &str| {
+        let issues = check_kinds(&block(items)).unwrap_err();
+        assert!(
+            issues.iter().any(|i| i.contains(want)),
+            "{items}: {issues:?}"
+        );
+    };
+    let vp = |body: &str| format!("    viewport {{\n{body}    }}\n");
+    bad(
+        &vp("      x = 0.0\n      y = 0.0\n      zoom = 0.0\n"),
+        "zoom",
+    );
+    bad(
+        &vp("      x = 0.0\n      zoom = 1.0\n"),
+        "viewport.y: is required",
+    );
+    bad(
+        &vp("      x = 0.0\n      y = 0.0\n      zoom = 1.0\n      scale = 2.0\n"),
+        "scale",
+    );
+    let one = vp("      x = 0.0\n      y = 0.0\n      zoom = 1.0\n");
+    bad(&format!("{one}{one}"), "has more than one viewport");
+}
+
+#[test]
 fn an_asset_block_takes_a_viewer_height_and_a_card_flag() {
     let block = |items: &str| {
         format!(

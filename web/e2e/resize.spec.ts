@@ -1,6 +1,7 @@
 // Canvas and ink blocks resize from the handle on their bottom edge: a mouse or finger drag shows
 // the height as it goes and saves once on release, the arrow keys step it, a double-click resets
-// it, and a reload keeps it. An ink drawing's strokes keep their stored coordinates throughout.
+// it, and a reload keeps it. An ink drawing's strokes keep their stored coordinates throughout:
+// its height is the height of its view onto the plane, in screen pixels.
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -100,6 +101,9 @@ function bodyInk(note: Stored): Block[] {
 
 const height = async (l: Locator) => (await l.boundingBox())!.height;
 
+/** The height of an ink drawing's view, inside its border. */
+const viewHeight = (l: Locator) => l.evaluate((el) => el.clientHeight);
+
 /**
  * With E2E_SHOTS set to a folder, light and dark screenshots of `what` there with the handle
  * shown as it is under the pointer. Without it, nothing is written.
@@ -179,10 +183,9 @@ test("dragging an ink block's handle saves its height once, keeps every stroke, 
   // Shorter: the stroke at y = 380 lies past the edge and is hidden, not removed.
   const saves = countSaves(page, note.id);
   const before = await height(surface);
-  const scale = before / 400;
-  await mouseDrag(page, handle, -200 * scale);
+  await mouseDrag(page, handle, -200);
   await expect(handle).toHaveAttribute("aria-valuenow", "200");
-  await expect(surface).toHaveAttribute("viewBox", "0 0 800 200");
+  await expect.poll(() => viewHeight(surface)).toBe(200);
   // The box includes the 1px border on each side.
   expect(Math.abs((await height(surface)) - 2 - (before - 2) / 2)).toBeLessThan(1.5);
   await saveAndWait(page);
@@ -190,7 +193,7 @@ test("dragging an ink block's handle saves its height once, keeps every stroke, 
   let ink0 = bodyInk(await stored(admin, note.id))[0]!;
   expect(ink0.fields).toEqual({ width: 800, height: 200 });
   expect(ink0.blocks).toEqual(strokes);
-  expect(await paths()).toEqual(drawn);
+  expect(await paths()).toEqual(drawn.slice(0, 2));
 
   // The keyboard: Shift+Down twice and Down once grows it by 220, and the stroke shows again.
   await handle.focus();
@@ -205,11 +208,11 @@ test("dragging an ink block's handle saves its height once, keeps every stroke, 
 
   await page.reload();
   const again = page.getByRole("textbox", { name: "Body" }).getByRole("img", { name: "Drawing" });
-  await expect(again).toHaveAttribute("viewBox", "0 0 800 420");
+  await expect.poll(() => viewHeight(again)).toBe(420);
   expect(await again.locator("path.ink-stroke").evaluateAll((els) => els.map((e) => e.getAttribute("d")))).toEqual(drawn);
 });
 
-test("an ink block in a narrow column resizes by what the pointer moved, at the drawing's scale", async ({
+test("an ink block in a narrow column resizes by what the pointer moved, whatever the drawing's zoom", async ({
   page,
   admin,
 }) => {
@@ -226,10 +229,10 @@ test("an ink block in a narrow column resizes by what the pointer moved, at the 
   const handle = page.getByRole("textbox", { name: "Body" }).getByRole("separator", { name: "Drawing height" });
   await expect(surface).toBeVisible();
   const box = (await surface.boundingBox())!;
-  const scale = box.width / 800;
-  expect(scale).toBeLessThan(0.9);
+  // The old 800-wide page is zoomed out to fit the column.
+  expect(box.width / 800).toBeLessThan(0.9);
   await mouseDrag(page, handle, 100);
-  const want = Math.round(400 + 100 / scale);
+  const want = 400 + 100;
   await expect.poll(async () => Number(await handle.getAttribute("aria-valuenow"))).toBeGreaterThan(want - 3);
   const got = Number(await handle.getAttribute("aria-valuenow"));
   expect(Math.abs(got - want)).toBeLessThan(3);
@@ -276,10 +279,9 @@ test.describe("on a phone", () => {
     const handle = page.getByRole("textbox", { name: "Body" }).getByRole("separator", { name: "Drawing height" });
     await expect(surface).toBeVisible();
     await expect(handle.locator(".canvas-height-grip")).toHaveCSS("opacity", "1");
-    const scale = (await surface.boundingBox())!.width / 800;
     const saves = countSaves(page, inkNote.id);
     await touchDrag(page, handle, 80);
-    const want = Math.round(400 + 80 / scale);
+    const want = 400 + 80;
     await expect.poll(async () => Math.abs(Number(await handle.getAttribute("aria-valuenow")) - want)).toBeLessThan(3);
     await saveAndWait(page);
     expect(saves).toHaveLength(1);

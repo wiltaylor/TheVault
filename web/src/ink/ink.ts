@@ -1,6 +1,7 @@
-// An ink drawing (docs/vault-format.md, "Ink", D18, D29) to and from its block, and the outline
-// perfect-freehand draws for each stroke. The renderer and the editor share this, so a stroke
-// looks the same while it is drawn, once saved, and after a reload.
+// An ink drawing (docs/vault-format.md, "Ink", D18, D29) to and from its block, the outline
+// perfect-freehand draws for each stroke, and the view onto the drawing's endless plane. The
+// renderer and the editor share this, so a stroke looks the same while it is drawn, once saved,
+// and after a reload.
 
 import { getStroke } from "perfect-freehand";
 import type { Block, Json } from "../api";
@@ -16,48 +17,95 @@ export interface Stroke {
   points: number[];
 }
 
+/** The part of the plane on show: the ink point at the view's top-left corner, and the zoom. */
+export interface InkView {
+  x: number;
+  y: number;
+  /** Screen pixels per ink unit: 1 is 100%. */
+  zoom: number;
+}
+
 export interface Ink {
-  width: number;
+  /**
+   * The width of the page a drawing made before the plane was endless had, in ink units, when
+   * its file says. Without a saved view such a drawing opens with this width fitted to the column.
+   */
+  width?: number;
+  /** The height of the view on the page, in CSS pixels. */
   height: number;
   background: Background;
+  /** The view saved with the drawing, or null for the default view. */
+  view: InkView | null;
   strokes: Stroke[];
 }
 
 export const BACKGROUNDS: Background[] = ["blank", "lines", "grid", "dots"];
 
-/** The size of a drawing made from scratch, in ink units. */
+/** The size of a drawing made from scratch. */
 export const NEW_WIDTH = 800;
 export const NEW_HEIGHT = 400;
 
 /**
- * The drawing's height, in ink units: what an omitted `height` reads as and the handle resets
- * to, and the bounds the handle drags within. The server accepts 1 to `max`, so a drawing made
- * shorter than `min` before the handle existed stays as it is until it is resized.
+ * The drawing's height: what an omitted `height` reads as and the handle resets to, and the
+ * bounds the handle drags within. The server accepts 1 to `max`, so a drawing made shorter than
+ * `min` before the handle existed stays as it is until it is resized.
  */
 export const INK_HEIGHT = { initial: NEW_HEIGHT, min: 80, max: 4000 };
 
 /** The pressure stored for a device that reports none. */
 export const NO_PRESSURE = 0.5;
 
+/** The zoom bounds: 10% to 800%. */
+export const MIN_ZOOM = 0.1;
+export const MAX_ZOOM = 8;
+
+export function clampZoom(z: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number.isFinite(z) && z > 0 ? z : 1));
+}
+
 const num = (v: Json | undefined, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+
+// A stroke read from a block is kept with that block, and written back as the same block while
+// it is unchanged, so an edit leaves the other strokes' objects, and their drawn paths, as they were.
+const strokeOf = new WeakMap<Block, Stroke>();
+const blockOf = new WeakMap<Stroke, Block>();
+
+function readStroke(b: Block): Stroke {
+  const known = strokeOf.get(b);
+  if (known) return known;
+  const s: Stroke = {
+    tool: b.fields?.tool === "highlighter" ? "highlighter" : "pen",
+    colour: typeof b.fields?.colour === "string" ? b.fields.colour : "#1f2937",
+    size: num(b.fields?.size, 4),
+    points: Array.isArray(b.fields?.points) ? b.fields.points.filter((p): p is number => typeof p === "number") : [],
+  };
+  strokeOf.set(b, s);
+  blockOf.set(s, b);
+  return s;
+}
+
+function strokeBlock(s: Stroke): Block {
+  const known = blockOf.get(s);
+  if (known) return known;
+  const b: Block = { kind: "stroke", fields: { tool: s.tool, colour: s.colour, size: s.size, points: s.points } };
+  strokeOf.set(b, s);
+  blockOf.set(s, b);
+  return b;
+}
 
 /** The drawing an `ink` block holds. Missing items read as their defaults. */
 export function inkOf(block: Block | undefined): Ink {
   const f = block?.fields ?? {};
   const bg = f.background;
-  return {
-    width: Math.max(1, Math.round(num(f.width, NEW_WIDTH))),
+  const vp = (block?.blocks ?? []).find((b) => b.kind === "viewport")?.fields;
+  const ink: Ink = {
     height: Math.max(1, Math.round(num(f.height, NEW_HEIGHT))),
     background: BACKGROUNDS.includes(bg as Background) ? (bg as Background) : "blank",
-    strokes: (block?.blocks ?? [])
-      .filter((b) => b.kind === "stroke")
-      .map((b) => ({
-        tool: b.fields?.tool === "highlighter" ? "highlighter" : "pen",
-        colour: typeof b.fields?.colour === "string" ? b.fields.colour : "#1f2937",
-        size: num(b.fields?.size, 4),
-        points: Array.isArray(b.fields?.points) ? b.fields.points.filter((p): p is number => typeof p === "number") : [],
-      })),
+    view: vp ? { x: num(vp.x, 0), y: num(vp.y, 0), zoom: clampZoom(num(vp.zoom, 1)) } : null,
+    strokes: (block?.blocks ?? []).filter((b) => b.kind === "stroke").map(readStroke),
   };
+  if (typeof f.width === "number" && Number.isFinite(f.width)) ink.width = Math.max(1, Math.round(f.width));
+  return ink;
 }
 
 const round = (v: number, places: number) => {
@@ -70,20 +118,30 @@ export function storedPoint(x: number, y: number, pressure: number): [number, nu
   return [round(x, 2), round(y, 2), round(Math.min(1, Math.max(0, pressure)), 3)];
 }
 
+/** A view as stored: the corner to two decimal places, the zoom clamped and to three. */
+export function storedView(v: InkView): InkView {
+  return { x: round(v.x, 2), y: round(v.y, 2), zoom: round(clampZoom(v.zoom), 3) };
+}
+
 /**
  * `ink` as a block, keeping `base`'s kind and labels: an ink content block has none, an ink
- * field's block is labelled with the field name. `background` is left out while it is `blank`.
+ * field's block is labelled with the field name. `background` is left out while it is `blank`,
+ * `width` while the drawing has none, and the viewport while the drawing has no saved view; the
+ * viewport goes ahead of the strokes.
  */
 export function inkBlock(ink: Ink, base?: Block): Block {
-  const fields: Record<string, Json> = { width: ink.width, height: ink.height };
+  const fields: Record<string, Json> = {};
+  if (ink.width !== undefined) fields.width = ink.width;
+  fields.height = ink.height;
   if (ink.background !== "blank") fields.background = ink.background;
+  const view = ink.view ? storedView(ink.view) : null;
   const block: Block = {
     kind: "ink",
     fields,
-    blocks: ink.strokes.map((s) => ({
-      kind: "stroke",
-      fields: { tool: s.tool, colour: s.colour, size: s.size, points: s.points },
-    })),
+    blocks: [
+      ...(view ? [{ kind: "viewport", fields: { x: view.x, y: view.y, zoom: view.zoom } }] : []),
+      ...ink.strokes.map(strokeBlock),
+    ],
   };
   return base?.labels ? { ...block, labels: base.labels } : block;
 }
@@ -104,12 +162,13 @@ function triples(points: number[]): [number, number, number][] {
 
 /**
  * The SVG path of a stroke's filled outline. Pressure is always the stored one, never simulated,
- * so the outline depends on the file alone.
+ * so the outline depends on the file alone. A highlighter keeps one width whatever the pressure,
+ * as a felt tip does.
  */
 export function strokePath(s: Stroke, last = true): string {
   const outline = getStroke(triples(s.points), {
     size: s.size,
-    thinning: 0.6,
+    thinning: s.tool === "highlighter" ? 0 : 0.6,
     smoothing: 0.5,
     streamline: 0.4,
     simulatePressure: false,
@@ -121,6 +180,18 @@ export function strokePath(s: Stroke, last = true): string {
   let d = `M${f(first![0])},${f(first![1])}`;
   for (const [x, y] of rest) d += `L${f(x)},${f(y)}`;
   return `${d}Z`;
+}
+
+const paths = new WeakMap<Stroke, string>();
+
+/** strokePath of a finished stroke, worked out once per stroke. */
+export function cachedPath(s: Stroke): string {
+  let d = paths.get(s);
+  if (d === undefined) {
+    d = strokePath(s);
+    paths.set(s, d);
+  }
+  return d;
 }
 
 /** Distance from p to the segment a-b. */
@@ -135,6 +206,8 @@ function toSegment(px: number, py: number, ax: number, ay: number, bx: number, b
 /** True when a circle of `radius` at (x, y) touches the stroke. */
 export function hits(s: Stroke, x: number, y: number, radius: number): boolean {
   const reach = radius + s.size / 2;
+  const b = strokeBounds(s);
+  if (x < b.x0 - radius || x > b.x1 + radius || y < b.y0 - radius || y > b.y1 + radius) return false;
   const p = triples(s.points);
   if (p.length === 1) return Math.hypot(x - p[0]![0], y - p[0]![1]) <= reach;
   for (let i = 1; i < p.length; i++) {
@@ -148,3 +221,212 @@ export function paintOrder(strokes: Stroke[]): { stroke: Stroke; index: number }
   const all = strokes.map((stroke, index) => ({ stroke, index }));
   return [...all.filter((s) => s.stroke.tool === "highlighter"), ...all.filter((s) => s.stroke.tool === "pen")];
 }
+
+// ---- the view -----------------------------------------------------------------------------
+
+/** A box on the plane, in ink units. */
+export interface Bounds {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+const bounds = new WeakMap<Stroke, Bounds>();
+
+/** The box a stroke's outline lies in: its points, grown by its size. */
+export function strokeBounds(s: Stroke): Bounds {
+  let b = bounds.get(s);
+  if (b) return b;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (let i = 0; i + 2 < s.points.length; i += 3) {
+    const x = s.points[i]!;
+    const y = s.points[i + 1]!;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  const r = s.size;
+  b = x0 === Infinity ? { x0: 0, y0: 0, x1: 0, y1: 0 } : { x0: x0 - r, y0: y0 - r, x1: x1 + r, y1: y1 + r };
+  bounds.set(s, b);
+  return b;
+}
+
+/** The box every stroke lies in, or null when there are none. */
+export function drawingBounds(strokes: Stroke[]): Bounds | null {
+  if (strokes.length === 0) return null;
+  const all = strokes.map(strokeBounds);
+  return {
+    x0: Math.min(...all.map((b) => b.x0)),
+    y0: Math.min(...all.map((b) => b.y0)),
+    x1: Math.max(...all.map((b) => b.x1)),
+    y1: Math.max(...all.map((b) => b.y1)),
+  };
+}
+
+/** The part of the plane a view `width` by `height` screen pixels shows. */
+export function viewBounds(v: InkView, width: number, height: number): Bounds {
+  return { x0: v.x, y0: v.y, x1: v.x + width / v.zoom, y1: v.y + height / v.zoom };
+}
+
+/**
+ * The strokes that show in the view, or come within `margin` screen pixels of it: the rest are
+ * not drawn, so a large drawing pans as fast as a small one.
+ */
+export function visibleStrokes(strokes: Stroke[], v: InkView, width: number, height: number, margin = 64): Stroke[] {
+  const m = margin / v.zoom;
+  const r = viewBounds(v, width, height);
+  return strokes.filter((s) => {
+    const b = strokeBounds(s);
+    return b.x1 >= r.x0 - m && b.x0 <= r.x1 + m && b.y1 >= r.y0 - m && b.y0 <= r.y1 + m;
+  });
+}
+
+/**
+ * The view a drawing opens at when it has none saved: the origin at the top-left, at 100%, or,
+ * for a drawing with a page `width`, that width fitted to the column as it used to be.
+ */
+export function defaultView(ink: Pick<Ink, "width">, screenWidth: number): InkView {
+  const zoom = ink.width && screenWidth > 0 ? Math.min(1, screenWidth / ink.width) : 1;
+  return { x: 0, y: 0, zoom: clampZoom(zoom) };
+}
+
+/** The ink point under screen point (sx, sy), measured from the view's top-left. */
+export function toInk(v: InkView, sx: number, sy: number): [number, number] {
+  return [v.x + sx / v.zoom, v.y + sy / v.zoom];
+}
+
+/** The view moved so the plane follows a pointer that moved (dx, dy) screen pixels. */
+export function panBy(v: InkView, dx: number, dy: number): InkView {
+  return { x: v.x - dx / v.zoom, y: v.y - dy / v.zoom, zoom: v.zoom };
+}
+
+/** The view zoomed by `factor` about screen point (sx, sy), which stays over the same ink point. */
+export function zoomAbout(v: InkView, factor: number, sx: number, sy: number): InkView {
+  const zoom = clampZoom(v.zoom * factor);
+  const [cx, cy] = toInk(v, sx, sy);
+  return { x: cx - sx / zoom, y: cy - sy / zoom, zoom };
+}
+
+type Pt = { x: number; y: number };
+
+/**
+ * The view during a two-finger gesture that began at fingers a0, b0 on view `from` and is now at
+ * a1, b1, all in screen pixels from the view's top-left: the spread zooms, and the ink point that
+ * was under the fingers' midpoint stays under it as it moves.
+ */
+export function pinchView(from: InkView, a0: Pt, b0: Pt, a1: Pt, b1: Pt): InkView {
+  const d0 = Math.hypot(a0.x - b0.x, a0.y - b0.y);
+  const d1 = Math.hypot(a1.x - b1.x, a1.y - b1.y);
+  const zoom = clampZoom(from.zoom * (d0 > 0 ? d1 / d0 : 1));
+  const [px, py] = toInk(from, (a0.x + b0.x) / 2, (a0.y + b0.y) / 2);
+  return { x: px - (a1.x + b1.x) / 2 / zoom, y: py - (a1.y + b1.y) / 2 / zoom, zoom };
+}
+
+/**
+ * The view that shows every stroke in a view `width` by `height` screen pixels, with a margin,
+ * no closer than 100%. A drawing without strokes fits at the origin at 100%.
+ */
+export function fitView(strokes: Stroke[], width: number, height: number, margin = 32): InkView {
+  const b = drawingBounds(strokes);
+  if (!b || width <= 0 || height <= 0) return { x: 0, y: 0, zoom: 1 };
+  const bw = Math.max(1, b.x1 - b.x0);
+  const bh = Math.max(1, b.y1 - b.y0);
+  const zoom = clampZoom(Math.min(1, (width - 2 * margin) / bw, (height - 2 * margin) / bh));
+  return { x: b.x0 - (width / zoom - bw) / 2, y: b.y0 - (height / zoom - bh) / 2, zoom };
+}
+
+/**
+ * The spacing of a background's pattern, in ink units: 32, doubled as often as it takes for the
+ * lines or dots to stay at least 12 screen pixels apart when zoomed out.
+ */
+export function patternStep(zoom: number): number {
+  let step = 32;
+  while (step * zoom < 12) step *= 2;
+  return step;
+}
+
+// ---- input --------------------------------------------------------------------------------
+
+export type Mode = Tool | "eraser";
+
+/** What a press starts. */
+export type Route = "draw" | "erase" | "pan" | "pinch" | "ignore";
+
+/** A stylus's eraser end (Pointer Events: button 5, `buttons` bit 32) or its barrel button (2). */
+export function stylusErases(e: { button: number; buttons: number }): boolean {
+  return e.button === 5 || e.button === 2 || (e.buttons & 32) !== 0 || (e.buttons & 2) !== 0;
+}
+
+/**
+ * What a pointer press on an editable drawing does (docs/vault-format.md, "Ink"):
+ *
+ * - A stylus always draws with the chosen tool, or erases with its eraser end or barrel button.
+ * - A mouse or one finger pans, unless drawing with the mouse and touch is on, when they draw.
+ *   The middle mouse button always pans.
+ * - A second finger turns the gesture into a pinch, which pans and zooms; a third is ignored.
+ * - While a stylus touches the surface every finger is ignored, so a resting palm does nothing.
+ */
+export function routePress(
+  e: { pointerType: string; button: number; buttons: number },
+  s: { mode: Mode; touchDraws: boolean; penDown: boolean; fingers: number },
+): Route {
+  const tool: Route = s.mode === "eraser" ? "erase" : "draw";
+  if (e.pointerType === "pen") return stylusErases(e) ? "erase" : e.button === 0 ? tool : "ignore";
+  if (e.pointerType === "touch") {
+    if (s.penDown) return "ignore";
+    if (s.fingers === 1) return "pinch";
+    if (s.fingers > 1) return "ignore";
+    return s.touchDraws ? tool : "pan";
+  }
+  if (e.button === 1) return "pan";
+  if (e.button !== 0) return "ignore";
+  return s.touchDraws ? tool : "pan";
+}
+
+// ---- tool styles --------------------------------------------------------------------------
+
+/**
+ * The ink colours offered for the pen: the default ink and the inline palette's hues (OQ-S4).
+ * Strokes store the hex, and the paper is light in both themes, so the hues are the light ones.
+ */
+export const PEN_COLOURS: { name: string; hex: string }[] = [
+  { name: "Ink", hex: "#1f2937" },
+  { name: "Gray", hex: "#6b7280" },
+  { name: "Brown", hex: "#92400e" },
+  { name: "Orange", hex: "#ea580c" },
+  { name: "Yellow", hex: "#ca8a04" },
+  { name: "Green", hex: "#16a34a" },
+  { name: "Blue", hex: "#2563eb" },
+  { name: "Purple", hex: "#9333ea" },
+  { name: "Pink", hex: "#db2777" },
+  { name: "Red", hex: "#dc2626" },
+];
+
+/** The highlighter's colours: the palette's hues in their bright, felt-tip shades. */
+export const HIGHLIGHTER_COLOURS: { name: string; hex: string }[] = [
+  { name: "Yellow", hex: "#facc15" },
+  { name: "Orange", hex: "#fb923c" },
+  { name: "Green", hex: "#4ade80" },
+  { name: "Blue", hex: "#60a5fa" },
+  { name: "Purple", hex: "#c084fc" },
+  { name: "Pink", hex: "#f472b6" },
+  { name: "Red", hex: "#f87171" },
+  { name: "Brown", hex: "#d6a36a" },
+  { name: "Gray", hex: "#9ca3af" },
+];
+
+export interface ToolStyle {
+  colour: string;
+  size: number;
+}
+
+/** Each drawing tool's colours, sizes and the style it starts with. */
+export const TOOL_STYLES: Record<Tool, { colours: { name: string; hex: string }[]; sizes: number[]; initial: ToolStyle }> = {
+  pen: { colours: PEN_COLOURS, sizes: [2, 4, 8, 16], initial: { colour: "#1f2937", size: 4 } },
+  highlighter: { colours: HIGHLIGHTER_COLOURS, sizes: [16, 24, 36, 48], initial: { colour: "#facc15", size: 24 } },
+};

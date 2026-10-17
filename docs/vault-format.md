@@ -1434,37 +1434,61 @@ The API's `/api/query` takes an optional `archived` of `include` or `only`, whic
 
 An ink drawing is an `ink` block (D18, D29). It is a content block with no label, or a note's `ink` field with the field name as its label.
 
+A drawing is an endless plane. Its block on the page is a view onto the plane, as wide as the column it is in and `height` pixels tall. Strokes can lie anywhere on the plane, at negative or large coordinates.
+
 | Item | Form | Meaning |
 |------|------|---------|
-| `width` | int | Required. The drawing surface's width in ink units, which are CSS pixels at 100% zoom |
-| `height` | int, 1 to 4000 | The drawing surface's height in ink units. Default 400 |
-| `background` | string | `blank`, `lines`, `grid` or `dots`. Default `blank` |
+| `width` | int | Optional. The width of the page a drawing made before the plane was endless had, in ink units. A drawing with a `width` and no `viewport` opens at the origin with that width fitted to the column, no larger than 100%, as it showed before. The app keeps the item and does not write it on new drawings |
+| `height` | int, 1 to 4000 | The height of the view on the page, in CSS pixels. Default 400 |
+| `background` | string | `blank`, `lines`, `grid` or `dots`. Default `blank`. The pattern covers the whole plane and moves with it |
+| `viewport { ... }` | block | Optional, at most one, ahead of the strokes. The view saved with the drawing. Without it a drawing opens at the origin at 100%, or as `width` says |
 | `stroke { ... }` | block | The strokes, in drawing order. Later strokes draw on top |
+
+The `viewport` holds:
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `x`, `y` | float | Required. The ink point at the top-left corner of the view |
+| `zoom` | float | Required. Greater than 0: screen pixels per ink unit, so `1.0` is 100%. The app keeps it from 0.1 to 8 and writes it to three decimal places, and `x` and `y` to two |
 
 Each `stroke` holds:
 
 | Item | Form | Meaning |
 |------|------|---------|
-| `tool` | string | Required. `pen`, or `highlighter`, which draws translucent and behind pen strokes |
+| `tool` | string | Required. `pen`, or `highlighter`, which draws translucent, behind pen strokes and at one width whatever the pressure |
 | `colour` | ink colour | Required. `#rrggbb` |
 | `size` | float | Required. The perfect-freehand base size in ink units |
-| `points` | list of floats | Required. Flat triples `x, y, pressure`. `x` and `y` are ink units from the top-left corner. `pressure` is 0.0 to 1.0, and 0.5 where the device reports none. At least one triple |
+| `points` | list of floats | Required. Flat triples `x, y, pressure`. `x` and `y` are ink units on the plane, which are CSS pixels at 100% zoom, and may be negative. `pressure` is 0.0 to 1.0, and 0.5 where the device reports none. At least one triple |
 
-The renderer feeds each stroke's points to perfect-freehand. Erasing deletes whole strokes, so no eraser strokes are stored. The writer rounds coordinates to two decimal places and pressure to three.
+The renderer feeds each stroke's points to perfect-freehand, and draws only the strokes in or near the view. Erasing deletes whole strokes, so no eraser strokes are stored. The writer rounds coordinates to two decimal places and pressure to three.
 
-The handle on the bottom edge of an editable drawing sets `height`, from 80 to 4000, and a double-click on it puts back 400. Resizing never moves or scales a stroke: a taller drawing shows more paper below, and a shorter one hides any stroke below its new edge without removing it, so the stroke shows again when the drawing grows back. The app writes `height` on every drawing it saves; a file without one reads as 400. Where the column is narrower than `width`, the drawing scales down to fit and keeps its proportions.
+In the app a stylus draws with the chosen tool, and its eraser end or barrel button erases. The mouse and one finger pan, two fingers pan and pinch to zoom, the wheel pans, and Ctrl or Cmd with the wheel, or a trackpad pinch, zooms. **Draw with mouse and touch**, a toggle kept per device, makes the mouse and one finger draw instead; two fingers still pan and zoom. While a stylus touches the drawing, fingers are ignored. The pen starts dark grey at size 4, with sizes 2, 4, 8 and 16; the highlighter starts yellow (`#facc15`) at size 24, with sizes 16, 24, 36 and 48, and each tool keeps its own colour and size. The view is saved into `viewport` a moment after it stops moving, through the normal autosave, so a pan is not an undo step and a run of pans is one version in the history. A read-only drawing, such as a version shown from history, shows its saved view and cannot be panned.
+
+The handle on the bottom edge of an editable drawing sets `height`, from 80 to 4000, and a double-click on it puts back 400. Resizing changes only how much of the plane shows: no stroke moves or scales, and the view keeps its top-left corner. The app writes `height` on every drawing it saves; a file without one reads as 400.
 
 ```wcl
 ink {
-  width      = 800
   height     = 300
   background = "lines"
+
+  viewport {
+    x    = -40.0
+    y    = -20.0
+    zoom = 1.0
+  }
 
   stroke {
     tool   = "pen"
     colour = "#1f2937"
     size   = 4.0
     points = [10.0, 20.0, 0.5, 14.5, 22.0, 0.6, 20.0, 25.5, 0.7]
+  }
+
+  stroke {
+    tool   = "highlighter"
+    colour = "#facc15"
+    size   = 24.0
+    points = [-120.0, 60.0, 0.5, 240.0, 60.0, 0.5]
   }
 }
 ```

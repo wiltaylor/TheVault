@@ -158,3 +158,45 @@ fn ink_and_canvas_heights_round_trip() {
     assert!(refused.is_err(), "4001 was accepted");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 }
+
+/// An endless drawing's saved view, and strokes far from the origin with negative coordinates,
+/// are written as the client sends them and read back byte for byte.
+#[test]
+fn ink_viewport_and_negative_coordinates_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let mut drawing = ink(
+        Some("drawing"),
+        serde_json::json!([-1500.25, -320.5, 0.5, 4200.0, -7.0, 0.75]),
+    );
+    drawing["fields"] = serde_json::json!({ "height": 300 });
+    drawing["blocks"].as_array_mut().unwrap().insert(
+        0,
+        serde_json::json!({ "kind": "viewport", "fields": { "x": -1620.5, "y": -400.0, "zoom": 0.375 } }),
+    );
+    let json = serde_json::json!({ "fields": { "title": "Far" }, "blocks": [drawing] });
+    let saved = w.create("sketch", &Input::Json(json), &author()).unwrap();
+    let path = dir.path().join(format!("notes/sketch/{}.wcl", saved.id));
+    let text = std::fs::read_to_string(&path).unwrap();
+    let squeezed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        squeezed.contains("viewport { x = -1620.5 y = -400.0 zoom = 0.375 }"),
+        "{text}"
+    );
+    assert_eq!(
+        points(&text),
+        vec!["[-1500.25, -320.5, 0.5, 4200.0, -7.0, 0.75]"],
+        "{text}"
+    );
+    // The viewport stays ahead of the strokes, as it was sent.
+    assert!(text.find("viewport {").unwrap() < text.find("stroke {").unwrap());
+
+    let again = w.update(
+        &saved.id,
+        &Input::Wcl(text.clone()),
+        Some(&saved.version),
+        &author(),
+    );
+    assert!(again.is_ok(), "{again:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+}

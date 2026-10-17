@@ -6,7 +6,7 @@ import { Portal } from "solid-js/web";
 import type { Block } from "../api";
 import { upload } from "../blocks/MediaBlocks";
 import { newCanvas } from "../canvas/canvas";
-import { NEW_HEIGHT, NEW_WIDTH } from "../ink/ink";
+import { NEW_HEIGHT } from "../ink/ink";
 import { blocksToDoc, docToBlocks } from "./doc";
 import { newQueryView } from "../views/model";
 import { editorExtensions } from "./extensions";
@@ -62,7 +62,7 @@ export const INSERTS: { label: string; text: string; menu: string; keywords: str
     text: "Ink",
     menu: "Ink drawing",
     keywords: "ink sketch draw pen",
-    block: () => ({ kind: "ink", fields: { width: NEW_WIDTH, height: NEW_HEIGHT }, blocks: [] }),
+    block: () => ({ kind: "ink", fields: { height: NEW_HEIGHT }, blocks: [] }),
   },
   { label: "Insert query view", text: "Query", menu: "Query view", keywords: "query table list cards kanban", block: newQueryView },
   { label: "Insert canvas", text: "Canvas", menu: "Canvas", keywords: "board whiteboard", block: newCanvas },

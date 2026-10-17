@@ -132,10 +132,12 @@ describe("ink height", () => {
     expect(saves).toHaveLength(1);
     expect(inkOf(block()).height).toBe(200);
     expect(block().blocks).toEqual(strokes);
-    expect(svg.querySelectorAll("path.ink-stroke")).toHaveLength(2);
+    // The stroke at y = 380 lies below the view now: kept, but not drawn.
+    expect(svg.querySelectorAll("path.ink-stroke")).toHaveLength(1);
 
     fireEvent.keyDown(handle, { key: "End" });
     expect(inkOf(block()).height).toBe(INK_HEIGHT.max);
+    expect(svg.querySelectorAll("path.ink-stroke")).toHaveLength(2);
     fireEvent.dblClick(handle);
     expect(inkOf(block()).height).toBe(INK_HEIGHT.initial);
     expect(block().blocks).toEqual(strokes);

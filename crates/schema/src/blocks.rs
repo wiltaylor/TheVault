@@ -608,16 +608,30 @@ impl Check<'_> {
     pub fn ink(&mut self, d: &Doc, at: &str) {
         const BACKGROUNDS: &[&str] = &["blank", "lines", "grid", "dots"];
         let items = [
-            req("width", Form::Int(1, i64::MAX)),
+            opt("width", Form::Int(1, i64::MAX)),
             opt("height", Form::Int(INK_HEIGHT_MIN, INK_HEIGHT_MAX)),
             opt("background", Form::OneOf(BACKGROUNDS)),
         ];
         self.items(d, &items, &[], at);
+        self.only_blocks(d, &["viewport", "stroke"], at);
+        if d.blocks_of("viewport").count() > 1 {
+            self.fail(at, "has more than one viewport");
+        }
+        for v in d.blocks_of("viewport") {
+            let path = format!("{at} > viewport");
+            self.no_label(v, &path);
+            let items = [
+                req("x", Form::Num),
+                req("y", Form::Num),
+                req("zoom", Form::Positive),
+            ];
+            self.items(&v.body, &items, &[], &path);
+            self.only_blocks(&v.body, &[], &path);
+        }
         self.strokes(d, at);
     }
 
     fn strokes(&mut self, d: &Doc, at: &str) {
-        self.only_blocks(d, &["stroke"], at);
         for (n, s) in d.blocks_of("stroke").enumerate() {
             let path = format!("{at} > stroke#{}", n + 1);
             self.no_label(s, &path);

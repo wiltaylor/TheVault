@@ -1369,8 +1369,7 @@ mark {
 /* The surface, with its controls floating over its top edge as the canvas's do. */
 .ink-stage {
   position: relative;
-  width: fit-content;
-  max-width: 100%;
+  width: 100%;
 }
 
 .ink-controls {
@@ -1587,21 +1586,29 @@ mark {
 
 .ink-surface {
   display: block;
-  max-width: 100%;
-  height: auto;
+  width: 100%;
   border: 1px solid var(--line);
   border-radius: 0.4rem;
   background: var(--paper);
 }
 
 .ink-surface.editing {
-  /* Touch and stylus draw instead of scrolling or zooming the page. */
+  /* Every finger and stylus gesture belongs to the drawing: it pans, zooms or draws. */
   touch-action: none;
   cursor: crosshair;
 }
 
-.ink-surface.editing.ink-eraser {
+.ink-surface.editing.mode-eraser {
   cursor: cell;
+}
+
+/* The mouse pans unless drawing with the mouse and touch is on; a stylus over it still draws. */
+.ink-surface.editing.pans {
+  cursor: grab;
+}
+
+.ink-surface.editing.panning {
+  cursor: grabbing;
 }
 
 .ink-surface:focus-visible {
@@ -1611,16 +1618,25 @@ mark {
 
 .ink-guide {
   fill: none;
-  stroke: var(--line);
+  /* The paper is light in both themes, so its guides keep the light theme's colours. */
+  stroke: #dfe5ec;
   stroke-width: 1;
 }
 
 .ink-dot {
-  fill: var(--muted);
+  fill: #94a3b8;
 }
 
 .ink-highlighter {
-  opacity: 0.35;
+  opacity: 0.5;
+}
+
+.ink-zoom {
+  width: auto;
+  min-width: 2.75rem;
+  padding: 0 0.3rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Definition editors: types, templates and taxonomies (D3, D7, D14). */

@@ -57,6 +57,31 @@ export function UndoIcon() {
   );
 }
 
+/** A pointing hand: the mouse and fingers draw, as a stylus does. */
+export function TouchDrawIcon() {
+  return (
+    <Svg>
+      <path d="M22 14a8 8 0 0 1-8 8" />
+      <path d="M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
+      <path d="M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1" />
+      <path d="M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10" />
+      <path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+    </Svg>
+  );
+}
+
+/** Four corners: fit the drawing to the view. */
+export function FitIcon() {
+  return (
+    <Svg>
+      <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+      <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+      <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+      <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+    </Svg>
+  );
+}
+
 /** A background's look: an empty sheet, ruled lines, a grid or dots. */
 export function PaperIcon(props: { background: Background }) {
   return (

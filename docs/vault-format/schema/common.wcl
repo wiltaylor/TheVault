@@ -103,12 +103,15 @@ type Stroke {
   points: list<f64>
 }
 
-@block("ink", required_fields = ["width", "height"])
+# An ink drawing is an endless plane; its optional viewport (the Viewport
+# block declared with the canvas below) is the view saved with it.
+@block("ink")
 type Ink {
   @inline(0) field: identifier?
-  width:      i64
-  height:     i64
+  width:      i64?
+  height:     i64?
   background: utf8?
+  @children("viewport", max = 1) viewports: list<Viewport>
   @children("stroke") strokes: list<Stroke>
 }
 
