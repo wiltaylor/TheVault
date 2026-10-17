@@ -23,14 +23,14 @@
 
 use std::collections::BTreeSet;
 
-use schema::{Schema, TypeDef};
+use schema::{Doc, Schema, TypeDef, Value as DocValue};
 use sha2::{Digest, Sha256};
-use state::NewNotification;
+use state::{Author, NewNotification};
 use store::Change;
 use wcl_lang::ast::{Block, Expr, Item, Source};
 
 use crate::builtin::{BUILT_IN_TYPES, DEFAULT_PERSON_TYPE, PERSON_TYPE};
-use crate::types::{TypeChange, rebuild_schema};
+use crate::types::{NativeMigration, TypeChange, rebuild_schema};
 use crate::{CALL_TYPE, CONVERSATION_TYPE, MESSAGE_TYPE, Result, Writer, pairs, type_path};
 
 /// The author of the changes the server makes to keep its shipped defaults up to date.
@@ -74,6 +74,7 @@ pub const SHIPPED_FILES: [ShippedFile; 6] = [
             "4791759aabba0aaf89f52fb547b0640421ac0dbe158664c35a7152a1b359e7ee",
             "3310afb4541dd79a72a4a734adc07b5ec8ce59199a23a7ede53b866cba6a10be",
             "057f224d49972d84bb8bb7f41bf3f92b3ed344c9a6e74fc1b9500956781adab2",
+            "6e72f49fc4eb2ca77f12d6771f8ce052d1cc7f2a568944113ffd207ba6953fa5",
         ],
     },
     ShippedFile {
@@ -119,7 +120,158 @@ pub struct UpgradeStep {
 /// Every one-time vault upgrade, in the order they run. Adding one is one line here, such as
 /// `UpgradeStep { id: "0001_person_emails", run: person_emails },` with `person_emails` a
 /// `fn(&Writer) -> Result<()>` beside it. Never remove or reorder a step that has shipped.
-pub const UPGRADE_STEPS: &[UpgradeStep] = &[];
+pub const UPGRADE_STEPS: &[UpgradeStep] = &[UpgradeStep {
+    id: "0001_person_emails",
+    run: person_emails,
+}];
+
+/// Step `0001_person_emails` (D16): a `person` type with `addresses` or `email` and no `emails`
+/// is from before people carried every contact detail, when `addresses` held email addresses and
+/// `email` one more. One planned type change renames `addresses` to `emails`, moves a non-empty
+/// `email` value to the front of `emails` (once: a matching address already there, ignoring
+/// case, is dropped), and removes `email`, with the template slots of both becoming one slot of
+/// `emails`. Fields the user added are kept, and every note keeps every value. The other new
+/// fields, postal `addresses` among them, are added by the seeding that runs next.
+fn person_emails(w: &Writer) -> Result<()> {
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(PERSON_TYPE) else {
+        return Ok(());
+    };
+    if !awaits_person_emails(ty) {
+        return Ok(());
+    }
+    let has_addresses = ty.field("addresses").is_some();
+    let text = w.vault.read_text(&type_path(PERSON_TYPE))?;
+    let mut change = TypeChange {
+        wcl: person_with_emails(&text)?,
+        ..TypeChange::default()
+    };
+    if has_addresses {
+        change
+            .renames
+            .insert("addresses".to_owned(), "emails".to_owned());
+    }
+    let native = NativeMigration {
+        script: SERVER_AUTHOR,
+        function: "0001_person_emails",
+        run: move_email_into_emails,
+    };
+    w.apply_native_type_change(
+        PERSON_TYPE,
+        &change,
+        &native,
+        &Author::Task(SERVER_AUTHOR.to_owned()),
+    )?;
+    Ok(())
+}
+
+/// Whether `person` type `ty` is one step `0001_person_emails` changes. A device leaves such a
+/// type alone: seeding it there would add `emails` beside the old email `addresses`, and the home
+/// server's step, which sees the vault as it syncs, would then find nothing to move.
+fn awaits_person_emails(ty: &TypeDef) -> bool {
+    ty.field("emails").is_none() && (ty.field("addresses").is_some() || ty.field("email").is_some())
+}
+
+/// The person type file `vault_text` with the shipped `emails` field where `email` was, else
+/// where `addresses` was, `email` and `addresses` gone, and every template slot of either naming
+/// `emails` instead, once per template.
+fn person_with_emails(vault_text: &str) -> Result<String> {
+    let path = type_path(PERSON_TYPE);
+    let shipped: Source = store::parse_data_only(DEFAULT_PERSON_TYPE, &path)?;
+    let emails = shipped
+        .items
+        .iter()
+        .find(|i| block(i, "field").and_then(label) == Some("emails"))
+        .expect("the shipped person type has emails")
+        .clone();
+    let mut ast = store::parse_data_only(vault_text, &path)?;
+    let at = |ast: &Source, name: &str| {
+        ast.items
+            .iter()
+            .position(|i| block(i, "field").and_then(label) == Some(name))
+    };
+    let target = at(&ast, "email").or_else(|| at(&ast, "addresses"));
+    if let Some(k) = target {
+        ast.items[k] = emails;
+    }
+    ast.items.retain(|i| {
+        !matches!(
+            block(i, "field").and_then(label),
+            Some("email" | "addresses")
+        )
+    });
+    for item in &mut ast.items {
+        if let Some(template) = block_mut(item, "template") {
+            let mut seen = false;
+            emails_slots(&mut template.items, &mut seen);
+        }
+    }
+    Ok(store::to_canonical(&ast))
+}
+
+/// Rename every `email` and `addresses` slot in `items`, and in the blocks they hold, to
+/// `emails`, keeping the first and dropping the rest.
+fn emails_slots(items: &mut Vec<Item>, seen: &mut bool) {
+    let mut k = 0;
+    while k < items.len() {
+        if let Some(slot) = block_mut(&mut items[k], "slot")
+            && matches!(label(slot), Some("email" | "addresses" | "emails"))
+        {
+            if *seen {
+                items.remove(k);
+                continue;
+            }
+            *seen = true;
+            slot.labels[0] = Expr::Utf8("emails".to_owned());
+        } else if let Item::Block(b) = &mut items[k] {
+            emails_slots(&mut b.items, seen);
+        }
+        k += 1;
+    }
+}
+
+/// The migration of step `0001_person_emails` for one note: a non-empty `email` moves to the
+/// front of `emails`, which drops an equal address (ignoring case) further on, and `email` goes.
+fn move_email_into_emails(doc: &mut Doc) {
+    let email: Vec<String> = doc
+        .fields
+        .iter()
+        .filter(|(n, _)| n == "email")
+        .flat_map(|(_, v)| match v {
+            DocValue::Str(s) => vec![s.trim().to_owned()],
+            DocValue::List(l) => l
+                .iter()
+                .filter_map(DocValue::as_str)
+                .map(|s| s.trim().to_owned())
+                .collect(),
+            _ => Vec::new(),
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    doc.fields.retain(|(n, _)| n != "email");
+    if email.is_empty() {
+        return;
+    }
+    let mut emails: Vec<DocValue> = email.iter().cloned().map(DocValue::Str).collect();
+    let rest = match doc.field("emails") {
+        Some(DocValue::List(l)) => l.clone(),
+        Some(v) => vec![v.clone()],
+        None => Vec::new(),
+    };
+    for v in rest {
+        let dup = v.as_str().is_some_and(|s| {
+            emails
+                .iter()
+                .any(|e| e.as_str().is_some_and(|e| e.eq_ignore_ascii_case(s.trim())))
+        });
+        if !dup {
+            emails.push(v);
+        }
+    }
+    doc.fields.retain(|(n, _)| n != "emails");
+    doc.fields
+        .push(("emails".to_owned(), DocValue::List(emails)));
+}
 
 /// Where the writer runs, which decides how much of the upkeep it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -252,6 +404,9 @@ impl Writer {
             let Some(ty) = current.type_def(name) else {
                 continue;
             };
+            if name == PERSON_TYPE && upkeep == Upkeep::Device && awaits_person_emails(ty) {
+                continue;
+            }
             let vault_text = self.vault.read_text(&type_path(name))?;
             let Some((wcl, added)) = with_shipped_fields(name, &vault_text, ty, shipped)? else {
                 continue;

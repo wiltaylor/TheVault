@@ -1,5 +1,5 @@
 title        = "Alex Example"
-email        = "alex@example.com"
+emails       = ["alex@example.com"]
 organisation = "Example Co"
 
 content body {

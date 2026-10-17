@@ -887,8 +887,8 @@ fn the_skill_documents_how_batches_report_and_refer() {
     let first = json!([
         upsert(
             "person",
-            "email",
-            json!({ "title": "Robin", "email": "robin@example.com" })
+            "title",
+            json!({ "title": "Robin", "emails": ["robin@example.com"] })
         ),
         upsert("project", "title", json!({ "title": "Launch the shop" })),
     ])
@@ -943,6 +943,10 @@ fn the_skill_documents_how_batches_report_and_refer() {
     vault.fails(
         &["upsert", "--type", "project", "--key", "tasks"],
         "title = \"X\"\n",
+    );
+    vault.fails(
+        &["upsert", "--type", "person", "--key", "emails"],
+        "title = \"X\"\nemails = [\"x@example.com\"]\n",
     );
 
     // An upsert keeps the fields it was not sent.

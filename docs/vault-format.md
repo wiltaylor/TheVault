@@ -185,7 +185,7 @@ Every vault has five types that the app relies on. The server writes each one's 
 
 A change that removes a "must keep" field, or changes its kind, is refused with `invalid_type`.
 
-The phone data types reference `person`, which is a starter type and not a built-in one. When the server adds any of the three to a vault that has no `person` type, it adds `crates/writer/defaults/person.wcl` with them, in the same commit. That `person` can be customised and, once nothing references it, deleted. A vault that already has a `person` type keeps it, and gains on start each field of `crates/writer/defaults/person.wcl` it lacks, such as `phones`, `addresses` and `device_contacts`, which the device scripts write.
+The phone data types reference `person`, which is a starter type and not a built-in one. When the server adds any of the three to a vault that has no `person` type, it adds `crates/writer/defaults/person.wcl` with them, in the same commit. That `person` can be customised and, once nothing references it, deleted. A vault that already has a `person` type keeps it, and gains on start each field of `crates/writer/defaults/person.wcl` it lacks, such as `emails`, `phones`, `addresses` and `device_contacts`, which the device scripts write.
 
 The fields of the phone data types, as a new vault gets them:
 
@@ -232,9 +232,22 @@ template default {
 }
 ```
 
-The `person` type, both the starter pack's and the one added with the phone data types, holds a person's phone numbers and addresses (D24):
+The `person` type, both the starter pack's and the one added with the phone data types, holds every detail a phone contact holds, and the device scripts keep the two in step both ways (D16, D24):
 
 ```wcl
+field emails {
+  kind  = "list"
+  label = "Emails"
+  items = "string"
+}
+
+field email_labels {
+  kind        = "list"
+  label       = "Email labels"
+  description = "The label of each email address, in the same order: mobile, home, work, main, other, or the phone's own label."
+  items       = "string"
+}
+
 field phones {
   kind        = "list"
   label       = "Phones"
@@ -242,10 +255,63 @@ field phones {
   items       = "string"
 }
 
+field phone_labels {
+  kind        = "list"
+  label       = "Phone labels"
+  description = "The label of each phone number, in the same order: mobile, home, work, main, other, or the phone's own label."
+  items       = "string"
+}
+
 field addresses {
+  kind        = "list"
+  label       = "Addresses"
+  description = "Postal addresses, each on one line with its lines joined by commas."
+  items       = "string"
+}
+
+field address_labels {
+  kind        = "list"
+  label       = "Address labels"
+  description = "The label of each postal address, in the same order: home, work, other, or the phone's own label."
+  items       = "string"
+}
+
+field organisation {
+  kind  = "string"
+  label = "Organisation"
+}
+
+field job_title {
+  kind  = "string"
+  label = "Job title"
+}
+
+field nickname {
+  kind  = "string"
+  label = "Nickname"
+}
+
+field birthday {
+  kind        = "string"
+  label       = "Birthday"
+  description = "YYYY-MM-DD, or --MM-DD when the year is not known."
+}
+
+field websites {
   kind  = "list"
-  label = "Addresses"
-  items = "string"
+  label = "Websites"
+  items = "url"
+}
+
+field contact_note {
+  kind        = "string"
+  label       = "Contact note"
+  description = "The note on the phone contact."
+}
+
+field photo {
+  kind  = "asset"
+  label = "Photo"
 }
 
 field device_contacts {
@@ -256,6 +322,10 @@ field device_contacts {
   hidden      = true
 }
 ```
+
+`phones`, `emails` and `addresses` each have a label list beside them, index-aligned: the label of `phones[0]` is `phone_labels[0]`. A label is `mobile`, `home`, `work`, `main`, `other`, or the phone's custom label text, and `""` for none. `phones` are E.164, so `has(phones, "+61400000000")` finds the person by a number. `addresses` are postal addresses, each the phone's formatted address with its line breaks joined by `", "`. `birthday` is `YYYY-MM-DD`, or `--MM-DD` when the year is not known. `contact_note` is the note on the phone contact, kept apart from `body`, which is the person's own content. `photo` is the contact photo. The starter's `person` also has `homepage` and a Work tab.
+
+A vault from before people carried every contact detail has `addresses` holding email addresses and a separate single `email`. The upgrade step `0001_person_emails` renames that `addresses` to `emails`, moves a non-empty `email` value to the front of `emails` (an equal address further on, ignoring case, is dropped), and removes `email`, as one planned type change that edits every person note it applies to; see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). The template slots of `email` and `addresses` become one slot of `emails`. Fields the user added stay, and the seeding that follows adds the other new fields, postal `addresses` among them. A device's local vault adds no field to such a `person` type, and waits for the home server's step to sync.
 
 `device_contacts` maps each device to the id of the contact on that device that is linked to the person. The key is `device_` followed by the device id, as in `device_01JB8Z4K2MQ7V3X9T5R6W8Y2ZB`, because a dict key must be an identifier and a device id starts with a digit. It is hidden: the device scripts write it, and the app does not show it.
 
@@ -1822,7 +1892,11 @@ Each script captures an item once, by its `device_ref`, archived notes included.
 
 The app ships defaults into every vault: the built-in types (and the `person` type the phone data types reference), the default device file `devices/android.wcl`, and the five default device scripts `scripts/device_*.ws`. On every start the home server brings them up to date, and a device's local vault does the same when the app opens it. The code is `crates/writer/src/shipped.rs`.
 
-1. **Upgrade steps.** One-time upgrades for changes that are not additive, such as a field rename with a migration script. Each has an id, runs once per vault in the order the app lists them, and is recorded in `state.db` once it succeeds. A step that fails stops the server from starting and runs again on the next start. Steps run first, so the seeding below never adds a field under the name a step is about to rename it to. Only the home server runs them; a device takes their results through sync.
+1. **Upgrade steps.** One-time upgrades for changes that are not additive, such as a field rename with a migration script. Each has an id, runs once per vault in the order the app lists them, and is recorded in `state.db` once it succeeds. A step that fails stops the server from starting and runs again on the next start. Steps run first, so the seeding below never adds a field under the name a step is about to rename it to. Only the home server runs them; a device takes their results through sync. The steps are:
+
+   | Step | Does |
+   |------|------|
+   | `0001_person_emails` | A `person` type with `addresses` or `email` and no `emails`: `addresses` becomes `emails`, `email` moves into it and goes (see [Built-in types](#built-in-types)). Its note versions are authored by `task server` |
 2. **Built-in types.** A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` template places an added field, the vault's `default` template gains that slot, after the nearest slot the shipped template puts before it, or at the end of its first tab. No other template, and nothing else in the `default` template, changes. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
 3. **Missing files.** Each default device script and the default device file the vault lacks is written, the scripts before the device file that names them. A deleted one comes back on the next start. That changes nothing on a device: a vault with no `devices/android.wcl` runs the same built-in default, and a script the device file names cannot be deleted while it does.
 4. **Newer shipped files.** `state.db` records the content hash of each default device file or script the server writes. The app carries the hash of every version of each that it has ever shipped. On start, a file whose content is still a version the app shipped, or still what the server wrote, is replaced by the current shipped version, so a vault that skipped releases is upgraded too. A file the user changed is left alone. When a newer shipped version exists than the one the user changed, the server adds one notification under the bell that names the file and says a newer version exists. It adds no other for that version, on any later start. A file the user changed with no record of what the server wrote, as in a vault from before these records, counts as based on an older version. A device's local vault never adds the notification, since the home server does.

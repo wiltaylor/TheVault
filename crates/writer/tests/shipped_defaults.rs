@@ -5,6 +5,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use serde_json::json;
 use state::{Author, State};
 use store::Vault;
 use writer::{SHIPPED_FILES, UpgradeStep, Upgraded, Upkeep, Writer, content_hash};
@@ -14,6 +15,9 @@ const OLDEST_PERSON: &str = include_str!("fixtures/shipped/person_oldest_starter
 
 /// The starter's `person` type as it is now.
 const STARTER_PERSON: &str = include_str!("../../cli/starter/types/person.wcl");
+
+/// The starter's `person` type in 0.1.5, when `addresses` held email addresses beside `email`.
+const PERSON_0_1_5: &str = include_str!("fixtures/shipped/person_0_1_5_starter.wcl");
 
 /// `scripts/device_calls.ws` as the first release with device scripts shipped it.
 const OLD_DEVICE_CALLS: &str = include_str!("fixtures/shipped/device_calls_39d9091.ws");
@@ -55,6 +59,12 @@ fn notification_titles(w: &Writer) -> Vec<String> {
         .collect()
 }
 
+/// The fields of note `id`, in the JSON form of the notes API.
+fn fields_of(w: &Writer, id: &str) -> serde_json::Value {
+    let note = w.read(id).unwrap();
+    writer::doc_to_json(&note.doc)["fields"].clone()
+}
+
 fn shipped(path: &str) -> String {
     let file = SHIPPED_FILES.iter().find(|f| f.path == path).unwrap();
     if path.ends_with(".wcl") {
@@ -88,21 +98,35 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
 
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
 
-    let fields: Vec<(&str, &str)> = done
+    // The step moved email into emails; the seeding added the rest.
+    assert_eq!(done.steps, ["0001_person_emails"]);
+    let fields: Vec<&str> = done
         .fields_added
         .iter()
-        .map(|(t, f)| (t.as_str(), f.as_str()))
+        .map(|(t, f)| {
+            assert_eq!(t, "person");
+            f.as_str()
+        })
         .collect();
     assert_eq!(
         fields,
         [
-            ("person", "phones"),
-            ("person", "addresses"),
-            ("person", "device_contacts")
+            "email_labels",
+            "phones",
+            "phone_labels",
+            "addresses",
+            "address_labels",
+            "job_title",
+            "nickname",
+            "birthday",
+            "websites",
+            "contact_note",
+            "photo",
+            "device_contacts",
         ]
     );
     // Laid out as the starter now writes it: organisation and homepage kept, the new fields
-    // after email, the new slots after email's, the card and the Work tab untouched.
+    // in the shipped order, the card and the Work tab untouched.
     assert_eq!(
         w.read_type("person").unwrap(),
         store::canonical(STARTER_PERSON, "types/person.wcl").unwrap()
@@ -115,8 +139,9 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
     );
     let ty = w.schema();
     let person = ty.type_def("person").unwrap();
+    assert!(person.field("email").is_none());
     for f in [
-        "email",
+        "emails",
         "organisation",
         "homepage",
         "body",
@@ -127,9 +152,14 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
         assert!(person.field(f).is_some(), "person lacks {f}");
     }
 
-    // Every note unchanged.
-    assert_eq!(read(root, &note_path).unwrap(), note_before);
-    assert_eq!(w.history(&alex).unwrap().len(), versions_before);
+    // The one note the step edits: its email is now its first entry in emails, one version more.
+    let note_after = read(root, &note_path).unwrap();
+    assert_ne!(note_after, note_before);
+    let fields = fields_of(&w, &alex);
+    assert_eq!(fields["emails"], json!(["alex@example.com"]));
+    assert!(fields.get("email").is_none(), "{fields}");
+    assert_eq!(fields["homepage"], "https://example.com");
+    assert_eq!(w.history(&alex).unwrap().len(), versions_before + 1);
 
     // The device file and the five device scripts.
     let paths: Vec<&str> = SHIPPED_FILES.iter().map(|f| f.path).collect();
@@ -330,10 +360,144 @@ fn a_field_the_user_changed_is_left_as_it_is() {
     let w = open(root);
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     let fields: Vec<&str> = done.fields_added.iter().map(|(_, f)| f.as_str()).collect();
-    assert_eq!(fields, ["addresses", "device_contacts"]);
+    assert_eq!(
+        fields,
+        [
+            "email_labels",
+            "phone_labels",
+            "addresses",
+            "address_labels",
+            "job_title",
+            "nickname",
+            "birthday",
+            "websites",
+            "contact_note",
+            "photo",
+            "device_contacts"
+        ]
+    );
     let schema = w.schema();
     let phones = schema.type_def("person").unwrap().field("phones").unwrap();
     assert_eq!(phones.label, "Phone");
+}
+
+#[test]
+fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/person.wcl"), PERSON_0_1_5).unwrap();
+    let w = open(root);
+    let make = |fields: serde_json::Value| {
+        w.create(
+            "person",
+            &writer::Input::Json(json!({ "fields": fields })),
+            &author(),
+        )
+        .unwrap()
+        .id
+    };
+    // Both, with the single email also among the addresses in another case.
+    let sam = make(json!({
+        "title": "Sam",
+        "email": "Sam@Example.com",
+        "addresses": ["sam@home.example", "sam@example.com"],
+        "phones": ["+61400000001"],
+        "homepage": "https://sam.example",
+    }));
+    let only_email = make(json!({ "title": "Kim", "email": "kim@example.com" }));
+    let only_addresses = make(json!({
+        "title": "Lee",
+        "addresses": ["lee@example.com", "lee@work.example"],
+    }));
+    let empty_email = make(json!({ "title": "Ash", "email": "" }));
+    let neither = make(json!({ "title": "Bo" }));
+    drop(w);
+
+    let w = open(root);
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert_eq!(done.steps, ["0001_person_emails"]);
+    // Seeding added postal addresses after the step had moved the email addresses out of it.
+    assert!(
+        done.fields_added
+            .contains(&("person".to_owned(), "addresses".to_owned())),
+        "{:?}",
+        done.fields_added
+    );
+
+    let schema = w.schema();
+    let person = schema.type_def("person").unwrap();
+    assert!(person.field("email").is_none());
+    for f in [
+        "emails",
+        "email_labels",
+        "phones",
+        "phone_labels",
+        "addresses",
+        "address_labels",
+        "organisation",
+        "job_title",
+        "nickname",
+        "birthday",
+        "websites",
+        "contact_note",
+        "photo",
+        "homepage",
+        "device_contacts",
+        "body",
+    ] {
+        assert!(person.field(f).is_some(), "person lacks {f}");
+    }
+    let wcl = w.read_type("person").unwrap();
+    assert!(!wcl.contains("slot \"email\""), "{wcl}");
+    assert_eq!(wcl.matches("slot \"emails\"").count(), 1, "{wcl}");
+
+    let f = fields_of(&w, &sam);
+    assert_eq!(
+        f["emails"],
+        json!(["Sam@Example.com", "sam@home.example"]),
+        "{f}"
+    );
+    assert_eq!(f["phones"], json!(["+61400000001"]));
+    assert_eq!(f["homepage"], "https://sam.example");
+    let f = fields_of(&w, &only_email);
+    assert_eq!(f["emails"], json!(["kim@example.com"]));
+    let f = fields_of(&w, &only_addresses);
+    assert_eq!(f["emails"], json!(["lee@example.com", "lee@work.example"]));
+    for id in [&sam, &only_email, &only_addresses, &empty_email, &neither] {
+        let f = fields_of(&w, id);
+        assert!(f.get("email").is_none(), "{f}");
+        assert!(
+            f.get("addresses")
+                .is_none_or(|a| a.as_array().is_some_and(Vec::is_empty)),
+            "{f}"
+        );
+    }
+    assert!(w.flagged().unwrap().is_empty());
+    drop(w);
+
+    // The next start runs the step no more and changes nothing.
+    let gen_before = generation(root);
+    let w = open(root);
+    assert_eq!(
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap(),
+        Upgraded::default()
+    );
+    assert_eq!(generation(root), gen_before);
+}
+
+#[test]
+fn a_device_vault_runs_no_upgrade_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/person.wcl"), PERSON_0_1_5).unwrap();
+    let w = open(root);
+    let done = w.upgrade_shipped_defaults(Upkeep::Device).unwrap();
+    assert!(done.steps.is_empty());
+    // The person type waits for the home server's step: nothing is added beside the old fields.
+    assert!(!done.fields_added.iter().any(|(t, _)| t == "person"));
+    assert_eq!(w.read_type("person").unwrap(), PERSON_0_1_5);
 }
 
 static RUNS: AtomicUsize = AtomicUsize::new(0);
