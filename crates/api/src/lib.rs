@@ -255,6 +255,7 @@ fn build() -> Built {
             "/api/devices/{id}/commands/{cid}/result",
             devices::command_result,
         )
+        .post("/api/devices/{id}/event-failures", devices::event_failure)
         .get("/api/device-files", devices::files)
         .get("/api/device-files/{platform}", devices::file)
         .put("/api/device-files/{platform}", devices::put_file)

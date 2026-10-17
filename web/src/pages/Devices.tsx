@@ -4,6 +4,7 @@ import { when } from "../admin/format";
 import { inAndroidApp } from "../deviceImport";
 import { appInfo } from "../inApp";
 import { ClientDownloads } from "./Apps";
+import { CaptureProblemsBadge } from "./CaptureProblems";
 import { PhoneImport, ThisDevice } from "./DeviceImport";
 import { errorText } from "./TypeEditor";
 
@@ -227,7 +228,7 @@ function DeviceCard(props: {
           {title()}
           <Show when={props.thisDevice}>
             {" "}
-            <span class="this-device">This device</span>
+            <span class="this-device">This device</span> <CaptureProblemsBadge />
           </Show>
         </h2>
         <span class="muted">

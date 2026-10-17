@@ -26,7 +26,10 @@
 //! must be awaited inside a Tokio runtime, which Tauri's async runtime is.
 //!
 //! [`Embedded::device`] adds the device event runtime of [`device`]: the durable queue of device
-//! events, their handlers, and the commands server scripts send the device (D5, D6, D22).
+//! events, their handlers, and the commands server scripts send the device (D5, D6, D22). Once the
+//! app hands the runtime over ([`Embedded::set_device`]), `GET /api/app/device-events` lists the
+//! events that failed or were skipped, and `POST /api/app/device-events/{id}/retry` and
+//! `.../dismiss` act on a failed one, for Settings > Devices > This device.
 
 pub mod device;
 mod home;
@@ -37,6 +40,8 @@ pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState};
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock, Weak};
+
+use device::DeviceRuntime;
 
 use anyhow::Context;
 use axum::Router;
@@ -90,6 +95,8 @@ struct Parts {
     build: RwLock<Option<AppBuild>>,
     /// The app's sync loop, once the app hands it over ([`Embedded::set_sync_source`]).
     sync: RwLock<Option<Box<dyn SyncSource>>>,
+    /// The app's device runtime, once the app hands it over ([`Embedded::set_device`]).
+    device: RwLock<Weak<DeviceRuntime>>,
     /// Keeps the `before_*` handler host alive; it holds only a weak link to the writer.
     _handlers: script::Handlers,
 }
@@ -168,6 +175,7 @@ impl Embedded {
                 home: Home::new().context("building the home server's HTTP client")?,
                 build: RwLock::new(None),
                 sync: RwLock::new(None),
+                device: RwLock::new(Weak::new()),
                 _handlers: handlers,
             }),
         })
@@ -239,6 +247,110 @@ impl Embedded {
             .sync
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(source);
+    }
+
+    /// Hand over the app's device runtime, whose failed and skipped events
+    /// `GET /api/app/device-events` lists. The server holds it weakly: the app owns it.
+    pub fn set_device(&self, runtime: &Arc<DeviceRuntime>) {
+        *self
+            .parts()
+            .device
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::downgrade(runtime);
+    }
+
+    fn device_runtime(&self) -> Option<Arc<DeviceRuntime>> {
+        self.parts()
+            .device
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .upgrade()
+    }
+
+    /// `GET /api/app/device-events`: `{ device, failed, events }`, whether a device runtime runs
+    /// here, how many events failed for good, and every failed and skipped event, newest first.
+    async fn device_events(&self) -> Response<Body> {
+        let Some(runtime) = self.device_runtime() else {
+            return home::json_response(
+                StatusCode::OK,
+                &serde_json::json!({ "device": false, "failed": 0, "events": [] }),
+            );
+        };
+        let listed = tokio::task::spawn_blocking(move || {
+            let events = runtime.problems()?;
+            let failed = runtime.failed_count()?;
+            anyhow::Ok(serde_json::json!({
+                "device": true,
+                "failed": failed,
+                "events": events.iter().map(device::QueuedEvent::problem_json).collect::<Vec<_>>(),
+            }))
+        })
+        .await;
+        match listed {
+            Ok(Ok(out)) => home::json_response(StatusCode::OK, &out),
+            Ok(Err(e)) => home::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                &format!("{e:#}"),
+            ),
+            Err(e) => home::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                &e.to_string(),
+            ),
+        }
+    }
+
+    /// `POST /api/app/device-events/{id}/retry`: give failed event `id` another three passes and
+    /// run the first now, answering the event as it then stands; `.../dismiss`: hide it. 404 when
+    /// no failed event `id` is queued.
+    async fn device_event(&self, id: i64, retry: bool) -> Response<Body> {
+        let Some(runtime) = self.device_runtime() else {
+            return home::error(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "no device runtime runs here",
+            );
+        };
+        // A retry runs the handlers, which may reach the phone and the local vault.
+        let acted = tokio::task::spawn_blocking(move || {
+            let out = if retry {
+                runtime.retry(id)?.map(|e| e.problem_json())
+            } else {
+                runtime
+                    .dismiss(id)?
+                    .then(|| serde_json::json!({ "id": id, "status": "dismissed" }))
+            };
+            anyhow::Ok(out.map(|mut out| {
+                out["failed"] = serde_json::json!(runtime.failed_count().unwrap_or_default());
+                out
+            }))
+        })
+        .await;
+        match acted {
+            Ok(Ok(Some(out))) => {
+                if retry {
+                    // What the handlers wrote reaches the home server soon.
+                    self.request_sync();
+                }
+                home::json_response(StatusCode::OK, &out)
+            }
+            Ok(Ok(None)) => home::error(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                &format!("no failed device event {id}"),
+            ),
+            Ok(Err(e)) => home::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                &format!("{e:#}"),
+            ),
+            Err(e) => home::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                &e.to_string(),
+            ),
+        }
     }
 
     /// Where sync stands, as `GET /api/app/sync` answers it: the app's sync loop's report with the
@@ -331,6 +443,8 @@ impl Embedded {
                     Unavailable::NotPaired.response()
                 }
             }
+            Route::AppDeviceEvents => self.device_events().await,
+            Route::AppDeviceEvent { id, retry } => self.device_event(id, retry).await,
             Route::ServerVersion => home.server_version().await,
             Route::NeedsWebApp => home::error(
                 StatusCode::FORBIDDEN,

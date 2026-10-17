@@ -23,6 +23,13 @@
 //! A vault without `devices/<platform>.wcl` runs the built-in default device file, and a script
 //! the device file names that the vault lacks runs from the built-in defaults (D15).
 //!
+//! An event whose handler fails on every pass is marked failed and stays in the queue until the
+//! user retries it ([`DeviceRuntime::retry`]) or dismisses it ([`DeviceRuntime::dismiss`]), from
+//! Settings > Devices > This device's "Capture problems", which [`DeviceRuntime::problems`] lists.
+//! Each failed event is announced once on the phone ([`DeviceRuntime::new_failures`]) and reported
+//! once to the home server ([`DeviceRuntime::unreported_failures`]), so a message that never
+//! became a note is never silent.
+//!
 //! Each queued event records the notes its handlers created ([`QueuedEvent::notes`]), so a caller
 //! that runs one event at once with [`DeviceRuntime::run_event`], such as the share target, can
 //! tell what it made.
@@ -64,7 +71,9 @@ CREATE TABLE IF NOT EXISTS device_events (
     attempts   INTEGER NOT NULL DEFAULT 0,
     message    TEXT,
     updated_ms INTEGER NOT NULL,
-    notes      TEXT NOT NULL DEFAULT '[]'
+    notes      TEXT NOT NULL DEFAULT '[]',
+    notified   INTEGER NOT NULL DEFAULT 0,
+    reported   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS device_events_status ON device_events (status, id);
 
@@ -163,6 +172,8 @@ pub enum EventStatus {
     Failed,
     /// Dropped by the exclusion list or the skip pattern, before any handler ran.
     Skipped,
+    /// Failed, then dismissed by the user from "Capture problems".
+    Dismissed,
 }
 
 impl EventStatus {
@@ -172,6 +183,7 @@ impl EventStatus {
             EventStatus::Done => "done",
             EventStatus::Failed => "failed",
             EventStatus::Skipped => "skipped",
+            EventStatus::Dismissed => "dismissed",
         }
     }
 
@@ -180,6 +192,7 @@ impl EventStatus {
             "done" => EventStatus::Done,
             "failed" => EventStatus::Failed,
             "skipped" => EventStatus::Skipped,
+            "dismissed" => EventStatus::Dismissed,
             _ => EventStatus::Queued,
         }
     }
@@ -198,6 +211,44 @@ pub struct QueuedEvent {
     pub message: Option<String>,
     /// The ids of the notes its handlers created, over every pass, oldest first.
     pub notes: Vec<String>,
+}
+
+impl QueuedEvent {
+    /// Who the event is from or about, as its payload names them: the phone contact's name, an
+    /// RCS sender, a contact event's name, else the number. `None` when it names nobody, as a
+    /// share does.
+    pub fn who(&self) -> Option<String> {
+        let d = &self.data;
+        fn text(v: &Json) -> Option<&str> {
+            v.as_str().map(str::trim).filter(|s| !s.is_empty())
+        }
+        [
+            &d["contact"]["name"],
+            &d["sender"],
+            &d["name"],
+            &d["number"],
+            &d["number_raw"],
+            &d["to"][0]["contact"]["name"],
+            &d["to"][0]["number"],
+        ]
+        .into_iter()
+        .find_map(text)
+        .map(str::to_owned)
+    }
+
+    /// The event as "Capture problems" lists it and the home server is told of it: `{ id, event,
+    /// at, status, attempts, message, who }`.
+    pub fn problem_json(&self) -> Json {
+        json!({
+            "id": self.id,
+            "event": self.event,
+            "at": self.at_ms,
+            "status": self.status.as_str(),
+            "attempts": self.attempts,
+            "message": self.message,
+            "who": self.who(),
+        })
+    }
 }
 
 /// How a command run ended, in the form `POST /api/devices/{id}/commands/{cid}/result` takes.
@@ -263,6 +314,18 @@ impl DeviceRuntime {
                 "ALTER TABLE device_events ADD COLUMN notes TEXT NOT NULL DEFAULT '[]'",
             )
             .context("adding the notes of device events")?;
+        }
+        // A queue made before failures were announced and reported.
+        if conn
+            .prepare("SELECT notified, reported FROM device_events LIMIT 0")
+            .is_err()
+        {
+            conn.execute_batch(
+                "ALTER TABLE device_events ADD COLUMN notified INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE device_events ADD COLUMN reported INTEGER NOT NULL DEFAULT 0;
+                 UPDATE device_events SET notified = 1, reported = 1 WHERE status = 'failed';",
+            )
+            .context("adding the announcement of failed device events")?;
         }
         let settings = conn
             .query_row(
@@ -383,6 +446,82 @@ impl DeviceRuntime {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The events "Capture problems" lists: every failed and skipped one, newest first.
+    pub fn problems(&self) -> anyhow::Result<Vec<QueuedEvent>> {
+        self.select("status IN ('failed', 'skipped') ORDER BY at_ms DESC, id DESC")
+    }
+
+    /// How many events failed for good and are not dismissed.
+    pub fn failed_count(&self) -> anyhow::Result<i64> {
+        Ok(self.conn().query_row(
+            "SELECT COUNT(*) FROM device_events WHERE status = 'failed'",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Give failed event `id` another [`MAX_ATTEMPTS`] passes, running the first now, and return
+    /// it as it then stands. `None` when the queue holds no failed event `id`.
+    pub fn retry(&self, id: i64) -> anyhow::Result<Option<QueuedEvent>> {
+        let changed = self.conn().execute(
+            "UPDATE device_events SET status = 'queued', attempts = 0, notified = 0, reported = 0,
+             updated_ms = ?2 WHERE id = ?1 AND status = 'failed'",
+            params![id, self.writer.now_ms()],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        self.run_event(id)
+    }
+
+    /// Dismiss failed event `id`: it leaves "Capture problems" and the failed count, and the queue
+    /// with the finished events. `false` when the queue holds no failed event `id`.
+    pub fn dismiss(&self, id: i64) -> anyhow::Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE device_events SET status = 'dismissed', updated_ms = ?2
+             WHERE id = ?1 AND status = 'failed'",
+            params![id, self.writer.now_ms()],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// The events that failed for good since the last call, oldest first, each returned once, for
+    /// the phone to announce.
+    pub fn new_failures(&self) -> anyhow::Result<Vec<QueuedEvent>> {
+        let fresh = self.select("status = 'failed' AND notified = 0 ORDER BY id")?;
+        for e in &fresh {
+            self.conn().execute(
+                "UPDATE device_events SET notified = 1 WHERE id = ?1",
+                [e.id],
+            )?;
+        }
+        Ok(fresh)
+    }
+
+    /// The failed events the home server has not been told of yet, oldest first. Mark each told
+    /// with [`DeviceRuntime::mark_reported`].
+    pub fn unreported_failures(&self) -> anyhow::Result<Vec<QueuedEvent>> {
+        self.select("status = 'failed' AND reported = 0 ORDER BY id")
+    }
+
+    /// The home server has been told event `id` failed.
+    pub fn mark_reported(&self, id: i64) -> anyhow::Result<()> {
+        self.conn()
+            .execute("UPDATE device_events SET reported = 1 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// The events `filter`, a `WHERE` clause and its `ORDER BY`, picks.
+    fn select(&self, filter: &str) -> anyhow::Result<Vec<QueuedEvent>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, event, data, at_ms, status, attempts, message, notes FROM device_events
+             WHERE {filter}"
+        ))?;
+        let rows = stmt.query_map([], event_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Run every queued event, oldest first, and return each as it then stands. Blocks while the
     /// handlers run. Finished and dropped events older than [`RETENTION_MS`] leave the queue.
     pub fn run_pending(&self) -> anyhow::Result<Vec<QueuedEvent>> {
@@ -391,7 +530,8 @@ impl DeviceRuntime {
         let queued: Vec<QueuedEvent> = {
             let conn = self.conn();
             conn.execute(
-                "DELETE FROM device_events WHERE status IN ('done', 'skipped') AND updated_ms < ?1",
+                "DELETE FROM device_events WHERE status IN ('done', 'skipped', 'dismissed')
+                 AND updated_ms < ?1",
                 [now - RETENTION_MS],
             )?;
             let mut stmt = conn.prepare(

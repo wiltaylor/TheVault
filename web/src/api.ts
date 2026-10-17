@@ -544,6 +544,28 @@ export interface AppSync {
   server: string | null;
 }
 
+/** A device event that failed for good or was skipped, from the app's embedded server (ticket 88). */
+export interface CaptureProblem {
+  id: number;
+  /** The device event, such as `sms_received` or `call_ended`. */
+  event: string;
+  /** When it happened on the phone, in milliseconds since the epoch. */
+  at: number;
+  status: "failed" | "skipped" | "queued" | "done" | "dismissed";
+  attempts: number;
+  /** The handler's error, or why it was skipped. */
+  message: string | null;
+  /** The contact, sender or number the event names, if any. */
+  who: string | null;
+}
+
+/** `GET /api/app/device-events`: whether a device runtime runs here, the failed count, and the list newest first. */
+export interface CaptureProblems {
+  device: boolean;
+  failed: number;
+  events: CaptureProblem[];
+}
+
 /** Where a note's history came from: the home server's, or in an app offline, the app's own. */
 export type HistorySource = "server" | "device";
 
@@ -832,6 +854,14 @@ export const api = {
   appSync: () => request<AppSync>("GET", "/api/app/sync"),
   /** In an app: run a sync round now. */
   appSyncNow: () => request<AppSync>("POST", "/api/app/sync"),
+  /** In the Android app: the device events that failed or were skipped. */
+  captureProblems: () => request<CaptureProblems>("GET", "/api/app/device-events"),
+  /** In the Android app: give a failed device event three more tries, the first now. Answers it as it then stands. */
+  retryCaptureProblem: (id: number) =>
+    request<CaptureProblem & { failed: number }>("POST", `/api/app/device-events/${id}/retry`),
+  /** In the Android app: hide a failed device event. */
+  dismissCaptureProblem: (id: number) =>
+    request<{ id: number; status: "dismissed"; failed: number }>("POST", `/api/app/device-events/${id}/dismiss`),
   /** A pairing code whose QR payload names `serverUrl`, the address this page was loaded from. */
   createPairCode: (serverUrl: string) =>
     request<PairCode>("POST", "/api/devices/pair-codes", { server_url: serverUrl }),

@@ -14,7 +14,8 @@ import org.json.JSONObject
  * server's id as its tag and an id derived from it ([androidId]), so a read, dismiss or clear
  * from anywhere cancels exactly that one. A swipe sends [ACTION_DISMISSED] to
  * [NotificationDismissReceiver], which marks it read on the server; a tap opens the app at its
- * note or page and marks it read too.
+ * note or page and marks it read too. What this phone reported itself, from `device:<its id>`, is
+ * left out: [CaptureProblems] already shows it.
  */
 object NotificationMirror {
     const val CHANNEL = "thevault-notifications"
@@ -117,7 +118,11 @@ object NotificationMirror {
      */
     fun reconcile(context: Context, unread: JSONArray, pushed: String? = null) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // What this phone reported itself, its device events that failed for good, it already
+        // shows as its own notification ([CaptureProblems]).
+        val own = Device.deviceId(context)?.let { "device:$it" }
         val items = (0 until unread.length()).map { unread.getJSONObject(it) }
+            .filter { own == null || it.optString("source") != own }
         val ids = items.map { it.getString("id") }.toSet()
         val shown = shown(context)
         for (id in shown - ids) cancel(context, id)

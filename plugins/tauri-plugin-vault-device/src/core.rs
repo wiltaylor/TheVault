@@ -27,7 +27,10 @@
 //! and the `device.settings` event and push make that round come at once.
 //!
 //! Device capture (D7, D17) hands events to the device runtime [`Core::device`] opens, whose
-//! device module reaches the phone through the Kotlin bridge. After each round the runtime queues
+//! device module reaches the phone through the Kotlin bridge. The runtime is handed to the
+//! embedded server too, which lists the events that failed or were skipped for This device in
+//! Settings > Devices. Each round ends by reporting the device events that failed for good to the
+//! home server, one bell notification each ([`commands::report_failures`]). After each round the runtime queues
 //! a `contact_changed` event for each linked `person` that changed, so the change reaches the
 //! phone contact (D16). Commands from server scripts run through [`Core::run_commands`] (D22).
 //!
@@ -172,6 +175,7 @@ fn now_ms() -> i64 {
 /// The process's core for the vault folder `vault`, opening it on first use. Asking for another
 /// folder closes the old core once its last user lets go: a process has one vault.
 pub fn open(vault: &Path) -> anyhow::Result<Arc<Core>> {
+    crate::logging::init();
     let mut current = lock(&CORE);
     if let Some(core) = current.as_ref()
         && core.vault == vault
@@ -236,6 +240,7 @@ impl Core {
             platform: PLATFORM.to_owned(),
             data: data(),
         })?);
+        self.server.set_device(&runtime);
         *device = Some((id.to_owned(), runtime.clone()));
         Ok(runtime)
     }
@@ -270,7 +275,7 @@ impl Core {
         let _round = lock(&self.round);
         self.syncing.store(true, Ordering::SeqCst);
         if let Err(e) = self.refresh_settings(&link) {
-            eprintln!("the device settings were not refreshed: {e:#}");
+            log::warn!("the device settings were not refreshed: {e:#}");
         }
         let result = self
             .server
@@ -300,7 +305,10 @@ impl Core {
         self.syncing.store(false, Ordering::SeqCst);
         let report = result?;
         if let Err(e) = self.people_to_contacts() {
-            eprintln!("person changes not queued for the phone: {e:#}");
+            log::warn!("person changes not queued for the phone: {e:#}");
+        }
+        if let Err(e) = self.report_failures(&link) {
+            log::warn!("failed device events not reported to the home server: {e:#}");
         }
         Ok(report)
     }
@@ -317,6 +325,19 @@ impl Core {
         if let Some(s) = commands::settings(link)?.filter(Value::is_object) {
             runtime.set_settings(&s)?;
         }
+        Ok(())
+    }
+
+    /// Report the device events that failed for good to the home server, when a runtime of this
+    /// device is open.
+    fn report_failures(&self, link: &Link) -> anyhow::Result<()> {
+        let Ok(runtime) = self.runtime() else {
+            return Ok(());
+        };
+        if runtime.device_id() != link.device_id {
+            return Ok(());
+        }
+        commands::report_failures(link, &runtime)?;
         Ok(())
     }
 
@@ -412,7 +433,7 @@ impl Core {
                     }
                     let Some(core) = core.upgrade() else { return };
                     if let Err(e) = core.sync_now() {
-                        eprintln!("sync failed: {e}");
+                        log::warn!("sync failed: {e}");
                     }
                 }
             })
@@ -651,7 +672,7 @@ fn follow_events(core: Weak<Core>) {
                 live.running = false;
                 return;
             }
-            Err(e) => eprintln!("the live event stream ended: {e}"),
+            Err(e) => log::warn!("the live event stream ended: {e}"),
         }
         // Wait before reconnecting, but stop at once when the app leaves the front.
         let until = Instant::now() + backoff;

@@ -21,7 +21,7 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
     val notifications: MutableList<JSONObject> = Collections.synchronizedList(mutableListOf())
 
     /** Adds an unread notification, newest. */
-    fun notify(id: String, title: String, body: String? = null, note: String? = null, url: String? = null) {
+    fun notify(id: String, title: String, body: String? = null, note: String? = null, url: String? = null, source: String = "test") {
         notifications.add(
             0,
             JSONObject()
@@ -31,7 +31,7 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
                 .put("body", body ?: JSONObject.NULL)
                 .put("note", note ?: JSONObject.NULL)
                 .put("url", url ?: JSONObject.NULL)
-                .put("source", "test")
+                .put("source", source)
                 .put("read", JSONObject.NULL),
         )
     }

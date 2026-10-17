@@ -378,6 +378,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Report a command delivered, or done or failed with a result",
     ),
     (
+        "POST",
+        "/api/devices/{id}/event-failures",
+        "Report a device event whose handler failed for good, as one notification from device:<id>",
+    ),
+    (
         "GET",
         "/api/device-files",
         "Every devices/<platform>.wcl with its handlers and commands, and the event and command lists",

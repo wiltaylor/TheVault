@@ -92,6 +92,14 @@ fn is_device_commands(path: &str) -> bool {
         .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
 
+/// Whether `path` is `/api/devices/{id}/event-failures`, where a device reports its device
+/// events that failed for good.
+fn is_device_event_failures(path: &str) -> bool {
+    path.strip_prefix("/api/devices/")
+        .and_then(|rest| rest.strip_suffix("/event-failures"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
 /// Whether `path` is `/api/devices/{id}/commands/{cid}/result`.
 fn is_device_command_result(path: &str) -> bool {
     path.strip_prefix("/api/devices/")
@@ -134,12 +142,14 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     {
         return Some(Scope::Read);
     }
-    // A device sets its own push endpoint and bases, reports on its own commands and queues an
-    // import of its own history, with its `write` token; the handler checks it is its own.
+    // A device sets its own push endpoint and bases, reports on its own commands and its failed
+    // device events, and queues an import of its own history, with its `write` token; the
+    // handler checks it is its own.
     if WRITE_PATHS.iter().any(|p| under(p))
         || (method == Method::PUT && is_device_own(path))
         || (method == Method::POST && is_device_command_result(path))
         || (method == Method::POST && is_device_commands(path))
+        || (method == Method::POST && is_device_event_failures(path))
     {
         Some(Scope::Write)
     } else {
@@ -434,6 +444,16 @@ mod tests {
             (
                 Method::POST,
                 "/api/devices/x/commands//result",
+                Some(Scope::Admin),
+            ),
+            (
+                Method::POST,
+                "/api/devices/x/event-failures",
+                Some(Scope::Write),
+            ),
+            (
+                Method::POST,
+                "/api/devices/x/y/event-failures",
                 Some(Scope::Admin),
             ),
             (Method::GET, "/api/device-files/android", Some(Scope::Read)),

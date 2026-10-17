@@ -1145,3 +1145,204 @@ fn queued_events_survive_a_restart_and_failures_are_retried() {
         EventStatus::Failed
     );
 }
+
+/// Sends `method path` to the embedded server, as the app's webview does, and expects `status`.
+async fn app_json(server: &Embedded, method: &str, path: &str, status: u16) -> Json {
+    let req = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = server.handle(req).await;
+    let got = res.status().as_u16();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        got,
+        status,
+        "{method} {path}: {}",
+        String::from_utf8_lossy(&body)
+    );
+    serde_json::from_slice(&body).unwrap_or(Json::Null)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_handler_that_fails_three_times_is_listed_and_retry_reruns_it_and_dismiss_hides_it() {
+    let dir = TempDir::new().unwrap();
+    let server = Embedded::open(Config {
+        vault: dir.path().to_owned(),
+        web: None,
+        secret_key: None,
+    })
+    .unwrap();
+    // No device runtime yet: nothing to list, nothing to retry.
+    let none = app_json(&server, "GET", "/api/app/device-events", 200).await;
+    assert_eq!(none, json!({ "device": false, "failed": 0, "events": [] }));
+    app_json(&server, "POST", "/api/app/device-events/1/retry", 404).await;
+
+    let runtime = Arc::new(
+        server
+            .device(DeviceConfig {
+                id: DEVICE.to_owned(),
+                platform: "android".to_owned(),
+                data: Arc::new(Phone::default()),
+            })
+            .unwrap(),
+    );
+    server.set_device(&runtime);
+    let broken = "fn call_ended(event: Value) -> Result[(), string] { Err(\"the call note could not be written\") }\n";
+    server.writer().put_script("device_calls", broken).unwrap();
+    let call = |device_ref: &str| {
+        json!({
+            "device_ref": device_ref,
+            "direction": "in",
+            "number": "+61400000001",
+            "number_raw": "0400 000 001",
+            "contact": { "id": "c7", "name": "Ada Lovelace" },
+            "started": "2026-10-20T12:00:00+11:00",
+            "duration": 30,
+        })
+    };
+    let first = runtime
+        .enqueue("call_ended", call("call:1"), 1_760_000_000_000)
+        .unwrap();
+    let second = runtime
+        .enqueue("call_ended", call("call:2"), 1_760_000_100_000)
+        .unwrap();
+    // A skipped event is listed too, with why, but is not counted as failed.
+    let code = sms(
+        "sms:9",
+        Some("+61400000009"),
+        "",
+        "t9",
+        "Your verification code is 482913",
+    );
+    let skipped = runtime
+        .enqueue("sms_received", code, 1_760_000_050_000)
+        .unwrap();
+    for pass in 1..=embedded::device::MAX_ATTEMPTS {
+        runtime.run_pending().unwrap();
+        if pass < embedded::device::MAX_ATTEMPTS {
+            assert!(runtime.new_failures().unwrap().is_empty(), "pass {pass}");
+        }
+    }
+    assert_eq!(
+        runtime.event(first).unwrap().unwrap().status,
+        EventStatus::Failed
+    );
+
+    // Each failure is announced once, and reported once.
+    let fresh: Vec<i64> = runtime
+        .new_failures()
+        .unwrap()
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(fresh, vec![first, second]);
+    assert!(runtime.new_failures().unwrap().is_empty());
+    assert_eq!(runtime.unreported_failures().unwrap().len(), 2);
+    runtime.mark_reported(first).unwrap();
+    let left: Vec<i64> = runtime
+        .unreported_failures()
+        .unwrap()
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(left, vec![second]);
+
+    // Newest first, with who, the handler's message and the attempts.
+    let listed = app_json(&server, "GET", "/api/app/device-events", 200).await;
+    assert_eq!(listed["device"], true);
+    assert_eq!(listed["failed"], 2);
+    let events = listed["events"].as_array().unwrap();
+    let ids: Vec<i64> = events.iter().map(|e| e["id"].as_i64().unwrap()).collect();
+    assert_eq!(ids, vec![second, skipped, first]);
+    assert_eq!(events[0]["event"], "call_ended");
+    assert_eq!(events[0]["status"], "failed");
+    assert_eq!(events[0]["at"], 1_760_000_100_000_i64);
+    assert_eq!(events[0]["who"], "Ada Lovelace");
+    assert_eq!(events[0]["attempts"], 3);
+    assert!(
+        events[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("the call note could not be written"),
+        "{listed}"
+    );
+    assert_eq!(events[1]["status"], "skipped");
+    assert_eq!(events[1]["message"], "the body matches the skip pattern");
+    assert_eq!(events[1]["who"], "+61400000009");
+
+    // Retry gives it three more passes and runs the first now: fixed, it is done.
+    server
+        .writer()
+        .put_script(
+            "device_calls",
+            "fn call_ended(event: Value) -> Result[(), string] { Ok(()) }\n",
+        )
+        .unwrap();
+    let retried = app_json(
+        &server,
+        "POST",
+        &format!("/api/app/device-events/{first}/retry"),
+        200,
+    )
+    .await;
+    assert_eq!(retried["status"], "done", "{retried}");
+    assert_eq!(retried["attempts"], 1);
+    assert_eq!(retried["failed"], 1);
+    // Only a failed event can be retried or dismissed.
+    app_json(
+        &server,
+        "POST",
+        &format!("/api/app/device-events/{first}/retry"),
+        404,
+    )
+    .await;
+    app_json(
+        &server,
+        "POST",
+        &format!("/api/app/device-events/{skipped}/dismiss"),
+        404,
+    )
+    .await;
+
+    // Retried and failing again, it is announced and reported again once it fails for good.
+    server.writer().put_script("device_calls", broken).unwrap();
+    let again = runtime.retry(second).unwrap().unwrap();
+    assert_eq!((again.status, again.attempts), (EventStatus::Queued, 1));
+    runtime.run_pending().unwrap();
+    runtime.run_pending().unwrap();
+    assert_eq!(
+        runtime.event(second).unwrap().unwrap().status,
+        EventStatus::Failed
+    );
+    assert_eq!(runtime.new_failures().unwrap().len(), 1);
+    assert_eq!(runtime.unreported_failures().unwrap().len(), 1);
+
+    // Dismiss hides it from the list and the count.
+    let dismissed = app_json(
+        &server,
+        "POST",
+        &format!("/api/app/device-events/{second}/dismiss"),
+        200,
+    )
+    .await;
+    assert_eq!(dismissed["failed"], 0);
+    let listed = app_json(&server, "GET", "/api/app/device-events", 200).await;
+    assert_eq!(listed["failed"], 0);
+    let ids: Vec<i64> = listed["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![skipped]);
+    assert_eq!(
+        runtime.event(second).unwrap().unwrap().status,
+        EventStatus::Dismissed
+    );
+    assert!(runtime.unreported_failures().unwrap().is_empty());
+    assert!(runtime.run_pending().unwrap().is_empty());
+}

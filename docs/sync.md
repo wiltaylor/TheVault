@@ -63,6 +63,8 @@ The device token is never widened to `admin`. In the apps, Settings hides the Se
 
 `GET /api/app/sync`, also answered only by the embedded server, says where the app's sync stands for the sidebar's sync icon: `state` (`synced`, green, when the last round succeeded and nothing waits; `syncing`, yellow, while a round runs or local writes wait for one; `error`, red, otherwise), `phase` (`unpaired`, `starting`, `syncing`, `synced`, `offline`, `update_required`, `revoked` or `error`), `queued` (local writes waiting), `last_ok_ms` (when a round last succeeded), `last_error` and `server`. The web client asks for it every few seconds, every second while yellow, and at once after each note write. `POST /api/app/sync` asks the app's sync loop for a round now and answers 202 with the status, or 503 `not_paired` when the app has no sync loop.
 
+`GET /api/app/device-events`, answered only by the Android app's embedded server, lists the device events that failed for good or were skipped, newest first, for Settings > Devices > This device: `{ device, failed, events: [{ id, event, at, status, attempts, message, who }] }`, where `device` says whether a device runtime runs and `failed` counts the failed events. `POST /api/app/device-events/<id>/retry` gives a failed event three more passes, runs the first at once and answers the event as it then stands with the new `failed` count; `POST /api/app/device-events/<id>/dismiss` hides it. Both answer 404 for an event that is not failed (docs/scripts.md, "Device events").
+
 ### Every route
 
 | Routes | Backed by | Answered |

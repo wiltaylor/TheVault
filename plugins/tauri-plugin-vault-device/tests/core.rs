@@ -871,3 +871,59 @@ fn the_sync_status_follows_the_rounds() {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
+
+#[test]
+fn a_device_event_that_fails_for_good_is_reported_once_to_the_bell() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let vault = core::vault_dir(dir.path());
+    std::fs::create_dir_all(vault.join("scripts")).unwrap();
+    std::fs::write(
+        vault.join("scripts/device_calls.ws"),
+        "fn call_ended(event: Value) -> Result[(), string] { Err(\"no call type\") }\n",
+    )
+    .unwrap();
+    let core = core::open(&vault).unwrap();
+    let admin = Admin::start();
+    let paired = admin.pair("Pixel");
+    core.set_link(Some(link(&paired, 64)));
+    let runtime = core
+        .device(&paired.device_id, || Arc::new(NoPhone))
+        .unwrap();
+    runtime
+        .enqueue(
+            "call_ended",
+            json!({
+                "device_ref": "call:1",
+                "number": "+61400000001",
+                "number_raw": "0400 000 001",
+                "contact": { "id": "c1", "name": "Ada Lovelace" },
+                "direction": "in",
+                "duration": 30,
+                "started": "2026-10-15T09:31:00+11:00",
+            }),
+            1_760_000_000_000,
+        )
+        .unwrap();
+    // Not failed for good yet: nothing is reported.
+    runtime.run_pending().unwrap();
+    core.sync_now().unwrap();
+    let list = admin.send("GET", "/api/notifications", None);
+    assert_eq!(list["items"], json!([]), "{list}");
+
+    runtime.run_pending().unwrap();
+    runtime.run_pending().unwrap();
+    core.sync_now().unwrap();
+    core.sync_now().unwrap();
+    let list = admin.send("GET", "/api/notifications", None);
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{list}");
+    assert_eq!(items[0]["source"], format!("device:{}", paired.device_id));
+    assert_eq!(items[0]["title"], "A call could not be saved");
+    let body = items[0]["body"].as_str().unwrap();
+    assert!(
+        body.contains("Ada Lovelace") && body.contains("no call type"),
+        "{body}"
+    );
+    assert!(runtime.unreported_failures().unwrap().is_empty());
+}
