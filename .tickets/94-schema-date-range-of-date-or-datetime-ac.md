@@ -3,7 +3,7 @@ id: '94'
 title: 'Schema: date_range of = "date_or_datetime", accepted by calendar and timeline
   views and the type editor'
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -18,3 +18,7 @@ Scope: the Schema section of the spec. Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-17T22:58:51Z — /work
+
+Claimed.

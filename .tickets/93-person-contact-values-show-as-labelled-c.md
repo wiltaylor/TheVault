@@ -3,8 +3,8 @@ id: '93'
 title: Person contact values show as labelled chips you can copy and edit, and image
   fields are a tile with a placeholder that picks or uploads an image
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Person contact values show as labelled chips you can copy and edit, and image fields are a tile with a placeholder that picks or uploads an image
@@ -49,3 +49,15 @@ Acceptance criteria:
 ### 2026-10-17T22:39:05Z — /work
 
 Claimed.
+
+### 2026-10-17T23:03:30Z — wil
+
+Verified set to verified.
+
+### 2026-10-17T23:03:30Z — wil
+
+Status set to done.
+
+### 2026-10-17T23:03:30Z — wil
+
+Done on ticket/93 at 47d71eb. Schema tests (crates/schema/tests/validation.rs: labels_*, an_image_asset_field_*), web tests (LabelledList.test.tsx, ImageField.test.tsx, defs.test.ts), upgrade tests (crates/writer/tests/shipped_defaults.rs: a_0_1_6_vault_gains_labels_*, a_photo_that_is_not_an_image_*), Playwright web/e2e/labelled-chips.spec.ts; ./dev just check and the full e2e suite (307) pass. Step 0001 now strips labels from the emails block it copies so it stays valid; 0002 adds missing label fields itself. Seeding now places a new slot before the next shipped slot when none precedes it (photo before title). Left alone: crates/bench/defs/types/person.wcl (old minimal person with no phones/photo); no type-editor UI for labels/accept (model only); multiple image-only asset fields keep the chip picker. Filed 100 on older devices and FORMAT_VERSION.
