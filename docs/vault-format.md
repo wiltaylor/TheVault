@@ -25,6 +25,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 - [Taxonomy files](#taxonomy-files)
 - [Task files](#task-files)
 - [Device files](#device-files)
+- [Shipped defaults and upgrades](#shipped-defaults-and-upgrades)
 - [Validating vault files](#validating-vault-files)
 
 ## Files at a glance
@@ -172,7 +173,7 @@ template default {
 
 ### Built-in types
 
-Every vault has five types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it. `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`.
+Every vault has five types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it, and adds to a built-in type the vault has every field its shipped default gained since: see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`.
 
 | Type | Label | For | Must keep |
 |------|-------|-----|-----------|
@@ -184,7 +185,7 @@ Every vault has five types that the app relies on. The server writes each one's 
 
 A change that removes a "must keep" field, or changes its kind, is refused with `invalid_type`.
 
-The phone data types reference `person`, which is a starter type and not a built-in one. When the server adds any of the three to a vault that has no `person` type, it adds `crates/writer/defaults/person.wcl` with them, in the same commit. That `person` can be customised and, once nothing references it, deleted. A vault that already has a `person` type keeps it as it is.
+The phone data types reference `person`, which is a starter type and not a built-in one. When the server adds any of the three to a vault that has no `person` type, it adds `crates/writer/defaults/person.wcl` with them, in the same commit. That `person` can be customised and, once nothing references it, deleted. A vault that already has a `person` type keeps it, and gains on start each field of `crates/writer/defaults/person.wcl` it lacks, such as `phones`, `addresses` and `device_contacts`, which the device scripts write.
 
 The fields of the phone data types, as a new vault gets them:
 
@@ -1815,7 +1816,18 @@ A vault with no `devices/android.wcl` runs the built-in default on an Android de
 | `device_share` | `share_received`: a fleeting note with the shared text, link, images and files |
 | `device_import` | The command `import_history`: answers the import to run, by default the command's payload. The app then reads the phone's history and runs each item that has no note yet as its device event |
 
-Each script captures an item once, by its `device_ref`, archived notes included. A device file in the vault names the scripts it runs; a script it names that the vault does not hold runs from the built-in defaults. `vault init --starter` writes the default device file and scripts into the vault, so they can be edited.
+Each script captures an item once, by its `device_ref`, archived notes included. A device file in the vault names the scripts it runs; a script it names that the vault does not hold runs from the built-in defaults. The server writes the default device file and scripts into a vault that lacks them on every start, and `vault init --starter` writes them too, so they can be edited. [Shipped defaults and upgrades](#shipped-defaults-and-upgrades) says when a newer shipped version replaces one.
+
+## Shipped defaults and upgrades
+
+The app ships defaults into every vault: the built-in types (and the `person` type the phone data types reference), the default device file `devices/android.wcl`, and the five default device scripts `scripts/device_*.ws`. On every start the home server brings them up to date, and a device's local vault does the same when the app opens it. The code is `crates/writer/src/shipped.rs`.
+
+1. **Upgrade steps.** One-time upgrades for changes that are not additive, such as a field rename with a migration script. Each has an id, runs once per vault in the order the app lists them, and is recorded in `state.db` once it succeeds. A step that fails stops the server from starting and runs again on the next start. Steps run first, so the seeding below never adds a field under the name a step is about to rename it to. Only the home server runs them; a device takes their results through sync.
+2. **Built-in types.** A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` template places an added field, the vault's `default` template gains that slot, after the nearest slot the shipped template puts before it, or at the end of its first tab. No other template, and nothing else in the `default` template, changes. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
+3. **Missing files.** Each default device script and the default device file the vault lacks is written, the scripts before the device file that names them. A deleted one comes back on the next start. That changes nothing on a device: a vault with no `devices/android.wcl` runs the same built-in default, and a script the device file names cannot be deleted while it does.
+4. **Newer shipped files.** `state.db` records the content hash of each default device file or script the server writes. The app carries the hash of every version of each that it has ever shipped. On start, a file whose content is still a version the app shipped, or still what the server wrote, is replaced by the current shipped version, so a vault that skipped releases is upgraded too. A file the user changed is left alone. When a newer shipped version exists than the one the user changed, the server adds one notification under the bell that names the file and says a newer version exists. It adds no other for that version, on any later start. A file the user changed with no record of what the server wrote, as in a vault from before these records, counts as based on an older version. A device's local vault never adds the notification, since the home server does.
+
+Steps 2 to 4 make one commit. A start that finds nothing to do makes no commit, no change-feed entry and no note version.
 
 ## Validating vault files
 

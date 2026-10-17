@@ -1,6 +1,7 @@
 //! `.vault/state.db`: version history, trash, the change feed devices sync from, encrypted secrets,
 //! API tokens, paired devices and their base versions, task run logs, the queue of `after_*`
-//! handler jobs and the user's notifications.
+//! handler jobs, the user's notifications, and the shipped defaults and upgrade steps the vault
+//! has had.
 //!
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
@@ -15,6 +16,7 @@ mod notifications;
 mod pins;
 mod runs;
 mod secrets;
+mod shipped;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -40,6 +42,7 @@ pub use notifications::{
 pub use pins::{PinEntry, PinKind, PinNode};
 pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{SecretInfo, SecretKey, key_file_path};
+pub use shipped::ShippedRecord;
 
 /// Errors from `state.db`.
 #[derive(Debug, thiserror::Error)]
@@ -128,7 +131,7 @@ pub struct State {
     events: Events,
 }
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -333,6 +336,21 @@ CREATE TABLE IF NOT EXISTS device_commands (
 CREATE INDEX IF NOT EXISTS device_commands_by_device ON device_commands (device_id, status, id);
 ";
 
+/// What version 11 adds: the hash of every shipped default written into the vault, and the
+/// one-time upgrade steps applied to it.
+const SCHEMA_V11: &str = "
+CREATE TABLE IF NOT EXISTS shipped_files (
+    path       TEXT PRIMARY KEY,
+    hash       TEXT NOT NULL,
+    notified   TEXT,
+    updated_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS upgrades (
+    id         TEXT PRIMARY KEY,
+    applied_ms INTEGER NOT NULL
+);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -422,7 +440,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=9 => {
+        0..=10 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -458,6 +476,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 9 {
                 tx.execute_batch(SCHEMA_V10)?;
+            }
+            if version <= 10 {
+                tx.execute_batch(SCHEMA_V11)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

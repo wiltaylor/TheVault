@@ -83,8 +83,8 @@ fn main() -> anyhow::Result<()> {
             .with_hooks(handlers.hooks()),
     );
     writer
-        .ensure_built_in_types()
-        .context("adding the built-in types")?;
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .context("bringing the vault's shipped defaults up to date")?;
     handlers.start(&writer);
     // The script hosts' HTTP clients block, so they are made outside the async runtime. Tasks
     // change notes through the writer, so a task's changes run handlers too.

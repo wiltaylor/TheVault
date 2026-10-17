@@ -803,8 +803,15 @@ fn scripts_are_stored_as_sent_and_kept_while_a_handler_names_them() {
     assert_eq!(api.file("scripts/digest.ws"), source);
     let read = expect(api.get("/api/scripts/digest").send().unwrap(), 200);
     assert_eq!(read["source"], source);
+    // Listed beside the default device scripts every vault holds.
     let list = expect(api.get("/api/scripts").send().unwrap(), 200);
-    assert_eq!(list["scripts"], json!(["digest"]));
+    assert!(
+        list["scripts"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("digest")),
+        "{list}"
+    );
 
     let res = api
         .put("/api/types/note")

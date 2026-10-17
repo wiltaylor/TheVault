@@ -189,7 +189,7 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
 }
 
 #[test]
-fn an_existing_vault_gets_the_phone_types_and_keeps_its_own_person() {
+fn an_existing_vault_gets_the_phone_types_and_keeps_its_own_person_with_the_phone_fields() {
     // A vault from before the phone types: the older built-ins and its own `person`.
     const PERSON: &str = "label = \"Contact\"\n\nfield email {\n  kind = \"string\"\n}\n\ntemplate default {\n  tab \"Contact\" {\n    slot \"title\"\n  }\n}\n";
     let api = Api::new(TestServer::start_seeded(|vault| {
@@ -211,7 +211,15 @@ fn an_existing_vault_gets_the_phone_types_and_keeps_its_own_person() {
         assert_eq!(find(&types, name)["builtin"], true, "{name}");
         assert!(api.type_file(name).contains("label"), "{name}");
     }
-    assert_eq!(api.type_file("person"), PERSON);
+    // Its own person, with the fields the device scripts write added and nothing else changed.
+    let person = api.type_file("person");
+    assert!(person.starts_with("label = \"Contact\"\n"), "{person}");
+    assert!(person.contains("tab \"Contact\""), "{person}");
+    let person = find(&types, "person");
+    assert_eq!(
+        field_names(person),
+        ["email", "phones", "addresses", "device_contacts", "body"]
+    );
 }
 
 #[test]

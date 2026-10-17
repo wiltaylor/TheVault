@@ -90,7 +90,7 @@ pub fn install(vault: Vault, state: State) -> Result<Value, Fail> {
 
     let writer = Writer::open(vault, state).map_err(Fail::from_display("starter"))?;
     writer
-        .ensure_built_in_types()
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
         .map_err(Fail::from_display("starter"))?;
     let author = Author::Session(writer::ADOPTED_BY.to_owned());
     let today = days_since_epoch();

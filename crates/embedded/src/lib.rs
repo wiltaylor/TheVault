@@ -142,8 +142,8 @@ impl Embedded {
         );
         let _ = bound.set(Arc::downgrade(&writer));
         writer
-            .ensure_built_in_types()
-            .context("adding the built-in types")?;
+            .upgrade_shipped_defaults(writer::Upkeep::Device)
+            .context("bringing the vault's shipped defaults up to date")?;
         // Bound, never started: no queue thread runs.
         handlers.bind(&writer);
         let host = Arc::new(script::Host::new(

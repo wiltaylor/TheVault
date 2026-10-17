@@ -1,0 +1,65 @@
+label       = "Person"
+plural      = "People"
+description = "Someone you work with."
+icon        = "user"
+colour      = "purple"
+
+field email {
+  kind  = "string"
+  label = "Email"
+}
+
+field organisation {
+  kind  = "string"
+  label = "Organisation"
+}
+
+field homepage {
+  kind  = "url"
+  label = "Homepage"
+}
+
+field body {
+  kind  = "content"
+  label = "Notes"
+}
+
+template default {
+  tab "Person" {
+    slot "title" {
+      label = "Name"
+    }
+    slot "email"
+    slot "organisation"
+    slot "homepage"
+    slot "body"
+  }
+
+  tab "Work" {
+    query_view {
+      title = "Projects"
+      query = "from project where owner == this sort title asc"
+
+      view list {
+        kind = "list"
+      }
+    }
+
+    query_view {
+      title = "Tasks"
+      query = "from task where assignee == this sort due asc"
+
+      view table {
+        kind    = "table"
+        columns = ["title", "status", "due"]
+      }
+    }
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "organisation"
+  }
+}
