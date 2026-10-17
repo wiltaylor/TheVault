@@ -574,17 +574,52 @@ fn a_person_saved_on_the_server_queues_upsert_contact_for_each_phone_without_its
         json!({ "contacts_write": true, "commands": ["delete_contact"] }),
     );
 
-    // A person made in the web app becomes one upsert_contact for each phone that may take it.
+    // A person made in the web app becomes one upsert_contact for each phone that may take it,
+    // carrying every detail a contact holds: label lists one per value, the photo as its asset.
+    let photo = send(
+        api.admin("POST", "/api/assets?filename=carla.jpg")
+            .body(b"jpeg bytes".to_vec()),
+        201,
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let carla = api.create_person(
         &api.admin,
-        json!({ "title": "Carla Created", "phones": ["+16502530005"] }),
+        json!({
+            "title": "Carla Created",
+            "phones": ["+16502530005", "+16502530015"],
+            "phone_labels": ["mobile"],
+            "emails": ["carla@example.com"],
+            "email_labels": ["work"],
+            "addresses": ["1 Main St, Springfield"],
+            "address_labels": ["home"],
+            "organisation": "Example Co",
+            "job_title": "Engineer",
+            "nickname": "Carlie",
+            "birthday": "--04-01",
+            "websites": ["https://carla.example"],
+            "contact_note": "Met at the conference",
+            "photo": photo,
+        }),
     );
     let id = carla["id"].as_str().unwrap().to_owned();
     let expected = json!({
         "contact_id": null,
         "name": "Carla Created",
-        "phones": ["+16502530005"],
-        "addresses": [],
+        "phones": ["+16502530005", "+16502530015"],
+        "phone_labels": ["mobile", ""],
+        "emails": ["carla@example.com"],
+        "email_labels": ["work"],
+        "addresses": ["1 Main St, Springfield"],
+        "address_labels": ["home"],
+        "organisation": "Example Co",
+        "job_title": "Engineer",
+        "nickname": "Carlie",
+        "birthday": "--04-01",
+        "websites": ["https://carla.example"],
+        "contact_note": "Met at the conference",
+        "photo": photo,
         "person": id,
     });
     for device in [&pixel, &tablet] {
@@ -601,7 +636,9 @@ fn a_person_saved_on_the_server_queues_upsert_contact_for_each_phone_without_its
     // contact holds queues nothing more.
     api.create_person(&api.admin, json!({ "title": "No Number" }));
     let mut edited = carla.clone();
-    edited["note"]["fields"]["email"] = json!("carla@example.com");
+    edited["note"]["blocks"] = json!([{ "kind": "content", "labels": ["body"], "blocks": [
+        { "kind": "paragraph", "fields": { "text": "Prefers email." } }
+    ] }]);
     let carla = api.update_note(&api.admin, &edited);
     assert_eq!(api.upserts(&pixel).len(), 1);
     assert_eq!(api.upserts(&tablet).len(), 1);
@@ -668,6 +705,14 @@ fn a_person_saved_on_the_server_queues_upsert_contact_for_each_phone_without_its
         tablet_upserts[3]["payload"]["phones"],
         json!(["+16502530005", "+16502530007"])
     );
+
+    // A person with only an email address is one a contact can hold.
+    api.create_person(
+        &api.admin,
+        json!({ "title": "Email Only", "emails": ["only@example.com"] }),
+    );
+    assert_eq!(api.upserts(&pixel).len(), 2);
+    assert_eq!(api.upserts(&tablet).len(), 5);
 
     // Deleting a person deletes no phone contact (D16).
     let version = api.note(&id)["version"].as_str().unwrap().to_owned();

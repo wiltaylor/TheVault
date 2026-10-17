@@ -4,9 +4,17 @@ description = "Someone you know."
 icon        = "user"
 colour      = "purple"
 
-field email {
-  kind  = "string"
-  label = "Email"
+field emails {
+  kind  = "list"
+  label = "Emails"
+  items = "string"
+}
+
+field email_labels {
+  kind        = "list"
+  label       = "Email labels"
+  description = "The label of each email address, in the same order: mobile, home, work, main, other, or the phone's own label."
+  items       = "string"
 }
 
 field phones {
@@ -16,10 +24,63 @@ field phones {
   items       = "string"
 }
 
+field phone_labels {
+  kind        = "list"
+  label       = "Phone labels"
+  description = "The label of each phone number, in the same order: mobile, home, work, main, other, or the phone's own label."
+  items       = "string"
+}
+
 field addresses {
+  kind        = "list"
+  label       = "Addresses"
+  description = "Postal addresses, each on one line with its lines joined by commas."
+  items       = "string"
+}
+
+field address_labels {
+  kind        = "list"
+  label       = "Address labels"
+  description = "The label of each postal address, in the same order: home, work, other, or the phone's own label."
+  items       = "string"
+}
+
+field organisation {
+  kind  = "string"
+  label = "Organisation"
+}
+
+field job_title {
+  kind  = "string"
+  label = "Job title"
+}
+
+field nickname {
+  kind  = "string"
+  label = "Nickname"
+}
+
+field birthday {
+  kind        = "string"
+  label       = "Birthday"
+  description = "YYYY-MM-DD, or --MM-DD when the year is not known."
+}
+
+field websites {
   kind  = "list"
-  label = "Addresses"
-  items = "string"
+  label = "Websites"
+  items = "url"
+}
+
+field contact_note {
+  kind        = "string"
+  label       = "Contact note"
+  description = "The note on the phone contact."
+}
+
+field photo {
+  kind  = "asset"
+  label = "Photo"
 }
 
 field device_contacts {
@@ -40,9 +101,19 @@ template default {
     slot "title" {
       label = "Name"
     }
-    slot "email"
+    slot "photo"
+    slot "emails"
+    slot "email_labels"
     slot "phones"
+    slot "phone_labels"
     slot "addresses"
+    slot "address_labels"
+    slot "organisation"
+    slot "job_title"
+    slot "nickname"
+    slot "birthday"
+    slot "websites"
+    slot "contact_note"
     slot "body"
   }
 }
@@ -50,6 +121,6 @@ template default {
 template card {
   tab "Card" {
     slot "title"
-    slot "email"
+    slot "emails"
   }
 }

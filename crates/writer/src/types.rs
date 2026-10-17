@@ -51,6 +51,15 @@ pub struct Migration {
     pub function: String,
 }
 
+/// A migration written in Rust, which the server's one-time upgrade steps use: `run` changes one
+/// note, already through the change's simple rules, in place. The plan names it as
+/// `script`/`function`.
+pub(crate) struct NativeMigration {
+    pub(crate) script: &'static str,
+    pub(crate) function: &'static str,
+    pub(crate) run: fn(&mut Doc),
+}
+
 /// What a type change would do, from [`Writer::plan_type_change`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypePlan {
@@ -107,6 +116,22 @@ impl Writer {
         Ok(self.work(&current, name, change)?.plan)
     }
 
+    /// Plan and apply a change to type `name` at once, with `native` run over every note after
+    /// the change's simple rules, in place of a wscript migration. For the one-time upgrade steps
+    /// the server runs on start, which no one reviews a plan for (`crate::shipped`).
+    pub(crate) fn apply_native_type_change(
+        &self,
+        name: &str,
+        change: &TypeChange,
+        native: &NativeMigration,
+        author: &Author,
+    ) -> Result<(TypePlan, Vec<Saved>)> {
+        let _w = self.write_lock();
+        let current = self.schema();
+        let worked = self.work_with(&current, name, change, Some(native))?;
+        self.apply_worked(name, worked, author)
+    }
+
     /// Apply a change to type `name` that [`Writer::plan_type_change`] planned with `token`.
     /// The type file and every edited note change in one commit (D4, D6).
     pub fn apply_type_change(
@@ -122,6 +147,17 @@ impl Writer {
         if worked.plan.token != token {
             return Err(Error::PlanStale(Box::new(worked.plan)));
         }
+        self.apply_worked(name, worked, author)
+    }
+
+    /// Commit a worked change: the type file and every edited note in one commit. The caller
+    /// holds the write lock.
+    fn apply_worked(
+        &self,
+        name: &str,
+        worked: Worked,
+        author: &Author,
+    ) -> Result<(TypePlan, Vec<Saved>)> {
         let Worked {
             plan,
             schema,
@@ -263,6 +299,18 @@ impl Writer {
     /// migration, and validate the result. Runs without the data lock, so a migration can read
     /// the vault; the caller holds the write lock.
     pub(crate) fn work(&self, current: &Schema, name: &str, change: &TypeChange) -> Result<Worked> {
+        self.work_with(current, name, change, None)
+    }
+
+    /// [`Writer::work`], with `native` run over every note after the simple rules and before
+    /// any wscript migration.
+    fn work_with(
+        &self,
+        current: &Schema,
+        name: &str,
+        change: &TypeChange,
+        native: Option<&NativeMigration>,
+    ) -> Result<Worked> {
         let old = current
             .type_def(name)
             .ok_or_else(|| Error::UnknownType(name.to_owned()))?;
@@ -318,6 +366,19 @@ impl Writer {
             hasher.update(format!("{id}\0{version}\0").as_bytes());
             let doc = Input::Wcl(text).parse(&path)?;
             let (mut after, mut edits) = rules.apply(&doc);
+            if let Some(n) = native {
+                let mut migrated = after.clone();
+                (n.run)(&mut migrated);
+                if migrated != after {
+                    edits.push(NoteEdit::Migrated {
+                        script: n.script.to_owned(),
+                        function: n.function.to_owned(),
+                    });
+                    after = migrated;
+                }
+                hasher.update(note::print(&after).as_bytes());
+                hasher.update([0]);
+            }
             if let Some(m) = &change.migration {
                 let migrated = self
                     .hooks

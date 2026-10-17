@@ -96,8 +96,9 @@ fn the_oldest_starter_vault_is_brought_up_to_date_once() {
     let note_text = read(&server, &note);
 
     let fields = field_names(&server, "person");
+    assert!(!fields.iter().any(|n| n == "email"), "{fields:?}");
     for f in [
-        "email",
+        "emails",
         "phones",
         "addresses",
         "device_contacts",
@@ -119,6 +120,13 @@ fn the_oldest_starter_vault_is_brought_up_to_date_once() {
         alex["note"]["fields"]["homepage"], "https://example.com",
         "{alex}"
     );
+    // The upgrade step moved the single email into emails.
+    assert_eq!(
+        alex["note"]["fields"]["emails"],
+        serde_json::json!(["alex@example.com"]),
+        "{alex}"
+    );
+    assert!(alex["note"]["fields"].get("email").is_none(), "{alex}");
 
     // The device file and the five scripts, none with a compile problem.
     assert_eq!(
@@ -154,6 +162,59 @@ fn the_oldest_starter_vault_is_brought_up_to_date_once() {
     );
     assert_eq!(read(&server, &note), note_text);
     assert!(notification_titles(&server).is_empty());
+}
+
+/// The starter's `person` type in 0.1.5, when `addresses` held email addresses beside `email`.
+const PERSON_0_1_5: &str =
+    include_str!("../../writer/tests/fixtures/shipped/person_0_1_5_starter.wcl");
+
+const SAM_ID: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
+
+const SAM: &str = r#"title     = "Sam Sample"
+email     = "sam@example.com"
+addresses = ["sam@home.example", "SAM@example.com"]
+phones    = ["+61400000001"]
+homepage  = "https://sam.example"
+created   = "2026-10-01T00:00:00Z"
+updated   = "2026-10-01T00:00:00Z"
+"#;
+
+#[test]
+fn a_0_1_5_vault_starts_with_every_email_in_emails() {
+    let server = TestServer::start_seeded(|vault| {
+        std::fs::create_dir_all(vault.join("types")).unwrap();
+        std::fs::write(vault.join("types/person.wcl"), PERSON_0_1_5).unwrap();
+        std::fs::create_dir_all(vault.join("notes/person")).unwrap();
+        std::fs::write(vault.join(format!("notes/person/{ALEX_ID}.wcl")), ALEX).unwrap();
+        std::fs::write(vault.join(format!("notes/person/{SAM_ID}.wcl")), SAM).unwrap();
+    });
+    let fields = field_names(&server, "person");
+    assert!(!fields.iter().any(|n| n == "email"), "{fields:?}");
+    for f in ["emails", "addresses", "homepage", "organisation", "photo"] {
+        assert!(
+            fields.iter().any(|n| n == f),
+            "person lacks {f}: {fields:?}"
+        );
+    }
+    let sam = get(&server, &format!("/api/notes/{SAM_ID}"))["note"]["fields"].clone();
+    assert_eq!(
+        sam["emails"],
+        serde_json::json!(["sam@example.com", "sam@home.example"]),
+        "{sam}"
+    );
+    assert_eq!(sam["phones"], serde_json::json!(["+61400000001"]));
+    assert_eq!(sam["homepage"], "https://sam.example");
+    let alex = get(&server, &format!("/api/notes/{ALEX_ID}"))["note"]["fields"].clone();
+    assert_eq!(
+        alex["emails"],
+        serde_json::json!(["alex@example.com"]),
+        "{alex}"
+    );
+    assert_eq!(alex["homepage"], "https://example.com");
+    for person in [&sam, &alex] {
+        assert!(person.get("email").is_none(), "{person}");
+        assert!(person.get("addresses").is_none(), "{person}");
+    }
 }
 
 #[test]

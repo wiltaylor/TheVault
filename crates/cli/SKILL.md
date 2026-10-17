@@ -187,8 +187,8 @@ cat > batch.json <<'EOF'
     "note": { "fields": { "title": "Draft the agenda", "status": "Todo", "priority": "low" } } },
   { "op": "create", "type": "task",
     "wcl": "title = \"Send the invites\"\nstatus = \"Todo\"\npriority = \"high\"\n" },
-  { "op": "upsert", "type": "person", "key": "email",
-    "note": { "fields": { "title": "Sam Sample", "email": "sam@example.com" } } }
+  { "op": "upsert", "type": "person", "key": "title",
+    "note": { "fields": { "title": "Sam Sample", "emails": ["sam@example.com"] } } }
 ]
 EOF
 vault batch --dry-run --file batch.json
@@ -226,8 +226,8 @@ No item in a batch can refer to a note that another item in the same batch creat
 ```sh
 cat > first.json <<'EOF'
 [
-  { "op": "upsert", "type": "person", "key": "email",
-    "note": { "fields": { "title": "Robin Rivera", "email": "robin@example.com" } } },
+  { "op": "upsert", "type": "person", "key": "title",
+    "note": { "fields": { "title": "Robin Rivera", "emails": ["robin@example.com"] } } },
   { "op": "upsert", "type": "project", "key": "title",
     "note": { "fields": { "title": "Launch the shop", "status": "Todo" } } }
 ]
@@ -248,26 +248,28 @@ vault batch --dry-run --file second.json
 vault batch --file second.json
 ```
 
-The second report lists the project under `also`, because the server added the task to the project's `tasks`. Upserts make every stage safe to rerun. To find the ids of an earlier stage later, query by the key, as in `vault query 'from person where email == "robin@example.com"'`.
+The second report lists the project under `also`, because the server added the task to the project's `tasks`. Upserts make every stage safe to rerun. To find the ids of an earlier stage later, query by the key, as in `vault query 'from person where title == "Robin Rivera"'`, or by any field, as in `vault query 'from person where has(emails, "robin@example.com")'`.
 
 ## 5. Upsert by a key field
 
 An upsert finds the note of the type whose `key` field holds the same value. It updates that note, or creates one when there is none. Running the same upsert twice changes nothing the second time, so an import that uses upserts can be rerun safely.
 
 - The key is `title` or a single `string`, `int`, `url`, `date`, `datetime` or `select` field, and the note you send must have a value for it.
-- The server does not keep key values unique. When more than one note of the type holds the value, the upsert is refused with `"status": 409` and `"error": "key_not_unique"`, and `ids` lists the matching notes. Choose a key that is unique in your data, such as a person's `email`. `title` works when no two notes of the type share a title.
+- The server does not keep key values unique. When more than one note of the type holds the value, the upsert is refused with `"status": 409` and `"error": "key_not_unique"`, and `ids` lists the matching notes. Choose a key that is unique in your data, such as a person's `homepage`. A list field, such as a person's `emails`, cannot be a key. `title` works when no two notes of the type share a title.
 - Two upserts in one batch may not have the same key value.
 - An update sets only the fields and `content` blocks you send. Every other field keeps its value, so an upsert cannot clear a field. To clear one, `put` the whole note.
 
 ```sh
-vault upsert --type person --key email <<'EOF'
+vault upsert --type person --key homepage <<'EOF'
 title = "Alex Example"
-email = "alex@example.com"
+homepage = "https://alex.example"
+emails = ["alex@example.com"]
 organisation = "Example Co"
 EOF
-vault upsert --type person --key email --dry-run <<'EOF'
+vault upsert --type person --key homepage --dry-run <<'EOF'
 title = "Alex Example"
-email = "alex@example.com"
+homepage = "https://alex.example"
+emails = ["alex@example.com"]
 organisation = "Example Co"
 EOF
 ```

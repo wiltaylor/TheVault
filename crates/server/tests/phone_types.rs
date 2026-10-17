@@ -182,7 +182,10 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
     assert_eq!(person["builtin"], false);
     assert_eq!(field(person, "phones")["kind"], "list");
     assert_eq!(field(person, "phones")["items"], "string");
+    assert_eq!(field(person, "emails")["items"], "string");
     assert_eq!(field(person, "addresses")["items"], "string");
+    assert_eq!(field(person, "websites")["items"], "url");
+    assert_eq!(field(person, "photo")["kind"], "asset");
     assert_eq!(field(person, "device_contacts")["kind"], "dict");
     assert_eq!(field(person, "device_contacts")["hidden"], true);
     assert_eq!(field(person, "phones")["hidden"], false);
@@ -211,14 +214,31 @@ fn an_existing_vault_gets_the_phone_types_and_keeps_its_own_person_with_the_phon
         assert_eq!(find(&types, name)["builtin"], true, "{name}");
         assert!(api.type_file(name).contains("label"), "{name}");
     }
-    // Its own person, with the fields the device scripts write added and nothing else changed.
+    // Its own person, with its single `email` moved into `emails` by the upgrade step, the
+    // fields the device scripts write added, and nothing else changed.
     let person = api.type_file("person");
     assert!(person.starts_with("label = \"Contact\"\n"), "{person}");
     assert!(person.contains("tab \"Contact\""), "{person}");
     let person = find(&types, "person");
     assert_eq!(
         field_names(person),
-        ["email", "phones", "addresses", "device_contacts", "body"]
+        [
+            "emails",
+            "email_labels",
+            "phones",
+            "phone_labels",
+            "addresses",
+            "address_labels",
+            "organisation",
+            "job_title",
+            "nickname",
+            "birthday",
+            "websites",
+            "contact_note",
+            "photo",
+            "device_contacts",
+            "body"
+        ]
     );
 }
 

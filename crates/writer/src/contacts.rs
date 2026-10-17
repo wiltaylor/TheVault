@@ -3,8 +3,11 @@
 //! A person saved on the home server that no contact on a device mirrors yet becomes an
 //! `upsert_contact` command for that device, so a person made in the web app reaches the phone.
 //! A command is queued only for a device whose contacts-write switch is on and that has
-//! `upsert_contact` enabled, and only when the person has a phone number or an address to carry
-//! and its name, phones or addresses changed in the save (a create always counts). A save the
+//! `upsert_contact` enabled, and only when the person has a phone number, an email address or a
+//! postal address to carry and a detail a contact holds changed in the save (a create always
+//! counts). The command carries every detail: the name, the phones, emails and postal addresses
+//! each with its labels, organisation, job title, nickname, birthday, websites, the contact note
+//! and the photo (D16). A save the
 //! device itself made, such as the link it writes back, queues nothing for that device, so
 //! nothing echoes back to where it came from.
 //!
@@ -57,16 +60,56 @@ fn strings(note: &Json, field: &str) -> Vec<String> {
         .collect()
 }
 
-/// What a contact mirrors of a person: `(name, phones, addresses)`.
-fn contact_fields(note: &Json) -> (String, Vec<String>, Vec<String>) {
-    (
-        note["fields"]["title"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned(),
-        strings(note, "phones"),
-        strings(note, "addresses"),
-    )
+fn text(note: &Json, field: &str) -> String {
+    note["fields"][field]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The lists a contact holds with a label list beside each, as `(values, labels)`.
+const LABELLED: [(&str, &str); 3] = [
+    ("phones", "phone_labels"),
+    ("emails", "email_labels"),
+    ("addresses", "address_labels"),
+];
+
+/// The single-string details a contact holds.
+const DETAILS: [&str; 5] = [
+    "organisation",
+    "job_title",
+    "nickname",
+    "birthday",
+    "contact_note",
+];
+
+/// What a contact mirrors of a person, as the detail keys of the `upsert_contact` payload: the
+/// name, each list with its labels (one label per value, `""` where the person has none), the
+/// single details, the websites, and the photo's asset id or null.
+fn contact_fields(note: &Json) -> Map<String, Json> {
+    let mut out = Map::new();
+    out.insert("name".into(), json!(text(note, "title")));
+    for (values, labels) in LABELLED {
+        let v = strings(note, values);
+        let mut l = strings(note, labels);
+        l.resize(v.len(), String::new());
+        out.insert(values.into(), json!(v));
+        out.insert(labels.into(), json!(l));
+    }
+    for detail in DETAILS {
+        out.insert(detail.into(), json!(text(note, detail)));
+    }
+    out.insert("websites".into(), json!(strings(note, "websites")));
+    let photo = note["fields"]["photo"].as_str().filter(|p| !p.is_empty());
+    out.insert("photo".into(), json!(photo));
+    out
+}
+
+/// Whether a person has something a phone contact could find them by.
+fn worth_a_contact(fields: &Map<String, Json>) -> bool {
+    ["phones", "emails", "addresses"]
+        .iter()
+        .any(|k| fields[*k].as_array().is_some_and(|a| !a.is_empty()))
 }
 
 fn is_links(block: &Json) -> bool {
@@ -117,13 +160,11 @@ impl Writer {
             return;
         }
         for change in changes {
-            let (name, phones, addresses) = contact_fields(&change.after);
-            if phones.is_empty() && addresses.is_empty() {
+            let fields = contact_fields(&change.after);
+            if !worth_a_contact(&fields) {
                 continue;
             }
-            if change.before.as_ref().map(contact_fields)
-                == Some((name.clone(), phones.clone(), addresses.clone()))
-            {
+            if change.before.as_ref().map(contact_fields).as_ref() == Some(&fields) {
                 continue;
             }
             for device in &devices {
@@ -132,13 +173,10 @@ impl Writer {
                 {
                     continue;
                 }
-                let payload = json!({
-                    "contact_id": null,
-                    "name": name,
-                    "phones": phones,
-                    "addresses": addresses,
-                    "person": change.id,
-                });
+                let mut payload = fields.clone();
+                payload.insert("contact_id".into(), Json::Null);
+                payload.insert("person".into(), json!(change.id));
+                let payload = Json::Object(payload);
                 if let Err(e) =
                     self.device_command(&device.id, UPSERT_CONTACT, &payload, CONTACTS_SOURCE)
                 {

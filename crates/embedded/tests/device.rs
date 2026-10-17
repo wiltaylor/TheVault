@@ -403,7 +403,7 @@ fn rcs_senders_match_by_name_or_by_the_phone_contact_and_are_partial() {
         "contact_id": "c2",
         "name": "Sammy",
         "phones": ["+61400000002"],
-        "addresses": [],
+        "emails": [],
     }));
     let rcs = |key: &str, sender: &str, body: &str| {
         json!({
@@ -573,7 +573,7 @@ fn contacts_sync_with_people_both_ways_and_deletes_only_unlink() {
             "contact_id": id,
             "name": name,
             "phones": phones,
-            "addresses": ["sam@example.com"],
+            "emails": ["sam@example.com"],
             "updated": updated,
         })
     };
@@ -594,7 +594,7 @@ fn contacts_sync_with_people_both_ways_and_deletes_only_unlink() {
     let f = d.fields(&sam);
     assert_eq!(f["title"], "Sam Lee");
     assert_eq!(f["phones"], json!(["+61400000002"]));
-    assert_eq!(f["addresses"], json!(["sam@example.com"]));
+    assert_eq!(f["emails"], json!(["sam@example.com"]));
     assert_eq!(d.links(&sam), json!({ SLOT: "c9" }));
 
     // A later change on the phone wins over the person.
@@ -668,6 +668,15 @@ fn contacts_sync_with_people_both_ways_and_deletes_only_unlink() {
     assert_eq!(d.query("from person").len(), 2);
 }
 
+/// What the phone records as agreed after an upsert: the detail keys it carried.
+fn synced_from(upsert: &Json) -> Json {
+    let mut synced = upsert.clone();
+    let m = synced.as_object_mut().unwrap();
+    m.remove("contact_id");
+    m.remove("person");
+    synced
+}
+
 /// The last `upsert` the phone was asked for, as JSON.
 fn last_upsert(phone: &Phone) -> Json {
     let actions = phone.actions();
@@ -697,7 +706,7 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
             "contact_id": "c5",
             "name": "Kim Park",
             "phones": ["+61400000005"],
-            "addresses": [],
+            "emails": [],
             "updated": "2020-01-01T00:00:00Z",
         }),
     );
@@ -706,7 +715,7 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
     assert_eq!(up["person"], kim.as_str());
     assert_eq!(up["contact_id"], "c5");
     assert_eq!(up["name"], "Kim Park");
-    let synced = json!({ "name": "Kim Park", "phones": ["+61400000005"], "addresses": [] });
+    let synced = synced_from(&up);
 
     // The person is renamed in the vault, and the phone adds a number, in an edit older than
     // the rename. Each side changed a different field, so each change stands.
@@ -724,7 +733,7 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
             "contact_id": "c5",
             "name": "Kim Park",
             "phones": ["+61400000005", "+61400000055"],
-            "addresses": [],
+            "emails": [],
             "updated": "2020-02-01T00:00:00Z",
             "person": kim,
             "synced": synced,
@@ -739,7 +748,7 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
     let synced = json!({
         "name": "Kim Park-Lee",
         "phones": ["+61400000005", "+61400000055"],
-        "addresses": [],
+        "emails": [],
     });
 
     // Both sides changed the name: the more recent edit wins, here the phone's.
@@ -757,7 +766,7 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
             "contact_id": "c5",
             "name": "Kimberly Park-Lee",
             "phones": ["+61400000005", "+61400000055"],
-            "addresses": [],
+            "emails": [],
             "updated": "2999-01-01T00:00:00Z",
             "person": kim,
             "synced": synced,
@@ -769,13 +778,13 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
     let synced = json!({
         "name": "Kimberly Park-Lee",
         "phones": ["+61400000005", "+61400000055"],
-        "addresses": [],
+        "emails": [],
     });
     let contact = json!({
         "contact_id": "c5",
         "name": "Kimberly Park-Lee",
         "phones": ["+61400000005", "+61400000055"],
-        "addresses": [],
+        "emails": [],
         "updated": "2999-01-02T00:00:00Z",
         "person": kim,
         "synced": synced,
@@ -790,7 +799,7 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
         "contact_id": "c5",
         "name": "Kimberly Park-Lee",
         "phones": ["+61400000005", "+61400000055"],
-        "addresses": [],
+        "emails": [],
         "updated": "2020-03-01T00:00:00Z",
         "person": kim,
         "synced": contact["synced"],
@@ -800,7 +809,7 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
     Vault::patch(
         &**d.writer(),
         &kim,
-        json!({ "addresses": ["kim@example.com"] }),
+        json!({ "emails": ["kim@example.com"] }),
         "",
         &Author::Session("test".into()),
     )
@@ -823,7 +832,8 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
     );
     let up = last_upsert(&d.phone);
     assert_eq!(up["contact_id"], "c5");
-    assert_eq!(up["addresses"], json!(["kim@example.com"]));
+    assert_eq!(up["emails"], json!(["kim@example.com"]));
+    assert_eq!(up["email_labels"], json!([""]));
     assert_eq!(up["name"], "Kimberly Park-Lee");
     assert_eq!(
         d.runtime.queue_person_changes().unwrap(),
@@ -845,6 +855,326 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
     .unwrap();
     d.send("contact_changed", contact);
     assert!(d.query("from person").is_empty());
+}
+
+impl Device {
+    fn asset(&self, name: &str, bytes: &[u8]) -> String {
+        self.writer().put_asset(name, bytes.to_vec()).unwrap().id
+    }
+
+    fn patch(&self, id: &str, fields: Json) {
+        Vault::patch(
+            &**self.writer(),
+            id,
+            fields,
+            "",
+            &Author::Session("test".into()),
+        )
+        .unwrap();
+    }
+}
+
+/// A contact as the phone reports it, with every detail.
+fn full_contact(photo: &str, hash: &str) -> Json {
+    json!({
+        "contact_id": "c7",
+        "name": "Robin Rivera",
+        "phones": ["+61400000007", "+61290000007"],
+        "phone_labels": ["mobile", "work"],
+        "emails": ["robin@example.com"],
+        "email_labels": ["home"],
+        "addresses": ["1 Main St, Springfield, 2000"],
+        "address_labels": ["Holiday house"],
+        "organisation": "Example Co",
+        "job_title": "Engineer",
+        "nickname": "Rob",
+        "birthday": "--04-01",
+        "websites": ["robin.example", "https://example.org/robin", "not a url"],
+        "contact_note": "Met at the conference",
+        "photo": { "asset": photo, "hash": hash },
+        "updated": "2020-01-01T00:00:00Z",
+    })
+}
+
+#[test]
+fn a_contact_brings_every_detail_and_a_person_change_reaches_every_detail_of_the_contact() {
+    let d = Device::open();
+    d.settings(json!({ "contacts_write": true }));
+    let photo = d.asset("robin.jpg", b"\xff\xd8\xffrobin");
+    d.send("contact_changed", full_contact(&photo, "h1"));
+
+    let robin = d.query("from person")[0]["id"].as_str().unwrap().to_owned();
+    let f = d.fields(&robin);
+    assert_eq!(f["title"], "Robin Rivera");
+    assert_eq!(f["phones"], json!(["+61400000007", "+61290000007"]));
+    assert_eq!(f["phone_labels"], json!(["mobile", "work"]));
+    assert_eq!(f["emails"], json!(["robin@example.com"]));
+    assert_eq!(f["email_labels"], json!(["home"]));
+    assert_eq!(f["addresses"], json!(["1 Main St, Springfield, 2000"]));
+    assert_eq!(f["address_labels"], json!(["Holiday house"]));
+    assert_eq!(f["organisation"], "Example Co");
+    assert_eq!(f["job_title"], "Engineer");
+    assert_eq!(f["nickname"], "Rob");
+    assert_eq!(f["birthday"], "--04-01");
+    // A website without a scheme gets https://, and one that is still not a URL is dropped.
+    assert_eq!(
+        f["websites"],
+        json!(["https://robin.example", "https://example.org/robin"])
+    );
+    assert_eq!(f["contact_note"], "Met at the conference");
+    assert_eq!(f["photo"], photo.as_str());
+
+    // The contact is told the person's id and every detail they now agree on.
+    let up = last_upsert(&d.phone);
+    assert_eq!(up["person"], robin.as_str());
+    assert_eq!(up["photo"], photo.as_str());
+    assert_eq!(up["websites"], f["websites"]);
+    for key in [
+        "phones",
+        "phone_labels",
+        "emails",
+        "email_labels",
+        "addresses",
+        "address_labels",
+        "organisation",
+        "job_title",
+        "nickname",
+        "birthday",
+        "contact_note",
+    ] {
+        assert_eq!(up[key], f[key], "{key}");
+    }
+}
+
+#[test]
+fn every_detail_settles_field_by_field_and_labels_follow_their_values() {
+    let d = Device::open();
+    d.settings(json!({ "contacts_write": true }));
+    let photo = d.asset("robin.jpg", b"\xff\xd8\xffrobin");
+    d.send("contact_changed", full_contact(&photo, "h1"));
+    let robin = d.query("from person")[0]["id"].as_str().unwrap().to_owned();
+    let mut synced = synced_from(&last_upsert(&d.phone));
+    synced["photo"] = json!({ "asset": photo, "hash": "h1" });
+
+    // The person changes the job title and the birthday and swaps the phones, labels with them;
+    // the phone, in an older edit, changes the organisation and the nickname and relabels the
+    // email. Each side's change stands.
+    d.patch(
+        &robin,
+        json!({
+            "job_title": "Lead Engineer",
+            "birthday": "1990-04-01",
+            "phones": ["+61290000007", "+61400000007"],
+            "phone_labels": ["work", "mobile"],
+        }),
+    );
+    let mut contact = full_contact(&photo, "h1");
+    contact["organisation"] = json!("Other Co");
+    contact["nickname"] = json!("Robbie");
+    contact["email_labels"] = json!(["work"]);
+    contact["updated"] = json!("2020-02-01T00:00:00Z");
+    contact["person"] = json!(robin);
+    contact["synced"] = synced.clone();
+    d.send("contact_changed", contact);
+    let f = d.fields(&robin);
+    assert_eq!(f["job_title"], "Lead Engineer");
+    assert_eq!(f["birthday"], "1990-04-01");
+    assert_eq!(f["organisation"], "Other Co");
+    assert_eq!(f["nickname"], "Robbie");
+    assert_eq!(f["emails"], json!(["robin@example.com"]));
+    assert_eq!(f["email_labels"], json!(["work"]));
+    assert_eq!(f["phones"], json!(["+61290000007", "+61400000007"]));
+    assert_eq!(f["phone_labels"], json!(["work", "mobile"]));
+    let up = last_upsert(&d.phone);
+    assert_eq!(up["job_title"], "Lead Engineer");
+    assert_eq!(up["birthday"], "1990-04-01");
+    assert_eq!(up["organisation"], "Other Co");
+    assert_eq!(up["phones"], json!(["+61290000007", "+61400000007"]));
+    assert_eq!(up["phone_labels"], json!(["work", "mobile"]));
+    assert_eq!(up["email_labels"], json!(["work"]));
+
+    // Both sides change the contact note: the more recent edit wins, here the person's.
+    let mut synced = synced_from(&up);
+    synced["photo"] = json!({ "asset": photo, "hash": "h1" });
+    d.patch(&robin, json!({ "contact_note": "Prefers email" }));
+    let mut contact = full_contact(&photo, "h1");
+    for key in [
+        "phones",
+        "phone_labels",
+        "organisation",
+        "job_title",
+        "nickname",
+        "birthday",
+        "email_labels",
+    ] {
+        contact[key] = up[key].clone();
+    }
+    contact["contact_note"] = json!("Prefers calls");
+    contact["updated"] = json!("2000-01-01T00:00:00Z");
+    contact["person"] = json!(robin);
+    contact["synced"] = synced;
+    d.send("contact_changed", contact);
+    assert_eq!(d.fields(&robin)["contact_note"], "Prefers email");
+    assert_eq!(last_upsert(&d.phone)["contact_note"], "Prefers email");
+
+    // A label changed on the phone alone moves with its value.
+    let up = last_upsert(&d.phone);
+    let mut synced = synced_from(&up);
+    synced["photo"] = json!({ "asset": photo, "hash": "h1" });
+    let mut contact = synced.clone();
+    contact["contact_id"] = json!("c7");
+    contact["phone_labels"] = json!(["main", "mobile"]);
+    contact["photo"] = json!({ "asset": photo, "hash": "h1" });
+    contact["updated"] = json!("2000-01-02T00:00:00Z");
+    contact["person"] = json!(robin);
+    contact["synced"] = synced;
+    d.send("contact_changed", contact);
+    assert_eq!(d.fields(&robin)["phone_labels"], json!(["main", "mobile"]));
+}
+
+#[test]
+fn a_detail_the_phone_does_not_report_is_left_alone() {
+    let d = Device::open();
+    let photo = d.asset("robin.jpg", b"\xff\xd8\xffrobin");
+    d.send("contact_changed", full_contact(&photo, "h1"));
+    let robin = d.query("from person")[0]["id"].as_str().unwrap().to_owned();
+    let before = d.fields(&robin);
+
+    // A newer contact from an app that reports only the name and phones changes nothing else.
+    d.send(
+        "contact_changed",
+        json!({
+            "contact_id": "c7",
+            "name": "Robin Rivera",
+            "phones": ["+61400000007", "+61290000007"],
+            "phone_labels": ["mobile", "work"],
+            "updated": "2999-01-01T00:00:00Z",
+            "person": robin,
+        }),
+    );
+    let after = d.fields(&robin);
+    for key in [
+        "emails",
+        "email_labels",
+        "addresses",
+        "address_labels",
+        "organisation",
+        "job_title",
+        "nickname",
+        "birthday",
+        "websites",
+        "contact_note",
+        "photo",
+    ] {
+        assert_eq!(after[key], before[key], "{key}");
+    }
+
+    // An app from before emails had their own key reports them as `addresses`: they are emails,
+    // and the contact it is sent back takes them as `addresses` too.
+    d.settings(json!({ "contacts_write": true }));
+    d.send(
+        "contact_changed",
+        json!({
+            "contact_id": "c8",
+            "name": "Old App",
+            "phones": ["+61400000008"],
+            "addresses": ["old@example.com"],
+            "updated": "2020-01-01T00:00:00Z",
+        }),
+    );
+    let old = d.query("from person where title == \"Old App\"").remove(0);
+    let f = d.fields(old["id"].as_str().unwrap());
+    assert_eq!(f["emails"], json!(["old@example.com"]));
+    assert!(f.get("addresses").is_none(), "{f}");
+    let up = last_upsert(&d.phone);
+    assert_eq!(up["addresses"], json!(["old@example.com"]));
+    assert_eq!(up["emails"], json!(["old@example.com"]));
+}
+
+#[test]
+fn a_contact_agreed_before_the_new_details_comes_through_as_no_change() {
+    let d = Device::open();
+    d.settings(json!({ "contacts_write": true }));
+    let photo = d.asset("robin.jpg", b"\xff\xd8\xffrobin");
+    d.send("contact_changed", full_contact(&photo, "h1"));
+    let robin = d.query("from person")[0]["id"].as_str().unwrap().to_owned();
+    let versions = d.writer().history(&robin).unwrap().len();
+    let asked = d.phone.actions().len();
+
+    // The app rewrote its old agreed row, `addresses` read as emails, and reports the contact
+    // once more: only the name, phones and emails were agreed, and nothing changed.
+    let mut contact = full_contact(&photo, "h1");
+    contact["websites"] = json!(["https://robin.example", "https://example.org/robin"]);
+    contact["updated"] = json!("2999-01-01T00:00:00Z");
+    contact["person"] = json!(robin);
+    contact["synced"] = json!({
+        "name": "Robin Rivera",
+        "phones": ["+61400000007", "+61290000007"],
+        "emails": ["robin@example.com"],
+    });
+    d.send("contact_changed", contact);
+    assert_eq!(d.writer().history(&robin).unwrap().len(), versions);
+    assert_eq!(d.phone.actions().len(), asked, "{:?}", d.phone.actions());
+}
+
+#[test]
+fn the_photo_compares_by_hash() {
+    let d = Device::open();
+    d.settings(json!({ "contacts_write": true }));
+    let photo = d.asset("robin.jpg", b"\xff\xd8\xffrobin");
+    d.send("contact_changed", full_contact(&photo, "h1"));
+    let robin = d.query("from person")[0]["id"].as_str().unwrap().to_owned();
+    let mut synced = synced_from(&last_upsert(&d.phone));
+    synced["photo"] = json!({ "asset": photo, "hash": "h1" });
+    let event = |photo: &str, hash: &str, updated: &str, synced: &Json| {
+        let mut c = full_contact(photo, hash);
+        c["websites"] = json!(["https://robin.example", "https://example.org/robin"]);
+        c["updated"] = json!(updated);
+        c["person"] = json!(robin);
+        c["synced"] = synced.clone();
+        c
+    };
+
+    // The same photo stored again on the phone, as a new asset with the same hash, is no change:
+    // the person keeps its asset and the phone is asked nothing.
+    let again = d.asset("robin-again.jpg", b"\xff\xd8\xffrobin");
+    let asked = d.phone.actions().len();
+    d.send(
+        "contact_changed",
+        event(&again, "h1", "2999-01-01T00:00:00Z", &synced),
+    );
+    assert_eq!(d.fields(&robin)["photo"], photo.as_str());
+    assert_eq!(d.phone.actions().len(), asked, "{:?}", d.phone.actions());
+
+    // A new photo on the phone, a new hash, reaches the person.
+    let new_photo = d.asset("robin-new.jpg", b"\xff\xd8\xffnew");
+    d.send(
+        "contact_changed",
+        event(&new_photo, "h2", "2020-02-01T00:00:00Z", &synced),
+    );
+    assert_eq!(d.fields(&robin)["photo"], new_photo.as_str());
+    let up = last_upsert(&d.phone);
+    assert_eq!(up["photo"], new_photo.as_str());
+
+    // A new photo on the person, with the phone's still the agreed one, reaches the phone.
+    let mut synced = synced_from(&up);
+    synced["photo"] = json!({ "asset": new_photo, "hash": "h2" });
+    let person_photo = d.asset("robin-web.jpg", b"\xff\xd8\xffweb");
+    d.patch(&robin, json!({ "photo": person_photo }));
+    d.send(
+        "contact_changed",
+        event(&new_photo, "h2", "2020-03-01T00:00:00Z", &synced),
+    );
+    assert_eq!(d.fields(&robin)["photo"], person_photo.as_str());
+    assert_eq!(last_upsert(&d.phone)["photo"], person_photo.as_str());
+
+    // The photo removed on the phone, with the person's the agreed one, removes it.
+    let mut synced = synced_from(&last_upsert(&d.phone));
+    synced["photo"] = json!({ "asset": person_photo, "hash": "h3" });
+    let mut c = event(&person_photo, "h3", "2999-02-01T00:00:00Z", &synced);
+    c["photo"] = Json::Null;
+    d.send("contact_changed", c);
+    assert!(d.fields(&robin).get("photo").is_none());
 }
 
 /// A share as the Android share target queues it: a photo and a PDF the app stored as assets.
@@ -999,7 +1329,7 @@ fn switches_block_contact_writes_and_sending_sms() {
     let upsert = command(
         "cmd1",
         "upsert_contact",
-        json!({ "contact_id": null, "name": "Sam Lee", "phones": ["+61400000002"], "addresses": [], "person": sam }),
+        json!({ "contact_id": null, "name": "Sam Lee", "phones": ["+61400000002"], "emails": [], "person": sam }),
     );
     let send = command(
         "cmd2",
@@ -1064,7 +1394,7 @@ fn an_upsert_for_a_person_not_synced_here_yet_still_adds_the_contact() {
             "contact_id": null,
             "name": "Carla Created",
             "phones": ["+16502530005"],
-            "addresses": [],
+            "emails": [],
             "person": "01PERSONNOTHEREYET00000000",
         },
         "status": "pending",
