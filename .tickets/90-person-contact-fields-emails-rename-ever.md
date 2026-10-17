@@ -4,8 +4,8 @@ title: 'Person contact fields: emails rename, every phone detail, two-way merge,
   step for existing vaults'
 blocked_by:
 - '86'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Person contact fields: emails rename, every phone detail, two-way merge, upgrade step for existing vaults
@@ -45,3 +45,19 @@ Acceptance criteria:
 - `./dev just check` passes.
 
 ## Worklog
+
+### 2026-10-17T21:02:07Z — /work
+
+Claimed.
+
+### 2026-10-17T21:22:12Z — wil
+
+Verified set to verified.
+
+### 2026-10-17T21:22:12Z — wil
+
+Status set to done.
+
+### 2026-10-17T21:22:12Z — wil
+
+Done on ticket/90 (2f206e7). Decisions beyond the ticket: step 0001_person_emails also applies to a person type with only a single email (oldest starter), so emails replaces email everywhere; a device vault does not seed a person type still awaiting the step; device_contacts reads an event without an emails key as an older app (addresses = emails) and sends addresses = emails back to it; with no synced value a side lacking a field gives way, and equal sides count as agreed (so 89's synced-row rewrite is a no-op); label lists are padded/cut to one per value; an empty settled value removes the person field. The upsert key examples in crates/cli/SKILL.md moved from email to title/homepage since a list cannot be a key. script-core/src/device.rs doc text taken verbatim from ticket/89 so the merge is clean. Left alone: crates/bench person type, Kotlin.
