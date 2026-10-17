@@ -70,7 +70,7 @@ export function controlFits(kind: ControlKind, f: FieldDef): boolean {
     case "chips":
       return (choice && f.multiple) || (f.kind === "list" && (f.items ?? "string") === "string");
     case "calendar":
-      return f.kind === "date" || (f.kind === "date_range" && f.of !== "datetime");
+      return f.kind === "date" || (f.kind === "date_range" && (f.of ?? "date") === "date");
     case "datetime":
     case "time":
       return f.kind === "datetime";
@@ -87,7 +87,9 @@ export function fittingFields(kind: ControlKind, fields: readonly FieldDef[]): F
 /** A field's kind as the field pickers show it: `multiple select`, `list of string`. */
 export function fieldKindText(f: FieldDef): string {
   if (f.kind === "list") return `list of ${f.items ?? "string"}`;
-  if (f.kind === "date_range") return f.of === "datetime" ? "datetime range" : "date range";
+  if (f.kind === "date_range") {
+    return f.of === "datetime" ? "datetime range" : f.of === "date_or_datetime" ? "date or datetime range" : "date range";
+  }
   return `${f.multiple ? "multiple " : ""}${f.kind}${f.computed ? ", computed" : ""}`;
 }
 

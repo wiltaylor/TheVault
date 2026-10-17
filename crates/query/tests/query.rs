@@ -1433,6 +1433,90 @@ fn a_note_matching_several_list_items_is_one_result() {
     assert_eq!(ids.len(), 2, "{ids:?}");
 }
 
+/// A `date_or_datetime` range holds dates on some notes and datetimes on others. Filters and
+/// sorts read both forms on one time line, a date as the start of its day in UTC, and the SQL
+/// plan agrees with the note-by-note scan (google-sync D15).
+#[test]
+fn a_date_or_datetime_range_filters_and_sorts_across_both_forms() {
+    let mut files = vec![(
+        "types/event.wcl".to_owned(),
+        with_template(
+            "label = \"Event\"\n\nfield when {\n  kind = \"date_range\"\n  of   = \"date_or_datetime\"\n}\n",
+        ),
+    )];
+    // (title, when): two all-day ranges and two timed ones, interleaved in time.
+    let events = [
+        ("Offsite", "{ start: \"2026-10-14\", end: \"2026-10-15\" }"),
+        (
+            "Standup",
+            "{ start: \"2026-10-14T09:00:00Z\", end: \"2026-10-14T09:15:00Z\" }",
+        ),
+        (
+            "Late call",
+            "{ start: \"2026-10-13T23:00:00Z\", end: \"2026-10-14T00:30:00Z\" }",
+        ),
+        ("Holiday", "{ start: \"2026-10-16\", end: \"2026-10-16\" }"),
+    ];
+    for (i, (title, when)) in events.iter().enumerate() {
+        let id = format!("01JB8Z4K2MQ7V3X9T5R6W8Y2E{i}");
+        files.push((
+            format!("notes/event/{id}.wcl"),
+            note(title, "2026-10-02T09:00:00Z", &format!("when = {when}\n")),
+        ));
+    }
+    let f = build(&files, events.len());
+    let titles = |text: &str| -> Vec<String> {
+        let q = query::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        let page = query::run(&q, &f.ctx(), &PageRequest::default()).unwrap();
+        let by_id: std::collections::HashMap<String, &str> = (0..events.len())
+            .map(|i| (format!("01JB8Z4K2MQ7V3X9T5R6W8Y2E{i}"), events[i].0))
+            .collect();
+        page.rows.iter().map(|r| by_id[&r.id].to_owned()).collect()
+    };
+    let cases: [(&str, &[&str]); 7] = [
+        // The date 2026-10-14 is 2026-10-14T00:00:00Z, after the late call starts.
+        (
+            "from event sort when.start",
+            &["Late call", "Offsite", "Standup", "Holiday"],
+        ),
+        (
+            "from event sort when.start desc",
+            &["Holiday", "Standup", "Offsite", "Late call"],
+        ),
+        (
+            "from event where when.start >= \"2026-10-14\" sort when.start",
+            &["Offsite", "Standup", "Holiday"],
+        ),
+        (
+            "from event where when.start < \"2026-10-14T09:00:00Z\" sort when.start",
+            &["Late call", "Offsite"],
+        ),
+        (
+            "from event where when.end > \"2026-10-14T00:00:00Z\" && when.start < \"2026-10-15\" sort when.start",
+            &["Late call", "Offsite", "Standup"],
+        ),
+        (
+            "from event where when.end >= \"2026-10-16\" sort title",
+            &["Holiday"],
+        ),
+        (
+            "from event where !empty(when) sort title",
+            &["Holiday", "Late call", "Offsite", "Standup"],
+        ),
+    ];
+    for (text, want) in cases {
+        assert_eq!(titles(text), want, "{text}");
+        for size in [0, 1, 2] {
+            let a = every_page(&f, text, None, size, false).unwrap();
+            let b = every_page(&f, text, None, size, true).unwrap();
+            assert!(
+                same_pages(&a, &b),
+                "{text} (pages of {size})\n{a:#?}\n{b:#?}"
+            );
+        }
+    }
+}
+
 /// The shapes the S6 benchmark times, against this fixture's fields, must run as SQL: run note
 /// by note they read every note of their types (D33).
 #[test]

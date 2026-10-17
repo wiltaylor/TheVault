@@ -91,9 +91,9 @@ pub enum FieldKind {
     Bool,
     Date,
     Datetime,
-    /// `of = "datetime"` makes both ends datetimes.
+    /// `of` says what both ends are.
     DateRange {
-        datetime: bool,
+        of: RangeOf,
     },
     Url,
     Select {
@@ -117,6 +117,36 @@ pub enum FieldKind {
     Asset,
     Ink,
     Canvas,
+}
+
+/// What the ends of a date range are: both dates, both datetimes, or either form as long as both
+/// ends share it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeOf {
+    Date,
+    Datetime,
+    DateOrDatetime,
+}
+
+impl RangeOf {
+    /// The closed set of `of` values.
+    pub const NAMES: [&str; 3] = ["date", "datetime", "date_or_datetime"];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            RangeOf::Date => "date",
+            RangeOf::Datetime => "datetime",
+            RangeOf::DateOrDatetime => "date_or_datetime",
+        }
+    }
+
+    fn parse(s: Option<&str>) -> RangeOf {
+        match s {
+            Some("datetime") => RangeOf::Datetime,
+            Some("date_or_datetime") => RangeOf::DateOrDatetime,
+            _ => RangeOf::Date,
+        }
+    }
 }
 
 impl FieldKind {
@@ -465,7 +495,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
     ];
     let kind_name = d.field("kind").and_then(Value::as_str).unwrap_or("");
     match kind_name {
-        "date_range" => items.push(opt("of", Form::OneOf(&["date", "datetime"]))),
+        "date_range" => items.push(opt("of", Form::OneOf(&RangeOf::NAMES))),
         "select" => items.push(req("options", Form::StrList)),
         "taxonomy" => items.push(req("taxonomy", Form::Str)),
         "reference" => items.extend([
@@ -510,7 +540,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         "date" => FieldKind::Date,
         "datetime" => FieldKind::Datetime,
         "date_range" => FieldKind::DateRange {
-            datetime: s("of").as_deref() == Some("datetime"),
+            of: RangeOf::parse(s("of").as_deref()),
         },
         "url" => FieldKind::Url,
         "select" => {

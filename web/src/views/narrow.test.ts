@@ -216,6 +216,30 @@ describe("calendar and timeline items", () => {
     expect(calendarEvent(row({}), field("due", "date"))).toBeNull();
   });
 
+  it("places a date_or_datetime range as all-day when it holds dates and as timed when it holds datetimes", () => {
+    const when = field("when", "date_range", { of: "date_or_datetime" });
+    expect(calendarEvent(row({ when: { start: "2026-10-05", end: "2026-10-06" } }), when)).toEqual({
+      id: "N1",
+      title: "One",
+      start: "2026-10-05",
+      end: "2026-10-07",
+      allDay: true,
+    });
+    expect(
+      calendarEvent(row({ when: { start: "2026-10-05T09:00:00+11:00", end: "2026-10-05T10:30:00+11:00" } }), when),
+    ).toEqual({ id: "N1", title: "One", start: "2026-10-05T09:00:00+11:00", end: "2026-10-05T10:30:00+11:00", allDay: false });
+    expect(timelineItem(row({ when: { start: "2026-10-05", end: "2026-10-06" } }), when)).toMatchObject({
+      start: "2026-10-05",
+      end: "2026-10-07",
+      type: "range",
+    });
+    expect(timelineItem(row({ when: { start: "2026-10-05T09:00:00Z", end: "2026-10-05T10:00:00Z" } }), when)).toMatchObject({
+      start: "2026-10-05T09:00:00Z",
+      end: "2026-10-05T10:00:00Z",
+      type: "range",
+    });
+  });
+
   it("makes a date range a range and a single date a point on the timeline", () => {
     expect(timelineItem(row({ due: "2026-10-05" }), field("due", "date"))).toMatchObject({
       id: "N1",
@@ -240,6 +264,11 @@ describe("visibleWindow", () => {
     );
     expect(visibleWindow(field("span", "date_range", { of: "date" }), start, end)).toBe(
       'span.start < "2026-11-01" && span.end >= "2026-10-01"',
+    );
+    // Either form may be stored, so the window takes the notes either reading finds.
+    expect(visibleWindow(field("when", "date_range", { of: "date_or_datetime" }), start, end)).toBe(
+      '(when.start < "2026-11-01" && when.end >= "2026-10-01") || ' +
+        `(when.start < "${end.toISOString()}" && when.end >= "${start.toISOString()}")`,
     );
   });
 });

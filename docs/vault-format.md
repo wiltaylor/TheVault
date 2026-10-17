@@ -124,7 +124,7 @@ WCL has no date, URL or reference type. TheVault stores these as strings and its
 | Boolean | `true` / `false` | | `false` |
 | Date | string | ISO 8601 calendar date, `YYYY-MM-DD` | `"2026-11-01"` |
 | Datetime | string | ISO 8601 date and time with seconds and a required offset: `YYYY-MM-DDTHH:MM:SS[.fff](Z\|±HH:MM)`. The writer keeps the offset it was given | `"2026-10-20T09:30:00+11:00"` |
-| Date range | record | `{ start: <date>, end: <date> }`, or two datetimes. Both ends inclusive, `end` not before `start` | `{ start: "2026-10-20", end: "2026-11-01" }` |
+| Date range | record | `{ start: <date>, end: <date> }`, or two datetimes. Both ends inclusive, `end` not before `start`. Both ends have the same form, never one date and one datetime | `{ start: "2026-10-20", end: "2026-11-01" }` |
 | Duration | string | ISO 8601 duration | `"PT1M"` |
 | URL | string | An absolute URL with a scheme | `"https://example.com/importer"` |
 | Note reference | string | The target note's ULID: 26 Crockford base32 characters, upper case | `"01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"` |
@@ -497,7 +497,7 @@ starts_at = "2026-10-20T09:30:00+11:00"
 
 | Item | Values | Default |
 |------|--------|---------|
-| `of` | `"date"` or `"datetime"` | `"date"` |
+| `of` | `"date"`, `"datetime"` or `"date_or_datetime"` | `"date"` |
 
 ```wcl
 field span {
@@ -509,6 +509,31 @@ field span {
 ```wcl
 span = { start: "2026-10-20", end: "2026-11-01" }
 ```
+
+`of = "date"` takes two dates and `of = "datetime"` two datetimes. `of = "date_or_datetime"` takes
+either, one value at a time: both ends are dates, or both ends are datetimes. A value with one date
+end and one datetime end fails, and so does an `end` before its `start`. An event that lasts all
+day holds dates, and a timed event on the same field holds datetimes:
+
+```wcl
+field when {
+  kind = "date_range"
+  of   = "date_or_datetime"
+}
+```
+
+```wcl
+when = { start: "2026-10-20", end: "2026-10-21" }
+```
+
+```wcl
+when = { start: "2026-10-20T09:30:00+11:00", end: "2026-10-20T10:00:00+11:00" }
+```
+
+Queries read each value by its form. A date compares and sorts as the start of its day in UTC, so
+`when.start >= "2026-10-20"` and `sort when.start` order dated and timed values on one line. The
+`calendar` and `timeline` views place a dated value as an all-day span and a timed value at its
+times. No control fits such a field: the `calendar` control picks days only.
 
 ### `url`
 

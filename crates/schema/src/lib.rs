@@ -36,8 +36,8 @@ pub use inline::{MARKUP_BLOCKS, Placeholder, placeholder_at, placeholders};
 pub use note::{NoteLookup, NoteReport};
 pub use taxonomy::{Taxonomy, Term};
 pub use types::{
-    Accept, EVENTS, FieldDef, FieldKind, Handler, OnDelete, RESERVED_FIELDS, Reference, Relation,
-    Scalar, Tab, TabItem, Template, TypeDef, is_image_filename,
+    Accept, EVENTS, FieldDef, FieldKind, Handler, OnDelete, RESERVED_FIELDS, RangeOf, Reference,
+    Relation, Scalar, Tab, TabItem, Template, TypeDef, is_image_filename,
 };
 
 /// One problem, at a path inside a file such as `field estimate.default` or
