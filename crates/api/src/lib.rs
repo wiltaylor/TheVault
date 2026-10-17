@@ -245,6 +245,7 @@ fn build() -> Built {
         .patch("/api/devices/{id}", devices::update)
         .delete("/api/devices/{id}", devices::revoke)
         .put("/api/devices/{id}/push", devices::put_push)
+        .put("/api/devices/{id}/health", devices::put_health)
         .put("/api/devices/{id}/bases", sync::put_bases)
         .get("/api/sync/info", sync::info)
         .get("/api/version", sync::version)

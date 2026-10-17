@@ -20,7 +20,8 @@ import org.json.JSONArray
  * settings from the home server, fetches the pending commands, runs each one the device file
  * declares and the settings enable, and reports every result. A `device.command` push starts it,
  * and so does the app opening; a phone with no UnifiedPush distributor also runs it every 15
- * minutes, beside the notification check (D4).
+ * minutes, beside the notification check (D4). Each run is recorded for [CaptureHealth], which
+ * shows the check stalled when that schedule has not run it for two hours.
  *
  * What a command may do is enforced in the core and by Android, not here: `send_sms` needs the
  * command enabled, the device's SMS-send switch on, and the SEND_SMS permission.
@@ -36,6 +37,8 @@ class CommandWorker(context: Context, params: WorkerParameters) : Worker(context
         return try {
             // A command's handler may write notes, as a sent SMS does: have them reach the server.
             if (JSONArray(VaultCore.runCommands()).length() > 0) SyncWorker.soon(applicationContext)
+            CaptureHealth.ran(applicationContext, CaptureHealth.COMMANDS)
+            CaptureHealth.refresh(applicationContext)
             Result.success()
         } catch (e: IllegalStateException) {
             if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.failure(workDataOf(ERROR to e.message))
@@ -64,11 +67,13 @@ class CommandWorker(context: Context, params: WorkerParameters) : Worker(context
                 .build()
             WorkManager.getInstance(context)
                 .enqueueUniquePeriodicWork(FALLBACK, ExistingPeriodicWorkPolicy.KEEP, request)
+            CaptureHealth.setCommandsPolled(context, true)
         }
 
         /** Stops the 15-minute check once pushes reach the phone. */
         fun unschedule(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(FALLBACK)
+            CaptureHealth.setCommandsPolled(context, false)
         }
     }
 }

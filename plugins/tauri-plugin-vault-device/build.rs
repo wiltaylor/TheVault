@@ -3,6 +3,8 @@
 const COMMANDS: &[&str] = &[
     "open_capture_setup",
     "capture_status",
+    "capture_health",
+    "open_capture_fix",
     "import_history",
     "import_status",
     "check_now",

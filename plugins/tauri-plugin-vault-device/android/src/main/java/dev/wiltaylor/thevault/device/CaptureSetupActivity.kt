@@ -119,6 +119,7 @@ class CaptureSetupActivity : Activity() {
         // allows restricted settings from App info.
         val blocked = s.permissions.none { shouldShowRequestPermissionRationale(it) }
         if (s.restricted && blocked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            CaptureHealth.blocked(this, CaptureHealth.STEP_KINDS[s.title].orEmpty())
             guidance.text = RESTRICTED_GUIDANCE
             appInfo.visibility = View.VISIBLE
         } else {
@@ -156,7 +157,10 @@ class CaptureSetupActivity : Activity() {
         appInfo = button("Open App info") {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
         }.apply { visibility = View.GONE }
-        skip = button("Skip") { next() }
+        skip = button("Skip") {
+            if (step < STEPS.size) CaptureHealth.skipped(this, CaptureHealth.STEP_KINDS[STEPS[step].title].orEmpty())
+            next()
+        }
         permissionPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             listOf(title, body, guidance, primary, appInfo, skip).forEach { addView(it) }

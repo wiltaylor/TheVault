@@ -94,5 +94,5 @@ fn a_version_10_state_db_gains_the_shipped_tables() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
 }

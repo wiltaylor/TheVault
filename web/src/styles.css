@@ -8348,3 +8348,48 @@ button.toast-action {
 .archive-empty {
   margin: 1rem 0;
 }
+
+/* This device's Capture health panel, and a phone's reported problem on its card (ticket 91). */
+.capture-health {
+  border-top: 1px solid var(--line);
+  margin: 1rem 0 0;
+  padding: 0.5rem 0 0;
+}
+
+.capture-health h3 {
+  margin: 0.25rem 0;
+  font-size: 1.05rem;
+}
+
+.capture-health-list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+}
+
+.capture-health-item {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.capture-health-item[data-state="permission_missing"],
+.capture-health-item[data-state="restricted"],
+.capture-health-item[data-state="optimised"],
+.capture-health-item[data-state="stale"] {
+  border-left: 3px solid var(--danger);
+}
+
+.capture-health-message {
+  margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+}
+
+.device-health-warning {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid var(--danger);
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}

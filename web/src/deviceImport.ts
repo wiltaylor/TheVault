@@ -166,6 +166,23 @@ export interface ImportStatus {
   error?: string;
 }
 
+/** The system screens a capture health problem's button opens. */
+export type CaptureFix = "app_details" | "notification_access" | "battery" | "capture_setup";
+
+/** A capture kind's state: working, permission missing, blocked by restricted settings, or not set up. */
+export type CaptureState = "working" | "permission_missing" | "restricted" | "not_set_up";
+
+/** The phone's capture health, as the device plugin's `capture_health` answers it (ticket 91). */
+export interface CaptureHealthStatus {
+  paired: boolean;
+  setup_done: boolean;
+  kinds: { kind: string; label: string; state: CaptureState; message: string; fix: CaptureFix | null; then?: CaptureFix }[];
+  battery: { optimised: boolean; samsung: boolean; message: string; fix: CaptureFix | null; samsung_line?: string };
+  background: { work: string; label: string; last: number | null; expected: boolean; stale: boolean }[];
+  problems: string[];
+  checked: number;
+}
+
 /** The device plugin's commands for this phone. */
 export const thisPhone = {
   /** Start an import in the background. Nothing starts when a chosen kind's permission is missing. */
@@ -176,6 +193,10 @@ export const thisPhone = {
   checkNow: () => plugin<{ captured: number; missing: string[] }>("check_now"),
   /** The capture setup screen: each permission in turn. */
   openPermissions: () => plugin<void>("open_capture_setup"),
+  /** The phone's capture health: each capture kind, battery optimisation and background work (ticket 91). */
+  captureHealth: () => plugin<CaptureHealthStatus>("capture_health"),
+  /** Open the system screen that fixes a capture health problem. */
+  openCaptureFix: (fix: CaptureFix) => plugin<void>("open_capture_fix", { fix }),
   /** What the app update check last decided, why, and when (ms since the epoch); null before the first. */
   updateStatus: () => plugin<{ status: string | null; message: string | null; checked: number | null }>("update_status"),
   /** Run the app update check now, once the phone is online. */

@@ -73,13 +73,14 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrantedScope(pub Scope);
 
-/// Whether `path` is `/api/devices/{id}/push` or `/api/devices/{id}/bases`, which a device sets
-/// for itself.
+/// Whether `path` is `/api/devices/{id}/push`, `/api/devices/{id}/bases` or
+/// `/api/devices/{id}/health`, which a device sets for itself.
 fn is_device_own(path: &str) -> bool {
     path.strip_prefix("/api/devices/")
         .and_then(|rest| {
             rest.strip_suffix("/push")
                 .or_else(|| rest.strip_suffix("/bases"))
+                .or_else(|| rest.strip_suffix("/health"))
         })
         .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
@@ -423,6 +424,8 @@ mod tests {
             (Method::PUT, "/api/devices/x/y/push", Some(Scope::Admin)),
             (Method::PUT, "/api/devices//push", Some(Scope::Admin)),
             (Method::PUT, "/api/devices/x/bases", Some(Scope::Write)),
+            (Method::PUT, "/api/devices/x/health", Some(Scope::Write)),
+            (Method::PUT, "/api/devices/x/y/health", Some(Scope::Admin)),
             (Method::PUT, "/api/devices/x/y/bases", Some(Scope::Admin)),
             (Method::GET, "/api/sync/info", None),
             (Method::GET, "/api/version", None),

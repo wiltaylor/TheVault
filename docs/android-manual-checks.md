@@ -125,6 +125,18 @@ In the web app, open Settings > Devices for the phone. Turn on **Contacts write*
 | 47 | Turn **SMS send** off for the phone and queue `send_sms` again. | No text is sent. The command shows `failed`, and its result says to turn on SMS send. |
 | 48 | Uninstall the UnifiedPush distributor and queue `show_notification`. Wait up to 15 minutes without opening the app. | The notification appears within 15 minutes. The fallback check runs pending commands while the phone has a network. |
 
+## Capture health
+
+Run these on a paired phone with capture set up. Open Settings > Devices > **This device** and find **Capture health**.
+
+| # | Do this | Expect this |
+|---|---------|-------------|
+| 53 | In Android's App info for TheVault, turn off the SMS permission and set the app's battery to **Optimised**. Go back to the app. | Capture health lists **SMS** and **MMS** as **Permission missing**, each with **Open App info**, and **Battery** as **Optimised** with **Stop optimising battery**; on a Samsung phone it also says to keep TheVault out of Sleeping apps. One notification, "TheVault is not capturing everything", appears; tapping it opens Capture health. Closing and opening the app again the same day raises no second one. |
+| 54 | Tap **Open App info** and allow SMS again. Tap **Stop optimising battery** and allow it. Go back to the app. | Android's own screens open for each. Back in the app, SMS, MMS and Battery read **Working** and **Not optimised** without reloading. |
+| 55 | Repeat check 53, then wait for a sync round, or open the app's sync icon and tap **Sync now**. Open Settings > Devices in the web app in a browser. | The phone's card shows a warning line "The phone reports a capture problem: SMS: permission missing; MMS: permission missing; Battery optimisation is on." with when it was reported. Fix both as in check 54 and sync again: the line goes away. |
+| 56 | On a sideloaded install on Android 15 or later, with Allow restricted settings not yet allowed, turn off notification access for TheVault. | Capture health lists **RCS** as **Blocked by restricted settings**, with **Open App info** and **Open notification access**. |
+| 57 | With battery optimisation on, leave the phone idle and unplugged, with the app closed, for over two hours. Open the app. | If Android held back the hourly catch-up, Capture health shows **Catch-up of messages, calls and contacts** as **Stalled** with when it last ran, and the notification says so. |
+
 ## Coverage
 
 Every check in S7 of the implementation specification, and the checks that cover it:

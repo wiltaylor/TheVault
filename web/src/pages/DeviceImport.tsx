@@ -16,6 +16,7 @@ import {
   thisPhone,
 } from "../deviceImport";
 import { CaptureProblems, CaptureProblemsBadge } from "./CaptureProblems";
+import { CaptureHealth } from "./CaptureHealth";
 import { errorText } from "./TypeEditor";
 
 /** The command that asks a phone to import its history (D22). */
@@ -141,7 +142,8 @@ function MissingPermissions(props: { permissions: string[]; here: boolean }) {
  * Settings > Devices "This device", inside the Android app: import messages, calls and contacts
  * from this phone over a range of dates, at any time, and check for new ones now. A message or
  * call that already has a note is left alone; one whose note was deleted gets a note again. Its
- * "Capture problems" lists the device events that failed or were skipped, and its heading carries
+ * "Capture health" says what stops capture on this phone, with a button for each fix (ticket 91);
+ * its "Capture problems" lists the device events that failed or were skipped, and its heading carries
  * the count of failed ones.
  */
 export function ThisDevice() {
@@ -248,6 +250,7 @@ export function ThisDevice() {
           {error()}
         </p>
       </Show>
+      <CaptureHealth />
       <CaptureProblems />
     </section>
   );

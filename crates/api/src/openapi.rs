@@ -344,6 +344,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "PUT",
+        "/api/devices/{id}/health",
+        "Report a phone's capture health, { problems, ... }, which the device list then carries",
+    ),
+    (
+        "PUT",
         "/api/devices/{id}/bases",
         "Replace the base versions a device holds, one per note; pruning keeps them",
     ),

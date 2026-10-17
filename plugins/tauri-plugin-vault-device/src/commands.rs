@@ -44,6 +44,22 @@ pub fn settings(link: &Link) -> anyhow::Result<Option<Value>> {
         .map(|d| d["settings"].clone()))
 }
 
+/// Send the phone's capture health, `{ problems, ... }`, to `PUT /api/devices/{id}/health`, which
+/// Settings > Devices shows on the phone's card (ticket 91).
+pub fn report_health(link: &Link, health: &Value) -> anyhow::Result<()> {
+    let rb = client()?
+        .put(format!(
+            "{}/api/devices/{}/health",
+            link.server_url, link.device_id
+        ))
+        .json(health);
+    let res = send(link, rb)?;
+    if !res.status().is_success() {
+        return Err(refused(res));
+    }
+    Ok(())
+}
+
 /// The commands waiting for this device, oldest first.
 pub fn pending(link: &Link) -> anyhow::Result<Vec<Value>> {
     let rb = client()?

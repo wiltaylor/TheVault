@@ -5,7 +5,7 @@
 //! a device through `/api/devices` or through `/api/tokens` ends the same thing. A token's
 //! successful use is the device's last-seen time.
 //!
-//! `capabilities` and `settings` are JSON text that this crate stores and never reads; the API
+//! `capabilities`, `settings` and `health` are JSON text that this crate stores and never reads; the API
 //! checks their shape (D25). A pairing code is stored as a hash, works once and expires.
 
 use rusqlite::{OptionalExtension, Row, params};
@@ -44,6 +44,11 @@ pub struct Device {
     /// JSON text.
     pub settings: String,
     pub created_ms: i64,
+    /// The capture health the device last reported, JSON text, or `None` before its first report
+    /// (ticket 91).
+    pub health: Option<String>,
+    /// When the server heard [`Device::health`].
+    pub health_ms: Option<i64>,
 }
 
 /// What a new device is paired with.
@@ -83,7 +88,7 @@ fn code_hash(code: &str) -> Vec<u8> {
 }
 
 const DEVICE_COLUMNS: &str = "id, name, platform, capabilities, token_id, push_endpoint, \
-     push_p256dh, push_auth, last_seen_ms, settings, created_ms";
+     push_p256dh, push_auth, last_seen_ms, settings, created_ms, health, health_ms";
 
 fn device_row(row: &Row<'_>) -> rusqlite::Result<Device> {
     let endpoint: Option<String> = row.get(5)?;
@@ -107,6 +112,8 @@ fn device_row(row: &Row<'_>) -> rusqlite::Result<Device> {
         last_seen_ms: row.get(8)?,
         settings: row.get(9)?,
         created_ms: row.get(10)?,
+        health: row.get(11)?,
+        health_ms: row.get(12)?,
     })
 }
 
@@ -229,6 +236,19 @@ impl State {
             self.events.publish(LiveEvent::DeviceSettings {
                 device: id.to_owned(),
             });
+        }
+        self.device(id)
+    }
+
+    /// Record the capture health the device reports, JSON text that this crate stores and never
+    /// reads, as heard now (ticket 91).
+    pub fn set_device_health(&self, id: &str, health: &str) -> Result<Device> {
+        let changed = self.conn().execute(
+            "UPDATE devices SET health = ?2, health_ms = ?3 WHERE id = ?1",
+            params![id, health, self.now()],
+        )?;
+        if changed == 0 {
+            return Err(Error::UnknownDevice(id.to_owned()));
         }
         self.device(id)
     }

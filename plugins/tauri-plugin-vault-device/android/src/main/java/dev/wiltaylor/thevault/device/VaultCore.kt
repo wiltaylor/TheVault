@@ -112,6 +112,13 @@ object VaultCore {
     @JvmStatic
     external fun runCommands(): String
 
+    /**
+     * Hands the core the phone's capture health, `{ problems, ... }` as JSON, which the next sync
+     * round sends to the home server with the device's settings when it changed ([CaptureHealth]).
+     */
+    @JvmStatic
+    external fun setCaptureHealth(health: String): String?
+
     /** `{paired, pending, last_sync_ms, last_error}` as JSON. */
     @JvmStatic
     external fun status(): String

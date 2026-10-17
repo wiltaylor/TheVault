@@ -353,3 +353,83 @@ fn only_the_device_itself_sets_its_push_endpoint() {
         200,
     );
 }
+
+#[test]
+fn a_phone_reports_its_capture_health_and_the_device_list_carries_it() {
+    let server = TestServer::start_seeded(seed);
+    let admin = client(server.admin_token());
+    let (a, token_a) = pair_with_password(&server, "Phone A");
+    let (b, _) = pair_with_password(&server, "Phone B");
+    let device_a = client(&token_a);
+    let listed = |id: &str| -> Value {
+        let list = send(admin.get(server.url("/api/devices")), 200);
+        list["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["id"] == id)
+            .cloned()
+            .unwrap()
+    };
+    // Before its first report a device has no health.
+    assert_eq!(listed(&a)["health"], Value::Null);
+
+    let health = json!({
+        "problems": ["SMS: permission missing", "Battery optimisation is on"],
+        "kinds": [{ "kind": "sms", "state": "permission_missing" }],
+        "battery_optimised": true,
+        "reported": 1,
+    });
+    let path = format!("/api/devices/{a}/health");
+    let out = send(device_a.put(server.url(&path)).json(&health), 200);
+    assert_eq!(out["health"]["problems"], health["problems"]);
+    let shown = listed(&a);
+    assert_eq!(shown["health"]["problems"], health["problems"]);
+    assert_eq!(shown["health"]["kinds"], health["kinds"]);
+    assert_eq!(shown["health"]["battery_optimised"], true);
+    // The server says when it heard the report, whatever the phone put there.
+    let reported = shown["health"]["reported"].as_i64().unwrap();
+    assert!(reported > 1_700_000_000_000, "{shown}");
+    assert_eq!(listed(&b)["health"], Value::Null);
+
+    // A report with nothing wrong clears the problems.
+    send(
+        device_a
+            .put(server.url(&path))
+            .json(&json!({ "problems": [] })),
+        200,
+    );
+    assert_eq!(listed(&a)["health"]["problems"], json!([]));
+
+    // Only the device itself, or the owner, reports its health, and the shape is checked.
+    send(
+        device_a
+            .put(server.url(&format!("/api/devices/{b}/health")))
+            .json(&health),
+        403,
+    );
+    for bad in [
+        json!([]),
+        json!({}),
+        json!({ "problems": "SMS" }),
+        json!({ "problems": [1] }),
+        json!({ "problems": [""] }),
+        json!({ "problems": ["x".repeat(301)] }),
+        json!({ "problems": vec!["SMS"; 33] }),
+        json!({ "problems": [], "padding": "x".repeat(17 * 1024) }),
+    ] {
+        send(device_a.put(server.url(&path)).json(&bad), 400);
+    }
+    send(
+        admin
+            .put(server.url(&format!("/api/devices/{b}/health")))
+            .json(&json!({ "problems": [] })),
+        200,
+    );
+    send(
+        admin
+            .put(server.url("/api/devices/01J0000000000000000000NOPE/health"))
+            .json(&json!({ "problems": [] })),
+        404,
+    );
+}
