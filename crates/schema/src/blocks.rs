@@ -223,9 +223,37 @@ impl Check<'_> {
         self.issues.push(Issue::new(at, message));
     }
 
+    /// Report something this version ignores, which leaves the file valid.
+    pub fn warn(&mut self, at: &str, message: impl Into<String>) {
+        self.issues.push(Issue::warning(at, message));
+    }
+
+    /// How many errors have been found, leaving out warnings.
+    pub fn errors(&self) -> usize {
+        self.issues.iter().filter(|i| !i.is_warning()).count()
+    }
+
     /// Check `doc`'s fields against `items`: no unknown or repeated item, every required one
     /// present, every value of its form. `also` names further fields the caller checks itself.
     pub fn items(&mut self, doc: &Doc, items: &[Item], also: &[&str], at: &str) {
+        self.check_items(doc, items, also, at, None);
+    }
+
+    /// [`Check::items`] for the attributes of a type or a field, where an unknown one is a warning
+    /// rather than an error: a newer release may have added it, and an older reader still loads
+    /// the definition, ignoring it. `owner` names what the attributes belong to, as "int fields".
+    pub fn attributes(&mut self, doc: &Doc, items: &[Item], also: &[&str], at: &str, owner: &str) {
+        self.check_items(doc, items, also, at, Some(owner));
+    }
+
+    fn check_items(
+        &mut self,
+        doc: &Doc,
+        items: &[Item],
+        also: &[&str],
+        at: &str,
+        tolerant: Option<&str>,
+    ) {
         let mut seen = HashSet::new();
         for (name, value) in &doc.fields {
             let path = format!("{at}.{name}");
@@ -236,7 +264,13 @@ impl Check<'_> {
             match items.iter().find(|i| i.name == name) {
                 Some(item) => self.form(value, item.form, &path),
                 None if also.contains(&name.as_str()) => {}
-                None => self.fail(&path, "is not an item of this block"),
+                None => match tolerant {
+                    Some(owner) => self.warn(
+                        &path,
+                        format!("is not an attribute of {owner} in this version; it is ignored"),
+                    ),
+                    None => self.fail(&path, "is not an item of this block"),
+                },
             }
         }
         for item in items.iter().filter(|i| i.required) {

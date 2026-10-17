@@ -82,6 +82,15 @@ export interface TypeDef {
   builtin?: boolean;
   fields: FieldDef[];
   templates: Template[];
+  /** What this version ignores in the type file, such as an attribute only a newer release knows. */
+  warnings?: SchemaIssue[];
+}
+
+/** One schema issue: where in the file, and what. A warning leaves the file valid. */
+export interface SchemaIssue {
+  at: string;
+  message: string;
+  severity: "error" | "warning";
 }
 
 export interface Term {

@@ -657,3 +657,109 @@ fn desktop_keeps_every_asset_and_android_fetches_on_demand() {
     assert_eq!(got.bytes().unwrap().to_vec(), vec![3u8; 10]);
     assert_eq!(shape(&admin.note(&other_id)).0, "Other, edited");
 }
+
+/// A gadget type as a newer release writes it: an attribute of the type and one of a field that
+/// this version does not know.
+const NEWER_GADGET: &str = "label = \"Gadget\"\nshelf = \"top\"\n\nfield size {\n  kind = \"int\"\n  unit = \"cm\"\n}\n\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n    slot \"size\"\n  }\n}\n";
+
+/// The device's view of the gadget type: its warnings, from `GET /api/types`.
+fn gadget_warnings(device: &Device) -> Value {
+    let list = device.call("GET", "/api/types", None, 200);
+    list["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "gadget")
+        .unwrap_or_else(|| panic!("no gadget type: {list}"))["warnings"]
+        .clone()
+}
+
+#[test]
+fn a_type_with_attributes_the_device_does_not_know_still_syncs_and_takes_notes() {
+    let server = TestServer::start_seeded(|vault| {
+        seed(vault);
+        std::fs::write(
+            vault.join("types/gadget.wcl"),
+            format!("label = \"Gadget\"\n{TEMPLATE}"),
+        )
+        .unwrap();
+    });
+    let admin = Http::admin(&server);
+    let laptop = Device::pair(&server, "Laptop");
+    laptop.sync();
+    assert_eq!(gadget_warnings(&laptop), json!([]));
+
+    // The server's type gains attributes only a newer release knows.
+    admin.send(
+        admin
+            .client
+            .put(server.url("/api/types/gadget"))
+            .header("Content-Type", "text/plain")
+            .body(NEWER_GADGET),
+        200,
+    );
+    laptop.sync();
+    let warnings = gadget_warnings(&laptop);
+    assert_eq!(
+        warnings
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| str(&w["at"]))
+            .collect::<Vec<_>>(),
+        ["type.shelf", "field size.unit"],
+        "the device loaded the newer type, with warnings: {warnings}"
+    );
+
+    // The device writes notes of the type, checked against what it knows, and they reach the
+    // server.
+    let made = laptop.call(
+        "POST",
+        "/api/notes?type=gadget",
+        Some(json!({ "note": { "fields": { "title": "Lamp", "size": 30 } } })),
+        201,
+    );
+    laptop.call(
+        "POST",
+        "/api/notes?type=gadget",
+        Some(json!({ "note": { "fields": { "title": "Lamp", "size": "big" } } })),
+        400,
+    );
+    let report = laptop.sync();
+    assert_eq!(report.pushed.len(), 1, "{report:?}");
+    let lamp = str(&made["id"]);
+    assert_eq!(admin.note(&lamp)["note"]["fields"]["size"], 30);
+
+    // The device opens its vault again, as the app does on its next start, and carries on.
+    let Device {
+        embedded,
+        remote,
+        runtime,
+        _vault,
+    } = laptop;
+    drop(embedded);
+    let embedded = Embedded::open(Config {
+        vault: _vault.path().to_owned(),
+        web: None,
+        secret_key: None,
+    })
+    .expect("the device opens a vault whose type has attributes it does not know");
+    let laptop = Device {
+        embedded,
+        remote,
+        runtime,
+        _vault,
+    };
+    let made = laptop.call(
+        "POST",
+        "/api/notes?type=gadget",
+        Some(json!({ "note": { "fields": { "title": "Fan", "size": 40 } } })),
+        201,
+    );
+    let report = laptop.sync();
+    assert_eq!(report.pushed.len(), 1, "{report:?}");
+    assert_eq!(
+        admin.note(&str(&made["id"]))["note"]["fields"]["title"],
+        "Fan"
+    );
+}

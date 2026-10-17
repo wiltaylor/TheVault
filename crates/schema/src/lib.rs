@@ -40,25 +40,53 @@ pub use types::{
     Relation, Scalar, Tab, TabItem, Template, TypeDef, is_image_filename,
 };
 
+/// How much an [`Issue`] matters. An error makes the file invalid. A warning does not: it reports
+/// something this version ignores, such as an attribute of a type or field that only a newer
+/// release knows, so that a newer server's files still load in an older app.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Severity {
+    #[default]
+    Error,
+    Warning,
+}
+
 /// One problem, at a path inside a file such as `field estimate.default` or
 /// `content body > list#2 > item#1.text`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issue {
     pub at: String,
     pub message: String,
+    pub severity: Severity,
 }
 
 impl Issue {
+    /// An error.
     pub fn new(at: impl Into<String>, message: impl Into<String>) -> Issue {
         Issue {
             at: at.into(),
             message: message.into(),
+            severity: Severity::Error,
         }
+    }
+
+    /// A warning, which leaves the file valid.
+    pub fn warning(at: impl Into<String>, message: impl Into<String>) -> Issue {
+        Issue {
+            severity: Severity::Warning,
+            ..Issue::new(at, message)
+        }
+    }
+
+    pub fn is_warning(&self) -> bool {
+        self.severity == Severity::Warning
     }
 }
 
 impl fmt::Display for Issue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_warning() {
+            write!(f, "warning: ")?;
+        }
         write!(f, "{}: {}", self.at, self.message)
     }
 }

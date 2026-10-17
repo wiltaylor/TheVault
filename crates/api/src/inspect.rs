@@ -38,6 +38,7 @@ pub(crate) fn type_json(t: &TypeDef) -> Value {
             "allow_domains": h.allow_domains,
             "secrets": h.secrets,
         })).collect::<Vec<_>>(),
+        "warnings": t.warnings.iter().map(crate::error::issue_json).collect::<Vec<_>>(),
     })
 }
 

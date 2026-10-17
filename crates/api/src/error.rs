@@ -87,7 +87,7 @@ impl From<Error> for ApiError {
                     "error": "invalid",
                     "file": inv.file,
                     "issues": inv.issues.iter()
-                        .map(|i| json!({ "at": i.at, "message": i.message }))
+                        .map(issue_json)
                         .collect::<Vec<_>>(),
                 }),
             ),
@@ -153,7 +153,7 @@ impl From<Error> for ApiError {
                     "failures": e.0.iter().map(|inv| json!({
                         "file": inv.file,
                         "issues": inv.issues.iter()
-                            .map(|i| json!({ "at": i.at, "message": i.message }))
+                            .map(issue_json)
                             .collect::<Vec<_>>(),
                     })).collect::<Vec<_>>(),
                 }),
@@ -228,4 +228,14 @@ pub fn in_use(w: &Writer, e: Error) -> ApiError {
     }
     err.body["notes"] = Value::Array(notes);
     err
+}
+
+/// One schema issue as the API reports it: `{ "at", "message", "severity" }`, the severity
+/// `error` or `warning`.
+pub(crate) fn issue_json(i: &schema::Issue) -> Value {
+    json!({
+        "at": i.at,
+        "message": i.message,
+        "severity": if i.is_warning() { "warning" } else { "error" },
+    })
 }

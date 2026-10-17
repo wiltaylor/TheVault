@@ -344,6 +344,8 @@ pub struct TypeDef {
     pub fields: Vec<FieldDef>,
     pub templates: Vec<Template>,
     pub handlers: Vec<Handler>,
+    /// What this version ignores in the file, such as an attribute only a newer release knows.
+    pub warnings: Vec<Issue>,
 }
 
 impl TypeDef {
@@ -375,7 +377,7 @@ impl TypeDef {
             opt("icon", Form::Str),
             opt("colour", Form::Palette),
         ];
-        c.items(doc, &items, &[], "type");
+        c.attributes(doc, &items, &[], "type", "types");
         c.only_blocks(doc, &["field", "template", "handler"], "type");
 
         let mut fields: Vec<FieldDef> = Vec::new();
@@ -417,8 +419,12 @@ impl TypeDef {
             .filter_map(|b| handler(&mut c, b))
             .collect();
 
-        if !issues.is_empty() {
-            return Err(issues);
+        // A type with an error is refused, and reports only its errors. Warnings leave it valid
+        // and stay with the definition, so the type editor and `PUT /api/types` can show them.
+        let (warnings, errors): (Vec<Issue>, Vec<Issue>) =
+            issues.into_iter().partition(Issue::is_warning);
+        if !errors.is_empty() {
+            return Err(errors);
         }
         let label = string(doc, "label").unwrap_or_default();
         Ok(TypeDef {
@@ -431,6 +437,7 @@ impl TypeDef {
             fields,
             templates,
             handlers,
+            warnings,
         })
     }
 
@@ -520,12 +527,18 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         ]),
         _ => {}
     }
-    let before = c.issues.len();
-    c.items(d, &items, &["default"], at);
-    if c.issues.len() > before || !FieldKind::NAMES.contains(&kind_name) {
+    let before = c.errors();
+    let owner = if FieldKind::NAMES.contains(&kind_name) {
+        format!("{kind_name} fields")
+    } else {
+        "fields".to_owned()
+    };
+    c.attributes(d, &items, &["default"], at, &owner);
+    if c.errors() > before || !FieldKind::NAMES.contains(&kind_name) {
         return None;
     }
 
+    let known = |n: &str| items.iter().any(|i| i.name == n);
     let flag = |n: &str| d.field(n) == Some(&Value::Bool(true));
     let s = |n: &str| string(d, n);
     let (required, computed, multiple) = (flag("required"), flag("computed"), flag("multiple"));
@@ -626,8 +639,9 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         multiple: multiple || term_list,
         term_list,
         default: d.field("default").cloned(),
-        labels: s("labels"),
-        accept: if s("accept").as_deref() == Some("image") {
+        // An attribute this kind does not have is ignored, as a newer release's would be.
+        labels: s("labels").filter(|_| known("labels")),
+        accept: if known("accept") && s("accept").as_deref() == Some("image") {
             Accept::Image
         } else {
             Accept::Any

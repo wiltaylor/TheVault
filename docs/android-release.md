@@ -133,6 +133,14 @@ To release:
 2. Run `./dev just android-release-smoke` and fix anything it finds. Then run the checks in `docs/android-manual-checks.md` on a phone.
 3. Tag the commit as `v<version>`, for example `v0.2.0`, and push the tag. The workflow stops when the tag does not match the version.
 
+### Releasing a format change
+
+A release that adds an attribute to a type or a field, such as `labels` on a list field, ships type files that an older app has never seen. An app tolerates an attribute it does not know: it ignores it with a warning and keeps loading the type ([Attributes a reader does not know](vault-format.md#attributes-a-reader-does-not-know)). Apps from before that rule, 0.1.6 and earlier, refuse such a type file, and then refuse to open their vault on the next start. Roll out such a release in this order:
+
+1. Publish the new app first: `./dev just publish-clients <clients dir>`, with the old server still running. The old server announces the update.
+2. Let the phones update, and open the app on each phone to check that it shows the new version.
+3. Then restart the server on the new version. Its shipped defaults upgrade the vault's types, and the phones, already updated, read them.
+
 ## Install the app
 
 ### With adb
