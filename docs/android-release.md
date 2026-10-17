@@ -126,7 +126,7 @@ The app updates itself from the server it is paired with, once you allow it to i
 2. The server pushes `clients.updated` to the phone over UnifiedPush. Without push, the app checks when it opens and once a day.
 3. The app reads `GET /api/clients`, and takes the APK for the phone's architecture when it is newer than the installed app and the same kind of build: a release app takes only release APKs, a debug app only debug APKs. It never installs the same or a lower version.
 4. It downloads the APK from the server and checks its SHA-256 against the server's list. A mismatch deletes the download and shows "TheVault update failed".
-5. It installs the APK with an Android PackageInstaller session. The session asks for no user action on Android 12 and later, so once TheVault has installed itself one update, later updates install silently. The first update after you installed the APK by hand shows "Update TheVault to <version>": tap it and confirm Android's dialog. When the new version starts, it shows "TheVault updated to <version>".
+5. It installs the APK with an Android PackageInstaller session. The session asks for no user action, which the app's `UPDATE_PACKAGES_WITHOUT_USER_ACTION` permission allows on Android 12 and later for an app updating itself, so updates install silently, the first one after you installed the APK by hand too. If Android asks anyway, for example because another app store owns TheVault's updates, the phone shows "Update TheVault to <version>": tap it and confirm Android's dialog. When the new version starts, it shows "TheVault updated to <version>".
 
 The check needs the phone online, but not idle or charging.
 

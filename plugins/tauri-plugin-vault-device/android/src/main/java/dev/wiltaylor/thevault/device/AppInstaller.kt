@@ -16,10 +16,11 @@ import java.io.File
 /**
  * Installs a downloaded APK over the running app with a PackageInstaller session. On Android 12
  * (API 31) and later the session asks for no user action
- * ([PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED]): once TheVault is the installer of
- * record of itself, which it becomes with the first update it installs, updates install
- * silently. The first one, over an APK installed by hand, still shows the system's confirmation,
- * which [UpdateInstallReceiver] posts as a notice to tap.
+ * ([PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED]), which the manifest's
+ * `UPDATE_PACKAGES_WITHOUT_USER_ACTION` permission allows for an update of the app by itself:
+ * updates install silently, the first one over an APK installed by hand too. When the system
+ * still asks (another app owns the app's updates, say), [UpdateInstallReceiver] posts its
+ * confirmation as a notice to tap.
  */
 object AppInstaller {
     const val ACTION_STATUS = "dev.wiltaylor.thevault.UPDATE_STATUS"
@@ -142,7 +143,9 @@ object UpdateNotices {
                 description = "TheVault updating itself from your server"
             },
         )
-        val icon = context.applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.stat_sys_download_done
+        // The status bar icon, as the mirrored notifications use: the launcher icon is an
+        // adaptive icon, which is no notification small icon.
+        val icon = R.drawable.ic_stat_thevault
         val builder = Notification.Builder(context, CHANNEL)
             .setSmallIcon(icon)
             .setContentTitle(title)

@@ -195,6 +195,28 @@ class AppUpdateTest {
     }
 
     @Test
+    fun theAppMayUpdateItselfWithoutAskingTheUser() {
+        // Without it Android 12 and later answer USER_ACTION_NOT_REQUIRED with a confirmation.
+        val info = context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.GET_PERMISSIONS)
+        assertTrue(info.requestedPermissions!!.contains("android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION"))
+    }
+
+    @Test
+    fun theUpdatedAppSaysSoWhenTheUpdateWasItsOwn() {
+        val prefs = context.getSharedPreferences(AppUpdateWorker.PREFS, Context.MODE_PRIVATE)
+        // Replaced by someone else (adb, a store): no notice.
+        PackageReplacedReceiver().onReceive(context, Intent(Intent.ACTION_MY_PACKAGE_REPLACED))
+        assertTrue(notices().isEmpty())
+        prefs.edit().putString(AppInstaller.PENDING, "0.2.0").commit()
+        PackageReplacedReceiver().onReceive(context, Intent(Intent.ACTION_MY_PACKAGE_REPLACED))
+        val notice = notices().single()
+        assertEquals("TheVault updated", notice.extras.getString("android.title"))
+        assertEquals(UpdateNotices.CHANNEL, notice.channelId)
+        assertEquals(R.drawable.ic_stat_thevault, notice.smallIcon.resId)
+        assertNull(prefs.getString(AppInstaller.PENDING, null))
+    }
+
+    @Test
     fun theSameOrAnOlderVersionIsNeverInstalled() {
         publish("0.1.0")
         var result = check()

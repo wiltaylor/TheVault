@@ -19,6 +19,8 @@
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <!-- Updating itself from the APK the home server hands out (D27); granted once by the user. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Without it Android 12 and later ask the user to confirm every update, even its own. -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <application>
         <!-- First-run setup and pairing (D2). -->
