@@ -925,6 +925,55 @@ fn edges_take_four_arrow_values_and_canvases_a_height() {
 }
 
 #[test]
+fn an_ink_drawing_takes_an_optional_height_up_to_4000() {
+    let field = |items: &str| {
+        format!(
+            "ink sketch {{\n  width = 800\n{items}  stroke {{\n    tool = \"pen\"\n    colour = \"#1f2937\"\n    size = 2.0\n    points = [1.0, 2.0, 0.5, 10.0, 3900.0, 0.5]\n  }}\n}}"
+        )
+    };
+    let block =
+        |items: &str| format!("content body {{\n  ink {{\n    width = 800\n{items}  }}\n}}");
+    // Omitted reads as the default; a drawing made short before the handle existed stays valid.
+    check_kinds(&field("")).unwrap();
+    check_kinds(&block("")).unwrap();
+    for ok in ["1", "80", "400", "4000"] {
+        check_kinds(&field(&format!("  height = {ok}\n")))
+            .unwrap_or_else(|e| panic!("{ok}: {e:?}"));
+        check_kinds(&block(&format!("    height = {ok}\n")))
+            .unwrap_or_else(|e| panic!("{ok}: {e:?}"));
+    }
+    for bad in ["0", "4001", "-5"] {
+        let issues = check_kinds(&field(&format!("  height = {bad}\n"))).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("sketch\".height: must be from 1 to 4000")),
+            "{bad}: {issues:?}"
+        );
+        let issues = check_kinds(&block(&format!("    height = {bad}\n"))).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("height: must be from 1 to 4000")),
+            "{bad}: {issues:?}"
+        );
+    }
+    let float = check_kinds(&field("  height = 300.5\n")).unwrap_err();
+    assert!(
+        float.iter().any(|i| i.contains("must be an integer")),
+        "{float:?}"
+    );
+    assert_eq!(
+        (
+            schema::INK_HEIGHT_DEFAULT,
+            schema::INK_HEIGHT_MIN,
+            schema::INK_HEIGHT_MAX
+        ),
+        (400, 1, 4000)
+    );
+}
+
+#[test]
 fn an_asset_block_takes_a_viewer_height_and_a_card_flag() {
     let block = |items: &str| {
         format!(

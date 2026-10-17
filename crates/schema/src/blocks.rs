@@ -149,6 +149,13 @@ pub const CANVAS_HEIGHT_MAX: i64 = 4000;
 pub const ASSET_HEIGHT_MIN: i64 = 160;
 pub const ASSET_HEIGHT_MAX: i64 = 4000;
 
+/// An ink drawing's `height`, in ink units: the default when it has none, and the bounds. The
+/// minimum stays 1 so drawings made before the resize handle stay valid; the handle itself keeps
+/// to 80 and up.
+pub const INK_HEIGHT_DEFAULT: i64 = 400;
+pub const INK_HEIGHT_MIN: i64 = 1;
+pub const INK_HEIGHT_MAX: i64 = 4000;
+
 /// The kinds of a `query_view`'s `view`.
 pub const VIEW_KINDS: [&str; 9] = [
     "table", "cards", "list", "details", "kanban", "calendar", "timeline", "map", "canvas",
@@ -602,7 +609,7 @@ impl Check<'_> {
         const BACKGROUNDS: &[&str] = &["blank", "lines", "grid", "dots"];
         let items = [
             req("width", Form::Int(1, i64::MAX)),
-            req("height", Form::Int(1, i64::MAX)),
+            opt("height", Form::Int(INK_HEIGHT_MIN, INK_HEIGHT_MAX)),
             opt("background", Form::OneOf(BACKGROUNDS)),
         ];
         self.items(d, &items, &[], at);

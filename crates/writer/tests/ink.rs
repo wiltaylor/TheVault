@@ -107,3 +107,54 @@ fn create_and_update_round_every_stroke() {
     let text = std::fs::read_to_string(&path).unwrap();
     assert_eq!(points(&text)[0], "[1.23, 2.0, 0.988]", "{text}");
 }
+
+/// A resized ink drawing and canvas keep their `height` items: the JSON a client sends is written
+/// as is, and writing the file's own text back leaves it byte for byte the same.
+#[test]
+fn ink_and_canvas_heights_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let mut drawing = ink(Some("drawing"), serde_json::json!([10.0, 3900.0, 0.5]));
+    drawing["fields"]["height"] = serde_json::json!(4000);
+    let mut inline = ink(None, serde_json::json!([1.0, 2.0, 0.5]));
+    inline["fields"]["height"] = serde_json::json!(120);
+    let json = serde_json::json!({
+        "fields": { "title": "Tall" },
+        "blocks": [
+            drawing,
+            { "kind": "content", "labels": ["body"], "blocks": [inline] },
+            { "kind": "canvas", "labels": ["board"], "fields": { "height": 900 }, "blocks": [
+                { "kind": "viewport", "fields": { "x": 0.0, "y": 0.0, "zoom": 1.0 } }
+            ] }
+        ]
+    });
+    let saved = w.create("sketch", &Input::Json(json), &author()).unwrap();
+    let path = dir.path().join(format!("notes/sketch/{}.wcl", saved.id));
+    let text = std::fs::read_to_string(&path).unwrap();
+    let heights: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("height"))
+        .collect();
+    assert_eq!(
+        heights,
+        ["height = 4000", "height = 120", "height = 900"],
+        "{text}"
+    );
+
+    let again = w.update(
+        &saved.id,
+        &Input::Wcl(text.clone()),
+        Some(&saved.version),
+        &author(),
+    );
+    assert!(again.is_ok(), "{again:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+    // Past the bound is refused, and the file stays as it was.
+    let too_tall = text.replace("height = 4000", "height = 4001");
+    let version = again.unwrap().version;
+    let refused = w.update(&saved.id, &Input::Wcl(too_tall), Some(&version), &author());
+    assert!(refused.is_err(), "4001 was accepted");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+}

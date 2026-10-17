@@ -1436,7 +1436,8 @@ An ink drawing is an `ink` block (D18, D29). It is a content block with no label
 
 | Item | Form | Meaning |
 |------|------|---------|
-| `width`, `height` | int | Required. The drawing surface in ink units, which are CSS pixels at 100% zoom |
+| `width` | int | Required. The drawing surface's width in ink units, which are CSS pixels at 100% zoom |
+| `height` | int, 1 to 4000 | The drawing surface's height in ink units. Default 400 |
 | `background` | string | `blank`, `lines`, `grid` or `dots`. Default `blank` |
 | `stroke { ... }` | block | The strokes, in drawing order. Later strokes draw on top |
 
@@ -1450,6 +1451,8 @@ Each `stroke` holds:
 | `points` | list of floats | Required. Flat triples `x, y, pressure`. `x` and `y` are ink units from the top-left corner. `pressure` is 0.0 to 1.0, and 0.5 where the device reports none. At least one triple |
 
 The renderer feeds each stroke's points to perfect-freehand. Erasing deletes whole strokes, so no eraser strokes are stored. The writer rounds coordinates to two decimal places and pressure to three.
+
+The handle on the bottom edge of an editable drawing sets `height`, from 80 to 4000, and a double-click on it puts back 400. Resizing never moves or scales a stroke: a taller drawing shows more paper below, and a shorter one hides any stroke below its new edge without removing it, so the stroke shows again when the drawing grows back. The app writes `height` on every drawing it saves; a file without one reads as 400. Where the column is narrower than `width`, the drawing scales down to fit and keeps its proportions.
 
 ```wcl
 ink {
@@ -1472,7 +1475,7 @@ A canvas is TheVault's own WCL format, not JSON Canvas (D15, D26). It is a `canv
 
 | Item | Form | Meaning |
 |------|------|---------|
-| `height` | integer | The height of the canvas on the page, in screen pixels, from 160 to 4000. Default 480. Its width always fills the page or pane it is in |
+| `height` | integer | The height of the canvas on the page, in screen pixels, from 160 to 4000. Default 480. Its width always fills the page or pane it is in. The handle on the canvas's bottom edge sets it, and a double-click on the handle puts back the default, which leaves the item out. Resizing changes only how much of the canvas shows: the viewport and the nodes stay where they are |
 | `viewport { ... }` | block | Required. The view saved with the canvas |
 | `group <id> { ... }` | block | Labelled frames that hold nodes |
 | `node <id> { ... }` | block | Items on the canvas, in z-order. Later nodes draw on top |

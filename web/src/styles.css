@@ -5088,12 +5088,50 @@ input.canvas-caption-input {
 }
 
 .canvas-height-handle:hover .canvas-height-grip,
-.canvas-height-handle:focus-visible .canvas-height-grip {
+.canvas-height-handle:focus-visible .canvas-height-grip,
+.canvas-height-handle.dragging .canvas-height-grip {
   background: var(--accent);
 }
 
 .canvas-height-handle:focus-visible {
   outline: none;
+}
+
+/* Canvas and ink blocks show their grip while the pointer is over the block or the handle has
+   focus; a touch screen has no hover, so there it always shows. */
+.height-handle .canvas-height-grip {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+:hover > .height-handle .canvas-height-grip,
+.height-handle:focus-visible .canvas-height-grip,
+.height-handle.dragging .canvas-height-grip {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .height-handle .canvas-height-grip {
+    opacity: 1;
+  }
+}
+
+/* The height while the handle is dragged. */
+.height-readout {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 100%;
+  margin-bottom: 0.25rem;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.15);
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 @media (max-width: 600px), (pointer: coarse) {

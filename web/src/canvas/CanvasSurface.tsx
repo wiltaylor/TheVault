@@ -16,6 +16,7 @@ import { type JSX, For, Show, createEffect, createMemo, createSignal, on, onClea
 import type { Editor } from "@tiptap/core";
 import type { Block, Json } from "../api";
 import { api } from "../api";
+import { HeightHandle } from "../components/HeightHandle";
 import { ContentEditor } from "../editor/ContentEditor";
 import { openInBackground, wantsNewTab } from "../workspace/events";
 import { openTab } from "../workspace/store";
@@ -79,10 +80,6 @@ const CLICK_SLOP = 3;
 /** Two presses this close in time and place are a double-click. */
 const DOUBLE_MS = 450;
 const DOUBLE_SLOP = 6;
-
-/** How far one press of Up or Down moves the canvas's bottom edge, in pixels; with Shift. */
-const HEIGHT_STEP = 20;
-const HEIGHT_STEP_BIG = 100;
 
 /** The `/` menu items a card leaves out: a card cannot hold a canvas. */
 const CARD_EXCLUDES = ["canvas"];
@@ -177,7 +174,6 @@ export function CanvasSurface(props: {
   const [size, setSize] = createSignal({ width: 0, height: 0 });
   let box!: HTMLDivElement;
   let drag: Drag | null = null;
-  let heightDrag: { pointer: number; sy: number; from: number } | null = null;
   let wheelTimer: ReturnType<typeof setTimeout> | undefined;
   let lastPress: { key: string; t: number; x: number; y: number } | null = null;
   // Where a double-click asked the card editor to put its caret.
@@ -598,46 +594,6 @@ export function CanvasSurface(props: {
 
   function setHeight(h: number) {
     commit(withHeight(current(), clampHeight(h)));
-  }
-
-  function onHeightDown(e: PointerEvent) {
-    if (!editing() || e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {
-      // As for the view: a synthetic pointer still sends its events here.
-    }
-    heightDrag = { pointer: e.pointerId, sy: e.clientY, from: height() };
-    setHeightPreview(height());
-  }
-
-  function onHeightMove(e: PointerEvent) {
-    const d = heightDrag;
-    if (!d || e.pointerId !== d.pointer) return;
-    setHeightPreview(clampHeight(d.from + e.clientY - d.sy));
-  }
-
-  function onHeightUp(e: PointerEvent) {
-    const d = heightDrag;
-    if (!d || e.pointerId !== d.pointer) return;
-    heightDrag = null;
-    const h = clampHeight(d.from + e.clientY - d.sy);
-    setHeightPreview(null);
-    if (h !== (stored().height ?? CANVAS_HEIGHT.initial)) setHeight(h);
-  }
-
-  function onHeightKey(e: KeyboardEvent) {
-    const step = e.shiftKey ? HEIGHT_STEP_BIG : HEIGHT_STEP;
-    let next: number | null = null;
-    if (e.key === "ArrowDown") next = height() + step;
-    else if (e.key === "ArrowUp") next = height() - step;
-    else if (e.key === "Home") next = CANVAS_HEIGHT.min;
-    else if (e.key === "End") next = CANVAS_HEIGHT.max;
-    if (next === null) return;
-    e.preventDefault();
-    if (clampHeight(next) !== height()) setHeight(next);
   }
 
   // ---- rendering ----------------------------------------------------------------------------
@@ -1330,26 +1286,15 @@ export function CanvasSurface(props: {
           </div>
         </Show>
         <Show when={editing()}>
-          <div
-            class="canvas-height-handle"
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Canvas height"
-            aria-valuemin={CANVAS_HEIGHT.min}
-            aria-valuemax={CANVAS_HEIGHT.max}
-            aria-valuenow={height()}
-            title="Drag to set the canvas's height; Up and Down arrows resize it"
-            tabindex={0}
-            data-testid="canvas-height-handle"
+          <HeightHandle
+            label="Canvas height"
+            height={stored().height ?? CANVAS_HEIGHT.initial}
+            range={CANVAS_HEIGHT}
+            onPreview={setHeightPreview}
+            onChange={setHeight}
+            testid="canvas-height-handle"
             id={`${uid}-height`}
-            onPointerDown={onHeightDown}
-            onPointerMove={onHeightMove}
-            onPointerUp={onHeightUp}
-            onPointerCancel={onHeightUp}
-            onKeyDown={onHeightKey}
-          >
-            <span class="canvas-height-grip" aria-hidden="true" />
-          </div>
+          />
         </Show>
       </div>
     </div>

@@ -29,6 +29,13 @@ export const BACKGROUNDS: Background[] = ["blank", "lines", "grid", "dots"];
 export const NEW_WIDTH = 800;
 export const NEW_HEIGHT = 400;
 
+/**
+ * The drawing's height, in ink units: what an omitted `height` reads as and the handle resets
+ * to, and the bounds the handle drags within. The server accepts 1 to `max`, so a drawing made
+ * shorter than `min` before the handle existed stays as it is until it is resized.
+ */
+export const INK_HEIGHT = { initial: NEW_HEIGHT, min: 80, max: 4000 };
+
 /** The pressure stored for a device that reports none. */
 export const NO_PRESSURE = 0.5;
 

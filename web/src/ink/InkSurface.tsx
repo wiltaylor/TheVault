@@ -5,8 +5,10 @@
 
 import { For, type JSX, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import type { Block } from "../api";
+import { HeightHandle } from "../components/HeightHandle";
 import {
   BACKGROUNDS,
+  INK_HEIGHT,
   type Background,
   type Ink,
   type Stroke,
@@ -81,6 +83,16 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
 
   const strokes = () => erased() ?? ink().strokes;
 
+  // The height while the bottom handle is dragged. Strokes keep their coordinates: a taller
+  // drawing shows more paper, and a shorter one hides what lies below its edge without removing it.
+  const [heightPreview, setHeightPreview] = createSignal<number | null>(null);
+  const frame = () => {
+    const h = heightPreview();
+    return h === null ? ink() : { ...ink(), height: h };
+  };
+  /** Screen pixels per ink unit: the surface shrinks to fit a narrow column. */
+  const scale = () => (svg.getBoundingClientRect().width || ink().width) / ink().width;
+
   function commit(next: Ink) {
     const before = props.block ?? inkBlock(ink());
     setHistory([...history(), before]);
@@ -98,7 +110,7 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
   /** The pointer's position in ink units. */
   function at(e: PointerEvent): [number, number] {
     const r = svg.getBoundingClientRect();
-    const { width, height } = ink();
+    const { width, height } = frame();
     return [((e.clientX - r.left) * width) / (r.width || width), ((e.clientY - r.top) * height) / (r.height || height)];
   }
 
@@ -357,9 +369,9 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
         aria-label={props.label}
         tabindex={props.onChange ? 0 : undefined}
         data-node-view-interactive={props.onChange ? "" : undefined}
-        width={ink().width}
-        height={ink().height}
-        viewBox={`0 0 ${ink().width} ${ink().height}`}
+        width={frame().width}
+        height={frame().height}
+        viewBox={`0 0 ${frame().width} ${frame().height}`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -399,6 +411,17 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
           {(s) => <path class={`ink-stroke ink-live ink-${s().tool}`} d={strokePath(s(), false)} fill={s().colour} />}
         </Show>
       </svg>
+      <Show when={props.onChange}>
+        <HeightHandle
+          label={`${props.label} height`}
+          height={ink().height}
+          range={INK_HEIGHT}
+          scale={scale}
+          onPreview={setHeightPreview}
+          onChange={(height) => commit({ ...ink(), height })}
+          testid="ink-height-handle"
+        />
+      </Show>
       </div>
     </div>
   );
