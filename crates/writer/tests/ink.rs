@@ -200,3 +200,40 @@ fn ink_viewport_and_negative_coordinates_round_trip() {
     assert!(again.is_ok(), "{again:?}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 }
+
+/// The default ink is stored as the token `ink`, next to strokes in a hex colour, and both are
+/// written as sent and read back byte for byte.
+#[test]
+fn the_default_ink_token_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let mut drawing = ink(Some("drawing"), serde_json::json!([1.0, 2.0, 0.5]));
+    drawing["fields"] = serde_json::json!({ "height": 300 });
+    drawing["blocks"][0]["fields"]["colour"] = serde_json::json!("ink");
+    let mut red = stroke(serde_json::json!([3.0, 4.0, 0.5]));
+    red["fields"]["colour"] = serde_json::json!("#dc2626");
+    drawing["blocks"].as_array_mut().unwrap().push(red);
+    let json = serde_json::json!({ "fields": { "title": "Inked" }, "blocks": [drawing] });
+    let saved = w.create("sketch", &Input::Json(json), &author()).unwrap();
+    let path = dir.path().join(format!("notes/sketch/{}.wcl", saved.id));
+    let text = std::fs::read_to_string(&path).unwrap();
+    let colours: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("colour"))
+        .collect();
+    assert_eq!(
+        colours,
+        ["colour = \"ink\"", "colour = \"#dc2626\""],
+        "{text}"
+    );
+
+    let again = w.update(
+        &saved.id,
+        &Input::Wcl(text.clone()),
+        Some(&saved.version),
+        &author(),
+    );
+    assert!(again.is_ok(), "{again:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+}

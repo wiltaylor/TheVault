@@ -345,7 +345,7 @@ async function mouseDrag(page: Page, surface: Locator, from: [number, number], d
  * With E2E_SHOTS set to a folder, light and dark screenshots of `what` there, as
  * `inkpan-<name>-<theme>.png`. Without it, nothing is written.
  */
-async function shots(page: Page, name: string, what: Locator) {
+async function shots(page: Page, name: string, what: Locator, prefix = "inkpan") {
   const dir = process.env.E2E_SHOTS;
   if (!dir) return;
   mkdirSync(dir, { recursive: true });
@@ -353,7 +353,7 @@ async function shots(page: Page, name: string, what: Locator) {
   for (const theme of ["light", "dark"]) {
     await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
     await page.waitForTimeout(250);
-    await what.screenshot({ path: join(dir, `inkpan-${name}-${theme}.png`) });
+    await what.screenshot({ path: join(dir, `${prefix}-${name}-${theme}.png`) });
   }
   await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
 }
@@ -492,9 +492,87 @@ test("the highlighter draws yellow, translucent and much wider than the pen", as
   expect(hlHeight).toBeGreaterThan(penHeight * 3);
   await saveAndWait(page);
   const [pen, highlight] = (bodyInk(await stored(admin, note.id))[0]!.blocks ?? []).map((b) => b.fields!);
-  expect(pen).toMatchObject({ tool: "pen", colour: "#1f2937", size: 4 });
+  expect(pen).toMatchObject({ tool: "pen", colour: "ink", size: 4 });
   expect(highlight).toMatchObject({ tool: "highlighter", colour: "#facc15", size: 24 });
   await shots(page, "highlighter", ink);
+});
+
+/** The relative luminance of a CSS `rgb(...)` or `#rrggbb` colour, 0 for black to 1 for white. */
+function luminanceOf(css: string): number {
+  const hex = /^#([0-9a-f]{6})$/i.exec(css);
+  const rgb = hex
+    ? [0, 2, 4].map((i) => parseInt(hex[1]!.slice(i, i + 2), 16))
+    : (css.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number);
+  const lin = (c: number) => (c / 255 <= 0.03928 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lin(rgb[0]!) + 0.7152 * lin(rgb[1]!) + 0.0722 * lin(rgb[2]!);
+}
+
+test("in dark mode the paper is dark and the default ink light; the stored colours stay as they were", async ({
+  page,
+  admin,
+}) => {
+  const drawing: Block = {
+    kind: "ink",
+    fields: { height: 320, background: "grid" },
+    blocks: [
+      // The default ink as drawings stored it before the token: it draws as the token does.
+      { kind: "stroke", fields: { tool: "pen", colour: "#1f2937", size: 4.0, points: [60, 60, 0.5, 200, 90, 0.6, 340, 60, 0.7] } },
+      { kind: "stroke", fields: { tool: "pen", colour: "#2563eb", size: 4.0, points: [60, 140, 0.5, 200, 170, 0.6, 340, 140, 0.7] } },
+      { kind: "stroke", fields: { tool: "highlighter", colour: "#facc15", size: 24.0, points: [40, 230, 0.5, 360, 230, 0.5] } },
+    ],
+  };
+  const note = await create(admin, "task", `Dark ink ${token()}`, [{ kind: "content", labels: ["body"], blocks: [drawing] }]);
+  await logIn(page, `/notes/${note.id}`);
+  const ink = page.getByRole("textbox", { name: "Body" }).getByTestId("ink");
+  const surface = ink.getByRole("img", { name: "Drawing" });
+  await expect(surface.locator("path.ink-stroke")).toHaveCount(3);
+  // A stylus stroke in the pen's default ink, beside the old ones.
+  await penLine(surface, 60, 420, 700, [0.5, 0.6, 0.7, 0.6, 0.5], 51);
+  await expect(surface.locator("path.ink-pen")).toHaveCount(3);
+  await saveAndWait(page);
+  const colours = () =>
+    stored(admin, note.id).then((n) => (bodyInk(n)[0]!.blocks ?? []).filter((b) => b.kind === "stroke").map((b) => b.fields?.colour));
+  expect(await colours()).toEqual(["#1f2937", "#2563eb", "#facc15", "ink"]);
+
+  const look = () =>
+    surface.evaluate((el) => ({
+      paper: getComputedStyle(el).backgroundColor,
+      pens: [...el.querySelectorAll(".ink-pen")].map((p) => getComputedStyle(p).fill),
+      highlighter: getComputedStyle(el.querySelector(".ink-highlighter")!).opacity,
+      guide: getComputedStyle(el.querySelector("pattern .ink-guide")!).stroke,
+      swatch: getComputedStyle(document.querySelector(".ink-controls .ink-action[aria-label='Colour'] .ink-swatch")!).backgroundColor,
+    }));
+  const light = await look();
+  expect(luminanceOf(light.paper)).toBeGreaterThan(0.9);
+  expect(light.pens).toEqual(["rgb(31, 41, 55)", "rgb(37, 99, 235)", "rgb(31, 41, 55)"]);
+  expect(light.swatch).toBe("rgb(31, 41, 55)");
+  await shots(page, "dark-ink", ink, "inkdark");
+
+  // The theme switch in the sidebar redraws the open drawing without a reload.
+  const darkMode = page.getByRole("switch", { name: "Dark mode" });
+  await darkMode.click();
+  await expect(darkMode).toHaveAttribute("aria-checked", "true");
+  await expect.poll(async () => luminanceOf((await look()).paper)).toBeLessThan(0.03);
+  const dark = await look();
+  expect(dark.pens).toEqual(["rgb(226, 232, 240)", "rgb(96, 165, 250)", "rgb(226, 232, 240)"]);
+  for (const fill of dark.pens) expect(luminanceOf(fill)).toBeGreaterThan(0.3);
+  expect(luminanceOf(dark.guide)).toBeGreaterThan(luminanceOf(dark.paper));
+  expect(luminanceOf(dark.guide)).toBeLessThan(0.05);
+  expect(Number(dark.highlighter)).toBeLessThan(Number(light.highlighter));
+  expect(Number(dark.highlighter)).toBeGreaterThan(0.2);
+  expect(dark.swatch).toBe("rgb(226, 232, 240)");
+  if (process.env.E2E_SHOTS) await page.screenshot({ path: join(process.env.E2E_SHOTS, "inkdark-page-dark.png") });
+  // The popover shows each colour as it draws on dark paper.
+  await ink.getByRole("button", { name: "Colour" }).click();
+  const palette = ink.getByRole("group", { name: "Ink colours" });
+  await expect(palette.getByRole("button", { name: "Ink", exact: true })).toHaveAttribute("data-colour", "ink");
+  await expect(palette.getByRole("button", { name: "Blue" }).locator(".ink-swatch")).toHaveCSS("background-color", "rgb(96, 165, 250)");
+  await page.keyboard.press("Escape");
+
+  // Back in light mode the same strokes draw dark again, and nothing was written.
+  await darkMode.click();
+  await expect.poll(async () => (await look()).pens).toEqual(light.pens);
+  expect(await colours()).toEqual(["#1f2937", "#2563eb", "#facc15", "ink"]);
 });
 
 test.describe("on a phone", () => {

@@ -132,7 +132,7 @@ WCL has no date, URL or reference type. TheVault stores these as strings and its
 | Geo location | record | `{ lat: <float>, lng: <float> }` in WGS 84 decimal degrees. `lat` in -90..90, `lng` in -180..180 | `{ lat: -37.8136, lng: 144.9631 }` |
 | Image location | record | `{ x: <float>, y: <float> }` in pixels from the map image's top-left corner | `{ x: 412.0, y: 188.5 }` |
 | Palette colour | string | One of `gray`, `brown`, `orange`, `yellow`, `green`, `blue`, `purple`, `pink`, `red` (OQ-S4) | `"blue"` |
-| Ink colour | string | `#rrggbb`, lower-case hex | `"#1f2937"` |
+| Ink colour | string | `#rrggbb`, lower-case hex, or `ink`, the default ink, which draws in the theme's foreground | `"#2563eb"`, `"ink"` |
 
 A record must be written with every member. `schema` rejects a missing or extra key, because WCL does not.
 
@@ -1456,15 +1456,29 @@ Each `stroke` holds:
 | Item | Form | Meaning |
 |------|------|---------|
 | `tool` | string | Required. `pen`, or `highlighter`, which draws translucent, behind pen strokes and at one width whatever the pressure |
-| `colour` | ink colour | Required. `#rrggbb` |
+| `colour` | ink colour | Required. `#rrggbb`, or `ink` for the default ink. See [Ink colours](#ink-colours) |
 | `size` | float | Required. The perfect-freehand base size in ink units |
 | `points` | list of floats | Required. Flat triples `x, y, pressure`. `x` and `y` are ink units on the plane, which are CSS pixels at 100% zoom, and may be negative. `pressure` is 0.0 to 1.0, and 0.5 where the device reports none. At least one triple |
 
 The renderer feeds each stroke's points to perfect-freehand, and draws only the strokes in or near the view. Erasing deletes whole strokes, so no eraser strokes are stored. The writer rounds coordinates to two decimal places and pressure to three.
 
-In the app a stylus draws with the chosen tool, and its eraser end or barrel button erases. The mouse and one finger pan, two fingers pan and pinch to zoom, the wheel pans, and Ctrl or Cmd with the wheel, or a trackpad pinch, zooms. **Draw with mouse and touch**, a toggle kept per device, makes the mouse and one finger draw instead; two fingers still pan and zoom. While a stylus touches the drawing, fingers are ignored. The pen starts dark grey at size 4, with sizes 2, 4, 8 and 16; the highlighter starts yellow (`#facc15`) at size 24, with sizes 16, 24, 36 and 48, and each tool keeps its own colour and size. The view is saved into `viewport` a moment after it stops moving, through the normal autosave, so a pan is not an undo step and a run of pans is one version in the history. A read-only drawing, such as a version shown from history, shows its saved view and cannot be panned.
+In the app a stylus draws with the chosen tool, and its eraser end or barrel button erases. The mouse and one finger pan, two fingers pan and pinch to zoom, the wheel pans, and Ctrl or Cmd with the wheel, or a trackpad pinch, zooms. **Draw with mouse and touch**, a toggle kept per device, makes the mouse and one finger draw instead; two fingers still pan and zoom. While a stylus touches the drawing, fingers are ignored. The pen starts in the default ink at size 4, with sizes 2, 4, 8 and 16; the highlighter starts yellow (`#facc15`) at size 24, with sizes 16, 24, 36 and 48, and each tool keeps its own colour and size. The view is saved into `viewport` a moment after it stops moving, through the normal autosave, so a pan is not an undo step and a run of pans is one version in the history. A read-only drawing, such as a version shown from history, shows its saved view and cannot be panned.
 
 The handle on the bottom edge of an editable drawing sets `height`, from 80 to 4000, and a double-click on it puts back 400. Resizing changes only how much of the plane shows: no stroke moves or scales, and the view keeps its top-left corner. The app writes `height` on every drawing it saves; a file without one reads as 400.
+
+### Ink colours
+
+The paper follows the app's theme: white in the light theme, a dark panel colour in the dark theme, with its lines, grid or dots in a faint shade of the text colour. A stroke's `colour` is stored once and draws so it reads on either paper, so a drawing made on a device in one theme reads on a device in the other:
+
+| Stored `colour` | Light theme | Dark theme |
+|-----------------|-------------|------------|
+| `ink`, the default ink | Dark ink, `#1f2937` | Light ink, `#e2e8f0` |
+| `#1f2937` on a pen stroke, the default ink as drawings stored it before `ink` | As `ink` | As `ink` |
+| A palette hue as the pen stores it: `#6b7280`, `#92400e`, `#ea580c`, `#ca8a04`, `#16a34a`, `#2563eb`, `#9333ea`, `#db2777`, `#dc2626` | As stored | The hue's dark-theme shade, as inline palette colours take |
+| Any other pen colour | As stored | As stored |
+| A highlighter colour | As stored | As stored, fainter |
+
+A pen colour of the last two kinds with a contrast ratio below 2 against the paper, such as black on dark paper or white on light paper, draws with its lightness turned over and its hue kept. The app never rewrites a stored colour: the pen's **Ink** swatch writes `ink`, and the toolbar's swatches show each colour as it draws in the current theme.
 
 ```wcl
 ink {
@@ -1479,7 +1493,7 @@ ink {
 
   stroke {
     tool   = "pen"
-    colour = "#1f2937"
+    colour = "ink"
     size   = 4.0
     points = [10.0, 20.0, 0.5, 14.5, 22.0, 0.6, 20.0, 25.5, 0.7]
   }

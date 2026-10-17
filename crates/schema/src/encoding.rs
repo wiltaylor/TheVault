@@ -32,14 +32,19 @@ pub fn is_palette(s: &str) -> bool {
     PALETTE.contains(&s)
 }
 
-/// `#rrggbb`, lower-case hex.
+/// The ink colour that stands for the theme's foreground: dark ink on light paper, light ink on
+/// dark paper.
+pub const DEFAULT_INK: &str = "ink";
+
+/// `#rrggbb`, lower-case hex, or `ink`, the default ink.
 pub fn is_ink_colour(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() == 7
-        && b[0] == b'#'
-        && b[1..]
-            .iter()
-            .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+    s == DEFAULT_INK
+        || b.len() == 7
+            && b[0] == b'#'
+            && b[1..]
+                .iter()
+                .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// An ISO 8601 calendar date, `YYYY-MM-DD`, that exists.
@@ -286,6 +291,8 @@ mod tests {
         assert!(!is_ulid("01JB8Z4K2MQ7V3X9T5R6W8Y2ZI"));
         assert!(!is_ulid("81JB8Z4K2MQ7V3X9T5R6W8Y2ZA"));
         assert!(is_ink_colour("#1f2937"));
+        assert!(is_ink_colour("ink"));
+        assert!(!is_ink_colour("Ink") && !is_ink_colour("black"));
         assert!(!is_ink_colour("#1F2937"));
         assert!(!is_ink_colour("1f2937"));
         assert!(is_palette("blue") && !is_palette("cyan"));

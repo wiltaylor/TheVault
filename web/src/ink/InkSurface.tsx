@@ -14,8 +14,10 @@ import {
   INK_HEIGHT,
   NEW_WIDTH,
   TOOL_STYLES,
+  PAPER,
   type Background,
   type Ink,
+  type InkTheme,
   type InkView,
   type Mode,
   type Route,
@@ -32,6 +34,7 @@ import {
   patternStep,
   pinchView,
   pointerPressure,
+  renderColour,
   routePress,
   storedPoint,
   storedView,
@@ -88,6 +91,17 @@ function setTouchDraws(on: boolean) {
 /** Read the stored choice again: for tests, which change local storage between surfaces. */
 export function reloadTouchDraws() {
   setTouchDrawsSignal(readTouchDraws());
+}
+
+// The page's theme, as `data-theme` on <html> says: strokes, guides and swatches draw in its
+// colours, and draw again when it changes, without a reload.
+const themeOfPage = (): InkTheme => (document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+const [pageTheme, setPageTheme] = createSignal<InkTheme>(themeOfPage());
+if (typeof MutationObserver !== "undefined") {
+  new MutationObserver(() => setPageTheme(themeOfPage())).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
 }
 
 type Pt = { x: number; y: number };
@@ -435,6 +449,8 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
   const highlighters = () => visible().filter((s) => s.tool === "highlighter");
   const pens = () => visible().filter((s) => s.tool === "pen");
   const step = () => patternStep(view().zoom);
+  const paper = () => PAPER[pageTheme()];
+  const fillOf = (s: Stroke) => renderColour(s.colour, s.tool, pageTheme());
   const zoomPercent = () => Math.round(view().zoom * 100);
 
   // ---- the controls -------------------------------------------------------------------------
@@ -480,7 +496,9 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
     );
 
   const colours = () => TOOL_STYLES[drawTool()].colours;
-  const colourName = (hex: string) => colours().find((c) => c.hex === hex)?.name ?? hex;
+  const colourName = (colour: string) => colours().find((c) => c.value === colour)?.name ?? colour;
+  /** A colour as a stroke of the tool the controls set draws it in this theme. */
+  const shown = (colour: string) => renderColour(colour, drawTool(), pageTheme());
 
   function Trigger(p: { popover: Popover; label: string; title: string; children: JSX.Element }) {
     return (
@@ -525,7 +543,7 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
               <span class="ink-divider" aria-hidden="true" />
               <span class="ink-popover-wrap">
                 <Trigger popover="colour" label="Colour" title={`Colour: ${colourName(style().colour)}`}>
-                  <span class="ink-swatch" style={{ background: style().colour }} />
+                  <span class="ink-swatch" style={{ background: shown(style().colour) }} />
                 </Trigger>
                 <Show when={open() === "colour"}>
                   <div class="ink-popover ink-palette" role="group" aria-label="Ink colours" onKeyDown={onPopoverKey} ref={focusChosen}>
@@ -536,14 +554,14 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
                           class="ink-palette-item"
                           aria-label={c.name}
                           title={c.name}
-                          aria-pressed={style().colour === c.hex}
-                          data-colour={c.hex}
+                          aria-pressed={style().colour === c.value}
+                          data-colour={c.value}
                           onClick={() => {
-                            setStyle({ colour: c.hex });
+                            setStyle({ colour: c.value });
                             close(true);
                           }}
                         >
-                          <span class="ink-swatch" style={{ background: c.hex }} />
+                          <span class="ink-swatch" style={{ background: shown(c.value) }} />
                         </button>
                       )}
                     </For>
@@ -551,7 +569,7 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
                       <input
                         type="color"
                         aria-label="Ink colour"
-                        value={style().colour}
+                        value={shown(style().colour)}
                         onInput={(e) => setStyle({ colour: e.currentTarget.value.toLowerCase() })}
                       />
                       <span>Custom</span>
@@ -666,6 +684,8 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
           }}
           role="img"
           aria-label={props.label}
+          data-theme={pageTheme()}
+          style={{ background: paper().paper }}
           tabindex={editing() ? 0 : undefined}
           data-node-view-interactive={editing() ? "" : undefined}
           data-zoom={view().zoom}
@@ -686,17 +706,18 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
         >
           <defs>
             <pattern id={`${id}-lines`} width={step()} height={step()} patternUnits="userSpaceOnUse">
-              <path d={`M0 ${step() / 2}H${step()}`} class="ink-guide" vector-effect="non-scaling-stroke" />
+              <path d={`M0 ${step() / 2}H${step()}`} class="ink-guide" stroke={paper().guide} vector-effect="non-scaling-stroke" />
             </pattern>
             <pattern id={`${id}-grid`} width={step()} height={step()} patternUnits="userSpaceOnUse">
               <path
                 d={`M0 ${step() / 2}H${step()}M${step() / 2} 0V${step()}`}
                 class="ink-guide"
+                stroke={paper().guide}
                 vector-effect="non-scaling-stroke"
               />
             </pattern>
             <pattern id={`${id}-dots`} width={step()} height={step()} patternUnits="userSpaceOnUse">
-              <circle cx={step() / 2} cy={step() / 2} r={1.25 / view().zoom} class="ink-dot" />
+              <circle cx={step() / 2} cy={step() / 2} r={1.25 / view().zoom} class="ink-dot" fill={paper().dot} />
             </pattern>
           </defs>
           <rect
@@ -708,11 +729,11 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
             fill={ink().background === "blank" ? "transparent" : `url(#${id}-${ink().background})`}
           />
           <For each={highlighters()}>
-            {(s) => <path class="ink-stroke ink-highlighter" d={cachedPath(s)} fill={s.colour} />}
+            {(s) => <path class="ink-stroke ink-highlighter" d={cachedPath(s)} fill={fillOf(s)} />}
           </For>
-          <For each={pens()}>{(s) => <path class="ink-stroke ink-pen" d={cachedPath(s)} fill={s.colour} />}</For>
+          <For each={pens()}>{(s) => <path class="ink-stroke ink-pen" d={cachedPath(s)} fill={fillOf(s)} />}</For>
           <Show when={live()}>
-            {(s) => <path class={`ink-stroke ink-live ink-${s().tool}`} d={strokePath(s(), false)} fill={s().colour} />}
+            {(s) => <path class={`ink-stroke ink-live ink-${s().tool}`} d={strokePath(s(), false)} fill={fillOf(s())} />}
           </Show>
         </svg>
         <Show when={props.onChange}>

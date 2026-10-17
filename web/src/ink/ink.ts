@@ -75,7 +75,7 @@ function readStroke(b: Block): Stroke {
   if (known) return known;
   const s: Stroke = {
     tool: b.fields?.tool === "highlighter" ? "highlighter" : "pen",
-    colour: typeof b.fields?.colour === "string" ? b.fields.colour : "#1f2937",
+    colour: typeof b.fields?.colour === "string" ? b.fields.colour : DEFAULT_INK,
     size: num(b.fields?.size, 4),
     points: Array.isArray(b.fields?.points) ? b.fields.points.filter((p): p is number => typeof p === "number") : [],
   };
@@ -388,36 +388,126 @@ export function routePress(
   return s.touchDraws ? tool : "pan";
 }
 
-// ---- tool styles --------------------------------------------------------------------------
+// ---- colours ------------------------------------------------------------------------------
+
+export type InkTheme = "light" | "dark";
 
 /**
- * The ink colours offered for the pen: the default ink and the inline palette's hues (OQ-S4).
- * Strokes store the hex, and the paper is light in both themes, so the hues are the light ones.
+ * The colour a stroke stores for the default ink: the theme's foreground, dark on light paper and
+ * light on dark paper, so a drawing reads in either theme, and on a device set to the other one.
  */
-export const PEN_COLOURS: { name: string; hex: string }[] = [
-  { name: "Ink", hex: "#1f2937" },
-  { name: "Gray", hex: "#6b7280" },
-  { name: "Brown", hex: "#92400e" },
-  { name: "Orange", hex: "#ea580c" },
-  { name: "Yellow", hex: "#ca8a04" },
-  { name: "Green", hex: "#16a34a" },
-  { name: "Blue", hex: "#2563eb" },
-  { name: "Purple", hex: "#9333ea" },
-  { name: "Pink", hex: "#db2777" },
-  { name: "Red", hex: "#dc2626" },
+export const DEFAULT_INK = "ink";
+
+/** The hex the default ink was stored as before the token: a pen stroke in it draws as the token. */
+export const LEGACY_DEFAULT_INK = "#1f2937";
+
+/** The paper, its guides and the default ink in each theme. */
+export const PAPER: Record<InkTheme, { paper: string; guide: string; dot: string; ink: string }> = {
+  light: { paper: "#ffffff", guide: "#dfe5ec", dot: "#94a3b8", ink: "#1f2937" },
+  dark: { paper: "#172033", guide: "#2a364b", dot: "#56647a", ink: "#e2e8f0" },
+};
+
+/**
+ * The inline palette's hues (OQ-S4): the light theme's shade, which the pen stores, and the shade
+ * it draws in on dark paper, the dark theme's `--palette-*` in styles.css.
+ */
+const PALETTE_INK: { name: string; light: string; dark: string }[] = [
+  { name: "Gray", light: "#6b7280", dark: "#9ca3af" },
+  { name: "Brown", light: "#92400e", dark: "#d6a35c" },
+  { name: "Orange", light: "#ea580c", dark: "#fb923c" },
+  { name: "Yellow", light: "#ca8a04", dark: "#facc15" },
+  { name: "Green", light: "#16a34a", dark: "#4ade80" },
+  { name: "Blue", light: "#2563eb", dark: "#60a5fa" },
+  { name: "Purple", light: "#9333ea", dark: "#c084fc" },
+  { name: "Pink", light: "#db2777", dark: "#f472b6" },
+  { name: "Red", light: "#dc2626", dark: "#f87171" },
+];
+
+const DARK_SHADE = new Map(PALETTE_INK.map((c) => [c.light, c.dark]));
+
+type Rgb = [number, number, number];
+
+function rgbOf(hex: string): Rgb | null {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return null;
+  const n = parseInt(m[1]!, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function luminance(rgb: Rgb): number {
+  const lin = (c: number) => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+}
+
+/** The WCAG contrast ratio between two `#rrggbb` colours. */
+export function contrast(a: string, b: string): number {
+  const la = luminance(rgbOf(a) ?? [0, 0, 0]);
+  const lb = luminance(rgbOf(b) ?? [0, 0, 0]);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/** `hex` with its HSL lightness turned over and its hue kept: near-black becomes near-white. */
+function flipLightness(hex: string): string {
+  const rgb = rgbOf(hex) ?? [0, 0, 0];
+  const max = Math.max(...rgb);
+  const min = Math.min(...rgb);
+  // At the same hue and saturation the chroma, max - min, stays, so turning L = (max + min) / 2
+  // over to 1 - L moves every channel by the same amount.
+  const shift = 255 - max - min;
+  return `#${rgb.map((c) => (c + shift).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Pen ink fainter than this against the paper draws with its lightness turned over. */
+const MIN_PEN_CONTRAST = 2;
+
+/**
+ * The colour a stroke draws in, in `theme`. The stored colour never changes, only how it shows:
+ *
+ * - The default ink, and a pen stroke in the hex it was stored as before, draw in the theme's
+ *   foreground.
+ * - On dark paper a palette hue draws in its dark-theme shade, as inline colours do.
+ * - Any other pen colour too faint against the paper, such as black on dark paper, keeps its hue
+ *   with its lightness turned over.
+ * - A highlighter draws in its own colour: its bright shades show on either paper.
+ */
+export function renderColour(colour: string, tool: Tool, theme: InkTheme): string {
+  const ink = PAPER[theme].ink;
+  if (colour === DEFAULT_INK || (tool === "pen" && colour === LEGACY_DEFAULT_INK)) return ink;
+  const hex = colour.toLowerCase();
+  if (!rgbOf(hex)) return ink;
+  if (tool === "highlighter") return hex;
+  if (theme === "dark" && DARK_SHADE.has(hex)) return DARK_SHADE.get(hex)!;
+  return contrast(hex, PAPER[theme].paper) < MIN_PEN_CONTRAST ? flipLightness(hex) : hex;
+}
+
+// ---- tool styles --------------------------------------------------------------------------
+
+/** A colour a tool's popover offers: its name and the value a stroke stores. */
+export interface InkColour {
+  name: string;
+  value: string;
+}
+
+/** The ink colours offered for the pen: the default ink and the inline palette's hues (OQ-S4). */
+export const PEN_COLOURS: InkColour[] = [
+  { name: "Ink", value: DEFAULT_INK },
+  ...PALETTE_INK.map((c) => ({ name: c.name, value: c.light })),
 ];
 
 /** The highlighter's colours: the palette's hues in their bright, felt-tip shades. */
-export const HIGHLIGHTER_COLOURS: { name: string; hex: string }[] = [
-  { name: "Yellow", hex: "#facc15" },
-  { name: "Orange", hex: "#fb923c" },
-  { name: "Green", hex: "#4ade80" },
-  { name: "Blue", hex: "#60a5fa" },
-  { name: "Purple", hex: "#c084fc" },
-  { name: "Pink", hex: "#f472b6" },
-  { name: "Red", hex: "#f87171" },
-  { name: "Brown", hex: "#d6a36a" },
-  { name: "Gray", hex: "#9ca3af" },
+export const HIGHLIGHTER_COLOURS: InkColour[] = [
+  { name: "Yellow", value: "#facc15" },
+  { name: "Orange", value: "#fb923c" },
+  { name: "Green", value: "#4ade80" },
+  { name: "Blue", value: "#60a5fa" },
+  { name: "Purple", value: "#c084fc" },
+  { name: "Pink", value: "#f472b6" },
+  { name: "Red", value: "#f87171" },
+  { name: "Brown", value: "#d6a36a" },
+  { name: "Gray", value: "#9ca3af" },
 ];
 
 export interface ToolStyle {
@@ -426,7 +516,7 @@ export interface ToolStyle {
 }
 
 /** Each drawing tool's colours, sizes and the style it starts with. */
-export const TOOL_STYLES: Record<Tool, { colours: { name: string; hex: string }[]; sizes: number[]; initial: ToolStyle }> = {
-  pen: { colours: PEN_COLOURS, sizes: [2, 4, 8, 16], initial: { colour: "#1f2937", size: 4 } },
+export const TOOL_STYLES: Record<Tool, { colours: InkColour[]; sizes: number[]; initial: ToolStyle }> = {
+  pen: { colours: PEN_COLOURS, sizes: [2, 4, 8, 16], initial: { colour: DEFAULT_INK, size: 4 } },
   highlighter: { colours: HIGHLIGHTER_COLOURS, sizes: [16, 24, 36, 48], initial: { colour: "#facc15", size: 24 } },
 };

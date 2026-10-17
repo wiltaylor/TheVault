@@ -1014,6 +1014,24 @@ fn an_ink_drawing_takes_an_optional_viewport_and_strokes_anywhere_on_its_plane()
 }
 
 #[test]
+fn a_stroke_colour_is_a_hex_or_the_default_ink_token() {
+    let block = |colour: &str| {
+        format!(
+            "content body {{\n  ink {{\n    stroke {{\n      tool = \"pen\"\n      colour = \"{colour}\"\n      size = 4.0\n      points = [1.0, 2.0, 0.5]\n    }}\n  }}\n}}"
+        )
+    };
+    check_kinds(&block("ink")).unwrap();
+    check_kinds(&block("#1f2937")).unwrap();
+    for bad in ["Ink", "black", "#1F2937", "inky"] {
+        let issues = check_kinds(&block(bad)).unwrap_err();
+        assert!(
+            issues.iter().any(|i| i.contains("colour")),
+            "{bad}: {issues:?}"
+        );
+    }
+}
+
+#[test]
 fn an_asset_block_takes_a_viewer_height_and_a_card_flag() {
     let block = |items: &str| {
         format!(

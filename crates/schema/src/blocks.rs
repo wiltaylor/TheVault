@@ -257,9 +257,9 @@ impl Check<'_> {
                 PALETTE.join(", ")
             )),
             (Form::InkColour, Value::Str(s)) if is_ink_colour(s) => None,
-            (Form::InkColour, Value::Str(s)) => {
-                Some(format!("{s:?} is not a lower-case #rrggbb colour"))
-            }
+            (Form::InkColour, Value::Str(s)) => Some(format!(
+                "{s:?} is not a lower-case #rrggbb colour or \"ink\""
+            )),
             (Form::Ident, Value::Str(s)) if is_ident(s) => None,
             (Form::Ident, Value::Str(s)) => Some(format!("{s:?} is not an identifier")),
             (Form::OneOf(set), Value::Str(s)) if set.contains(&s.as_str()) => None,

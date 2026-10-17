@@ -3,10 +3,16 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Block } from "../api";
 import {
+  DEFAULT_INK,
+  LEGACY_DEFAULT_INK,
   MAX_ZOOM,
   MIN_ZOOM,
+  PAPER,
+  PEN_COLOURS,
   type Stroke,
   TOOL_STYLES,
+  contrast,
+  renderColour,
   defaultView,
   fitView,
   hits,
@@ -106,7 +112,7 @@ describe("InkSurface", () => {
     expect(block().blocks).toHaveLength(3);
     expect(block().blocks?.[0]).toEqual({
       kind: "stroke",
-      fields: { tool: "pen", colour: "#1f2937", size: 4, points: [10, 10, 0.5, 100, 10, 0.5, 190, 10, 0.5] },
+      fields: { tool: "pen", colour: "ink", size: 4, points: [10, 10, 0.5, 100, 10, 0.5, 190, 10, 0.5] },
     });
     expect(svg.querySelectorAll(".ink-stroke")).toHaveLength(3);
 
@@ -342,9 +348,9 @@ describe("ink input", () => {
   });
 
   it("starts the highlighter yellow and six times as wide as the pen, with sizes of its own", () => {
-    expect(TOOL_STYLES.pen.initial).toEqual({ colour: "#1f2937", size: 4 });
+    expect(TOOL_STYLES.pen.initial).toEqual({ colour: "ink", size: 4 });
     expect(TOOL_STYLES.highlighter.initial).toEqual({ colour: "#facc15", size: 24 });
-    expect(TOOL_STYLES.highlighter.colours[0]).toEqual({ name: "Yellow", hex: "#facc15" });
+    expect(TOOL_STYLES.highlighter.colours[0]).toEqual({ name: "Yellow", value: "#facc15" });
     expect(TOOL_STYLES.highlighter.sizes).toEqual([16, 24, 36, 48]);
     expect(TOOL_STYLES.pen.sizes).toEqual([2, 4, 8, 16]);
   });
@@ -509,5 +515,118 @@ describe("InkSurface on the endless plane", () => {
     fireEvent.wheel(svg, { deltaY: -Math.log(2) / 0.0025, ctrlKey: true, clientX: 0, clientY: 0 });
     expect(getByTestId("ink-zoom").textContent).toBe("200%");
     expect(svg.getAttribute("viewBox")).toBe("30 20 100 50");
+  });
+});
+
+describe("ink colours per theme", () => {
+  afterEach(() => {
+    document.documentElement.dataset.theme = "light";
+  });
+
+  it("draws the default ink token, and the old default hex on a pen, in the theme's foreground", () => {
+    expect(renderColour(DEFAULT_INK, "pen", "light")).toBe("#1f2937");
+    expect(renderColour(DEFAULT_INK, "pen", "dark")).toBe("#e2e8f0");
+    expect(renderColour(LEGACY_DEFAULT_INK, "pen", "light")).toBe("#1f2937");
+    expect(renderColour(LEGACY_DEFAULT_INK, "pen", "dark")).toBe("#e2e8f0");
+    // A colour that is not a hex at all draws as the default ink, rather than not at all.
+    expect(renderColour("nonsense", "pen", "dark")).toBe("#e2e8f0");
+  });
+
+  it("draws each palette hue in its dark-theme shade on dark paper and as stored on light", () => {
+    const shades: Record<string, string> = {
+      Gray: "#9ca3af",
+      Brown: "#d6a35c",
+      Orange: "#fb923c",
+      Yellow: "#facc15",
+      Green: "#4ade80",
+      Blue: "#60a5fa",
+      Purple: "#c084fc",
+      Pink: "#f472b6",
+      Red: "#f87171",
+    };
+    expect(PEN_COLOURS.map((c) => c.name)).toEqual(["Ink", ...Object.keys(shades)]);
+    for (const c of PEN_COLOURS.slice(1)) {
+      expect(renderColour(c.value, "pen", "light")).toBe(c.value);
+      expect(renderColour(c.value, "pen", "dark")).toBe(shades[c.name]);
+    }
+    // Every pen swatch reads on its paper in both themes.
+    for (const theme of ["light", "dark"] as const) {
+      for (const c of PEN_COLOURS) {
+        expect(contrast(renderColour(c.value, "pen", theme), PAPER[theme].paper)).toBeGreaterThanOrEqual(2.5);
+      }
+    }
+  });
+
+  it("turns over a custom pen colour too faint for the paper, keeping its hue, and leaves the rest", () => {
+    expect(renderColour("#000000", "pen", "dark")).toBe("#ffffff");
+    expect(renderColour("#ffffff", "pen", "light")).toBe("#000000");
+    expect(renderColour("#0f172a", "pen", "dark")).toBe("#d5ddf0");
+    expect(renderColour("#000000", "pen", "light")).toBe("#000000");
+    expect(renderColour("#abcdef", "pen", "dark")).toBe("#abcdef");
+    // The old default hex on a highlighter is a highlighter colour, and highlighters keep theirs.
+    expect(renderColour(LEGACY_DEFAULT_INK, "highlighter", "dark")).toBe(LEGACY_DEFAULT_INK);
+    expect(renderColour("#facc15", "highlighter", "dark")).toBe("#facc15");
+    expect(renderColour("#facc15", "highlighter", "light")).toBe("#facc15");
+  });
+
+  it("has a dark paper with faint light guides in the dark theme, and the light paper unchanged", () => {
+    expect(PAPER.light).toEqual({ paper: "#ffffff", guide: "#dfe5ec", dot: "#94a3b8", ink: "#1f2937" });
+    expect(contrast(PAPER.dark.paper, "#000000")).toBeLessThan(2);
+    expect(contrast(PAPER.dark.guide, PAPER.dark.paper)).toBeGreaterThan(1.1);
+    expect(contrast(PAPER.dark.guide, PAPER.dark.paper)).toBeLessThan(1.6);
+    expect(contrast(PAPER.dark.dot, PAPER.dark.paper)).toBeGreaterThan(1.8);
+    expect(contrast(PAPER.dark.ink, PAPER.dark.paper)).toBeGreaterThan(10);
+  });
+
+  it("draws the surface in the page's theme, and again when the theme changes, without a reload", async () => {
+    const block: Block = {
+      kind: "ink",
+      fields: { width: 200, height: 100, background: "grid" },
+      blocks: [
+        { kind: "stroke", fields: { tool: "pen", colour: "ink", size: 4, points: [10, 10, 0.5] } },
+        { kind: "stroke", fields: { tool: "pen", colour: LEGACY_DEFAULT_INK, size: 4, points: [10, 20, 0.5] } },
+        { kind: "stroke", fields: { tool: "pen", colour: "#2563eb", size: 4, points: [10, 30, 0.5] } },
+        { kind: "stroke", fields: { tool: "highlighter", colour: "#facc15", size: 24, points: [10, 40, 0.5] } },
+      ],
+    };
+    const [b, setB] = createSignal(block);
+    const { getByRole } = render(() => <InkSurface block={b()} label="Drawing" onChange={setB} />);
+    const svg = getByRole("img", { name: "Drawing" });
+    const look = () => ({
+      theme: svg.getAttribute("data-theme"),
+      paper: (svg as unknown as SVGSVGElement).style.background,
+      guide: svg.querySelector(`pattern[id$="-grid"] .ink-guide`)?.getAttribute("stroke"),
+      pens: [...svg.querySelectorAll(".ink-pen")].map((p) => p.getAttribute("fill")),
+      highlighter: svg.querySelector(".ink-highlighter")?.getAttribute("fill"),
+      swatch: getByRole("button", { name: "Colour" }).querySelector<HTMLElement>(".ink-swatch")!.style.background,
+    });
+    expect(look()).toEqual({
+      theme: "light",
+      paper: "rgb(255, 255, 255)",
+      guide: "#dfe5ec",
+      pens: ["#1f2937", "#1f2937", "#2563eb"],
+      highlighter: "#facc15",
+      swatch: "rgb(31, 41, 55)",
+    });
+    document.documentElement.dataset.theme = "dark";
+    await Promise.resolve();
+    expect(look()).toEqual({
+      theme: "dark",
+      paper: "rgb(23, 32, 51)",
+      guide: PAPER.dark.guide,
+      pens: ["#e2e8f0", "#e2e8f0", "#60a5fa"],
+      highlighter: "#facc15",
+      swatch: "rgb(226, 232, 240)",
+    });
+    // The popover's swatches show the colours as they draw here; the stored values stay as they were.
+    fireEvent.click(getByRole("button", { name: "Colour" }));
+    const ink = getByRole("button", { name: "Ink" });
+    expect(ink.getAttribute("data-colour")).toBe("ink");
+    expect(ink.querySelector<HTMLElement>(".ink-swatch")!.style.background).toBe("rgb(226, 232, 240)");
+    expect(getByRole("button", { name: "Blue" }).getAttribute("data-colour")).toBe("#2563eb");
+    expect(b().blocks?.map((s) => s.fields?.colour)).toEqual(["ink", LEGACY_DEFAULT_INK, "#2563eb", "#facc15"]);
+    document.documentElement.dataset.theme = "light";
+    await Promise.resolve();
+    expect(look().pens).toEqual(["#1f2937", "#1f2937", "#2563eb"]);
   });
 });

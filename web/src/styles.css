@@ -61,7 +61,7 @@
   --accent-soft: #172554;
   --hover: #1e293b;
   --highlight: #854d0e;
-  --paper: #f8fafc;
+  --paper: #172033;
   --code-keyword: #c4b5fd;
   --code-string: #86efac;
   --code-number: #fdba74;
@@ -1616,19 +1616,19 @@ mark {
   outline-offset: 2px;
 }
 
+/* The paper, its guides and each stroke's colour follow the theme from ink.ts (PAPER, renderColour). */
 .ink-guide {
   fill: none;
-  /* The paper is light in both themes, so its guides keep the light theme's colours. */
-  stroke: #dfe5ec;
   stroke-width: 1;
-}
-
-.ink-dot {
-  fill: #94a3b8;
 }
 
 .ink-highlighter {
   opacity: 0.5;
+}
+
+/* On dark paper a bright highlighter at half strength glares: it shows fainter. */
+.ink-surface[data-theme="dark"] .ink-highlighter {
+  opacity: 0.4;
 }
 
 .ink-zoom {
