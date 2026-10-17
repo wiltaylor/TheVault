@@ -1,6 +1,6 @@
 import { For, type JSX, Match, Show, Switch } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import type { Block, Json } from "../api";
+import type { Block, FieldDef, Json } from "../api";
 import { QueryView } from "../views/QueryView";
 import { CodeBlock } from "../blocks/CodeBlock";
 import { columnWidth, columnsOf } from "../blocks/columns";
@@ -10,7 +10,9 @@ import { MermaidBlock } from "../blocks/MermaidBlock";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { ControlBlock } from "../controls/ControlView";
 import { InkSurface } from "../ink/InkSurface";
+import { ImageThumb } from "./ImageField";
 import { Inline } from "./Inline";
+import { labelled, labelledText } from "./LabelledList";
 
 /** A field value as plain text. Lists join with commas and records list their members. */
 export function formatValue(value: Json | undefined): string {
@@ -23,6 +25,37 @@ export function formatValue(value: Json | undefined): string {
   }
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return String(value);
+}
+
+/**
+ * A field's value as plain text, with the note's other `fields` at hand: a list with `labels`
+ * shows each value after its label, "mobile +61400000020, home +61400000021".
+ */
+export function fieldText(f: FieldDef, value: Json | undefined, fields?: Record<string, Json | undefined>): string {
+  if (f.kind === "list" && f.labels && Array.isArray(value)) {
+    return labelledText(labelled(value, fields?.[f.labels]));
+  }
+  return formatValue(value);
+}
+
+/**
+ * A field's value, read-only, for cards, tables and the note page: an image field's image as a
+ * thumbnail, everything else as [`fieldText`].
+ */
+export function FieldValue(props: {
+  field: FieldDef;
+  value: Json | undefined;
+  fields?: Record<string, Json | undefined>;
+  size?: "small" | "card";
+}) {
+  return (
+    <Show
+      when={props.field.kind === "asset" && props.field.accept === "image" && typeof props.value === "string" && props.value}
+      fallback={fieldText(props.field, props.value, props.fields)}
+    >
+      {(id) => <ImageThumb id={id() as string} alt={props.field.label} size={props.size} />}
+    </Show>
+  );
 }
 
 function ListItems(props: { items: Block[]; style: string }) {

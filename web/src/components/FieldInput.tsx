@@ -12,6 +12,8 @@ import { geoPoint, imagePoint, mapKind } from "../map/model";
 import { taxonomyDef, typeDef } from "../session";
 import { ChipPicker, matches } from "./ChipPicker";
 import type { Suggestion } from "./Combobox";
+import { ImageField } from "./ImageField";
+import { LabelledList, labelled, labelledWrite } from "./LabelledList";
 import { termPicker } from "./termPicker";
 
 export interface FieldInputProps {
@@ -24,6 +26,68 @@ export interface FieldInputProps {
   placeholder?: string;
   /** Offer no new terms, even for a field on an open taxonomy, as for a field's default. */
   fixedTerms?: boolean;
+  /**
+   * The note's other fields, for an editor that writes more than one field in one edit: a list
+   * with `labels` writes its values and their labels together. Without it, such a list is edited
+   * as a plain list.
+   */
+  related?: RelatedFields;
+}
+
+/** The fields of the note a field belongs to. */
+export interface RelatedFields {
+  /** The note's type name, for suggestions drawn from other notes of the type. */
+  type?: string;
+  value: (name: string) => Json | undefined;
+  /** Write several fields in one edit, `undefined` removing one. */
+  set: (values: Record<string, Json | undefined>) => void;
+}
+
+/**
+ * The labels notes of `type` hold in field `name`, most used first; fetched once per type and
+ * field while the page is open.
+ */
+const knownLabelCache = new Map<string, Promise<string[]>>();
+export function knownLabels(type: string | undefined, name: string): Promise<string[]> {
+  if (!type) return Promise.resolve([]);
+  const key = `${type}\u0000${name}`;
+  let p = knownLabelCache.get(key);
+  if (!p) {
+    p = api
+      .query(`from ${type} select ${name}`, null, 500)
+      .then((page) => {
+        const counts = new Map<string, number>();
+        for (const r of page.rows) {
+          const v = r.fields[name];
+          for (const l of Array.isArray(v) ? v : []) {
+            if (typeof l === "string" && l.trim()) counts.set(l.trim(), (counts.get(l.trim()) ?? 0) + 1);
+          }
+        }
+        return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([l]) => l);
+      })
+      .catch(() => {
+        knownLabelCache.delete(key);
+        return [];
+      });
+    knownLabelCache.set(key, p);
+  }
+  return p;
+}
+
+/** A list of strings with `labels`: one chip per value with its label, both lists written together. */
+function LabelledInput(props: FieldInputProps & { related: RelatedFields; labelsField: string }) {
+  const l = () => labelled(props.value, props.related.value(props.labelsField));
+  return (
+    <LabelledList
+      id={props.id}
+      label={props.label}
+      values={l().values}
+      labels={l().labels}
+      emptyText={props.placeholder}
+      knownLabels={() => knownLabels(props.related.type, props.labelsField)}
+      onChange={(next) => props.related.set(labelledWrite(next, props.field.name, props.labelsField))}
+    />
+  );
 }
 
 const SCALAR_INPUT: Record<string, string> = {
@@ -591,8 +655,19 @@ export function FieldInput(props: FieldInputProps) {
       <Match when={f().kind === "reference"}>
         <ReferencePicker {...props} />
       </Match>
+      <Match when={f().kind === "asset" && f().accept === "image" && !f().multiple}>
+        <ImageField
+          id={props.id}
+          label={props.label}
+          value={typeof props.value === "string" ? props.value : undefined}
+          onChange={(id) => props.onChange(id)}
+        />
+      </Match>
       <Match when={f().kind === "asset"}>
         <AssetInput {...props} />
+      </Match>
+      <Match when={f().kind === "list" && (f().items ?? "string") === "string" && f().labels && props.related}>
+        <LabelledInput {...props} related={props.related!} labelsField={f().labels!} />
       </Match>
       <Match when={f().kind === "list" && (f().items ?? "string") === "string"}>
         <Picker {...props} freeText suggest={() => []} />

@@ -52,6 +52,10 @@ export interface FieldDef {
   values?: string;
   /** `location`: the image an image map's pins sit on, null on a real-world map. */
   image?: string | null;
+  /** A list of strings: the field holding one label per value, in the same order. */
+  labels?: string | null;
+  /** `asset`: `"image"` when the field takes only images. */
+  accept?: "any" | "image";
 }
 
 export type TemplateItem = { slot: string; label: string | null } | { block: Block };

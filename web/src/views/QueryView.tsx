@@ -16,7 +16,7 @@ import {
 import { type Block, type Row, api } from "../api";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { changes } from "../changes";
-import { formatValue } from "../components/Render";
+import { FieldValue, formatValue } from "../components/Render";
 import { VirtualList } from "../components/VirtualList";
 import { type PagedRows, createPagedRows } from "../components/pagedRows";
 import { MapView } from "../map/MapView";
@@ -54,6 +54,19 @@ function Placeholder() {
   return <span class="query-placeholder" data-testid="query-placeholder">…</span>;
 }
 
+/** A table cell: the field's value, an image field's thumbnail, a labelled list with its labels. */
+function Cell(props: { row: Row; name: string }) {
+  const f = () => {
+    const t = typeDef(props.row.type);
+    return t ? slotField(t, props.name) : undefined;
+  };
+  return (
+    <Show when={f()} fallback={formatValue(props.row.fields[props.name])}>
+      {(field) => <FieldValue field={field()} value={props.row.fields[props.name]} fields={props.row.fields} size="small" />}
+    </Show>
+  );
+}
+
 function TableView(props: { view: ViewDef; data: PagedRows; total: number }) {
   const columns = () => props.view.columns;
   const label = (c: string) => {
@@ -80,7 +93,7 @@ function TableView(props: { view: ViewDef; data: PagedRows; total: number }) {
                 <For each={columns()}>
                   {(c) => (
                     <span class="query-cell">
-                      {c === "title" ? <NoteLink row={row()} /> : formatValue(row().fields[c])}
+                      {c === "title" ? <NoteLink row={row()} /> : <Cell row={row()} name={c} />}
                     </span>
                   )}
                 </For>

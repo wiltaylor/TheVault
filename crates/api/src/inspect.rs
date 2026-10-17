@@ -94,6 +94,10 @@ fn field_json(f: &FieldDef) -> Value {
         }
         FieldKind::List { items } => {
             out.insert("items".into(), json!(scalar_name(*items)));
+            out.insert("labels".into(), json!(f.labels));
+        }
+        FieldKind::Asset => {
+            out.insert("accept".into(), json!(f.accept.name()));
         }
         FieldKind::Dict { values } => {
             out.insert("values".into(), json!(scalar_name(*values)));

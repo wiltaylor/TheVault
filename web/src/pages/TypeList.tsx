@@ -3,7 +3,7 @@ import { For, Match, Show, Switch, createEffect, createResource, createSignal, o
 import { type Row, type TypeDef, api, isArchived } from "../api";
 import { changes } from "../changes";
 import { ArchiveIcon, SearchIcon, TypeIcon } from "../components/Icon";
-import { formatValue } from "../components/Render";
+import { FieldValue } from "../components/Render";
 import { knowArchived, knowTitle } from "../editor/titles";
 import { typeDef } from "../session";
 import {
@@ -295,7 +295,13 @@ function ListTable(props: { type: TypeDef; rows: Row[] }) {
                     <span class="archived-chip">Archived</span>
                   </Show>
                 </td>
-                <For each={columns()}>{(f) => <td>{formatValue(row.fields[f.name])}</td>}</For>
+                <For each={columns()}>
+                  {(f) => (
+                    <td>
+                      <FieldValue field={f} value={row.fields[f.name]} fields={row.fields} size="small" />
+                    </td>
+                  )}
+                </For>
                 <td class="type-table-updated">
                   <time datetime={typeof row.fields.updated === "string" ? row.fields.updated : undefined}>
                     {formatDate(row.fields.updated)}

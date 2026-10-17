@@ -12,7 +12,8 @@
 //!    declares and the vault's type lacks, as a planned schema change that edits no note. A field
 //!    the vault has is never removed, renamed or changed. The `default` template gains a slot for
 //!    an added field when the shipped `default` template has one, after the slot the shipped
-//!    template puts before it; no other template is touched.
+//!    template puts before it, else before the one it puts after it; no other template is
+//!    touched.
 //! 3. **Missing device files and scripts.** Each file of [`SHIPPED_FILES`] the vault lacks is
 //!    written, the scripts before the device file that names them.
 //! 4. **Shipped file upgrades.** A file of [`SHIPPED_FILES`] whose content is still a version the
@@ -120,10 +121,175 @@ pub struct UpgradeStep {
 /// Every one-time vault upgrade, in the order they run. Adding one is one line here, such as
 /// `UpgradeStep { id: "0001_person_emails", run: person_emails },` with `person_emails` a
 /// `fn(&Writer) -> Result<()>` beside it. Never remove or reorder a step that has shipped.
-pub const UPGRADE_STEPS: &[UpgradeStep] = &[UpgradeStep {
-    id: "0001_person_emails",
-    run: person_emails,
-}];
+pub const UPGRADE_STEPS: &[UpgradeStep] = &[
+    UpgradeStep {
+        id: "0001_person_emails",
+        run: person_emails,
+    },
+    UpgradeStep {
+        id: "0002_person_labels",
+        run: person_labels,
+    },
+];
+
+/// The person fields whose values carry labels, each with the field holding its labels.
+const LABELLED: [(&str, &str); 3] = [
+    ("emails", "email_labels"),
+    ("phones", "phone_labels"),
+    ("addresses", "address_labels"),
+];
+
+/// Step `0002_person_labels` (D16): `emails`, `phones` and `addresses` on a `person` type from
+/// before a value and its label were edited as one chip are lists of strings with no `labels`.
+/// One planned type change that edits no note gives each of the three that the type has its
+/// `labels`, adding the shipped label field after it when the type lacks it; gives `photo`
+/// `accept = "image"` when every photo in the vault is an image; and takes the slots of the three
+/// label fields out of the `default` template. Nothing else the user changed in the type is
+/// touched. A field the type lacks here, such as postal `addresses` before step
+/// `0001_person_emails` freed the name, comes with its `labels` from the seeding that runs next.
+fn person_labels(w: &Writer) -> Result<()> {
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(PERSON_TYPE) else {
+        return Ok(());
+    };
+    let is_strings = |name: &str| {
+        ty.field(name).is_some_and(|f| {
+            matches!(
+                f.kind,
+                schema::FieldKind::List {
+                    items: schema::Scalar::String
+                }
+            )
+        })
+    };
+    if ty.fields.iter().any(|f| f.labels.is_some()) {
+        return Ok(());
+    }
+    // Each value field to label, and whether its label field must be added.
+    let labelled: Vec<(&str, &str, bool)> = LABELLED
+        .iter()
+        .filter(|(v, l)| is_strings(v) && (is_strings(l) || ty.field(l).is_none()))
+        .map(|(v, l)| (*v, *l, ty.field(l).is_none()))
+        .collect();
+    if labelled.is_empty() {
+        return Ok(());
+    }
+    let photo_images = ty
+        .field("photo")
+        .is_some_and(|f| f.kind == schema::FieldKind::Asset && f.accept == schema::Accept::Any)
+        && every_photo_is_an_image(w)?;
+    let text = w.vault.read_text(&type_path(PERSON_TYPE))?;
+    let change = TypeChange {
+        wcl: person_with_labels(&text, &labelled, photo_images)?,
+        ..TypeChange::default()
+    };
+    let plan = w.plan_type_change(PERSON_TYPE, &change)?;
+    if !plan.changes.is_empty() {
+        eprintln!("step 0002_person_labels was not applied: it would edit notes");
+        return Ok(());
+    }
+    w.apply_type_change(
+        PERSON_TYPE,
+        &change,
+        &plan.token,
+        &Author::Task(SERVER_AUTHOR.to_owned()),
+    )?;
+    Ok(())
+}
+
+/// Whether every `photo` of every person note names an asset in the vault whose file is an
+/// image. An asset the vault folder lacks is not known to be one.
+fn every_photo_is_an_image(w: &Writer) -> Result<bool> {
+    for id in w.note_ids(PERSON_TYPE)? {
+        let path = crate::note_path(PERSON_TYPE, &id);
+        let doc = crate::Input::Wcl(w.vault.read_text(&path)?).parse(&path)?;
+        let ids: Vec<&str> = match doc.field("photo") {
+            None => Vec::new(),
+            Some(DocValue::Str(s)) => vec![s.as_str()],
+            Some(DocValue::List(l)) => l.iter().filter_map(DocValue::as_str).collect(),
+            Some(_) => return Ok(false),
+        };
+        for asset in ids {
+            let image = w
+                .find_asset(asset)
+                .is_some_and(|a| schema::is_image_filename(&a.filename));
+            if !image {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// The person type file `vault_text` with `labels` on each value field of `labelled`, the
+/// shipped label field after it where `labelled` says the type lacks it, `accept = "image"` on
+/// `photo` when `photo_images`, and no slot of a label field in the `default` template.
+fn person_with_labels(
+    vault_text: &str,
+    labelled: &[(&str, &str, bool)],
+    photo_images: bool,
+) -> Result<String> {
+    let path = type_path(PERSON_TYPE);
+    let shipped: Source = store::parse_data_only(DEFAULT_PERSON_TYPE, &path)?;
+    let shipped_field = |name: &str| {
+        shipped
+            .items
+            .iter()
+            .find(|i| block(i, "field").and_then(label) == Some(name))
+            .cloned()
+            .expect("the shipped person type has the label fields")
+    };
+    let mut ast = store::parse_data_only(vault_text, &path)?;
+    let attribute = |name: &str, value: &str| -> Result<Item> {
+        let src = store::parse_data_only(&format!("{name} = {value:?}\n"), &path)?;
+        Ok(src.items.into_iter().next().expect("one attribute"))
+    };
+    let mut k = 0;
+    while k < ast.items.len() {
+        let mut insert = None;
+        if let Some(field) = block_mut(&mut ast.items[k], "field") {
+            let name = label(field).unwrap_or_default().to_owned();
+            if let Some((_, labels, add)) = labelled.iter().find(|(v, _, _)| *v == name) {
+                field.items.push(attribute("labels", labels)?);
+                if *add {
+                    insert = Some(shipped_field(labels));
+                }
+            } else if name == "photo" && photo_images {
+                field
+                    .items
+                    .retain(|i| !matches!(i, Item::Field(f) if f.name == "accept"));
+                field.items.push(attribute("accept", "image")?);
+            }
+        }
+        if let Some(item) = insert {
+            ast.items.insert(k + 1, item);
+            k += 1;
+        }
+        k += 1;
+    }
+    let label_fields: Vec<&str> = LABELLED.iter().map(|(_, l)| *l).collect();
+    for item in &mut ast.items {
+        if let Some(template) = block_mut(item, "template").filter(|b| label(b) == Some("default"))
+        {
+            drop_slots(&mut template.items, &label_fields);
+        }
+    }
+    Ok(store::to_canonical(&ast))
+}
+
+/// Remove every slot of one of `fields` from `items` and the blocks they hold.
+fn drop_slots(items: &mut Vec<Item>, fields: &[&str]) {
+    items.retain(|i| {
+        !block(i, "slot")
+            .and_then(label)
+            .is_some_and(|f| fields.contains(&f))
+    });
+    for item in items {
+        if let Item::Block(b) = item {
+            drop_slots(&mut b.items, fields);
+        }
+    }
+}
 
 /// Step `0001_person_emails` (D16): a `person` type with `addresses` or `email` and no `emails`
 /// is from before people carried every contact detail, when `addresses` held email addresses and
@@ -184,6 +350,12 @@ fn person_with_emails(vault_text: &str) -> Result<String> {
         .find(|i| block(i, "field").and_then(label) == Some("emails"))
         .expect("the shipped person type has emails")
         .clone();
+    // As 0.1.6 shipped it: `labels` and its field come with step `0002_person_labels`.
+    let mut emails = emails;
+    if let Some(b) = block_mut(&mut emails, "field") {
+        b.items
+            .retain(|i| !matches!(i, Item::Field(f) if f.name == "labels"));
+    }
     let mut ast = store::parse_data_only(vault_text, &path)?;
     let at = |ast: &Source, name: &str| {
         ast.items
@@ -636,8 +808,8 @@ fn with_shipped_fields(
                 continue;
             };
             let slot = shipped_slots[n].1.clone();
-            // After the nearest slot the shipped template puts before it, else at the end of the
-            // first tab.
+            // After the nearest slot the shipped template puts before it, else before the nearest
+            // one it puts after it, else at the end of the first tab.
             let mut placed = false;
             for (before, _) in shipped_slots[..n].iter().rev() {
                 for tab in template
@@ -657,6 +829,29 @@ fn with_shipped_fields(
                 }
                 if placed {
                     break;
+                }
+            }
+            // Else before the nearest slot it puts after it.
+            if !placed {
+                for (after, _) in &shipped_slots[n + 1..] {
+                    for tab in template
+                        .items
+                        .iter_mut()
+                        .filter_map(|i| block_mut(i, "tab"))
+                    {
+                        if let Some(k) = tab
+                            .items
+                            .iter()
+                            .position(|i| block(i, "slot").and_then(label) == Some(after.as_str()))
+                        {
+                            tab.items.insert(k, slot.clone());
+                            placed = true;
+                            break;
+                        }
+                    }
+                    if placed {
+                        break;
+                    }
                 }
             }
             if !placed

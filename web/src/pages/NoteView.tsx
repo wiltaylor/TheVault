@@ -6,10 +6,10 @@ import { type Autosave, type SaveState, createAutosave } from "../autosave";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { ConflictView } from "../components/ConflictView";
 import { type ControlBinding, ControlBindingContext } from "../controls/binding";
-import { FieldInput, hasInput } from "../components/FieldInput";
+import { FieldInput, type RelatedFields, hasInput } from "../components/FieldInput";
 import { FieldRefs, type FieldRefValues } from "../components/fieldRefs";
 import { refText } from "../components/refText";
-import { BlockView, Blocks, ColumnsView, formatValue } from "../components/Render";
+import { BlockView, Blocks, ColumnsView, FieldValue, formatValue } from "../components/Render";
 import { slotOfBlock } from "../blocks/columns";
 import { ContentEditor } from "../editor/ContentEditor";
 import { knowArchived, knowTitle, noteTitle } from "../editor/titles";
@@ -21,6 +21,7 @@ import {
   applyEdits,
   compoundBlock,
   fieldValue,
+  labelFields,
   missingRequired,
   mergeDocs,
   pageTemplate,
@@ -521,6 +522,20 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     edit((d) => (f.kind === "dict" ? applyDict(d, f, v) : applyEdits(d, { [f.name]: v })));
   }
 
+  /** Several fields in one edit, such as a labelled list's values and its labels. */
+  function setFields(values: Record<string, Json | undefined>) {
+    edit((d) => applyEdits(d, values));
+  }
+
+  /** The note's other fields, for an editor that writes two at once. */
+  const related: RelatedFields = {
+    get type() {
+      return type()?.name;
+    },
+    value: (name) => shown().fields[name],
+    set: (values) => setFields(values),
+  };
+
   const missing = () => {
     const t = type();
     return t ? missingRequired(t, doc()) : [];
@@ -676,6 +691,9 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     value: (f) => fieldValue(shown(), f),
     get set() {
       return preview() ? undefined : write;
+    },
+    get setMany() {
+      return preview() ? undefined : setFields;
     },
     get reason() {
       return preview() ? "Viewing an older version." : undefined;
@@ -1000,7 +1018,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     const ids = () => (Array.isArray(p.value) ? p.value : [p.value]).filter((x) => typeof x === "string");
     return (
       <Show when={p.value !== undefined} fallback={<span class="muted">—</span>}>
-        <Show when={p.field.kind === "reference"} fallback={formatValue(p.value)}>
+        <Show when={p.field.kind === "reference"} fallback={<FieldValue field={p.field} value={p.value} fields={shown().fields} />}>
           <For each={ids()}>
             {(id, i) => (
               <>
@@ -1067,6 +1085,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
       return <FieldInput
           field={f}
           value={fieldValue(shown(), f)}
+          related={related}
           onChange={(v) => setField(f, v)}
           label={p.label}
           id={id}
@@ -1131,6 +1150,8 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
 
   function Slot(p: { name: string; label: string | null }) {
     const t = type();
+    // A field holding another field's labels is edited with that field, not on its own.
+    if (t && labelFields(t).has(p.name)) return null;
     const f = t ? slotField(t, p.name) : undefined;
     return (
       <Show when={f} fallback={<div class="field missing">Unknown field {p.name}</div>}>
