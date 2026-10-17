@@ -178,7 +178,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 
 ## 2. Every route in the endpoint listing
 
-The listing has 85 routes. `/api/test/clock` is left out of the listing on purpose: it exists only when a test build runs with `--test-clock` (S7).
+The listing has 86 routes. `/api/test/clock` is left out of the listing on purpose: it exists only when a test build runs with `--test-clock` (S7).
 
 | Route | CLI | UI | Note |
 |---|---|---|---|
@@ -261,6 +261,7 @@ The listing has 85 routes. `/api/test/clock` is left out of the listing on purpo
 | `PUT /api/devices/{id}/push` | none | not used | The Android app registers its UnifiedPush endpoint |
 | `PUT /api/devices/{id}/bases` | none | not used | The apps' sync engine records its bases |
 | `GET /api/sync/info` | none | not used | The apps check it before they sync |
+| `GET /api/version` | none | Settings > General, About | Public: no credentials. In the apps the embedded server asks the home server |
 | `GET /api/sync/changes` | none | not used | The apps' sync engine pulls it |
 | `GET /api/clients` | `vault clients list` | Devices and `/apps`, Get the apps | Public: no credentials. The desktop app's update check reads it too |
 | `GET /api/clients/{filename}` | none | Devices and `/apps`, Download | Public. A plain download, with Range and an SHA-256 ETag |

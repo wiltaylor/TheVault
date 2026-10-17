@@ -19,11 +19,22 @@ async function pair(name: string): Promise<string> {
   return id;
 }
 
-/** Make the page an app's, paired as device `id`. */
-async function inApp(page: Page, id: string | null) {
+/** Make the page an app's, paired as device `id`, built as `build`. */
+async function inApp(
+  page: Page,
+  id: string | null,
+  build: { version: string; platform: string; build: string } = { version: "0.1.3", platform: "linux-appimage", build: "release" },
+) {
   await page.route("**/api/app", (route) =>
     route.fulfill({
-      json: { app: true, paired: id !== null, device_id: id, device_name: id && "This laptop", server_url: id && "https://home" },
+      json: {
+        app: true,
+        paired: id !== null,
+        device_id: id,
+        device_name: id && "This laptop",
+        server_url: id && "https://home",
+        ...build,
+      },
     }),
   );
 }
@@ -92,4 +103,56 @@ test("in an app that is not paired, Settings > Devices says so", async ({ page }
   await unavailable(page, "**/api/devices", "not_paired");
   await logIn(page, "/settings/devices");
   await expect(page.getByRole("alert")).toHaveText("Not paired");
+});
+
+test("in the desktop app, Settings > General's About shows the app, the home server and the update check", async ({
+  page,
+  admin,
+}) => {
+  const server = ((await (await admin.get("/api/version")).json()) as { server_version: string }).server_version;
+  await inApp(page, "01JZZZZZZZZZZZZZZZZZZZZZZZ");
+  let checked = false;
+  await page.route("**/_desktop/status", (route) =>
+    route.fulfill({
+      json: {
+        update: checked ? { version: "0.1.4", ready: true, url: "x", source: "server" } : null,
+        updater: {
+          install: "appimage",
+          checks: checked ? 2 : 1,
+          ready: checked ? "0.1.4" : null,
+          error: null,
+          checking: false,
+          last_checked: checked ? 2_000 : 1_000,
+          available: true,
+        },
+        settings: { update_check: true },
+      },
+    }),
+  );
+  await page.route("**/_desktop/update/check", (route) => {
+    checked = true;
+    return route.fulfill({ status: 202, json: {} });
+  });
+  await logIn(page, "/settings");
+  const about = page.getByRole("group", { name: "About" });
+  await expect(about.locator('[data-about="app"]')).toHaveText("TheVault 0.1.3");
+  await expect(about.locator('[data-about="platform"]')).toHaveText("Linux AppImage");
+  await expect(about.locator('[data-about="build"]')).toHaveText("release");
+  await expect(about.locator('[data-about="device"]')).toHaveText("This laptop");
+  await expect(about.locator('[data-about="server"]')).toHaveText(server);
+  await expect(about.locator('[data-about="updates"]')).toHaveText("Up to date");
+  await about.getByRole("button", { name: "Check for updates" }).click();
+  await expect(about.locator('[data-about="updates"]')).toHaveText("0.1.4 ready — restart to update");
+  await expect(about.getByRole("button", { name: "Restart to update" })).toBeVisible();
+});
+
+test("in the Android app offline, About says the home server is unreachable", async ({ page }) => {
+  await inApp(page, "01JZZZZZZZZZZZZZZZZZZZZZZZ", { version: "0.1.3", platform: "android", build: "debug" });
+  await unavailable(page, "**/api/version", "offline");
+  await logIn(page, "/settings");
+  const about = page.getByRole("group", { name: "About" });
+  await expect(about.locator('[data-about="app"]')).toHaveText("TheVault 0.1.3");
+  await expect(about.locator('[data-about="platform"]')).toHaveText("Android");
+  await expect(about.locator('[data-about="build"]')).toHaveText("debug");
+  await expect(about.locator('[data-about="server"]')).toHaveText("unreachable");
 });

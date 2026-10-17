@@ -134,6 +134,12 @@ class AppUpdateWorker(context: Context, params: WorkerParameters) : Worker(conte
             return (info.versionName ?: "0.0.0") to debuggable
         }
 
+        /** When the last check finished, in milliseconds since the epoch, or null before the first. */
+        fun lastChecked(context: Context): Long? {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            return if (prefs.contains(CHECKED)) prefs.getLong(CHECKED, 0) else null
+        }
+
         /** The last check's status and message, or null before the first. */
         fun lastStatus(context: Context): Pair<String, String>? {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

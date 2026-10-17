@@ -255,6 +255,22 @@ test("a thevault://note link opens the note", async () => {
   await waitFor("the linked note's title", async () => (await app.text("[aria-label='Title']")) === "Linked");
 });
 
+test("Settings > General's About shows the app's version from tauri.conf.json and the home server's", async () => {
+  const conf = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+  const server = (await home.api("GET", "/api/version")).server_version;
+  await app.navigate(`${ORIGIN}/settings`);
+  const about = (key) => app.text(`[data-about='${key}']`);
+  await waitFor("the app's version", async () => (await about("app")) === `TheVault ${conf.version}`);
+  assert.equal(await about("platform"), "Linux AppImage");
+  assert.equal(await about("build"), "debug");
+  await waitFor("the home server's version", async () => (await about("server")) === server);
+  // The update check runs when asked, whatever the timer says.
+  const checks = (await status()).updater.checks;
+  await app.click(await app.find("[aria-label='Updates'] button"));
+  await waitFor("the asked-for check", async () => (await status()).updater.checks > checks, 60_000);
+  await waitFor("up to date", async () => (await about("updates")) === "Up to date");
+});
+
 test("a newer release is offered in the window, and Later hides the offer", async () => {
   await app.quit();
   desktop.releases.tag = "v99.0.0";

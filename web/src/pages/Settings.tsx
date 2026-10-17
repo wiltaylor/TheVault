@@ -1,5 +1,6 @@
 import { Show, createSignal } from "solid-js";
 import { logOut } from "../session";
+import { About } from "./About";
 import { DEFAULT_TILES, isTileTemplate, setTileUrl, tileUrl, validTileUrl } from "../map/model";
 
 /** Settings kept in this browser. */
@@ -18,6 +19,7 @@ export function Settings() {
   return (
     <section class="settings">
       <h1>General settings</h1>
+      <About />
       <form class="settings-form" aria-label="Map tiles" onSubmit={save}>
         <h2>Map tiles</h2>
         <p class="muted">

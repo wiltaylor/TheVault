@@ -1,4 +1,4 @@
-/// The commands onboarding and Settings > Devices call; each forwards to the Kotlin plugin in
+/// The commands onboarding, Settings > Devices and Settings > General call; each forwards to the Kotlin plugin in
 /// `android/`.
 const COMMANDS: &[&str] = &[
     "open_capture_setup",
@@ -6,6 +6,8 @@ const COMMANDS: &[&str] = &[
     "import_history",
     "import_status",
     "check_now",
+    "update_status",
+    "check_for_updates",
 ];
 
 fn main() {

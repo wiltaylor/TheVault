@@ -10,6 +10,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import org.json.JSONObject
 
 /**
  * TheVault's device plugin (note 01). When the app opens it hands the Rust core the stored
@@ -23,7 +24,8 @@ import app.tauri.plugin.Plugin
  * It also keeps the page clear of the system bars and the keyboard ([SystemBars], ticket 79).
  *
  * Commands for the webview: `open_capture_setup`, `capture_status`, and for Settings > Devices'
- * "This device" section `import_history`, `import_status` and `check_now`.
+ * "This device" section `import_history`, `import_status` and `check_now`, and for Settings >
+ * General's About section `update_status` and `check_for_updates`.
  */
 @TauriPlugin
 class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
@@ -183,6 +185,28 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.reject(e.message ?: e.toString())
             }
         }
+    }
+
+    /**
+     * Settings > General's update status (D27): `{ status, message, checked }`, what the last
+     * update check decided, why, and when in milliseconds since the epoch; null before the first.
+     */
+    @Command
+    fun updateStatus(invoke: Invoke) {
+        val app = activity.applicationContext
+        val answer = JSObject()
+        val last = AppUpdateWorker.lastStatus(app)
+        answer.put("status", last?.first ?: JSONObject.NULL)
+        answer.put("message", last?.second ?: JSONObject.NULL)
+        answer.put("checked", AppUpdateWorker.lastChecked(app) ?: JSONObject.NULL)
+        invoke.resolve(answer)
+    }
+
+    /** Settings > General's "Check for updates": run the update check now, once online. */
+    @Command
+    fun checkForUpdates(invoke: Invoke) {
+        AppUpdateWorker.enqueue(activity.applicationContext)
+        invoke.resolve()
     }
 
     /** A tapped notification: mark it read and show its note or page. */

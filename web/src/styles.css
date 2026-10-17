@@ -2178,6 +2178,33 @@ a.button {
   gap: 0.5rem;
 }
 
+/* Settings > General's About: label and value side by side. */
+.about-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1.25rem;
+  margin: 0;
+}
+
+.about-list dt {
+  color: var(--muted);
+}
+
+.about-list dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.about-updates {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.about-updates h3,
+.about-updates p {
+  margin: 0;
+}
+
 /* Kanban: one column per term, scrolling sideways when they do not fit. */
 .kanban {
   display: flex;

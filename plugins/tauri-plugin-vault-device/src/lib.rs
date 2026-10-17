@@ -9,9 +9,10 @@
 //! commands (D17). [`jni`] holds those entry points and [`core`] the core they share with the
 //! app's webview.
 //!
-//! The commands here are for the webview: `open_capture_setup`, `capture_status`, and Settings >
-//! Devices' "This device" actions `import_history`, `import_status` and `check_now`. They forward
-//! to the Kotlin plugin, and fail anywhere but Android.
+//! The commands here are for the webview: `open_capture_setup`, `capture_status`, Settings >
+//! Devices' "This device" actions `import_history`, `import_status` and `check_now`, and Settings >
+//! General's `update_status` and `check_for_updates`. They forward to the Kotlin plugin, and fail
+//! anywhere but Android.
 
 use serde_json::{Value as Json, json};
 use tauri::plugin::{Builder, TauriPlugin};
@@ -99,6 +100,19 @@ async fn check_now<R: Runtime>(app: AppHandle<R>) -> Result<Json, String> {
     run_kotlin(&app, "checkNow", json!({}))
 }
 
+/// `{ status, message, checked }`: what the app update check last decided, why, and when, in
+/// milliseconds since the Unix epoch; each is null before the first check (D27).
+#[tauri::command]
+async fn update_status<R: Runtime>(app: AppHandle<R>) -> Result<Json, String> {
+    run_kotlin(&app, "updateStatus", json!({}))
+}
+
+/// Check the home server for a newer app build now, once the phone is online (D27).
+#[tauri::command]
+async fn check_for_updates<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    run_kotlin(&app, "checkForUpdates", json!({})).map(|_| ())
+}
+
 /// Why the core failed to open in the plugin's setup, managed instead of the core so the app can
 /// show it.
 #[derive(Debug, Clone)]
@@ -113,7 +127,9 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             capture_status,
             import_history,
             import_status,
-            check_now
+            check_now,
+            update_status,
+            check_for_updates
         ])
         .setup(|app, api| {
             // Android's data folder is the app's own (`Context.getDataDir`); elsewhere it is
@@ -125,6 +141,16 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let vault = core::vault_dir(&data);
             match core::open(&vault) {
                 Ok(core) => {
+                    core.server().set_app(embedded::AppBuild {
+                        version: app.package_info().version.to_string(),
+                        platform: core::PLATFORM.to_owned(),
+                        build: if cfg!(debug_assertions) {
+                            "debug"
+                        } else {
+                            "release"
+                        }
+                        .to_owned(),
+                    });
                     app.manage(core);
                 }
                 // The app shows this instead of aborting: a panic here takes the process down

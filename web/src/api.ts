@@ -520,6 +520,12 @@ export interface AppInfo {
   device_id: string | null;
   device_name: string | null;
   server_url: string | null;
+  /** The app's version, from its `tauri.conf.json`; null from an app too old to say. */
+  version?: string | null;
+  /** `linux-appimage`, `linux-package` (deb or rpm), `linux` or `android`. */
+  platform?: string | null;
+  /** `release` or `debug`. */
+  build?: string | null;
 }
 
 /** Where a note's history came from: the home server's, or in an app offline, the app's own. */
@@ -794,6 +800,8 @@ export const api = {
   devices: async () => (await request<{ devices: Device[] }>("GET", "/api/devices")).devices,
   /** The app builds the server hands out. Public: it needs no session. */
   clients: () => request<{ clients: ClientBuild[]; enabled: boolean }>("GET", "/api/clients"),
+  /** The home server's version. In an app the embedded server asks the home server. */
+  serverVersion: async () => (await request<{ server_version: string }>("GET", "/api/version")).server_version,
   /** The app this page runs in, or null in a browser: the home server answers 404. */
   app: async (): Promise<AppInfo | null> => {
     try {

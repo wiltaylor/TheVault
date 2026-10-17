@@ -247,6 +247,7 @@ fn build() -> Built {
         .put("/api/devices/{id}/push", devices::put_push)
         .put("/api/devices/{id}/bases", sync::put_bases)
         .get("/api/sync/info", sync::info)
+        .get("/api/version", sync::version)
         .get("/api/sync/changes", sync::changes)
         .get("/api/devices/{id}/commands", devices::commands)
         .post("/api/devices/{id}/commands", devices::queue_command)

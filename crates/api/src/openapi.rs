@@ -354,6 +354,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/version",
+        "The server's version, for Settings > General; needs no credentials",
+    ),
+    (
+        "GET",
         "/api/sync/changes",
         "Every note and definition file changed after ?since=, oldest first, paged by ?limit=, with next and latest",
     ),

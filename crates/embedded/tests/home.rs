@@ -532,3 +532,40 @@ fn a_phone_asks_itself_to_import_through_the_home_server() {
     );
     assert!(ids(&admin.call("GET", &other, None, 200), "commands").is_empty());
 }
+
+#[test]
+fn the_app_says_its_build_and_asks_the_home_server_for_its_version() {
+    let server = TestServer::start_seeded(seed);
+    let device = Device::pair(&server, "Laptop");
+
+    // Before the app says which build it is, the build fields are null.
+    let app = device.call("GET", "/api/app", None, 200);
+    assert_eq!(app["version"], Value::Null, "{app}");
+    device.embedded.set_app(embedded::AppBuild {
+        version: "9.8.7".to_owned(),
+        platform: "linux-appimage".to_owned(),
+        build: "release".to_owned(),
+    });
+    let app = device.call("GET", "/api/app", None, 200);
+    assert_eq!(app["version"], "9.8.7", "{app}");
+    assert_eq!(app["platform"], "linux-appimage", "{app}");
+    assert_eq!(app["build"], "release", "{app}");
+    assert_eq!(app["device_name"], "Laptop", "{app}");
+
+    // `/api/version` is the home server's, not the embedded server's own.
+    let version = device.call("GET", "/api/version", None, 200);
+    assert_eq!(
+        version,
+        json!({ "server_version": env!("CARGO_PKG_VERSION") })
+    );
+
+    device.go_offline();
+    let out = device.call("GET", "/api/version", None, 503);
+    assert_eq!(out["error"], "offline", "{out}");
+    device.embedded.set_remote(None);
+    let out = device.call("GET", "/api/version", None, 503);
+    assert_eq!(out["error"], "not_paired", "{out}");
+    // The app build stays.
+    let app = device.call("GET", "/api/app", None, 200);
+    assert_eq!(app["version"], "9.8.7", "{app}");
+}

@@ -108,7 +108,8 @@ const PUBLIC_READ_PATHS: [&str; 1] = ["/api/clients"];
 
 /// The scope a request needs, or `None` for the public endpoints: health, login, device pairing,
 /// which checks the password or a pairing code itself, the sync handshake, which an app reads
-/// before it pairs (D27), and the app downloads under [`PUBLIC_READ_PATHS`].
+/// before it pairs (D27), the server's version, and the app downloads under
+/// [`PUBLIC_READ_PATHS`].
 pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     let under = |prefix: &str| {
         path == prefix
@@ -118,7 +119,7 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     };
     let reads = matches!(*method, Method::GET | Method::HEAD);
     if path == "/api/health"
-        || (method == Method::GET && path == "/api/sync/info")
+        || (method == Method::GET && (path == "/api/sync/info" || path == "/api/version"))
         || (reads && PUBLIC_READ_PATHS.iter().any(|p| under(p)))
         || (method == Method::POST && (path == "/api/login" || path == "/api/devices/pair"))
     {
@@ -414,6 +415,7 @@ mod tests {
             (Method::PUT, "/api/devices/x/bases", Some(Scope::Write)),
             (Method::PUT, "/api/devices/x/y/bases", Some(Scope::Admin)),
             (Method::GET, "/api/sync/info", None),
+            (Method::GET, "/api/version", None),
             (Method::POST, "/api/sync/info", Some(Scope::Admin)),
             (Method::GET, "/api/sync/changes", Some(Scope::Read)),
             (Method::GET, "/api/devices/x/commands", Some(Scope::Read)),

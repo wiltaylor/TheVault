@@ -7,6 +7,7 @@ The desktop and Android apps keep a copy of the vault and sync it with the home 
 | Endpoint | Credentials | What it does |
 |---|---|---|
 | `GET /api/sync/info` | none | Returns `{protocol, format_version, server_version}`. An app refuses to sync, and keeps its queued writes, when either version is newer than it supports (D27). |
+| `GET /api/version` | none | Returns `{server_version}`, for Settings > General's About section. |
 | `GET /api/sync/changes?since=<seq>&limit=<n>` | any token or session | Returns every note and synced file whose latest change comes after `since`, oldest first, with `next` and `latest`. |
 | `PUT /api/devices/{id}/bases` | the device's own token, or `admin` | Replaces the base versions the device holds: `{"bases": {"<note id>": "<version>"}}`. |
 
@@ -58,7 +59,7 @@ When a forwarded route cannot be answered, the embedded server says why instead 
 | 503 `{"error": "not_paired"}` | The app is not paired, or the server answers 401: the device was revoked. | "Not paired" |
 | 403 `{"error": "needs_web_app"}` | The route needs `admin`, which a device token never has (D2). The server's own message is in `detail`. | "Manage this in the web app" |
 
-The device token is never widened to `admin`. In the apps, Settings hides the Secrets and API tokens sections, and Settings > Devices lists the devices read-only, marked "This device" for the app's own, and says to pair, rename, revoke and change settings in the web app. `GET /api/app`, answered only by the embedded server, tells the web client it runs in an app and which device it is; the home server answers it 404.
+The device token is never widened to `admin`. In the apps, Settings hides the Secrets and API tokens sections, and Settings > Devices lists the devices read-only, marked "This device" for the app's own, and says to pair, rename, revoke and change settings in the web app. `GET /api/app`, answered only by the embedded server, tells the web client it runs in an app, which device it is, and which app build: `version` (from the app's `tauri.conf.json`), `platform` (`linux-appimage`, `linux-package`, `linux` or `android`) and `build` (`release` or `debug`). The home server answers it 404.
 
 ### Every route
 
@@ -82,6 +83,7 @@ The device token is never widened to `admin`. In the apps, Settings hides the Se
 | `GET /api/notes/{id}/history/{version}` | The version's own copy | Locally when the device recorded that version, otherwise forwarded |
 | `POST /api/notes/{id}/restore` | A note write | Locally; see below |
 | `/api/clients` and below | The server's clients folder | Forwarded, `Range` included |
+| `GET /api/version` | The home server's version | Answered from the home server's `GET /api/sync/info`, so an older server still says its version; offline or unpaired, 503 |
 | `/api/tokens`, `/api/secrets` and below | The server's `tokens` and `secrets` tables, which need `admin` even to read | Not forwarded: 403 `needs_web_app` at once |
 
 ### The history

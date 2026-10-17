@@ -57,8 +57,11 @@ pub(crate) enum Route {
     Restore { id: String },
     /// `GET /api/events`: the server's events with the local note changes.
     Events,
-    /// `GET /api/app`: which device this is.
+    /// `GET /api/app`: which device and app build this is.
     App,
+    /// `GET /api/version`: the home server's version, read from its `/api/sync/info`, which
+    /// every home server answers.
+    ServerVersion,
     /// Credentials that need `admin`, which a device token never has.
     NeedsWebApp,
 }
@@ -81,6 +84,9 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     let get = *method == Method::GET || *method == Method::HEAD;
     if path == "/api/app" && get {
         return Route::App;
+    }
+    if path == "/api/version" && get {
+        return Route::ServerVersion;
     }
     if under(path, "/api/tokens") || under(path, "/api/secrets") {
         return Route::NeedsWebApp;
@@ -274,6 +280,26 @@ impl Home {
         match self.send(req).await {
             Ok(res) => translate(res).await,
             Err(why) => why.response(),
+        }
+    }
+
+    /// `GET /api/version`: `{ server_version }` from the home server's `GET /api/sync/info`, so a
+    /// home server older than `/api/version` still says its version.
+    pub async fn server_version(&self) -> Response<Body> {
+        let ask = Request::get("/api/sync/info")
+            .body(Body::empty())
+            .unwrap_or_default();
+        let res = match self.send(ask).await {
+            Ok(res) if res.status().is_success() => res,
+            Ok(res) => return translate(res).await,
+            Err(why) => return why.response(),
+        };
+        match read_json(res).await {
+            Some(info) => json_response(
+                StatusCode::OK,
+                &json!({ "server_version": info["server_version"] }),
+            ),
+            None => Unavailable::Offline.response(),
         }
     }
 
@@ -506,6 +532,8 @@ mod tests {
         assert_eq!(route(&get, "/api/pins"), Route::Local);
         assert_eq!(route(&get, "/api/trash"), Route::Local);
         assert_eq!(route(&get, "/api/app"), Route::App);
+        assert_eq!(route(&get, "/api/version"), Route::ServerVersion);
+        assert_eq!(route(&get, "/api/sync/info"), Route::Local);
     }
 
     #[test]

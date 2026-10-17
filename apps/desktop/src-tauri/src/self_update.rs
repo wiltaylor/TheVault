@@ -16,10 +16,10 @@
 //! whole check and download against a build they signed with a throwaway key.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
@@ -53,6 +53,12 @@ pub struct Status {
     pub ready: Option<String>,
     /// Why the last check or download failed.
     pub error: Option<String>,
+    /// Whether a check runs now.
+    pub checking: bool,
+    /// When the last check finished, in milliseconds since the Unix epoch.
+    pub last_checked: Option<u64>,
+    /// Whether the app checks at all: `THEVAULT_UPDATE_URL=off` turns the check off.
+    pub available: bool,
 }
 
 /// The update check's state, shared by the update thread, the window's routes and the tray.
@@ -65,7 +71,11 @@ pub struct Updates {
     ready: Mutex<Option<Ready>>,
     error: Mutex<Option<String>>,
     checks: AtomicU64,
-    wake: Mutex<Option<Sender<()>>>,
+    checking: AtomicBool,
+    last_checked: Mutex<Option<u64>>,
+    /// Wakes the update thread; `true` when the user asked, so the check runs even with the
+    /// automatic check turned off.
+    wake: Mutex<Option<Sender<bool>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -106,6 +116,8 @@ impl Updates {
             ready: Mutex::new(None),
             error: Mutex::new(None),
             checks: AtomicU64::new(0),
+            checking: AtomicBool::new(false),
+            last_checked: Mutex::new(None),
             wake: Mutex::new(None),
         }
     }
@@ -137,13 +149,29 @@ impl Updates {
             checks: self.checks.load(Ordering::SeqCst),
             ready: self.ready_version(),
             error: lock(&self.error).clone(),
+            checking: self.checking.load(Ordering::SeqCst),
+            last_checked: *lock(&self.last_checked),
+            available: lock(&self.wake).is_some(),
         }
     }
 
-    /// Asks the update thread to check now.
+    /// Asks the update thread to check now, as a server announcement does: only while the
+    /// automatic check is on.
     pub fn wake(&self) {
         if let Some(tx) = lock(&self.wake).as_ref() {
-            let _ = tx.send(());
+            let _ = tx.send(false);
+        }
+    }
+
+    /// The user's "Check for updates": checks now even with the automatic check off. Answers
+    /// whether the app checks at all.
+    pub fn check_now(&self) -> bool {
+        match lock(&self.wake).as_ref() {
+            Some(tx) => {
+                self.checking.store(true, Ordering::SeqCst);
+                tx.send(true).is_ok()
+            }
+            None => false,
         }
     }
 
@@ -161,13 +189,13 @@ impl Updates {
     }
 
     /// Starts the update thread. `github` is where the fallback offer asks, and `on` says
-    /// whether checking is turned on now. `changed` runs after each check that changed what is
-    /// ready, for the tray.
+    /// whether to check now, given whether the user asked. `changed` runs after each check that
+    /// changed what is ready, for the tray.
     pub fn start(
         self: &Arc<Self>,
         app: AppHandle,
         github: String,
-        on: impl Fn(&AppHandle) -> Option<Option<String>> + Send + 'static,
+        on: impl Fn(&AppHandle, bool) -> Option<Option<String>> + Send + 'static,
         changed: impl Fn(&AppHandle) + Send + 'static,
     ) {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -183,28 +211,39 @@ impl Updates {
         &self,
         app: AppHandle,
         github: String,
-        wake: Receiver<()>,
-        on: impl Fn(&AppHandle) -> Option<Option<String>>,
+        wake: Receiver<bool>,
+        on: impl Fn(&AppHandle, bool) -> Option<Option<String>>,
         changed: impl Fn(&AppHandle),
     ) {
         let mut wait = FIRST;
         loop {
-            match wake.recv_timeout(wait) {
-                Ok(()) => {
+            let asked = match wake.recv_timeout(wait) {
+                Ok(mut asked) => {
                     // A burst of announcements is one check.
-                    while wake.try_recv().is_ok() {}
+                    while let Ok(more) = wake.try_recv() {
+                        asked |= more;
+                    }
+                    asked
                 }
-                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Timeout) => false,
                 Err(RecvTimeoutError::Disconnected) => return,
-            }
+            };
             wait = EVERY;
             // `None` when checking is off; else the paired server's URL, if paired.
-            let Some(server) = on(&app) else {
+            let Some(server) = on(&app, asked) else {
+                self.checking.store(false, Ordering::SeqCst);
                 continue;
             };
+            self.checking.store(true, Ordering::SeqCst);
             let before = self.ready_version();
             self.check(&app, server.as_deref(), &github);
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or_default();
+            *lock(&self.last_checked) = Some(now);
             self.checks.fetch_add(1, Ordering::SeqCst);
+            self.checking.store(false, Ordering::SeqCst);
             if self.ready_version() != before {
                 changed(&app);
             }

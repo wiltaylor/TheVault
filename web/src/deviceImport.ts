@@ -176,4 +176,8 @@ export const thisPhone = {
   checkNow: () => plugin<{ captured: number; missing: string[] }>("check_now"),
   /** The capture setup screen: each permission in turn. */
   openPermissions: () => plugin<void>("open_capture_setup"),
+  /** What the app update check last decided, why, and when (ms since the epoch); null before the first. */
+  updateStatus: () => plugin<{ status: string | null; message: string | null; checked: number | null }>("update_status"),
+  /** Run the app update check now, once the phone is online. */
+  checkForUpdates: () => plugin<void>("check_for_updates"),
 };

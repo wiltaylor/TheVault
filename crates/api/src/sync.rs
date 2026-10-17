@@ -45,6 +45,12 @@ pub async fn info() -> Json<Value> {
     }))
 }
 
+/// `GET /api/version`: the server's own version, for Settings > General's About section. Like
+/// `/api/sync/info` it needs no credentials.
+pub async fn version() -> Json<Value> {
+    Json(json!({ "server_version": env!("CARGO_PKG_VERSION") }))
+}
+
 #[derive(Deserialize)]
 pub struct ChangesQuery {
     since: Option<i64>,

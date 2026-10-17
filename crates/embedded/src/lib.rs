@@ -34,7 +34,7 @@ mod home;
 pub use home::{NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE, OFFLINE_MESSAGE};
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock, Weak};
 
 use anyhow::Context;
 use axum::Router;
@@ -61,6 +61,18 @@ pub struct Config {
     pub secret_key: Option<SecretKey>,
 }
 
+/// The app build an embedded server runs in, which `GET /api/app` reports for Settings > General.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AppBuild {
+    /// The app's version, from its `tauri.conf.json`.
+    pub version: String,
+    /// How the app runs: `linux-appimage`, `linux-package` (a deb or rpm), `linux` (any other
+    /// binary) or `android`.
+    pub platform: String,
+    /// `release` or `debug`.
+    pub build: String,
+}
+
 /// The in-process server of one local vault.
 pub struct Embedded {
     /// Always `Some` until dropped.
@@ -72,6 +84,8 @@ struct Parts {
     writer: Arc<Writer>,
     queue: Arc<sync::Queue>,
     home: Home,
+    /// The app build, once the app says it ([`Embedded::set_app`]).
+    build: RwLock<Option<AppBuild>>,
     /// Keeps the `before_*` handler host alive; it holds only a weak link to the writer.
     _handlers: script::Handlers,
 }
@@ -148,6 +162,7 @@ impl Embedded {
                 writer,
                 queue,
                 home: Home::new().context("building the home server's HTTP client")?,
+                build: RwLock::new(None),
                 _handlers: handlers,
             }),
         })
@@ -193,6 +208,24 @@ impl Embedded {
         self.parts().home.set_remote(remote);
     }
 
+    /// Say which app build this server runs in, for `GET /api/app`.
+    pub fn set_app(&self, build: AppBuild) {
+        *self
+            .parts()
+            .build
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(build);
+    }
+
+    /// The app build [`Embedded::set_app`] gave, if any.
+    pub fn app_build(&self) -> Option<AppBuild> {
+        self.parts()
+            .build
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// The home server the embedded server forwards to, once paired.
     pub fn remote(&self) -> Option<sync::Remote> {
         self.parts().home.remote()
@@ -230,6 +263,7 @@ impl Embedded {
             Route::Events => home.events(self.writer(), req).await,
             Route::App => {
                 let remote = home.remote();
+                let build = self.app_build();
                 home::json_response(
                     StatusCode::OK,
                     &serde_json::json!({
@@ -238,9 +272,13 @@ impl Embedded {
                         "device_id": remote.as_ref().map(|r| &r.device_id),
                         "device_name": remote.as_ref().map(|r| &r.device_name),
                         "server_url": remote.as_ref().map(|r| &r.url),
+                        "version": build.as_ref().map(|b| &b.version),
+                        "platform": build.as_ref().map(|b| &b.platform),
+                        "build": build.as_ref().map(|b| &b.build),
                     }),
                 )
             }
+            Route::ServerVersion => home.server_version().await,
             Route::NeedsWebApp => home::error(
                 StatusCode::FORBIDDEN,
                 "needs_web_app",

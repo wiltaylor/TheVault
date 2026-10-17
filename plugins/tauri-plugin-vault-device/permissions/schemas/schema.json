@@ -307,6 +307,18 @@
           "markdownDescription": "Denies the capture_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the check_for_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-for-updates",
+          "markdownDescription": "Enables the check_for_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_for_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-for-updates",
+          "markdownDescription": "Denies the check_for_updates command without any pre-configured scope."
+        },
+        {
           "description": "Enables the check_now command without any pre-configured scope.",
           "type": "string",
           "const": "allow-check-now",
@@ -355,10 +367,22 @@
           "markdownDescription": "Denies the open_capture_setup command without any pre-configured scope."
         },
         {
-          "description": "Lets the webview open the capture setup screen, read the capture status, import the phone's history and check for new messages and calls.\n#### This default permission set includes:\n\n- `allow-open-capture-setup`\n- `allow-capture-status`\n- `allow-import-history`\n- `allow-import-status`\n- `allow-check-now`",
+          "description": "Enables the update_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-status",
+          "markdownDescription": "Enables the update_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-status",
+          "markdownDescription": "Denies the update_status command without any pre-configured scope."
+        },
+        {
+          "description": "Lets the webview open the capture setup screen, read the capture status, import the phone's history, check for new messages and calls, and read and run the app update check.\n#### This default permission set includes:\n\n- `allow-open-capture-setup`\n- `allow-capture-status`\n- `allow-import-history`\n- `allow-import-status`\n- `allow-check-now`\n- `allow-update-status`\n- `allow-check-for-updates`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Lets the webview open the capture setup screen, read the capture status, import the phone's history and check for new messages and calls.\n#### This default permission set includes:\n\n- `allow-open-capture-setup`\n- `allow-capture-status`\n- `allow-import-history`\n- `allow-import-status`\n- `allow-check-now`"
+          "markdownDescription": "Lets the webview open the capture setup screen, read the capture status, import the phone's history, check for new messages and calls, and read and run the app update check.\n#### This default permission set includes:\n\n- `allow-open-capture-setup`\n- `allow-capture-status`\n- `allow-import-history`\n- `allow-import-status`\n- `allow-check-now`\n- `allow-update-status`\n- `allow-check-for-updates`"
         }
       ]
     }

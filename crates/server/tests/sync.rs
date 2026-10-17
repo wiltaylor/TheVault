@@ -155,6 +155,13 @@ fn sync_info_needs_no_credentials() {
 }
 
 #[test]
+fn the_server_version_needs_no_credentials() {
+    let server = TestServer::start();
+    let version = send(Client::new().get(server.url("/api/version")), 200);
+    assert_eq!(version["server_version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
 fn the_change_feed_returns_every_kind_of_change_in_order_and_pages() {
     let server = TestServer::start_seeded(seed);
     let admin = bearer(server.admin_token());

@@ -41,7 +41,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use embedded::{Config, Embedded};
+use embedded::{AppBuild, Config, Embedded};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tauri::http::{Method, Request, Response, StatusCode, header};
@@ -227,6 +227,7 @@ pub fn run() {
             let live = Live::start(Arc::new(LiveShell(handle.clone())), remote_rx);
             let hotkey = Arc::new(Mutex::new(hotkey::Status::Starting));
             let updates = Arc::new(Updates::new());
+            embedded.set_app(app_build(&handle, updates.install()));
             app.manage(App {
                 app: handle.clone(),
                 embedded,
@@ -331,9 +332,9 @@ fn start_update_checks(app: AppHandle, updates: &Arc<Updates>) {
     updates.start(
         app,
         github,
-        |app| {
+        |app, asked| {
             let state = app.try_state::<App>()?;
-            if !state.settings().update_check {
+            if !asked && !state.settings().update_check {
                 return None;
             }
             // The paired server comes first; it is read each time, since the app may have
@@ -353,6 +354,30 @@ fn start_update_checks(app: AppHandle, updates: &Arc<Updates>) {
             }
         },
     );
+}
+
+/// What `GET /api/app` says about this build: the version in `tauri.conf.json`, how it was
+/// installed, and whether it is a release build.
+fn app_build(app: &AppHandle, install: update::Install) -> AppBuild {
+    AppBuild {
+        version: app.package_info().version.to_string(),
+        platform: platform(install).to_owned(),
+        build: if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+        .to_owned(),
+    }
+}
+
+/// The platform `GET /api/app` names for an app installed as `install`.
+fn platform(install: update::Install) -> &'static str {
+    match install {
+        update::Install::AppImage => "linux-appimage",
+        update::Install::Package => "linux-package",
+        update::Install::Binary => "linux",
+    }
 }
 
 /// Shows the window at the web client's `path`.
@@ -443,6 +468,13 @@ async fn desktop(state: &App, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
                 state.change_settings(&state.app, |s| s.skipped_update = Some(release.version));
             }
             json_response(StatusCode::OK, &json!({}))
+        }
+        (Method::POST, "/_desktop/update/check") => {
+            if state.updates.check_now() {
+                json_response(StatusCode::ACCEPTED, &json!({}))
+            } else {
+                error(StatusCode::CONFLICT, "the update check is turned off")
+            }
         }
         (Method::POST, "/_desktop/update/restart") => {
             match self_update::restart_to_update(&state.app) {

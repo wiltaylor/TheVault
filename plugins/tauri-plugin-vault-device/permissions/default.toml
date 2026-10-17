@@ -1,11 +1,13 @@
 "$schema" = "schemas/schema.json"
 
 [default]
-description = "Lets the webview open the capture setup screen, read the capture status, import the phone's history and check for new messages and calls."
+description = "Lets the webview open the capture setup screen, read the capture status, import the phone's history, check for new messages and calls, and read and run the app update check."
 permissions = [
   "allow-open-capture-setup",
   "allow-capture-status",
   "allow-import-history",
   "allow-import-status",
   "allow-check-now",
+  "allow-update-status",
+  "allow-check-for-updates",
 ]
