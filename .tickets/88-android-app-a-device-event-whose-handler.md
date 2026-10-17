@@ -2,8 +2,8 @@
 id: '88'
 title: 'Android app: a device event whose handler fails for good is never shown anywhere'
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Android app: a device event whose handler fails for good is never shown anywhere
@@ -27,3 +27,15 @@ Acceptance criteria:
 ### 2026-10-17T20:46:33Z — /work
 
 Claimed.
+
+### 2026-10-17T21:07:19Z — wil
+
+Verified set to verified.
+
+### 2026-10-17T21:07:19Z — wil
+
+Status set to done.
+
+### 2026-10-17T21:07:19Z — wil
+
+Done on ticket/88 at 5d0e6d9. Embedded server routes GET /api/app/device-events, POST /api/app/device-events/{id}/retry|dismiss (Core hands the runtime over with Embedded::set_device). device_events gained notified/reported columns (migrated; existing failed rows count as already announced) and a dismissed status, swept after 7 days like done/skipped. Phone notification: CaptureProblems.kt, one id + group, count accumulates while showing. Server: POST /api/devices/{id}/event-failures (write scope, own device or admin), documented in docs/scripts.md; the core reports at the end of each sync round, 4xx counts as reported. NotificationMirror skips source device:<own id>. Logging: plugin uses log + android_logger and forwards stderr to logcat (src/logging.rs) so eprintln! in embedded/writer/sync lands too; compiled for aarch64 but not observed on a phone. UI in web/src/pages/CaptureProblems.tsx, mounted at the end of ThisDevice, so ticket 91 can sit beside it. FakeHome.notify gained an optional source parameter.
