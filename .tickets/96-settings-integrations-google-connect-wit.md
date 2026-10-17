@@ -4,7 +4,7 @@ title: 'Settings > Integrations > Google: connect with the user''s OAuth client 
   paste or https direct), status, Disconnect, and docs/google.md'
 blocked_by:
 - '95'
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -22,3 +22,7 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-17T23:29:37Z — /work
+
+Claimed.

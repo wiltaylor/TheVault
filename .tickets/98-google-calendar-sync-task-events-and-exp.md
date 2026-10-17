@@ -5,7 +5,7 @@ title: 'Google Calendar sync task: events and expanded series occurrences into e
 blocked_by:
 - '94'
 - '95'
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -25,3 +25,7 @@ Acceptance criteria (server tests through TestServer and POST /api/tasks/google_
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-17T23:29:54Z — /work
+
+Claimed.

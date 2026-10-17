@@ -4,7 +4,7 @@ title: 'Gmail sync task: labelled or all mail into email and email_thread notes,
   cursor, back-fill, attachments'
 blocked_by:
 - '95'
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -25,3 +25,7 @@ Acceptance criteria (server tests through TestServer and POST /api/tasks/google_
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-17T23:29:49Z — /work
+
+Claimed.
