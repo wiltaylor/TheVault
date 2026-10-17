@@ -246,7 +246,7 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
     );
     assert_eq!(field(event, "when")["kind"], "date_range");
     assert_eq!(field(event, "when")["of"], "date_or_datetime");
-    assert_eq!(field(event, "calendar")["kind"], "select");
+    assert_eq!(field(event, "calendar")["kind"], "string");
     assert_eq!(field(event, "location")["kind"], "string");
     assert_eq!(field(event, "description")["kind"], "content");
     assert_eq!(field(event, "attendees")["target"], "person");

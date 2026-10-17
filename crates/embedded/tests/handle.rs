@@ -354,10 +354,17 @@ async fn runs_no_scheduler_and_no_after_handlers() {
     assert!(!names.iter().any(|n| n == "scheduler"), "{names:?}");
     assert!(!names.iter().any(|n| n == "handler-queue"), "{names:?}");
 
-    // The every-minute task is listed. Its runs, and running it now, are the home server's,
-    // and this device is not paired with one.
+    // The every-minute task is listed, beside the shipped ones. Its runs, and running it now,
+    // are the home server's, and this device is not paired with one.
     let tasks = d.get("/api/tasks").await;
-    assert_eq!(tasks["tasks"][0]["name"], "noop", "{tasks}");
+    assert!(
+        tasks["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "noop"),
+        "{tasks}"
+    );
     let runs = d.json("GET", "/api/tasks/noop/runs", None, 503).await;
     assert_eq!(runs["error"], "not_paired", "{runs}");
     let refused = d.json("POST", "/api/tasks/noop/run", None, 503).await;
