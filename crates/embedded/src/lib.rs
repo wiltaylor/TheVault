@@ -30,8 +30,10 @@
 
 pub mod device;
 mod home;
+mod sync_status;
 
 pub use home::{NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE, OFFLINE_MESSAGE};
+pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState};
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock, Weak};
@@ -86,6 +88,8 @@ struct Parts {
     home: Home,
     /// The app build, once the app says it ([`Embedded::set_app`]).
     build: RwLock<Option<AppBuild>>,
+    /// The app's sync loop, once the app hands it over ([`Embedded::set_sync_source`]).
+    sync: RwLock<Option<Box<dyn SyncSource>>>,
     /// Keeps the `before_*` handler host alive; it holds only a weak link to the writer.
     _handlers: script::Handlers,
 }
@@ -163,6 +167,7 @@ impl Embedded {
                 queue,
                 home: Home::new().context("building the home server's HTTP client")?,
                 build: RwLock::new(None),
+                sync: RwLock::new(None),
                 _handlers: handlers,
             }),
         })
@@ -226,6 +231,46 @@ impl Embedded {
             .clone()
     }
 
+    /// Hand over the app's sync loop, which `GET /api/app/sync` reports and `POST /api/app/sync`
+    /// asks for a round.
+    pub fn set_sync_source(&self, source: Box<dyn SyncSource>) {
+        *self
+            .parts()
+            .sync
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(source);
+    }
+
+    /// Where sync stands, as `GET /api/app/sync` answers it: the app's sync loop's report with the
+    /// local writes waiting counted now.
+    pub fn sync_status(&self) -> serde_json::Value {
+        let report = self
+            .parts()
+            .sync
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map_or_else(SyncReport::unpaired, |s| s.report());
+        let queued = self.queue().pending().map_or(0, |p| p.len());
+        report.to_json(queued)
+    }
+
+    /// Ask the app's sync loop for a round now. `false` when the app gave no sync loop.
+    pub fn request_sync(&self) -> bool {
+        let sync = self
+            .parts()
+            .sync
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        match sync.as_ref() {
+            Some(source) => {
+                source.sync_now();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// The home server the embedded server forwards to, once paired.
     pub fn remote(&self) -> Option<sync::Remote> {
         self.parts().home.remote()
@@ -277,6 +322,14 @@ impl Embedded {
                         "build": build.as_ref().map(|b| &b.build),
                     }),
                 )
+            }
+            Route::AppSync => home::json_response(StatusCode::OK, &self.sync_status()),
+            Route::AppSyncNow => {
+                if self.request_sync() {
+                    home::json_response(StatusCode::ACCEPTED, &self.sync_status())
+                } else {
+                    Unavailable::NotPaired.response()
+                }
             }
             Route::ServerVersion => home.server_version().await,
             Route::NeedsWebApp => home::error(

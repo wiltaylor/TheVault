@@ -801,3 +801,73 @@ fn every_round_takes_the_device_settings_first() {
     assert_eq!(s.commands, ["send_sms"]);
     assert_eq!(s.skip_pattern, "");
 }
+
+/// The sync icon's status (`GET /api/app/sync`): red while unpaired, yellow before the first
+/// round and while a write waits, green once it is pushed, red with the reason once the server
+/// cannot be reached, and "Sync now" runs a round.
+#[test]
+fn the_sync_status_follows_the_rounds() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let status = || core.server().sync_status();
+    let out = status();
+    assert_eq!(out["state"], "error", "{out}");
+    assert_eq!(out["phase"], "unpaired", "{out}");
+
+    let admin = Admin::start();
+    let paired = link(&admin.pair("Pixel"), 64);
+    core.set_link(Some(paired.clone()));
+    let out = status();
+    assert_eq!(out["state"], "syncing", "{out}");
+    assert_eq!(out["phase"], "starting", "{out}");
+    assert_eq!(out["server"], paired.server_url.as_str(), "{out}");
+
+    // The share's note waits for a round. `share` kicks the loop, so the round may run already.
+    core.share(&Shared {
+        text: "waiting".into(),
+        ..Shared::default()
+    })
+    .unwrap();
+    let out = status();
+    assert_eq!(out["state"], "syncing", "{out}");
+    core.sync_now().unwrap();
+    let out = status();
+    assert_eq!(out["state"], "synced", "{out}");
+    assert_eq!(out["queued"], 0, "{out}");
+    assert_eq!(out["last_error"], Value::Null, "{out}");
+    let ok_ms = out["last_ok_ms"].as_u64().expect("the round's time");
+
+    // The server goes away: the round fails, and the icon says why.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    core.set_link(Some(Link {
+        server_url: dead,
+        ..paired.clone()
+    }));
+    assert!(core.sync_now().is_err());
+    let out = status();
+    assert_eq!(out["state"], "error", "{out}");
+    assert_eq!(out["phase"], "offline", "{out}");
+    assert!(
+        out["last_error"]
+            .as_str()
+            .is_some_and(|m| m.contains("cannot reach the server")),
+        "{out}"
+    );
+    assert_eq!(out["last_ok_ms"], ok_ms, "the last good round stays: {out}");
+
+    // Back online, "Sync now" runs a round at once.
+    core.set_link(Some(paired));
+    assert!(core.server().request_sync());
+    let deadline = Instant::now() + ROUND;
+    loop {
+        let out = status();
+        if out["state"] == "synced" && out["last_ok_ms"].as_u64() > Some(ok_ms) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no round ran: {out}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}

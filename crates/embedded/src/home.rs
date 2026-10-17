@@ -59,6 +59,10 @@ pub(crate) enum Route {
     Events,
     /// `GET /api/app`: which device and app build this is.
     App,
+    /// `GET /api/app/sync`: where the app's sync loop stands.
+    AppSync,
+    /// `POST /api/app/sync`: ask the app's sync loop for a round now.
+    AppSyncNow,
     /// `GET /api/version`: the home server's version, read from its `/api/sync/info`, which
     /// every home server answers.
     ServerVersion,
@@ -84,6 +88,14 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     let get = *method == Method::GET || *method == Method::HEAD;
     if path == "/api/app" && get {
         return Route::App;
+    }
+    if path == "/api/app/sync" {
+        if get {
+            return Route::AppSync;
+        }
+        if *method == Method::POST {
+            return Route::AppSyncNow;
+        }
     }
     if path == "/api/version" && get {
         return Route::ServerVersion;
@@ -532,6 +544,8 @@ mod tests {
         assert_eq!(route(&get, "/api/pins"), Route::Local);
         assert_eq!(route(&get, "/api/trash"), Route::Local);
         assert_eq!(route(&get, "/api/app"), Route::App);
+        assert_eq!(route(&get, "/api/app/sync"), Route::AppSync);
+        assert_eq!(route(&post, "/api/app/sync"), Route::AppSyncNow);
         assert_eq!(route(&get, "/api/version"), Route::ServerVersion);
         assert_eq!(route(&get, "/api/sync/info"), Route::Local);
     }

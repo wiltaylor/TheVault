@@ -37,6 +37,7 @@ import { DailyCalendar } from "../daily/DailyCalendar";
 import { ArchiveIcon, CalendarIcon, CaptureIcon, GearIcon, InboxIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
 import { NotificationsBell, NotificationsLive } from "../notifications/NotificationsPanel";
 import { PinnedTree } from "./PinnedTree";
+import { SyncStatusButton } from "./SyncStatus";
 import { Toasts } from "./Toasts";
 import { TypesNav } from "./TypesNav";
 
@@ -490,6 +491,7 @@ export function Shell() {
                 </span>
               </span>
             </button>
+            <SyncStatusButton />
             <a
               href="/archive"
               class="footer-button"

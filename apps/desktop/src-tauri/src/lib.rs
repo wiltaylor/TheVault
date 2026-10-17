@@ -219,6 +219,7 @@ pub fn run() {
             };
             let (remote_tx, remote_rx) = tokio::sync::watch::channel(None);
             let sync = SyncLoop::start(embedded.clone(), paired, Box::new(Keyring), remote_tx);
+            embedded.set_sync_source(Box::new(sync.source()));
             let settings = settings::load(&dir);
             let handle = app.handle().clone();
             apply_autostart(&handle, &settings);

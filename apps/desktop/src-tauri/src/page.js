@@ -1,7 +1,8 @@
-// Runs in every page of the desktop app's window, before the page's own scripts. It adds the sync
-// badge to the web client's pages, sends an unpaired app back to setup, offers a newer release
+// Runs in every page of the desktop app's window, before the page's own scripts. It sends an
+// unpaired app back to setup, offers a newer release
 // when the update check found one, or a restart once an update is downloaded (D27), and opens the capture dialog when `thevault --capture`,
-// the hotkey or the tray asked for it. The web client itself is unchanged (D18).
+// the hotkey or the tray asked for it. The web client itself is unchanged (D18): it shows the sync
+// status itself, as the icon beside Archive, from the embedded server's `GET /api/app/sync`.
 (() => {
   if (window.__thevaultPage || window.top !== window || location.protocol !== "vault:") return;
   window.__thevaultPage = true;
@@ -77,51 +78,7 @@
 
   if (location.pathname.startsWith("/_desktop/")) return;
 
-  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-  function describe(s) {
-    const waiting = s.pending > 0 ? plural(s.pending, "change", "changes") + " waiting" : "";
-    switch (s.phase) {
-      case "starting":
-        return "Starting sync…";
-      case "syncing":
-        return "Syncing…";
-      case "synced":
-        return waiting ? `Synced · ${waiting}` : "Synced";
-      case "offline":
-        return waiting ? `Offline · ${waiting}` : "Offline";
-      case "update_required":
-      case "revoked":
-        return s.message;
-      default:
-        return `Sync failed: ${s.message ?? "unknown error"}`;
-    }
-  }
-
   function mount() {
-    const badge = document.createElement("button");
-    badge.id = "thevault-sync";
-    badge.type = "button";
-    badge.setAttribute("role", "status");
-    badge.title = "Sync now";
-    badge.style.cssText = [
-      "position:fixed",
-      "left:12px",
-      "bottom:12px",
-      "z-index:2147483000",
-      "max-width:min(36rem,60vw)",
-      "padding:4px 10px",
-      "border:1px solid rgba(127,127,127,.35)",
-      "border-radius:999px",
-      "background:Canvas",
-      "color:CanvasText",
-      "font:12px/1.4 system-ui,sans-serif",
-      "opacity:.85",
-      "cursor:pointer",
-      "text-align:left",
-    ].join(";");
-    badge.addEventListener("click", () => fetch("/_desktop/sync", { method: "POST" }));
-    document.body.appendChild(badge);
-
     // The update prompt: shown while the app offers a newer release, until the user picks one of
     // its buttons. "Later" hides it until the app starts again. A downloaded update offers
     // "Restart to update"; an app installed from a deb or rpm is told to use its package manager.
@@ -207,11 +164,6 @@
           location.replace("/_desktop/setup");
           return;
         }
-        badge.dataset.phase = s.phase;
-        badge.dataset.pending = String(s.pending);
-        const alarm = s.phase === "update_required" || s.phase === "revoked" || s.phase === "error";
-        badge.style.borderColor = alarm ? "#c62828" : "rgba(127,127,127,.35)";
-        badge.textContent = describe(s);
         offer(s.update);
       } catch {}
     }

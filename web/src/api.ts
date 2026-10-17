@@ -528,6 +528,22 @@ export interface AppInfo {
   build?: string | null;
 }
 
+/** Where an app's sync stands, from its embedded server's `GET /api/app/sync` (D19, D20, D27). */
+export interface AppSync {
+  /** What the sidebar's sync icon shows: green, yellow or red. */
+  state: "synced" | "syncing" | "error";
+  /** Where the app's sync loop stands, in more detail. */
+  phase: "unpaired" | "starting" | "syncing" | "synced" | "offline" | "update_required" | "revoked" | "error";
+  /** Local changes waiting for the home server. */
+  queued: number;
+  /** When a round last succeeded, in milliseconds since the epoch. */
+  last_ok_ms: number | null;
+  /** Why the last round failed, for the phases that need words. */
+  last_error: string | null;
+  /** The home server's address, once paired. */
+  server: string | null;
+}
+
 /** Where a note's history came from: the home server's, or in an app offline, the app's own. */
 export type HistorySource = "server" | "device";
 
@@ -812,6 +828,10 @@ export const api = {
       throw e;
     }
   },
+  /** In an app: where its sync stands. */
+  appSync: () => request<AppSync>("GET", "/api/app/sync"),
+  /** In an app: run a sync round now. */
+  appSyncNow: () => request<AppSync>("POST", "/api/app/sync"),
   /** A pairing code whose QR payload names `serverUrl`, the address this page was loaded from. */
   createPairCode: (serverUrl: string) =>
     request<PairCode>("POST", "/api/devices/pair-codes", { server_url: serverUrl }),

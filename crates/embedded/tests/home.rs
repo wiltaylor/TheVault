@@ -569,3 +569,120 @@ fn the_app_says_its_build_and_asks_the_home_server_for_its_version() {
     let app = device.call("GET", "/api/app", None, 200);
     assert_eq!(app["version"], "9.8.7", "{app}");
 }
+
+/// An app's sync loop as a test drives it: it says what it is told to, and counts the rounds it
+/// was asked for.
+#[derive(Clone, Default)]
+struct FakeLoop {
+    report: std::sync::Arc<std::sync::Mutex<Option<embedded::SyncReport>>>,
+    asked: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl FakeLoop {
+    fn set(&self, phase: embedded::SyncPhase, message: Option<&str>, last_ok_ms: Option<u64>) {
+        *self.report.lock().unwrap() = Some(embedded::SyncReport {
+            phase,
+            message: message.map(str::to_owned),
+            last_ok_ms,
+            server: Some("http://home.test".to_owned()),
+        });
+    }
+}
+
+impl embedded::SyncSource for FakeLoop {
+    fn report(&self) -> embedded::SyncReport {
+        self.report
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(embedded::SyncReport::unpaired)
+    }
+
+    fn sync_now(&self) {
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
+    use embedded::SyncPhase;
+    let server = TestServer::start_seeded(seed);
+    let device = Device::pair(&server, "Laptop");
+
+    // With no sync loop handed over, the app is not syncing at all, and cannot be asked to.
+    let out = device.call("GET", "/api/app/sync", None, 200);
+    assert_eq!(out["state"], "error", "{out}");
+    assert_eq!(out["phase"], "unpaired", "{out}");
+    let out = device.call("POST", "/api/app/sync", None, 503);
+    assert_eq!(out["error"], "not_paired", "{out}");
+
+    let fake = FakeLoop::default();
+    device.embedded.set_sync_source(Box::new(fake.clone()));
+
+    // Before the first round finishes: yellow.
+    fake.set(SyncPhase::Starting, None, None);
+    let out = device.call("GET", "/api/app/sync", None, 200);
+    assert_eq!(out["state"], "syncing", "{out}");
+
+    // Idle after a round, nothing queued: green, with the time and the server.
+    fake.set(SyncPhase::Synced, None, Some(1_700_000_000_000));
+    let out = device.call("GET", "/api/app/sync", None, 200);
+    assert_eq!(
+        out,
+        json!({
+            "state": "synced",
+            "phase": "synced",
+            "queued": 0,
+            "last_ok_ms": 1_700_000_000_000u64,
+            "last_error": null,
+            "server": "http://home.test",
+        })
+    );
+
+    // A local write waits for the next round: yellow, counted from the queue.
+    device.call(
+        "POST",
+        "/api/notes?type=memo",
+        Some(json!({ "note": { "fields": { "title": "Waiting" }, "blocks": [] } })),
+        201,
+    );
+    let out = device.call("GET", "/api/app/sync", None, 200);
+    assert_eq!(out["state"], "syncing", "{out}");
+    assert_eq!(out["queued"], 1, "{out}");
+
+    // A round runs: yellow.
+    fake.set(SyncPhase::Syncing, None, Some(1_700_000_000_000));
+    let out = device.call("GET", "/api/app/sync", None, 200);
+    assert_eq!(out["state"], "syncing", "{out}");
+
+    // The round pushed the write: green again.
+    device.sync();
+    fake.set(SyncPhase::Synced, None, Some(1_700_000_100_000));
+    let out = device.call("GET", "/api/app/sync", None, 200);
+    assert_eq!(out["state"], "synced", "{out}");
+    assert_eq!(out["queued"], 0, "{out}");
+
+    // The server cannot be reached, or wants a newer app: red, with the reason.
+    fake.set(
+        SyncPhase::Offline,
+        Some("cannot reach the server: refused"),
+        Some(1_700_000_100_000),
+    );
+    let out = device.call("GET", "/api/app/sync", None, 200);
+    assert_eq!(out["state"], "error", "{out}");
+    assert_eq!(out["phase"], "offline", "{out}");
+    assert_eq!(
+        out["last_error"], "cannot reach the server: refused",
+        "{out}"
+    );
+    assert_eq!(out["last_ok_ms"], 1_700_000_100_000u64, "{out}");
+    fake.set(SyncPhase::UpdateRequired, Some("Update the app"), None);
+    let out = device.call("GET", "/api/app/sync", None, 200);
+    assert_eq!(out["state"], "error", "{out}");
+    assert_eq!(out["phase"], "update_required", "{out}");
+
+    // Sync now asks the loop for a round.
+    let out = device.call("POST", "/api/app/sync", None, 202);
+    assert_eq!(out["phase"], "update_required", "{out}");
+    assert_eq!(fake.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

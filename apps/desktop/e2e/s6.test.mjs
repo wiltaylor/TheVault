@@ -35,7 +35,25 @@ const launch = (args = []) =>
 const path = async () => new URL(await app.url()).pathname;
 /** Whether the window shows the web client, which sends `/` on to a page of its own choosing. */
 const inWebClient = async () => !(await path()).startsWith("/_desktop/") && (await badge()) !== null;
-const badge = () => app.run("const b = document.getElementById('thevault-sync'); return b ? { phase: b.dataset.phase, pending: Number(b.dataset.pending), text: b.textContent } : null;");
+/** The sync icon beside Archive in the sidebar footer: its colour state, phase, waiting count and words. */
+const badge = () =>
+  app.run(
+    "const b = document.querySelector('.sidebar-footer .sync-button'); return b ? { state: b.dataset.syncState, phase: b.dataset.phase, pending: Number(b.dataset.queued), text: b.getAttribute('aria-label') } : null;",
+  );
+/** Record every state the sync icon shows from now on, in `window.__syncStates`. */
+const recordStates = () =>
+  app.run(`
+    window.__syncStates = [];
+    const note = () => {
+      const s = document.querySelector('.sidebar-footer .sync-button')?.dataset.syncState;
+      if (s && window.__syncStates.at(-1) !== s) window.__syncStates.push(s);
+    };
+    note();
+    window.__syncObserver?.disconnect();
+    window.__syncObserver = new MutationObserver(note);
+    window.__syncObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-sync-state'] });
+  `);
+const recorded = () => app.run("return window.__syncStates;");
 
 before(async () => {
   root = tempRoot();
@@ -112,7 +130,10 @@ async function scenario() {
   // The server's note was pulled into the local vault and shows.
   await app.navigate(`${ORIGIN}/notes/${created.id}`);
   await waitFor("the pulled note's title", async () => (await app.text("[aria-label='Title']")) === "Written on the server");
-  await waitFor("the synced badge", async () => (await badge())?.phase === "synced");
+  // The sync icon is green after the first sync, and no sync toast shows any more.
+  await waitFor("the green sync icon", async () => (await badge())?.state === "synced");
+  assert.match((await badge()).text, /^Synced/);
+  assert.equal(await app.run("return document.getElementById('thevault-sync');"), null);
 
   // The server goes away; the edit is saved locally and waits.
   await home.stop();
@@ -129,23 +150,65 @@ async function scenario() {
   await app.type(await app.find("[aria-label='Title']"), ", edited offline");
   await waitFor("the local save", async () => (await app.text("[data-testid='save-status']")) === "Saved");
   // Typing can reach the local vault as one save or several, depending on how fast it goes.
-  const offline = await waitFor("the offline badge with the change waiting", async () => {
+  const offline = await waitFor("the red sync icon with the change waiting", async () => {
     const b = await badge();
-    return b?.phase === "offline" && b.pending >= 1 ? b : null;
+    return b?.state === "error" && b.phase === "offline" && b.pending >= 1 ? b : null;
   });
-  assert.match(offline.text, /Offline · \d+ changes? waiting/);
+  assert.match(offline.text, /^Sync failed: cannot reach the server — retrying · \d+ changes? waiting$/);
 
   // The server comes back on the same address, and the change reaches it.
+  await recordStates();
   await home.start();
   await waitFor(
     "the edit on the server",
     async () => (await home.api("GET", `/api/notes/${created.id}`)).note.fields.title === "Written on the server, edited offline",
     60_000,
   );
-  await waitFor("the synced badge with nothing waiting", async () => {
+  await waitFor("the green sync icon with nothing waiting", async () => {
     const b = await badge();
-    return b?.phase === "synced" && b.pending === 0;
+    return b?.state === "synced" && b.pending === 0;
   });
+  const recovered = await recorded();
+  assert.equal(recovered[0], "error", `from red: ${recovered}`);
+  assert.equal(recovered.at(-1), "synced", `to green: ${recovered}`);
+
+  // An edit made online shows yellow while it waits for its round, then green.
+  await app.navigate(`${ORIGIN}/notes/${created.id}`);
+  await waitFor("the note again", async () => (await app.text("[aria-label='Title']")) === "Written on the server, edited offline");
+  await waitFor("the green sync icon on the note", async () => (await badge())?.state === "synced");
+  await recordStates();
+  await app.click(await app.find("[aria-label='Title']"));
+  await app.run(`
+    const el = document.querySelector("[aria-label='Title']");
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  `);
+  await app.type(await app.find("[aria-label='Title']"), "!");
+  await waitFor("the local save of the online edit", async () => (await app.text("[data-testid='save-status']")) === "Saved");
+  let onServer;
+  await waitFor(
+    "the edit on the server again",
+    async () => {
+      onServer = (await home.api("GET", `/api/notes/${created.id}`)).note.fields.title;
+      return onServer === "Written on the server, edited offline!";
+    },
+    60_000,
+  ).catch(async (e) => {
+    const local = await app.run(`return fetch('/api/notes/${created.id}').then(r => r.text());`);
+    const saved = await app.text("[data-testid='save-status']");
+    e.message += ` (the server's title: ${JSON.stringify(onServer)}; save status ${JSON.stringify(saved)}; local note ${local.slice(0, 400)})`;
+    throw e;
+  });
+  await waitFor("the green sync icon after the edit", async () => {
+    const b = await badge();
+    return b?.state === "synced" && b.pending === 0;
+  });
+  const online = await recorded();
+  assert.deepEqual(online.slice(-2), ["syncing", "synced"], `yellow then green: ${online}`);
 
   // Started again, the app is still paired: it reads its token from the keyring and syncs.
   await app.quit();
@@ -156,7 +219,7 @@ async function scenario() {
   });
   app = await launch();
   await waitFor("the web client, not setup", inWebClient);
-  await waitFor("a sync with the stored token", async () => (await badge())?.phase === "synced");
+  await waitFor("a sync with the stored token", async () => (await badge())?.state === "synced");
   await app.navigate(`${ORIGIN}/notes/${created.id}`);
   await waitFor("the server's rename", async () => (await app.text("[aria-label='Title']")) === "Renamed on the server");
 }

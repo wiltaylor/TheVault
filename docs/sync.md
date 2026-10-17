@@ -61,6 +61,8 @@ When a forwarded route cannot be answered, the embedded server says why instead 
 
 The device token is never widened to `admin`. In the apps, Settings hides the Secrets and API tokens sections, and Settings > Devices lists the devices read-only, marked "This device" for the app's own, and says to pair, rename, revoke and change settings in the web app. `GET /api/app`, answered only by the embedded server, tells the web client it runs in an app, which device it is, and which app build: `version` (from the app's `tauri.conf.json`), `platform` (`linux-appimage`, `linux-package`, `linux` or `android`) and `build` (`release` or `debug`). The home server answers it 404.
 
+`GET /api/app/sync`, also answered only by the embedded server, says where the app's sync stands for the sidebar's sync icon: `state` (`synced`, green, when the last round succeeded and nothing waits; `syncing`, yellow, while a round runs or local writes wait for one; `error`, red, otherwise), `phase` (`unpaired`, `starting`, `syncing`, `synced`, `offline`, `update_required`, `revoked` or `error`), `queued` (local writes waiting), `last_ok_ms` (when a round last succeeded), `last_error` and `server`. The web client asks for it every few seconds, every second while yellow, and at once after each note write. `POST /api/app/sync` asks the app's sync loop for a round now and answers 202 with the status, or 503 `not_paired` when the app has no sync loop.
+
 ### Every route
 
 | Routes | Backed by | Answered |

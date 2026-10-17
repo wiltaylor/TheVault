@@ -3761,6 +3761,149 @@ body.pin-dragging * {
   background: var(--accent-soft);
 }
 
+/* The app's sync icon in the sidebar footer, beside Archive (D19, D20): green, yellow or red,
+   with a status dot whose shape differs too, and its details popover. */
+:root {
+  --sync-ok: #15803d;
+  --sync-busy: #ca8a04;
+  --sync-bad: #dc2626;
+}
+
+:root[data-theme="dark"] {
+  --sync-ok: #4ade80;
+  --sync-busy: #facc15;
+  --sync-bad: #f87171;
+}
+
+.sync-button {
+  position: relative;
+  background: none;
+  cursor: pointer;
+}
+
+.sidebar .footer-button.sync-button {
+  padding: 0;
+}
+
+.sync-button.sync-synced,
+.sync-summary.sync-synced {
+  color: var(--sync-ok);
+}
+
+.sync-button.sync-syncing,
+.sync-summary.sync-syncing {
+  color: var(--sync-busy);
+}
+
+.sync-button.sync-error,
+.sync-summary.sync-error {
+  color: var(--sync-bad);
+}
+
+.sync-button.sync-error {
+  border-color: color-mix(in srgb, var(--sync-bad) 55%, var(--line));
+}
+
+.sync-button:hover {
+  background: var(--hover);
+}
+
+.sync-button .sync-dot {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+}
+
+.sync-button.sync-syncing .sync-glyph {
+  animation: sync-spin 1.6s linear infinite;
+}
+
+@keyframes sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sync-button.sync-syncing .sync-glyph {
+    animation: none;
+  }
+}
+
+.sync-panel {
+  position: fixed;
+  z-index: 1900;
+  width: min(18rem, calc(100vw - 1rem));
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 10px 30px rgb(15 23 42 / 0.18);
+}
+
+.sync-panel:focus {
+  outline: none;
+}
+
+.sync-panel h2 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+.sync-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0 0 0.6rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.sync-summary .sync-dot {
+  flex: none;
+  margin-top: 0.3rem;
+}
+
+/* The words stay in the text colour, for contrast; the dot carries the state's colour. */
+.sync-summary.sync-syncing span {
+  color: var(--ink);
+}
+
+.sync-details {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.sync-details dt {
+  color: var(--muted);
+}
+
+.sync-details dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sync-details .sync-error {
+  color: var(--danger);
+}
+
+.sync-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.sync-link {
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
 /* Settings: section tabs above the section's page */
 .settings-tabs {
   display: flex;

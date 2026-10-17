@@ -15,7 +15,7 @@
 | An AppImage's installed copy | `~/Applications/TheVault.AppImage` |
 | An AppImage's application menu entry and icons, while "Add TheVault to the application menu" is on | `$XDG_DATA_HOME/applications/dev.wiltaylor.thevault.desktop`, `$XDG_DATA_HOME/icons/hicolor/<size>x<size>/apps/dev.wiltaylor.thevault.png` |
 
-The device file holds no secret. Without the keyring the app still opens and edits the local vault, and its badge reports that it cannot read the token.
+The device file holds no secret. Without the keyring the app still opens and edits the local vault, and its sync icon reports that it cannot read the token.
 
 ## How the window reaches the vault
 
@@ -38,9 +38,9 @@ One thread runs the sync rounds of `crates/sync` with every asset kept locally (
 - 0.75 seconds after a write reaches the local vault, so a burst of saves syncs once;
 - 1 second after the live link's event stream reports a `note.changed` for a note version the local vault does not hold, and 1 second after the stream reconnects, so a change made in the browser or on another device shows within seconds. The echo of the app's own pushed write is not news and runs no round;
 - when the server answers again: while it does not, the app checks every 3 seconds;
-- when the user clicks the sync badge.
+- when the user clicks Sync now in the sync icon's details.
 
-The badge in the bottom left corner of every page shows where sync stands: synced, syncing, offline with the number of changes waiting, or why it stopped. When the server is newer than the app, the badge says to update the app, and the changes stay queued until then (D27). When the server refuses the token, the device was revoked, and the badge asks for pairing again.
+The sync icon beside Archive at the foot of the left sidebar shows where sync stands, as on Android: green when the last round succeeded and nothing waits, yellow while a round runs or changes wait for one, red when the server cannot be reached or sync stopped. Its tooltip says the state in words, and clicking it shows the last sync time, the changes waiting, the server, the last error and a Sync now button. When the server is newer than the app, the icon says to update the app, a notice says so once, and the changes stay queued until then (D27). When the server refuses the token, the device was revoked, and the icon asks for pairing again.
 
 ## The tray
 

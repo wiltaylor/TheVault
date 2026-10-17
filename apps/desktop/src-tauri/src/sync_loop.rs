@@ -54,26 +54,8 @@ pub enum Trigger {
     Paired(Device, String),
 }
 
-/// Where sync stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Phase {
-    /// No home server yet: the setup page shows.
-    Unpaired,
-    /// Paired, before the first round has finished.
-    Starting,
-    Syncing,
-    /// The last round finished.
-    Synced,
-    /// The server does not answer; changes wait in the queue.
-    Offline,
-    /// The server is newer than this app: sync stops until the app is updated (D27).
-    UpdateRequired,
-    /// The server refused the device token: the device was revoked.
-    Revoked,
-    /// The last round failed for another reason.
-    Error,
-}
+/// Where sync stands: the phases the embedded server reports to the web client's sync icon.
+pub use embedded::SyncPhase as Phase;
 
 /// What the app shows about sync.
 #[derive(Debug, Clone, Serialize)]
@@ -142,6 +124,14 @@ impl SyncLoop {
         }
     }
 
+    /// The loop as the embedded server's sync source, for the web client's sync icon.
+    pub fn source(&self) -> Source {
+        Source {
+            tx: Mutex::new(lock(&self.tx).clone()),
+            status: self.status.clone(),
+        }
+    }
+
     pub fn trigger(&self, trigger: Trigger) {
         let _ = lock(&self.tx).send(trigger);
     }
@@ -155,6 +145,28 @@ impl SyncLoop {
             .pending()
             .map_or(status.pending, |p| p.len());
         status
+    }
+}
+
+/// What `GET /api/app/sync` reads of the loop, and how `POST /api/app/sync` asks it for a round.
+pub struct Source {
+    tx: Mutex<Sender<Trigger>>,
+    status: Arc<Mutex<Status>>,
+}
+
+impl embedded::SyncSource for Source {
+    fn report(&self) -> embedded::SyncReport {
+        let s = lock(&self.status);
+        embedded::SyncReport {
+            phase: s.phase,
+            message: s.message.clone(),
+            last_ok_ms: s.last_sync_ms,
+            server: s.server_url.clone(),
+        }
+    }
+
+    fn sync_now(&self) {
+        let _ = lock(&self.tx).send(Trigger::Now);
     }
 }
 
@@ -185,28 +197,15 @@ impl Outcome {
         }
     }
 
-    /// What a failed round means for the user.
+    /// What a failed round means for the user, and when the next one runs.
     pub fn of_error(e: &sync::Error) -> Outcome {
-        match e {
-            sync::Error::ServerNewer { .. } => Outcome::new(
-                Phase::UpdateRequired,
-                Some(format!("Update the app to keep syncing. {e}")),
-                INTERVAL,
-            ),
-            sync::Error::Http(_) => {
-                Outcome::new(Phase::Offline, Some(e.to_string()), OFFLINE_RETRY)
-            }
-            sync::Error::Server { status, .. } if *status == 401 || *status == 403 => Outcome::new(
-                Phase::Revoked,
-                Some(
-                    "The server refused this device's token: it was revoked. Your changes \
-                         wait here; pair the device again to sync them."
-                        .to_owned(),
-                ),
-                NEVER,
-            ),
-            other => Outcome::new(Phase::Error, Some(other.to_string()), INTERVAL),
-        }
+        let (phase, message) = Phase::of_error(e);
+        let next = match phase {
+            Phase::Offline => OFFLINE_RETRY,
+            Phase::Revoked => NEVER,
+            _ => INTERVAL,
+        };
+        Outcome::new(phase, Some(message), next)
     }
 }
 

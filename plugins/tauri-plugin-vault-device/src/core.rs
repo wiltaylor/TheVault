@@ -38,12 +38,13 @@
 //! runs it at once, before pairing as well, since its handler needs only the local vault.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use embedded::device::{DeviceConfig, DeviceData, DeviceRuntime, ImportReport, ImportRequest};
-use embedded::{Config, Embedded};
+use embedded::{Config, Embedded, SyncPhase, SyncReport, SyncSource};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sync::live::{self, Seen};
@@ -110,10 +111,15 @@ impl Link {
 }
 
 /// How the last round went.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct Last {
     at_ms: i64,
     error: Option<String>,
+    /// What the error means for the user: offline, update required, revoked or another error;
+    /// synced when the round succeeded.
+    phase: SyncPhase,
+    /// When a round last succeeded.
+    ok_ms: Option<i64>,
 }
 
 /// The live event stream's state.
@@ -139,6 +145,8 @@ pub struct Core {
     kicks: Mutex<Option<Sender<Duration>>>,
     live: Mutex<Live>,
     last: Mutex<Option<Last>>,
+    /// Whether a round runs now.
+    syncing: AtomicBool,
     /// The device runtime and the device id it opened with, once Kotlin opens it.
     device: Mutex<Option<(String, Arc<DeviceRuntime>)>>,
     /// Held while commands run, so a push and the periodic check never take one command twice.
@@ -184,9 +192,12 @@ pub fn open(vault: &Path) -> anyhow::Result<Arc<Core>> {
         kicks: Mutex::new(None),
         live: Mutex::new(Live::default()),
         last: Mutex::new(None),
+        syncing: AtomicBool::new(false),
         device: Mutex::new(None),
         commands: Mutex::new(()),
     });
+    core.server
+        .set_sync_source(Box::new(Source(Arc::downgrade(&core))));
     *current = Some(core.clone());
     Ok(core)
 }
@@ -257,6 +268,7 @@ impl Core {
     pub fn sync_now(&self) -> anyhow::Result<Report> {
         let link = self.linked()?;
         let _round = lock(&self.round);
+        self.syncing.store(true, Ordering::SeqCst);
         if let Err(e) = self.refresh_settings(&link) {
             eprintln!("the device settings were not refreshed: {e:#}");
         }
@@ -264,10 +276,28 @@ impl Core {
             .server
             .sync_engine(link.remote(), link.assets())
             .and_then(|engine| engine.sync());
-        *lock(&self.last) = Some(Last {
-            at_ms: now_ms(),
-            error: result.as_ref().err().map(ToString::to_string),
-        });
+        let at_ms = now_ms();
+        {
+            let mut last = lock(&self.last);
+            let ok_ms = match &result {
+                Ok(_) => Some(at_ms),
+                Err(_) => last.as_ref().and_then(|l| l.ok_ms),
+            };
+            let (phase, error) = match &result {
+                Ok(_) => (SyncPhase::Synced, None),
+                Err(e) => {
+                    let (phase, message) = SyncPhase::of_error(e);
+                    (phase, Some(message))
+                }
+            };
+            *last = Some(Last {
+                at_ms,
+                error,
+                phase,
+                ok_ms,
+            });
+        }
+        self.syncing.store(false, Ordering::SeqCst);
         let report = result?;
         if let Err(e) = self.people_to_contacts() {
             eprintln!("person changes not queued for the phone: {e:#}");
@@ -333,6 +363,31 @@ impl Core {
     /// Ask the foreground loop for a round once writes settle. Nothing happens while unpaired.
     pub fn kick(self: &Arc<Self>) {
         self.nudge(SETTLE);
+    }
+
+    /// Ask the foreground loop for a round at once: the sync icon's "Sync now". Nothing happens
+    /// while unpaired.
+    pub fn sync_soon(self: &Arc<Self>) {
+        self.nudge(Duration::ZERO);
+    }
+
+    /// Where sync stands, for the web client's sync icon (`GET /api/app/sync`).
+    pub fn sync_report(&self) -> SyncReport {
+        let Some(link) = self.link() else {
+            return SyncReport::unpaired();
+        };
+        let last = lock(&self.last).clone();
+        let phase = if self.syncing.load(Ordering::SeqCst) {
+            SyncPhase::Syncing
+        } else {
+            last.as_ref().map_or(SyncPhase::Starting, |l| l.phase)
+        };
+        SyncReport {
+            phase,
+            message: last.as_ref().and_then(|l| l.error.clone()),
+            last_ok_ms: last.and_then(|l| l.ok_ms).map(|ms| ms.max(0) as u64),
+            server: Some(link.server_url),
+        }
     }
 
     /// Ask the foreground loop for a round once nothing more has asked for `settle`.
@@ -531,6 +586,23 @@ impl Core {
             "last_error": last.and_then(|l| l.error),
             "live": lock(&self.live).connected,
         }))
+    }
+}
+
+/// The core as its embedded server's sync source. Weak, since the core holds the server.
+struct Source(Weak<Core>);
+
+impl SyncSource for Source {
+    fn report(&self) -> SyncReport {
+        self.0
+            .upgrade()
+            .map_or_else(SyncReport::unpaired, |core| core.sync_report())
+    }
+
+    fn sync_now(&self) {
+        if let Some(core) = self.0.upgrade() {
+            core.sync_soon();
+        }
     }
 }
 
