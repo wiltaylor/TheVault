@@ -58,8 +58,15 @@ android {
             if (releaseKeystore != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
+            // The home server is usually reached over plain http on a private network (Tailscale
+            // encrypts it), so release builds allow cleartext like debug builds.
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+            // No code shrinking: R8 stripped the constructors WorkManager and Room create by
+            // reflection, so the release app crashed at start while the unshrunk debug build, which
+            // every test runs, worked. Release runs the same code as the tests.
+            isMinifyEnabled = false
             optimization {
-               enable = true
+               enable = false
             }
             proguardFiles(
                 *fileTree(".") {
