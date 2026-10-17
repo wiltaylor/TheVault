@@ -397,6 +397,11 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
           return !conflict() && !autosave?.dirty();
         },
         restored: takeRestored,
+        day: () => {
+          const n = note();
+          const date = n?.type === "dailynote" ? n.note.fields.date : undefined;
+          return typeof date === "string" ? date.slice(0, 10) : "";
+        },
       }),
     );
     // Leaving the note (another page in the pane, the pane closing) ends its preview.

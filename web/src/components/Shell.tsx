@@ -32,6 +32,8 @@ import { activePane, location as paneLocation } from "../workspace/model";
 import { workspace } from "../workspace/store";
 import { Workspace } from "../workspace/Workspace";
 import { AssetUsagePanel } from "./AssetUsage";
+import { dayOfLocation, todayDay } from "../daily/calendar";
+import { DailyCalendar } from "../daily/DailyCalendar";
 import { ArchiveIcon, CalendarIcon, CaptureIcon, GearIcon, InboxIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
 import { NotificationsBell, NotificationsLive } from "../notifications/NotificationsPanel";
 import { PinnedTree } from "./PinnedTree";
@@ -187,9 +189,18 @@ function NoteSidebar(props: { shown: boolean }) {
   // The graph follows the active pane's note, once it has been created.
   const graphOf = createMemo(() => source()?.noteId() || "");
   const graphOpen = () => sidebars().right.graph;
+  // Beside the daily notes page or a daily note, a calendar to pick another day sits on top.
+  const calendarDay = createMemo(() => dayOfLocation(paneLocation(workspace(), pane()), todayDay()) || source()?.day?.() || "");
   return (
     <div id="right-sidebar" class="right-sidebar">
       <Resizer side="right" />
+      <Show when={calendarDay()}>
+        {(day) => (
+          <DailyCalendar day={day()} noteId={graphOf()} shown={props.shown}>
+            <HideRight />
+          </DailyCalendar>
+        )}
+      </Show>
       <Show when={graphOf()}>
         <section class="graph-section" aria-label="Graph">
           <div class="sidebar-head graph-head">
@@ -206,7 +217,9 @@ function NoteSidebar(props: { shown: boolean }) {
               </svg>
               Graph
             </button>
-            <HideRight />
+            <Show when={!calendarDay()}>
+              <HideRight />
+            </Show>
           </div>
           <Show when={graphOpen() && props.shown}>
             <div id="graph-body" class="graph-body">
@@ -233,7 +246,7 @@ function NoteSidebar(props: { shown: boolean }) {
             )}
           </For>
         </div>
-        <Show when={!graphOf()}>
+        <Show when={!graphOf() && !calendarDay()}>
           <HideRight />
         </Show>
       </div>
