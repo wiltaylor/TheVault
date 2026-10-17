@@ -1,6 +1,6 @@
 [package]
 name = "thevault-desktop"
-version = "0.1.4"
+version = "0.1.5"
 description = "TheVault's Linux desktop app"
 edition = "2024"
 license = "MIT"
