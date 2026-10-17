@@ -4,7 +4,7 @@ title: Google sync built-in types, gmail_label taxonomy, and the fake Google ser
   in testkit
 blocked_by:
 - '94'
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -21,3 +21,7 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-17T23:10:48Z — /work
+
+Claimed.
