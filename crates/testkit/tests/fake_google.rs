@@ -252,3 +252,41 @@ fn gmail_and_calendar_answer_404_until_their_tickets_add_them() {
     google.clear_requests();
     assert!(google.requests().is_empty());
 }
+
+#[test]
+fn the_consent_page_over_http_redirects_with_a_code_as_consent_does() {
+    let google = FakeGoogle::start();
+    let query = auth_url().split_once('?').unwrap().1.to_owned();
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let res = client
+        .get(google.url(&format!("{}?{query}", testkit::fake_google::AUTH_PATH)))
+        .send()
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 302);
+    let back = res.headers()["location"].to_str().unwrap().to_owned();
+    assert!(back.starts_with(REDIRECT), "{back}");
+    let (code, state) = code_and_state(&back);
+    assert_eq!(state, "st+1");
+    let (status, body) = post_form(
+        &google.url("/token"),
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("code_verifier", VERIFIER),
+            ("redirect_uri", REDIRECT),
+            ("client_id", DEFAULT_CLIENT_ID),
+            ("client_secret", DEFAULT_CLIENT_SECRET),
+        ],
+    );
+    assert_eq!(status, 200, "{body}");
+
+    // Without a redirect there is nowhere to go.
+    let res = client
+        .get(google.url(testkit::fake_google::AUTH_PATH))
+        .send()
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 400);
+}

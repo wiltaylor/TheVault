@@ -49,8 +49,8 @@ const WRITE_PATHS: [&str; 8] = [
 /// builder's model send the query in the body but change nothing.
 const READ_POST_PATHS: [&str; 1] = ["/api/query"];
 
-/// Paths that need `admin` even to read, because they disclose credentials.
-const ADMIN_PATHS: [&str; 2] = ["/api/tokens", "/api/secrets"];
+/// Paths that need `admin` even to read, because they disclose or hand out credentials.
+const ADMIN_PATHS: [&str; 3] = ["/api/tokens", "/api/secrets", "/api/integrations"];
 
 /// The authenticated caller of a request, recorded as the author of what it writes (D13).
 #[derive(Debug, Clone, PartialEq, Eq)]

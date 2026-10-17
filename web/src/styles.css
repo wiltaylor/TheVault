@@ -3029,6 +3029,42 @@ button.link {
   max-width: 48rem;
 }
 
+/* Settings > Integrations: the Google card (google-sync D1, D18). */
+.google-card {
+  max-width: 48rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.google-card h2 {
+  margin: 0.25rem 0;
+  font-size: 1.1rem;
+}
+
+.google-card header p {
+  margin: 0;
+}
+
+.google-card #google-pasted {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+}
+
+.google-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.google-card > button {
+  align-self: flex-start;
+}
+
+.google-account {
+  font-weight: 600;
+  margin: 0;
+}
+
 .device-head h2 {
   margin: 0.25rem 0;
   font-size: 1.1rem;
