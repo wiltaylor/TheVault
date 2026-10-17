@@ -478,6 +478,26 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/tasks/{name}/run",
         "Run a task now and wait for the run to end",
     ),
+    (
+        "GET",
+        "/api/integrations/google",
+        "The Google sync's connection, account, and each side's last run, error and pause",
+    ),
+    (
+        "POST",
+        "/api/integrations/google/start",
+        "Store the OAuth client and answer Google's consent URL, loopback or direct",
+    ),
+    (
+        "POST",
+        "/api/integrations/google/finish",
+        "Exchange the code in the redirect URL, store the refresh token and unpause the sync",
+    ),
+    (
+        "POST",
+        "/api/integrations/google/disconnect",
+        "Delete the Google secrets, pause the sync and clear the account",
+    ),
 ];
 
 /// The OpenAPI document of [`ENDPOINTS`].

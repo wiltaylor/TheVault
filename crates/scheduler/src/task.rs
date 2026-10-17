@@ -295,6 +295,34 @@ fn is_host(s: &str) -> bool {
             && !s.starts_with(['.', '-'])
 }
 
+/// The task file `text` with its `paused` field set to `paused`, written in place when the file
+/// has one and added at the end when it does not. Every other line stays as it is.
+pub fn with_paused(text: &str, paused: bool) -> String {
+    let line = format!("paused = {paused}");
+    let mut found = false;
+    let mut out: Vec<String> = text
+        .lines()
+        .map(|l| {
+            let top_level = !l.starts_with([' ', '\t']);
+            let is_paused = l
+                .strip_prefix("paused")
+                .is_some_and(|rest| rest.trim_start().starts_with('='));
+            if top_level && is_paused && !found {
+                found = true;
+                line.clone()
+            } else {
+                l.to_owned()
+            }
+        })
+        .collect();
+    if !found {
+        out.push(line);
+    }
+    let mut out = out.join("\n");
+    out.push('\n');
+    out
+}
+
 /// An ISO 8601 duration of weeks, days, hours, minutes and seconds. Years and months have no
 /// fixed length, so a delay cannot use them.
 pub fn parse_duration(s: &str) -> Result<Duration, String> {
@@ -418,6 +446,21 @@ impl Reader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_paused_rewrites_the_field_or_adds_it() {
+        let paused = with_paused(DIGEST, true);
+        assert_eq!(paused, format!("{DIGEST}paused = true\n"));
+        assert!(TaskDef::parse("digest", &paused).unwrap().paused);
+        let resumed = with_paused(&paused, false);
+        assert_eq!(resumed, format!("{DIGEST}paused = false\n"));
+        assert!(!TaskDef::parse("digest", &resumed).unwrap().paused);
+        let aligned = "schedule = \"0 * * * *\"\nscript   = \"digest\"\npaused   = true\n";
+        assert_eq!(
+            with_paused(aligned, false),
+            "schedule = \"0 * * * *\"\nscript   = \"digest\"\npaused = false\n"
+        );
+    }
 
     const DIGEST: &str = r#"label         = "Daily digest"
 schedule      = "0 7 * * 1-5"

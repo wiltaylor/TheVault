@@ -1,6 +1,6 @@
 //! The fake OAuth endpoints: the token endpoint at [`super::TOKEN_PATH`] and userinfo at
 //! [`super::USERINFO_PATH`], with the consent step a browser would do as
-//! [`FakeGoogle::consent`].
+//! [`FakeGoogle::consent`], or over HTTP at [`AUTH_PATH`].
 //!
 //! The token endpoint takes a form-urlencoded POST, as Google's does, with the client id and
 //! secret in the body:
@@ -147,35 +147,46 @@ impl FakeGoogle {
     /// When `auth_url` has no `redirect_uri`.
     pub fn consent(&self, auth_url: &str) -> String {
         let query = auth_url.split_once('?').map(|(_, q)| q).unwrap_or_default();
-        let pairs = url_pairs(query);
-        let param = |name: &str| {
-            pairs
-                .iter()
-                .find_map(|(k, v)| (k == name).then(|| v.clone()))
-        };
-        let redirect_uri = param("redirect_uri").expect("the authorization URL has a redirect_uri");
-        let mut oauth = self.oauth();
-        let code = oauth.next("code");
-        let scope = param("scope").unwrap_or_default();
-        oauth.codes.push(Code {
-            code: code.clone(),
-            redirect_uri: redirect_uri.clone(),
-            challenge: param("code_challenge"),
-            scope: scope.clone(),
-        });
-        let mut query = String::new();
-        if let Some(state) = param("state") {
-            query.push_str(&format!("state={}&", encode(&state)));
-        }
-        query.push_str(&format!("code={}&scope={}", encode(&code), encode(&scope)));
-        let sep = if redirect_uri.contains('?') { '&' } else { '?' };
-        format!("{redirect_uri}{sep}{query}")
+        consent(&mut self.oauth(), query).expect("the authorization URL has a redirect_uri")
     }
 
     /// Every access token the token endpoint has issued, oldest first.
     pub fn access_tokens(&self) -> Vec<String> {
         self.oauth().access_tokens.clone()
     }
+}
+
+/// The path of the fake consent page, Google's own authorization path. A browser, or a test
+/// standing in for one, that GETs it with an authorization URL's query is answered as Google
+/// answers once the user agrees: a 302 to the redirect, with the code [`FakeGoogle::consent`]
+/// would issue. A query without a `redirect_uri` answers 400 `invalid_request`.
+pub const AUTH_PATH: &str = "/o/oauth2/v2/auth";
+
+/// Issue a code for the authorization URL query `query` and return where the browser goes next,
+/// or `None` when the query has no `redirect_uri`.
+fn consent(oauth: &mut State, query: &str) -> Option<String> {
+    let pairs = url_pairs(query);
+    let param = |name: &str| {
+        pairs
+            .iter()
+            .find_map(|(k, v)| (k == name).then(|| v.clone()))
+    };
+    let redirect_uri = param("redirect_uri")?;
+    let code = oauth.next("code");
+    let scope = param("scope").unwrap_or_default();
+    oauth.codes.push(Code {
+        code: code.clone(),
+        redirect_uri: redirect_uri.clone(),
+        challenge: param("code_challenge"),
+        scope: scope.clone(),
+    });
+    let mut query = String::new();
+    if let Some(state) = param("state") {
+        query.push_str(&format!("state={}&", encode(&state)));
+    }
+    query.push_str(&format!("code={}&scope={}", encode(&code), encode(&scope)));
+    let sep = if redirect_uri.contains('?') { '&' } else { '?' };
+    Some(format!("{redirect_uri}{sep}{query}"))
 }
 
 /// Percent-encode `s` for a query string.
@@ -195,6 +206,21 @@ fn encode(s: &str) -> String {
 pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
     match (request.method.as_str(), request.route()) {
         ("POST", TOKEN_PATH) => Some(token(&mut lock(&shared.oauth), request)),
+        ("GET", AUTH_PATH) => {
+            let query = request
+                .path
+                .split_once('?')
+                .map(|(_, q)| q)
+                .unwrap_or_default();
+            Some(match consent(&mut lock(&shared.oauth), query) {
+                Some(to) => Reply::text(302, "").header("location", &to),
+                None => oauth_error(
+                    400,
+                    "invalid_request",
+                    "Missing required parameter: redirect_uri",
+                ),
+            })
+        }
         (_, TOKEN_PATH) => Some(oauth_error(405, "invalid_request", "Use POST.")),
         ("GET", USERINFO_PATH) => Some(if super::authorized(shared, request) {
             let account = lock(&shared.oauth).config.account.clone();

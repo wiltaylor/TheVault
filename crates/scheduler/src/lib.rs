@@ -35,7 +35,7 @@ use state::{Clock, RunOutcome, TaskRun};
 use writer::Writer;
 
 pub use describe::describe;
-pub use task::{MAX_RETRIES, TaskDef, parse_duration, preview};
+pub use task::{MAX_RETRIES, TaskDef, parse_duration, preview, with_paused};
 
 /// Errors from the scheduler.
 #[derive(Debug, thiserror::Error)]
@@ -209,6 +209,21 @@ impl Scheduler {
         })?;
         self.reload()?;
         Ok(text)
+    }
+
+    /// Set task `name`'s `paused` field in its file and reload. Returns `false`, changing nothing,
+    /// when there is no such task.
+    pub fn set_paused(&self, name: &str, paused: bool) -> Result<bool> {
+        let text = match self.writer.read_task(name) {
+            Ok(text) => text,
+            Err(writer::Error::Missing(_)) => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+        if TaskDef::parse(name, &text).is_ok_and(|d| d.paused == paused) {
+            return Ok(true);
+        }
+        self.put_task(name, &with_paused(&text, paused))?;
+        Ok(true)
     }
 
     /// Delete `tasks/<name>.wcl` and forget the task. Its run records stay.

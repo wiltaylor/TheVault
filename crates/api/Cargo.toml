@@ -13,10 +13,12 @@ futures-util.workspace = true
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 query.workspace = true
 regex = "1"
+reqwest = { workspace = true, features = ["json"] }
 scheduler.workspace = true
 schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 state.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "time"] }
 vocab.workspace = true

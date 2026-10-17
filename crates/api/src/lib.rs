@@ -22,6 +22,9 @@
 //! The desktop and Android apps pair under `/api/devices`, each getting a `write` token bound to
 //! the device (D2, D3).
 //!
+//! Settings > Integrations > Google signs in with the user's own OAuth client under
+//! `/api/integrations/google` (google-sync D1, D18).
+//!
 //! Scheduled tasks live under `/api/tasks`, with their run history and a route to run one now;
 //! the secrets they read are written, never read back, under `/api/secrets` (D10).
 //!
@@ -47,6 +50,7 @@ mod defs;
 mod devices;
 mod error;
 mod events;
+mod google;
 mod inspect;
 mod notes;
 mod notifications;
@@ -160,6 +164,8 @@ struct Built {
     tasks: Routes<Arc<Scheduler>>,
     /// The app downloads, which take the clients folder.
     apps: Routes<Arc<apps::Folder>>,
+    /// The Google sign-in routes, which take the sign-ins started.
+    google: Routes<Arc<google::Google>>,
 }
 
 fn build() -> Built {
@@ -285,11 +291,17 @@ fn build() -> Built {
             "/api/clients/update/{target}/{arch}/{current_version}",
             apps::update,
         );
+    let google = Routes::new()
+        .get("/api/integrations/google", google::status)
+        .post("/api/integrations/google/start", google::start)
+        .post("/api/integrations/google/finish", google::finish)
+        .post("/api/integrations/google/disconnect", google::disconnect);
     Built {
         api,
         login,
         tasks,
         apps,
+        google,
     }
 }
 
@@ -300,12 +312,14 @@ pub fn routes() -> Vec<(Method, &'static str)> {
         login,
         tasks,
         apps,
+        google,
     } = build();
     api.seen
         .into_iter()
         .chain(login.seen)
         .chain(tasks.seen)
         .chain(apps.seen)
+        .chain(google.seen)
         .collect()
 }
 
@@ -343,13 +357,19 @@ fn assemble(
         login,
         tasks,
         apps,
+        google,
     } = build();
     let mut app = api
         .router
         .with_state(writer)
         .merge(login.router.with_state(sessions))
         .merge(tasks.router.with_state(scheduler.clone()))
-        .merge(apps.router.with_state(Arc::new(apps::Folder(clients))));
+        .merge(apps.router.with_state(Arc::new(apps::Folder(clients))))
+        .merge(
+            google
+                .router
+                .with_state(Arc::new(google::Google::new(scheduler.clone()))),
+        );
     if let Some(clock) = test_clock {
         app = app.merge(
             Router::new()

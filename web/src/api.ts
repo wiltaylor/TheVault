@@ -369,6 +369,36 @@ export interface CronPreview {
   next: number[];
 }
 
+/** One side of the Google sync, Gmail or Calendar, as Settings > Integrations shows it. */
+export interface GoogleSide {
+  /** The scheduled task that runs it: `google_gmail` or `google_calendar`. */
+  task: string;
+  /** Whether the task file exists. */
+  installed: boolean;
+  /** Whether the task is paused, or null when it does not exist or does not check. */
+  paused: boolean | null;
+  /** When the sync last ran, as the settings note records it. */
+  last_run: string | null;
+  last_error: string | null;
+}
+
+/** The Google sync's connection (google-sync D1, D18). */
+export interface GoogleStatus {
+  /** Whether the client id, client secret and refresh token are all stored. */
+  connected: boolean;
+  /** Whether the OAuth client's id and secret are stored. */
+  client_stored: boolean;
+  /** The connected address, from the settings note. */
+  account: string | null;
+  /** The settings note's id, or null when there is none yet. */
+  settings: string | null;
+  gmail: GoogleSide;
+  calendar: GoogleSide;
+}
+
+/** How Google's consent page sends the browser back: to a loopback address to paste, or straight to this server. */
+export type GoogleRedirect = "loopback" | "direct";
+
 /** A secret's name and times. No response ever carries its value (D10). */
 export interface Secret {
   name: string;
@@ -861,6 +891,15 @@ export const api = {
   /** Store or replace a secret's value. It is never read back. */
   putSecret: (name: string, value: string) => request<Secret>("PUT", `/api/secrets/${enc(name)}`, { value }),
   deleteSecret: (name: string) => request<unknown>("DELETE", `/api/secrets/${enc(name)}`),
+  /** The Google sync's connection and each side's last run. */
+  googleStatus: () => request<GoogleStatus>("GET", "/api/integrations/google"),
+  /** Store the OAuth client and get Google's consent page address. */
+  googleStart: (client_id: string, client_secret: string, redirect: GoogleRedirect) =>
+    request<{ auth_url: string }>("POST", "/api/integrations/google/start", { client_id, client_secret, redirect }),
+  /** Finish signing in with the address Google sent the browser to. */
+  googleFinish: (url: string) => request<GoogleStatus>("POST", "/api/integrations/google/finish", { url }),
+  /** Delete the Google secrets and pause the sync. */
+  googleDisconnect: () => request<GoogleStatus>("POST", "/api/integrations/google/disconnect"),
   devices: async () => (await request<{ devices: Device[] }>("GET", "/api/devices")).devices,
   /** The app builds the server hands out. Public: it needs no session. */
   clients: () => request<{ clients: ClientBuild[]; enabled: boolean }>("GET", "/api/clients"),

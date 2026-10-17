@@ -23,7 +23,7 @@
 //!
 //! | Module | Paths | Endpoint key |
 //! |--------|-------|--------------|
-//! | `oauth` | `/token`, `/oauth2/v3/userinfo` | `token`, `userinfo` |
+//! | `oauth` | `/token`, `/oauth2/v3/userinfo`, the consent page `/o/oauth2/v2/auth` | `token`, `userinfo` |
 //! | `gmail` | under `/gmail/v1` | `gmail` |
 //! | `calendar` | under `/calendar/v3` | `calendar` |
 //!
@@ -39,7 +39,9 @@ mod calendar;
 mod gmail;
 mod oauth;
 
-pub use oauth::{DEFAULT_ACCOUNT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN};
+pub use oauth::{
+    AUTH_PATH, DEFAULT_ACCOUNT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN,
+};
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
