@@ -404,6 +404,19 @@ export interface Device {
   last_seen: number | null;
   created: number;
   settings: DeviceSettings;
+  /** The capture health the phone last reported with its settings sync, or null before its first report (ticket 91). */
+  health?: DeviceHealth | null;
+}
+
+/** What a phone reports of its capture health (ticket 91). */
+export interface DeviceHealth {
+  /** What stops capture, in words; empty when all is well. */
+  problems: string[];
+  kinds?: { kind: string; label?: string; state: string }[];
+  battery_optimised?: boolean;
+  background?: { work: string; stale: boolean }[];
+  /** When the home server heard the report, ms since the epoch. */
+  reported?: number | null;
 }
 
 /** A command queued for a device, and what became of it (D22). */

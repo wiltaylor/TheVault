@@ -393,6 +393,21 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_newFailures<
     })
 }
 
+/// `VaultCore.setCaptureHealth(health: String)`: the phone's capture health, `{ problems, ... }`
+/// as JSON, which the next round sends to the home server when it changed (ticket 91).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_setCaptureHealth<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    health: JString<'local>,
+) -> jstring {
+    answer(&mut env, |env| {
+        let health: Json = serde_json::from_str(&required(env, &health, "health")?)?;
+        core()?.set_capture_health(health)?;
+        Ok(None)
+    })
+}
+
 /// `VaultCore.putAsset(filename: String, bytes: ByteArray): String`: store a file in the local
 /// vault, such as an MMS part. Answers `{ asset, filename, size }`.
 #[unsafe(no_mangle)]

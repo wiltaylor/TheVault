@@ -131,7 +131,7 @@ pub struct State {
     events: Events,
 }
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -351,6 +351,13 @@ CREATE TABLE IF NOT EXISTS upgrades (
 );
 ";
 
+/// What version 12 adds: the capture health each phone last reported with its settings sync
+/// (ticket 91), and when the server heard it.
+const SCHEMA_V12: &str = "
+ALTER TABLE devices ADD COLUMN health TEXT;
+ALTER TABLE devices ADD COLUMN health_ms INTEGER;
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -440,7 +447,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=10 => {
+        0..=11 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -479,6 +486,14 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 10 {
                 tx.execute_batch(SCHEMA_V11)?;
+            }
+            let has_health: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM pragma_table_info('devices') WHERE name = 'health')",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_health {
+                tx.execute_batch(SCHEMA_V12)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

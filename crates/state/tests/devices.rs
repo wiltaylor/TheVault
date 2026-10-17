@@ -234,5 +234,27 @@ fn a_version_7_database_gains_the_devices_tables() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
+}
+
+#[test]
+fn a_device_reports_its_capture_health_with_when_it_was_heard() {
+    let dir = TempDir::new().unwrap();
+    let (state, clock) = open(&dir);
+    let (device, _) = state.pair_device(&phone()).unwrap();
+    assert_eq!(device.health, None);
+    assert_eq!(device.health_ms, None);
+    clock.advance(5);
+    let health = r#"{"problems":["SMS: permission missing"]}"#;
+    let set = state.set_device_health(&device.id, health).unwrap();
+    assert_eq!(set.health.as_deref(), Some(health));
+    assert_eq!(set.health_ms, Some(1_000_005));
+    assert_eq!(
+        state.list_devices().unwrap()[0].health.as_deref(),
+        Some(health)
+    );
+    assert!(matches!(
+        state.set_device_health("nope", "{}"),
+        Err(Error::UnknownDevice(_))
+    ));
 }

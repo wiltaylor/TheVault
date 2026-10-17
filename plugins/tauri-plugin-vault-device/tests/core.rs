@@ -931,3 +931,49 @@ fn a_device_event_that_fails_for_good_is_reported_once_to_the_bell() {
     );
     assert!(runtime.unreported_failures().unwrap().is_empty());
 }
+
+/// The phone's capture health goes to the home server with the settings sync, once per change
+/// (ticket 91).
+#[test]
+fn the_capture_health_is_sent_with_the_settings_sync_when_it_changes() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let admin = Admin::start();
+    let paired = admin.pair("Pixel");
+    core.set_link(Some(link(&paired, 64)));
+    let health = |admin: &Admin| -> Value {
+        let list = admin.send("GET", "/api/devices", None);
+        list["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["id"] == paired.device_id.as_str())
+            .unwrap()["health"]
+            .clone()
+    };
+    // Nothing checked yet: nothing is sent.
+    core.sync_now().unwrap();
+    assert_eq!(health(&admin), Value::Null);
+
+    assert!(core.set_capture_health(json!({ "kinds": [] })).is_err());
+    let missing = json!({
+        "problems": ["SMS: permission missing"],
+        "kinds": [{ "kind": "sms", "state": "permission_missing" }],
+    });
+    core.set_capture_health(missing.clone()).unwrap();
+    core.sync_now().unwrap();
+    let first = health(&admin);
+    assert_eq!(first["problems"], missing["problems"], "{first}");
+    assert_eq!(first["kinds"], missing["kinds"], "{first}");
+
+    // The same health is not sent again.
+    std::thread::sleep(Duration::from_millis(5));
+    core.set_capture_health(missing.clone()).unwrap();
+    core.sync_now().unwrap();
+    assert_eq!(health(&admin)["reported"], first["reported"]);
+
+    core.set_capture_health(json!({ "problems": [] })).unwrap();
+    core.sync_now().unwrap();
+    assert_eq!(health(&admin)["problems"], json!([]));
+}

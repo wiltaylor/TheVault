@@ -48,6 +48,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         }
         if (!paired) return Result.success()
         return try {
+            // The round sends the phone's capture health with the device's settings (ticket 91).
+            CaptureHealth.refresh(applicationContext)
             val report = VaultCore.sync()
             // The round may have run device events, the person changes it pulled; it reported
             // the failures among them to the home server, and the phone says so too.

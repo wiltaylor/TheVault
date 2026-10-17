@@ -122,10 +122,15 @@ class RunEventsWorker(context: Context, params: WorkerParameters) : Worker(conte
     }
 }
 
-/** The periodic catch-up: every provider since its cursor (D7). */
+/**
+ * The periodic catch-up: every provider since its cursor (D7). Each run is recorded for
+ * [CaptureHealth], which then checks capture can still work.
+ */
 class CatchUpWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
     override fun doWork(): Result = try {
         Device.capture(applicationContext).catchUp()
+        CaptureHealth.ran(applicationContext, CaptureHealth.CATCH_UP)
+        CaptureHealth.refresh(applicationContext)
         Result.success()
     } catch (e: Exception) {
         Log.w(TAG, "catch-up failed", e)

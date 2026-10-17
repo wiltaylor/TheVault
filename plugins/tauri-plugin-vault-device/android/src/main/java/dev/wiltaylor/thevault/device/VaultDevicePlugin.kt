@@ -23,7 +23,8 @@ import org.json.JSONObject
  * server's live events, so a note changed elsewhere is pulled within seconds (D4). The notification listener code lands here too.
  * It also keeps the page clear of the system bars and the keyboard ([SystemBars], ticket 79).
  *
- * Commands for the webview: `open_capture_setup`, `capture_status`, and for Settings > Devices'
+ * Commands for the webview: `open_capture_setup`, `capture_status`, `capture_health` and
+ * `open_capture_fix` for This device's Capture health panel, and for Settings > Devices'
  * "This device" section `import_history`, `import_status` and `check_now`, and for Settings >
  * General's About section `update_status` and `check_for_updates`.
  */
@@ -82,6 +83,8 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
             return false
         }
         if (paired) {
+            // On app start: check capture can work, and say so when it cannot (ticket 91).
+            CaptureHealth.refresh(context)
             VaultCore.kick()
             SyncWorker.schedule(context)
             startCapture()
@@ -126,6 +129,28 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
         status.put("permissions", permissions)
         status.put("notificationAccess", RcsListenerService.enabled(activity))
         invoke.resolve(status)
+    }
+
+    /** This device's Capture health panel (ticket 91): the phone's health as [CaptureHealth.check] answers it. */
+    @Command
+    fun captureHealth(invoke: Invoke) {
+        val health = CaptureHealth.refresh(activity.applicationContext, notify = false)
+        invoke.resolve(JSObject(health.toString()))
+    }
+
+    /** Open the system screen `{ fix }` names, from a Capture health problem's button. */
+    @Command
+    fun openCaptureFix(invoke: Invoke) {
+        val fix = invoke.getArgs().optString("fix")
+        val intent = CaptureHealth.fixIntent(activity, fix)
+            ?: return invoke.reject("unknown fix $fix: ${CaptureHealth.FIXES.joinToString(", ")}")
+        try {
+            activity.startActivity(intent)
+        } catch (e: android.content.ActivityNotFoundException) {
+            // A phone without the exact screen: App info holds every setting the panel names.
+            activity.startActivity(CaptureHealth.fixIntent(activity, CaptureHealth.FIX_APP_DETAILS)!!)
+        }
+        invoke.resolve()
     }
 
     /**

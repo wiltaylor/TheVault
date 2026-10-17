@@ -69,6 +69,10 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
     @Volatile
     var settings: JSONObject = JSONObject()
 
+    /** The capture health the device last reported, or null before its first report. */
+    @Volatile
+    var health: JSONObject? = null
+
     /** The commands server scripts queued for this device, oldest first, each with its `status` and `result`. */
     val commands: MutableList<JSONObject> = Collections.synchronizedList(mutableListOf())
 
@@ -180,6 +184,10 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
                     200 to found.toString()
                 }
             }
+        }
+        method == "PUT" && path == "/api/devices/$DEVICE_ID/health" -> {
+            health = JSONObject(body)
+            200 to JSONObject().put("id", DEVICE_ID).put("health", health).toString()
         }
         method == "PUT" && path == "/api/devices/$DEVICE_ID/push" ->
             200 to JSONObject().put("id", DEVICE_ID).put("push", !JSONObject(body).isNull("endpoint")).toString()

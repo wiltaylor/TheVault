@@ -9,7 +9,8 @@
 //! commands (D17). [`jni`] holds those entry points and [`core`] the core they share with the
 //! app's webview.
 //!
-//! The commands here are for the webview: `open_capture_setup`, `capture_status`, Settings >
+//! The commands here are for the webview: `open_capture_setup`, `capture_status`, This device's
+//! Capture health panel's `capture_health` and `open_capture_fix`, Settings >
 //! Devices' "This device" actions `import_history`, `import_status` and `check_now`, and Settings >
 //! General's `update_status` and `check_for_updates`. They forward to the Kotlin plugin, and fail
 //! anywhere but Android.
@@ -70,6 +71,21 @@ async fn capture_status<R: Runtime>(app: AppHandle<R>) -> Result<Json, String> {
     run_kotlin(&app, "captureStatus", json!({}))
 }
 
+/// The phone's capture health (ticket 91): `{ kinds, battery, background, problems, checked }`,
+/// each capture kind's state, whether the app is battery-optimised, when the catch-up and the
+/// command fetch last ran, and what stops capture, in words.
+#[tauri::command]
+async fn capture_health<R: Runtime>(app: AppHandle<R>) -> Result<Json, String> {
+    run_kotlin(&app, "captureHealth", json!({}))
+}
+
+/// Open the system screen that fixes one capture health problem: `fix` is the `fix` a problem in
+/// [`capture_health`] names, such as `app_details`, `notification_access` or `battery`.
+#[tauri::command]
+async fn open_capture_fix<R: Runtime>(app: AppHandle<R>, fix: String) -> Result<(), String> {
+    run_kotlin(&app, "openCaptureFix", json!({ "fix": fix })).map(|_| ())
+}
+
 /// Start importing the phone's history in a background worker (D7): `kinds` of `sms`, `mms`,
 /// `calls` and `contacts`, from `since` to `until`, RFC 3339 times or null for no bound. Answers
 /// `{ started, missing }`: when a permission a kind needs is not granted, nothing starts and
@@ -126,6 +142,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         .invoke_handler(tauri::generate_handler![
             open_capture_setup,
             capture_status,
+            capture_health,
+            open_capture_fix,
             import_history,
             import_status,
             check_now,

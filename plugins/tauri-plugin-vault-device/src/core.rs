@@ -154,6 +154,11 @@ pub struct Core {
     device: Mutex<Option<(String, Arc<DeviceRuntime>)>>,
     /// Held while commands run, so a push and the periodic check never take one command twice.
     commands: Mutex<()>,
+    /// The phone's capture health as Kotlin last checked it, which each round sends to the home
+    /// server when it changed (ticket 91).
+    health: Mutex<Option<Value>>,
+    /// The capture health the home server last took, with the device id it was sent for.
+    health_sent: Mutex<Option<(String, Value)>>,
 }
 
 /// The platform the device runtime runs as, which names its device file.
@@ -199,6 +204,8 @@ pub fn open(vault: &Path) -> anyhow::Result<Arc<Core>> {
         syncing: AtomicBool::new(false),
         device: Mutex::new(None),
         commands: Mutex::new(()),
+        health: Mutex::new(None),
+        health_sent: Mutex::new(None),
     });
     core.server
         .set_sync_source(Box::new(Source(Arc::downgrade(&core))));
@@ -277,6 +284,9 @@ impl Core {
         if let Err(e) = self.refresh_settings(&link) {
             log::warn!("the device settings were not refreshed: {e:#}");
         }
+        if let Err(e) = self.report_health(&link) {
+            log::warn!("the capture health was not reported: {e:#}");
+        }
         let result = self
             .server
             .sync_engine(link.remote(), link.assets())
@@ -326,6 +336,35 @@ impl Core {
             runtime.set_settings(&s)?;
         }
         Ok(())
+    }
+
+    /// Hold the phone's capture health, `{ problems, ... }` as Kotlin checked it, for the next
+    /// round to send with the device's settings sync (ticket 91).
+    pub fn set_capture_health(&self, health: Value) -> anyhow::Result<()> {
+        if !health["problems"].is_array() {
+            anyhow::bail!("capture health needs `problems`, a list");
+        }
+        *lock(&self.health) = Some(health);
+        Ok(())
+    }
+
+    /// Send the capture health to the home server when it differs from what the server last
+    /// took for this device; a report the server refuses is not sent again until it changes.
+    fn report_health(&self, link: &Link) -> anyhow::Result<()> {
+        let Some(health) = lock(&self.health).clone() else {
+            return Ok(());
+        };
+        if let Some((id, sent)) = lock(&self.health_sent).as_ref()
+            && *id == link.device_id
+            && *sent == health
+        {
+            return Ok(());
+        }
+        let result = commands::report_health(link, &health);
+        if result.is_ok() {
+            *lock(&self.health_sent) = Some((link.device_id.clone(), health));
+        }
+        result
     }
 
     /// Report the device events that failed for good to the home server, when a runtime of this

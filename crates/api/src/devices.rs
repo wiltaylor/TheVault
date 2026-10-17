@@ -12,6 +12,9 @@
 //! on each at `POST /api/devices/{id}/commands/{cid}/result` (D22). Settings > Devices queues one
 //! itself at `POST /api/devices/{id}/commands`, as "Import from phone" does.
 //!
+//! A phone reports its capture health, what stops it capturing, at `PUT /api/devices/{id}/health`
+//! with each settings sync, and the device list carries the last report (ticket 91).
+//!
 //! A device reports each device event whose handler failed for good at
 //! `POST /api/devices/{id}/event-failures`, which adds one notification under the bell from
 //! `device:<id>`, so the web app shows it too.
@@ -177,7 +180,23 @@ fn device_json(d: &Device) -> Value {
         "last_seen": d.last_seen_ms,
         "created": d.created_ms,
         "settings": parse_json(&d.settings, "settings"),
+        "health": health_json(d),
     })
+}
+
+/// The capture health the device last reported, with `reported`, when the server heard it, or
+/// null before its first report (ticket 91).
+fn health_json(d: &Device) -> Value {
+    match &d.health {
+        None => Value::Null,
+        Some(text) => {
+            let mut health = parse_json(text, "capture health");
+            if let Value::Object(m) = &mut health {
+                m.insert("reported".to_owned(), json!(d.health_ms));
+            }
+            health
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -459,6 +478,77 @@ pub async fn put_push(
         let state = w.state();
         own_or_admin(&state.device(&id)?, &author, scope, "set its push endpoint")?;
         Ok::<_, ApiError>(state.set_device_push(&id, target.as_ref())?)
+    })
+    .await?;
+    Ok(Json(device_json(&device)))
+}
+
+/// The largest capture health report a device may send, in bytes of JSON.
+const MAX_HEALTH_BYTES: usize = 16 * 1024;
+
+/// The most problems a capture health report may list, and the longest one, in characters.
+const MAX_HEALTH_PROBLEMS: usize = 32;
+const MAX_HEALTH_PROBLEM_CHARS: usize = 300;
+
+/// A capture health report as a device sends it: a JSON object whose `problems` is the list of
+/// what stops capture, in words, empty when all is well. The rest, such as each capture kind's
+/// state, is the device's own and kept as sent.
+fn check_health(body: &Value) -> Result<String, ApiError> {
+    let Value::Object(m) = body else {
+        return Err(ApiError::bad_request(
+            "capture health must be a JSON object",
+        ));
+    };
+    let Some(problems) = m.get("problems").and_then(Value::as_array) else {
+        return Err(ApiError::bad_request(
+            "capture health needs `problems`, a list of strings",
+        ));
+    };
+    if problems.len() > MAX_HEALTH_PROBLEMS {
+        return Err(ApiError::bad_request(format!(
+            "capture health lists at most {MAX_HEALTH_PROBLEMS} problems"
+        )));
+    }
+    if problems.iter().any(|p| {
+        p.as_str()
+            .is_none_or(|p| p.trim().is_empty() || p.chars().count() > MAX_HEALTH_PROBLEM_CHARS)
+    }) {
+        return Err(ApiError::bad_request(format!(
+            "each capture health problem must be a string of 1 to {MAX_HEALTH_PROBLEM_CHARS} characters"
+        )));
+    }
+    let mut kept = m.clone();
+    // The server says when it heard the report.
+    kept.remove("reported");
+    let text = serde_json::to_string(&kept).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    if text.len() > MAX_HEALTH_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "capture health is larger than {MAX_HEALTH_BYTES} bytes"
+        )));
+    }
+    Ok(text)
+}
+
+/// `PUT /api/devices/{id}/health`: the device reports its capture health with its settings sync,
+/// `{ problems, ... }`, which Settings > Devices shows on its card (ticket 91). Only the device's
+/// own token, or the owner, may. Answers the device.
+pub async fn put_health(
+    State(w): Shared,
+    Caller(author): Caller,
+    Extension(GrantedScope(scope)): Extension<GrantedScope>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let health = check_health(&body)?;
+    let device = blocking(w, move |w| {
+        let state = w.state();
+        own_or_admin(
+            &state.device(&id)?,
+            &author,
+            scope,
+            "report its capture health",
+        )?;
+        Ok::<_, ApiError>(state.set_device_health(&id, &health)?)
     })
     .await?;
     Ok(Json(device_json(&device)))

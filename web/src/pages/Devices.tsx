@@ -4,6 +4,7 @@ import { when } from "../admin/format";
 import { inAndroidApp } from "../deviceImport";
 import { appInfo } from "../inApp";
 import { ClientDownloads } from "./Apps";
+import { healthWarning } from "./CaptureHealth";
 import { CaptureProblemsBadge } from "./CaptureProblems";
 import { PhoneImport, ThisDevice } from "./DeviceImport";
 import { errorText } from "./TypeEditor";
@@ -236,6 +237,14 @@ function DeviceCard(props: {
           {d.last_seen === null ? "never" : when(d.last_seen)}
           {d.push ? " · push on" : ""}
         </span>
+        <Show when={healthWarning(d)}>
+          {(w) => (
+            <p class="device-health-warning" role="alert">
+              {w()}
+              <Show when={d.health?.reported}>{(at) => <span class="muted"> Reported {when(at())}.</span>}</Show>
+            </p>
+          )}
+        </Show>
       </header>
       <form aria-label={`Settings for ${title()}`} onSubmit={save}>
         <fieldset class="device-settings" disabled={props.readOnly}>
