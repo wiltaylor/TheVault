@@ -26,12 +26,13 @@ created      = "2026-10-01T00:00:00Z"
 updated      = "2026-10-01T00:00:00Z"
 "#;
 
-const SCRIPTS: [&str; 5] = [
+const SCRIPTS: [&str; 6] = [
     "device_calls",
     "device_contacts",
     "device_import",
     "device_messages",
     "device_share",
+    "google_calendar",
 ];
 
 fn get(server: &TestServer, path: &str) -> Value {
@@ -128,7 +129,7 @@ fn the_oldest_starter_vault_is_brought_up_to_date_once() {
     );
     assert!(alex["note"]["fields"].get("email").is_none(), "{alex}");
 
-    // The device file and the five scripts, none with a compile problem.
+    // The device file and the shipped scripts, none with a compile problem.
     assert_eq!(
         read(&server, "devices/android.wcl"),
         writer::DEFAULT_ANDROID_DEVICE_FILE

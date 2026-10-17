@@ -1,0 +1,8 @@
+label         = "Google Calendar sync"
+description   = "Pulls the calendars the Google sync note lists into event notes. Connect Google in Settings > Integrations to start it."
+schedule      = "*/5 * * * *"
+script        = "google_calendar"
+allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com"]
+secrets       = ["google_client_id", "google_client_secret", "google_refresh_token"]
+timeout       = "PT5M"
+paused        = true

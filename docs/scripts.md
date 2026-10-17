@@ -400,3 +400,43 @@ A device reports on a command at `POST /api/devices/<id>/commands/<cid>/result` 
 Settings > Devices queues a command itself at `POST /api/devices/<id>/commands` with `{ "name": ..., "payload": ... }`, under the same rules as `vault::device_command`. An admin may queue any command. A device's own `write` token, which is what an app's Settings > Devices reaches the home server with, may queue only `import_history`, and only for itself. A long command reports `{ "status": "delivered", "result": { "progress": ... } }` while it runs, at most every two seconds; `import_history` reports its report that way, so the page shows how far it got.
 
 The Android app fetches its pending commands when a `device.command` push arrives, when the app opens, and, on a phone with no UnifiedPush distributor, every 15 minutes. It first takes its settings from the home server, so a command enabled a moment ago runs. It reports each command `delivered` before running it, so a run that a crash cuts short is not repeated: the command expires instead. `send_sms` also needs Android's SEND_SMS permission; without it the command fails with a message that says so.
+
+## The Google Calendar sync
+
+The shipped task `google_calendar` runs `scripts/google_calendar.ws` every five minutes once it is unpaused (google-sync D12, D19). It reads the one `google_sync` note, `vault::query("from google_sync limit 1")`, and ends successfully with a log line when there is none. It exchanges the `google_refresh_token` secret for an access token at the note's `endpoints.token` (Google's own token endpoint when the key is absent), and calls the Calendar API at `endpoints.calendar`, by default `https://www.googleapis.com/calendar/v3`. The run's log ends with what it did, such as `2 created, 1 updated, 0 trashed`.
+
+For each calendar id in the note's `calendars` (`["primary"]` when empty):
+
+- **Listing.** `events.list` with `singleEvents=false` and the calendar's sync token, or with none on the first run. A 410 drops the token and lists the calendar in full. A full listing names every event there is, so a note of that calendar whose event or series it leaves out goes to the trash. The next sync token is stored in the note's `calendar_sync_tokens` dict under the key `c_` followed by the calendar id with every character other than a letter or digit written as `_` and its two lower-case hex digits: `primary` is `c_primary`, `me@example.com` is `c_me_40example_2ecom`.
+- **Single events** become one `event` note each, found again by `google_ref`, the event id.
+- **Series.** A series master that is new or changed has its occurrences fetched with `events.instances` from 30 days before today to `calendar_window_end` (a year after today), each occurrence one note whose `google_ref` is the occurrence id, `<series id>_<original start>`, and whose `series` is the master's `recurrence` lines joined by a line break. An occurrence note in that span that Google no longer lists goes to the trash. The master itself has no note. A changed occurrence arrives on its own and updates its note.
+- **Deletes.** A cancelled event or occurrence moves its note to the trash; a cancelled series moves every note of its occurrences there (D9).
+- **Window roll.** When today has moved on since `calendar_window_end` was written, every series with an occurrence note on the calendar has the new days' occurrences fetched, from the old window end to the new one.
+- `event.calendar` holds the calendar id as `calendars` lists it, such as `primary`.
+
+Afterwards the run writes `calendar_window_end`, `last_calendar_run` and the tokens, and removes `last_calendar_error`. A failure writes the error to `last_calendar_error` and fails the run. An `invalid_grant` answer from the token endpoint writes `last_calendar_error` as `invalid_grant: <Google's description>`, adds the notification "Google sign-in expired" unless the error it found there already started `invalid_grant`, and ends the run successfully, so the task-failure notification does not fire as well (D18).
+
+### Snapshot and etag
+
+Every event note the sync writes holds, in hidden fields, what Google last sent, so a change can be told apart by side (D10):
+
+| Field | Holds |
+|-------|-------|
+| `google_ref` | The event id, or the occurrence id `<series id>_<original start>` |
+| `etag` | Google's `etag` exactly as sent, quotes included, such as `"3181161784712000"`. Send it as `If-Match` |
+| `snapshot` | A dict of strings, every key always present, `""` for a value Google did not send |
+
+The `snapshot` keys hold each synced field in the form the note holds it:
+
+| Key | From Google | Note field |
+|-----|-------------|------------|
+| `title` | `summary` | `title` |
+| `start`, `end` | `start.date` and the day before `end.date` for an all-day event (Google's end date is exclusive, the vault's range ends on its last day); `start.dateTime` and `end.dateTime` as sent, with their offsets, for a timed one | `when.start`, `when.end` |
+| `location` | `location` | `location` |
+| `description` | `description` with carriage returns and line-ending spaces removed and blank lines dropped | `description`: one paragraph per line, the lines joined with a line break to compare |
+| `attendees` | Each `attendees[].email`, in Google's order, joined with a line break | `attendees_raw`, joined the same way. `attendees` links each address to the person whose `emails` hold it, ignoring case (D5) |
+| `organiser` | `organizer.email` | `organiser` |
+| `status` | `status`, `confirmed` when absent | `status` |
+| `meet_url` | `hangoutLink` | `meet_url` |
+
+A note's synced fields equal its `snapshot` in every key exactly when the vault has not changed them since the last sync. Applying a Google change to a note merges each field against the snapshot: a field changed only in Google takes Google's value, a field changed only in the vault keeps the vault's, and a field changed on both takes the side changed most recently, the note's `updated` against Google's `updated`. `start` and `end` merge as one field. The sync then writes Google's values as the new `snapshot` and Google's `etag`, so a field the vault kept still differs from the snapshot afterwards. A note Google did not change is not written.

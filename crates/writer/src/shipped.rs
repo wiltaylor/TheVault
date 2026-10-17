@@ -1,5 +1,6 @@
 //! Keeping a vault's shipped defaults up to date: the built-in types, the default device file and
-//! the default device scripts, and the one-time upgrade steps (D15, D16, D24).
+//! the default device scripts, the Google sync's scripts and tasks, and the one-time upgrade steps
+//! (D15, D16, D24; google-sync D19).
 //!
 //! [`Writer::upgrade_shipped_defaults`] runs on every start of the home server and of the
 //! embedded writer. It does four things:
@@ -15,8 +16,8 @@
 //!    an added field when the shipped `default` template has one, after the slot the shipped
 //!    template puts before it, else before the one it puts after it; no other template is
 //!    touched.
-//! 3. **Missing device files and scripts.** Each file of [`SHIPPED_FILES`] the vault lacks is
-//!    written, the scripts before the device file that names them.
+//! 3. **Missing device files, tasks and scripts.** Each file of [`SHIPPED_FILES`] the vault lacks
+//!    is written, the scripts before the device file or task that names them.
 //! 4. **Shipped file upgrades.** A file of [`SHIPPED_FILES`] whose content is still a version the
 //!    app shipped is replaced by the current one. A file the user changed is left alone, and the
 //!    user hears once, under the bell, that a newer shipped version exists.
@@ -54,8 +55,8 @@ pub struct ShippedFile {
     pub hashes: &'static [&'static str],
 }
 
-/// The shipped files, scripts before the device file that names them.
-pub const SHIPPED_FILES: [ShippedFile; 6] = [
+/// The shipped files, scripts before the device file or task that names them.
+pub const SHIPPED_FILES: [ShippedFile; 8] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -102,6 +103,16 @@ pub const SHIPPED_FILES: [ShippedFile; 6] = [
             "82f1e219cdc77ac5a8fb698a9ab15fa2d4795049ca1705877744135e220e21f0",
             "02a8b77d470a9740cfeaa0cbf1ccafff99ffc2447cd8edff79a95e853880c411",
         ],
+    },
+    ShippedFile {
+        path: "scripts/google_calendar.ws",
+        source: include_str!("../defaults/google/google_calendar.ws"),
+        hashes: &["c3f42196166b550d457a9c1f3aa9db7b89c0502a36924efc072448bd61e70e64"],
+    },
+    ShippedFile {
+        path: "tasks/google_calendar.wcl",
+        source: include_str!("../defaults/google/tasks/google_calendar.wcl"),
+        hashes: &["6d3a43e62acc5382f380dddcc8576631a0aca4bb97a20dee3ffc23d965bc8617"],
     },
 ];
 
@@ -907,12 +918,14 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_files_are_the_default_device_file_and_scripts() {
+    fn the_shipped_files_are_the_default_device_file_and_scripts_and_the_google_tasks() {
         let mut paths: Vec<String> = crate::DEFAULT_DEVICE_SCRIPTS
             .iter()
             .map(|(name, _)| crate::defs::script_path(name))
             .collect();
         paths.push(crate::device_file_path("android"));
+        paths.push("scripts/google_calendar.ws".to_owned());
+        paths.push("tasks/google_calendar.wcl".to_owned());
         let shipped: Vec<String> = SHIPPED_FILES.iter().map(|f| f.path.to_owned()).collect();
         assert_eq!(shipped, paths);
         for (name, source) in crate::DEFAULT_DEVICE_SCRIPTS {
@@ -925,8 +938,9 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_device_file_is_canonical() {
-        let file = SHIPPED_FILES.last().unwrap();
-        assert_eq!(file.text().unwrap(), file.source);
+    fn the_shipped_wcl_files_are_canonical() {
+        for file in SHIPPED_FILES.iter().filter(|f| f.path.ends_with(".wcl")) {
+            assert_eq!(file.text().unwrap(), file.source, "{}", file.path);
+        }
     }
 }

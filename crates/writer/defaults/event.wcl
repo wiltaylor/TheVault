@@ -11,10 +11,9 @@ field when {
 }
 
 field calendar {
-  kind        = "select"
+  kind        = "string"
   label       = "Calendar"
-  description = "The Google calendar the event is on. The calendar sync writes the options."
-  options     = ["primary"]
+  description = "The id of the Google calendar the event is on, one of the Google sync note's calendars."
 }
 
 field location {
