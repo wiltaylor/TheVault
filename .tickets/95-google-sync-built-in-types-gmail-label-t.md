@@ -4,8 +4,8 @@ title: Google sync built-in types, gmail_label taxonomy, and the fake Google ser
   in testkit
 blocked_by:
 - '94'
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Google sync built-in types, gmail_label taxonomy, and the fake Google server in testkit
@@ -25,3 +25,15 @@ Acceptance criteria:
 ### 2026-10-17T23:10:48Z — /work
 
 Claimed.
+
+### 2026-10-17T23:28:45Z — wil
+
+Verified set to verified.
+
+### 2026-10-17T23:28:45Z — wil
+
+Status set to done.
+
+### 2026-10-17T23:28:45Z — wil
+
+Commit c14f6d0 on ticket/95. FakeGoogle API for 96-98: testkit::FakeGoogle::builder().client(id,secret).refresh_token(t).account(email).invalid_grant(bool).start() (or FakeGoogle::start()); .endpoints() is the google_sync endpoints dict {token: <base>/token, userinfo: <base>/oauth2/v3/userinfo, gmail: <base>/gmail/v1, calendar: <base>/calendar/v3}; .host() for allow_domains; .consent(auth_url) returns the redirect URL with state and a code (PKCE S256 checked at exchange); .set_invalid_grant(bool), .set_account(), .access_tokens(), .requests(), .requests_to(prefix), .clear_requests(); Request has route(), query(), form(), json(), header(). gmail.rs and calendar.rs each have Config, State, handle(); add switches via impl FakeGoogleBuilder / impl FakeGoogle in the module and check super::authorized(shared, req). event calendar select ships options ["primary"] unlabelled (select has no option labels: ticket 103). Own types named email/event etc. get treated as built-ins (ticket 104). Taxonomy is not in SHIPPED_FILES on purpose: the Gmail sync grows it.
