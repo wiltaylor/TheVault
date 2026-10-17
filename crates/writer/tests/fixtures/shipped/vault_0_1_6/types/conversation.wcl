@@ -1,0 +1,46 @@
+label       = "Conversation"
+plural      = "Conversations"
+description = "One message thread on a phone, showing its messages."
+icon        = "messages-square"
+colour      = "blue"
+
+field participants {
+  kind     = "reference"
+  label    = "Participants"
+  target   = "person"
+  multiple = true
+}
+
+field channel {
+  kind    = "select"
+  label   = "Channel"
+  options = ["sms", "mms", "rcs"]
+}
+
+field thread_ref {
+  kind        = "string"
+  label       = "Thread reference"
+  description = "The phone's id for the thread."
+}
+
+template default {
+  tab "Messages" {
+    slot "participants"
+    query_view {
+      title = "Messages"
+      query = "from message where conversation == this sort sent asc"
+
+      view table {
+        kind    = "table"
+        columns = ["sent", "direction", "from_raw", "title"]
+      }
+    }
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "participants"
+  }
+}

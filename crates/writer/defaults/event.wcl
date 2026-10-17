@@ -1,0 +1,115 @@
+label       = "Event"
+plural      = "Events"
+description = "One event, or one occurrence of a recurring event, on a Google calendar."
+icon        = "calendar"
+colour      = "blue"
+
+field when {
+  kind  = "date_range"
+  label = "When"
+  of    = "date_or_datetime"
+}
+
+field calendar {
+  kind        = "select"
+  label       = "Calendar"
+  description = "The Google calendar the event is on. The calendar sync writes the options."
+  options     = ["primary"]
+}
+
+field location {
+  kind  = "string"
+  label = "Location"
+}
+
+field description {
+  kind  = "content"
+  label = "Description"
+}
+
+field attendees {
+  kind     = "reference"
+  label    = "Attendees"
+  target   = "person"
+  multiple = true
+}
+
+field attendees_raw {
+  kind        = "list"
+  label       = "Attendees (as sent)"
+  description = "Each attendee's address as Google gave it."
+  items       = "string"
+}
+
+field organiser {
+  kind  = "string"
+  label = "Organiser"
+}
+
+field status {
+  kind    = "select"
+  label   = "Status"
+  options = ["confirmed", "tentative", "cancelled"]
+}
+
+field meet_url {
+  kind  = "url"
+  label = "Meet link"
+}
+
+field series {
+  kind        = "string"
+  label       = "Repeats"
+  description = "The recurrence rule of the series this occurrence belongs to."
+  computed    = true
+}
+
+field google_ref {
+  kind        = "string"
+  label       = "Google reference"
+  description = "Google's id for the event, or for this occurrence of a series."
+  hidden      = true
+}
+
+field etag {
+  kind        = "string"
+  label       = "ETag"
+  description = "Google's version of the event, as last synced."
+  hidden      = true
+}
+
+field snapshot {
+  kind        = "dict"
+  label       = "Snapshot"
+  description = "The synced fields as Google last sent them, so a sync can tell which side changed."
+  values      = "string"
+  hidden      = true
+}
+
+template default {
+  tab "Event" {
+    columns {
+      column {
+        slot "when"
+        slot "series"
+        slot "location"
+      }
+      column {
+        slot "calendar"
+        slot "status"
+        slot "meet_url"
+      }
+    }
+    slot "attendees"
+    slot "organiser"
+    slot "description"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "when"
+    slot "location"
+  }
+}

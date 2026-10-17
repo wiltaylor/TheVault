@@ -69,14 +69,18 @@ fn lists_every_type_with_its_fields_and_templates() {
     let mut names: Vec<&str> = types.iter().map(|t| t["name"].as_str().unwrap()).collect();
     names.sort();
     // The seeded type, and the built-in types every vault has.
-    // `person` comes with the phone types, which reference it.
+    // `person` comes with the phone and Google types, which reference it.
     assert_eq!(
         names,
         [
             "call",
             "conversation",
             "dailynote",
+            "email",
+            "email_thread",
+            "event",
             "fleeting",
+            "google_sync",
             "message",
             "person",
             "task"

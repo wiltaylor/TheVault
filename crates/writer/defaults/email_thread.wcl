@@ -1,0 +1,41 @@
+label       = "Email thread"
+plural      = "Email threads"
+description = "One Gmail conversation, showing its emails."
+icon        = "mails"
+colour      = "red"
+
+field participants {
+  kind     = "reference"
+  label    = "Participants"
+  target   = "person"
+  multiple = true
+}
+
+field thread_ref {
+  kind        = "string"
+  label       = "Thread reference"
+  description = "Gmail's id for the thread."
+  hidden      = true
+}
+
+template default {
+  tab "Emails" {
+    slot "participants"
+    query_view {
+      title = "Emails"
+      query = "from email where thread == this sort sent asc"
+
+      view table {
+        kind    = "table"
+        columns = ["sent", "from_raw", "title"]
+      }
+    }
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "participants"
+  }
+}

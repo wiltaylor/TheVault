@@ -146,8 +146,19 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
     added.sort();
     assert_eq!(
         added,
-        ["call", "conversation", "dailynote", "fleeting", "message"]
+        [
+            "call",
+            "conversation",
+            "dailynote",
+            "email",
+            "email_thread",
+            "event",
+            "fleeting",
+            "google_sync",
+            "message"
+        ]
     );
+    assert_eq!(done.taxonomies_added, ["gmail_label"]);
     let ty = w.schema();
     let person = ty.type_def("person").unwrap();
     assert!(person.field("email").is_none());
@@ -674,4 +685,167 @@ fn a_photo_that_is_not_an_image_keeps_the_photo_field_open_to_any_asset() {
         Some("phone_labels")
     );
     assert!(fields_of(&w, &sam)["photo"].is_string());
+}
+
+/// The Google sync's built-in types, which a vault from before them gains (google-sync D4, D6,
+/// D15, D17).
+const GOOGLE_TYPES: [&str; 4] = ["email", "email_thread", "event", "google_sync"];
+
+/// Copy the vault fixture `from` into `to`, keeping its folders.
+fn copy_tree(from: &Path, to: &Path) {
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            std::fs::create_dir_all(&target).unwrap();
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// A vault as the 0.1.6 home server left it: its built-in types, its `person`, its device file
+/// and scripts, step `0001_person_emails` recorded, and one person note. Returns the person's id.
+fn vault_0_1_6(root: &Path) -> String {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/shipped/vault_0_1_6");
+    copy_tree(&fixture, root);
+    let w = open(root);
+    w.state().record_upgrade("0001_person_emails").unwrap();
+    w.create(
+        "person",
+        &writer::Input::Json(json!({ "fields": {
+            "title": "Alex", "emails": ["alex@example.com"],
+        }})),
+        &author(),
+    )
+    .unwrap()
+    .id
+}
+
+#[test]
+fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let alex = vault_0_1_6(root);
+    let w = open(root);
+    let versions_before = w.history(&alex).unwrap().len();
+    let before: u64 = generation(root).trim().parse().unwrap();
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    assert_eq!(done.taxonomies_added, ["gmail_label"]);
+    let mut added = done.types_added.clone();
+    added.sort();
+    assert_eq!(added, GOOGLE_TYPES);
+    // Step 0002 is the one 0.1.6 had not run. The seeding is then one commit, with no field
+    // added to a new type and no note edited.
+    assert_eq!(done.steps, ["0002_person_labels"]);
+    assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 2);
+    assert!(
+        done.fields_added.iter().all(|(t, _)| t == "person"),
+        "{:?}",
+        done.fields_added
+    );
+    assert_eq!(w.history(&alex).unwrap().len(), versions_before);
+
+    let sources = [
+        ("email", writer::DEFAULT_EMAIL_TYPE),
+        ("email_thread", writer::DEFAULT_EMAIL_THREAD_TYPE),
+        ("event", writer::DEFAULT_EVENT_TYPE),
+        ("google_sync", writer::DEFAULT_GOOGLE_SYNC_TYPE),
+    ];
+    for (name, source) in sources {
+        let path = format!("types/{name}.wcl");
+        assert_eq!(
+            read(root, &path).unwrap(),
+            store::canonical(source, &path).unwrap(),
+            "{name}"
+        );
+        assert!(writer::is_built_in_type(name), "{name}");
+    }
+    assert_eq!(
+        read(root, "taxonomies/gmail_label.wcl").unwrap(),
+        store::canonical(
+            writer::DEFAULT_GMAIL_LABEL_TAXONOMY,
+            "taxonomies/gmail_label.wcl"
+        )
+        .unwrap()
+    );
+    let schema = w.schema();
+    let labels = schema.taxonomy("gmail_label").unwrap();
+    assert!(labels.allow_new);
+    for name in GOOGLE_TYPES {
+        assert!(schema.type_def(name).is_some(), "{name}");
+    }
+
+    // An email can now carry a Gmail system label and a new one of its own.
+    let email = w
+        .create(
+            "email",
+            &writer::Input::Json(json!({ "fields": {
+                "title": "Hello", "from": alex, "labels": ["system/INBOX", "Receipts"],
+            }})),
+            &author(),
+        )
+        .unwrap()
+        .id;
+    assert_eq!(
+        fields_of(&w, &email)["labels"],
+        json!(["system/INBOX", "Receipts"])
+    );
+}
+
+#[test]
+fn a_0_1_6_vault_changes_nothing_on_its_second_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let alex = vault_0_1_6(root);
+    {
+        let w = open(root);
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    }
+    let gen_before = generation(root);
+    let taxonomy_before = read(root, "taxonomies/gmail_label.wcl").unwrap();
+    let w = open(root);
+    let feed_before = w.state().changes_since(0, 10_000).unwrap().latest;
+    let versions_before = w.history(&alex).unwrap().len();
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    assert_eq!(done, Upgraded::default());
+    assert_eq!(generation(root), gen_before, "a second start made a commit");
+    assert_eq!(
+        w.state().changes_since(0, 10_000).unwrap().latest,
+        feed_before
+    );
+    assert_eq!(w.history(&alex).unwrap().len(), versions_before);
+    assert_eq!(
+        read(root, "taxonomies/gmail_label.wcl").unwrap(),
+        taxonomy_before
+    );
+    assert!(notification_titles(&w).is_empty());
+}
+
+#[test]
+fn a_gmail_label_taxonomy_the_sync_grew_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    vault_0_1_6(root);
+    {
+        let w = open(root);
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+        // The Gmail sync adds the labels it meets to the open taxonomy.
+        w.create(
+            "email",
+            &writer::Input::Json(json!({ "fields": { "title": "Hi", "labels": ["Work"] } })),
+            &author(),
+        )
+        .unwrap();
+    }
+    let grown = read(root, "taxonomies/gmail_label.wcl").unwrap();
+    assert!(grown.contains("term \"Work\""), "{grown}");
+    let w = open(root);
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert!(done.taxonomies_added.is_empty());
+    assert_eq!(read(root, "taxonomies/gmail_label.wcl").unwrap(), grown);
 }

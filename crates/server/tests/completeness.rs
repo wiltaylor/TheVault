@@ -542,8 +542,12 @@ template card {
         person["templates"][0]["tabs"][0]["items"][1]["slot"],
         "email"
     );
-    let status = &schema["taxonomies"][0];
-    assert_eq!(status["name"], "status");
+    let status = schema["taxonomies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "status")
+        .unwrap();
     assert_eq!(
         status["terms"][1]["children"][0]["path"],
         "Active/In progress"
@@ -742,7 +746,8 @@ fn a_taxonomy_edit_renames_and_moves_terms_in_every_note() {
         .unwrap();
     expect(res, 200);
     let list = expect(api.get("/api/taxonomies").send().unwrap(), 200);
-    assert_eq!(list["taxonomies"].as_array().unwrap().len(), 2);
+    // Theirs, and the built-in gmail_label.
+    assert_eq!(list["taxonomies"].as_array().unwrap().len(), 3);
     expect(api.delete("/api/taxonomies/area").send().unwrap(), 200);
     assert!(!api.server.vault_path().join("taxonomies/area.wcl").exists());
 }

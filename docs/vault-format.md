@@ -173,7 +173,7 @@ template default {
 
 ### Built-in types
 
-Every vault has five types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it, and adds to a built-in type the vault has every field its shipped default gained since: see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`.
+Every vault has nine types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it, and adds to a built-in type the vault has every field its shipped default gained since: see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`.
 
 | Type | Label | For | Must keep |
 |------|-------|-----|-----------|
@@ -182,10 +182,14 @@ Every vault has five types that the app relies on. The server writes each one's 
 | `message` | Message | One SMS, MMS or RCS message from a phone, written by the default device scripts (D15) | nothing |
 | `call` | Call | One phone call, made, received or missed (D15) | nothing |
 | `conversation` | Conversation | One message thread. Its page lists the thread's messages (D15) | nothing |
+| `email` | Email | One Gmail message, written by the Gmail sync (google-sync D17) | nothing |
+| `email_thread` | Email thread | One Gmail thread. Its page lists the thread's emails (google-sync D4) | nothing |
+| `event` | Event | One Google Calendar event, or one occurrence of a recurring one, written by the calendar sync (google-sync D15) | nothing |
+| `google_sync` | Google sync | The one note holding the Google sync's settings and progress (google-sync D6) | nothing |
 
 A change that removes a "must keep" field, or changes its kind, is refused with `invalid_type`.
 
-The phone data types reference `person`, which is a starter type and not a built-in one. When the server adds any of the three to a vault that has no `person` type, it adds `crates/writer/defaults/person.wcl` with them, in the same commit. That `person` can be customised and, once nothing references it, deleted. A vault that already has a `person` type keeps it, and gains on start each field of `crates/writer/defaults/person.wcl` it lacks, such as `emails`, `phones`, `addresses` and `device_contacts`, which the device scripts write.
+The phone data types, `email`, `email_thread` and `event` reference `person`, which is a starter type and not a built-in one. When the server adds any of them to a vault that has no `person` type, it adds `crates/writer/defaults/person.wcl` with them, in the same commit. That `person` can be customised and, once nothing references it, deleted. A vault that already has a `person` type keeps it, and gains on start each field of `crates/writer/defaults/person.wcl` it lacks, such as `emails`, `phones`, `addresses` and `device_contacts`, which the device scripts write.
 
 The fields of the phone data types, as a new vault gets them:
 
@@ -231,6 +235,55 @@ template default {
   }
 }
 ```
+
+The fields of the Google sync types, as a new vault gets them. The Gmail and calendar syncs link a sender, recipient or attendee to the person whose `emails` holds the address, ignoring case, and create no person (google-sync D5):
+
+| Type | Field | Kind | Meaning |
+|------|-------|------|---------|
+| `email` | `from` | `reference` to `person` | The sender, when a person matches. The title is the subject |
+| | `from_raw` | `string` | The sender as the message gave it, such as `Alex Example <alex@example.com>` |
+| | `to`, `cc` | `reference` to `person`, `multiple` | The recipients that match a person |
+| | `to_raw`, `cc_raw` | `list` of `string` | Each recipient as the message gave it |
+| | `sent` | `datetime` | When it was sent |
+| | `thread` | `reference` to `email_thread` | The thread it belongs to |
+| | `labels` | `taxonomy` `gmail_label`, `multiple` | Its Gmail labels |
+| | `snippet` | `string` | Gmail's short preview |
+| | `body` | `content` | The text |
+| | `html` | `asset` | The HTML part, as Gmail sent it |
+| | `attachments` | `asset`, `multiple` | Its attachments |
+| | `gmail_ref` | `string`, hidden | Gmail's message id, so a message is pulled once |
+| `email_thread` | `participants` | `reference` to `person`, `multiple` | The people in the thread. The title is the subject |
+| | `thread_ref` | `string`, hidden | Gmail's thread id |
+| `event` | `when` | `date_range`, `of = "date_or_datetime"` | Dates for an all-day event, datetimes with their offsets for a timed one |
+| | `calendar` | `select` | The Google calendar it is on. The calendar sync writes the options; a new vault has `primary` |
+| | `location` | `string` | |
+| | `description` | `content` | |
+| | `attendees` | `reference` to `person`, `multiple` | The attendees that match a person |
+| | `attendees_raw` | `list` of `string` | Each attendee's address as Google gave it |
+| | `organiser` | `string` | |
+| | `status` | `select`: `confirmed`, `tentative`, `cancelled` | |
+| | `meet_url` | `url` | The Google Meet link |
+| | `series` | `string`, computed | The recurrence rule of the series an occurrence belongs to, as text |
+| | `google_ref` | `string`, hidden | Google's id for the event, or for this occurrence |
+| | `etag` | `string`, hidden | Google's version of the event, as last synced |
+| | `snapshot` | `dict` of `string`, hidden | The synced fields as Google last sent them, so a sync can tell which side changed (google-sync D10) |
+| `google_sync` | `gmail_mode` | `select`: `labels`, `all`, default `labels` | Pull the listed labels, or all mail |
+| | `gmail_labels` | `list` of `string` | The labels to pull, by name |
+| | `gmail_window_days` | `int`, default `90` | How many days back the first pull reaches |
+| | `gmail_backfill_to` | `date` | Pull older mail, a page a run, back to this date |
+| | `calendars` | `list` of `string`, default `["primary"]` | The ids of the calendars to pull |
+| | `default_calendar` | `string`, default `primary` | Where a new event note goes when it names no calendar |
+| | `account` | `string`, computed | The connected Google address |
+| | `gmail_history_id`, `gmail_backfill_page` | `string`, computed | The Gmail sync's cursors |
+| | `calendar_sync_tokens` | `dict` of `string`, computed | The calendar sync's token for each calendar |
+| | `calendar_window_end` | `date`, computed | How far ahead recurring events have occurrence notes |
+| | `last_gmail_run`, `last_calendar_run` | `datetime`, computed | When each sync last ran |
+| | `last_gmail_error`, `last_calendar_error` | `string`, computed | Each sync's last error |
+| | `endpoints` | `dict` of `url`, hidden | Where to reach Google: keys `token`, `gmail`, `calendar` and `userinfo`. Absent keys mean Google's own hosts. Tests point it at a fake server |
+
+The `email_thread` type's default template lists its emails with the query `from email where thread == this sort sent asc`.
+
+`email` uses the built-in open taxonomy `gmail_label`, at `taxonomies/gmail_label.wcl` (google-sync D14). The server adds it when it starts on a vault that lacks it, in the same commit as the types, and never changes it afterwards: the Gmail sync adds each label it meets. A nested Gmail label is a term path, such as `Work/Clients`. Gmail's own labels sit under the `system` term the shipped file holds: `system/INBOX`, `system/UNREAD`, `system/STARRED`, `system/IMPORTANT`, `system/SENT` and `system/DRAFT`.
 
 The `person` type, both the starter pack's and the one added with the phone data types, holds every detail a phone contact holds, and the device scripts keep the two in step both ways (D16, D24):
 
@@ -1955,7 +2008,7 @@ Each script captures an item once, by its `device_ref`, archived notes included.
 
 ## Shipped defaults and upgrades
 
-The app ships defaults into every vault: the built-in types (and the `person` type the phone data types reference), the default device file `devices/android.wcl`, and the five default device scripts `scripts/device_*.ws`. On every start the home server brings them up to date, and a device's local vault does the same when the app opens it. The code is `crates/writer/src/shipped.rs`.
+The app ships defaults into every vault: the built-in types (and the `person` type the phone data types reference), the built-in taxonomy `gmail_label`, the default device file `devices/android.wcl`, and the five default device scripts `scripts/device_*.ws`. On every start the home server brings them up to date, and a device's local vault does the same when the app opens it. The code is `crates/writer/src/shipped.rs`.
 
 1. **Upgrade steps.** One-time upgrades for changes that are not additive, such as a field rename with a migration script. Each has an id, runs once per vault in the order the app lists them, and is recorded in `state.db` once it succeeds. A step that fails stops the server from starting and runs again on the next start. Steps run first, so the seeding below never adds a field under the name a step is about to rename it to. Only the home server runs them; a device takes their results through sync. The steps are:
 
@@ -1963,7 +2016,7 @@ The app ships defaults into every vault: the built-in types (and the `person` ty
    |------|------|
    | `0001_person_emails` | A `person` type with `addresses` or `email` and no `emails`: `addresses` becomes `emails`, `email` moves into it and goes (see [Built-in types](#built-in-types)). Its note versions are authored by `task server` |
    | `0002_person_labels` | A `person` type whose `emails`, `phones` and `addresses` have no `labels`: each gains its `labels`, `photo` gains `accept = "image"` when every photo is an image, and the label lists' slots leave the `default` template (see [Built-in types](#built-in-types)). It edits no note |
-2. **Built-in types.** A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` template places an added field, the vault's `default` template gains that slot, after the nearest slot the shipped template puts before it, else before the nearest slot it puts after it, or at the end of its first tab. No other template, and nothing else in the `default` template, changes. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
+2. **Built-in taxonomies and types.** A built-in taxonomy the vault lacks is added whole, before the types that use it; one the vault has is never changed. A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` template places an added field, the vault's `default` template gains that slot, after the nearest slot the shipped template puts before it, else before the nearest slot it puts after it, or at the end of its first tab. No other template, and nothing else in the `default` template, changes. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
 3. **Missing files.** Each default device script and the default device file the vault lacks is written, the scripts before the device file that names them. A deleted one comes back on the next start. That changes nothing on a device: a vault with no `devices/android.wcl` runs the same built-in default, and a script the device file names cannot be deleted while it does.
 4. **Newer shipped files.** `state.db` records the content hash of each default device file or script the server writes. The app carries the hash of every version of each that it has ever shipped. On start, a file whose content is still a version the app shipped, or still what the server wrote, is replaced by the current shipped version, so a vault that skipped releases is upgraded too. A file the user changed is left alone. When a newer shipped version exists than the one the user changed, the server adds one notification under the bell that names the file and says a newer version exists. It adds no other for that version, on any later start. A file the user changed with no record of what the server wrote, as in a vault from before these records, counts as based on an older version. A device's local vault never adds the notification, since the home server does.
 
