@@ -215,3 +215,28 @@ test("Import from phone queues import_history with the chosen options once it is
   await card.getByRole("button", { name: "Save" }).click();
   await expect(button).toBeDisabled();
 });
+
+test("in an app, only the app's own phone can be asked to import", async ({ page, admin }) => {
+  expect((await admin.put("/api/scripts/device_import", { data: { source: DEVICE_IMPORT } })).status()).toBe(200);
+  const file = await admin.put("/api/device-files/android", {
+    data: { wcl: 'command "import_history" {\n  script = "device_import"\n}\n' },
+  });
+  expect(file.status(), await file.text()).toBe(200);
+  const own = await pair({ password: password(), name: `Own ${unique()}`, platform: "android" });
+  const other = await pair({ password: password(), name: `Other ${unique()}`, platform: "android" });
+  for (const d of [own, other]) {
+    const res = await admin.patch(`/api/devices/${d.body.device_id}`, { data: { settings: { commands: ["import_history"] } } });
+    expect(res.status()).toBe(200);
+  }
+  // The page runs in the app paired as `own`, as its embedded server says.
+  await page.route("**/api/app", (route) =>
+    route.fulfill({ json: { app: true, paired: true, device_id: own.body.device_id, device_name: "Own", server_url: "https://home" } }),
+  );
+  await logIn(page, "/settings/devices");
+  const importer = (d: { body: Paired }) =>
+    page.locator(`[data-device="${d.body.device_id}"]`).getByRole("group", { name: "Import from phone" });
+  await expect(importer(other).getByRole("button", { name: "Import from phone" })).toBeDisabled();
+  await expect(importer(other)).toContainText("Ask another phone to import from the web app");
+  // The app's own phone, declared and enabled, can be asked.
+  await expect(importer(own).getByRole("button", { name: "Import from phone" })).toBeEnabled();
+});
