@@ -458,3 +458,92 @@ fn a_change_that_would_break_existing_notes_is_refused() {
     assert_eq!(api.note_files(&ids), before);
     assert_eq!(api.type_file("task").unwrap(), TASK_TYPE);
 }
+
+#[test]
+fn an_unknown_attribute_is_a_warning_that_put_and_the_type_list_show() {
+    let api = Api::start();
+    let gadget = "label = \"Gadget\"\nshelf = \"top\"\n\nfield size {\n  kind = \"int\"\n  unit = \"cm\"\n}\n\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n    slot \"size\"\n  }\n}\n";
+    let saved = expect(
+        api.put("/api/types/gadget")
+            .json(&json!({ "wcl": gadget }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    let warnings = json!([
+        {
+            "at": "type.shelf",
+            "message": "is not an attribute of types in this version; it is ignored",
+            "severity": "warning",
+        },
+        {
+            "at": "field size.unit",
+            "message": "is not an attribute of int fields in this version; it is ignored",
+            "severity": "warning",
+        },
+    ]);
+    assert_eq!(saved["warnings"], warnings, "{saved}");
+    // The file keeps the attribute: a newer release may know it.
+    assert!(api.type_file("gadget").unwrap().contains("unit"));
+
+    let list = expect(api.get("/api/types").send().unwrap(), 200);
+    let listed = list["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "gadget")
+        .unwrap();
+    assert_eq!(listed["warnings"], warnings, "{listed}");
+    let task = list["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "task")
+        .unwrap();
+    assert_eq!(task["warnings"], json!([]));
+    // The type editor reads the schema.
+    let schema = expect(api.get("/api/schema").send().unwrap(), 200);
+    let inspected = schema["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "gadget")
+        .unwrap();
+    assert_eq!(inspected["warnings"], warnings, "{inspected}");
+
+    // Notes of the type are written and checked against what the type does know.
+    api.create_note("gadget", "title = \"Lamp\"\nsize = 30\n");
+    let refused = expect(
+        api.post("/api/notes?type=gadget")
+            .header(CONTENT_TYPE, WCL)
+            .body("title = \"Lamp\"\nsize = \"big\"\n")
+            .send()
+            .unwrap(),
+        400,
+    );
+    assert_eq!(refused["error"], "invalid", "{refused}");
+
+    // A malformed value of an attribute it knows is still an error.
+    let refused = expect(
+        api.put("/api/types/broken")
+            .json(&json!({ "wcl": gadget.replace("kind = \"int\"", "kind = \"int\"\n  required = \"yes\"") }))
+            .send()
+            .unwrap(),
+        400,
+    );
+    assert_eq!(refused["error"], "invalid_type", "{refused}");
+    let issues = refused["failures"][0]["issues"].as_array().unwrap();
+    assert_eq!(
+        issues[0],
+        json!({
+            "at": "field size.required",
+            "message": "must be true or false, not a string",
+            "severity": "error",
+        }),
+        "{refused}"
+    );
+    assert!(
+        issues.iter().all(|i| i["severity"] == "error"),
+        "a refused type lists its errors: {refused}"
+    );
+}

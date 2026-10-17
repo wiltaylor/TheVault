@@ -1,7 +1,7 @@
 // The type editor's model of a type file (D3, D6, D14), read from schema inspection and written
 // back as WCL in the order docs/vault-format.md gives.
 
-import type { Block, Json } from "../api";
+import type { Block, Json, SchemaIssue } from "../api";
 import { slotOfBlock, slotsOf } from "../blocks/columns";
 import { renameFieldRefs } from "../editor/markup";
 import { wclBlock, wclField, wclString } from "./wcl";
@@ -155,6 +155,8 @@ export interface SchemaType {
   fields: Record<string, Json>[];
   templates: TemplateModel[];
   handlers?: HandlerModel[];
+  /** What this version ignored in the type file, such as an attribute only a newer release knows. */
+  warnings?: SchemaIssue[];
 }
 
 let nextKey = 1;

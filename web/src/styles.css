@@ -1704,6 +1704,18 @@ a.button {
   gap: 0.5rem;
 }
 
+.type-warnings {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+  padding: 0.5rem 1rem;
+  margin: 1rem 0;
+}
+
+.type-warnings p {
+  margin: 0 0 0.25rem;
+}
+
 .preview {
   border: 1px solid var(--line);
   border-radius: 0.5rem;

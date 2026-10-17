@@ -638,10 +638,6 @@ fn field_definition_rules() {
             "not one of the options",
         ),
         (
-            "field a {\n  kind = \"string\"\n  options = [\"x\"]\n}",
-            "not an item of this block",
-        ),
-        (
             "field a {\n  kind = \"list\"\n  items = \"canvas\"\n}",
             "is not one of",
         ),
@@ -1227,14 +1223,17 @@ fn a_list_of_terms_names_its_taxonomy_and_takes_no_multiple() {
         issues.iter().any(|i| i == "field f.taxonomy: is required"),
         "{issues:?}"
     );
-    let issues = type_issues(&field(
-        "  kind = \"list\"\n  items = \"string\"\n  taxonomy = \"status\"",
-    ));
-    assert!(
-        issues
-            .iter()
-            .any(|i| i == "field f.taxonomy: is not an item of this block"),
-        "{issues:?}"
+    // `taxonomy` is not an attribute of a list of strings: a warning, and the field still loads.
+    let t = TypeDef::parse(
+        "a",
+        &field("  kind = \"list\"\n  items = \"string\"\n  taxonomy = \"status\""),
+    )
+    .unwrap();
+    assert_eq!(
+        text(&t.warnings),
+        [
+            "warning: field f.taxonomy: is not an attribute of list fields in this version; it is ignored"
+        ]
     );
     let issues = type_issues(&field(
         "  kind = \"list\"\n  items = \"taxonomy\"\n  taxonomy = \"status\"\n  multiple = true",
@@ -1380,14 +1379,21 @@ fn labels_is_refused_when_it_names_a_missing_field_a_non_list_itself_or_a_named_
             "{want}: {issues:?}"
         );
     }
-    // `labels` belongs to a list of strings only.
-    let issues = type_issues(&type_with(
-        "field a {\n  kind  = \"list\"\n  items = \"int\"\n  labels = \"l\"\n}\nfield l {\n  kind  = \"list\"\n  items = \"string\"\n}\n",
-    ));
-    assert!(
-        issues.iter().any(|i| i.starts_with("field a.labels")),
-        "{issues:?}"
+    // `labels` belongs to a list of strings only: on a list of ints it is ignored, with a warning.
+    let t = TypeDef::parse(
+        "t",
+        &type_with(
+            "field a {\n  kind  = \"list\"\n  items = \"int\"\n  labels = \"l\"\n}\nfield l {\n  kind  = \"list\"\n  items = \"string\"\n}\n",
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        text(&t.warnings),
+        [
+            "warning: field a.labels: is not an attribute of list fields in this version; it is ignored"
+        ]
     );
+    assert_eq!(t.field("a").unwrap().labels, None);
 }
 
 /// Assets by id with their file names.
@@ -1444,5 +1450,133 @@ fn an_image_asset_field_refuses_an_asset_that_is_not_an_image() {
     assert!(
         issues.iter().any(|i| i.starts_with("field photo.accept")),
         "{issues:?}"
+    );
+}
+
+/// A type with one field `f` whose body is `field`, `top` at the top of the file.
+fn tolerant_type(top: &str, field: &str) -> String {
+    format!(
+        "label = \"A\"\n{top}\nfield f {{\n{field}\n}}\ntemplate default {{\n  tab \"T\" {{\n    slot \"title\"\n    slot \"f\"\n  }}\n}}\n"
+    )
+}
+
+#[test]
+fn an_unknown_field_attribute_is_a_warning_and_the_type_still_loads_and_validates() {
+    let source = tolerant_type(
+        "",
+        "  kind = \"int\"\n  required = true\n  sparkle = \"gold\"",
+    );
+    let t = TypeDef::parse("a", &source).unwrap();
+    assert_eq!(
+        text(&t.warnings),
+        [
+            "warning: field f.sparkle: is not an attribute of int fields in this version; it is ignored"
+        ]
+    );
+    assert!(t.warnings.iter().all(Issue::is_warning));
+    let f = t.field("f").expect("the field still loads");
+    assert_eq!(f.kind, FieldKind::Int);
+    assert!(f.required, "the attributes it knows still apply");
+
+    let schema = Schema::from_sources(&[("a", &source)], &[]).unwrap();
+    let none = lookup(&[]);
+    schema
+        .validate_note_source("a", "title = \"t\"\nf = 3\n", "n.wcl", &none)
+        .unwrap();
+    let err = schema
+        .validate_note_source("a", "title = \"t\"\nf = \"three\"\n", "n.wcl", &none)
+        .unwrap_err();
+    assert!(err.to_string().contains("f: must be"), "{err}");
+    let err = schema
+        .validate_note_source("a", "title = \"t\"\n", "n.wcl", &none)
+        .unwrap_err();
+    assert!(err.to_string().contains("is required"), "{err}");
+}
+
+#[test]
+fn an_unknown_type_attribute_is_a_warning_and_the_type_still_loads_and_validates() {
+    let source = tolerant_type("sort_by = \"title\"\nlayout = 2", "  kind = \"string\"");
+    let t = TypeDef::parse("a", &source).unwrap();
+    assert_eq!(
+        text(&t.warnings),
+        [
+            "warning: type.sort_by: is not an attribute of types in this version; it is ignored",
+            "warning: type.layout: is not an attribute of types in this version; it is ignored",
+        ]
+    );
+    assert_eq!(t.label, "A");
+    let schema = Schema::from_sources(&[("a", &source)], &[]).unwrap();
+    let none = lookup(&[]);
+    schema
+        .validate_note_source("a", "title = \"t\"\nf = \"x\"\n", "n.wcl", &none)
+        .unwrap();
+    let err = schema
+        .validate_note_source("a", "title = \"t\"\nf = 3\n", "n.wcl", &none)
+        .unwrap_err();
+    assert!(err.to_string().contains("f: must be"), "{err}");
+}
+
+#[test]
+fn a_malformed_value_of_a_known_attribute_stays_an_error_beside_an_unknown_one() {
+    for (field, says) in [
+        (
+            "  kind = \"asset\"\n  accept = \"video\"",
+            "field f.accept: \"video\" is not one of",
+        ),
+        (
+            "  kind = \"int\"\n  required = \"yes\"",
+            "field f.required: must be true or false",
+        ),
+        (
+            "  kind = \"list\"\n  items = \"string\"\n  labels = 3",
+            "field f.labels: must be a string",
+        ),
+        (
+            "  kind = \"glitter\"",
+            "field f.kind: \"glitter\" is not one of",
+        ),
+    ] {
+        let source = tolerant_type("", &format!("{field}\n  sparkle = true"));
+        let issues = type_issues(&source);
+        assert!(
+            issues.iter().any(|i| i.starts_with(says)),
+            "{field}: {issues:?}"
+        );
+        assert!(
+            issues.iter().all(|i| !i.starts_with("warning:")),
+            "a refused type reports its errors: {issues:?}"
+        );
+    }
+    let issues = type_issues(&tolerant_type(
+        "colour = \"teal\"\nsparkle = 1",
+        "  kind = \"string\"",
+    ));
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.starts_with("type.colour: \"teal\" is not a palette colour")),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn the_newer_person_type_loads_on_a_reader_that_lacks_its_newest_attributes() {
+    // A field attribute some later release adds, on the shipped person type.
+    let person = include_str!("../../writer/defaults/person.wcl").replacen(
+        "  labels = \"email_labels\"\n",
+        "  labels = \"email_labels\"\n  verify = \"smtp\"\n",
+        1,
+    );
+    assert!(person.contains("verify = \"smtp\""));
+    let t = TypeDef::parse("person", &person).unwrap();
+    assert_eq!(
+        text(&t.warnings),
+        [
+            "warning: field emails.verify: is not an attribute of list fields in this version; it is ignored"
+        ]
+    );
+    assert_eq!(
+        t.field("emails").unwrap().labels.as_deref(),
+        Some("email_labels")
     );
 }

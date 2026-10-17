@@ -1,7 +1,10 @@
 //! Type definitions, planned schema changes and flagged notes (D6). Every route but the reads
 //! needs the `admin` scope (D11).
 //!
-//! - `PUT /api/types/{name}` creates a type, or replaces one that has no notes, at once.
+//! - `PUT /api/types/{name}` creates a type, or replaces one that has no notes, at once. The JSON
+//!   answer carries `warnings`: what this version ignores in the file, such as an attribute of
+//!   the type or a field that it does not know. `GET /api/types` and `GET /api/schema` list each
+//!   type's `warnings` too.
 //! - `POST /api/types/{name}/change` takes `{ "wcl", "renames"?, "migration"?, "plan"? }` and
 //!   changes a type that has notes. Without `plan` it returns the plan and changes nothing. With
 //!   the `plan` token from that response it applies the change as one commit, or answers 409
@@ -26,6 +29,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use writer::{Migration, NoteEdit, TypeChange, TypePlan, Writer, doc_to_json};
 
+use crate::error::issue_json;
 use crate::notes::{is_json, wants_wcl};
 use crate::{ApiError, Caller, blocking};
 
@@ -62,6 +66,7 @@ fn type_json(t: &TypeDef) -> Value {
         "builtin": writer::is_built_in_type(&t.name),
         "fields": t.fields.iter().map(field_json).collect::<Vec<_>>(),
         "templates": t.templates.iter().map(template_json).collect::<Vec<_>>(),
+        "warnings": t.warnings.iter().map(issue_json).collect::<Vec<_>>(),
     })
 }
 
@@ -185,8 +190,23 @@ pub async fn put(
             .map_err(|_| ApiError::bad_request("the WCL body is not UTF-8"))?
     };
     let n = name.clone();
-    let wcl = blocking(w, move |w| w.put_type(&n, &source)).await?;
-    Ok(type_response(&headers, &name, wcl))
+    let (wcl, warnings) = blocking(w, move |w| {
+        let wcl = w.put_type(&n, &source)?;
+        let warnings = w
+            .schema()
+            .type_def(&n)
+            .map(|t| t.warnings.clone())
+            .unwrap_or_default();
+        Ok::<_, writer::Error>((wcl, warnings))
+    })
+    .await?;
+    if wants_wcl(&headers) {
+        return Ok(type_response(&headers, &name, wcl));
+    }
+    // What this version ignores in the type, such as an attribute it does not know, so that a
+    // typo shows.
+    let warnings: Vec<Value> = warnings.iter().map(issue_json).collect();
+    Ok(Json(json!({ "name": name, "wcl": wcl, "warnings": warnings })).into_response())
 }
 
 #[derive(Deserialize)]

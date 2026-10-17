@@ -171,6 +171,18 @@ template default {
 }
 ```
 
+### Attributes a reader does not know
+
+A reader tolerates an attribute of a type, or of a field, that it does not know. This keeps a type file from a newer server readable in an older app, so that a release can add an attribute without raising the format version. The rule covers the items at the top of a type file and the items of a `field` block, including an item that belongs to another kind, such as `accept` on a `string` field:
+
+- The reader ignores the attribute. The type loads, and notes of the type are written and checked against what the reader knows.
+- The reader reports the attribute as a warning, `<path>: is not an attribute of <owner> in this version; it is ignored`. `GET /api/types` and `GET /api/schema` list each type's `warnings`, the JSON answer of `PUT /api/types/<name>` carries them, and the type editor shows them, so a misspelt attribute is seen. Each warning is `{ "at", "message", "severity": "warning" }`.
+- The file keeps the attribute. Saving the type from the type editor rewrites the file from what the editor knows, which leaves the attribute out.
+
+Everything else stays an error that refuses the type: a malformed value of an attribute the reader knows, such as `accept = "video"` or `required = "yes"`, a missing required attribute, a `kind` the reader does not know, and an unknown block, template item or handler item. A change that an older reader would misread rather than ignore still raises the format version (D27).
+
+A release that adds an attribute is rolled out apps first. See [Releasing a format change](android-release.md#releasing-a-format-change).
+
 ### Built-in types
 
 Every vault has five types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it, and adds to a built-in type the vault has every field its shipped default gained since: see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`.
@@ -1974,8 +1986,8 @@ Steps 2 to 4 make one commit. A start that finds nothing to do makes no commit, 
 A vault file is checked in three layers. Each catches what the one before cannot.
 
 1. **Data-only.** `store` parses the file and rejects anything outside [the data-only subset](#the-data-only-subset). `docs/vault-format/data-only.mjs` is a reference implementation of this check.
-2. **Structure.** `wcl_lang` validates the file against the WCL schema for its file kind. This catches unknown fields and blocks, wrong value types, missing block items, out-of-range heading levels, and canvas edges that name no node.
-3. **Semantics.** `schema` checks what WCL cannot express. That covers required top-level fields, the encodings in [Value encodings](#value-encodings), and closed vocabularies such as kinds, styles and colours. It also checks that references and terms exist, and the cross-file rules: inverse fields, template slots and handler events, and the events and commands a device file names.
+2. **Structure.** `wcl_lang` validates the file against the WCL schema for its file kind. The schemas describe this version's vocabulary, which is why they are a check for the example files and not a reader's rule. This catches unknown fields and blocks, wrong value types, missing block items, out-of-range heading levels, and canvas edges that name no node.
+3. **Semantics.** `schema` checks what WCL cannot express. An attribute of a type or a field that it does not know is a warning, not an error (see [Attributes a reader does not know](#attributes-a-reader-does-not-know)). That covers required top-level fields, the encodings in [Value encodings](#value-encodings), and closed vocabularies such as kinds, styles and colours. It also checks that references and terms exist, and the cross-file rules: inverse fields, template slots and handler events, and the events and commands a device file names.
 
 ### The schema files
 

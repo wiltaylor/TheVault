@@ -1,7 +1,7 @@
 import { A, useNavigate, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, on } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
-import { ApiError, type FieldDef, type Json, type Row, type TypePlan, api } from "../api";
+import { ApiError, type FieldDef, type Json, type Row, type SchemaIssue, type TypePlan, api } from "../api";
 import { FieldInput } from "../components/FieldInput";
 import {
   DEFAULT_KINDS,
@@ -43,6 +43,33 @@ export function errorText(e: unknown): string {
     }
   }
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * What this version ignored when it loaded the type file, such as an attribute of the type or a
+ * field that only a newer release knows. The type still works, so these do not stop a save, but
+ * they show, so a typo is seen. The editor saves what it knows, which leaves them out.
+ */
+export function TypeWarnings(props: { warnings: SchemaIssue[] }) {
+  return (
+    <Show when={props.warnings.length > 0}>
+      <section class="type-warnings" aria-label="Warnings">
+        <p class="muted">
+          This version ignores {props.warnings.length === 1 ? "this part" : "these parts"} of the type file. The type
+          still works. Saving here leaves {props.warnings.length === 1 ? "it" : "them"} out of the file.
+        </p>
+        <ul>
+          <For each={props.warnings}>
+            {(w) => (
+              <li>
+                {w.at}: {w.message}
+              </li>
+            )}
+          </For>
+        </ul>
+      </section>
+    </Show>
+  );
 }
 
 /** The field as a note page would edit it, so a default is entered with the field's own editor. */
@@ -112,6 +139,8 @@ export function TypeEditor() {
   // The script and function a change runs over every note of the type, if any (D6).
   const [migrationScript, setMigrationScript] = createSignal("");
   const [migrationFunction, setMigrationFunction] = createSignal("");
+  // What this version ignored when it loaded the stored type file.
+  const [warnings, setWarnings] = createSignal<SchemaIssue[]>([]);
 
   createEffect(
     on(
@@ -123,6 +152,7 @@ export function TypeEditor() {
         setRefused(null);
         setSaveError(null);
         setDeleteError(null);
+        setWarnings([]);
         if (type === undefined) {
           setName("");
           setModel(reconcile(emptyType()));
@@ -137,6 +167,7 @@ export function TypeEditor() {
             return;
           }
           setName(type);
+          setWarnings(t.warnings ?? []);
           setModel(reconcile(typeFromSchema(t)));
           setLoaded(true);
         } catch (e) {
@@ -878,6 +909,8 @@ export function TypeEditor() {
             </Show>
           </div>
         </Show>
+
+        <TypeWarnings warnings={warnings()} />
 
         <div class="save-bar">
           <Show when={issues().length > 0}>
