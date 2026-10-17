@@ -3,8 +3,8 @@ id: '94'
 title: 'Schema: date_range of = "date_or_datetime", accepted by calendar and timeline
   views and the type editor'
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Schema: date_range of = "date_or_datetime", accepted by calendar and timeline views and the type editor
@@ -22,3 +22,15 @@ Scope: the Schema section of the spec. Acceptance criteria:
 ### 2026-10-17T22:58:51Z — /work
 
 Claimed.
+
+### 2026-10-17T23:07:43Z — wil
+
+Verified set to verified.
+
+### 2026-10-17T23:07:43Z — wil
+
+Commit 7e89497 on ticket/94. FieldKind::DateRange is now { of: RangeOf } (Date, Datetime, DateOrDatetime); types.rs diff confined to the DateRange variant, the RangeOf enum and the two date_range lines in the field parser. Calendar placement already branched on value form in narrow.ts; visibleWindow now ORs the local-day and instant windows for an either-form field. The calendar control does not fit an either-form range (server blocks.rs and web controls/model.ts agree). Left alone and filed: 101 (note editor input for either-form ranges), 102 (search page date filters on such fields).
+
+### 2026-10-17T23:07:43Z — wil
+
+Status set to done.
