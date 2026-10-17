@@ -877,14 +877,18 @@ fn a_device_event_that_fails_for_good_is_reported_once_to_the_bell() {
     let _turn = turn();
     let dir = TempDir::new().unwrap();
     let vault = core::vault_dir(dir.path());
+    let failing = "fn call_ended(event: Value) -> Result[(), string] { Err(\"no call type\") }\n";
     std::fs::create_dir_all(vault.join("scripts")).unwrap();
-    std::fs::write(
-        vault.join("scripts/device_calls.ws"),
-        "fn call_ended(event: Value) -> Result[(), string] { Err(\"no call type\") }\n",
-    )
-    .unwrap();
+    std::fs::write(vault.join("scripts/device_calls.ws"), failing).unwrap();
     let core = core::open(&vault).unwrap();
     let admin = Admin::start();
+    // The home server seeds the shipped device_calls.ws, and a sync would bring it back here, so
+    // the failing handler has to be the server's script too.
+    admin.send(
+        "PUT",
+        "/api/scripts/device_calls",
+        Some(json!({ "source": failing })),
+    );
     let paired = admin.pair("Pixel");
     core.set_link(Some(link(&paired, 64)));
     let runtime = core

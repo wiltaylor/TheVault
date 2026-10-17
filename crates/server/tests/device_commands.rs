@@ -906,11 +906,21 @@ fn a_device_event_that_failed_for_good_becomes_one_bell_notification_from_the_de
     let made = send(api.req(&phone, "POST", &path).json(&failure), 201);
     assert_eq!(made["source"], format!("device:{pixel}"));
 
+    // The seed's own device scripts also earn a "newer version" notice, so count the device's.
+    let source = format!("device:{pixel}");
+    let from_device = |list: &Value| -> Vec<Value> {
+        list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["source"] == source.as_str())
+            .cloned()
+            .collect()
+    };
     let list = send(api.admin("GET", "/api/notifications"), 200);
-    let items = list["items"].as_array().unwrap();
+    let items = from_device(&list);
     assert_eq!(items.len(), 1, "{list}");
     let n = &items[0];
-    assert_eq!(n["source"], format!("device:{pixel}"));
     assert_eq!(n["title"], "A message could not be saved");
     let body = n["body"].as_str().unwrap();
     for part in [
@@ -923,7 +933,7 @@ fn a_device_event_that_failed_for_good_becomes_one_bell_notification_from_the_de
     }
     assert_eq!(n["url"], "/settings/devices#this-device");
     assert_eq!(n["read"], Value::Null);
-    assert_eq!(list["unread"], 1);
+    assert!(list["unread"].as_u64().unwrap() >= 1, "{list}");
 
     // Another device may not report for it, and the event must be a device event.
     send(api.req(&other, "POST", &path).json(&failure), 403);
@@ -940,7 +950,7 @@ fn a_device_event_that_failed_for_good_becomes_one_bell_notification_from_the_de
         404,
     );
     let list = send(api.admin("GET", "/api/notifications"), 200);
-    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+    assert_eq!(from_device(&list).len(), 1, "{list}");
 
     // A call's failure says so.
     let mut call = failure.clone();
