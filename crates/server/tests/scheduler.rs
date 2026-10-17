@@ -477,7 +477,7 @@ fn task_files_are_checked_and_changing_tasks_needs_admin() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["google_calendar"]);
+    assert_eq!(names, ["google_calendar", "google_gmail"]);
 }
 
 /// Debug builds are the test builds: they accept `--test-clock`. A release build refuses to

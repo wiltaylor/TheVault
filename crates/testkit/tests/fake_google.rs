@@ -1,10 +1,10 @@
 //! The fake Google server's OAuth endpoints over HTTP: code exchange with PKCE, refresh, the
-//! `invalid_grant` switch and userinfo (google-sync D1, D18).
+//! `invalid_grant` switch and userinfo (google-sync D1, D18), and its Gmail API (google-sync D11).
 
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use reqwest::blocking::{Client, Response};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use testkit::FakeGoogle;
 use testkit::fake_google::{DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN};
@@ -239,18 +239,114 @@ fn the_invalid_grant_switch_refuses_refresh_and_exchange_until_it_is_off() {
 }
 
 #[test]
-fn gmail_and_calendar_answer_404_until_their_tickets_add_them() {
-    let google = FakeGoogle::start();
-    let res = Client::new()
-        .get(google.url("/gmail/v1/users/me/labels"))
-        .send()
+fn gmail_needs_an_issued_token_and_answers_labels_lists_messages_and_history() {
+    let google = FakeGoogle::builder().gmail_page_size(1).start();
+    let work = google.add_label("Work/Clients");
+    let old = google
+        .add_message(json!({ "labels": ["INBOX"], "at": 1_000_000_000_000_i64, "text": "old" }));
+    let new = google.add_message(json!({
+        "labels": ["INBOX", work],
+        "at": 1_000_086_400_000_i64,
+        "from": "Alex <alex@example.com>",
+        "subject": "Hi",
+        "text": "café",
+        "attachments": [{ "filename": "a.bin", "mime": "application/octet-stream", "size": 3 }],
+    }));
+    let gmail = |path: &str, token: &str| {
+        read(
+            Client::new()
+                .get(google.url(&format!("/gmail/v1/users/me/{path}")))
+                .bearer_auth(token)
+                .send()
+                .unwrap(),
+        )
+    };
+    let (status, body) = gmail("labels", "not-issued");
+    assert_eq!(status, 401, "{body}");
+    assert_eq!(body["error"]["code"], 401);
+
+    let access = refresh(&google, DEFAULT_REFRESH_TOKEN).1["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, labels) = gmail("labels", &access);
+    let user: Vec<&Value> = labels["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["type"] == "user")
+        .collect();
+    assert_eq!(user.len(), 1);
+    assert_eq!(user[0]["name"], "Work/Clients");
+
+    // Newest first, a page at a time, filtered by label and by `after:`.
+    let (_, page) = gmail("messages?q=after:999999999", &access);
+    assert_eq!(page["messages"][0]["id"], new.as_str());
+    let token = page["nextPageToken"].as_str().unwrap().to_owned();
+    let (_, page) = gmail(&format!("messages?pageToken={token}"), &access);
+    assert_eq!(page["messages"][0]["id"], old.as_str());
+    assert!(page.get("nextPageToken").is_none());
+    let (_, page) = gmail(&format!("messages?labelIds={work}"), &access);
+    assert_eq!(page["resultSizeEstimate"], 1);
+    let (_, page) = gmail("messages?q=after:1000000001", &access);
+    assert_eq!(page["messages"][0]["id"], new.as_str());
+    assert_eq!(page["resultSizeEstimate"], 1);
+
+    // The message, with its body as base64url, and its attachment.
+    let (_, message) = gmail(&format!("messages/{new}?format=full"), &access);
+    let parts = message["payload"]["parts"].as_array().unwrap();
+    let text = URL_SAFE
+        .decode(parts[0]["body"]["data"].as_str().unwrap())
         .unwrap();
-    let (status, body) = read(res);
-    assert_eq!(status, 404);
-    assert_eq!(body["error"]["code"], 404);
-    assert_eq!(google.requests().len(), 1);
-    google.clear_requests();
-    assert!(google.requests().is_empty());
+    assert_eq!(String::from_utf8(text).unwrap(), "café");
+    let aid = parts[1]["body"]["attachmentId"].as_str().unwrap();
+    let (_, attachment) = gmail(&format!("messages/{new}/attachments/{aid}"), &access);
+    assert_eq!(attachment["size"], 3);
+    let (_, metadata) = gmail(&format!("messages/{new}?format=metadata"), &access);
+    assert!(metadata["payload"].get("parts").is_none());
+    assert_eq!(
+        metadata["payload"]["headers"][0]["value"],
+        "Alex <alex@example.com>"
+    );
+
+    // History after the first message: the second added, then its label change and deletion.
+    let (_, first) = gmail(&format!("messages/{old}"), &access);
+    let start = first["historyId"].as_str().unwrap().to_owned();
+    google.set_message_labels(&new, &["INBOX"]);
+    google.delete_message(&old);
+    let mut records = Vec::new();
+    let mut token = String::new();
+    loop {
+        let (status, body) = gmail(
+            &format!("history?startHistoryId={start}&pageToken={token}"),
+            &access,
+        );
+        assert_eq!(status, 200, "{body}");
+        records.extend(body["history"].as_array().cloned().unwrap_or_default());
+        match body["nextPageToken"].as_str() {
+            Some(t) => token = t.to_owned(),
+            None => break,
+        }
+    }
+    let kinds: Vec<&str> = records
+        .iter()
+        .map(|r| {
+            ["messagesAdded", "labelsRemoved", "messagesDeleted"]
+                .into_iter()
+                .find(|k| r.get(*k).is_some())
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(kinds, ["messagesAdded", "labelsRemoved", "messagesDeleted"]);
+    assert_eq!(gmail(&format!("messages/{old}"), &access).0, 404);
+    let (_, profile) = gmail("profile", &access);
+    assert_eq!(profile["historyId"], google.gmail_history_id().to_string());
+
+    google.set_history_not_found(true);
+    assert_eq!(
+        gmail(&format!("history?startHistoryId={start}"), &access).0,
+        404
+    );
 }
 
 #[test]

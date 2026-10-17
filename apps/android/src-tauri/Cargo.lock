@@ -125,10 +125,12 @@ dependencies = [
  "qrcode",
  "query",
  "regex",
+ "reqwest 0.12.28",
  "scheduler",
  "schema",
  "serde",
  "serde_json",
+ "sha2",
  "state",
  "tokio",
  "vocab",
@@ -5054,7 +5056,9 @@ dependencies = [
 name = "testkit"
 version = "0.1.6"
 dependencies = [
+ "base64 0.22.1",
  "serde_json",
+ "sha2",
  "state",
  "tempfile",
 ]

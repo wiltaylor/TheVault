@@ -183,7 +183,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
     assert_eq!(fields["homepage"], "https://example.com");
     assert_eq!(w.history(&alex).unwrap().len(), versions_before + 1);
 
-    // The device file, the device scripts and the Google calendar task and script.
+    // The device file, the device scripts, and the Google sync tasks and scripts.
     let paths: Vec<&str> = SHIPPED_FILES.iter().map(|f| f.path).collect();
     assert_eq!(done.files_added, paths);
     for path in paths {
@@ -197,7 +197,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "device_import",
             "device_messages",
             "device_share",
-            "google_calendar"
+            "google_calendar",
+            "google_gmail"
         ]
     );
     assert!(notification_titles(&w).is_empty());
