@@ -497,6 +497,17 @@ impl Core {
         Ok(true)
     }
 
+    /// The bytes of asset `id`, fetched from the home server first when the device does not hold
+    /// them: a person's photo the phone writes to its contact. `Ok(None)` when neither has it.
+    /// It may block on the network.
+    pub fn asset_bytes(&self, id: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        let writer = self.server.writer();
+        if writer.asset_info(id).is_err() && !self.fetch_asset(id)? {
+            return Ok(None);
+        }
+        Ok(Some(writer.asset(id)?.1))
+    }
+
     /// Note `id` was opened: remember it for the prefetch and fetch its missing assets. It
     /// blocks.
     pub fn note_opened(&self, id: &str) -> anyhow::Result<()> {

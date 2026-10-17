@@ -20,7 +20,9 @@ use crate::{Extensions, Kind, Reply, Vault, convert, run};
 /// Items travel in the shapes of the device event payloads in `docs/scripts.md`: an SMS as
 /// `{ device_ref, thread_ref, number, number_raw, contact, body, sent, direction }`, a call as
 /// `{ device_ref, direction, number, number_raw, contact, started, duration }`, a contact as
-/// `{ contact_id, name, phones, addresses, updated, person, synced }`.
+/// `{ contact_id, name, phones, phone_labels, emails, email_labels, addresses, address_labels,
+/// organisation, job_title, nickname, birthday, websites, contact_note, photo, updated, person,
+/// synced }`, with `photo` `{ asset, hash }` or null.
 pub trait DeviceData: Send + Sync {
     /// SMS matching `filter`, newest first. `filter` may hold `thread_ref`, `number`, `since` (a
     /// time) and `limit`.
@@ -39,8 +41,9 @@ pub trait DeviceData: Send + Sync {
     /// The contact with `contact_id`.
     fn contacts_get(&self, contact_id: &str) -> Result<Json, String>;
 
-    /// Add the contact, or change it when `contact_id` is not null: `{ contact_id, name, phones,
-    /// addresses, person }`. Returns `{ contact_id }`.
+    /// Add the contact, or change it when `contact_id` is not null: `{ contact_id, person }` and
+    /// any of the contact's detail keys, with `photo` an asset id of the local vault or null. A
+    /// detail key left out leaves that detail alone. Returns `{ contact_id }`.
     fn contacts_upsert(&self, contact: &Json) -> Result<Json, String>;
 
     /// Delete the contact with `contact_id`.

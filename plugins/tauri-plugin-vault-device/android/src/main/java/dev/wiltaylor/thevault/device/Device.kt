@@ -14,6 +14,9 @@ import java.util.concurrent.Executors
 object Device {
     private const val PREFS = "thevault.device"
     private const val CURSORS = "thevault.device.cursors"
+
+    /** The asset each contact photo was stored as, by the SHA-256 of its bytes. */
+    private const val PHOTOS = "thevault.device.contact_photos"
     private const val RCS = "thevault.device.rcs"
     private const val SETUP_DONE = "capture_setup_done"
 
@@ -100,11 +103,19 @@ object Device {
         PhoneNumbers.forDevice(context),
         CoreSink(context),
         Cursors(context.getSharedPreferences(CURSORS, Context.MODE_PRIVATE)),
-        { filename, bytes ->
-            ensureCore(context)
-            JSONObject(VaultCore.putAsset(filename, bytes))
+        object : AssetStore {
+            override fun put(filename: String, bytes: ByteArray): JSONObject {
+                ensureCore(context)
+                return JSONObject(VaultCore.putAsset(filename, bytes))
+            }
+
+            override fun bytes(asset: String): ByteArray? {
+                ensureCore(context)
+                return VaultCore.assetBytes(asset)
+            }
         },
         { selfNumbers(context, PhoneNumbers.forDevice(context)) },
+        PrefsMap(context.getSharedPreferences(PHOTOS, Context.MODE_PRIVATE), ""),
     )
 
     /** This phone's own numbers, to leave out of a group MMS's recipients, when Android tells. */

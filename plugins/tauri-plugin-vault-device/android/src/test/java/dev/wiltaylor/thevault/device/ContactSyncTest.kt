@@ -8,6 +8,7 @@ import androidx.work.testing.WorkManagerTestInitHelper
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -47,7 +48,8 @@ class ContactSyncTest {
         )
         phone = FakePhone(context)
         phone.contact(3, "Ada Lovelace", 1_000, listOf("0412 345 678" to "+61412345678"), listOf("ada@example.com"))
-        capture = phone.install()
+        // Photos go into the local vault through the core, as in the app.
+        capture = phone.install(assets = CoreAssets)
         assertTrue(Device.openCore(context))
         // The device may write contacts: the core takes that from the server with its commands.
         home.settings = JSONObject()
@@ -94,7 +96,6 @@ class ContactSyncTest {
         val fields = ada.getJSONObject("fields")
         assertEquals("Ada Lovelace", fields.getString("title"))
         assertEquals("[\"+61412345678\"]", fields.getJSONArray("phones").toString())
-        assertEquals("[\"ada@example.com\"]", fields.getJSONArray("addresses").toString())
         assertEquals("3", links(ada)!!.getString("device_${FakeHome.DEVICE_ID}"))
 
         // The contact holds the person's id and what the two now agree on, and keeps its own
@@ -141,7 +142,7 @@ class ContactSyncTest {
                 .put("contact_id", "3")
                 .put("name", "Augusta Ada King")
                 .put("phones", JSONArray().put("+61412345678").put("+61411111111"))
-                .put("addresses", JSONArray().put("ada@example.com"))
+                .put("emails", JSONArray().put("ada@example.com"))
                 .put("person", id),
         )
         VaultCore.runCommands()
@@ -151,7 +152,7 @@ class ContactSyncTest {
         assertEquals("3", done.getJSONObject("result").getString("contact_id"))
         assertEquals("Augusta Ada King", phone.name(3))
         assertEquals(listOf("+61412345678 2", "+61411111111 2"), phone.rows(3, FakePhone.PHONE))
-        assertEquals("the addresses agreed already", listOf("ada@example.com"), phone.rows(3, FakePhone.EMAIL))
+        assertEquals("the emails agreed already", listOf("ada@example.com"), phone.rows(3, FakePhone.EMAIL))
         val row = vaultRow(3)
         assertTrue(row, row.startsWith("$id "))
         assertEquals("Augusta Ada King", JSONObject(row.substringAfter(" ")).getString("name"))
@@ -162,7 +163,7 @@ class ContactSyncTest {
             .put("contact_id", JSONObject.NULL)
             .put("name", "Grace Hopper")
             .put("phones", JSONArray().put("+14155552671"))
-            .put("addresses", JSONArray())
+            .put("emails", JSONArray())
             .put("person", "01PERSONGRACE0000000000000")
         val added = JSONObject(AndroidDeviceData(context, capture).call("contacts_upsert", JSONObject().put("contact", fresh).toString()))
         val grace = added.getJSONObject("ok").getString("contact_id").toLong()
@@ -197,7 +198,7 @@ class ContactSyncTest {
                 .put("contact_id", JSONObject.NULL)
                 .put("name", "Carla Created")
                 .put("phones", JSONArray().put("+16502530005"))
-                .put("addresses", JSONArray())
+                .put("emails", JSONArray())
                 .put("person", carla),
         )
         VaultCore.runCommands()
@@ -217,6 +218,63 @@ class ContactSyncTest {
         val person = person()
         assertEquals(carla, person.getString("id"))
         assertEquals(contact.toString(), links(person)!!.getString("device_${FakeHome.DEVICE_ID}"))
+    }
+
+    /** The local vault's assets, through the core, as the app stores them. */
+    private object CoreAssets : AssetStore {
+        override fun put(filename: String, bytes: ByteArray): JSONObject = JSONObject(VaultCore.putAsset(filename, bytes))
+
+        override fun bytes(asset: String): ByteArray? = VaultCore.assetBytes(asset)
+    }
+
+    @Test
+    fun anUpsertContactCommandWritesEveryDetailAndItReadsBackUnchanged() {
+        phone.photo(3, byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1))
+        changed(3)
+        val id = person().getString("id")
+        // The contact's photo went into the local vault before its event was queued.
+        val event = JSONArray(VaultCore.events()).let { e -> (0 until e.length()).map { e.getJSONObject(it) } }
+            .last { it.optString("event") == "contact_changed" }
+        val queuedPhoto = event.getJSONObject("data").getJSONObject("photo")
+        assertArrayEquals(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1), VaultCore.assetBytes(queuedPhoto.getString("asset")))
+
+        val face = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 42)
+        val asset = JSONObject(VaultCore.putAsset("face.jpg", face)).getString("asset")
+        val details = JSONObject()
+            .put("name", "Augusta Ada King")
+            .put("phones", JSONArray().put("+61412345678").put("+442079460018"))
+            .put("phone_labels", JSONArray().put("mobile").put("Ockham"))
+            .put("emails", JSONArray().put("ada@example.com").put("countess@example.org"))
+            .put("email_labels", JSONArray().put("home").put("work"))
+            .put("addresses", JSONArray().put("12 St James's Square, London"))
+            .put("address_labels", JSONArray().put("home"))
+            .put("organisation", "Analytical Society")
+            .put("job_title", "Countess of Lovelace")
+            .put("nickname", "Enchantress of Numbers")
+            .put("birthday", "1815-12-10")
+            .put("websites", JSONArray().put("https://ada.example.com"))
+            .put("contact_note", "Wrote the first program.")
+            .put("photo", asset)
+        home.command(
+            "01CMDEVERYDETAIL0000000000",
+            "upsert_contact",
+            JSONObject(details.toString()).put("contact_id", "3").put("person", id),
+        )
+        VaultCore.runCommands()
+
+        val done = home.command("01CMDEVERYDETAIL0000000000")
+        assertEquals(done.toString(), "done", done.getString("status"))
+        val read = capture.contacts.get("3")
+        for (key in details.keys()) {
+            if (key == "photo") continue
+            assertEquals(key, details.get(key).toString(), read.get(key).toString())
+        }
+        assertEquals("the photo reads back as the asset it was written from", asset, read.getJSONObject("photo").getString("asset"))
+        assertArrayEquals(face, phone.photoOf(3))
+        val synced = read.getJSONObject("synced")
+        assertEquals("1815-12-10", synced.getString("birthday"))
+        assertEquals("[\"home\",\"work\"]", synced.getJSONArray("email_labels").toString())
+        assertEquals(asset, synced.getJSONObject("photo").getString("asset"))
     }
 
     @Test

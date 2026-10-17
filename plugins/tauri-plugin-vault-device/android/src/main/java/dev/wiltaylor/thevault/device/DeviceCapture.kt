@@ -64,12 +64,18 @@ class DeviceCapture(
     private val cursors: Cursors,
     assets: AssetStore,
     selfNumbers: () -> Set<String> = { emptySet() },
+    /** The asset each contact photo was stored as, by hash, kept across processes in the app. */
+    photoAssets: MutableMap<String, String> = HashMap(),
 ) {
     private val contactLookup = ContactLookup(resolver)
     val sms = SmsReader(resolver, numbers, contactLookup)
     val mms = MmsReader(resolver, numbers, contactLookup, assets, selfNumbers)
     val calls = CallLogReader(resolver, numbers, contactLookup)
-    val contacts = ContactsReader(resolver, numbers)
+    val contacts = ContactsReader(resolver, numbers, ContactPhotos(assets, photoAssets))
+
+    /** Whether this process has rewritten the contacts' `synced` an older version stored. */
+    @Volatile
+    private var syncedMigrated = false
 
     private val latest: Map<String, () -> Long> = mapOf(
         Cursors.SMS to sms::latestKey,
@@ -101,9 +107,29 @@ class DeviceCapture(
     fun captureCalls(): Int = capture(Cursors.CALLS) { calls.since(it) }
 
     /** Contacts changed or deleted since the last read. */
-    fun captureContacts(): Int =
-        capture(Cursors.CONTACTS) { contacts.changedSince(it) } +
+    fun captureContacts(): Int {
+        migrateSynced()
+        return capture(Cursors.CONTACTS) { contacts.changedSince(it) } +
             capture(Cursors.CONTACTS_DELETED) { contacts.deletedSince(it) }
+    }
+
+    /**
+     * Once per process, before contacts are read: rewrite the `synced` state an older app version
+     * stored on linked contacts ([ContactsReader.migrateSynced]). Without permission to write
+     * contacts it is left for a later read; the reader translates the old form meanwhile.
+     */
+    fun migrateSynced() {
+        if (syncedMigrated) return
+        try {
+            val n = contacts.migrateSynced()
+            if (n > 0) Log.i(TAG, "rewrote the synced state of $n linked contacts")
+            syncedMigrated = true
+        } catch (e: SecurityException) {
+            Log.i(TAG, "no permission to rewrite contacts' synced state yet: ${e.message}")
+        } catch (e: Exception) {
+            Log.w(TAG, "rewriting contacts' synced state failed", e)
+        }
+    }
 
     /** Have the sink run what was captured. */
     fun flush() = sink.flush()
