@@ -172,9 +172,35 @@ async function scenario() {
   assert.equal(recovered[0], "error", `from red: ${recovered}`);
   assert.equal(recovered.at(-1), "synced", `to green: ${recovered}`);
 
+  // Typing straight on in the same open editor, without opening the note again, after the push
+  // took the server's result back into the local vault with a version of its own, is saved and
+  // reaches the server too.
+  await app.click(await app.find("[aria-label='Title']"));
+  await app.run(`
+    const el = document.querySelector("[aria-label='Title']");
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  `);
+  await app.type(await app.find("[aria-label='Title']"), " and again");
+  await waitFor(
+    "the typing after the sync on the server",
+    async () => (await home.api("GET", `/api/notes/${created.id}`)).note.fields.title === "Written on the server, edited offline and again",
+    60_000,
+  );
+  assert.equal(await app.run("return !!document.querySelector(\"[data-testid='conflict-view']\");"), false, "no conflict view");
+  assert.equal(await app.text("[data-testid='save-status']"), "Saved");
+  await waitFor("the green sync icon after typing on", async () => {
+    const b = await badge();
+    return b?.state === "synced" && b.pending === 0;
+  });
+
   // An edit made online shows yellow while it waits for its round, then green.
   await app.navigate(`${ORIGIN}/notes/${created.id}`);
-  await waitFor("the note again", async () => (await app.text("[aria-label='Title']")) === "Written on the server, edited offline");
+  await waitFor("the note again", async () => (await app.text("[aria-label='Title']")) === "Written on the server, edited offline and again");
   await waitFor("the green sync icon on the note", async () => (await badge())?.state === "synced");
   await recordStates();
   await app.click(await app.find("[aria-label='Title']"));
@@ -194,7 +220,7 @@ async function scenario() {
     "the edit on the server again",
     async () => {
       onServer = (await home.api("GET", `/api/notes/${created.id}`)).note.fields.title;
-      return onServer === "Written on the server, edited offline!";
+      return onServer === "Written on the server, edited offline and again!";
     },
     60_000,
   ).catch(async (e) => {
@@ -209,27 +235,6 @@ async function scenario() {
   });
   const online = await recorded();
   assert.deepEqual(online.slice(-2), ["syncing", "synced"], `yellow then green: ${online}`);
-
-  // Typing straight on in the same open editor, after the push took the server's result back
-  // into the local vault with a version of its own, is saved and reaches the server too.
-  await app.click(await app.find("[aria-label='Title']"));
-  await app.run(`
-    const el = document.querySelector("[aria-label='Title']");
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-  `);
-  await app.type(await app.find("[aria-label='Title']"), " and again");
-  await waitFor(
-    "the typing after the sync on the server",
-    async () => (await home.api("GET", `/api/notes/${created.id}`)).note.fields.title === "Written on the server, edited offline and again",
-    60_000,
-  );
-  assert.equal(await app.run("return !!document.querySelector(\"[data-testid='conflict-view']\");"), false, "no conflict view");
-  assert.equal(await app.text("[data-testid='save-status']"), "Saved");
 
   // Started again, the app is still paired: it reads its token from the keyring and syncs.
   await app.quit();
