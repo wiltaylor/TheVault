@@ -5,8 +5,8 @@ title: 'Google Calendar sync task: events and expanded series occurrences into e
 blocked_by:
 - '94'
 - '95'
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Google Calendar sync task: events and expanded series occurrences into event notes, sync tokens, window roll, field-by-field merge
@@ -29,3 +29,15 @@ Acceptance criteria (server tests through TestServer and POST /api/tasks/google_
 ### 2026-10-17T23:29:54Z — /work
 
 Claimed.
+
+### 2026-10-17T23:51:18Z — wil
+
+Verified set to verified.
+
+### 2026-10-17T23:51:18Z — wil
+
+Status set to done.
+
+### 2026-10-17T23:51:19Z — wil
+
+Branch ticket/98, commit dd88d7c. Lead's change: event.calendar is now a string holding the Google calendar id (a script cannot change a type, so no select options); the first criterion's 'fills the calendar select options' was dropped. Tests: crates/server/tests/google_calendar.rs (8, through TestServer on --test-clock 2026-03-01 against FakeGoogle) and crates/testkit/tests/fake_calendar.rs (4). Snapshot/etag format for ticket 99 is in docs/scripts.md 'The Google Calendar sync' > 'Snapshot and etag'. The task does not call calendarList (the fake serves it). Event descriptions are stored as paragraphs unescaped, so Google text with inline-markup characters renders as markup, and HTML descriptions are not converted. Shipped-file list grew, so tests that listed every task or script (embedded handle.rs, server scheduler.rs and shipped_defaults.rs, writer shipped_defaults.rs) were updated. Tickets 96/97 will conflict in SHIPPED_FILES and docs/scripts.md tail; resolve by keeping both.
