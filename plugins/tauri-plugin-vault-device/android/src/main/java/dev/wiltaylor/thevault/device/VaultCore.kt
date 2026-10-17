@@ -149,6 +149,13 @@ object VaultCore {
     external fun putAsset(filename: String, bytes: ByteArray): String
 
     /**
+     * The bytes of asset [id], fetched from the home server first when the device does not hold
+     * them, or null when neither does. It may make a network request: never on the main thread.
+     */
+    @JvmStatic
+    external fun assetBytes(id: String): ByteArray?
+
+    /**
      * Imports the phone's history as [request] says, `{ kinds, since, until }` as JSON: the core
      * reads each kind page by page through the device runtime's bridge (`history`), and runs each
      * message and call that has no note yet as its device event, so the device file's handlers

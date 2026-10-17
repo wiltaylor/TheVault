@@ -10,6 +10,9 @@ import org.json.JSONObject
 fun interface AssetStore {
     /** Store [bytes] as [filename]. Returns `{ asset, filename, size }`. */
     fun put(filename: String, bytes: ByteArray): JSONObject
+
+    /** The bytes of [asset], such as a photo to write to a contact, or null when it is not to be had. */
+    fun bytes(asset: String): ByteArray? = null
 }
 
 /**

@@ -21,6 +21,11 @@ class ReadersTest {
     private lateinit var phone: FakePhone
     private lateinit var capture: DeviceCapture
 
+    private companion object {
+        val PHOTO = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 1, 2, 3)
+        val THUMBNAIL = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 7)
+    }
+
     @Before
     fun setUp() {
         phone = FakePhone(ApplicationProvider.getApplicationContext())
@@ -177,7 +182,8 @@ class ReadersTest {
         assertEquals("4", grace.getString("contact_id"))
         assertEquals("Grace Hopper", grace.getString("name"))
         assertEquals("[\"+14155552671\"]", grace.getJSONArray("phones").toString())
-        assertEquals("[\"grace@example.com\"]", grace.getJSONArray("addresses").toString())
+        assertEquals("[\"grace@example.com\"]", grace.getJSONArray("emails").toString())
+        assertEquals("[]", grace.getJSONArray("addresses").toString())
         assertEquals(Payloads.time(2_000), grace.getString("updated"))
 
         assertEquals(listOf("3", "4"), capture.contacts.changedSince(0).map { it.data.getString("contact_id") })
@@ -187,6 +193,259 @@ class ReadersTest {
         assertEquals(JSONObject().put("contact_id", "8").toString(), deleted.single().data.toString())
         assertEquals(2_000L, capture.contacts.latestChange())
         assertEquals(3_000L, capture.contacts.latestDeletion())
+    }
+
+    /** Contact 4 with one of every detail kind, as the contacts app holds them. */
+    private fun everyDetail(full: ByteArray? = PHOTO, thumbnail: ByteArray? = THUMBNAIL) {
+        phone.contact(4, "Grace Hopper", 2_000)
+        phone.data(4, FakePhone.PHONE, "data1" to "0412 345 678", "data2" to 2, "data4" to "+61412345678")
+        phone.data(4, FakePhone.PHONE, "data1" to "12345", "data2" to 3)
+        phone.data(4, FakePhone.PHONE, "data1" to "+1 415 555 2671", "data2" to 0, "data3" to "Navy line")
+        phone.data(4, FakePhone.PHONE, "data1" to "(02) 9999 0000", "data2" to 4)
+        phone.data(4, FakePhone.EMAIL, "data1" to "grace@example.com", "data2" to 2)
+        phone.data(4, FakePhone.EMAIL, "data1" to "amazing@example.org", "data2" to 0, "data3" to "Fan mail")
+        phone.data(4, FakePhone.POSTAL, "data1" to "1 Navy Way\nArlington VA 22202\nUSA", "data2" to 2)
+        phone.data(4, FakePhone.POSTAL, "data1" to "2 Home St\r\n\r\nNew York", "data2" to 1)
+        phone.data(4, FakePhone.ORGANIZATION, "data1" to "US Navy", "data4" to "Rear Admiral", "data2" to 1)
+        phone.data(4, FakePhone.NICKNAME, "data1" to "Amazing Grace")
+        phone.data(4, FakePhone.EVENT, "data1" to "--12-09", "data2" to 3)
+        phone.data(4, FakePhone.EVENT, "data1" to "1930-06-15", "data2" to 1)
+        phone.data(4, FakePhone.WEBSITE, "data1" to "grace.example.com", "data2" to 7)
+        phone.data(4, FakePhone.WEBSITE, "data1" to "https://cobol.example.org/", "data2" to 7)
+        phone.data(4, FakePhone.NOTE, "data1" to "Found the first bug.")
+        phone.photo(4, full, thumbnail)
+    }
+
+    private fun strings(a: org.json.JSONArray): List<String> = (0 until a.length()).map { a.getString(it) }
+
+    @Test
+    fun contactsReaderReadsEveryDetailKindWithLabels() {
+        everyDetail()
+
+        val grace = capture.contacts.changedSince(1_000).single().data
+        assertEquals(listOf("+61412345678", "+14155552671", "+61299990000"), strings(grace.getJSONArray("phones")))
+        assertEquals("the unnormalisable number's label drops with it", listOf("mobile", "Navy line", "other"), strings(grace.getJSONArray("phone_labels")))
+        assertEquals(listOf("grace@example.com", "amazing@example.org"), strings(grace.getJSONArray("emails")))
+        assertEquals(listOf("work", "Fan mail"), strings(grace.getJSONArray("email_labels")))
+        assertEquals(listOf("1 Navy Way, Arlington VA 22202, USA", "2 Home St, New York"), strings(grace.getJSONArray("addresses")))
+        assertEquals(listOf("work", "home"), strings(grace.getJSONArray("address_labels")))
+        assertEquals("US Navy", grace.getString("organisation"))
+        assertEquals("Rear Admiral", grace.getString("job_title"))
+        assertEquals("Amazing Grace", grace.getString("nickname"))
+        assertEquals("a birthday with no year, and not the anniversary", "--12-09", grace.getString("birthday"))
+        assertEquals(listOf("grace.example.com", "https://cobol.example.org/"), strings(grace.getJSONArray("websites")))
+        assertEquals("Found the first bug.", grace.getString("contact_note"))
+        assertTrue(grace.isNull("person"))
+        assertTrue(grace.isNull("synced"))
+
+        // The full-size photo, not the thumbnail, stored as an asset before the payload is made.
+        val photo = grace.getJSONObject("photo")
+        assertEquals("01ASSET1", photo.getString("asset"))
+        assertEquals(ContactPhotos.sha256(PHOTO), photo.getString("hash"))
+        assertEquals("contact-4-photo.jpg", phone.assets.stored.single().first)
+        assertArrayEquals(PHOTO, phone.assets.stored.single().second)
+
+        // Read again, and by a capture made afresh, the same bytes reuse the asset.
+        assertEquals(photo.toString(), capture.contacts.get("4").getJSONObject("photo").toString())
+        assertEquals(photo.toString(), phone.capture().contacts.get("4").getJSONObject("photo").toString())
+        assertEquals("stored once", 1, phone.assets.stored.size)
+
+        // A new photo is a new asset.
+        phone.photo(4, byteArrayOf(9, 9, 9))
+        assertEquals("01ASSET2", capture.contacts.get("4").getJSONObject("photo").getString("asset"))
+        assertEquals(2, phone.assets.stored.size)
+    }
+
+    @Test
+    fun aContactWithOnlyAThumbnailOrNoDetailsReadsAsEmpty() {
+        everyDetail(full = null)
+        assertEquals(ContactPhotos.sha256(THUMBNAIL), capture.contacts.get("4").getJSONObject("photo").getString("hash"))
+        assertArrayEquals(THUMBNAIL, phone.assets.stored.single().second)
+
+        val ada = capture.contacts.get("3")
+        for (key in listOf("addresses", "address_labels", "websites")) assertEquals(key, "[]", ada.getJSONArray(key).toString())
+        assertEquals(listOf("mobile"), strings(ada.getJSONArray("phone_labels")))
+        assertEquals(listOf("other"), strings(ada.getJSONArray("email_labels")))
+        for (key in listOf("organisation", "job_title", "nickname", "birthday", "contact_note")) assertEquals(key, "", ada.getString(key))
+        assertTrue(ada.isNull("photo"))
+    }
+
+    @Test
+    fun birthdaysAreFullDatesOrMonthAndDay() {
+        assertEquals("1906-12-09", ContactsReader.birthday("1906-12-09"))
+        assertEquals("1906-12-09", ContactsReader.birthday("19061209"))
+        assertEquals("1906-12-09", ContactsReader.birthday("1906-12-09T00:00:00.000Z"))
+        assertEquals("--12-09", ContactsReader.birthday("--12-09"))
+        assertEquals("--12-09", ContactsReader.birthday("--1209"))
+        assertEquals(null, ContactsReader.birthday("December"))
+        assertEquals(null, ContactsReader.birthday(""))
+    }
+
+    @Test
+    fun anEditToAnyDetailIsAChange() {
+        everyDetail()
+        val edits = listOf(
+            FakePhone.POSTAL to arrayOf<Pair<String, Any?>>("data1" to "3 New Rd", "data2" to 1),
+            FakePhone.ORGANIZATION to arrayOf<Pair<String, Any?>>("data1" to "Remington Rand", "data4" to "Engineer"),
+            FakePhone.NICKNAME to arrayOf<Pair<String, Any?>>("data1" to "Grandma COBOL"),
+            FakePhone.EVENT to arrayOf<Pair<String, Any?>>("data1" to "1906-12-09", "data2" to 3),
+            FakePhone.WEBSITE to arrayOf<Pair<String, Any?>>("data1" to "https://hopper.example.com"),
+            FakePhone.NOTE to arrayOf<Pair<String, Any?>>("data1" to "Nanoseconds."),
+            FakePhone.PHONE to arrayOf<Pair<String, Any?>>("data1" to "0499 999 999", "data2" to 0, "data3" to "Lab"),
+            FakePhone.EMAIL to arrayOf<Pair<String, Any?>>("data1" to "hopper@example.com", "data2" to 1),
+        )
+        val seen = mutableListOf<String>()
+        for ((mime, values) in edits) {
+            val before = capture.contacts.latestChange()
+            phone.edit(4, mime, *values)
+            assertTrue("$mime moves the last change", capture.contacts.latestChange() > before)
+            val changed = capture.contacts.changedSince(before)
+            assertEquals(mime, listOf("4"), changed.map { it.data.getString("contact_id") })
+            seen += changed.single().data.toString()
+        }
+        val last = capture.contacts.get("4")
+        assertEquals(listOf("3 New Rd"), strings(last.getJSONArray("addresses")))
+        assertEquals("Remington Rand", last.getString("organisation"))
+        assertEquals("1906-12-09", last.getString("birthday"))
+        assertEquals(listOf("Lab"), strings(last.getJSONArray("phone_labels")))
+        assertEquals(listOf("home"), strings(last.getJSONArray("email_labels")))
+
+        // The photo too, written as another app writes it.
+        val before = capture.contacts.latestChange()
+        context().contentResolver.openAssetFileDescriptor(
+            android.net.Uri.parse("content://com.android.contacts/raw_contacts/4/display_photo"),
+            "rw",
+        )!!.use { it.createOutputStream().use { out -> out.write(byteArrayOf(5, 5)) } }
+        assertEquals(listOf("4"), capture.contacts.changedSince(before).map { it.data.getString("contact_id") })
+        assertEquals(ContactPhotos.sha256(byteArrayOf(5, 5)), capture.contacts.get("4").getJSONObject("photo").getString("hash"))
+    }
+
+    private fun context(): android.content.Context = ApplicationProvider.getApplicationContext()
+
+    @Test
+    fun upsertWritesEveryDetailKindAndReadsBackTheSame() {
+        everyDetail()
+        val photo = phone.assets.put("face.png", byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 1))
+            .getString("asset")
+        val details = JSONObject()
+            .put("name", "Grace Brewster Hopper")
+            .put("phones", org.json.JSONArray(listOf("+61499999999", "+14155552671")))
+            .put("phone_labels", org.json.JSONArray(listOf("work", "Navy line")))
+            .put("emails", org.json.JSONArray(listOf("grace@navy.example.mil")))
+            .put("email_labels", org.json.JSONArray(listOf("Duty")))
+            .put("addresses", org.json.JSONArray(listOf("1 Navy Way, Arlington VA 22202, USA", "9 Main St, Cambridge MA")))
+            .put("address_labels", org.json.JSONArray(listOf("work", "other")))
+            .put("organisation", "Harvard")
+            .put("job_title", "Research Fellow")
+            .put("nickname", "Amazing Grace")
+            .put("birthday", "--12-09")
+            .put("websites", org.json.JSONArray(listOf("https://grace.example.com")))
+            .put("contact_note", "Wrote the first compiler.")
+            .put("photo", photo)
+        val data = AndroidDeviceData(context(), capture)
+        fun upsert(contact: JSONObject): JSONObject =
+            JSONObject(data.call("contacts_upsert", JSONObject().put("contact", contact).toString())).getJSONObject("ok")
+
+        // Onto the existing contact, and onto a new one.
+        assertEquals("4", upsert(JSONObject(details.toString()).put("contact_id", "4")).getString("contact_id"))
+        val added = upsert(JSONObject(details.toString()).put("contact_id", JSONObject.NULL)).getString("contact_id")
+        for (id in listOf("4", added)) {
+            val read = capture.contacts.get(id)
+            for (key in details.keys()) {
+                if (key == "photo") continue
+                assertEquals("$id $key", details.get(key).toString(), read.get(key).toString())
+            }
+            assertEquals("the written photo reads back as its own asset", photo, read.getJSONObject("photo").getString("asset"))
+            assertEquals(ContactPhotos.sha256(phone.assets.stored[0].second), read.getJSONObject("photo").getString("hash"))
+        }
+        assertEquals("no photo stored again", 1, phone.assets.stored.size)
+        // Labels go back as types, and a custom one as its text.
+        assertEquals(listOf("+61499999999 3", "+14155552671 0 Navy line"), phone.rows(4, FakePhone.PHONE, "data1", "data2", "data3"))
+        assertEquals(listOf("--12-09 3", "1930-06-15 1"), phone.rows(4, FakePhone.EVENT, "data1", "data2").sorted())
+        assertArrayEquals(phone.assets.stored[0].second, phone.photoOf(4))
+
+        // A key left out leaves its detail alone; a label list left out keeps each value's label;
+        // a null photo clears it.
+        upsert(
+            JSONObject()
+                .put("contact_id", "4")
+                .put("phones", org.json.JSONArray(listOf("+14155552671", "+61412345678")))
+                .put("nickname", JSONObject.NULL)
+                .put("photo", JSONObject.NULL),
+        )
+        val after = capture.contacts.get("4")
+        assertEquals(listOf("Navy line", "mobile"), strings(after.getJSONArray("phone_labels")))
+        assertEquals("", after.getString("nickname"))
+        assertTrue(after.isNull("photo"))
+        assertEquals("Grace Brewster Hopper", after.getString("name"))
+        assertEquals("Harvard", after.getString("organisation"))
+        assertEquals(listOf("grace@navy.example.mil"), strings(after.getJSONArray("emails")))
+        assertEquals("Wrote the first compiler.", after.getString("contact_note"))
+    }
+
+    @Test
+    fun upsertWithAPersonRecordsEveryDetailAsAgreed() {
+        everyDetail()
+        val photo = phone.assets.put("face.jpg", PHOTO).getString("asset")
+        AndroidDeviceData(context(), capture).call(
+            "contacts_upsert",
+            JSONObject().put(
+                "contact",
+                JSONObject()
+                    .put("contact_id", "4")
+                    .put("person", "01PERSONGRACE0000000000000")
+                    .put("name", "Grace Hopper")
+                    .put("emails", org.json.JSONArray(listOf("grace@example.com")))
+                    .put("birthday", "--12-09")
+                    .put("photo", photo),
+            ).toString(),
+        )
+        val row = phone.personRow(4)!!
+        assertEquals("01PERSONGRACE0000000000000", row[0])
+        assertEquals(ContactsReader.SYNCED_FORMAT, row[2])
+        val synced = capture.contacts.get("4").getJSONObject("synced")
+        assertEquals("Grace Hopper", synced.getString("name"))
+        assertEquals("[\"grace@example.com\"]", synced.getJSONArray("emails").toString())
+        assertEquals("[\"work\"]", synced.getJSONArray("email_labels").toString())
+        assertEquals("--12-09", synced.getString("birthday"))
+        assertEquals(JSONObject().put("asset", photo).put("hash", ContactPhotos.sha256(PHOTO)).toString(), synced.getJSONObject("photo").toString())
+        assertTrue("keys not written are not agreed", !synced.has("phones") && !synced.has("addresses"))
+        assertEquals("the photo was the same already: it reuses the asset", photo, capture.contacts.get("4").getJSONObject("photo").getString("asset"))
+        assertEquals(1, phone.assets.stored.size)
+    }
+
+    @Test
+    fun syncedStateFromAnOlderVersionHasItsEmailsMigrated() {
+        val old = JSONObject()
+            .put("name", "Ada Lovelace")
+            .put("phones", org.json.JSONArray(listOf("+61412345678")))
+            .put("addresses", org.json.JSONArray(listOf("ada@example.com")))
+        phone.data(3, ContactsReader.PERSON_MIME, "data1" to "01PERSONADA000000000000000", "data2" to old.toString())
+
+        // Before the rewrite, the reader already reads the old form as emails.
+        val read = capture.contacts.get("3").getJSONObject("synced")
+        assertEquals("[\"ada@example.com\"]", read.getJSONArray("emails").toString())
+        assertTrue(!read.has("addresses"))
+
+        // Capture rewrites it once, before it reads contacts.
+        capture.begin()
+        capture.captureContacts()
+        val row = phone.personRow(3)!!
+        assertEquals("01PERSONADA000000000000000", row[0])
+        assertEquals(ContactsReader.SYNCED_FORMAT, row[2])
+        val stored = JSONObject(row[1]!!)
+        assertEquals("Ada Lovelace", stored.getString("name"))
+        assertEquals("[\"+61412345678\"]", stored.getJSONArray("phones").toString())
+        assertEquals("[\"ada@example.com\"]", stored.getJSONArray("emails").toString())
+        assertTrue(!stored.has("addresses"))
+        assertEquals("nothing is left to rewrite", 0, capture.contacts.migrateSynced())
+
+        // A row in this version's form keeps its postal addresses.
+        val now = JSONObject().put("emails", org.json.JSONArray()).put("addresses", org.json.JSONArray(listOf("1 Navy Way")))
+        phone.contact(4, "Grace Hopper", 2_000)
+        phone.data(4, ContactsReader.PERSON_MIME, "data1" to "01PERSONGRACE0000000000000", "data2" to now.toString(), "data3" to ContactsReader.SYNCED_FORMAT)
+        assertEquals(0, capture.contacts.migrateSynced())
+        assertEquals(now.toString(), capture.contacts.get("4").getJSONObject("synced").toString())
     }
 
     @Test

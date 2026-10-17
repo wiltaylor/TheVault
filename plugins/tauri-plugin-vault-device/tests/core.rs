@@ -428,6 +428,13 @@ fn unpaired_sync_is_refused_and_assets_come_on_demand() {
     let report = core.sync_now().unwrap();
     assert_eq!(report.assets_evicted, 1);
     assert!(writer.asset_info(&asset).is_err());
+
+    // A photo a contact is to hold is read through the core, fetched again when evicted.
+    let bytes = core.asset_bytes(&asset).unwrap().expect("fetched for its bytes");
+    assert_eq!(bytes, vec![7u8; 3 * 1024 * 1024]);
+    let local = writer.put_asset("face.jpg", vec![1, 2, 3]).unwrap();
+    assert_eq!(core.asset_bytes(&local.id).unwrap(), Some(vec![1, 2, 3]));
+    assert_eq!(core.asset_bytes("01J00000000000000000000000").unwrap(), None);
 }
 
 /// A phone with nothing on it; the share handler never asks it anything.

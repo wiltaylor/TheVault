@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use embedded::device::{DeviceData, ImportReport, QueuedEvent};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString};
-use jni::sys::{jboolean, jlong, jstring};
+use jni::sys::{jboolean, jbyteArray, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
 use serde_json::{Value as Json, json};
 
@@ -415,6 +415,35 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_putAsset<'lo
                 .to_string(),
         ))
     })
+}
+
+/// `VaultCore.assetBytes(id: String): ByteArray?`: the bytes of asset `id`, fetched from the home
+/// server when the device does not hold them, such as the photo `device::contacts_upsert` writes
+/// to a phone contact. Null when neither holds it. It may make a network request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_assetBytes<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    id: JString<'local>,
+) -> jbyteArray {
+    let result = catch_unwind(AssertUnwindSafe(|| -> anyhow::Result<Option<Vec<u8>>> {
+        let id = required(&mut env, &id, "id")?;
+        core()?.asset_bytes(&id)
+    }))
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("the Rust core panicked reading an asset")));
+    match result {
+        Ok(None) => std::ptr::null_mut(),
+        Ok(Some(bytes)) => env
+            .byte_array_from_slice(&bytes)
+            .map(|a| a.into_raw())
+            .unwrap_or(std::ptr::null_mut()),
+        Err(e) => {
+            if !env.exception_check().unwrap_or(false) {
+                let _ = env.throw_new("java/lang/IllegalStateException", format!("{e:#}"));
+            }
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// `VaultCore.unreadNotifications(): String`: the home server's unread notifications, newest
