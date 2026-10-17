@@ -19,7 +19,19 @@ pub(crate) struct Note {
     pub data: String,
     pub values: Vec<FieldValue>,
     pub links: Vec<Link>,
+    /// Every asset the note names, in a field or in a block at any depth.
+    pub assets: Vec<AssetRef>,
     pub search: SearchDoc,
+}
+
+/// A reference to an asset. `via` is `field` for an asset field, where `field` is the field;
+/// otherwise it is the kind of the block naming the asset (`image`, `asset`, or a canvas
+/// `node` written before cards), and `field` is the content or canvas field holding it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AssetRef {
+    pub asset: String,
+    pub field: String,
+    pub via: String,
 }
 
 /// One scalar inside a field value. `pos` is the position in a list, and `part` names the member
@@ -62,6 +74,7 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
     let archived = doc.field("archived") == Some(&Value::Bool(true));
     let mut values = Vec::new();
     let mut links = Vec::new();
+    let mut assets = Vec::new();
     let mut body = Vec::new();
 
     for (name, value) in &doc.fields {
@@ -87,6 +100,12 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
             {
                 body.push(s.to_owned());
             }
+            if kind == Kind::Asset
+                && let Some(asset) = item.as_str()
+                && schema::is_ulid(asset)
+            {
+                push_asset(&mut assets, asset, name, "field");
+            }
             if kind == Kind::Reference
                 && let Some(dst) = item.as_str()
             {
@@ -99,6 +118,12 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
             }
             scalars(&mut values, name, pos, "", kind, item);
         }
+    }
+
+    // Blocks naming an asset, whatever field holds them: deleting the asset must not miss one.
+    for b in &doc.blocks {
+        let field = b.label().unwrap_or(&b.kind);
+        block_assets(b, field, &mut assets);
     }
 
     for b in &doc.blocks {
@@ -162,6 +187,30 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
         data: data.to_string(),
         values,
         links,
+        assets,
+    }
+}
+
+fn push_asset(out: &mut Vec<AssetRef>, asset: &str, field: &str, via: &str) {
+    let r = AssetRef {
+        asset: asset.to_owned(),
+        field: field.to_owned(),
+        via: via.to_owned(),
+    };
+    if !out.contains(&r) {
+        out.push(r);
+    }
+}
+
+/// The assets `b` and the blocks inside it name in their `asset` item.
+fn block_assets(b: &DocBlock, field: &str, out: &mut Vec<AssetRef>) {
+    if let Some(asset) = b.body.field("asset").and_then(Value::as_str)
+        && schema::is_ulid(asset)
+    {
+        push_asset(out, asset, field, &b.kind);
+    }
+    for inner in &b.body.blocks {
+        block_assets(inner, field, out);
     }
 }
 

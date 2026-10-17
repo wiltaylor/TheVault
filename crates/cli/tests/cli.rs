@@ -1135,7 +1135,12 @@ fn every_command_prints_json() {
         &[s(&asset["id"]), "--out", &tmp_path(&scratch, "g.txt")],
         "",
     );
+    run("asset usage", &[s(&asset["id"])], "");
+    run("asset rename", &[s(&asset["id"]), "h.txt"], "");
     run("asset delete", &[s(&asset["id"])], "");
+    run("asset trash", &[], "");
+    run("asset restore", &[s(&asset["id"])], "");
+    run("asset cleanup", &["--dry-run"], "");
 
     run("type list", &[], "");
     run("type get", &["task"], "");
@@ -1341,6 +1346,57 @@ fn asset_delete_is_refused_while_a_note_names_it_and_unlink_takes_it_out() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn asset_usage_cleanup_and_restore() {
+    let server = TestServer::start_seeded(seed);
+    let vault = Vault::against(&server);
+    let dir = TempDir::new().unwrap();
+    let used_file = tmp_path(&dir, "used.png");
+    std::fs::write(&used_file, b"used").unwrap();
+    let spare_file = tmp_path(&dir, "spare.txt");
+    std::fs::write(&spare_file, b"spare").unwrap();
+    let used = s(&vault.ok(&["asset", "upload", &used_file], "")["id"]).to_owned();
+    let spare = s(&vault.ok(&["asset", "upload", &spare_file], "")["id"]).to_owned();
+    let wcl = format!(
+        "title = \"Board\"\n\ncanvas board {{\n  viewport {{\n    x    = 0.0\n    y    = 0.0\n    zoom = 1.0\n  }}\n\n  node pic {{\n    kind   = \"asset\"\n    x      = 0.0\n    y      = 0.0\n    width  = 10.0\n    height = 10.0\n    asset  = \"{used}\"\n  }}\n}}\n"
+    );
+    let note_id = s(&vault.ok(&["put", "--type", "board"], &wcl)["id"]).to_owned();
+
+    let usage = vault.ok(&["asset", "usage", &used], "");
+    assert_eq!(usage["used_by"], 1, "{usage}");
+    assert_eq!(usage["notes"][0]["id"], note_id.as_str(), "{usage}");
+    let unused = vault.ok(&["asset", "list", "--unused"], "");
+    assert_eq!(unused["assets"].as_array().unwrap().len(), 1, "{unused}");
+    assert_eq!(unused["assets"][0]["id"], spare.as_str());
+
+    let dry = vault.ok(&["asset", "cleanup", "--dry-run"], "");
+    assert_eq!(dry["count"], 1, "{dry}");
+    assert_eq!(dry["size"], 5, "{dry}");
+    assert_eq!(
+        vault.ok(&["asset", "list"], "")["assets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let done = vault.ok(&["asset", "cleanup"], "");
+    assert_eq!(done["assets"][0]["id"], spare.as_str(), "{done}");
+    assert_eq!(
+        vault.ok(&["asset", "list"], "")["assets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let trash = vault.ok(&["asset", "trash"], "");
+    assert_eq!(trash["assets"][0]["id"], spare.as_str(), "{trash}");
+    let back = vault.ok(&["asset", "restore", &spare], "");
+    assert_eq!(back["restored"][0]["id"], spare.as_str(), "{back}");
+    let renamed = vault.ok(&["asset", "rename", &spare, "kept.txt"], "");
+    assert_eq!(renamed["filename"], "kept.txt", "{renamed}");
 }
 
 #[test]

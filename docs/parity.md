@@ -73,7 +73,13 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Insert or replace an image or file | `blocks/MediaBlocks.tsx` | `POST /api/assets?filename=` | `vault asset upload <path> [--filename]` | |
 | Show an image or download an asset | `MediaBlocks.tsx`, `canvas/CanvasNodes.tsx` | `GET /api/assets/{id}` | `vault asset get <id> --out <file>` | |
 | Show an asset block's name and size | `MediaBlocks.tsx` | `GET /api/assets` | `vault asset list` | |
-| Delete an asset, taking it out of the notes that use it after confirming | `pages/Assets.tsx` | `DELETE /api/assets/{id}[?unlink=true]` | `vault asset delete <id> [--unlink]` | |
+| Browse images and files as cards or a sortable list, search names and PDF text, filter by kind or to the unused ones | `pages/Assets.tsx` | `GET /api/assets?kind=&unused=&q=&sort=&dir=&cursor=&limit=` | `vault asset list [--unused] [--kind] [--search]` | |
+| Open an asset like a note: preview, file name, type, size, upload time | `pages/AssetView.tsx` | `GET /api/assets/{id}/usage`, `GET /api/assets/{id}` | `vault asset usage <id>`, `vault asset get <id> --out <file>` | |
+| See the notes, trashed notes and types using an asset | Right sidebar beside an asset (`components/AssetUsage.tsx`) | `GET /api/assets/{id}/usage` | `vault asset usage <id>` | |
+| Rename an asset's file | `pages/AssetView.tsx` | `PATCH /api/assets/{id}` | `vault asset rename <id> <filename>` | |
+| Delete an asset into the asset trash, taking it out of the notes that use it after confirming | `pages/AssetView.tsx`, `components/AssetUsage.tsx` | `DELETE /api/assets/{id}[?unlink=true]` | `vault asset delete <id> [--unlink]` | |
+| Delete every asset nothing uses, after a confirm listing them | `pages/Assets.tsx` (Clean up) | `POST /api/assets/cleanup` with `dry_run` first | `vault asset cleanup [--dry-run]` | |
+| Restore a deleted asset within 30 days | `pages/Assets.tsx` (Recently deleted), the Undo of a delete's toast | `GET /api/assets/trash`, `POST /api/assets/trash/restore` | `vault asset trash`, `vault asset restore <id>...` | |
 
 ### Query views
 
@@ -230,11 +236,16 @@ The listing has 85 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/scripts/{name}` | `vault script get` | Scripts | |
 | `PUT /api/scripts/{name}` | `vault script put` | Scripts | |
 | `DELETE /api/scripts/{name}` | `vault script delete` | Scripts | |
-| `GET /api/assets` | `vault asset list` | Asset field, asset block | |
+| `GET /api/assets` | `vault asset list` | Asset field, asset block, images and files library | |
+| `POST /api/assets/cleanup` | `vault asset cleanup [--dry-run]` | Images and files: Clean up | |
+| `GET /api/assets/trash` | `vault asset trash` | Images and files: Recently deleted | |
+| `POST /api/assets/trash/restore` | `vault asset restore` | Recently deleted, Undo after a delete | |
+| `GET /api/assets/{id}/usage` | `vault asset usage` | Asset page, Used by panel | |
+| `PATCH /api/assets/{id}` | `vault asset rename` | Asset page | |
 | `POST /api/assets` | `vault asset upload` | Image and file blocks, canvas | |
 | `GET /api/assets/{id}` | `vault asset get` | Images, downloads | |
 | `PUT /api/assets/{id}` | none | not used | The apps' sync engine sends assets a device stored offline |
-| `DELETE /api/assets/{id}` | `vault asset delete [--unlink]` | Assets | |
+| `DELETE /api/assets/{id}` | `vault asset delete [--unlink]` | Asset page, Used by panel | |
 | `GET /api/events` | none | Bell badge and panel, open notes | Explained: a stream for open clients (D4); a CLI command runs once and reads what it needs |
 | `GET /api/notifications` | `vault notifications [--unread]` | Bell badge and panel | |
 | `POST /api/notifications` | `vault notify` | not used | Scripts call `vault::notify`; the server notifies about failed scheduled scripts |

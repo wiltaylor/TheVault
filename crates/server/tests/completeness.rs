@@ -239,10 +239,28 @@ fn an_uploaded_asset_is_stored_under_its_ulid_and_downloads_byte_identical() {
         .send()
         .unwrap();
     expect(res, 200);
+    // In the trash, the note still holds the asset: restoring the note would bring it back.
+    let err = expect(
+        api.delete(&format!("/api/assets/{id}?unlink=true"))
+            .send()
+            .unwrap(),
+        409,
+    );
+    assert_eq!(err["error"], "asset_in_trash");
+    assert_eq!(err["notes"][0]["trashed"], true);
     expect(
-        api.delete(&format!("/api/assets/{id}")).send().unwrap(),
+        api.post(&format!("/api/trash/{}/restore", s(&note["id"])))
+            .send()
+            .unwrap(),
         200,
     );
+    let gone = expect(
+        api.delete(&format!("/api/assets/{id}?unlink=true"))
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(gone["trashed"], true);
     assert!(
         !api.server
             .vault_path()

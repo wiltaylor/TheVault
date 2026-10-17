@@ -38,7 +38,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 | Device file | `devices/<platform>.wcl` | `schema/device.wcl` | `vault/devices/android.wcl` |
 | Canvas | A `canvas` content block, or a `canvas` field value in a note | `schema/common.wcl` | `vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` |
 
-Paths in the last two columns are relative to `docs/vault-format/`. Scripts (`scripts/*.ws`) are wscript, not WCL, and this document does not define them. Assets (`assets/<ULID>/<filename>`) are stored byte for byte.
+Paths in the last two columns are relative to `docs/vault-format/`. Scripts (`scripts/*.ws`) are wscript, not WCL, and this document does not define them. Assets (`assets/<ULID>/<filename>`) are stored byte for byte. Deleting an asset moves its file to the server folder, at `.vault/asset-trash/<ULID>/<filename>`, with the time of the delete in milliseconds since the Unix epoch in `.vault/asset-trash/<ULID>.deleted`. It can be restored from there for 30 days, after which it is purged. The asset trash is not vault data: a note never names it, and a rebuild ignores it.
 
 The example vault under `docs/vault-format/vault/` is self-consistent: its notes use its types, and its types use its taxonomies. Notes that the examples reference but do not need (the parent, child and peer specimens) are left out. The scripts named by the example handlers, task and device file are left out too.
 

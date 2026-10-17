@@ -315,7 +315,13 @@ vault asset list
 
 `asset upload` prints the asset's `id`. Put that id in an `asset` field, or in an `image` or `asset` content block.
 
-`vault asset delete <id>` is refused with `asset_in_use` while notes name the asset, and the error lists them under `notes`. Add `--unlink` to take the asset out of those notes and delete it in one commit.
+`vault asset list` gives each asset its `kind` (`image`, `pdf`, `audio`, `video` or `other`), `uploaded_ms` and `used_by`, the count of notes, notes in the trash and types that use it. `--unused`, `--kind image|pdf|other` and `--search <words>` narrow the list. `vault asset usage <id>` lists those users: `notes` (with `how`, the field or the block kind naming the asset), `trashed` and `types`.
+
+`vault asset delete <id>` is refused with `asset_in_use` while notes name the asset, and the error lists them under `notes`. Add `--unlink` to take the asset out of those notes and delete it in one commit. A note in the trash naming the asset refuses the delete with `asset_in_trash`, even with `--unlink`: restore the note and take the asset out, or leave the asset.
+
+`vault asset cleanup --dry-run` lists every asset nothing uses, with their `count` and total `size`. `vault asset cleanup` deletes them in one commit.
+
+A deleted asset goes to the asset trash for 30 days. `vault asset trash` lists it, and `vault asset restore <id>...` brings it back under the same id. Notes a delete with `--unlink` changed do not get the asset back: restore their earlier versions for that. `vault asset rename <id> <filename>` renames the file; notes name assets by id, so none changes.
 
 ## 8. Fleeting notes and the inbox
 

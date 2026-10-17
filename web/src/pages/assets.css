@@ -1,0 +1,453 @@
+/* The images and files library (/assets), an asset's page (/assets/:id) and its Used by panel. */
+
+.assets-page .note-header .actions,
+.asset-header .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.assets-page .note-header .actions button,
+.asset-header .actions button,
+.asset-header .actions a.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.assets-page .note-header .actions button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.assets-cleanup {
+  border-color: color-mix(in srgb, var(--palette-orange) 55%, var(--line));
+  color: color-mix(in srgb, var(--palette-orange) 75%, var(--ink));
+}
+
+.assets-cleanup:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--palette-orange) 10%, var(--panel));
+}
+
+.assets-filters button {
+  gap: 0.4rem;
+}
+
+.assets-filter-count {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.assets-filters button[aria-pressed="true"] .assets-filter-count {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.asset-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12.5rem, 1fr));
+  gap: 0.75rem;
+}
+
+.asset-grid .asset-card {
+  padding: 0;
+  gap: 0.2rem;
+}
+
+.asset-grid .asset-card > :not(.asset-card-thumb) {
+  margin: 0 0.75rem;
+}
+
+.asset-grid .asset-card > :last-child {
+  margin-bottom: 0.75rem;
+}
+
+.asset-card-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 4 / 3;
+  margin-bottom: 0.45rem;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  background:
+    repeating-conic-gradient(color-mix(in srgb, var(--line) 45%, transparent) 0% 25%, transparent 0% 50%) 50% / 16px 16px,
+    var(--hover);
+}
+
+.asset-thumb-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* A PDF's first page peeks out of the top of the box, as a sheet would. */
+.asset-card-thumb .pdf-thumb {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 1rem;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(15 23 42 / 0.25);
+}
+
+.asset-card-thumb .pdf-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.asset-thumb-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.asset-card-name {
+  font-size: 0.925rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.asset-card-meta {
+  font-size: 0.8rem;
+}
+
+.asset-used {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.asset-used.unused {
+  background: color-mix(in srgb, var(--palette-orange) 14%, transparent);
+  color: color-mix(in srgb, var(--palette-orange) 80%, var(--ink));
+}
+
+.asset-card .asset-used {
+  margin-top: 0.25rem;
+}
+
+.asset-table-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.assets-more {
+  display: block;
+  margin: 0 auto 1.5rem;
+}
+
+.assets-trash {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.assets-trash h2 {
+  font-size: 1rem;
+  margin: 0 0 0.25rem;
+}
+
+.assets-trash p {
+  margin: 0 0 0.5rem;
+}
+
+.assets-trash ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.assets-trash li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.assets-trash-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assets-cleanup-dialog {
+  width: min(32rem, 100%);
+}
+
+.assets-cleanup-list {
+  list-style: none;
+  margin: 0.5rem 0 1rem;
+  padding: 0;
+  max-height: 16rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.assets-cleanup-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+.assets-cleanup-list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.assets-cleanup-list li > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assets-cleanup-dialog .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* An asset's page. */
+.asset-page {
+  max-width: 64rem;
+}
+
+.asset-header .asset-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.6rem;
+  line-height: 1.25;
+}
+
+.asset-title > .icon {
+  align-self: flex-start;
+  margin-top: 0.3rem;
+}
+
+.asset-header .actions {
+  flex: none;
+}
+
+.asset-title > span {
+  overflow-wrap: anywhere;
+}
+
+.asset-rename {
+  display: flex;
+  flex: 1;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.asset-rename input {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.1rem;
+}
+
+.asset-preview {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background:
+    repeating-conic-gradient(color-mix(in srgb, var(--line) 40%, transparent) 0% 25%, transparent 0% 50%) 50% / 20px 20px,
+    var(--hover);
+}
+
+.asset-preview > .pdf-viewer,
+.asset-preview > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.asset-preview-image-link {
+  display: flex;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.asset-preview-image {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+.asset-preview-audio {
+  width: min(36rem, 100%);
+  margin: 2.5rem 1rem;
+}
+
+.asset-preview-video {
+  width: 100%;
+  max-height: 70vh;
+  background: #000;
+}
+
+.asset-file-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 2.5rem 1rem;
+  color: var(--muted);
+}
+
+.asset-file-card-name {
+  color: var(--ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.asset-file-card .button {
+  margin-top: 0.5rem;
+}
+
+.asset-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.45rem 1.25rem;
+  margin: 0 0 1.5rem;
+  font-size: 0.925rem;
+}
+
+.asset-meta dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.asset-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+/* The right sidebar's Used by panel. */
+.sidebar-heading {
+  margin: 0;
+  padding: 0.35rem 0.5rem 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+
+.asset-usage-count {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
+.asset-users {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.asset-users li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.45rem 0.5rem;
+  margin: 0 -0.5rem;
+  border-radius: 0.4rem;
+}
+
+.asset-users li:hover {
+  background: var(--hover);
+}
+
+.asset-user-link {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+  min-width: 0;
+}
+
+.asset-user-link .icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.asset-user-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-user-how {
+  font-size: 0.8rem;
+  padding-left: calc(16px + 0.45rem);
+}
+
+.asset-users li.trashed .asset-user-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.asset-usage-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.asset-usage-empty p {
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .asset-meta {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.15rem;
+  }
+
+  .asset-meta dd {
+    margin-bottom: 0.5rem;
+  }
+}

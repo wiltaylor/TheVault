@@ -5,6 +5,7 @@ import { CommandPalette } from "../palette/CommandPalette";
 import { trackRecents } from "../palette/recents";
 import { PALETTE_KEYS, closePalette, isPaletteKey, openPalette, paletteOpen } from "../palette/store";
 import { captureOpen, inboxCount, isCaptureKey, openCapture, refreshInboxCount } from "../capture/store";
+import { assetIdOf } from "../assetLibrary";
 import { GraphView } from "../graph/GraphPanel";
 import { HistoryPanel } from "../history/HistoryPanel";
 import { endPreviews } from "../history/preview";
@@ -27,9 +28,10 @@ import {
 } from "../sidebars";
 import { theme, toggleTheme } from "../theme";
 import { isActiveLink } from "../workspace/links";
-import { activePane } from "../workspace/model";
+import { activePane, location as paneLocation } from "../workspace/model";
 import { workspace } from "../workspace/store";
 import { Workspace } from "../workspace/Workspace";
+import { AssetUsagePanel } from "./AssetUsage";
 import { ArchiveIcon, CalendarIcon, CaptureIcon, GearIcon, InboxIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
 import { NotificationsBell, NotificationsLive } from "../notifications/NotificationsPanel";
 import { PinnedTree } from "./PinnedTree";
@@ -137,9 +139,34 @@ const PANEL_TABS: { panel: Panel; label: string }[] = [
 
 /**
  * The right sidebar: context for the active pane. The graph of its note's links sits at the top;
- * below it, one panel at a time (Properties, History).
+ * below it, one panel at a time (Properties, History). Beside an asset's page it lists the notes
+ * using the asset instead.
  */
 function RightSidebar(props: { shown: boolean }) {
+  const pane = () => activePane(workspace());
+  const assetId = createMemo(() => assetIdOf(paneLocation(workspace(), pane())));
+  return (
+    <Show when={assetId()} keyed fallback={<NoteSidebar shown={props.shown} />}>
+      {(id) => (
+        <div id="right-sidebar" class="right-sidebar">
+          <Resizer side="right" />
+          <div class="sidebar-head right-head">
+            <h2 class="sidebar-heading" id="usage-heading">
+              Used by
+            </h2>
+            <HideRight />
+          </div>
+          <Show when={props.shown}>
+            <AssetUsagePanel id={id} pane={pane()} />
+          </Show>
+        </div>
+      )}
+    </Show>
+  );
+}
+
+/** The right sidebar beside a note, or any page but an asset's. */
+function NoteSidebar(props: { shown: boolean }) {
   const pane = () => activePane(workspace());
   const source = () => noteOf(pane());
   const panel = () => sidebars().right.panel;

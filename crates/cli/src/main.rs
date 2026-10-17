@@ -438,8 +438,18 @@ enum PinFolder {
 
 #[derive(Subcommand)]
 enum Asset {
-    /// Every uploaded asset.
-    List,
+    /// Uploaded assets, each with its kind, upload time and how many notes use it.
+    List {
+        /// Only the assets no note, note in the trash or type uses.
+        #[arg(long)]
+        unused: bool,
+        /// Only `image`, `pdf` or `other` assets.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Words in the file name, or in a PDF's text.
+        #[arg(long)]
+        search: Option<String>,
+    },
     /// Upload a file as a new asset.
     Upload {
         path: PathBuf,
@@ -453,12 +463,30 @@ enum Asset {
         #[arg(long, short)]
         out: PathBuf,
     },
-    /// Delete an asset. Refused while notes name it, unless --unlink is given.
+    /// Delete an asset into the asset trash, restorable for 30 days. Refused while notes name
+    /// it, unless --unlink is given, and always while a note in the trash names it.
     Delete {
         id: String,
         /// Take the asset out of every note that names it, in the same commit.
         #[arg(long)]
         unlink: bool,
+    },
+    /// Every note, trashed note and type that uses an asset.
+    Usage { id: String },
+    /// Delete every asset nothing uses into the asset trash, in one commit.
+    Cleanup {
+        /// List what would be deleted, and its total size, without deleting it.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Give an asset a new file name. Notes name assets by id, so none changes.
+    Rename { id: String, filename: String },
+    /// Deleted assets that can still be restored.
+    Trash,
+    /// Bring deleted assets back from the asset trash.
+    Restore {
+        #[arg(required = true)]
+        ids: Vec<String>,
     },
 }
 
@@ -1152,7 +1180,23 @@ fn notifications(api: &Api, n: Notifications) -> Result<Value, Fail> {
 
 fn asset(api: &Api, a: Asset) -> Result<Value, Fail> {
     match a {
-        Asset::List => api.get(&["api", "assets"]),
+        Asset::List {
+            unused,
+            kind,
+            search,
+        } => {
+            let mut query = Vec::new();
+            if unused {
+                query.push(("unused", "true".to_owned()));
+            }
+            if let Some(k) = kind {
+                query.push(("kind", k));
+            }
+            if let Some(q) = search {
+                query.push(("q", q));
+            }
+            api.call(Method::GET, &["api", "assets"], &query, Body::None)
+        }
         Asset::Upload { path, filename } => {
             let filename = match filename {
                 Some(f) => f,
@@ -1184,6 +1228,18 @@ fn asset(api: &Api, a: Asset) -> Result<Value, Fail> {
                 .collect();
             api.call(Method::DELETE, &["api", "assets", &id], &query, Body::None)
         }
+        Asset::Usage { id } => api.get(&["api", "assets", &id, "usage"]),
+        Asset::Cleanup { dry_run } => {
+            api.post(&["api", "assets", "cleanup"], json!({ "dry_run": dry_run }))
+        }
+        Asset::Rename { id, filename } => {
+            api.patch(&["api", "assets", &id], json!({ "filename": filename }))
+        }
+        Asset::Trash => api.get(&["api", "assets", "trash"]),
+        Asset::Restore { ids } => api.post(
+            &["api", "assets", "trash", "restore"],
+            json!({ "ids": ids }),
+        ),
     }
 }
 

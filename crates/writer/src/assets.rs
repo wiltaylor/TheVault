@@ -30,7 +30,7 @@ impl Asset {
 }
 
 /// Check an uploaded file's name: one path segment of printable characters.
-fn check_filename(name: &str) -> Result<()> {
+pub(crate) fn check_filename(name: &str) -> Result<()> {
     let bad = |why: &str| {
         Err(Error::BadRequest(format!(
             "{name:?} is not a valid asset file name: {why}"
@@ -177,6 +177,23 @@ impl Writer {
             .filter(|p| p.starts_with("types/"))
             .cloned()
             .collect();
+        // A note in the trash naming the asset would come back without it.
+        if types.is_empty() {
+            let trashed = self.trashed_naming(id)?;
+            if !trashed.is_empty() {
+                return Err(Error::InUse {
+                    code: "asset_in_trash",
+                    message: format!(
+                        "asset {id} cannot be deleted: a note in the trash names it; \
+                         restore the note and take the asset out of it first"
+                    ),
+                    by: trashed
+                        .iter()
+                        .map(|t| format!("trash/{}/{}", t.type_name, t.id))
+                        .collect(),
+                });
+            }
+        }
         if !types.is_empty() || (!by.is_empty() && !unlink) {
             let by = if types.is_empty() { by } else { types };
             return Err(Error::InUse {
@@ -212,15 +229,24 @@ impl Writer {
             });
         }
 
+        // The file goes to the asset trash, so the delete can be undone (see `asset_use`).
+        self.keep_in_trash(&asset)?;
         // Before the notes that lose the asset are indexed again, so they lose its text too.
         inner.index.forget_asset_text(id);
         let delete = vec![Change::delete(asset.path())];
         let saved = if changes.is_empty() {
-            let generation = self.commit(delete)?;
-            inner.index.advance(generation)?;
-            Vec::new()
+            self.commit(delete)
+                .and_then(|generation| Ok(inner.index.advance(generation)?))
+                .map(|()| Vec::new())
         } else {
-            self.apply_with(inner, changes, &|| Ok(()), author, delete, false)?
+            self.apply_with(inner, changes, &|| Ok(()), author, delete, false)
+        };
+        let saved = match saved {
+            Ok(saved) => saved,
+            Err(e) => {
+                self.drop_from_trash(id);
+                return Err(e);
+            }
         };
         let dir = self.vault.root().join("assets").join(id);
         let _ = std::fs::remove_dir(dir);
@@ -244,9 +270,8 @@ impl Writer {
         files.next()
     }
 
-    /// The vault paths of every note and type file whose text holds `needle`.
-    pub(crate) fn files_naming(&self, needle: &str) -> Result<Vec<String>> {
-        let mut out = Vec::new();
+    /// The vault paths of every type and note file, sorted.
+    pub(crate) fn definition_and_note_files(&self) -> Vec<String> {
         let root = self.vault.root();
         let mut files: Vec<String> = Vec::new();
         for (dir, nested) in [("types", false), ("notes", true)] {
@@ -273,7 +298,13 @@ impl Writer {
             }
         }
         files.sort();
-        for path in files {
+        files
+    }
+
+    /// The vault paths of every note and type file whose text holds `needle`.
+    pub(crate) fn files_naming(&self, needle: &str) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for path in self.definition_and_note_files() {
             if self.vault.read_text(&path)?.contains(needle) {
                 out.push(path);
             }
@@ -338,7 +369,7 @@ fn strip_blocks(body: &mut Doc, id: &str) -> bool {
     changed
 }
 
-fn missing(id: &str) -> Error {
+pub(crate) fn missing(id: &str) -> Error {
     Error::Missing(format!("asset {id} does not exist"))
 }
 

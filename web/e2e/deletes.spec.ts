@@ -104,29 +104,28 @@ test("an asset notes use is deleted after confirming, and leaves those notes", a
   const lone = await upload(admin, `lone-${t}.png`);
   const note = await createNote(admin, type, { title: `Album ${t}`, cover: used.id });
 
-  await logIn(page, "/assets");
-
-  // An asset nothing names goes after the browser's confirm.
+  // An asset nothing names goes after the browser's confirm, into the asset trash.
+  await logIn(page, `/assets/${lone.id}`);
   page.once("dialog", (d) => void d.accept());
-  await page.getByRole("button", { name: `Delete lone-${t}.png` }).click();
-  await expect(page.getByRole("status")).toHaveText(`Deleted lone-${t}.png.`);
-  await expect(page.locator(`tr[data-asset="${lone.id}"]`)).toHaveCount(0);
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByText(`Deleted lone-${t}.png.`)).toBeVisible();
+  await expect(page).toHaveURL(/\/assets$/);
   expect(existsSync(join(vaultDir(), "assets", lone.id))).toBe(false);
+  expect(existsSync(join(vaultDir(), ".vault", "asset-trash", lone.id, `lone-${t}.png`))).toBe(true);
 
-  // One a note names asks again, listing the note; cancelling keeps everything.
-  page.once("dialog", (d) => void d.accept());
-  await page.getByRole("button", { name: `Delete cover-${t}.png` }).click();
+  // One a note names asks first, listing the note; cancelling keeps everything.
+  await page.goto(`/assets/${used.id}`);
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
   const panel = page.getByRole("alertdialog", { name: `Delete cover-${t}.png` });
   await expect(panel.getByRole("link", { name: `Album ${t}` })).toHaveAttribute("href", `/notes/${note.id}`);
   await panel.getByRole("button", { name: "Cancel" }).click();
   await expect(panel).toHaveCount(0);
   expect(existsSync(join(vaultDir(), "assets", used.id))).toBe(true);
 
-  page.once("dialog", (d) => void d.accept());
-  await page.getByRole("button", { name: `Delete cover-${t}.png` }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
   await panel.getByRole("button", { name: "Remove from notes and delete" }).click();
-  await expect(page.getByRole("status")).toHaveText(`Deleted cover-${t}.png and took it out of 1 note.`);
-  await expect(page.locator(`tr[data-asset="${used.id}"]`)).toHaveCount(0);
+  await expect(page.getByText(`Deleted cover-${t}.png and took it out of 1 note.`)).toBeVisible();
+  await expect(page).toHaveURL(/\/assets$/);
   expect(existsSync(join(vaultDir(), "assets", used.id))).toBe(false);
   const after = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { note: { fields: Record<string, unknown> } };
   expect(after.note.fields.cover).toBeUndefined();

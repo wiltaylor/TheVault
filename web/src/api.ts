@@ -139,6 +139,74 @@ export interface Asset {
   path: string;
 }
 
+/** What an asset is, by its file name. */
+export type AssetKind = "image" | "pdf" | "audio" | "video" | "other";
+
+/** An asset in the library listing: with its kind, upload time and how much uses it. */
+export interface AssetSummary extends Asset {
+  kind: AssetKind;
+  content_type: string;
+  /** When it was uploaded, from its ULID; null for an id that does not read as one. */
+  uploaded_ms: number | null;
+  /** Notes, trashed notes and types using it, all told. */
+  used_by: number;
+  notes: number;
+  trashed: number;
+  types: number;
+}
+
+/** The library filters: by kind, or only what nothing uses. */
+export type AssetFilter = "all" | "image" | "pdf" | "other" | "unused";
+
+export interface AssetQuery {
+  filter?: AssetFilter;
+  q?: string;
+  /** `uploaded`, `name`, `size`, `kind` or `used`. */
+  sort?: string;
+  dir?: "asc" | "desc";
+  cursor?: string | null;
+  limit?: number;
+}
+
+export interface AssetPage {
+  assets: AssetSummary[];
+  /** Assets matching, over every page. */
+  total: number;
+  next: string | null;
+  /** The assets nothing uses, in the whole library. */
+  unused: { count: number; size: number };
+  counts: Record<"all" | "image" | "pdf" | "other" | "unused", number>;
+}
+
+/** A way a note names an asset: `field` is the asset field, or the content field holding the block. */
+export interface AssetHow {
+  field: string;
+  /** `field` for an asset field, else the block kind: `image`, `asset` or `node`. */
+  via: string;
+}
+
+/** An asset with everything that uses it. */
+export interface AssetUsage extends Omit<AssetSummary, "notes" | "trashed" | "types"> {
+  notes: { id: string; type: string; title: string; archived: boolean; how: AssetHow[] }[];
+  trashed: { id: string; type: string; title: string }[];
+  types: string[];
+}
+
+/** What a cleanup deleted, or a dry run would. */
+export interface AssetCleanup {
+  dry_run: boolean;
+  count: number;
+  size: number;
+  assets: Asset[];
+  purge_days: number;
+}
+
+/** A deleted asset that can still be restored. */
+export interface TrashedAsset extends Asset {
+  deleted_ms: number;
+  purge_ms: number;
+}
+
 /** A note pinned to the sidebar. */
 export interface Pin {
   id: string;
@@ -729,6 +797,29 @@ export const api = {
   createToken: (name: string, scope: Scope) => request<Token>("POST", "/api/tokens", { name, scope }),
   revokeToken: (name: string) => request<void>("DELETE", `/api/tokens/${enc(name)}`),
   assets: async () => (await request<{ assets: Asset[] }>("GET", "/api/assets")).assets,
+  /** One page of the asset library, filtered, searched and sorted by the server. */
+  assetLibrary: (q: AssetQuery) => {
+    const p = new URLSearchParams();
+    const f = q.filter ?? "all";
+    if (f === "unused") p.set("unused", "true");
+    else if (f !== "all") p.set("kind", f);
+    if (q.q?.trim()) p.set("q", q.q.trim());
+    p.set("sort", q.sort ?? "uploaded");
+    if (q.dir) p.set("dir", q.dir);
+    if (q.cursor) p.set("cursor", q.cursor);
+    if (q.limit) p.set("limit", String(q.limit));
+    return request<AssetPage>("GET", `/api/assets?${p}`);
+  },
+  /** Asset `id`, with every note, trashed note and type that uses it. */
+  assetUsage: (id: string) => request<AssetUsage>("GET", `/api/assets/${enc(id)}/usage`),
+  /** Give asset `id` a new file name. Notes name it by id, so none changes. */
+  renameAsset: (id: string, filename: string) => request<Asset>("PATCH", `/api/assets/${enc(id)}`, { filename }),
+  /** Delete the assets nothing uses (only those of `ids`, when given) into the asset trash. */
+  cleanupAssets: (dryRun: boolean, ids?: string[]) =>
+    request<AssetCleanup>("POST", "/api/assets/cleanup", { dry_run: dryRun, ...(ids ? { ids } : {}) }),
+  assetTrash: async () => (await request<{ assets: TrashedAsset[] }>("GET", "/api/assets/trash")).assets,
+  restoreAssets: (ids: string[]) =>
+    request<{ restored: Asset[]; failed: { id: string; error: string }[] }>("POST", "/api/assets/trash/restore", { ids }),
   /** Upload `file` as a new asset. The body is the file's bytes, unchanged. */
   uploadAsset: (file: File) =>
     request<Asset>("POST", `/api/assets?filename=${enc(file.name)}`, file),
@@ -748,6 +839,8 @@ export interface UsingNote {
   id: string;
   type: string;
   title: string;
+  /** The note is in the trash: restoring it would bring the reference back. */
+  trashed?: boolean;
 }
 
 /** The notes a 409 "in use" refusal lists, or none for any other error. */

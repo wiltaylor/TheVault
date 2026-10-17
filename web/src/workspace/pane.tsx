@@ -4,6 +4,7 @@
 import { createRouter } from "@solidjs/router";
 import { type JSX, createContext, createEffect, createMemo, on, untrack, useContext } from "solid-js";
 import { createStore } from "solid-js/store";
+import { assetIdOf, assetName, kindIcon, kindOf } from "../assetLibrary";
 import { noteTitle, noteType } from "../editor/titles";
 import { typeDef } from "../session";
 import * as M from "./model";
@@ -41,7 +42,7 @@ const NAMES: [RegExp, string][] = [
   [/^\/settings/, "Settings"],
   [/^\/search/, "Search"],
   [/^\/inbox/, "Inbox"],
-  [/^\/assets/, "Assets"],
+  [/^\/assets/, "Images and files"],
   [/^\/trash/, "Trash"],
   [/^\/archive/, "Archive"],
 ];
@@ -62,6 +63,11 @@ export function locationTitle(url: string): PageTitle {
     const type = new URLSearchParams(url.split("?")[1] ?? "").get("type") ?? "";
     const t = typeDef(type);
     return { title: `New ${t?.label.toLowerCase() ?? "note"}`, icon: t?.icon ?? null };
+  }
+  const asset = assetIdOf(path);
+  if (asset) {
+    const name = assetName(asset);
+    return { title: name ?? "File", icon: kindIcon(name ? kindOf(name) : undefined) };
   }
   const list = /^\/types\/([^/]+)$/.exec(path);
   if (list) {

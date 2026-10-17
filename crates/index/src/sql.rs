@@ -10,7 +10,7 @@ use crate::rebuild::Failure;
 
 /// Bump when the tables change. An index of another version is dropped and recreated empty, and
 /// the next rebuild fills it.
-const VERSION: i64 = 4;
+const VERSION: i64 = 5;
 
 const TABLES: &str = "
 CREATE TABLE notes (
@@ -59,6 +59,16 @@ CREATE TABLE links (
 );
 CREATE INDEX links_by_dst ON links(dst, via, field);
 
+-- `via` is `field` for an asset field, else the kind of the block naming the asset.
+CREATE TABLE asset_refs (
+  note  TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  field TEXT NOT NULL,
+  via   TEXT NOT NULL,
+  PRIMARY KEY (note, asset, field, via)
+) WITHOUT ROWID;
+CREATE INDEX asset_refs_by_asset ON asset_refs(asset, note);
+
 CREATE TABLE terms (
   taxonomy TEXT NOT NULL,
   path     TEXT NOT NULL,
@@ -89,7 +99,14 @@ CREATE TABLE meta (
 ";
 
 /// The tables [`dump`] prints. `failures` is left out: it records a rebuild, not the notes.
-const DUMPED: [&str; 5] = ["notes", "field_values", "links", "terms", "term_ancestors"];
+const DUMPED: [&str; 6] = [
+    "notes",
+    "field_values",
+    "links",
+    "asset_refs",
+    "terms",
+    "term_ancestors",
+];
 
 pub(crate) fn init(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -114,7 +131,7 @@ pub(crate) fn init(conn: &Connection) -> Result<()> {
 pub(crate) fn clear(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "DELETE FROM notes; DELETE FROM field_values; DELETE FROM links;
-         DELETE FROM terms; DELETE FROM term_ancestors; DELETE FROM failures;",
+         DELETE FROM asset_refs; DELETE FROM terms; DELETE FROM term_ancestors; DELETE FROM failures;",
     )?;
     Ok(())
 }
@@ -201,6 +218,12 @@ pub(crate) fn insert_note(conn: &Connection, n: &Note) -> Result<()> {
     for l in &n.links {
         links.execute(params![n.id, l.via, l.field, l.pos, l.dst])?;
     }
+    let mut assets = conn.prepare_cached(
+        "INSERT OR IGNORE INTO asset_refs (note, asset, field, via) VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    for a in &n.assets {
+        assets.execute(params![n.id, a.asset, a.field, a.via])?;
+    }
     Ok(())
 }
 
@@ -208,6 +231,7 @@ pub(crate) fn delete_note(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM notes WHERE id = ?1", [id])?;
     conn.execute("DELETE FROM field_values WHERE note = ?1", [id])?;
     conn.execute("DELETE FROM links WHERE src = ?1", [id])?;
+    conn.execute("DELETE FROM asset_refs WHERE note = ?1", [id])?;
     Ok(())
 }
 

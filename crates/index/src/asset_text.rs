@@ -182,6 +182,13 @@ impl AssetTexts {
         Ok(())
     }
 
+    /// Whether asset `id`'s text holds `part`, which is already lowercase.
+    pub fn matches(&self, id: &str, part: &str) -> bool {
+        self.known.get(id) == Some(&true)
+            && std::fs::read_to_string(self.path(id))
+                .is_ok_and(|t| crate::sql::contains_folded(&t, part))
+    }
+
     /// Forget asset `id`'s text.
     pub fn forget(&mut self, id: &str) {
         if self.known.remove(id).is_some() {

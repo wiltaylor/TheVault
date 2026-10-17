@@ -190,5 +190,5 @@ test("assets open from their card in the types gallery", async ({ page, admin })
   expect(shown).toBeGreaterThanOrEqual(assets.length);
   await card.getByRole("link", { name: /^Assets/ }).click();
   await expect(page).toHaveURL(/\/assets$/);
-  await expect(page.getByRole("heading", { name: "Assets" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Images and files" })).toBeVisible();
 });

@@ -30,6 +30,7 @@
 //! [`Writer::stage_delete`]: it is checked like any write, runs its own `before_*` handlers, and
 //! joins the write in progress, so it commits with it or not at all (D30).
 
+mod asset_use;
 mod assets;
 mod batch;
 mod builtin;
@@ -57,6 +58,7 @@ use schema::{Doc, Invalid, Issue, NoteLookup, NoteReport, Schema, TypeDef};
 use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, CommitStep, Vault};
 
+pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::Asset;
 pub use batch::{Item, Op, Outcome, Report};
 pub use builtin::{
@@ -72,7 +74,7 @@ pub use devices::{
 };
 pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
-pub use index::{Archived, Graph, GraphEdge, GraphNode};
+pub use index::{Archived, AssetHow, AssetUse, Graph, GraphEdge, GraphNode};
 pub use note::{
     ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, value_to_json,
 };

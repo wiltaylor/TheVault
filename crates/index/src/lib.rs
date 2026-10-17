@@ -19,6 +19,7 @@
 //! | `notes` | Note: id, type, path, title, created, updated, both again as Unix time, flagged, archived, and its fields as JSON |
 //! | `field_values` | Scalar inside a field value, including `title`, `created` and `updated`, with the type of its note |
 //! | `links` | Note reference in a field, or mention in inline text, from `src` to `dst` |
+//! | `asset_refs` | Asset a note names: in an asset field, or in the `asset` item of a block at any depth |
 //! | `terms` | Taxonomy term, with its parent, depth and display position |
 //! | `term_ancestors` | Pair of a term and itself or a term above it, for `under()` |
 //! | `failures` | Vault file the last rebuild could not index, with its diagnostic |
@@ -88,6 +89,26 @@ pub enum Update {
     },
     /// A note that was deleted.
     Delete { id: String },
+}
+
+/// A note naming an asset, from [`Index::asset_users`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetUse {
+    pub note: String,
+    pub type_name: String,
+    pub title: String,
+    pub archived: bool,
+    /// Every way the note names the asset.
+    pub how: Vec<AssetHow>,
+}
+
+/// One way a note names an asset. `via` is `field` for an asset field named `field`; otherwise
+/// it is the kind of the block naming it (`image`, `asset`, or an old canvas `node`), inside
+/// the content or canvas field `field`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetHow {
+    pub field: String,
+    pub via: String,
 }
 
 /// `index.db` and the tantivy index of one vault.
@@ -170,6 +191,59 @@ impl Index {
     /// archived note has a graph of its own. `None` when the index does not hold `id`.
     pub fn graph(&self, id: &str, limit: usize) -> Result<Option<Graph>> {
         graph::graph(&self.conn, id, limit)
+    }
+
+    /// Every indexed note naming asset `asset`, with how it does, ordered by title then id.
+    pub fn asset_users(&self, asset: &str) -> Result<Vec<AssetUse>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT r.note, n.type, n.title, n.archived, r.field, r.via
+             FROM asset_refs r JOIN notes n ON n.id = r.note
+             WHERE r.asset = ?1
+             ORDER BY n.title COLLATE NOCASE, r.note, r.field, r.via",
+        )?;
+        let rows = stmt.query_map([asset], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, bool>(3)?,
+                AssetHow {
+                    field: r.get(4)?,
+                    via: r.get(5)?,
+                },
+            ))
+        })?;
+        let mut out: Vec<AssetUse> = Vec::new();
+        for row in rows {
+            let (note, type_name, title, archived, how) = row?;
+            match out.last_mut() {
+                Some(last) if last.note == note => last.how.push(how),
+                _ => out.push(AssetUse {
+                    note,
+                    type_name,
+                    title,
+                    archived,
+                    how: vec![how],
+                }),
+            }
+        }
+        Ok(out)
+    }
+
+    /// How many indexed notes name each asset that any note names.
+    pub fn asset_use_counts(&self) -> Result<std::collections::HashMap<String, usize>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT asset, COUNT(DISTINCT note) FROM asset_refs GROUP BY asset")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Whether the text extracted from asset `id` holds `lowercase_part`, which is lowercase.
+    pub fn asset_text_matches(&self, id: &str, lowercase_part: &str) -> bool {
+        self.assets.matches(id, lowercase_part)
     }
 
     /// The SQLite connection, for `query` to read from.

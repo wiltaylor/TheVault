@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use writer::{Asset, Writer};
+use writer::{Asset, AssetSummary, TrashedAsset, Writer};
 
 use crate::error::in_use;
 use crate::{ApiError, Caller, blocking};
@@ -74,12 +74,305 @@ pub async fn put(
     Ok((status, Json(asset_json(&asset))).into_response())
 }
 
-/// `GET /api/assets`.
-pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
-    let assets = blocking(w, |w| w.assets()).await?;
-    Ok(Json(
-        json!({ "assets": assets.iter().map(asset_json).collect::<Vec<_>>() }),
-    ))
+/// The milliseconds since the Unix epoch in a ULID: when the asset was uploaded.
+fn ulid_ms(id: &str) -> Option<u64> {
+    const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    id.get(..10)?.bytes().try_fold(0u64, |acc, b| {
+        let d = CROCKFORD
+            .iter()
+            .position(|&c| c == b.to_ascii_uppercase())?;
+        Some(acc * 32 + d as u64)
+    })
+}
+
+/// What a file is, by its name: `image`, `pdf`, `audio`, `video` or `other`.
+fn kind_of(filename: &str) -> &'static str {
+    let ty = content_type(filename);
+    if ty == "application/pdf" {
+        "pdf"
+    } else if let Some(k) = ["image", "audio", "video"]
+        .into_iter()
+        .find(|k| ty.starts_with(&format!("{k}/")))
+    {
+        k
+    } else {
+        "other"
+    }
+}
+
+fn summary_json(s: &AssetSummary) -> Value {
+    let mut v = asset_json(&s.asset);
+    v["kind"] = json!(kind_of(&s.asset.filename));
+    v["content_type"] = json!(content_type(&s.asset.filename));
+    v["uploaded_ms"] = json!(ulid_ms(&s.asset.id));
+    v["used_by"] = json!(s.used_by());
+    v["notes"] = json!(s.notes);
+    v["trashed"] = json!(s.trashed);
+    v["types"] = json!(s.types);
+    v
+}
+
+#[derive(Deserialize, Default)]
+pub struct ListQuery {
+    /// `image`, `pdf` or `other` (neither).
+    kind: Option<String>,
+    /// Only assets nothing uses.
+    unused: Option<bool>,
+    /// Words in the file name, or in a PDF's text.
+    q: Option<String>,
+    /// `uploaded` (the default), `name`, `size`, `kind` or `used`.
+    sort: Option<String>,
+    /// `asc` or `desc`. Uploaded sorts newest first by default, everything else ascending.
+    dir: Option<String>,
+    /// The `next` of the previous page.
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+/// `GET /api/assets[?kind=&unused=&q=&sort=&dir=&cursor=&limit=]`. With no parameters, every
+/// asset oldest first. Each asset carries its kind, upload time and how many notes, trashed
+/// notes and types use it; `unused` totals the assets nothing uses in the whole library, and
+/// `counts` how many of the assets the search finds each filter would show.
+pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
+    let summaries = blocking(w.clone(), |w| w.asset_summaries()).await?;
+    let unused: Vec<&AssetSummary> = summaries.iter().filter(|s| s.used_by() == 0).collect();
+    let unused_json = json!({
+        "count": unused.len(),
+        "size": unused.iter().map(|s| s.asset.size).sum::<u64>(),
+    });
+    let plain = q.kind.is_none()
+        && q.unused.is_none()
+        && q.q.is_none()
+        && q.sort.is_none()
+        && q.cursor.is_none()
+        && q.limit.is_none();
+    let text =
+        q.q.as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_lowercase);
+    let mut found = summaries;
+    if let Some(t) = text {
+        found = blocking(w, move |w| {
+            Ok::<_, writer::Error>(
+                found
+                    .into_iter()
+                    .filter(|s| {
+                        s.asset.filename.to_lowercase().contains(&t)
+                            || (kind_of(&s.asset.filename) == "pdf"
+                                && w.asset_text_holds(&s.asset.id, &t))
+                    })
+                    .collect(),
+            )
+        })
+        .await?;
+    }
+    // How many of what the search found each filter would show.
+    let mut counts = serde_json::Map::new();
+    counts.insert("all".into(), json!(found.len()));
+    for k in ["image", "pdf", "other"] {
+        let n = found
+            .iter()
+            .filter(|s| matches_kind(&s.asset.filename, k))
+            .count();
+        counts.insert(k.into(), json!(n));
+    }
+    let unused_found = found.iter().filter(|s| s.used_by() == 0).count();
+    counts.insert("unused".into(), json!(unused_found));
+    let mut picked: Vec<AssetSummary> = found
+        .into_iter()
+        .filter(|s| {
+            q.kind
+                .as_deref()
+                .is_none_or(|k| matches_kind(&s.asset.filename, k))
+        })
+        .filter(|s| q.unused != Some(true) || s.used_by() == 0)
+        .collect();
+    if !plain {
+        sort_summaries(&mut picked, q.sort.as_deref(), q.dir.as_deref());
+    }
+    let total = picked.len();
+    let start = q
+        .cursor
+        .as_deref()
+        .and_then(|c| c.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(total);
+    let end = q.limit.map_or(total, |l| (start + l.max(1)).min(total));
+    let next = (end < total).then(|| end.to_string());
+    Ok(Json(json!({
+        "assets": picked[start..end].iter().map(summary_json).collect::<Vec<_>>(),
+        "total": total,
+        "next": next,
+        "unused": unused_json,
+        "counts": counts,
+    })))
+}
+
+/// Whether the file is of `kind` as a filter means it: `other` is neither an image nor a PDF,
+/// and an empty kind or `all` is anything.
+fn matches_kind(filename: &str, kind: &str) -> bool {
+    let k = kind_of(filename);
+    match kind {
+        "image" | "pdf" => k == kind,
+        "other" => k != "image" && k != "pdf",
+        _ => true,
+    }
+}
+
+fn sort_summaries(list: &mut [AssetSummary], sort: Option<&str>, dir: Option<&str>) {
+    let sort = sort.unwrap_or("uploaded");
+    let desc = match dir {
+        Some("desc") => true,
+        Some("asc") => false,
+        _ => sort == "uploaded",
+    };
+    let name = |s: &AssetSummary| s.asset.filename.to_lowercase();
+    list.sort_by(|a, b| {
+        let o = match sort {
+            "name" => name(a).cmp(&name(b)),
+            "size" => a.asset.size.cmp(&b.asset.size),
+            "kind" => kind_of(&a.asset.filename)
+                .cmp(kind_of(&b.asset.filename))
+                .then_with(|| ext(&a.asset.filename).cmp(&ext(&b.asset.filename))),
+            "used" => a.used_by().cmp(&b.used_by()),
+            _ => std::cmp::Ordering::Equal,
+        };
+        let o = o.then_with(|| a.asset.id.cmp(&b.asset.id));
+        if desc { o.reverse() } else { o }
+    });
+}
+
+fn ext(filename: &str) -> String {
+    filename
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+/// `GET /api/assets/{id}/usage`: the asset, and every note, trashed note and type using it.
+pub async fn usage(State(w): Shared, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
+    let (asset, usage) = blocking(w, move |w| {
+        let asset = w.asset_info(&id)?;
+        Ok::<_, writer::Error>((asset, w.asset_usage(&id)?))
+    })
+    .await?;
+    let s = AssetSummary {
+        notes: usage.notes.len(),
+        trashed: usage.trashed.len(),
+        types: usage.types.len(),
+        asset,
+    };
+    let mut body = summary_json(&s);
+    body["notes"] = usage
+        .notes
+        .iter()
+        .map(|n| {
+            let how: Vec<Value> = n
+                .how
+                .iter()
+                .map(|h| json!({ "field": h.field, "via": h.via }))
+                .collect();
+            json!({
+                "id": n.note,
+                "type": n.type_name,
+                "title": n.title,
+                "archived": n.archived,
+                "how": how,
+            })
+        })
+        .collect();
+    body["trashed"] = usage
+        .trashed
+        .iter()
+        .map(|t| json!({ "id": t.id, "type": t.type_name, "title": t.title }))
+        .collect();
+    body["types"] = json!(usage.types);
+    Ok(Json(body))
+}
+
+#[derive(Deserialize)]
+pub struct RenameBody {
+    filename: String,
+}
+
+/// `PATCH /api/assets/{id}` with `{"filename": …}`: rename the file. Notes name assets by id,
+/// so none changes.
+pub async fn rename(
+    State(w): Shared,
+    Path(id): Path<String>,
+    Json(b): Json<RenameBody>,
+) -> Result<Json<Value>, ApiError> {
+    let asset = blocking(w, move |w| w.rename_asset(&id, &b.filename)).await?;
+    Ok(Json(asset_json(&asset)))
+}
+
+#[derive(Deserialize, Default)]
+pub struct CleanupBody {
+    #[serde(default)]
+    dry_run: bool,
+    /// Only these, of the assets nothing uses: the ones a dry run listed.
+    ids: Option<Vec<String>>,
+}
+
+/// `POST /api/assets/cleanup` with `{"dry_run": bool, "ids": [...]}`: delete, in one commit,
+/// every asset nothing uses (or those of them `ids` names) into the asset trash.
+pub async fn cleanup(
+    State(w): Shared,
+    body: Option<Json<CleanupBody>>,
+) -> Result<Json<Value>, ApiError> {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let dry_run = b.dry_run;
+    let assets = blocking(w, move |w| w.cleanup_assets(b.ids.as_deref(), dry_run)).await?;
+    Ok(Json(json!({
+        "dry_run": dry_run,
+        "count": assets.len(),
+        "size": assets.iter().map(|a| a.size).sum::<u64>(),
+        "assets": assets.iter().map(asset_json).collect::<Vec<_>>(),
+        "purge_days": writer::ASSET_TRASH_DAYS,
+    })))
+}
+
+fn trashed_json(t: &TrashedAsset) -> Value {
+    let mut v = asset_json(&t.asset);
+    v["deleted_ms"] = json!(t.deleted_ms);
+    v["purge_ms"] = json!(t.purge_ms);
+    v
+}
+
+/// `GET /api/assets/trash`: deleted assets that can still be restored.
+pub async fn trash(State(w): Shared) -> Result<Json<Value>, ApiError> {
+    let list = blocking(w, |w| Ok::<_, writer::Error>(w.asset_trash())).await?;
+    Ok(Json(json!({
+        "assets": list.iter().map(trashed_json).collect::<Vec<_>>(),
+        "purge_days": writer::ASSET_TRASH_DAYS,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct RestoreBody {
+    ids: Vec<String>,
+}
+
+/// `POST /api/assets/trash/restore` with `{"ids": [...]}`: bring deleted assets back. Each id
+/// that cannot be restored is listed under `failed` with why.
+pub async fn restore(
+    State(w): Shared,
+    Json(b): Json<RestoreBody>,
+) -> Result<Json<Value>, ApiError> {
+    let (restored, failed) = blocking(w, move |w| {
+        let mut restored = Vec::new();
+        let mut failed = Vec::new();
+        for id in &b.ids {
+            match w.restore_asset(id) {
+                Ok(a) => restored.push(asset_json(&a)),
+                Err(e) => failed.push(json!({ "id": id, "error": e.to_string() })),
+            }
+        }
+        Ok::<_, writer::Error>((restored, failed))
+    })
+    .await?;
+    Ok(Json(json!({ "restored": restored, "failed": failed })))
 }
 
 /// `GET /api/assets/{id}`: the file's bytes. A `Range: bytes=…` header asking for one range
@@ -211,7 +504,9 @@ pub struct DeleteQuery {
 }
 
 /// `DELETE /api/assets/{id}[?unlink=true]`. Notes naming the asset refuse the delete, listing
-/// them, unless `unlink` is set: then they lose their references to it in the same commit.
+/// them, unless `unlink` is set: then they lose their references to it in the same commit. A
+/// note in the trash naming it always refuses, as `asset_in_trash`. The file goes to the asset
+/// trash, from which `POST /api/assets/trash/restore` brings it back.
 pub async fn delete(
     State(w): Shared,
     Caller(author): Caller,
@@ -225,6 +520,8 @@ pub async fn delete(
     .await?;
     let mut body = asset_json(&asset);
     body["deleted"] = json!(true);
+    body["trashed"] = json!(true);
+    body["purge_days"] = json!(writer::ASSET_TRASH_DAYS);
     body["notes"] = saved
         .iter()
         .map(|s| json!({ "id": s.id, "type": s.type_name, "version": s.version }))

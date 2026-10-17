@@ -186,7 +186,36 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/scripts/{name}",
         "Delete a script no handler or task names",
     ),
-    ("GET", "/api/assets", "Every uploaded asset"),
+    (
+        "GET",
+        "/api/assets",
+        "Uploaded assets with their use counts; ?kind=, ?unused=, ?q=, ?sort=, ?dir=, ?cursor=, ?limit=",
+    ),
+    (
+        "POST",
+        "/api/assets/cleanup",
+        "Delete every asset nothing uses into the asset trash; {dry_run, ids} to preview or narrow",
+    ),
+    (
+        "GET",
+        "/api/assets/trash",
+        "Deleted assets that can still be restored, for 30 days",
+    ),
+    (
+        "POST",
+        "/api/assets/trash/restore",
+        "Restore deleted assets by id from the asset trash",
+    ),
+    (
+        "GET",
+        "/api/assets/{id}/usage",
+        "The asset and every note, trashed note and type using it",
+    ),
+    (
+        "PATCH",
+        "/api/assets/{id}",
+        "Rename an asset's file; notes name it by id and are unchanged",
+    ),
     (
         "POST",
         "/api/assets",

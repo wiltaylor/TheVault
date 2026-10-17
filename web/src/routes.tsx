@@ -4,6 +4,7 @@ import { Navigate, Route } from "@solidjs/router";
 import { Secrets, Tokens } from "./pages/Access";
 import { Archive } from "./pages/Archive";
 import { Assets } from "./pages/Assets";
+import { AssetView } from "./pages/AssetView";
 import { DailyNotes } from "./pages/DailyNotes";
 import { Devices } from "./pages/Devices";
 import { Inbox } from "./pages/Inbox";
@@ -31,6 +32,7 @@ export function paneRoutes() {
       <Route path="/notes/:id" component={NoteView} />
       <Route path="/notes/:id/history" component={NoteHistoryRedirect} />
       <Route path="/assets" component={Assets} />
+      <Route path="/assets/:id" component={AssetView} />
       <Route
         path={["/tasks", "/tasks/new", "/tasks/:name", "/secrets", "/tokens", "/taxonomies", "/taxonomies/new", "/taxonomies/:name"]}
         component={MovedToSettings}

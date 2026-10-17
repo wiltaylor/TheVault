@@ -180,17 +180,17 @@ test("an asset field shows a PDF's first page, which opens the viewer over the p
   await expect(page.getByTestId("pdf-overlay")).toHaveCount(0);
 });
 
-test("the Assets page shows a PDF's first page and opens it", async ({ page, admin }) => {
+test("the images and files library shows a PDF's first page, and its page opens it in the viewer", async ({ page, admin }) => {
   const pdf = await uploadPdf(admin);
   await logIn(page, "/assets");
-  const row = activePane(page).locator(`tr[data-asset="${pdf.id}"]`);
-  const thumb = row.getByRole("button", { name: `View ${pdf.name}` });
+  await activePane(page).getByRole("searchbox", { name: "Search images and files" }).fill(pdf.name);
+  const card = activePane(page).locator(`[data-asset="${pdf.id}"]`);
+  const thumb = card.getByTestId("pdf-thumb");
   await expect(thumb).toBeVisible();
-  // The thumbnail is drawn once it scrolls into view; other tests' assets come first.
-  await thumb.scrollIntoViewIfNeeded();
   await expect.poll(() => thumb.locator("img").evaluate((i) => (i as HTMLImageElement).naturalWidth).catch(() => 0)).toBeGreaterThan(0);
-  await thumb.click();
-  const viewer = page.getByTestId("pdf-overlay").getByTestId("pdf-viewer");
+  await card.getByRole("link", { name: pdf.name }).click();
+  await expect(page).toHaveURL(new RegExp(`/assets/${pdf.id}$`));
+  const viewer = activePane(page).getByTestId("pdf-viewer");
   await expect(viewer.getByTestId("pdf-page")).toHaveText("1 / 3");
   await expect.poll(() => pageDrawn(viewer, 1)).toBe(true);
 });

@@ -205,6 +205,14 @@ pub fn in_use(w: &Writer, e: Error) -> ApiError {
     let mut err = ApiError::from(e);
     let mut notes: Vec<Value> = Vec::new();
     for path in &paths {
+        if let Some((type_name, id)) = path
+            .strip_prefix("trash/")
+            .and_then(|rest| rest.split_once('/'))
+        {
+            let title = w.trashed_title(id).unwrap_or_default();
+            notes.push(json!({ "id": id, "type": type_name, "title": title, "trashed": true }));
+            continue;
+        }
         let Some((type_name, id)) = path
             .strip_prefix("notes/")
             .and_then(|rest| rest.split_once(".wcl"))
