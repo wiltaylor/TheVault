@@ -2,7 +2,7 @@
 id: '88'
 title: 'Android app: a device event whose handler fails for good is never shown anywhere'
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -23,3 +23,7 @@ Acceptance criteria:
 - `./dev just check` and the Android unit tests pass.
 
 ## Worklog
+
+### 2026-10-17T20:46:33Z — /work
+
+Claimed.

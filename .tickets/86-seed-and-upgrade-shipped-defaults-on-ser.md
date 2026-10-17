@@ -3,8 +3,8 @@ id: '86'
 title: 'Seed and upgrade shipped defaults on server start: missing built-in fields,
   device file and scripts, unedited shipped scripts, numbered upgrade steps'
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Seed and upgrade shipped defaults on server start: missing built-in fields, device file and scripts, unedited shipped scripts, numbered upgrade steps
@@ -28,3 +28,19 @@ Acceptance criteria:
 - `./dev just check` passes.
 
 ## Worklog
+
+### 2026-10-17T20:46:28Z — /work
+
+Claimed.
+
+### 2026-10-17T21:01:13Z — wil
+
+Verified set to verified.
+
+### 2026-10-17T21:01:13Z — wil
+
+Done on ticket/86 (ea89720). Code: crates/writer/src/shipped.rs (Writer::upgrade_shipped_defaults(Upkeep), SHIPPED_FILES hash lists, UPGRADE_STEPS registry: add a step with one line, see its doc comment), state.db v11 tables shipped_files and upgrades (crates/state/src/shipped.rs). Choices: steps run before seeding so a rename step sees the old field name; steps run only on the home server; the embedded writer (Upkeep::Device) seeds types and files but makes no notifications, since device notifications move to the server. A deleted device file or script is re-added on next start (documented). A shipped field the user removed from a built-in type is re-added on next start (documented: hide it instead); not tracked per field. A user-edited file with no record of what the server wrote is treated as based on an older version and notified once. Changing a shipped device file/script now requires appending its new hash (a unit test fails otherwise). testkit gained TestServer::restart. Tests that assumed a vault starts with no device file or scripts were adjusted (device_commands, completeness, phone_types, fleeting).
+
+### 2026-10-17T21:01:13Z — wil
+
+Status set to done.

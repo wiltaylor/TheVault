@@ -3,7 +3,7 @@ id: '89'
 title: 'Android contacts read and write every detail: postal addresses, organisation,
   job title, birthday, websites, note, nickname, labels, photo'
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -28,3 +28,7 @@ Acceptance criteria:
 - The Android unit tests and `./dev just check` pass.
 
 ## Worklog
+
+### 2026-10-17T20:46:43Z — /work
+
+Claimed.
