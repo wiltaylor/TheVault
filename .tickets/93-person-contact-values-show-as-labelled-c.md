@@ -3,7 +3,7 @@ id: '93'
 title: Person contact values show as labelled chips you can copy and edit, and image
   fields are a tile with a placeholder that picks or uploads an image
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -45,3 +45,7 @@ Acceptance criteria:
 - `./dev just check` passes.
 
 ## Worklog
+
+### 2026-10-17T22:39:05Z — /work
+
+Claimed.
