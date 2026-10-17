@@ -209,14 +209,20 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve()
     }
 
-    /** A tapped notification: mark it read and show its note or page. */
+    /**
+     * A tapped notification: mark a server notification read, and show its note or page. The
+     * phone's own notifications, such as [CaptureProblems], carry a page and no server id.
+     */
     private fun opened(intent: Intent?) {
-        val id = intent?.getStringExtra(NotificationMirror.EXTRA_ID) ?: return
+        if (intent == null) return
+        val id = intent.getStringExtra(NotificationMirror.EXTRA_ID)
         val path = intent.getStringExtra(NotificationMirror.EXTRA_PATH)
         intent.removeExtra(NotificationMirror.EXTRA_ID)
         intent.removeExtra(NotificationMirror.EXTRA_PATH)
-        MarkReadWorker.enqueue(activity.applicationContext, id)
-        if (path != null) webView?.let { view -> view.post { view.loadUrl(ORIGIN + path) } }
+        if (id != null) MarkReadWorker.enqueue(activity.applicationContext, id)
+        if (path != null && path.startsWith("/") && !path.startsWith("//")) {
+            webView?.let { view -> view.post { view.loadUrl(ORIGIN + path) } }
+        }
     }
 
     companion object {

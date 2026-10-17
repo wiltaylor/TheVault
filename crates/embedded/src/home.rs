@@ -63,6 +63,11 @@ pub(crate) enum Route {
     AppSync,
     /// `POST /api/app/sync`: ask the app's sync loop for a round now.
     AppSyncNow,
+    /// `GET /api/app/device-events`: the device events that failed or were skipped, for
+    /// "Capture problems".
+    AppDeviceEvents,
+    /// `POST /api/app/device-events/{id}/retry` (`retry` true) or `.../dismiss`.
+    AppDeviceEvent { id: i64, retry: bool },
     /// `GET /api/version`: the home server's version, read from its `/api/sync/info`, which
     /// every home server answers.
     ServerVersion,
@@ -96,6 +101,20 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         if *method == Method::POST {
             return Route::AppSyncNow;
         }
+    }
+    if path == "/api/app/device-events" && get {
+        return Route::AppDeviceEvents;
+    }
+    if *method == Method::POST
+        && let Some(rest) = path.strip_prefix("/api/app/device-events/")
+        && let Some((id, action)) = rest.split_once('/')
+        && let Ok(id) = id.parse::<i64>()
+        && (action == "retry" || action == "dismiss")
+    {
+        return Route::AppDeviceEvent {
+            id,
+            retry: action == "retry",
+        };
     }
     if path == "/api/version" && get {
         return Route::ServerVersion;
@@ -546,6 +565,22 @@ mod tests {
         assert_eq!(route(&get, "/api/app"), Route::App);
         assert_eq!(route(&get, "/api/app/sync"), Route::AppSync);
         assert_eq!(route(&post, "/api/app/sync"), Route::AppSyncNow);
+        assert_eq!(
+            route(&get, "/api/app/device-events"),
+            Route::AppDeviceEvents
+        );
+        assert_eq!(
+            route(&post, "/api/app/device-events/7/retry"),
+            Route::AppDeviceEvent { id: 7, retry: true }
+        );
+        assert_eq!(
+            route(&post, "/api/app/device-events/7/dismiss"),
+            Route::AppDeviceEvent {
+                id: 7,
+                retry: false
+            }
+        );
+        assert_eq!(route(&post, "/api/app/device-events/x/retry"), Route::Local);
         assert_eq!(route(&get, "/api/version"), Route::ServerVersion);
         assert_eq!(route(&get, "/api/sync/info"), Route::Local);
     }

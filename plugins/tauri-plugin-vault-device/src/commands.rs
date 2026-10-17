@@ -77,6 +77,41 @@ pub fn report(link: &Link, id: &str, body: &Value) -> anyhow::Result<bool> {
     }
 }
 
+/// Tell the home server of each device event that failed for good and has not been reported,
+/// at `POST /api/devices/{id}/event-failures`, which adds one notification under the bell. Each
+/// is reported once: an answer the server will never accept (a 4xx) counts as reported too, and
+/// a server that cannot be reached leaves the rest for the next round. Answers how many the
+/// server took.
+pub fn report_failures(link: &Link, runtime: &DeviceRuntime) -> anyhow::Result<usize> {
+    let mut took = 0;
+    for e in runtime.unreported_failures()? {
+        let rb = client()?
+            .post(format!(
+                "{}/api/devices/{}/event-failures",
+                link.server_url, link.device_id
+            ))
+            .json(&e.problem_json());
+        let res = send(link, rb)?;
+        let status = res.status();
+        if status.is_success() {
+            took += 1;
+        } else if status.is_client_error()
+            && status != StatusCode::UNAUTHORIZED
+            && status != StatusCode::TOO_MANY_REQUESTS
+        {
+            log::warn!(
+                "the home server refused the failure of device event {}: {:#}",
+                e.id,
+                refused(res)
+            );
+        } else {
+            return Err(refused(res));
+        }
+        runtime.mark_reported(e.id)?;
+    }
+    Ok(took)
+}
+
 /// Run every pending command of `link`'s device through `runtime`, after taking the device's
 /// settings from the server. Answers what ran, `[{ id, name, status, result }]`, in order. It
 /// blocks while the commands run.
@@ -102,7 +137,7 @@ pub fn run(link: &Link, runtime: &DeviceRuntime) -> anyhow::Result<Value> {
             last = Some(Instant::now());
             let body = json!({ "status": "delivered", "result": { "progress": progress } });
             if let Err(e) = report(link, id, &body) {
-                eprintln!("progress of command {id} not reported: {e:#}");
+                log::warn!("progress of command {id} not reported: {e:#}");
             }
         });
         let body = ran.body();

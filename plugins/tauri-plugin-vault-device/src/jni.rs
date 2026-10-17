@@ -377,6 +377,22 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_events<'loca
     })
 }
 
+/// `VaultCore.newFailures(): String`: the device events that failed for good since the last call,
+/// oldest first, each answered once, as a JSON list of `{ id, event, at, status, attempts,
+/// message, who }`, for the phone to announce.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_newFailures<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    answer(&mut env, |_| {
+        let events = core()?.runtime()?.new_failures()?;
+        Ok(Some(
+            Json::from_iter(events.iter().map(QueuedEvent::problem_json)).to_string(),
+        ))
+    })
+}
+
 /// `VaultCore.putAsset(filename: String, bytes: ByteArray): String`: store a file in the local
 /// vault, such as an MMS part. Answers `{ asset, filename, size }`.
 #[unsafe(no_mangle)]

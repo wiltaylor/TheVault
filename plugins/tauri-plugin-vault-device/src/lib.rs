@@ -21,6 +21,7 @@ use tauri::{AppHandle, Manager, Runtime};
 pub mod commands;
 pub mod core;
 pub mod jni;
+pub mod logging;
 pub mod notify;
 pub mod pair;
 pub mod share;
@@ -157,7 +158,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 // before any window can say why.
                 Err(e) => {
                     let failure = CoreFailure(format!("opening {}: {e:#}", vault.display()));
-                    eprintln!("TheVault could not open its local vault: {}", failure.0);
+                    log::error!("TheVault could not open its local vault: {}", failure.0);
                     app.manage(failure);
                 }
             }

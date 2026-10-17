@@ -809,3 +809,64 @@ fn settings_queues_import_history_only_when_declared_and_enabled_and_sees_its_pr
         409,
     );
 }
+
+#[test]
+fn a_device_event_that_failed_for_good_becomes_one_bell_notification_from_the_device() {
+    let api = Api::start();
+    let (pixel, phone) = api.pair("Pixel");
+    let (_, other) = api.pair("Nokia");
+    let failure = json!({
+        "id": 12,
+        "event": "sms_received",
+        "at": 1_767_573_000_000_i64,
+        "who": "Ada Lovelace",
+        "message": "the message note could not be written",
+        "attempts": 3,
+    });
+    let path = format!("/api/devices/{pixel}/event-failures");
+    let made = send(api.req(&phone, "POST", &path).json(&failure), 201);
+    assert_eq!(made["source"], format!("device:{pixel}"));
+
+    let list = send(api.admin("GET", "/api/notifications"), 200);
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{list}");
+    let n = &items[0];
+    assert_eq!(n["source"], format!("device:{pixel}"));
+    assert_eq!(n["title"], "A message could not be saved");
+    let body = n["body"].as_str().unwrap();
+    for part in [
+        "Ada Lovelace",
+        "Pixel",
+        "the message note could not be written",
+        "3",
+    ] {
+        assert!(body.contains(part), "{part:?} in {body:?}");
+    }
+    assert_eq!(n["url"], "/settings/devices#this-device");
+    assert_eq!(n["read"], Value::Null);
+    assert_eq!(list["unread"], 1);
+
+    // Another device may not report for it, and the event must be a device event.
+    send(api.req(&other, "POST", &path).json(&failure), 403);
+    let mut bad = failure.clone();
+    bad["event"] = json!("sms_deleted");
+    send(api.req(&phone, "POST", &path).json(&bad), 400);
+    send(
+        api.req(
+            &phone,
+            "POST",
+            "/api/devices/01NODEVICE0000000000000000/event-failures",
+        )
+        .json(&failure),
+        404,
+    );
+    let list = send(api.admin("GET", "/api/notifications"), 200);
+    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+
+    // A call's failure says so.
+    let mut call = failure.clone();
+    call["event"] = json!("call_ended");
+    call["who"] = Value::Null;
+    let made = send(api.req(&phone, "POST", &path).json(&call), 201);
+    assert_eq!(made["title"], "A call could not be saved");
+}

@@ -132,6 +132,14 @@ object VaultCore {
     @JvmStatic
     external fun runPending(): String
 
+    /**
+     * The device events whose handler failed on every pass since the last call, oldest first,
+     * each answered once, as a JSON list of `{ id, event, at, status, attempts, message, who }`,
+     * for [CaptureProblems] to announce.
+     */
+    @JvmStatic
+    external fun newFailures(): String
+
     /** Every event in the queue, oldest first, with its payload, as a JSON list. */
     @JvmStatic
     external fun events(): String

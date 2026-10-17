@@ -48,7 +48,11 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         }
         if (!paired) return Result.success()
         return try {
-            Result.success(workDataOf(REPORT to VaultCore.sync()))
+            val report = VaultCore.sync()
+            // The round may have run device events, the person changes it pulled; it reported
+            // the failures among them to the home server, and the phone says so too.
+            CaptureProblems.announce(applicationContext)
+            Result.success(workDataOf(REPORT to report))
         } catch (e: IllegalStateException) {
             val message = e.message ?: "sync failed"
             if (message.contains(UPDATE_THE_APP)) {

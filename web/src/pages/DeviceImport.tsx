@@ -15,6 +15,7 @@ import {
   permissionName,
   thisPhone,
 } from "../deviceImport";
+import { CaptureProblems, CaptureProblemsBadge } from "./CaptureProblems";
 import { errorText } from "./TypeEditor";
 
 /** The command that asks a phone to import its history (D22). */
@@ -139,7 +140,9 @@ function MissingPermissions(props: { permissions: string[]; here: boolean }) {
 /**
  * Settings > Devices "This device", inside the Android app: import messages, calls and contacts
  * from this phone over a range of dates, at any time, and check for new ones now. A message or
- * call that already has a note is left alone; one whose note was deleted gets a note again.
+ * call that already has a note is left alone; one whose note was deleted gets a note again. Its
+ * "Capture problems" lists the device events that failed or were skipped, and its heading carries
+ * the count of failed ones.
  */
 export function ThisDevice() {
   const [choice, setChoice] = createSignal<ImportChoice>(defaultChoice());
@@ -212,7 +215,9 @@ export function ThisDevice() {
 
   return (
     <section class="field-card this-device-import" id="this-device" ref={section} aria-label="This device">
-      <h2>This device</h2>
+      <h2>
+        This device <CaptureProblemsBadge />
+      </h2>
       <p class="muted">
         Capture files new messages and calls as they arrive. To bring in what is already on the phone, or notes you
         deleted, import from the phone. Messages and calls that already have a note are left alone.
@@ -243,6 +248,7 @@ export function ThisDevice() {
           {error()}
         </p>
       </Show>
+      <CaptureProblems />
     </section>
   );
 }

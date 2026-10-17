@@ -408,7 +408,7 @@ impl DeviceRuntime {
                 k.notes += e.notes.len() as u64;
             }
             EventStatus::Skipped => k.skipped += 1,
-            EventStatus::Queued | EventStatus::Failed => {
+            EventStatus::Queued | EventStatus::Failed | EventStatus::Dismissed => {
                 k.failed += 1;
                 if let Some(m) = e.message {
                     k.error.get_or_insert(m);

@@ -103,14 +103,17 @@ object CaptureWork {
 
 /**
  * Runs the queued device events' handlers in the Rust core, then has the notes they wrote reach
- * the home server soon ([SyncWorker.soon]). Before pairing the events wait.
+ * the home server soon ([SyncWorker.soon]). An event that failed for good is announced on the
+ * phone ([CaptureProblems]) and reported to the home server by that round. Before pairing the
+ * events wait.
  */
 class RunEventsWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
     override fun doWork(): Result = try {
         val app = applicationContext
         if (Device.openCore(app) && Device.deviceId(app) != null) {
             VaultCore.runPending()
-            if (JSONObject(VaultCore.status()).optInt("pending") > 0) SyncWorker.soon(app)
+            val failed = CaptureProblems.announce(app)
+            if (failed > 0 || JSONObject(VaultCore.status()).optInt("pending") > 0) SyncWorker.soon(app)
         }
         Result.success()
     } catch (e: Exception) {

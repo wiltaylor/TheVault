@@ -11,6 +11,10 @@
 //! server scripts queued for it from `GET /api/devices/{id}/commands?status=pending` and reports
 //! on each at `POST /api/devices/{id}/commands/{cid}/result` (D22). Settings > Devices queues one
 //! itself at `POST /api/devices/{id}/commands`, as "Import from phone" does.
+//!
+//! A device reports each device event whose handler failed for good at
+//! `POST /api/devices/{id}/event-failures`, which adds one notification under the bell from
+//! `device:<id>`, so the web app shows it too.
 
 use std::sync::Arc;
 
@@ -690,6 +694,102 @@ pub async fn command_result(
     })
     .await?;
     Ok(Json(writer::command_json(&command)))
+}
+
+// ---- device event failures ------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct FailureBody {
+    event: String,
+    /// Who the event is from or about, as the device shows it.
+    #[serde(default)]
+    who: Option<String>,
+    /// The handler's error.
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    attempts: Option<i64>,
+}
+
+/// What failed to be saved, by device event: the bell's title.
+fn failure_title(event: &str) -> &'static str {
+    match event {
+        "call_ended" => "A call could not be saved",
+        "contact_changed" | "contact_deleted" => "A contact change could not be saved",
+        "share_received" => "A share could not be saved",
+        _ => "A message could not be saved",
+    }
+}
+
+/// The page the notification opens: the app's Settings > Devices > This device.
+const FAILURE_URL: &str = "/settings/devices#this-device";
+
+/// The longest handler message a failure notification carries, in characters.
+const MAX_FAILURE_MESSAGE: usize = 2000;
+
+/// `POST /api/devices/{id}/event-failures`: the device reports a device event whose handler
+/// failed on every pass, `{ event, who, message, attempts }`; other members, such as the
+/// device's `id` and `at` for the event, are ignored. Adds one notification under the
+/// bell from `device:<id>` that opens Settings > Devices. Only the device itself or an admin may.
+/// Answers 201 with the notification.
+pub async fn event_failure(
+    State(w): Shared,
+    Caller(author): Caller,
+    Extension(GrantedScope(scope)): Extension<GrantedScope>,
+    Path(id): Path<String>,
+    Json(body): Json<FailureBody>,
+) -> Result<Response, ApiError> {
+    if !DEVICE_EVENTS.contains(&body.event.as_str()) {
+        return Err(ApiError::bad_request(format!(
+            "{:?} is not a device event: {}",
+            body.event,
+            DEVICE_EVENTS.join(", ")
+        )));
+    }
+    let made = blocking(w, move |w| {
+        let device = w.state().device(&id)?;
+        own_or_admin(&device, &author, scope, "report its event failures")?;
+        let mut what = body.event.clone();
+        if let Some(who) = body.who.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            what.push_str(&format!(" from {who}"));
+        }
+        let mut text = format!("{what} on {}", device.name);
+        match body.attempts {
+            Some(n) => text.push_str(&format!(" failed {n} times")),
+            None => text.push_str(" failed"),
+        }
+        if let Some(m) = body
+            .message
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let m: String = m.chars().take(MAX_FAILURE_MESSAGE).collect();
+            text.push_str(&format!(": {m}"));
+        }
+        text.push_str(". Retry or dismiss it in the app's Settings > Devices > This device.");
+        let n = w.notify(&state::NewNotification {
+            title: failure_title(&body.event).to_owned(),
+            body: Some(text),
+            note_id: None,
+            url: Some(FAILURE_URL.to_owned()),
+            source: format!("device:{}", device.id),
+        })?;
+        Ok::<_, ApiError>(n)
+    })
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": made.id,
+            "created": made.created_ms,
+            "title": made.title,
+            "body": made.body,
+            "url": made.url,
+            "source": made.source,
+        })),
+    )
+        .into_response())
 }
 
 #[cfg(test)]

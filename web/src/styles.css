@@ -3044,6 +3044,50 @@ button.link {
   vertical-align: middle;
 }
 
+/* The count of failed device events, on This device (ticket 88). */
+.capture-problems-badge {
+  display: inline-block;
+  min-width: 1.4em;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 0 0.4em;
+  border-radius: 999px;
+  text-align: center;
+  vertical-align: middle;
+  color: #fff;
+  background: var(--danger, #c0392b);
+}
+
+.capture-problems {
+  border-top: 1px solid var(--line);
+  margin: 1rem 0 0;
+  padding: 0.5rem 0 0;
+}
+
+.capture-problems h3 {
+  margin: 0.25rem 0;
+  font-size: 1.05rem;
+}
+
+.capture-problem-list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+}
+
+.capture-problem {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.capture-problem-message {
+  margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+}
+
 /* The settings of a device, a plain group: in an app it is disabled, read-only. */
 .device-settings {
   border: 0;
