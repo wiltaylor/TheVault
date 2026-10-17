@@ -9,7 +9,10 @@ export interface Autosave {
   schedule(): void;
   /** Save now when there are unsaved changes. Resolves once nothing is left to save, or a save fails. */
   flush(): Promise<void>;
-  /** Drop the pending timer and any unsaved change, as when a conflict takes over. */
+  /**
+   * Drop the pending timer and any unsaved change, as when a conflict takes over. A save in
+   * flight that cancels does not end as "saved": nothing it was given reached the server.
+   */
   cancel(): void;
   dirty(): boolean;
   state(): SaveState;
@@ -31,6 +34,8 @@ export function createAutosave(options: AutosaveOptions): Autosave {
   let dirty = false;
   let running: Promise<void> | null = null;
   let state: SaveState = "idle";
+  // Bumped by `cancel`, so a save loop that was cancelled while it ran does not say "saved".
+  let epoch = 0;
 
   function set(next: SaveState) {
     state = next;
@@ -43,18 +48,32 @@ export function createAutosave(options: AutosaveOptions): Autosave {
   }
 
   async function run(): Promise<void> {
+    let started = epoch;
+    let sent = false;
     while (dirty) {
       dirty = false;
       set("saving");
+      let failed = false;
       try {
         await options.save();
+        sent = true;
       } catch {
+        failed = true;
+      }
+      if (epoch !== started) {
+        // Cancelled while it ran: what it was given is not "saved". A change made since is
+        // saved from here on, as a fresh run.
+        started = epoch;
+        sent = false;
+        continue;
+      }
+      if (failed) {
         dirty = true;
         set("error");
         return;
       }
     }
-    set("saved");
+    if (sent) set("saved");
   }
 
   function flush(): Promise<void> {
@@ -82,6 +101,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     },
     flush,
     cancel() {
+      epoch += 1;
       stopTimer();
       dirty = false;
       set("idle");

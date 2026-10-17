@@ -210,6 +210,27 @@ async function scenario() {
   const online = await recorded();
   assert.deepEqual(online.slice(-2), ["syncing", "synced"], `yellow then green: ${online}`);
 
+  // Typing straight on in the same open editor, after the push took the server's result back
+  // into the local vault with a version of its own, is saved and reaches the server too.
+  await app.click(await app.find("[aria-label='Title']"));
+  await app.run(`
+    const el = document.querySelector("[aria-label='Title']");
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  `);
+  await app.type(await app.find("[aria-label='Title']"), " and again");
+  await waitFor(
+    "the typing after the sync on the server",
+    async () => (await home.api("GET", `/api/notes/${created.id}`)).note.fields.title === "Written on the server, edited offline and again",
+    60_000,
+  );
+  assert.equal(await app.run("return !!document.querySelector(\"[data-testid='conflict-view']\");"), false, "no conflict view");
+  assert.equal(await app.text("[data-testid='save-status']"), "Saved");
+
   // Started again, the app is still paired: it reads its token from the keyring and syncs.
   await app.quit();
   const synced = await home.api("GET", `/api/notes/${created.id}`);

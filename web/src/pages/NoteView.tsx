@@ -22,7 +22,10 @@ import {
   compoundBlock,
   fieldValue,
   missingRequired,
+  mergeDocs,
   pageTemplate,
+  sameBlocks,
+  sameValue,
   slotField,
   TITLE_FIELD,
   unplacedFields,
@@ -179,6 +182,23 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     const text = typeof t === "string" ? t : "";
     if (titleEl && (titleEl.textContent ?? "") !== text && document.activeElement !== titleEl) titleEl.textContent = text;
   });
+  /**
+   * Show a title changed elsewhere even while the title has focus, caret at the end, so the next
+   * keystroke edits that title rather than writing the one on screen back over it.
+   */
+  function showOutsideTitle() {
+    const t = doc().fields.title;
+    const text = typeof t === "string" ? t : "";
+    if (!titleEl || preview() || (titleEl.textContent ?? "") === text) return;
+    titleEl.textContent = text;
+    if (document.activeElement !== titleEl) return;
+    const range = document.createRange();
+    range.selectNodeContents(titleEl);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
   const endPreview = () => {
     if (pane) setPreview(pane.id, null);
   };
@@ -192,17 +212,51 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
       },
       save: async () => {
         const n = note();
-        if (!n || n.id !== id || conflict()) return;
-        const mine = doc();
+        if (!n || n.id !== id) return;
+        // Never "saved" while the conflict view holds the edits: nothing is sent until it is resolved.
+        if (conflict()) throw new Error("Resolve the conflict first.");
+        // What the page edited, and the stored note it edited from.
+        const edited = doc();
+        let base = n;
+        let sending = edited;
+        // Whether a merge took a change made elsewhere into the note's compound blocks, or its title.
+        let tookBlocks = false;
+        let tookTitle = false;
         setSaveError(null);
         try {
-          const saved = await api.updateNote(id, mine, n.version);
+          let saved: Note | null = null;
+          for (let attempt = 0; !saved; attempt++) {
+            try {
+              saved = await api.updateNote(id, sending, base.version);
+            } catch (e) {
+              if (!(e instanceof ApiError && e.isConflict) || attempt >= 3) throw e;
+              // Written elsewhere since (a sync round taking the server's result back, another
+              // device, a script): what this page changed goes over it, unless both changed the
+              // same field, which is the conflict view's.
+              const stored = await api.note(id);
+              if (loadedId !== id) throw e;
+              const merged = mergeDocs(base.note, sending, stored.note);
+              if (!merged) throw e;
+              if (!sameBlocks(merged, sending)) tookBlocks = true;
+              if (!sameValue(merged.fields.title, sending.fields.title)) tookTitle = true;
+              base = stored;
+              sending = merged;
+            }
+          }
           const title = saved.note.fields.title;
           if (typeof title === "string") knowTitle(saved.id, title, saved.type);
           if (loadedId !== id) return;
-          setNote(saved);
-          // Take the server's form of the note (computed fields, defaults) unless it was edited since.
-          if (!saver.dirty()) setDoc(saved.note);
+          // Take the server's form of the note (computed fields, defaults, the changes merged in),
+          // keeping whatever was edited while the save ran, which the next save sends.
+          const now = doc();
+          const next = now === edited ? saved.note : (mergeDocs(edited, now, saved.note, true) ?? now);
+          batch(() => {
+            setNote(saved);
+            setDoc(next);
+            // An editor with state of its own starts again from a block changed elsewhere.
+            if (tookBlocks) setGeneration(generation() + 1);
+          });
+          if (tookTitle) showOutsideTitle();
         } catch (e) {
           if (loadedId !== id) throw e;
           if (e instanceof ApiError && e.isConflict) {
@@ -270,8 +324,8 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
 
   // A write elsewhere in this client (another pane on the same note, a card, a script field), or
   // on another device as the live stream reports it, may have changed this note. Unless it has
-  // edits of its own, which will meet the conflict view on their next save, it takes the stored
-  // note.
+  // edits of its own, which its next save merges with the stored note (or, when both changed the
+  // same field, shows in the conflict view), it takes the stored note.
   let recheck: ReturnType<typeof setTimeout> | undefined;
   const untouched = () => !props.newType && !conflict() && !autosave?.dirty() && saveState() !== "saving" && saveState() !== "dirty";
   const recheckSoon = () => {
@@ -282,13 +336,17 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
       const before = doc();
       try {
         const stored = await api.note(n.id);
-        // An edit made while the note was on its way wins: it meets the conflict view on save.
+        // An edit made while the note was on its way wins: its save merges it with the stored note.
         if (note()?.id !== stored.id || note()?.version === stored.version || doc() !== before || !untouched()) return;
         batch(() => {
           setNote(stored);
           setDoc(stored.note);
-          setGeneration(generation() + 1);
+          // The block editors keep their own state: they start again only when a block changed,
+          // so a write that changed nothing they show (a sync round taking the same note back
+          // with a new version) leaves the caret where it is.
+          if (!sameBlocks(before, stored.note)) setGeneration(generation() + 1);
         });
+        showOutsideTitle();
       } catch {
         // Deleted or unreachable: the next save says so.
       }
@@ -364,6 +422,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
       setSaveState("idle");
       endPreview();
     });
+    showOutsideTitle();
   }
 
   // A placeholder link clicked outside the editor (a card, the new-note form) is rewritten here,
@@ -451,8 +510,9 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
 
   /** Apply an edit to the note, and save it after a pause (a draft waits for Create). */
   function edit(fn: (d: NoteDoc) => NoteDoc) {
-    // A version on show is read-only: nothing edits or saves until the live note is back.
-    if (preview()) return;
+    // A version on show is read-only: nothing edits or saves until the live note is back. Nor
+    // while the conflict view holds the edits: what it compares is what Save my version sends.
+    if (preview() || conflict()) return;
     setDoc(fn(doc()));
     autosave?.schedule();
   }
@@ -560,6 +620,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     setGeneration(generation() + 1);
     setConflict(null);
     setSaveState("idle");
+    showOutsideTitle();
   }
 
   async function saveMine() {
@@ -574,6 +635,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
       setGeneration(generation() + 1);
       setConflict(null);
       setSaveState("saved");
+      showOutsideTitle();
     } catch (e) {
       if (e instanceof ApiError && e.isConflict) {
         setConflict({ mine: c.mine, stored: await api.note(c.stored.id) });
@@ -590,6 +652,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
 
   const status = (): string => {
     if (props.newType) return missing().length ? `Required: ${missing().join(", ")}` : "";
+    if (conflict()) return "Unsaved changes";
     switch (saveState()) {
       case "dirty":
         return "Unsaved changes";
@@ -687,8 +750,8 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                       role="textbox"
                       aria-label="Title"
                       aria-required="true"
-                      aria-readonly={preview() ? "true" : undefined}
-                      contentEditable={preview() ? false : "plaintext-only"}
+                      aria-readonly={preview() || conflict() ? "true" : undefined}
+                      contentEditable={preview() || conflict() ? false : "plaintext-only"}
                       spellcheck={false}
                       data-placeholder="Untitled"
                       onInput={(e) => {

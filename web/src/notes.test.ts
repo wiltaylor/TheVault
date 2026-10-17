@@ -8,6 +8,7 @@ import {
   comparedFields,
   fieldValue,
   missingRequired,
+  mergeDocs,
   refValue,
   slotField,
   unplacedFields,
@@ -126,5 +127,36 @@ describe("the inline note page", () => {
     expect(missingRequired(typed, { fields: {}, blocks: [] })).toEqual(["Title", "Owner"]);
     expect(missingRequired(typed, { fields: { title: "x", owner: "" }, blocks: [] })).toEqual(["Owner"]);
     expect(missingRequired(typed, { fields: { title: "x", owner: "me" }, blocks: [] })).toEqual([]);
+  });
+});
+
+describe("mergeDocs", () => {
+  const body = (text: string) => ({ kind: "content", labels: ["body"], blocks: [{ kind: "paragraph", fields: { text } }] });
+  const base = { fields: { title: "A", status: "todo", updated: "t1" }, blocks: [body("one")] };
+
+  it("keeps each side's changes when they touch different fields, with the server's stamps", () => {
+    const mine = { ...base, fields: { ...base.fields, title: "A typed" } };
+    const theirs = { fields: { title: "A", status: "done", updated: "t2" }, blocks: [body("two")] };
+    expect(mergeDocs(base, mine, theirs)).toEqual({ fields: { title: "A typed", status: "done", updated: "t2" }, blocks: [body("two")] });
+  });
+
+  it("takes an unchanged note back with a new stamp as no change", () => {
+    const mine = { ...base, fields: { ...base.fields, title: "A typed" } };
+    const theirs = { ...base, fields: { ...base.fields, updated: "t2" } };
+    expect(mergeDocs(base, mine, theirs)).toEqual({ fields: { title: "A typed", status: "todo", updated: "t2" }, blocks: [body("one")] });
+  });
+
+  it("is a clash when both changed the same field differently, unless mine is preferred", () => {
+    const mine = { ...base, fields: { ...base.fields, title: "Mine" } };
+    const theirs = { ...base, fields: { ...base.fields, title: "Theirs" } };
+    expect(mergeDocs(base, mine, theirs)).toBeNull();
+    expect(mergeDocs(base, { ...base, blocks: [body("mine")] }, { ...base, blocks: [body("theirs")] })).toBeNull();
+    expect(mergeDocs(base, mine, theirs, true)?.fields.title).toBe("Mine");
+  });
+
+  it("keeps a field one side removed while the other left it alone removed", () => {
+    const mine = { fields: { title: "A", updated: "t1" }, blocks: [] };
+    const theirs = { ...base, fields: { ...base.fields, title: "B" } };
+    expect(mergeDocs(base, mine, theirs)).toEqual({ fields: { title: "B", updated: "t1" }, blocks: [] });
   });
 });

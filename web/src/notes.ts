@@ -111,6 +111,68 @@ export function sameValue(a: Json | undefined, b: Json | undefined): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
+/** The fields the server stamps: a merge takes them from the stored side. */
+const STAMPED = new Set(["created", "updated", "archived"]);
+
+/** A doc's blocks by a key of their kind, first label and place among blocks of that key. */
+function keyedBlocks(doc: NoteDoc): Map<string, Block> {
+  const out = new Map<string, Block>();
+  const seen = new Map<string, number>();
+  for (const b of doc.blocks) {
+    const k = `${b.kind}\u0000${b.labels?.[0] ?? ""}`;
+    const n = seen.get(k) ?? 0;
+    seen.set(k, n + 1);
+    out.set(`${k}\u0000${n}`, b);
+  }
+  return out;
+}
+
+/** One value of a three-way merge, `null` on a clash. `{ v: undefined }` is "absent". */
+function pick<T>(base: T | undefined, mine: T | undefined, theirs: T | undefined, preferMine: boolean): { v: T | undefined } | null {
+  const same = (a: T | undefined, b: T | undefined) => sameValue(a as Json | undefined, b as Json | undefined) && (a === undefined) === (b === undefined);
+  if (same(mine, theirs)) return { v: mine };
+  if (same(mine, base)) return { v: theirs };
+  if (same(theirs, base) || preferMine) return { v: mine };
+  return null;
+}
+
+/**
+ * Three-way merge of a note, field by field and compound block by compound block: `mine` and
+ * `theirs` both started from `base`. Each side keeps what it changed and the other did not; a
+ * field both changed differently is a clash, and the merge is `null`. With `preferMine` a clash
+ * keeps `mine`, which makes this a rebase of `mine`'s edits over `theirs`. The server's stamps
+ * (`created`, `updated`, `archived`) come from `theirs`.
+ */
+export function mergeDocs(base: NoteDoc, mine: NoteDoc, theirs: NoteDoc, preferMine = false): NoteDoc | null {
+  const fields: Record<string, Json> = {};
+  const names = [...Object.keys(theirs.fields), ...Object.keys(mine.fields), ...Object.keys(base.fields)];
+  for (const name of new Set(names)) {
+    if (STAMPED.has(name)) {
+      if (theirs.fields[name] !== undefined) fields[name] = theirs.fields[name];
+      continue;
+    }
+    const got = pick(base.fields[name], mine.fields[name], theirs.fields[name], preferMine);
+    if (!got) return null;
+    if (got.v !== undefined) fields[name] = got.v;
+  }
+  const b = keyedBlocks(base);
+  const m = keyedBlocks(mine);
+  const t = keyedBlocks(theirs);
+  const blocks: Block[] = [];
+  // Theirs' order, then the blocks only mine has, in mine's order.
+  for (const key of new Set([...t.keys(), ...m.keys(), ...b.keys()])) {
+    const got = pick(b.get(key), m.get(key), t.get(key), preferMine);
+    if (!got) return null;
+    if (got.v !== undefined) blocks.push(got.v);
+  }
+  return { fields, blocks };
+}
+
+/** Whether two docs hold the same compound blocks, which editors with state of their own show. */
+export function sameBlocks(a: NoteDoc, b: NoteDoc): boolean {
+  return JSON.stringify(a.blocks) === JSON.stringify(b.blocks);
+}
+
 /** The fields the type's default template places with a slot, on any tab and in any column. */
 export function slottedFields(type: TypeDef): Set<string> {
   const t = pageTemplate(type);

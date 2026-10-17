@@ -65,4 +65,38 @@ describe("autosave", () => {
     expect(a.dirty()).toBe(false);
     expect(a.state()).toBe("idle");
   });
+
+  it("does not end as saved when cancelled during a save, and still saves a change made after", async () => {
+    let release: () => void = () => {};
+    let calls = 0;
+    const save = vi.fn(
+      () =>
+        new Promise<void>((r) => {
+          calls += 1;
+          release = r;
+        }),
+    );
+    const a = createAutosave({ delay: 100, save });
+    a.schedule();
+    const first = a.flush();
+    // A conflict takes over while the save runs.
+    a.cancel();
+    release();
+    await first;
+    expect(a.state()).toBe("idle");
+    expect(calls).toBe(1);
+
+    // A change made after a cancel, while the cancelled save still runs, is saved.
+    a.schedule();
+    const second = a.flush();
+    a.cancel();
+    a.schedule();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(3);
+    release();
+    await second;
+    expect(a.state()).toBe("saved");
+    expect(a.dirty()).toBe(false);
+  });
 });
