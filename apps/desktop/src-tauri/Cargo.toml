@@ -22,6 +22,8 @@ ashpd = { version = "0.13", default-features = false, features = ["tokio", "glob
 axum = "0.8"
 embedded = { path = "../../../crates/embedded" }
 futures-util = "0.3"
+# The same glib as GTK's, to name the program before GTK starts (app_menu).
+glib = "0.18"
 http-body-util = "0.1"
 keyring = { version = "3.6", features = ["async-secret-service", "tokio", "crypto-rust"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "stream"] }

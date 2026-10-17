@@ -1,5 +1,6 @@
 //! The tray icon (D12): the unread badge from the home server, and a menu with Quick capture,
-//! Open, "Restart to update" once an update is downloaded, the settings and Quit.
+//! Open, "Restart to update" once an update is downloaded, the settings (with "Add TheVault to
+//! the application menu" for an AppImage) and Quit.
 //!
 //! Tray specifications have no badge, so the badge is drawn: a red dot on the icon while
 //! anything is unread, the count beside the icon where the tray shows titles, and the count in
@@ -9,7 +10,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::image::Image;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{AppHandle, Wry};
 
@@ -21,6 +22,7 @@ pub const OPEN: &str = "open";
 pub const AUTOSTART: &str = "autostart";
 pub const UPDATE_CHECK: &str = "update_check";
 pub const INSTALL_ON_QUIT: &str = "install_on_quit";
+pub const APP_MENU: &str = "app_menu";
 pub const RESTART_TO_UPDATE: &str = "restart_to_update";
 pub const QUIT: &str = "quit";
 
@@ -59,6 +61,8 @@ pub struct Tray {
     autostart: Option<CheckMenuItem<Wry>>,
     update_check: Option<CheckMenuItem<Wry>>,
     install_on_quit: Option<CheckMenuItem<Wry>>,
+    /// Only an AppImage has it: the packages install their own entry.
+    app_menu: Option<CheckMenuItem<Wry>>,
     restart: Option<MenuItem<Wry>>,
     /// The version waiting for a restart, for the tooltip.
     ready: Mutex<Option<String>>,
@@ -77,6 +81,7 @@ impl Tray {
                     autostart: None,
                     update_check: None,
                     install_on_quit: None,
+                    app_menu: None,
                     restart: None,
                     ready: Mutex::new(None),
                     badge: Mutex::new(Badge::of(0)),
@@ -110,6 +115,18 @@ impl Tray {
             settings.install_on_quit,
             None::<&str>,
         )?;
+        let app_menu = crate::app_menu::appimage()
+            .map(|_| {
+                CheckMenuItem::with_id(
+                    app,
+                    APP_MENU,
+                    "Add TheVault to the application menu",
+                    true,
+                    settings.app_menu,
+                    None::<&str>,
+                )
+            })
+            .transpose()?;
         let restart = MenuItem::with_id(
             app,
             RESTART_TO_UPDATE,
@@ -117,20 +134,25 @@ impl Tray {
             false,
             None::<&str>,
         )?;
-        let menu = Menu::with_items(
-            app,
-            &[
-                &MenuItem::with_id(app, CAPTURE, "Quick capture", true, None::<&str>)?,
-                &MenuItem::with_id(app, OPEN, "Open TheVault", true, None::<&str>)?,
-                &restart,
-                &PredefinedMenuItem::separator(app)?,
-                &autostart,
-                &update_check,
-                &install_on_quit,
-                &PredefinedMenuItem::separator(app)?,
-                &MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?,
-            ],
-        )?;
+        let capture = MenuItem::with_id(app, CAPTURE, "Quick capture", true, None::<&str>)?;
+        let open = MenuItem::with_id(app, OPEN, "Open TheVault", true, None::<&str>)?;
+        let separator = PredefinedMenuItem::separator(app)?;
+        let separator2 = PredefinedMenuItem::separator(app)?;
+        let quit = MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?;
+        let mut items: Vec<&dyn IsMenuItem<Wry>> = vec![
+            &capture,
+            &open,
+            &restart,
+            &separator,
+            &autostart,
+            &update_check,
+            &install_on_quit,
+        ];
+        if let Some(item) = &app_menu {
+            items.push(item);
+        }
+        items.extend([&separator2 as &dyn IsMenuItem<Wry>, &quit]);
+        let menu = Menu::with_items(app, &items)?;
         let icon = TrayIconBuilder::with_id("main")
             .icon(plain_icon())
             .tooltip("TheVault")
@@ -145,6 +167,7 @@ impl Tray {
             autostart: Some(autostart),
             update_check: Some(update_check),
             install_on_quit: Some(install_on_quit),
+            app_menu,
             restart: Some(restart),
             ready: Mutex::new(None),
             badge: Mutex::new(badge),
@@ -204,6 +227,9 @@ impl Tray {
         }
         if let Some(item) = &self.install_on_quit {
             let _ = item.set_checked(settings.install_on_quit);
+        }
+        if let Some(item) = &self.app_menu {
+            let _ = item.set_checked(settings.app_menu);
         }
     }
 }

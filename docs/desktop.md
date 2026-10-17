@@ -10,8 +10,10 @@
 | The device file: server URL, device id and device name | `$XDG_DATA_HOME/thevault/device.json` |
 | The device token | The Secret Service keyring, service `thevault`, user the device id (D2) |
 | The sync queue and cursor | The `sync_*` tables of the local vault's `state.db` |
-| The app's settings: start on login, update check, a skipped version | `$XDG_DATA_HOME/thevault/settings.json` |
+| The app's settings: start on login, update check, a skipped version, install on quit, the application menu entry | `$XDG_DATA_HOME/thevault/settings.json` |
 | The autostart entry, while "Start on login" is on | `$XDG_CONFIG_HOME/autostart/dev.wiltaylor.thevault.desktop` |
+| An AppImage's installed copy | `~/Applications/TheVault.AppImage` |
+| An AppImage's application menu entry and icons, while "Add TheVault to the application menu" is on | `$XDG_DATA_HOME/applications/dev.wiltaylor.thevault.desktop`, `$XDG_DATA_HOME/icons/hicolor/<size>x<size>/apps/dev.wiltaylor.thevault.png` |
 
 The device file holds no secret. Without the keyring the app still opens and edits the local vault, and its badge reports that it cannot read the token.
 
@@ -20,7 +22,7 @@ The device file holds no secret. Without the keyring the app still opens and edi
 The window loads `vault://localhost/` through a custom URI scheme, with no network port (D26). On that scheme:
 
 - `/api/...` goes to the in-process server (`crates/embedded`), acting as the owner. It answers from the local vault, and sends the routes backed by the home server's own state, such as Settings > Devices and the notifications, to the home server with the device token ([`docs/sync.md`](sync.md#what-the-apps-answer-locally)). `/api/events` answers 503 at once, since the scheme cannot stream; the web client polls instead.
-- `/_desktop/...` goes to the app itself: the setup page, `GET /_desktop/status`, `POST /_desktop/pair`, `POST /_desktop/sync`, `POST /_desktop/capture`, and the update prompt's `POST /_desktop/update/open` and `POST /_desktop/update/skip`.
+- `/_desktop/...` goes to the app itself: the setup page, `GET /_desktop/status`, `POST /_desktop/pair`, `POST /_desktop/sync`, `POST /_desktop/capture`, the update prompt's `POST /_desktop/update/open` and `POST /_desktop/update/skip`, and the install notice's `POST /_desktop/installed/undo` and `POST /_desktop/installed/dismiss`.
 - Every other path serves the bundled `web/dist`, so the web client runs unchanged.
 
 ## Setup and pairing
@@ -50,6 +52,7 @@ The app puts an icon in the tray (D12). Its menu has:
 - **Start on login**: a check item. On, the app writes an XDG autostart entry that starts it with `--minimised`, so it starts in the tray with its window hidden. Off, the entry is removed.
 - **Check for updates**: a check item, on by default. See [Updates](#updates).
 - **Install updates on quit**: a check item, on by default. On, quitting installs an update that is downloaded and waiting, so the next start runs it.
+- **Add TheVault to the application menu**: a check item, on by default, shown only when the app runs from an AppImage. See [The icon and the application menu entry](#the-icon-and-the-application-menu-entry).
 - **Quit**: ends the app.
 
 While the home server has unread notifications, the icon carries a red dot, the count shows beside the icon where the tray shows titles (KDE and most StatusNotifier trays), and the tooltip says how many there are. Closing the window hides it in the tray; the app keeps syncing and mirroring notifications. Without a tray (the desktop has no StatusNotifier host, or `libayatana-appindicator3` is missing), the app says so on stderr and closing the window ends it.
@@ -94,7 +97,31 @@ On either desktop, if step 3 fails, read `hotkey` in `/_desktop/status` (from th
 
 ## thevault:// links
 
-`thevault://note/<id>` opens the note with that id in the window: in the running app when there is one, otherwise in a new one. The packages' desktop file (`apps/desktop/src-tauri/linux/thevault.desktop`) registers the app as the handler of `x-scheme-handler/thevault`. An AppImage installs no desktop file, so when the app runs from one it writes `~/.local/share/applications/dev.wiltaylor.thevault.desktop` pointing at the AppImage and makes it the default handler with `xdg-mime`. Any other `thevault://` link is ignored.
+`thevault://note/<id>` opens the note with that id in the window: in the running app when there is one, otherwise in a new one. The packages' desktop file (`apps/desktop/src-tauri/linux/thevault.desktop`) registers the app as the handler of `x-scheme-handler/thevault`. An AppImage installs no desktop file, so when the app runs from one it writes its own entry, which points at the AppImage, and makes it the default handler with `xdg-mime` (see [The icon and the application menu entry](#the-icon-and-the-application-menu-entry)). Any other `thevault://` link is ignored.
+
+## The icon and the application menu entry
+
+On Wayland the compositor and the panel find a window's icon through its `app_id`: they look for a desktop file named `<app_id>.desktop`, or one whose `StartupWMClass` is the `app_id`, and show its `Icon`. GTK 3 sets the `app_id` to the program's name, `g_get_prgname()`, which was the binary's name, `thevault`, up to 0.1.2. The app now names the program `dev.wiltaylor.thevault`, its identifier, before GTK starts (`app_menu::name_program`), so the `app_id` is `dev.wiltaylor.thevault`; on X11 it is the window's `WM_CLASS` name too. `app.enableGTKAppId` in `tauri.conf.json` also registers the GTK application under the identifier, which GNOME reads; the app is single-instance already, so that registration on the session bus changes nothing else.
+
+- The deb and rpm install `/usr/share/applications/TheVault.desktop` from `linux/thevault.desktop`, with `StartupWMClass=dev.wiltaylor.thevault` and `Icon=thevault`, and the icons under `/usr/share/icons/hicolor` as `thevault.png`. They get no entry from the app.
+- An AppImage installs itself in `~/Applications` first (see [The AppImage installs itself](#the-appimage-installs-itself)). While **Add TheVault to the application menu** is on, the default, each start of an AppImage (`$APPIMAGE` is set) writes `$XDG_DATA_HOME/applications/dev.wiltaylor.thevault.desktop` (`Name=TheVault`, `Exec="<AppImage>" %u`, `Icon=dev.wiltaylor.thevault`, `StartupWMClass=dev.wiltaylor.thevault`, the `thevault://` MIME type and the **Quick capture** action) and the bundled icons at 32, 64, 128, 256 and 512 px as `$XDG_DATA_HOME/icons/hicolor/<size>x<size>/apps/dev.wiltaylor.thevault.png`. A file already the same is left alone, so a start with nothing to change writes nothing; an AppImage moved to another path gets its `Exec` rewritten at its next start. When anything changed, the app touches the `hicolor` folder and runs `update-desktop-database`, `xdg-mime default` and `kbuildsycoca6`, each only when it is installed. Turning the item off removes the entry and the icons.
+
+The window also sets the 256 px icon itself, which X11, XWayland and some compositors show.
+
+### The AppImage installs itself
+
+When the app starts from an AppImage anywhere but `~/Applications/TheVault.AppImage`, it installs itself there before it opens a window:
+
+1. With no `~/Applications/TheVault.AppImage`, or one older than itself, it copies itself there: to a temporary file in `~/Applications`, made executable, then renamed over the old one. To learn the installed copy's version it runs `~/Applications/TheVault.AppImage --version`, which prints `TheVault <version>` and exits; a copy that answers nothing in 15 seconds counts as older.
+2. With an installed copy as new as itself or newer, it copies nothing.
+3. It deletes the AppImage the user started when that file is in the download folder (`XDG_DOWNLOAD_DIR` from `~/.config/user-dirs.dirs`, normally `~/Downloads`) or a temporary folder outside the home folder. Anywhere else the file stays.
+4. It starts `~/Applications/TheVault.AppImage` with the same arguments, so a `thevault://` link or `--capture` goes through, and exits. Starting it hands the arguments to a copy already running, as any second start does.
+
+The installed copy writes the application menu entry for its own path, and the self-updater replaces that file in place from then on, since it updates the running `$APPIMAGE` ([The AppImage updates itself](#the-appimage-updates-itself)).
+
+After an install, the window shows a notice once, at its top right, on the setup page too: "TheVault was installed to ~/Applications and added to your apps.", with "You can delete <file>." when the original stayed. **Undo** turns **Add TheVault to the application menu** off, which removes the entry and the icons and keeps the installed file; **OK** closes the notice. It waits in `$XDG_DATA_HOME/thevault/installed.json` until one of them is pressed. A deb or rpm install never installs itself. `THEVAULT_NO_SELF_INSTALL=1` turns the install off, which the release smoke test sets, since the second copy would leave tauri-driver driving the one that exited.
+
+After the first start of an AppImage that wrote the entry, the menu lists TheVault and the window and the task manager show its icon. If a panel keeps the generic icon, its icon cache is stale: on KDE Plasma run `kbuildsycoca6` and `plasmashell --replace &`, or log out and back in.
 
 ## Updates
 
@@ -167,7 +194,7 @@ The package installs the release's deb contents: `/usr/bin/thevault`, its deskto
 - Debian and Ubuntu: `sudo apt install ./TheVault_<version>_amd64.deb`.
 - Fedora: `sudo dnf install ./TheVault-<version>-1.x86_64.rpm`.
 - openSUSE: `sudo zypper install ./TheVault-<version>-1.x86_64.rpm`.
-- Anywhere else: `chmod +x TheVault_<version>_amd64.AppImage` and run it.
+- Anywhere else: `chmod +x TheVault_<version>_amd64.AppImage` and run it. It moves itself to `~/Applications` and adds itself to the application menu ([The AppImage installs itself](#the-appimage-installs-itself)).
 
 ## Releasing
 

@@ -1,14 +1,16 @@
 //! `thevault://` links (D12). The `.desktop` file registers the app as the handler of the
 //! `x-scheme-handler/thevault` MIME type, so the desktop starts `thevault thevault://note/<id>`,
-//! and a running app gets the link through the single-instance plugin.
+//! and a running app gets the link through the single-instance plugin. The packages install that
+//! file from `linux/thevault.desktop`; an AppImage writes its own ([`crate::app_menu`]).
 //!
 //! The one link kind is `thevault://note/<id>`, which opens the note with that ULID.
 
 /// The URI scheme the app handles.
 pub const SCHEME: &str = "thevault";
 
-/// The app's id: its desktop file is `<APP_ID>.desktop`, and the portal and the notification
-/// daemon know it by this name.
+/// The app's id, the identifier in `tauri.conf.json`: the Wayland `app_id` of its window
+/// ([`crate::app_menu::name_program`]), the name of the AppImage's desktop file, `<APP_ID>.desktop`, and the
+/// packages' `StartupWMClass`. The portal and the notification daemon know it by this name.
 pub const APP_ID: &str = "dev.wiltaylor.thevault";
 
 /// What a `thevault://` link asks for.
@@ -49,64 +51,6 @@ pub fn parse(arg: &str) -> Option<Link> {
 /// The first `thevault://` link among the command-line arguments.
 pub fn from_args<S: AsRef<str>>(args: &[S]) -> Option<Link> {
     args.iter().find_map(|a| parse(a.as_ref()))
-}
-
-/// The launcher the app writes for itself when it runs from an AppImage, which installs no
-/// desktop file: it names the AppImage as the handler of `thevault://` links. The deb and rpm
-/// packages install theirs from `linux/thevault.desktop`.
-pub fn register_appimage() {
-    let Some(appimage) = std::env::var_os("APPIMAGE") else {
-        return;
-    };
-    let Some(data) = std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".local/share"))
-        })
-    else {
-        return;
-    };
-    let dir = data.join("applications");
-    let entry = launcher_entry(&std::path::PathBuf::from(appimage));
-    if let Err(e) = std::fs::create_dir_all(&dir)
-        .and_then(|()| std::fs::write(dir.join(format!("{APP_ID}.desktop")), entry))
-    {
-        eprintln!("thevault: registering thevault:// links: {e}");
-        return;
-    }
-    for (cmd, args) in [
-        (
-            "update-desktop-database",
-            vec![dir.to_string_lossy().into_owned()],
-        ),
-        (
-            "xdg-mime",
-            vec![
-                "default".to_owned(),
-                format!("{APP_ID}.desktop"),
-                format!("x-scheme-handler/{SCHEME}"),
-            ],
-        ),
-    ] {
-        let _ = std::process::Command::new(cmd).args(args).status();
-    }
-}
-
-/// The launcher entry that starts `exe` for `thevault://` links.
-fn launcher_entry(exe: &std::path::Path) -> String {
-    let exe = crate::settings::launcher_exec(exe);
-    format!(
-        "[Desktop Entry]\n\
-         Type=Application\n\
-         Name=TheVault\n\
-         Comment=Notes, offline, synced with your TheVault server\n\
-         Exec={exe} %u\n\
-         Icon=thevault\n\
-         Terminal=false\n\
-         Categories=Office;\n\
-         StartupWMClass=thevault\n\
-         MimeType=x-scheme-handler/{SCHEME};\n"
-    )
 }
 
 /// Whether `id` is a ULID: 26 characters of Crockford base 32, the first at most `7`.
@@ -167,19 +111,6 @@ mod tests {
         ] {
             assert_eq!(parse(&link), None, "{link:?}");
         }
-    }
-
-    #[test]
-    fn the_appimage_launcher_handles_thevault_links() {
-        let entry = launcher_entry(std::path::Path::new("/home/u/Apps/TheVault.AppImage"));
-        assert!(
-            entry.contains("Exec=/home/u/Apps/TheVault.AppImage %u\n"),
-            "{entry}"
-        );
-        assert!(
-            entry.contains("MimeType=x-scheme-handler/thevault;\n"),
-            "{entry}"
-        );
     }
 
     #[test]

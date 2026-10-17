@@ -30,6 +30,9 @@ for dir in apps/desktop/src-tauri/icons apps/android/src-tauri/icons; do
   cp "$tmp"/tauri/Square*Logo.png "$dir/"
 done
 
+# The desktop app installs the 64 px icon too, with the AppImage's application menu entry.
+cp "$tmp"/tauri/64x64.png apps/desktop/src-tauri/icons/
+
 # Desktop tray: the mark alone on transparent, 64 px for HiDPI panels. tray.rs draws the unread dot.
 convert "$fg" -trim +repage -resize 60x60 -gravity center -background none -extent 64x64 \
   PNG32:apps/desktop/src-tauri/icons/tray.png

@@ -5,6 +5,8 @@
 //! that starts the app minimised to the tray; turning it off removes the entry. "Check for
 //! updates" turns the update check on and off ([`crate::update`]), and "Install updates on
 //! quit" installs an update downloaded and waiting when the app quits ([`crate::self_update`]).
+//! "Add TheVault to the application menu" keeps an AppImage's desktop entry and icons installed
+//! ([`crate::app_menu`]).
 
 use std::path::{Path, PathBuf};
 
@@ -25,6 +27,8 @@ pub struct Settings {
     /// Install an update that is downloaded and waiting when the app quits, so the next start
     /// runs it without asking.
     pub install_on_quit: bool,
+    /// Keep the AppImage's application menu entry and icons installed ([`crate::app_menu`]).
+    pub app_menu: bool,
 }
 
 impl Default for Settings {
@@ -34,6 +38,7 @@ impl Default for Settings {
             update_check: true,
             skipped_update: None,
             install_on_quit: true,
+            app_menu: true,
         }
     }
 }
@@ -145,6 +150,7 @@ mod tests {
             update_check: false,
             skipped_update: Some("0.2.0".into()),
             install_on_quit: false,
+            app_menu: false,
         };
         save(dir.path(), &changed).unwrap();
         assert_eq!(load(dir.path()), changed);
@@ -163,6 +169,7 @@ mod tests {
         let loaded = load(dir.path());
         assert!(loaded.autostart);
         assert!(loaded.install_on_quit);
+        assert!(loaded.app_menu);
     }
 
     #[test]

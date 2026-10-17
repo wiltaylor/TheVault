@@ -26,6 +26,8 @@ before(async () => {
   desktop = new Desktop(root);
   desktop.env.APPIMAGE_EXTRACT_AND_RUN = "1";
   desktop.env.TMPDIR = join(root, "runtime");
+  // Installing itself in ~/Applications would start a second copy and end the one tauri-driver drives.
+  desktop.env.THEVAULT_NO_SELF_INSTALL = "1";
   await desktop.start();
 });
 

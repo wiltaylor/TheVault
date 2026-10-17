@@ -5553,6 +5553,7 @@ dependencies = [
  "axum",
  "embedded",
  "futures-util",
+ "glib",
  "http-body-util",
  "keyring",
  "reqwest 0.12.28",

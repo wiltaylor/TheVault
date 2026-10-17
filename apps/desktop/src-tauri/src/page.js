@@ -18,6 +18,63 @@
     );
   };
 
+  // The notice an AppImage leaves after installing itself in ~/Applications, on every page,
+  // the setup page too, until the user answers it. Undo takes the menu entry away and keeps the
+  // file.
+  async function installedNotice() {
+    let s;
+    try {
+      s = await (await fetch("/_desktop/status")).json();
+    } catch {
+      return;
+    }
+    const n = s.installed;
+    if (!n || document.getElementById("thevault-installed")) return;
+    const box = document.createElement("div");
+    box.id = "thevault-installed";
+    box.setAttribute("role", "status");
+    box.style.cssText = [
+      "position:fixed",
+      "top:12px",
+      "right:12px",
+      "z-index:2147483001",
+      "display:flex",
+      "gap:8px",
+      "align-items:center",
+      "max-width:min(40rem,80vw)",
+      "padding:8px 12px",
+      "border:1px solid rgba(127,127,127,.35)",
+      "border-radius:8px",
+      "background:Canvas",
+      "color:CanvasText",
+      "font:13px/1.4 system-ui,sans-serif",
+      "box-shadow:0 2px 8px rgba(0,0,0,.2)",
+    ].join(";");
+    const text = document.createElement("span");
+    const menu = s.settings?.app_menu !== false;
+    text.textContent =
+      `TheVault was installed to ${n.path}${menu ? " and added to your apps" : ""}.` +
+      (n.removed_original ? "" : ` You can delete ${n.original}.`);
+    box.appendChild(text);
+    const button = (label, action, path) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.dataset.action = action;
+      b.style.cssText = "font:inherit;padding:2px 8px;cursor:pointer";
+      b.addEventListener("click", () => {
+        fetch(path, { method: "POST" });
+        box.remove();
+      });
+      box.appendChild(b);
+    };
+    if (menu) button("Undo", "undo", "/_desktop/installed/undo");
+    button("OK", "dismiss", "/_desktop/installed/dismiss");
+    document.body.appendChild(box);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", installedNotice);
+  else installedNotice();
+
   if (location.pathname.startsWith("/_desktop/")) return;
 
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;

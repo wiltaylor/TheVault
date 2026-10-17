@@ -9,6 +9,7 @@
   },
   "app": {
     "windows": [],
+    "enableGTKAppId": true,
     "security": {
       "csp": null
     }

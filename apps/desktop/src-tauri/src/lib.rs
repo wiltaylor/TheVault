@@ -14,7 +14,9 @@
 //! The desktop extras (D9, D12, D27): a tray icon with the home server's unread count and a
 //! menu ([`tray`]); server notifications mirrored on the desktop and closed when read anywhere
 //! ([`live`]); start on login, minimised ([`settings`]); a global capture hotkey through the
-//! portal ([`hotkey`]); `thevault://note/<id>` links ([`links`]); and the update check
+//! portal ([`hotkey`]); `thevault://note/<id>` links ([`links`]); an AppImage's application
+//! menu entry and icons ([`app_menu`]), after it installed itself in `~/Applications`
+//! ([`app_install`]); and the update check
 //! ([`update`]), with which an AppImage updates itself from the paired server
 //! ([`self_update`]).
 //!
@@ -22,6 +24,8 @@
 //! the user binds in their desktop runs it where the portal cannot (D12). Closing the window
 //! hides it in the tray; the tray's Quit ends the app.
 
+mod app_install;
+mod app_menu;
 mod device;
 mod hotkey;
 mod links;
@@ -109,6 +113,7 @@ impl App {
             eprintln!("thevault: {e}");
         }
         apply_autostart(app, &settings);
+        apply_app_menu(app, &settings);
         self.tray.show_settings(&settings);
     }
 }
@@ -126,6 +131,13 @@ fn apply_autostart(app: &AppHandle, settings: &Settings) {
         settings::apply_autostart(&config, &settings::launcher_exe(), settings.autostart)
     {
         eprintln!("thevault: {e}");
+    }
+}
+
+/// Installs or removes the AppImage's application menu entry to match `settings`.
+fn apply_app_menu(app: &AppHandle, settings: &Settings) {
+    if let Ok(data) = app.path().data_dir() {
+        app_menu::apply(&data, settings.app_menu);
     }
 }
 
@@ -158,6 +170,14 @@ impl live::Shell for LiveShell {
 
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(app_install::VERSION_FLAG) {
+        println!("TheVault {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if app_install::settle(&args) {
+        return;
+    }
+    app_menu::name_program();
     let capture = args.iter().any(|a| a == CAPTURE_FLAG);
     let minimised = args
         .iter()
@@ -202,7 +222,7 @@ pub fn run() {
             let settings = settings::load(&dir);
             let handle = app.handle().clone();
             apply_autostart(&handle, &settings);
-            links::register_appimage();
+            apply_app_menu(&handle, &settings);
             let tray = Tray::build(&handle, &settings);
             let live = Live::start(Arc::new(LiveShell(handle.clone())), remote_rx);
             let hotkey = Arc::new(Mutex::new(hotkey::Status::Starting));
@@ -228,6 +248,7 @@ pub fn run() {
             .inner_size(1200.0, 800.0)
             .visible(!minimised)
             .initialization_script(PAGE_SCRIPT)
+            .icon(app_menu::window_icon())?
             .build()?;
             window.on_window_event({
                 let app = handle.clone();
@@ -290,6 +311,7 @@ fn on_tray_menu(app: &AppHandle, id: &str) {
         tray::INSTALL_ON_QUIT => {
             state.change_settings(app, |s| s.install_on_quit = !s.install_on_quit)
         }
+        tray::APP_MENU => state.change_settings(app, |s| s.app_menu = !s.app_menu),
         tray::RESTART_TO_UPDATE => {
             if let Err(e) = self_update::restart_to_update(app) {
                 eprintln!("thevault: {e}");
@@ -435,6 +457,15 @@ async fn desktop(state: &App, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
             }
             None => status(StatusCode::NOT_FOUND),
         },
+        (Method::POST, "/_desktop/installed/undo") => {
+            state.change_settings(&state.app, |s| s.app_menu = false);
+            app_install::clear_notice(&state.dir);
+            json_response(StatusCode::OK, &json!({}))
+        }
+        (Method::POST, "/_desktop/installed/dismiss") => {
+            app_install::clear_notice(&state.dir);
+            json_response(StatusCode::OK, &json!({}))
+        }
         (Method::POST, "/_desktop/sync") => {
             state.sync.trigger(Trigger::Now);
             json_response(StatusCode::ACCEPTED, &json!({}))
@@ -465,6 +496,7 @@ fn status_json(state: &App) -> Value {
     out["updater"] = json!(state.updates.status());
     out["hotkey"] = json!(*lock(&state.hotkey));
     out["settings"] = json!(state.settings());
+    out["installed"] = json!(app_install::notice(&state.dir));
     out
 }
 

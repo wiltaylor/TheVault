@@ -6,7 +6,7 @@ Exec={{exec}} %u
 Icon={{icon}}
 Terminal=false
 Categories={{categories}}
-StartupWMClass={{exec}}
+StartupWMClass=dev.wiltaylor.thevault
 MimeType=x-scheme-handler/thevault;
 Actions=capture;
 
