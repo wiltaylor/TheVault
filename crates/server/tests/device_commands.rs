@@ -211,6 +211,10 @@ fn put_file(api: &Api, platform: &str, wcl: &str, status: u16) -> Value {
 #[test]
 fn device_files_round_trip_and_reject_unknown_events_and_commands() {
     let api = Api::start();
+    // Every vault starts with the shipped Android device file; delete it to start from none.
+    let shipped = send(api.admin("GET", "/api/device-files"), 200);
+    assert_eq!(shipped["files"][0]["platform"], "android", "{shipped}");
+    send(api.admin("DELETE", "/api/device-files/android"), 200);
     let empty = send(api.admin("GET", "/api/device-files"), 200);
     assert_eq!(empty["files"], json!([]));
     assert_eq!(empty["platforms"], json!(["linux", "android"]));
@@ -685,6 +689,7 @@ fn a_person_saved_on_the_server_queues_upsert_contact_for_each_phone_without_its
 fn settings_queues_import_history_only_when_declared_and_enabled_and_sees_its_progress() {
     // No device file: nothing is declared.
     let bare = Api::start();
+    send(bare.admin("DELETE", "/api/device-files/android"), 200);
     let (pixel, _) = bare.pair("Pixel");
     let path = format!("/api/devices/{pixel}/commands");
     let refused = send(

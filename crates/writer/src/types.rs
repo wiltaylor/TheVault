@@ -90,11 +90,11 @@ pub struct Flagged {
 }
 
 /// A planned change with everything applying it needs.
-struct Worked {
-    plan: TypePlan,
-    schema: Schema,
+pub(crate) struct Worked {
+    pub(crate) plan: TypePlan,
+    pub(crate) schema: Schema,
     /// The files of the open taxonomies the change adds terms to.
-    taxonomies: Vec<Change>,
+    pub(crate) taxonomies: Vec<Change>,
     /// Every note of the type: its id, the doc after the change, and whether the change edits it.
     notes: Vec<(String, Doc, bool)>,
 }
@@ -262,7 +262,7 @@ impl Writer {
     /// Plan a change against the `current` schema: check it, work out every note's edits, run the
     /// migration, and validate the result. Runs without the data lock, so a migration can read
     /// the vault; the caller holds the write lock.
-    fn work(&self, current: &Schema, name: &str, change: &TypeChange) -> Result<Worked> {
+    pub(crate) fn work(&self, current: &Schema, name: &str, change: &TypeChange) -> Result<Worked> {
         let old = current
             .type_def(name)
             .ok_or_else(|| Error::UnknownType(name.to_owned()))?;
@@ -443,7 +443,7 @@ fn parse_type(name: &str, wcl: &str) -> Result<(TypeDef, String)> {
 }
 
 /// The schema with `types` in place of its types, checked across types and taxonomies.
-fn rebuild_schema(current: &Schema, types: Vec<TypeDef>) -> Result<Schema> {
+pub(crate) fn rebuild_schema(current: &Schema, types: Vec<TypeDef>) -> Result<Schema> {
     Schema::new(types, current.taxonomies().cloned().collect()).map_err(Error::InvalidType)
 }
 

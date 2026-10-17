@@ -45,6 +45,7 @@ mod notify;
 mod refs;
 mod remote;
 mod script_vault;
+mod shipped;
 mod terms;
 mod time;
 mod types;
@@ -81,6 +82,10 @@ pub use note::{
 pub use refs::Referrer;
 pub use remote::{REMOTE_AUTHOR, Remote};
 pub use schema::NoteEdit;
+pub use shipped::{
+    SERVER_AUTHOR, SHIPPED_FILES, ShippedFile, UPGRADE_STEPS, UpgradeStep, Upgraded, Upkeep,
+    content_hash,
+};
 pub use types::{Flagged, Migration, PlannedNote, TypeChange, TypePlan};
 
 /// Errors from the write path.

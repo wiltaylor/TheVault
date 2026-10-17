@@ -95,7 +95,8 @@ fn a_vault_from_before_the_fleeting_type_gets_it_and_keeps_its_own_types() {
     assert!(api.type_file().contains("field processed"));
     let daily =
         std::fs::read_to_string(api.server.vault_path().join("types/dailynote.wcl")).unwrap();
-    assert!(daily.contains("label = \"Day\""), "{daily}");
+    assert!(daily.contains("= \"Day\""), "{daily}");
+    assert!(daily.contains("slot \"date\""), "{daily}");
     let ty = expect(api.send("GET", "/api/types/fleeting"), StatusCode::OK);
     assert!(
         ty["wcl"].as_str().unwrap().contains("Fleeting note"),

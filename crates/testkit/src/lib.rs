@@ -64,6 +64,9 @@ pub const ADMIN_TOKEN_NAME: &str = "admin";
 /// server and deletes the vault.
 pub struct TestServer {
     child: Child,
+    /// Builds the command that starts the server, without `--vault` and `--listen`.
+    command: Box<dyn Fn() -> Command + Send + Sync>,
+    binary: PathBuf,
     addr: SocketAddr,
     vault: TempDir,
     /// Holds the secret key file, outside the vault.
@@ -107,9 +110,14 @@ impl TestServer {
             .expect("create temporary config directory");
         let key = config.path().join("vault.key");
         state::SecretKey::create_file(&key).expect("write the secret key file");
-        let mut command = Command::new(binary);
-        command.env("VAULT_SECRET_KEY_FILE", &key).args(args);
-        Self::launch(command, binary, vault, config, admin_token)
+        let (program, args): (PathBuf, Vec<std::ffi::OsString>) =
+            (binary.to_owned(), args.iter().map(|a| a.into()).collect());
+        let command = move || {
+            let mut command = Command::new(&program);
+            command.env("VAULT_SECRET_KEY_FILE", &key).args(&args);
+            command
+        };
+        Self::launch(Box::new(command), binary, vault, config, admin_token)
     }
 
     /// Serves a vault folder that already holds its `state.db`, such as one `vault init` made or
@@ -122,43 +130,40 @@ impl TestServer {
             .prefix("thevault-config-")
             .tempdir()
             .expect("create temporary config directory");
-        let mut command = Command::new(&binary);
-        command.env_remove("VAULT_SECRET_KEY_FILE");
-        for (name, value) in env {
-            command.env(name, value);
-        }
-        Self::launch(command, &binary, vault, config, admin_token.to_owned())
+        let program = binary.clone();
+        let env: Vec<(String, PathBuf)> = env
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.to_path_buf()))
+            .collect();
+        let command = move || {
+            let mut command = Command::new(&program);
+            command.env_remove("VAULT_SECRET_KEY_FILE");
+            for (name, value) in &env {
+                command.env(name, value);
+            }
+            command
+        };
+        Self::launch(
+            Box::new(command),
+            &binary,
+            vault,
+            config,
+            admin_token.to_owned(),
+        )
     }
 
     fn launch(
-        mut command: Command,
+        command: Box<dyn Fn() -> Command + Send + Sync>,
         binary: &Path,
         vault: TempDir,
         config: TempDir,
         admin_token: String,
     ) -> Self {
-        let mut child = command
-            .arg("--vault")
-            .arg(vault.path())
-            .arg("--listen")
-            .arg("127.0.0.1:0")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap_or_else(|e| panic!("start {}: {e}", binary.display()));
-
-        let addr = match read_listen_line(&mut child) {
-            Ok(addr) => addr,
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("vault-server did not report its address: {e}");
-            }
-        };
-
+        let (child, addr) = spawn(&command, binary, vault.path());
         let server = TestServer {
             child,
+            command,
+            binary: binary.to_owned(),
             addr,
             vault,
             _config: config,
@@ -166,6 +171,17 @@ impl TestServer {
         };
         server.wait_healthy();
         server
+    }
+
+    /// Stops the server and starts it again on the same vault, key and arguments, as a restart of
+    /// a real server does. It listens on a new random port.
+    pub fn restart(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let (child, addr) = spawn(&self.command, &self.binary, self.vault.path());
+        self.child = child;
+        self.addr = addr;
+        self.wait_healthy();
     }
 
     /// The base URL, such as `http://127.0.0.1:41234`, with no trailing slash.
@@ -212,6 +228,28 @@ impl Drop for TestServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// Starts the server `command` builds on `vault` and a random port, and reads back the address.
+fn spawn(command: &dyn Fn() -> Command, binary: &Path, vault: &Path) -> (Child, SocketAddr) {
+    let mut child = command()
+        .arg("--vault")
+        .arg(vault)
+        .arg("--listen")
+        .arg("127.0.0.1:0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|e| panic!("start {}: {e}", binary.display()));
+    match read_listen_line(&mut child) {
+        Ok(addr) => (child, addr),
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("vault-server did not report its address: {e}");
+        }
     }
 }
 
