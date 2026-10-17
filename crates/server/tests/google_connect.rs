@@ -359,8 +359,10 @@ fn finish_creates_the_settings_note_when_there_is_none() {
     let made = notes[0]["id"].as_str().unwrap();
     assert_eq!(api.fields(made)["account"], DEFAULT_ACCOUNT);
     assert_eq!(api.secrets(), SECRETS);
-    // No task exists yet, and that is not an error.
-    assert_eq!(api.status()["gmail"]["paused"], Value::Null);
+    // The shipped Google tasks are unpaused.
+    let status = api.status();
+    assert_eq!(status["gmail"]["paused"], false, "{status}");
+    assert_eq!(status["calendar"]["paused"], false, "{status}");
 }
 
 #[test]
