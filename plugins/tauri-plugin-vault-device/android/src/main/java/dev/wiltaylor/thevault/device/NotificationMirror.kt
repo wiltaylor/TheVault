@@ -88,9 +88,8 @@ object NotificationMirror {
             .putExtra(EXTRA_ID, id)
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val body = item.optString("body").takeIf { !item.isNull("body") && it.isNotEmpty() }
-        val icon = context.applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
         val builder = Notification.Builder(context, CHANNEL)
-            .setSmallIcon(icon)
+            .setSmallIcon(R.drawable.ic_stat_thevault)
             .setContentTitle(item.optString("title"))
             .setAutoCancel(true)
             .setContentIntent(PendingIntent.getActivity(context, code, open, flags))

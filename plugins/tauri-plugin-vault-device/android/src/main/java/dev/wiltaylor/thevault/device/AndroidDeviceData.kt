@@ -90,7 +90,7 @@ class AndroidDeviceData(
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val builder = android.app.Notification.Builder(context, CHANNEL)
-            .setSmallIcon(context.applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_thevault)
             .setContentTitle(title)
             .setAutoCancel(true)
         if (body.isNotEmpty()) builder.setContentText(body)

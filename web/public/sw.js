@@ -1,9 +1,9 @@
 // TheVault service worker. It caches the app shell (the page, its scripts and styles, the
-// manifest and the icon) so the app opens fast. It never caches /api: notes are always read from
+// manifest and the icons) so the app opens fast. It never caches /api: notes are always read from
 // the server, and there is no offline mode (D18).
 
-const CACHE = "thevault-shell-v1";
-const SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE = "thevault-shell-v2";
+const SHELL = ["/", "/manifest.webmanifest", "/favicon.ico", "/icon-32.png", "/icon-192.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

@@ -221,8 +221,9 @@ fn restart_label(version: Option<&str>) -> String {
     }
 }
 
+/// The mark alone on transparent, from assets/icon/generate.sh.
 fn plain_icon() -> Image<'static> {
-    tauri::include_image!("icons/32x32.png")
+    tauri::include_image!("icons/tray.png")
 }
 
 /// The icon with a red dot in its lower right corner.

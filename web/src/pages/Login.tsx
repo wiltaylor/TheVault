@@ -38,6 +38,7 @@ export function Login() {
         <Navigate href={safeNext(params.next)} />
       </Show>
       <form class="login-card" onSubmit={onSubmit}>
+        <img class="login-logo" src="/icon-192.png" alt="" width="72" height="72" />
         <h1>TheVault</h1>
         <label for="password">Password</label>
         <input
