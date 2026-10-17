@@ -85,6 +85,7 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
             startCapture()
             NotificationWorker.enqueue(context)
             CommandWorker.enqueue(context)
+            AppUpdateWorker.start(context)
             if (!pushStarted) {
                 pushStarted = true
                 PushRegistration.start(activity)

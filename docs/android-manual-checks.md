@@ -111,6 +111,7 @@ Run these for each release, with the APK attached to its GitHub Release.
 |---|---------|-------------|
 | 42 | Install the release APK over the previous release with `adb install -r`, or update it from Obtainium. | The update installs without uninstalling first. The app stays paired, and its notes are still there. |
 | 43 | Open **About** in Android's App info for TheVault. | The version matches the release tag. |
+| 49 | With the app paired, push working and **Install unknown apps** allowed for TheVault, publish a build with a higher version on the server with `just publish-clients`. Leave the app closed. | Within about a minute, with no tap when TheVault installed the app before (the first update over a hand-installed APK asks you to confirm once), the phone shows "TheVault updated to <version>". App info shows the new version, and the app is still paired with its notes. |
 
 ## Device commands and contact conflicts
 

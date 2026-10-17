@@ -10,6 +10,7 @@
 //! | `note.changed` | `{id, type, version, deleted}` |
 //! | `device.command` | `{device, id}` |
 //! | `device.settings` | `{device}` |
+//! | `clients.updated` | `{clients: [{kind, arch, version, build}]}`: every app build listed now |
 //!
 //! Each event's SSE `id` is its sequence number since the server started. A comment line goes
 //! out every [`HEARTBEAT`] so proxies keep the connection open. A client that falls too far
@@ -50,6 +51,17 @@ fn sse(seq: u64, event: &LiveEvent) -> Event {
         } => json!({ "id": id, "type": type_name, "version": version, "deleted": deleted }),
         LiveEvent::DeviceCommand { device, id } => json!({ "device": device, "id": id }),
         LiveEvent::DeviceSettings { device } => json!({ "device": device }),
+        LiveEvent::ClientsUpdated { clients } => json!({
+            "clients": clients
+                .iter()
+                .map(|c| json!({
+                    "kind": c.kind,
+                    "arch": c.arch,
+                    "version": c.version,
+                    "build": c.build,
+                }))
+                .collect::<Vec<_>>()
+        }),
     };
     Event::default()
         .event(event.name())

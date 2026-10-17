@@ -13,6 +13,10 @@
 //! `just publish-clients` call it. The server reads the manifest with [`read`] and serves only the
 //! files it lists, through [`find`]. The folder holds one build per platform, kind and
 //! architecture: publishing a build replaces the one before it.
+//!
+//! An AppImage published with its updater signature beside it, `<file>.AppImage.sig` as
+//! `tauri signer` writes it, carries that signature in the manifest, and [`update_for`] offers
+//! it to the desktop app's updater (`GET /api/clients/update/...`).
 
 use std::fmt;
 use std::io::{Read, Write};
@@ -45,6 +49,10 @@ pub struct Entry {
     pub filename: String,
     /// When it was published, in milliseconds since the epoch.
     pub published: i64,
+    /// The Tauri updater's signature of the file (the text of the `.sig` file `tauri signer`
+    /// writes: minisign, base64), for an AppImage published with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 /// `manifest.json`.
@@ -238,6 +246,133 @@ pub fn latest<'a>(manifest: &'a Manifest, kind: Kind, arch: Option<&str>) -> Opt
     }
 }
 
+/// The AppImage the desktop app's updater should install, when there is one newer than
+/// `current`: a release build for `target` (`linux`) and `arch` (`x86_64`, `aarch64`) published
+/// with its updater signature. A build without a signature is never offered, since the updater
+/// would refuse it.
+pub fn update_for<'a>(
+    manifest: &'a Manifest,
+    target: &str,
+    arch: &str,
+    current: &str,
+) -> Option<&'a Entry> {
+    if target != Kind::AppImage.platform() {
+        return None;
+    }
+    manifest
+        .clients
+        .iter()
+        .filter(|e| e.kind == Kind::AppImage.as_str() && e.arch == arch && e.build == "release")
+        .filter(|e| e.signature.is_some())
+        .filter(|e| is_newer(&e.version, current))
+        .max_by(|a, b| Version::parse(&a.version).cmp(&Version::parse(&b.version)))
+}
+
+/// Whether version `candidate` is newer than `current`, as semver orders them. A version that
+/// does not parse is never newer.
+pub fn is_newer(candidate: &str, current: &str) -> bool {
+    match (Version::parse(candidate), Version::parse(current)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
+
+/// A semantic version, compared by precedence: build metadata does not count, and a pre-release
+/// sorts before its release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Version {
+    core: [u64; 3],
+    pre: Vec<String>,
+}
+
+impl Version {
+    /// `1.2.3`, `v1.2.3`, `1.2.3-rc.1` or `1.2.3+build`.
+    pub fn parse(s: &str) -> Option<Version> {
+        let s = s.trim();
+        let s = s.strip_prefix(['v', 'V']).unwrap_or(s);
+        let s = s.split_once('+').map_or(s, |(v, _)| v);
+        let (core, pre) = match s.split_once('-') {
+            Some((core, pre)) => (core, Some(pre)),
+            None => (s, None),
+        };
+        let nums: Vec<&str> = core.split('.').collect();
+        let [major, minor, patch] = nums.as_slice() else {
+            return None;
+        };
+        let num = |p: &str| -> Option<u64> {
+            if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            p.parse().ok()
+        };
+        let core = [num(major)?, num(minor)?, num(patch)?];
+        let pre: Vec<String> = match pre {
+            Some(pre) => pre.split('.').map(str::to_owned).collect(),
+            None => Vec::new(),
+        };
+        if pre.iter().any(String::is_empty) {
+            return None;
+        }
+        Some(Version { core, pre })
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        self.core
+            .cmp(&other.core)
+            .then_with(|| match (self.pre.is_empty(), other.pre.is_empty()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                (false, false) => {
+                    for (a, b) in self.pre.iter().zip(&other.pre) {
+                        let order = match (a.parse::<u64>(), b.parse::<u64>()) {
+                            (Ok(x), Ok(y)) => x.cmp(&y),
+                            (Ok(_), Err(_)) => Ordering::Less,
+                            (Err(_), Ok(_)) => Ordering::Greater,
+                            (Err(_), Err(_)) => a.cmp(b),
+                        };
+                        if order != Ordering::Equal {
+                            return order;
+                        }
+                    }
+                    self.pre.len().cmp(&other.pre.len())
+                }
+            })
+    }
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` (RFC 3339, UTC) for a time in milliseconds since the epoch, as the
+/// updater's `pub_date` carries it.
+pub fn rfc3339(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let rem = secs.rem_euclid(86_400);
+    // Howard Hinnant's civil_from_days.
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
 /// The SHA-256 of a file, as lowercase hex, and its size.
 pub fn hash_file(path: &Path) -> Result<(String, u64), Error> {
     let mut file = std::fs::File::open(path).map_err(io_err(path))?;
@@ -347,7 +482,21 @@ fn describe(item: &Publish) -> Result<Entry, Error> {
         sha256: String::new(),
         filename,
         published: 0,
+        signature: None,
     })
+}
+
+/// The updater signature beside an AppImage, `<path>.sig`, when there is one.
+fn signature_beside(path: &Path) -> Result<Option<String>, Error> {
+    let mut sig = path.as_os_str().to_owned();
+    sig.push(".sig");
+    let sig = PathBuf::from(sig);
+    match std::fs::read_to_string(&sig) {
+        Ok(text) if !text.trim().is_empty() => Ok(Some(text.trim().to_owned())),
+        Ok(_) => Err(Error(format!("{}: the signature is empty", sig.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(io_err(&sig)(e)),
+    }
 }
 
 /// Copy `items` into `dir`, creating it, and rewrite the manifest. Each build replaces the one
@@ -379,6 +528,9 @@ pub fn publish(dir: &Path, items: &[Publish], now: i64) -> Result<Manifest, Erro
         entry.sha256 = sha256;
         entry.size = size;
         entry.published = now;
+        if entry.kind == Kind::AppImage.as_str() {
+            entry.signature = signature_beside(&item.path)?;
+        }
     }
     let mut stale = Vec::new();
     manifest.clients.retain(|old| {
@@ -509,6 +661,7 @@ mod tests {
                 sha256: hash_file(&apk).unwrap().0,
                 filename: "TheVault_0.1.0_aarch64-debug.apk".into(),
                 published: 1_000,
+                signature: None,
             }
         );
         assert_eq!(l.kind, "appimage");
@@ -570,6 +723,80 @@ mod tests {
         let err = publish(clients.path(), &[Publish::file(&unnamed)], 1).unwrap_err();
         assert!(err.to_string().contains("--version"), "{err}");
         assert!(!clients.path().join(MANIFEST).exists());
+    }
+
+    #[test]
+    fn an_appimage_carries_the_signature_published_beside_it() {
+        let src = tempfile::tempdir().unwrap();
+        let clients = tempfile::tempdir().unwrap();
+        let image = build(src.path(), "TheVault_0.2.0_amd64.AppImage", b"img");
+        build(
+            src.path(),
+            "TheVault_0.2.0_amd64.AppImage.sig",
+            b"c2lnbmF0dXJl\n",
+        );
+        let unsigned = build(src.path(), "TheVault_0.2.0_amd64.deb", b"deb");
+        let manifest = publish(
+            clients.path(),
+            &[Publish::file(&image), Publish::file(&unsigned)],
+            1_760_000_000_000,
+        )
+        .unwrap();
+        let image = latest(&manifest, Kind::AppImage, None).unwrap();
+        assert_eq!(image.signature.as_deref(), Some("c2lnbmF0dXJl"));
+        assert_eq!(latest(&manifest, Kind::Deb, None).unwrap().signature, None);
+        let text = std::fs::read_to_string(clients.path().join(MANIFEST)).unwrap();
+        assert_eq!(text.matches("\"signature\"").count(), 1, "{text}");
+
+        let version = |current| update_for(&manifest, "linux", "x86_64", current);
+        assert_eq!(version("0.1.0").unwrap().version, "0.2.0");
+        assert!(version("0.2.0").is_none());
+        assert!(version("0.3.0").is_none());
+        assert!(update_for(&manifest, "linux", "aarch64", "0.1.0").is_none());
+        assert!(update_for(&manifest, "windows", "x86_64", "0.1.0").is_none());
+    }
+
+    #[test]
+    fn an_unsigned_or_debug_appimage_is_never_an_update() {
+        let entry = |build: &str, signature: Option<&str>| Entry {
+            platform: "linux".into(),
+            kind: "appimage".into(),
+            arch: "x86_64".into(),
+            version: "1.0.0".into(),
+            build: build.into(),
+            size: 1,
+            sha256: "x".into(),
+            filename: "TheVault_1.0.0_x86_64.AppImage".into(),
+            published: 0,
+            signature: signature.map(str::to_owned),
+        };
+        for e in [entry("release", None), entry("debug", Some("sig"))] {
+            let manifest = Manifest { clients: vec![e] };
+            assert!(update_for(&manifest, "linux", "x86_64", "0.1.0").is_none());
+        }
+    }
+
+    #[test]
+    fn versions_compare_as_semver() {
+        assert!(is_newer("0.2.0", "0.1.9"));
+        assert!(is_newer("0.10.0", "0.9.0"));
+        assert!(is_newer("v1.0.0", "1.0.0-rc.1"));
+        assert!(is_newer("1.0.0-rc.10", "1.0.0-rc.2"));
+        assert!(is_newer("1.0.0-beta", "1.0.0-alpha"));
+        assert!(!is_newer("1.0.0", "1.0.0"));
+        assert!(!is_newer("1.0.0+build.7", "1.0.0"));
+        assert!(!is_newer("0.9.0", "1.0.0"));
+        assert!(!is_newer("1.0", "0.1.0"));
+        assert!(!is_newer("latest", "0.1.0"));
+        assert!(!is_newer("2.0.0", "nonsense"));
+    }
+
+    #[test]
+    fn formats_rfc3339_times() {
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(951_782_400_000), "2000-02-29T00:00:00Z");
+        assert_eq!(rfc3339(1_791_796_507_999), "2026-10-12T09:15:07Z");
+        assert_eq!(rfc3339(-1000), "1969-12-31T23:59:59Z");
     }
 
     #[test]

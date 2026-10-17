@@ -1555,3 +1555,100 @@ fn clients_publish_writes_the_manifest_the_server_serves() {
         manifest["clients"][0]["sha256"]
     );
 }
+
+/// The `data` of the next `event` on the server's `/api/events`, read as the owner, after
+/// `act` runs, within 20 seconds.
+fn next_event(server: &TestServer, event: &str, act: impl FnOnce()) -> Value {
+    use std::io::{BufRead, BufReader};
+    let res = reqwest::blocking::Client::builder()
+        .timeout(None)
+        .build()
+        .unwrap()
+        .get(server.url("/api/events"))
+        .bearer_auth(server.admin_token())
+        .send()
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let want = event.to_owned();
+    std::thread::spawn(move || {
+        let mut current = String::new();
+        for line in BufReader::new(res).lines() {
+            let Ok(line) = line else { return };
+            if let Some(name) = line.strip_prefix("event:") {
+                current = name.trim().to_owned();
+            } else if let Some(data) = line.strip_prefix("data:")
+                && current == want
+            {
+                let _ = tx.send(serde_json::from_str::<Value>(data.trim()).unwrap());
+                return;
+            }
+        }
+    });
+    act();
+    rx.recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap_or_else(|_| panic!("no {event} event arrived"))
+}
+
+#[test]
+fn a_cli_publish_while_the_server_runs_is_announced_and_offered_to_the_updater() {
+    let scratch = TempDir::new().unwrap();
+    let dir = scratch.path().join("clients");
+    let image = scratch.path().join("TheVault_0.5.0_amd64.AppImage");
+    std::fs::write(&image, b"appimage").unwrap();
+    // `tauri signer sign` writes the signature beside the bundle.
+    std::fs::write(
+        scratch.path().join("TheVault_0.5.0_amd64.AppImage.sig"),
+        "dW50cnVzdGVkIGNvbW1lbnQ=\n",
+    )
+    .unwrap();
+    let server = TestServer::start_with_args(
+        |_| {},
+        &[
+            std::ffi::OsStr::new("--clients"),
+            dir.as_os_str(),
+            std::ffi::OsStr::new("--clients-poll-ms"),
+            std::ffi::OsStr::new("100"),
+        ],
+    );
+    let update = |current: &str| {
+        reqwest::blocking::get(server.url(&format!("/api/clients/update/linux/x86_64/{current}")))
+            .unwrap()
+    };
+    assert_eq!(update("0.1.0").status().as_u16(), 204, "nothing published");
+
+    let data = next_event(&server, "clients.updated", || {
+        Vault::offline().ok(
+            &[
+                "clients",
+                "publish",
+                "--dir",
+                dir.to_str().unwrap(),
+                image.to_str().unwrap(),
+            ],
+            "",
+        );
+    });
+    assert_eq!(
+        data,
+        json!({ "clients": [
+            { "kind": "appimage", "arch": "x86_64", "version": "0.5.0", "build": "release" }
+        ] })
+    );
+
+    let res = update("0.1.0");
+    assert_eq!(res.status().as_u16(), 200);
+    let body: Value = res.json().unwrap();
+    assert_eq!(body["version"], "0.5.0");
+    assert_eq!(body["signature"], "dW50cnVzdGVkIGNvbW1lbnQ=");
+    assert_eq!(
+        body["url"],
+        server.url("/api/clients/TheVault_0.5.0_x86_64.AppImage")
+    );
+    let bytes = reqwest::blocking::get(s(&body["url"]))
+        .unwrap()
+        .bytes()
+        .unwrap();
+    assert_eq!(bytes.as_ref(), b"appimage");
+    assert_eq!(update("0.5.0").status().as_u16(), 204, "up to date");
+}

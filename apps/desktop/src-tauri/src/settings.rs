@@ -3,7 +3,8 @@
 //!
 //! "Start on login" writes an XDG autostart entry, `$XDG_CONFIG_HOME/autostart/dev.wiltaylor.thevault.desktop`,
 //! that starts the app minimised to the tray; turning it off removes the entry. "Check for
-//! updates" turns the update check on and off ([`crate::update`]).
+//! updates" turns the update check on and off ([`crate::update`]), and "Install updates on
+//! quit" installs an update downloaded and waiting when the app quits ([`crate::self_update`]).
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +22,9 @@ pub struct Settings {
     pub update_check: bool,
     /// The newer version the user chose not to be told about again.
     pub skipped_update: Option<String>,
+    /// Install an update that is downloaded and waiting when the app quits, so the next start
+    /// runs it without asking.
+    pub install_on_quit: bool,
 }
 
 impl Default for Settings {
@@ -29,6 +33,7 @@ impl Default for Settings {
             autostart: false,
             update_check: true,
             skipped_update: None,
+            install_on_quit: true,
         }
     }
 }
@@ -139,11 +144,25 @@ mod tests {
             autostart: true,
             update_check: false,
             skipped_update: Some("0.2.0".into()),
+            install_on_quit: false,
         };
         save(dir.path(), &changed).unwrap();
         assert_eq!(load(dir.path()), changed);
         std::fs::write(dir.path().join("settings.json"), "not json").unwrap();
         assert_eq!(load(dir.path()), Settings::default());
+    }
+
+    #[test]
+    fn settings_saved_before_install_on_quit_turn_it_on() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            r#"{"autostart":true,"update_check":true,"skipped_update":null}"#,
+        )
+        .unwrap();
+        let loaded = load(dir.path());
+        assert!(loaded.autostart);
+        assert!(loaded.install_on_quit);
     }
 
     #[test]

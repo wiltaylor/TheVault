@@ -347,3 +347,43 @@ async fn other_refusals_are_not_retried() {
     assert_eq!(service.requests().len(), 1);
     assert!(state.device(&id).unwrap().push.is_some());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_publish_of_app_builds_is_coalesced_and_reaches_every_device() {
+    let dir = TempDir::new().unwrap();
+    let state = open_state(&dir);
+    let service = StandIn::start();
+    service.route("/a", Reply::text(201, ""));
+    service.route("/b", Reply::text(201, ""));
+    let (ka, kb) = (Keys::new(1), Keys::new(2));
+    device(&state, "A", Some(&ka.target(service.url("/a"))));
+    device(&state, "B", Some(&kb.target(service.url("/b"))));
+    device(&state, "C", None);
+    quick()
+        .with_note_window(Duration::from_millis(50), Duration::from_millis(800))
+        .spawn(state.clone());
+    let publish = |version: &str| {
+        state.events().publish(state::LiveEvent::ClientsUpdated {
+            clients: vec![state::ClientBuild {
+                kind: "apk".into(),
+                arch: "aarch64".into(),
+                version: version.into(),
+                build: "release".into(),
+            }],
+        })
+    };
+    // A burst of publishes, the APK and then the desktop builds, sends one push to each device.
+    publish("0.2.0");
+    publish("0.2.0");
+    let seen = wait_for(&service, 2).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(service.requests().len(), 2, "{:?}", service.requests());
+    let mut paths: Vec<&str> = seen.iter().map(|r| r.path.as_str()).collect();
+    paths.sort();
+    assert_eq!(paths, ["/a", "/b"]);
+    for r in &seen {
+        let keys = if r.path == "/a" { &ka } else { &kb };
+        assert_eq!(r.header("urgency"), Some("normal"));
+        assert_eq!(keys.open(&r.body), json!({ "event": "clients.updated" }));
+    }
+}

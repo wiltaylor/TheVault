@@ -62,16 +62,32 @@ desktop-build: (require-tool "cargo-tauri") web-build
 [group('desktop')]
 desktop-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-tool "gnome-keyring-daemon") desktop-build
 	cd apps/desktop/src-tauri && cargo test && cargo build --example fake-notifyd
-	cargo build -p server -p testkit --bins
+	cargo build -p server -p testkit -p cli --bins
 	xvfb-run -a pnpm -C apps/desktop/e2e test
 
-# Build the release bundles, AppImage, deb and rpm, into target/desktop-release with their SHA256SUMS (D11)
+# Build the release bundles, AppImage, deb and rpm, into target/desktop-release with their SHA256SUMS (D11); with the updater key (TAURI_SIGNING_PRIVATE_KEY, docs/desktop.md) the AppImage gets its updater signature, .AppImage.sig
 [group('desktop')]
-desktop-release: (require-tool "cargo-tauri") web-build
+desktop-release: (require-tool "cargo-tauri") (require-tool "jq") web-build
+	#!/usr/bin/env bash
+	set -euo pipefail
+	updater_env="${XDG_CONFIG_HOME:-$HOME/.config}/thevault/updater/updater.env"
+	if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -f "$updater_env" ]; then . "$updater_env"; fi
 	rm -rf apps/desktop/src-tauri/target/release/bundle target/desktop-release
-	cd apps/desktop && XDG_CACHE_HOME="$PWD/src-tauri/target/tauri-cache" APPIMAGE_EXTRACT_AND_RUN=1 cargo tauri build --bundles appimage,deb,rpm
+	# The updater signature is made below, bound to the version, so the build makes none itself.
+	(cd apps/desktop && env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD XDG_CACHE_HOME="$PWD/src-tauri/target/tauri-cache" APPIMAGE_EXTRACT_AND_RUN=1 cargo tauri build --bundles appimage,deb,rpm)
 	mkdir -p target/desktop-release
 	cp apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage apps/desktop/src-tauri/target/release/bundle/deb/*.deb apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm target/desktop-release/
+	if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+		version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+		key=(-k "$TAURI_SIGNING_PRIVATE_KEY")
+		if [ -f "$TAURI_SIGNING_PRIVATE_KEY" ]; then key=(-f "$TAURI_SIGNING_PRIVATE_KEY"); fi
+		for image in target/desktop-release/*.AppImage; do
+			env -u TAURI_SIGNING_PRIVATE_KEY cargo tauri signer sign "${key[@]}" --app-version "$version" "$image" > /dev/null
+			echo "signed $image for the updater"
+		done
+	else
+		echo "TAURI_SIGNING_PRIVATE_KEY is not set: the AppImage has no updater signature, so installed apps will not update to it (docs/desktop.md)" >&2
+	fi
 	cd target/desktop-release && sha256sum * > SHA256SUMS
 
 # Build the release bundles, then check that the AppImage starts to the setup page under Xvfb
@@ -125,11 +141,13 @@ android-emulator-checks: (require-tool "emulator") (require-tool "adb") (require
 android-check: (require-tool "cargo-ndk")
 	scripts/android-check.sh
 
-# Build the signed release APK for aarch64 into target/android-release with its SHA256SUMS, signed with the keystore THEVAULT_ANDROID_KEYSTORE names (D10)
+# Build the signed release APK for aarch64 into target/android-release with its SHA256SUMS, signed with the keystore THEVAULT_ANDROID_KEYSTORE names, read from ~/.config/thevault/android/keystore.env when it is not set (D10)
 [group('android')]
 android-release: (require-tool "cargo-tauri") (require-tool "cargo-ndk") (require-tool "jq") web-build
 	#!/usr/bin/env bash
 	set -euo pipefail
+	keystore_env="${XDG_CONFIG_HOME:-$HOME/.config}/thevault/android/keystore.env"
+	if [ -z "${THEVAULT_ANDROID_KEYSTORE:-}" ] && [ -f "$keystore_env" ]; then . "$keystore_env"; fi
 	for var in THEVAULT_ANDROID_KEYSTORE THEVAULT_ANDROID_KEYSTORE_PASSWORD THEVAULT_ANDROID_KEY_ALIAS; do
 		if [ -z "${!var:-}" ]; then
 			echo "$var is not set; see docs/android-release.md" >&2
@@ -161,25 +179,38 @@ android-test: (require-tool "java") android-build
 	cd apps/android/src-tauri && cargo rustc -p tauri-plugin-vault-device --lib --crate-type cdylib
 	cd apps/android/src-tauri/gen/android && VAULT_CORE_LIBRARY="$PWD/../../target/debug/libtauri_plugin_vault_device.so" ./gradlew --no-daemon testDebugUnitTest
 
-# Copy the newest app builds into a server's clients folder (its --clients, by default <vault>/.vault/clients) and rewrite its manifest.json; build='missing' builds what is not built yet, build='none' publishes only what is there
+# Copy the newest app builds into a server's clients folder (its --clients, by default <vault>/.vault/clients) and rewrite its manifest.json, which a running server announces to the apps so they update themselves; build='missing' builds what is not built yet, build='all' builds everything again, build='none' publishes only what is there
 [group('clients')]
 publish-clients dir build='missing': (require-tool "cargo") (require-tool "jq")
 	#!/usr/bin/env bash
 	set -euo pipefail
-	case "{{build}}" in missing|none) ;; *) echo "build must be missing or none, not {{build}}" >&2; exit 1 ;; esac
+	case "{{build}}" in missing|all|none) ;; *) echo "build must be missing, all or none, not {{build}}" >&2; exit 1 ;; esac
+	# The signing keys outside the repository (docs/android-release.md, docs/desktop.md); ./dev reads them too.
+	config="${XDG_CONFIG_HOME:-$HOME/.config}/thevault"
+	if [ -z "${THEVAULT_ANDROID_KEYSTORE:-}" ] && [ -f "$config/android/keystore.env" ]; then . "$config/android/keystore.env"; fi
+	if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -f "$config/updater/updater.env" ]; then . "$config/updater/updater.env"; fi
 	cargo build -q -p cli --bin vault
 	vault=target/debug/vault
 	dir="{{dir}}"
 	mkdir -p "$dir"
 	shopt -s nullglob
 	newest() { if [ $# -gt 0 ]; then ls -t -- "$@" | head -n 1; fi; }
-	# Android: the signed release APK, or else the debug APK of the last phone build, labelled debug.
+	# Android: the signed release APK, built when the release keystore is there, or else the debug
+	# APK of the last phone build, labelled debug.
 	apks=apps/android/src-tauri/gen/android/app/build/outputs/apk
 	debug_apk() { newest "$apks"/arm64/debug/*-debug.apk "$apks"/universal/debug/*-debug.apk; }
+	keystore=""
+	if [ -n "${THEVAULT_ANDROID_KEYSTORE:-}" ] && [ -f "$THEVAULT_ANDROID_KEYSTORE" ]; then keystore=yes; fi
+	android_toolchain=""
+	if command -v cargo-ndk > /dev/null 2>&1; then android_toolchain=yes; fi
 	release_apk=$(newest target/android-release/*.apk)
+	if [ -n "$keystore" ] && [ -n "$android_toolchain" ] && { [ "{{build}}" = all ] || { [ -z "$release_apk" ] && [ "{{build}}" = missing ]; }; }; then
+		just android-release
+		release_apk=$(newest target/android-release/*.apk)
+	fi
 	debug=$(debug_apk)
-	if [ -z "$release_apk" ] && [ -z "$debug" ] && [ "{{build}}" = missing ]; then
-		if command -v cargo-ndk > /dev/null 2>&1; then
+	if [ -z "$release_apk" ] && { [ "{{build}}" = all ] || { [ -z "$debug" ] && [ "{{build}}" = missing ]; }; }; then
+		if [ -n "$android_toolchain" ]; then
 			just android-build aarch64
 			debug=$(debug_apk)
 		else
@@ -194,9 +225,10 @@ publish-clients dir build='missing': (require-tool "cargo") (require-tool "jq")
 		"$vault" clients publish --dir "$dir" --build debug --version "$version" "$debug" > /dev/null
 		echo "published $debug as a debug build: there is no signed release APK (just android-release)"
 	fi
-	# Linux: the AppImage, deb and rpm of the last desktop release build.
+	# Linux: the AppImage, with its updater signature beside it when there is one, deb and rpm of
+	# the last desktop release build.
 	desktop=(target/desktop-release/*.AppImage target/desktop-release/*.deb target/desktop-release/*.rpm)
-	if [ ${#desktop[@]} -eq 0 ] && [ "{{build}}" = missing ]; then
+	if [ "{{build}}" = all ] || { [ ${#desktop[@]} -eq 0 ] && [ "{{build}}" = missing ]; }; then
 		just desktop-release
 		desktop=(target/desktop-release/*.AppImage target/desktop-release/*.deb target/desktop-release/*.rpm)
 	fi
@@ -205,7 +237,7 @@ publish-clients dir build='missing': (require-tool "cargo") (require-tool "jq")
 		printf 'published %s\n' "${desktop[@]}"
 	fi
 	if [ -f "$dir/manifest.json" ]; then
-		jq -r '.clients[] | "\(.platform)\t\(.kind)\t\(.arch)\t\(.version)\t\(.build)\t\(.size)\t\(.filename)"' "$dir/manifest.json"
+		jq -r '.clients[] | "\(.platform)\t\(.kind)\t\(.arch)\t\(.version)\t\(.build)\t\(.size)\t\(.filename)\t\(if .signature then "signed" else "" end)"' "$dir/manifest.json"
 	else
 		echo "nothing is published in $dir"
 	fi

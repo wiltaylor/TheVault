@@ -18,6 +18,10 @@
 //! A device's settings changing in Settings > Devices is coalesced the same way, in a batch of
 //! its own: each device whose settings changed is sent `{"event": "device.settings"}`, and only
 //! that device. The device takes its settings again in the sync round it runs on it.
+//!
+//! The app builds the server hands out changing (`clients.updated`, a publish) is coalesced the
+//! same way too: every device with an endpoint is sent `{"event": "clients.updated"}` once per
+//! window, and checks the server for a newer app.
 
 pub mod webpush;
 
@@ -79,7 +83,9 @@ pub fn message(event: &LiveEvent) -> Option<Message> {
             "high",
         ),
         // Coalesced by the dispatcher instead: see [`Changes`].
-        LiveEvent::NoteChanged { .. } | LiveEvent::DeviceSettings { .. } => return None,
+        LiveEvent::NoteChanged { .. }
+        | LiveEvent::DeviceSettings { .. }
+        | LiveEvent::ClientsUpdated { .. } => return None,
     };
     Some(Message {
         device,
@@ -156,9 +162,12 @@ impl Dispatcher {
             let mut changes = Changes::new(this.note_delay, this.note_window);
             // The devices whose settings changed, as changes with no token.
             let mut settings = Changes::new(this.note_delay, this.note_window);
+            // Publishes of app builds, as one change with no token.
+            let mut clients = Changes::new(this.note_delay, this.note_window);
             loop {
                 let due = changes.due();
                 let settings_due = settings.due();
+                let clients_due = clients.due();
                 tokio::select! {
                     got = events.recv() => match got {
                         Ok((_, LiveEvent::NoteChanged { id, token, .. })) => {
@@ -166,6 +175,9 @@ impl Dispatcher {
                         }
                         Ok((_, LiveEvent::DeviceSettings { device })) => {
                             settings.add(device, None, Instant::now());
+                        }
+                        Ok((_, LiveEvent::ClientsUpdated { .. })) => {
+                            clients.add(CLIENTS_UPDATED.to_owned(), None, Instant::now());
                         }
                         Ok((_, event)) => {
                             if let Some(message) = message(&event) {
@@ -180,6 +192,8 @@ impl Dispatcher {
                             this.send_changes(&owner, batch).await;
                             let batch = settings.take(Instant::now());
                             this.send_settings(&owner, batch).await;
+                            let batch = clients.take(Instant::now());
+                            this.send_clients(&owner, batch).await;
                             return;
                         }
                     },
@@ -190,6 +204,10 @@ impl Dispatcher {
                     _ = tokio::time::sleep_until(settings_due.unwrap_or_else(Instant::now)), if settings_due.is_some() => {
                         let batch = settings.take(Instant::now());
                         this.send_settings(&owner, batch).await;
+                    }
+                    _ = tokio::time::sleep_until(clients_due.unwrap_or_else(Instant::now)), if clients_due.is_some() => {
+                        let batch = clients.take(Instant::now());
+                        this.send_clients(&owner, batch).await;
                     }
                 }
             }
@@ -264,6 +282,20 @@ impl Dispatcher {
                     .await;
             });
         }
+    }
+
+    /// Start telling every device with an endpoint that the app builds changed, when `batch`
+    /// holds a publish.
+    async fn send_clients<S: HasState>(self: &Arc<Self>, owner: &Arc<S>, batch: Vec<Change>) {
+        if batch.is_empty() {
+            return;
+        }
+        let message = Message {
+            device: None,
+            body: json!({ "event": CLIENTS_UPDATED }),
+            urgency: "normal",
+        };
+        self.send(owner, message).await;
     }
 
     /// Start delivering `message` to every device it is for, each on its own task.
@@ -353,6 +385,9 @@ pub fn targets(devices: Vec<Device>, only: Option<&str>) -> Vec<(String, PushTar
         .filter_map(|d| d.push.map(|p| (d.id, p)))
         .collect()
 }
+
+/// The event, and push message, that says the app builds changed.
+pub const CLIENTS_UPDATED: &str = "clients.updated";
 
 /// The most note ids one `note.changed` push names. A WebPush message holds about 4 KB.
 pub const MAX_IDS: usize = 64;

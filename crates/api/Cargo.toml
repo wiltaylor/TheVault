@@ -18,7 +18,7 @@ schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 state.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio = { workspace = true, features = ["fs", "io-util", "time"] }
 vocab.workspace = true
 writer.workspace = true
 

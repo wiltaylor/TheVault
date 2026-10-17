@@ -71,6 +71,7 @@ use scheduler::{Scheduler, TestClock};
 use serde_json::{Value, json};
 use writer::Writer;
 
+pub use apps::watch as watch_clients;
 pub use auth::{Caller, OWNER_SESSION, SESSION_COOKIE, required_scope};
 pub use devices::DEFAULT_SKIP_PATTERN;
 pub use error::ApiError;
@@ -276,7 +277,11 @@ fn build() -> Built {
     let apps = Routes::new()
         .get("/api/clients", apps::list)
         .get("/api/clients/{filename}", apps::download)
-        .get("/api/clients/latest/{kind}", apps::latest);
+        .get("/api/clients/latest/{kind}", apps::latest)
+        .get(
+            "/api/clients/update/{target}/{arch}/{current_version}",
+            apps::update,
+        );
     Built {
         api,
         login,

@@ -10,6 +10,8 @@
 //   THEVAULT_EMULATOR_OUT   where results go (default .scratch/emulator)
 //   THEVAULT_CHECKS         comma-separated check numbers to report; the setup the others need still runs
 //   THEVAULT_PERIODIC_WAIT  minutes to wait for the 15-minute background work (default 17)
+//   THEVAULT_UPDATE_APK     the newer APK check 49 publishes, with THEVAULT_UPDATE_VERSION its version
+//                           (default: built here, the same app one patch version up)
 //
 // What the emulator stands in for, and how:
 //   - The home server is a vault-server on a fresh temporary vault, on 127.0.0.1, which the
@@ -26,7 +28,7 @@
 //     app from an untrusted installer (ACCESS_RESTRICTED_SETTINGS=deny) is set by hand first.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as L from "./lib.mjs";
@@ -160,6 +162,8 @@ async function startServer() {
   const port = listen.split(":").pop();
   srv = new L.Server(`http://127.0.0.1:${port}`, PASSWORD);
   srv.devicePort = port;
+  srv.vault = vault;
+  srv.env = env;
   await srv.login();
   console.log(`home server on ${srv.base}, vault ${vault}`);
 }
@@ -347,6 +351,24 @@ async function local(method, path, body) {
     },
     [method, path, body],
   );
+}
+
+/**
+ * The newer APK check 49 publishes, and its version: THEVAULT_UPDATE_APK, or the app built again
+ * one patch version above apps/android/src-tauri/tauri.conf.json's.
+ */
+async function updateApk() {
+  if (process.env.THEVAULT_UPDATE_APK) return [process.env.THEVAULT_UPDATE_VERSION, process.env.THEVAULT_UPDATE_APK];
+  const conf = JSON.parse(readFileSync(join(repo, "apps/android/src-tauri/tauri.conf.json"), "utf8"));
+  const [major, minor, patch] = conf.version.split(".").map(Number);
+  const version = `${major}.${minor}.${patch + 1}`;
+  const built = join(cache, `TheVault_${version}_x86_64-debug.apk`);
+  if (!existsSync(built)) {
+    const env = { ...process.env, CARGO_PROFILE_DEV_DEBUG: "0", CARGO_PROFILE_DEV_STRIP: "symbols", GRADLE_OPTS: `${process.env.GRADLE_OPTS ?? ""} -Dorg.gradle.daemon=false` };
+    await L.run("cargo", ["tauri", "android", "build", "--debug", "--apk", "--target", "x86_64", "--config", JSON.stringify({ version })], { cwd: join(repo, "apps/android"), env });
+    copyFileSync(join(repo, "apps/android/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk"), built);
+  }
+  return [version, built];
 }
 
 /** Runs every WorkManager job of the app now, as if its constraints and delay were met. */
@@ -1312,6 +1334,38 @@ async function main() {
     const shot = trySnap("offline-error");
     for (const n of [9, 15, 40, 41, 22, 48]) if (!results[n]) record(n, "fail", `The offline and background part of the run stopped: ${e.message}`, [shot]);
   }
+
+  // 49: the app updates itself from the server (D27).
+  await check(49, async () => {
+    const versionCode = () => Number(/versionCode=(\d+)/.exec(shell(`dumpsys package ${PKG}`))?.[1] ?? 0);
+    const before = versionCode();
+    const [version, newer] = await updateApk();
+    // Reinstalled with itself as the installer of record, as after an update it made, so this
+    // update needs no tap; the first one over an adb or browser install asks once.
+    adb("install", "-r", "-i", PKG, apk);
+    shell(`appops set ${PKG} REQUEST_INSTALL_PACKAGES allow`);
+    openApp();
+    await sleep(5_000);
+    closeApp();
+    execFileSync(join(repo, "target/debug/vault"), ["clients", "publish", "--vault", srv.vault, "--build", "debug", "--version", version, "--arch", "x86_64", newer], { env: srv.env, stdio: ["ignore", "ignore", "inherit"] });
+    const t0 = Date.now();
+    let nudged = false;
+    try {
+      // The server sees the publish within its 30-second poll and pushes clients.updated.
+      await until("the newer version installed", () => versionCode() > before, { timeout: 120_000, every: 2_000 });
+    } catch {
+      // No push: opening the app checks too.
+      nudged = true;
+      openApp();
+      await until("the newer version installed", () => versionCode() > before, { timeout: 120_000, every: 2_000 });
+    }
+    const after = versionCode();
+    const notice = await until("the updated notice", () => L.appNotifications().find((n) => /TheVault updated/.test(n.title)), { timeout: 30_000 }).catch(() => null);
+    const shot = snap("49-updated");
+    const name = /versionName=(\S+)/.exec(shell(`dumpsys package ${PKG}`))?.[1];
+    const ok = after > before && name === version && notice && !nudged;
+    return [ok ? "pass" : "fail", `Published ${version} on the server with the app closed: versionCode ${before} -> ${after} (versionName ${name}) ${elapsed(t0)} later${nudged ? ", but only after the app was opened (no clients.updated push)" : ", by push, with no tap"}. Notice: ${notice ? `"${notice.title}: ${notice.text}"` : "none"}.`, [shot]];
+  });
 
   // 4, 23: revoke, clear storage, pair again refusing notifications.
   await check(4, async () => {

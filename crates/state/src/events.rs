@@ -38,6 +38,20 @@ pub enum LiveEvent {
     DeviceCommand { device: String, id: String },
     /// A device's settings changed in Settings > Devices, so the device should take them again.
     DeviceSettings { device: String },
+    /// The app builds the server hands out (`/api/clients`) changed: a build was published,
+    /// replaced or removed. `clients` is every build listed now.
+    ClientsUpdated { clients: Vec<ClientBuild> },
+}
+
+/// One app build in a [`LiveEvent::ClientsUpdated`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientBuild {
+    /// `apk`, `appimage`, `deb` or `rpm`.
+    pub kind: String,
+    pub arch: String,
+    pub version: String,
+    /// `release` or `debug`.
+    pub build: String,
 }
 
 impl LiveEvent {
@@ -51,6 +65,7 @@ impl LiveEvent {
             LiveEvent::NoteChanged { .. } => "note.changed",
             LiveEvent::DeviceCommand { .. } => "device.command",
             LiveEvent::DeviceSettings { .. } => "device.settings",
+            LiveEvent::ClientsUpdated { .. } => "clients.updated",
         }
     }
 }

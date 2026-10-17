@@ -23,10 +23,24 @@ if [ -t 0 ] && [ -t 1 ]; then
   tty_flags=(-it)
 fi
 
-# The Android release keystore lives outside the repository (D10): pass its passwords through by
-# name, so they never appear on the docker command line, and mount the keystore file read-only.
+# The signing keys live outside the repository, in ~/.config/thevault (docs/android-release.md,
+# docs/desktop.md): the Android release keystore (D10) and the desktop updater's minisign key.
+# Their env files are read when they exist and the variables are not already set, unless
+# THEVAULT_NO_SIGNING_KEYS=1. The passwords pass through by name, so they never appear on the
+# docker command line, and the key files are mounted read-only.
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}/thevault"
+if [ "${THEVAULT_NO_SIGNING_KEYS:-}" != 1 ]; then
+  if [ -z "${THEVAULT_ANDROID_KEYSTORE:-}" ] && [ -f "$config_home/android/keystore.env" ]; then
+    # shellcheck disable=SC1091
+    . "$config_home/android/keystore.env"
+  fi
+  if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -f "$config_home/updater/updater.env" ]; then
+    # shellcheck disable=SC1091
+    . "$config_home/updater/updater.env"
+  fi
+fi
 keystore_flags=()
-for var in THEVAULT_ANDROID_KEYSTORE_PASSWORD THEVAULT_ANDROID_KEY_ALIAS THEVAULT_ANDROID_KEY_PASSWORD; do
+for var in THEVAULT_ANDROID_KEYSTORE_PASSWORD THEVAULT_ANDROID_KEY_ALIAS THEVAULT_ANDROID_KEY_PASSWORD TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
   if [ -n "${!var:-}" ]; then
     keystore_flags+=(-e "$var")
   fi
@@ -34,6 +48,15 @@ done
 if [ -n "${THEVAULT_ANDROID_KEYSTORE:-}" ]; then
   keystore=$(realpath "$THEVAULT_ANDROID_KEYSTORE")
   keystore_flags+=(-e "THEVAULT_ANDROID_KEYSTORE=$keystore" -v "$keystore:$keystore:ro")
+fi
+# TAURI_SIGNING_PRIVATE_KEY is a key file's path or the key itself.
+if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  if [ -f "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+    updater_key=$(realpath "$TAURI_SIGNING_PRIVATE_KEY")
+    keystore_flags+=(-e "TAURI_SIGNING_PRIVATE_KEY=$updater_key" -v "$updater_key:$updater_key:ro")
+  else
+    keystore_flags+=(-e TAURI_SIGNING_PRIVATE_KEY)
+  fi
 fi
 
 # The Android emulator (`just android-emulator-checks`) needs KVM; pass it through when the host
@@ -48,6 +71,10 @@ for var in THEVAULT_APK THEVAULT_EMULATOR_OUT THEVAULT_CHECKS THEVAULT_PERIODIC_
   fi
 done
 
+# ANDROID_USER_HOME, where the Android Gradle plugin keeps the debug keystore it signs debug APKs
+# with, is in the thevault-gradle volume rather than the tmpfs HOME, so every debug build is signed
+# with the same key and a debug APK installs over the one before it.
+#
 # /tmp is a tmpfs. Every test vault lives in a temporary folder, and the server fsyncs each write;
 # on the container's disk-backed /tmp, other workers' builds writing to the same disk stretched
 # those fsyncs to seconds and timed tests out (tickets 72, 74, 83). Test data needs no durability.
@@ -56,7 +83,7 @@ exec docker run --rm "${tty_flags[@]}" "${keystore_flags[@]}" "${kvm_flags[@]}" 
   --network host \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp/home \
-  -e ANDROID_USER_HOME=/tmp/home/.android \
+  -e ANDROID_USER_HOME=/gradle/android-user \
   -e CARGO_TERM_COLOR=always \
   -v thevault-cargo:/cargo \
   -v thevault-pnpm:/pnpm-store \

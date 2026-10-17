@@ -46,8 +46,10 @@ The app puts an icon in the tray (D12). Its menu has:
 
 - **Quick capture**: shows the window with the capture dialog open.
 - **Open TheVault**: shows the window.
+- **Restart to update to `<version>`**: greyed out, as **No update waiting**, until an update is downloaded. Then it installs the update and starts the new version. See [Updates](#updates).
 - **Start on login**: a check item. On, the app writes an XDG autostart entry that starts it with `--minimised`, so it starts in the tray with its window hidden. Off, the entry is removed.
 - **Check for updates**: a check item, on by default. See [Updates](#updates).
+- **Install updates on quit**: a check item, on by default. On, quitting installs an update that is downloaded and waiting, so the next start runs it.
 - **Quit**: ends the app.
 
 While the home server has unread notifications, the icon carries a red dot, the count shows beside the icon where the tray shows titles (KDE and most StatusNotifier trays), and the tooltip says how many there are. Closing the window hides it in the tray; the app keeps syncing and mirroring notifications. Without a tray (the desktop has no StatusNotifier host, or `libayatana-appindicator3` is missing), the app says so on stderr and closing the window ends it.
@@ -96,18 +98,47 @@ On either desktop, if step 3 fails, read `hotkey` in `/_desktop/status` (from th
 
 ## Updates
 
-About 10 seconds after it starts, and once a day after that, the app checks for a newer version (D27):
+The app checks for a newer version about 10 seconds after it starts, every 4 hours after that, and at once when the paired server announces a new build: the server sends `clients.updated` on the event stream the app keeps open whenever a build is published into its clients folder (D27; see [`docs/clients.md`](clients.md#updates)).
 
-1. It asks the server it is paired with for `/api/clients`, the builds the server hands out (see [`docs/clients.md`](clients.md)). When the server publishes an AppImage for this machine's architecture, that AppImage's version is the one compared, and GitHub is not asked.
+### The AppImage updates itself
+
+An app that runs as an AppImage (`$APPIMAGE` is set) and is paired updates itself from its server, with the Tauri updater (`tauri-plugin-updater` 2):
+
+1. It asks the server's updater endpoint, `GET /api/clients/update/linux/<arch>/<version>`. The server answers 204 when it publishes no signed release AppImage newer than the app, or the updater's JSON for the newer one.
+2. The app downloads the AppImage in the background and verifies its signature with the public key built into the app (`plugins.updater.pubkey` in `apps/desktop/src-tauri/tauri.conf.json`). The signature must also name the version the server announced (`requireSignedVersion`), so a server cannot pass an older signed build off as a newer one. A build that fails either check is thrown away.
+3. The window shows **TheVault `<version>` is ready — restart to update** in its bottom right corner, with **Restart to update**; the tray's **Restart to update to `<version>`** item and its tooltip say the same.
+4. **Restart to update** replaces the AppImage file with the new one and starts it. With **Install updates on quit** on, quitting the app replaces it too, and the next start runs the new version.
+
+The server's address may be plain `http` (`dangerousInsecureTransportProtocol` is on): the signature, not the transport, is what proves a build came from you.
+
+### Everything else is offered as a download
+
+When the server has no signed AppImage newer than the app, and for an app that does not run as an AppImage, the check offers a download instead:
+
+1. It asks the paired server for `/api/clients`, the builds the server hands out. When the server publishes an AppImage for this machine's architecture, that AppImage's version is the one compared, and GitHub is not asked.
 2. When the server publishes no AppImage, cannot be reached, or the app is not paired yet, it asks GitHub Releases for the latest release of `wiltaylor/thevault`. Drafts and pre-releases are skipped.
 
-When the version found is newer than the app, by semver order, the window shows a prompt in its bottom right corner. A build from the server says "available from your server".
+When the version found is newer than the app, by semver order, the window shows a prompt in its bottom right corner. A build from the server says "available from your server". An app installed from the deb or rpm (it runs from `/usr` or `/opt`) never replaces itself: the prompt says to update it with the package manager, and keeps the download.
 
 - **Download** opens the server's AppImage download, or the GitHub release page, in the browser.
 - **Skip this version** stops offering that version.
 - **Later** hides the prompt until the app starts again.
 
-The tray's **Check for updates** item turns the check off. `THEVAULT_UPDATE_URL` replaces the GitHub address, and `THEVAULT_UPDATE_URL=off` turns the whole check off, the server's part too. A build can name another repository with `THEVAULT_RELEASES_REPO` at compile time.
+The tray's **Check for updates** item turns the check off, the self-update too. `THEVAULT_UPDATE_URL` replaces the GitHub address, and `THEVAULT_UPDATE_URL=off` turns the whole check off, the server's part too. A build can name another repository with `THEVAULT_RELEASES_REPO` at compile time. `GET /_desktop/status` reports the check under `update` (the offer, with `ready` and `install`) and `updater` (`install`, `checks`, `ready`, `error`).
+
+### The updater signing key
+
+The AppImage's signature is made with a minisign key pair from `cargo tauri signer generate`. The private key and its password live outside the repository:
+
+| File | What it holds |
+|---|---|
+| `~/.config/thevault/updater/thevault-updater.key` | The private key, encrypted with the password |
+| `~/.config/thevault/updater/thevault-updater.key.pub` | The public key, the same as `plugins.updater.pubkey` in `tauri.conf.json` |
+| `~/.config/thevault/updater/updater.env` | `export TAURI_SIGNING_PRIVATE_KEY=<the key file>` and `export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<its password>` |
+
+`./dev` reads `updater.env` when it exists and `TAURI_SIGNING_PRIVATE_KEY` is not set already, passes the password through by name and mounts the key file read-only; `THEVAULT_NO_SIGNING_KEYS=1` leaves both signing keys out. `just desktop-release` then signs each AppImage, `cargo tauri signer sign --app-version <version>`, writing `<file>.AppImage.sig` beside it, and `just publish-clients` publishes the signature with the AppImage. Without the key, `just desktop-release` says so and builds an AppImage with no signature, which installed apps never update to.
+
+**Back up `~/.config/thevault/updater/`.** Without the private key or its password, no build you make can update the apps already installed: each one must download and install a new AppImage by hand, from a build whose `tauri.conf.json` carries a new public key. Never commit the key, its password or `updater.env`.
 
 ## Installing
 
@@ -149,11 +180,11 @@ Pushing a tag `v<version>` runs `.github/workflows/release.yml`. The tag must ma
 ```bash
 ./dev just desktop-build   # apps/desktop/src-tauri/target/debug/thevault
 ./dev just desktop-test    # unit tests, then S6 under Xvfb through tauri-driver
-./dev just desktop-release        # AppImage, deb and rpm into target/desktop-release
+./dev just desktop-release        # AppImage (signed for the updater with its key), deb and rpm into target/desktop-release
 ./dev just desktop-release-test   # the bundles, then the AppImage started under Xvfb to the setup page
 ./dev just aur-check              # packaging/aur/.SRCINFO matches the PKGBUILD
 ```
 
 S6 (`apps/desktop/e2e`) starts a testkit home server on port 0, a private D-Bus session with an unlocked throwaway gnome-keyring and a stand-in notification daemon (`examples/fake-notifyd.rs`), a stand-in GitHub Releases endpoint on port 0, and the app with its own XDG folders. It pairs, opens a note pulled from the server, edits it with the server stopped, and checks that the edit reaches the server once the server is back on the same address. It then starts the app again and checks that it syncs with the token from the keyring.
 
-The desktop extras' cases: a notification created on the server sets the tray badge and is raised on the desktop; reading it through the API closes it and clears the badge; closing one on the desktop marks it read on the server; clicking one opens its note. A note created and then renamed on the server reaches the local vault within seconds, through the live link. A `thevault://note/<id>` argument opens the note, and a newer release brings up the update prompt, which **Later** hides.
+The desktop extras' cases: a notification created on the server sets the tray badge and is raised on the desktop; reading it through the API closes it and clears the badge; closing one on the desktop marks it read on the server; clicking one opens its note. A note created and then renamed on the server reaches the local vault within seconds, through the live link. A `thevault://note/<id>` argument opens the note, and a newer release brings up the update prompt, which **Later** hides. The self-update case runs the debug app as an AppImage: `THEVAULT_TEST_APPIMAGE` names a file to treat as the running AppImage and `THEVAULT_TEST_UPDATER_PUBKEY` a throwaway public key, both read by debug builds only. With the app running and its first check done, the test signs a fake 97.0.0 AppImage with the throwaway key, publishes it with `vault clients publish` into the home server's clients folder, and checks that one check, started by the server's `clients.updated`, downloads and verifies it and that the window and the tray offer the restart. Installing and restarting are left to a real install.

@@ -1,5 +1,5 @@
 //! The tray icon (D12): the unread badge from the home server, and a menu with Quick capture,
-//! Open, the two settings and Quit.
+//! Open, "Restart to update" once an update is downloaded, the settings and Quit.
 //!
 //! Tray specifications have no badge, so the badge is drawn: a red dot on the icon while
 //! anything is unread, the count beside the icon where the tray shows titles, and the count in
@@ -20,6 +20,8 @@ pub const CAPTURE: &str = "capture";
 pub const OPEN: &str = "open";
 pub const AUTOSTART: &str = "autostart";
 pub const UPDATE_CHECK: &str = "update_check";
+pub const INSTALL_ON_QUIT: &str = "install_on_quit";
+pub const RESTART_TO_UPDATE: &str = "restart_to_update";
 pub const QUIT: &str = "quit";
 
 /// What the tray shows, for `/_desktop/status`.
@@ -56,6 +58,10 @@ pub struct Tray {
     icon: Option<TrayIcon>,
     autostart: Option<CheckMenuItem<Wry>>,
     update_check: Option<CheckMenuItem<Wry>>,
+    install_on_quit: Option<CheckMenuItem<Wry>>,
+    restart: Option<MenuItem<Wry>>,
+    /// The version waiting for a restart, for the tooltip.
+    ready: Mutex<Option<String>>,
     badge: Mutex<Badge>,
 }
 
@@ -70,6 +76,9 @@ impl Tray {
                     icon: None,
                     autostart: None,
                     update_check: None,
+                    install_on_quit: None,
+                    restart: None,
+                    ready: Mutex::new(None),
                     badge: Mutex::new(Badge::of(0)),
                 }
             }
@@ -93,14 +102,31 @@ impl Tray {
             settings.update_check,
             None::<&str>,
         )?;
+        let install_on_quit = CheckMenuItem::with_id(
+            app,
+            INSTALL_ON_QUIT,
+            "Install updates on quit",
+            true,
+            settings.install_on_quit,
+            None::<&str>,
+        )?;
+        let restart = MenuItem::with_id(
+            app,
+            RESTART_TO_UPDATE,
+            restart_label(None),
+            false,
+            None::<&str>,
+        )?;
         let menu = Menu::with_items(
             app,
             &[
                 &MenuItem::with_id(app, CAPTURE, "Quick capture", true, None::<&str>)?,
                 &MenuItem::with_id(app, OPEN, "Open TheVault", true, None::<&str>)?,
+                &restart,
                 &PredefinedMenuItem::separator(app)?,
                 &autostart,
                 &update_check,
+                &install_on_quit,
                 &PredefinedMenuItem::separator(app)?,
                 &MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?,
             ],
@@ -118,13 +144,35 @@ impl Tray {
             icon: Some(icon),
             autostart: Some(autostart),
             update_check: Some(update_check),
+            install_on_quit: Some(install_on_quit),
+            restart: Some(restart),
+            ready: Mutex::new(None),
             badge: Mutex::new(badge),
         })
+    }
+
+    /// Shows that `version` is downloaded and waiting for a restart, or that nothing is.
+    pub fn set_update_ready(&self, version: Option<&str>) {
+        *self.ready.lock().unwrap_or_else(|p| p.into_inner()) = version.map(str::to_owned);
+        if let Some(item) = &self.restart {
+            let _ = item.set_text(restart_label(version));
+            let _ = item.set_enabled(version.is_some());
+        }
+        let unread = self.badge().unread;
+        self.set_unread(unread);
     }
 
     /// Shows `unread` on the icon.
     pub fn set_unread(&self, unread: u64) {
         let mut badge = Badge::of(unread);
+        if let Some(version) = self
+            .ready
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_deref()
+        {
+            badge.tooltip = format!("{}\n{}", badge.tooltip, ready_text(version));
+        }
         if let Some(icon) = &self.icon {
             let applied = icon
                 .set_icon(Some(if unread > 0 {
@@ -154,6 +202,22 @@ impl Tray {
         if let Some(item) = &self.update_check {
             let _ = item.set_checked(settings.update_check);
         }
+        if let Some(item) = &self.install_on_quit {
+            let _ = item.set_checked(settings.install_on_quit);
+        }
+    }
+}
+
+/// What the window and the tray say about an update waiting for a restart.
+pub fn ready_text(version: &str) -> String {
+    format!("TheVault {version} is ready \u{2014} restart to update")
+}
+
+/// The tray's restart item, which is greyed out until an update is ready.
+fn restart_label(version: Option<&str>) -> String {
+    match version {
+        Some(version) => format!("Restart to update to {version}"),
+        None => "No update waiting".to_owned(),
     }
 }
 
@@ -202,6 +266,16 @@ mod tests {
         assert_eq!(Badge::of(1).tooltip, "TheVault: 1 unread notification");
         assert_eq!(Badge::of(42).tooltip, "TheVault: 42 unread notifications");
         assert_eq!(Badge::of(100).title, "99+");
+    }
+
+    #[test]
+    fn the_restart_item_names_the_update_waiting() {
+        assert_eq!(restart_label(None), "No update waiting");
+        assert_eq!(restart_label(Some("0.2.0")), "Restart to update to 0.2.0");
+        assert_eq!(
+            ready_text("0.2.0"),
+            "TheVault 0.2.0 is ready \u{2014} restart to update"
+        );
     }
 
     #[test]

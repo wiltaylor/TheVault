@@ -662,6 +662,9 @@ enum Clients {
     List,
     /// Copy app builds (.apk, .AppImage, .deb, .rpm) into a server's clients folder and rewrite
     /// its manifest.json. Each replaces the build before it of the same kind and architecture.
+    /// An AppImage's updater signature, `<file>.AppImage.sig` beside it, goes into the manifest,
+    /// so the desktop app updates itself. A running server announces the publish to the apps
+    /// within 30 seconds.
     Publish {
         /// The clients folder: the server's --clients. Defaults to <vault>/.vault/clients.
         #[arg(long)]

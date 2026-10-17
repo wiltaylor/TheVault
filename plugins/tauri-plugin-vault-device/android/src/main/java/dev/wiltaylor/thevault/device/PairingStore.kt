@@ -86,6 +86,13 @@ class PairingStore(context: Context, private val cipher: TokenCipher = defaultCi
     val deviceId: String?
         get() = prefs.getString(DEVICE_ID, null)?.takeIf { isPaired && it.isNotEmpty() }
 
+    /**
+     * The home server's address, or null before pairing. It needs no token, so the app update
+     * check ([AppUpdateWorker]) reads it without unsealing one.
+     */
+    val serverUrl: String?
+        get() = prefs.getString(SERVER_URL, null)?.trimEnd('/')?.takeIf { isPaired && it.isNotEmpty() }
+
     var cacheMb: Long
         get() = prefs.getLong(CACHE_MB, DEFAULT_CACHE_MB)
         set(value) {

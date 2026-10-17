@@ -7,13 +7,16 @@
 // The desktop extras (D9, D12, D27): a notification created on the server updates the tray badge
 // and raises a desktop notification; reading it through the API closes it; closing it on the
 // desktop marks it read, and clicking it opens its note. A note changed on the server is pulled
-// within seconds while the app is open. A newer release is offered in the window.
+// within seconds while the app is open. A newer release is offered in the window. A signed
+// AppImage published on the server while the app runs is announced, downloaded and verified at
+// once, and the window offers to restart to update (D27).
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { Desktop, HomeServer, appBinary, removeRoot, tempRoot } from "./harness.mjs";
+import { Desktop, HomeServer, appBinary, removeRoot, tempRoot, vaultBinary } from "./harness.mjs";
 import { Session, waitFor } from "./webdriver.mjs";
 
 const ORIGIN = "vault://localhost";
@@ -299,5 +302,51 @@ test("an AppImage the paired server publishes is offered before GitHub's release
   } finally {
     rmSync(clients, { recursive: true, force: true });
     desktop.releases.tag = "v0.1.0";
+  }
+});
+
+test("a signed AppImage published while the app runs is downloaded at once and offered as a restart", async () => {
+  await app.quit();
+  app = await launch();
+  await waitFor("the web client", inWebClient);
+  // The first check, ten seconds after start, finds nothing: the server publishes no AppImage.
+  await waitFor("the first update check", async () => (await status()).updater.checks >= 1, 60_000);
+  let s = await status();
+  assert.equal(s.update, null, JSON.stringify(s.update));
+  assert.equal(s.updater.install, "appimage");
+  const checks = s.updater.checks;
+
+  // Publish a signed 97.0.0 with the CLI, as `just publish-clients` does. The next periodic
+  // check is hours away, so only the server's clients.updated can start the download.
+  const build = join(root, "build");
+  mkdirSync(build, { recursive: true });
+  const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+  const image = join(build, `TheVault_97.0.0_${arch}.AppImage`);
+  writeFileSync(image, "\x7fELF TheVault 97.0.0");
+  desktop.updaterKey.sign(image, "97.0.0");
+  const clients = join(home.vault, ".vault", "clients");
+  execFileSync(vaultBinary(), ["clients", "publish", "--dir", clients, image], { stdio: "ignore" });
+  try {
+    const offer = await waitFor(
+      "the restart prompt",
+      async () => {
+        const text = await updatePrompt();
+        return text && text.includes("ready") ? text : null;
+      },
+      60_000,
+    );
+    assert.match(offer, /TheVault 97\.0\.0 is ready \u2014 restart to update/);
+    s = await status();
+    assert.equal(s.update.version, "97.0.0");
+    assert.equal(s.update.ready, true);
+    assert.equal(s.updater.ready, "97.0.0");
+    await waitFor("the check to finish", async () => (await status()).updater.checks > checks);
+    s = await status();
+    assert.equal(s.updater.checks, checks + 1, "one check, started by the announcement");
+    assert.match(s.tray.tooltip, /97\.0\.0 is ready/);
+    // Installing replaces the AppImage; the test leaves it, and the restart, to a real install.
+    assert.equal(readFileSync(desktop.appimage, "utf8"), "\x7fELF the installed AppImage");
+  } finally {
+    rmSync(clients, { recursive: true, force: true });
   }
 });

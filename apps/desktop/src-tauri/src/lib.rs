@@ -15,7 +15,8 @@
 //! menu ([`tray`]); server notifications mirrored on the desktop and closed when read anywhere
 //! ([`live`]); start on login, minimised ([`settings`]); a global capture hotkey through the
 //! portal ([`hotkey`]); `thevault://note/<id>` links ([`links`]); and the update check
-//! ([`update`]).
+//! ([`update`]), with which an AppImage updates itself from the paired server
+//! ([`self_update`]).
 //!
 //! `thevault --capture` opens the capture dialog, in the running app when there is one: a key
 //! the user binds in their desktop runs it where the portal cannot (D12). Closing the window
@@ -26,6 +27,7 @@ mod hotkey;
 mod links;
 mod live;
 mod notifier;
+mod self_update;
 mod settings;
 mod sync_loop;
 mod tray;
@@ -34,16 +36,16 @@ mod update;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use embedded::{Config, Embedded};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tauri::http::{Method, Request, Response, StatusCode, header};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use device::{Keyring, PairRequest};
 use live::Live;
+use self_update::Updates;
 use settings::{MINIMISED_FLAG, Settings};
 use sync_loop::{SyncLoop, Trigger};
 use tray::Tray;
@@ -66,10 +68,6 @@ const PAGE_SCRIPT: &str = include_str!("page.js");
 /// The command-line flag that opens the capture dialog.
 const CAPTURE_FLAG: &str = "--capture";
 
-/// How long after start the first update check runs, and how often it runs after that.
-const UPDATE_FIRST: Duration = Duration::from_secs(10);
-const UPDATE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
-
 /// The app's state, managed by Tauri.
 struct App {
     app: AppHandle,
@@ -83,8 +81,8 @@ struct App {
     tray: Tray,
     settings: Mutex<Settings>,
     hotkey: Arc<Mutex<hotkey::Status>>,
-    /// The newer release the last update check found.
-    update: Arc<Mutex<Option<Release>>>,
+    /// What the update check found, and the update downloaded and waiting.
+    updates: Arc<Updates>,
 }
 
 impl App {
@@ -95,7 +93,7 @@ impl App {
     /// The newer release to offer, unless the user turned the check off or skipped it.
     fn offered_update(&self) -> Option<Release> {
         let settings = self.settings();
-        lock(&self.update).clone().filter(|r| {
+        self.updates.offered().filter(|r| {
             settings.update_check && settings.skipped_update.as_ref() != Some(&r.version)
         })
     }
@@ -150,6 +148,12 @@ impl live::Shell for LiveShell {
             state.sync.trigger(Trigger::ServerChanged(change));
         }
     }
+
+    fn clients_updated(&self) {
+        if let Some(state) = self.0.try_state::<App>() {
+            state.updates.wake();
+        }
+    }
 }
 
 pub fn run() {
@@ -160,6 +164,7 @@ pub fn run() {
         .any(|a| a == MINIMISED_FLAG || a == "--minimized");
     let link = links::from_args(&args[1.min(args.len())..]);
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(link) = links::from_args(&args) {
                 open_path(app, &link.path());
@@ -201,7 +206,7 @@ pub fn run() {
             let tray = Tray::build(&handle, &settings);
             let live = Live::start(Arc::new(LiveShell(handle.clone())), remote_rx);
             let hotkey = Arc::new(Mutex::new(hotkey::Status::Starting));
-            let update = Arc::new(Mutex::new(None));
+            let updates = Arc::new(Updates::new());
             app.manage(App {
                 app: handle.clone(),
                 embedded,
@@ -212,7 +217,7 @@ pub fn run() {
                 tray,
                 settings: Mutex::new(settings),
                 hotkey: hotkey.clone(),
-                update: update.clone(),
+                updates: updates.clone(),
             });
             let window = WebviewWindowBuilder::new(
                 app,
@@ -242,11 +247,31 @@ pub fn run() {
                 show_main(&capture_app);
                 request_capture(&capture_app);
             });
-            start_update_checks(handle, update);
+            start_update_checks(handle, &updates);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("TheVault failed to start");
+        .build(tauri::generate_context!())
+        .expect("TheVault failed to start")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                install_on_quit(app);
+            }
+        });
+}
+
+/// With "Install updates on quit" on, installs the update waiting, so the next start runs it.
+fn install_on_quit(app: &AppHandle) {
+    let Some(state) = app.try_state::<App>() else {
+        return;
+    };
+    if !state.settings().install_on_quit {
+        return;
+    }
+    match state.updates.install_ready() {
+        Ok(Some(version)) => eprintln!("thevault: installed TheVault {version}; it runs next time"),
+        Ok(None) => {}
+        Err(e) => eprintln!("thevault: {e}"),
+    }
 }
 
 /// What the tray menu's items do.
@@ -262,44 +287,50 @@ fn on_tray_menu(app: &AppHandle, id: &str) {
         tray::OPEN => show_main(app),
         tray::AUTOSTART => state.change_settings(app, |s| s.autostart = !s.autostart),
         tray::UPDATE_CHECK => state.change_settings(app, |s| s.update_check = !s.update_check),
+        tray::INSTALL_ON_QUIT => {
+            state.change_settings(app, |s| s.install_on_quit = !s.install_on_quit)
+        }
+        tray::RESTART_TO_UPDATE => {
+            if let Err(e) = self_update::restart_to_update(app) {
+                eprintln!("thevault: {e}");
+            }
+        }
         tray::QUIT => app.exit(0),
         _ => {}
     }
 }
 
-/// Checks for a newer release soon after start and daily after that, while the setting is on.
-fn start_update_checks(app: AppHandle, found: Arc<Mutex<Option<Release>>>) {
-    let Some(url) = update::endpoint() else {
+/// Checks for a newer release soon after start, every few hours after that, and when the server
+/// announces new builds, while the setting is on ([`self_update`]).
+fn start_update_checks(app: AppHandle, updates: &Arc<Updates>) {
+    let Some(github) = update::endpoint() else {
         return;
     };
-    std::thread::Builder::new()
-        .name("update-check".to_owned())
-        .spawn(move || {
-            std::thread::sleep(UPDATE_FIRST);
-            loop {
-                let state = app.try_state::<App>();
-                let on = state.as_ref().is_some_and(|s| s.settings().update_check);
-                // The paired server's own AppImage comes first; it is read each time, since the
-                // app may have paired since the last check.
-                let server = state
-                    .as_ref()
-                    .and_then(|s| device::load(&s.dir).ok().flatten())
-                    .map(|d| d.server_url);
-                drop(state);
-                if on {
-                    match update::check_preferring_server(
-                        server.as_deref(),
-                        &url,
-                        env!("CARGO_PKG_VERSION"),
-                    ) {
-                        Ok(release) => *lock(&found) = release,
-                        Err(e) => eprintln!("thevault: update check: {e}"),
-                    }
-                }
-                std::thread::sleep(UPDATE_EVERY);
+    updates.start(
+        app,
+        github,
+        |app| {
+            let state = app.try_state::<App>()?;
+            if !state.settings().update_check {
+                return None;
             }
-        })
-        .expect("the update thread starts");
+            // The paired server comes first; it is read each time, since the app may have
+            // paired since the last check.
+            Some(
+                device::load(&state.dir)
+                    .ok()
+                    .flatten()
+                    .map(|d| d.server_url),
+            )
+        },
+        |app| {
+            if let Some(state) = app.try_state::<App>() {
+                state
+                    .tray
+                    .set_update_ready(state.updates.ready_version().as_deref());
+            }
+        },
+    );
 }
 
 /// Shows the window at the web client's `path`.
@@ -386,10 +417,16 @@ async fn desktop(state: &App, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
             .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR)),
         (Method::GET, "/_desktop/status") => json_response(StatusCode::OK, &status_json(state)),
         (Method::POST, "/_desktop/update/skip") => {
-            if let Some(release) = lock(&state.update).clone() {
+            if let Some(release) = state.updates.offered() {
                 state.change_settings(&state.app, |s| s.skipped_update = Some(release.version));
             }
             json_response(StatusCode::OK, &json!({}))
+        }
+        (Method::POST, "/_desktop/update/restart") => {
+            match self_update::restart_to_update(&state.app) {
+                Ok(()) => status(StatusCode::NOT_FOUND),
+                Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+            }
         }
         (Method::POST, "/_desktop/update/open") => match state.offered_update() {
             Some(release) => {
@@ -416,7 +453,16 @@ fn status_json(state: &App) -> Value {
     let mut out = json!(state.sync.status());
     out["notifications"] = json!(state.live.status());
     out["tray"] = json!(state.tray.badge());
-    out["update"] = json!(state.offered_update());
+    let ready = state.updates.ready_version();
+    let mut update = json!(state.offered_update());
+    if let Some(offer) = update.as_object_mut() {
+        let is_ready =
+            ready.is_some() && offer.get("version") == ready.as_ref().map(|v| json!(v)).as_ref();
+        offer.insert("ready".to_owned(), json!(is_ready));
+        offer.insert("install".to_owned(), json!(state.updates.install()));
+    }
+    out["update"] = update;
+    out["updater"] = json!(state.updates.status());
     out["hotkey"] = json!(*lock(&state.hotkey));
     out["settings"] = json!(state.settings());
     out

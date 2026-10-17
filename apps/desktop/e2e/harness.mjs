@@ -1,11 +1,11 @@
 // What the S6 tests run the desktop app against: a testkit home server on port 0, a private D-Bus
 // session with an unlocked throwaway Secret Service keyring and a stand-in notification daemon, a
-// stand-in GitHub Releases endpoint, and tauri-driver. Every path lives in one temporary folder,
-// and every port is picked free.
+// stand-in GitHub Releases endpoint, a throwaway updater key, and tauri-driver. Every path lives in
+// one temporary folder, and every port is picked free.
 
 import { execFileSync, spawn } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,41 @@ function binary(env, path) {
 
 export const appBinary = () => binary("THEVAULT_DESKTOP_BIN", "apps/desktop/src-tauri/target/debug/thevault");
 const notifydBinary = () => binary("FAKE_NOTIFYD_BIN", "apps/desktop/src-tauri/target/debug/examples/fake-notifyd");
+export const vaultBinary = () => binary("VAULT_BIN", "target/debug/vault");
+
+/** The environment without the real updater key ./dev passes through, which `tauri signer` would use. */
+function withoutSigningKey() {
+  const env = { ...process.env };
+  delete env.TAURI_SIGNING_PRIVATE_KEY;
+  delete env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD;
+  return env;
+}
+
+/**
+ * A throwaway updater key pair (minisign, as `tauri signer` makes it): the debug app verifies
+ * with its public key, `THEVAULT_TEST_UPDATER_PUBKEY`, and the tests sign builds with it.
+ */
+export class UpdaterKey {
+  constructor(root) {
+    this.path = join(root, "updater.key");
+    this.password = "throwaway";
+    execFileSync("cargo", ["tauri", "signer", "generate", "--ci", "-w", this.path, "-p", this.password], {
+      env: withoutSigningKey(),
+      stdio: "ignore",
+    });
+    this.pubkey = readFileSync(`${this.path}.pub`, "utf8").trim();
+  }
+
+  /** Signs `file` for `version`, writing `<file>.sig` beside it as `just desktop-release` does. */
+  sign(file, version) {
+    execFileSync(
+      "cargo",
+      ["tauri", "signer", "sign", "-f", this.path, "-p", this.password, "--app-version", version, file],
+      { env: withoutSigningKey(), stdio: "ignore" },
+    );
+    return readFileSync(`${file}.sig`, "utf8").trim();
+  }
+}
 
 /** A port nothing listens on now. */
 export function freePort() {
@@ -84,7 +119,8 @@ export class HomeServer {
     this.child = spawn(
       binary("VAULT_SERVER_BIN", "target/debug/vault-server"),
       ["--vault", this.vault, "--listen", this.address],
-      { stdio: ["ignore", "pipe", "inherit"] },
+      // A publish into the clients folder is announced within a fraction of a second.
+      { stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, VAULT_CLIENTS_POLL_MS: "200" } },
     );
     this.address = JSON.parse(await firstLine(this.child, "vault-server")).listen;
   }
@@ -189,6 +225,13 @@ export class Desktop {
     };
     this.children = [];
     this.namePasswdEntry();
+    // The debug app treats this file as the AppImage it runs from, and verifies updates with the
+    // throwaway key, so it downloads a build the tests sign as an installed AppImage would.
+    this.updaterKey = new UpdaterKey(root);
+    this.appimage = join(root, "TheVault.AppImage");
+    writeFileSync(this.appimage, "\x7fELF the installed AppImage", { mode: 0o755 });
+    this.env.THEVAULT_TEST_APPIMAGE = this.appimage;
+    this.env.THEVAULT_TEST_UPDATER_PUBKEY = this.updaterKey.pubkey;
   }
 
   /**

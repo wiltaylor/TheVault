@@ -28,7 +28,9 @@ pub use commands::{
     CommandStatus, DeviceCommand, NewCommand, RETENTION_MS as COMMAND_RETENTION_MS,
 };
 pub use devices::{Device, NewDevice, PLATFORMS, PairCode, PushTarget};
-pub use events::{CAPACITY as EVENT_CAPACITY, Events, LiveEvent, Missed, Subscription};
+pub use events::{
+    CAPACITY as EVENT_CAPACITY, ClientBuild, Events, LiveEvent, Missed, Subscription,
+};
 pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, Version};
 pub use jobs::{HandlerJob, JobStatus};
 pub use notifications::{

@@ -7,7 +7,15 @@
 //! setting is on. `THEVAULT_UPDATE_URL` replaces the GitHub address (the S6 tests point it at a
 //! local server); set to `off`, it turns the whole check off. The repository defaults to
 //! [`DEFAULT_REPO`], and a build can name another with `THEVAULT_RELEASES_REPO`.
+//!
+//! An app that runs as an AppImage and is paired updates itself: it asks the server's updater
+//! endpoint ([`updater_endpoint`]) first, and a newer signed AppImage there is downloaded and
+//! verified in the background by the Tauri updater ([`crate::self_update`]), then installed on
+//! restart or quit. An app installed from a deb or rpm ([`Install::Package`]) is only told to
+//! update through its package manager, with the download link beside it.
 
+use std::ffi::OsStr;
+use std::path::Path;
 use std::time::Duration;
 
 use semver::Version;
@@ -77,6 +85,45 @@ pub fn newer(current: &str, tag: &str) -> Option<Version> {
     let current = tag_version(current)?;
     let latest = tag_version(tag)?;
     (latest.cmp_precedence(&current).is_gt()).then_some(latest)
+}
+
+/// How the running app was installed, which decides how it updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Install {
+    /// An AppImage (`$APPIMAGE` is set): the app replaces it with a newer one itself.
+    AppImage,
+    /// A deb or rpm under `/usr` or `/opt`: the package manager updates it.
+    Package,
+    /// Any other binary, such as a development build: only offered the download.
+    Binary,
+}
+
+/// How the app at `exe` was installed, when `$APPIMAGE` is `appimage`.
+pub fn install_kind(appimage: Option<&OsStr>, exe: &Path) -> Install {
+    if appimage.is_some_and(|p| !p.is_empty()) {
+        Install::AppImage
+    } else if exe.starts_with("/usr") || exe.starts_with("/opt") {
+        Install::Package
+    } else {
+        Install::Binary
+    }
+}
+
+/// The Tauri updater's endpoint on the paired server, `{server}/api/clients/update/{{target}}/
+/// {{arch}}/{{current_version}}`, when the app updates itself: only an AppImage does, and only
+/// from the server it is paired with.
+pub fn updater_endpoint(install: Install, server: Option<&str>) -> Option<String> {
+    let server = server?.trim().trim_end_matches('/');
+    (install == Install::AppImage && !server.is_empty()).then(|| {
+        format!("{server}/api/clients/update/{{{{target}}}}/{{{{arch}}}}/{{{{current_version}}}}")
+    })
+}
+
+/// Whether a newer version the server announces, `found`, is worth downloading: it is not the
+/// one already downloaded and waiting, `ready`, and is newer than the running app, `current`.
+pub fn should_download(current: &str, ready: Option<&str>, found: &str) -> bool {
+    ready != Some(found) && newer(current, found).is_some()
 }
 
 /// Where the check looks, or `None` when it is turned off.
@@ -304,11 +351,20 @@ mod tests {
             }))
         );
         // The same version: the server has the AppImage, and nothing is newer.
-        assert_eq!(server_release("http://vault", &list, "0.2.0", "x86_64"), Some(None));
+        assert_eq!(
+            server_release("http://vault", &list, "0.2.0", "x86_64"),
+            Some(None)
+        );
         // No AppImage for this machine, or none at all.
-        assert_eq!(server_release("http://vault", &list, "0.1.0", "riscv64"), None);
+        assert_eq!(
+            server_release("http://vault", &list, "0.1.0", "riscv64"),
+            None
+        );
         let empty = builds(serde_json::json!([]));
-        assert_eq!(server_release("http://vault", &empty, "0.1.0", "x86_64"), None);
+        assert_eq!(
+            server_release("http://vault", &empty, "0.1.0", "x86_64"),
+            None
+        );
     }
 
     #[test]
@@ -333,7 +389,64 @@ mod tests {
         // No AppImage on the server, or the server cannot be reached: GitHub.
         let ask = || Ok(Some(github.clone()));
         assert_eq!(prefer_server(Ok(None), ask), Ok(Some(github.clone())));
-        assert_eq!(prefer_server(Err("down".into()), ask), Ok(Some(github.clone())));
+        assert_eq!(
+            prefer_server(Err("down".into()), ask),
+            Ok(Some(github.clone()))
+        );
+    }
+
+    #[test]
+    fn only_an_appimage_updates_itself() {
+        let appimage = Some(OsStr::new("/home/me/Apps/TheVault.AppImage"));
+        let mounted = Path::new("/tmp/.mount_TheVau/usr/bin/thevault");
+        assert_eq!(install_kind(appimage, mounted), Install::AppImage);
+        assert_eq!(
+            install_kind(Some(OsStr::new("")), Path::new("/usr/bin/thevault")),
+            Install::Package
+        );
+        assert_eq!(
+            install_kind(None, Path::new("/usr/bin/thevault")),
+            Install::Package
+        );
+        assert_eq!(
+            install_kind(None, Path::new("/opt/thevault/thevault")),
+            Install::Package
+        );
+        assert_eq!(
+            install_kind(None, Path::new("/home/me/dev/target/debug/thevault")),
+            Install::Binary
+        );
+    }
+
+    #[test]
+    fn the_updater_asks_the_paired_server() {
+        assert_eq!(
+            updater_endpoint(Install::AppImage, Some("http://vault:8080/")).as_deref(),
+            Some("http://vault:8080/api/clients/update/{{target}}/{{arch}}/{{current_version}}")
+        );
+        assert_eq!(updater_endpoint(Install::AppImage, None), None);
+        assert_eq!(updater_endpoint(Install::AppImage, Some(" ")), None);
+        assert_eq!(
+            updater_endpoint(Install::Package, Some("http://vault")),
+            None
+        );
+        assert_eq!(
+            updater_endpoint(Install::Binary, Some("http://vault")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_newer_version_is_downloaded_once() {
+        assert!(should_download("0.1.0", None, "0.2.0"));
+        // Already downloaded and waiting for a restart.
+        assert!(!should_download("0.1.0", Some("0.2.0"), "0.2.0"));
+        // A newer one replaces the one waiting.
+        assert!(should_download("0.1.0", Some("0.2.0"), "0.3.0"));
+        // Never the running version or an older one.
+        assert!(!should_download("0.2.0", None, "0.2.0"));
+        assert!(!should_download("0.2.0", None, "0.1.0"));
+        assert!(!should_download("0.2.0", None, "not a version"));
     }
 
     #[test]
@@ -371,6 +484,11 @@ mod tests {
                 source: "server",
             }))
         );
-        assert!(served.join().unwrap().starts_with("GET /api/clients HTTP/1.1"));
+        assert!(
+            served
+                .join()
+                .unwrap()
+                .starts_with("GET /api/clients HTTP/1.1")
+        );
     }
 }

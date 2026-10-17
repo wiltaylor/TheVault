@@ -59,7 +59,9 @@ class VaultPushService : PushService() {
  * round pull it soon ([SyncWorker.soon]), so a change made elsewhere reaches the phone, and a
  * linked contact, without waiting for the periodic sync. A change to the phone's settings in
  * Settings > Devices (`{"event": "device.settings"}`) asks for the same round, which takes the
- * settings first, so a switch turned on applies, and the contacts catch up, at once.
+ * settings first, so a switch turned on applies, and the contacts catch up, at once. A new app
+ * build published on the server (`{"event": "clients.updated"}`) has the update check run
+ * ([AppUpdateWorker]), which installs it when it is newer.
  */
 object PushHandler {
     /** Handles one decrypted message and answers its event, or null when it is not one. */
@@ -77,6 +79,7 @@ object PushHandler {
             "notification.cleared" -> NotificationWorker.enqueue(context)
             "device.command" -> CommandWorker.enqueue(context)
             "note.changed", "device.settings" -> SyncWorker.soon(context)
+            "clients.updated" -> AppUpdateWorker.enqueue(context)
             else -> return null
         }
         return event

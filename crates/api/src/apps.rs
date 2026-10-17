@@ -7,10 +7,19 @@
 //! Only files the manifest lists are served, so a name that tries to leave the folder, or any
 //! file the manifest does not name, is 404. A download carries its SHA-256 as the `ETag`, and
 //! answers one `Range` the way an asset download does.
+//!
+//! `GET /api/clients/update/{target}/{arch}/{current_version}` is the desktop app's updater
+//! endpoint, in the format the Tauri updater reads: 204 when nothing newer is published, else the
+//! newer signed AppImage's `{version, notes, pub_date, url, signature}`.
+//!
+//! [`watch`] notices the manifest changing, as `vault clients publish` rewrites it while the
+//! server runs, and publishes `clients.updated` on the live events, which `/api/events` streams
+//! and the push dispatcher sends to each paired device.
 
 use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use axum::Json;
 use axum::body::{Body, Bytes};
@@ -20,7 +29,9 @@ use axum::response::{IntoResponse, Response};
 use clients::{Entry, Kind};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use state::{ClientBuild, LiveEvent};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use writer::Writer;
 
 use crate::ApiError;
 use crate::assets::{Part, parse_range, percent_encode};
@@ -130,6 +141,120 @@ pub async fn latest(
         .map_err(internal)?;
     let (entry, path) = found.ok_or_else(not_found)?;
     send(entry, path, &headers).await
+}
+
+/// `GET /api/clients/update/{target}/{arch}/{current_version}`: the Tauri updater's check. 204
+/// when the server publishes no signed release AppImage for `target` and `arch` newer than
+/// `current_version`; else the updater's JSON, whose `url` downloads the AppImage itself and
+/// whose `signature` is the one published beside it.
+pub async fn update(
+    State(folder): Shared,
+    Path((target, arch, current)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let manifest = manifest(&folder).await?;
+    let Some(entry) = clients::update_for(&manifest, &target, &arch, &current) else {
+        return Ok(no_update());
+    };
+    let path = format!("/api/clients/{}", percent_encode(&entry.filename));
+    let Some(base) = server_url_from(&headers) else {
+        return Ok(no_update());
+    };
+    let body = json!({
+        "version": entry.version,
+        "notes": format!("TheVault {}, published by your server", entry.version),
+        "pub_date": clients::rfc3339(entry.published),
+        "url": format!("{}{path}", base.trim_end_matches('/')),
+        "signature": entry.signature,
+    });
+    let mut res = Json(body).into_response();
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    Ok(res)
+}
+
+fn no_update() -> Response {
+    let mut res = StatusCode::NO_CONTENT.into_response();
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    res
+}
+
+/// What [`watch`] last saw of the manifest file: its modification time, size and inode. A
+/// publish renames a new manifest into place, so each one changes at least the inode.
+type Stamp = Option<(Option<SystemTime>, u64, u64)>;
+
+fn stamp(dir: &std::path::Path) -> Stamp {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(dir.join(clients::MANIFEST)).ok()?;
+    Some((meta.modified().ok(), meta.len(), meta.ino()))
+}
+
+/// The builds of `manifest`, as `clients.updated` names them.
+fn builds(manifest: &clients::Manifest) -> Vec<ClientBuild> {
+    manifest
+        .clients
+        .iter()
+        .map(|e| ClientBuild {
+            kind: e.kind.clone(),
+            arch: e.arch.clone(),
+            version: e.version.clone(),
+            build: e.build.clone(),
+        })
+        .collect()
+}
+
+/// Looks at the clients folder's manifest every `every`, and publishes `clients.updated` on
+/// `writer`'s live events whenever the builds it lists change, whoever wrote it: `vault clients
+/// publish`, `just publish-clients`, or a hand edit. Looking costs one `stat`; the manifest is
+/// read only when the file changed. A manifest that does not parse, half-written by hand, is
+/// read again on the next look. It runs on the current Tokio runtime until the runtime stops.
+pub fn watch(writer: Arc<Writer>, dir: PathBuf, every: Duration) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let read = |dir: PathBuf| async move {
+            tokio::task::spawn_blocking(move || (stamp(&dir), clients::read(&dir)))
+                .await
+                .ok()
+        };
+        let (mut seen, mut listed) = match read(dir.clone()).await {
+            Some((stamp, Ok(manifest))) => (stamp, manifest),
+            Some((_, Err(e))) => {
+                eprintln!("clients: {e}");
+                (None, clients::Manifest::default())
+            }
+            None => (None, clients::Manifest::default()),
+        };
+        let mut tick = tokio::time::interval(every);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            let d = dir.clone();
+            let Ok(now) = tokio::task::spawn_blocking(move || stamp(&d)).await else {
+                continue;
+            };
+            if now == seen {
+                continue;
+            }
+            let Some((now, manifest)) = read(dir.clone()).await else {
+                continue;
+            };
+            let manifest = match manifest {
+                Ok(manifest) => manifest,
+                Err(e) => {
+                    eprintln!("clients: {e}");
+                    continue;
+                }
+            };
+            seen = now;
+            if manifest != listed {
+                writer.state().events().publish(LiveEvent::ClientsUpdated {
+                    clients: builds(&manifest),
+                });
+                listed = manifest;
+            }
+        }
+    })
 }
 
 /// Whether an `If-None-Match` or `If-Range` value names `etag`.

@@ -217,3 +217,62 @@ fn the_folder_defaults_to_the_vaults_server_folder() {
         APK
     );
 }
+
+/// Publish a signed release AppImage of `version` into `dir`.
+fn publish_signed(dir: &Path, version: &str, signature: &str) {
+    let src = tempfile::tempdir().unwrap();
+    let image = src
+        .path()
+        .join(format!("TheVault_{version}_amd64.AppImage"));
+    std::fs::write(&image, APPIMAGE).unwrap();
+    std::fs::write(
+        src.path()
+            .join(format!("TheVault_{version}_amd64.AppImage.sig")),
+        signature,
+    )
+    .unwrap();
+    clients::publish(dir, &[Publish::file(image)], 1_700_000_000_000).unwrap();
+}
+
+#[test]
+fn the_updater_endpoint_offers_a_newer_signed_appimage_and_204_otherwise() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = serve_with(dir.path());
+    let check = |path: &str| get(&server, &format!("/api/clients/update/{path}"));
+    // Nothing published.
+    assert_eq!(check("linux/x86_64/0.1.0").status(), StatusCode::NO_CONTENT);
+    // An AppImage published without a signature is never offered: the updater would refuse it.
+    publish(dir.path());
+    assert_eq!(check("linux/x86_64/0.1.0").status(), StatusCode::NO_CONTENT);
+
+    publish_signed(dir.path(), "0.4.0", "c2lnbmF0dXJlIG9mIDAuNC4w\n");
+    let res = check("linux/x86_64/0.1.0");
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value = res.json().unwrap();
+    assert_eq!(body["version"], "0.4.0");
+    assert_eq!(body["signature"], "c2lnbmF0dXJlIG9mIDAuNC4w");
+    assert_eq!(body["pub_date"], "2023-11-14T22:13:20Z");
+    assert_eq!(
+        body["url"],
+        server.url("/api/clients/TheVault_0.4.0_x86_64.AppImage")
+    );
+    assert!(body["notes"].as_str().unwrap().contains("0.4.0"));
+    // The url downloads the AppImage itself.
+    let bytes = get(&server, "/api/clients/TheVault_0.4.0_x86_64.AppImage")
+        .bytes()
+        .unwrap();
+    assert_eq!(bytes.as_ref(), APPIMAGE);
+
+    // Up to date, newer than the server's, another architecture or platform: nothing.
+    for path in [
+        "linux/x86_64/0.4.0",
+        "linux/x86_64/1.0.0",
+        "linux/aarch64/0.1.0",
+        "windows/x86_64/0.1.0",
+        "linux/x86_64/not-a-version",
+    ] {
+        assert_eq!(check(path).status(), StatusCode::NO_CONTENT, "{path}");
+    }
+    // A pre-release of the published version is older than it.
+    assert_eq!(check("linux/x86_64/0.4.0-rc.1").status(), StatusCode::OK);
+}

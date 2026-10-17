@@ -1,6 +1,6 @@
 // Runs in every page of the desktop app's window, before the page's own scripts. It adds the sync
 // badge to the web client's pages, sends an unpaired app back to setup, offers a newer release
-// when the update check found one (D27), and opens the capture dialog when `thevault --capture`,
+// when the update check found one, or a restart once an update is downloaded (D27), and opens the capture dialog when `thevault --capture`,
 // the hotkey or the tray asked for it. The web client itself is unchanged (D18).
 (() => {
   if (window.__thevaultPage || window.top !== window || location.protocol !== "vault:") return;
@@ -66,7 +66,8 @@
     document.body.appendChild(badge);
 
     // The update prompt: shown while the app offers a newer release, until the user picks one of
-    // its buttons. "Later" hides it until the app starts again.
+    // its buttons. "Later" hides it until the app starts again. A downloaded update offers
+    // "Restart to update"; an app installed from a deb or rpm is told to use its package manager.
     let later = null;
     const prompt = document.createElement("div");
     prompt.id = "thevault-update";
@@ -99,7 +100,13 @@
     };
     prompt.appendChild(text);
     const show = (on) => (prompt.style.display = on ? "flex" : "none");
-    button("Download", "download").addEventListener("click", () => {
+    const restart = button("Restart to update", "restart");
+    restart.addEventListener("click", () => {
+      text.textContent = "Restarting…";
+      fetch("/_desktop/update/restart", { method: "POST" });
+    });
+    const download = button("Download", "download");
+    download.addEventListener("click", () => {
       fetch("/_desktop/update/open", { method: "POST" });
       later = prompt.dataset.version;
       show(false);
@@ -120,10 +127,19 @@
         return;
       }
       prompt.dataset.version = update.version;
-      text.textContent =
-        update.source === "server"
-          ? `TheVault ${update.version} is available from your server.`
-          : `TheVault ${update.version} is available.`;
+      prompt.dataset.ready = String(Boolean(update.ready));
+      restart.style.display = update.ready ? "" : "none";
+      download.style.display = update.ready ? "none" : "";
+      if (update.ready) {
+        text.textContent = `TheVault ${update.version} is ready \u2014 restart to update.`;
+      } else if (update.install === "package") {
+        text.textContent = `TheVault ${update.version} is available. Update it with your package manager, or download it.`;
+      } else {
+        text.textContent =
+          update.source === "server"
+            ? `TheVault ${update.version} is available from your server.`
+            : `TheVault ${update.version} is available.`;
+      }
       show(true);
     }
 

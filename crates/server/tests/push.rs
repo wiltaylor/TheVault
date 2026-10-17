@@ -365,3 +365,45 @@ fn a_settings_change_is_streamed_and_pushed_to_its_device_only() {
         "one push for the burst, to A only"
     );
 }
+
+#[test]
+fn a_publish_of_app_builds_is_streamed_and_pushed_to_every_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let clients_dir = dir.path().join("clients");
+    let server = TestServer::start_with_args(
+        |_| {},
+        &[
+            std::ffi::OsStr::new("--clients"),
+            clients_dir.as_os_str(),
+            std::ffi::OsStr::new("--clients-poll-ms"),
+            std::ffi::OsStr::new("100"),
+        ],
+    );
+    let service = StandIn::start();
+    service.route("/up/a", Reply::text(201, ""));
+    service.route("/up/b", Reply::text(201, ""));
+    let a = Phone::pair(&server, "Pixel", 7);
+    a.register(&server, &service.url("/up/a"));
+    let b = Phone::pair(&server, "Tablet", 8);
+    b.register(&server, &service.url("/up/b"));
+    // Let the watcher take its first look at the empty folder.
+    thread::sleep(Duration::from_millis(300));
+
+    // Another process publishes, as `vault clients publish` does while the server runs.
+    let src = tempfile::tempdir().unwrap();
+    let apk = src.path().join("TheVault_0.6.0_aarch64.apk");
+    std::fs::write(&apk, b"apk").unwrap();
+    clients::publish(&clients_dir, &[clients::Publish::file(apk)], 1).unwrap();
+
+    let seen = wait_for(&service, 2);
+    let mut paths: Vec<&str> = seen.iter().map(|r| r.path.as_str()).collect();
+    paths.sort();
+    assert_eq!(paths, ["/up/a", "/up/b"]);
+    for r in &seen {
+        let phone = if r.path == "/up/a" { &a } else { &b };
+        assert_eq!(phone.open(&r.body), json!({ "event": "clients.updated" }));
+    }
+    // Looking again at a manifest that has not changed pushes nothing more.
+    thread::sleep(Duration::from_millis(600));
+    assert_eq!(service.requests().len(), 2);
+}

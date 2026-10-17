@@ -17,6 +17,8 @@
     <!-- Also mirroring the home server's notifications (D9); asked for during onboarding. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <!-- Updating itself from the APK the home server hands out (D27); granted once by the user. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application>
         <!-- First-run setup and pairing (D2). -->
@@ -93,5 +95,24 @@
         <receiver
             android:name=".NotificationDismissReceiver"
             android:exported="false" />
+
+        <!-- Self-update (D27): why it asks to install apps, and the installer's results. -->
+        <activity
+            android:name=".UpdateSetupActivity"
+            android:exported="false"
+            android:label="TheVault updates"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+
+        <receiver
+            android:name=".UpdateInstallReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".PackageReplacedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

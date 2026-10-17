@@ -30,6 +30,16 @@ struct Args {
     #[arg(long, env = "VAULT_CLIENTS_DIR", value_name = "DIR")]
     clients: Option<PathBuf>,
 
+    /// How often, in milliseconds, the server looks at the clients folder's manifest for a new
+    /// publish, which it announces as `clients.updated`. The tests shorten it.
+    #[arg(
+        long,
+        env = "VAULT_CLIENTS_POLL_MS",
+        default_value_t = 30_000,
+        hide = true
+    )]
+    clients_poll_ms: u64,
+
     /// Start a clock that only `/api/test/clock` moves, at this RFC 3339 time or count of
     /// milliseconds since the epoch. Only test builds accept it (S7).
     #[arg(long, value_name = "TIME")]
@@ -88,13 +98,20 @@ fn main() -> anyhow::Result<()> {
     if test_clock.is_none() {
         scheduler.start();
     }
-    let app = api::router(writer.clone(), scheduler, test_clock, Some(clients));
+    let app = api::router(writer.clone(), scheduler, test_clock, Some(clients.clone()));
 
     let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
     // Paired devices hear about notifications and their commands by push (D4, D9).
     let _push = {
         let _entered = runtime.enter();
         push::Dispatcher::default().spawn(writer.clone())
+    };
+    // A publish into the clients folder, by `vault clients publish` while the server runs, goes
+    // out as `clients.updated`, so the apps update themselves.
+    let _clients = {
+        let _entered = runtime.enter();
+        let every = std::time::Duration::from_millis(args.clients_poll_ms.max(10));
+        api::watch_clients(writer.clone(), clients, every)
     };
     runtime.block_on(serve(args.listen, args.web, app, move || {
         // Open event streams never finish on their own, so end them before waiting on

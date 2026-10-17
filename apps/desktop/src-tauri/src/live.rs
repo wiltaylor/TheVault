@@ -18,7 +18,9 @@
 //!
 //! Each `note.changed`, and each reconnect after the first connection, is handed to the shell
 //! ([`Shell::server_changed`]), which asks the sync loop for a round, so a change made in the
-//! browser or on another device reaches this app within seconds. The stream is parsed by the
+//! browser or on another device reaches this app within seconds. Each `clients.updated`, a new
+//! app build published on the server, wakes the update check ([`Shell::clients_updated`]). The
+//! stream is parsed by the
 //! sync crate's [`SseParser`], which the Android app's follower uses too.
 
 use std::collections::{HashMap, HashSet};
@@ -45,6 +47,9 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// How many unread notifications the reconcile reads.
 const PAGE: usize = 100;
 
+/// The event the server sends when it publishes new app builds.
+const CLIENTS_UPDATED: &str = "clients.updated";
+
 /// The home server and the device token, once the device is paired and the token is read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Remote {
@@ -61,6 +66,8 @@ pub trait Shell: Send + Sync + 'static {
     /// A note changed on the server, or `None` after a reconnect, when what changed meanwhile
     /// is unknown: the local vault should pull.
     fn server_changed(&self, change: Option<NoteChanged>);
+    /// The server published new app builds: check for an update now.
+    fn clients_updated(&self);
 }
 
 /// Where the live link stands, for `/_desktop/status`.
@@ -315,6 +322,9 @@ impl Task {
                     let events = parser.push(&String::from_utf8_lossy(&chunk));
                     for change in events.iter().filter_map(NoteChanged::of) {
                         self.shell.server_changed(Some(change));
+                    }
+                    if events.iter().any(|e| e.name == CLIENTS_UPDATED) {
+                        self.shell.clients_updated();
                     }
                     if events.iter().any(|e| e.name.starts_with("notification."))
                         && let Err(e) = self.refresh(remote).await

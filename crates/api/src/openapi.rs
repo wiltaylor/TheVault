@@ -280,7 +280,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
         "/api/events",
-        "Server-sent events: notification.created|read|dismissed|cleared, note.changed, device.command, device.settings",
+        "Server-sent events: notification.created|read|dismissed|cleared, note.changed, device.command, device.settings, clients.updated",
     ),
     (
         "GET",
@@ -406,6 +406,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "GET",
         "/api/clients/latest/{kind}",
         "Download the newest build of a kind (apk, appimage, deb, rpm), optionally for ?arch=; public",
+    ),
+    (
+        "GET",
+        "/api/clients/update/{target}/{arch}/{current_version}",
+        "The desktop updater's check: 204 when nothing newer is published, else the newer signed AppImage's version, notes, pub_date, url and signature; public",
     ),
     ("GET", "/api/tokens", "Every API token, without secrets"),
     ("POST", "/api/tokens", "Create an API token with one scope"),
