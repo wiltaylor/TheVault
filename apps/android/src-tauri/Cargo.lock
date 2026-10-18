@@ -116,7 +116,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "api"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "clients"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "serde",
  "serde_json",
@@ -1192,7 +1192,7 @@ checksum = "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7"
 
 [[package]]
 name = "embedded"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "api",
@@ -2144,8 +2144,9 @@ dependencies = [
 
 [[package]]
 name = "index"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
+ "lopdf",
  "pdf-extract",
  "rusqlite",
  "schema",
@@ -3436,7 +3437,7 @@ dependencies = [
 
 [[package]]
 name = "push"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -3459,7 +3460,7 @@ checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "query"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "index",
  "query-syntax",
@@ -3472,7 +3473,7 @@ dependencies = [
 
 [[package]]
 name = "query-syntax"
-version = "0.1.10"
+version = "0.1.11"
 
 [[package]]
 name = "quick-xml"
@@ -3933,7 +3934,7 @@ dependencies = [
 
 [[package]]
 name = "scheduler"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -3947,7 +3948,7 @@ dependencies = [
 
 [[package]]
 name = "schema"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "query-syntax",
  "store",
@@ -4014,7 +4015,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "script"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64 0.22.1",
  "reqwest 0.12.28",
@@ -4029,7 +4030,7 @@ dependencies = [
 
 [[package]]
 name = "script-core"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4409,7 +4410,7 @@ dependencies = [
 
 [[package]]
 name = "state"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -4429,7 +4430,7 @@ checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
 
 [[package]]
 name = "store"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "rustix",
  "serde",
@@ -4530,7 +4531,7 @@ dependencies = [
 
 [[package]]
 name = "sync"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "reqwest 0.12.28",
  "rusqlite",
@@ -5061,7 +5062,7 @@ dependencies = [
 
 [[package]]
 name = "testkit"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64 0.22.1",
  "serde_json",
@@ -5072,7 +5073,7 @@ dependencies = [
 
 [[package]]
 name = "thevault-android"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "axum",
@@ -5599,7 +5600,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vocab"
-version = "0.1.10"
+version = "0.1.11"
 
 [[package]]
 name = "vswhom"
@@ -6238,7 +6239,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "writer"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "index",
  "query",
