@@ -3,8 +3,8 @@ id: '119'
 title: Template tabs take a when condition in the query where syntax, evaluated live
   in the web client, so a tab only shows for notes that meet it
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Template tabs take a when condition in the query where syntax, evaluated live in the web client, so a tab only shows for notes that meet it
@@ -34,3 +34,15 @@ Added by the user: the agent skill (crates/cli/SKILL.md, printed by vault skill)
 ### 2026-10-18T04:33:02Z — /work
 
 Claimed.
+
+### 2026-10-18T05:03:40Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T05:03:40Z — wil
+
+Status set to done.
+
+### 2026-10-18T05:03:40Z — wil
+
+Done on ticket/119 (bc5fa14, not merged). The query parser, AST and printer moved to a new crate crates/query-syntax (no deps) so schema can parse a tab's when without a schema<->query cycle; query re-exports everything, and Query::search_all became the free fn query::search_all. Shared cases: crates/query/tests/when_cases.json (58 cases), run by crates/query/tests/when.rs (run_scan with 'id == this && (when)', errors count as false) and web/src/when.test.ts. Web evaluator: web/src/when.ts. A field keeps one slot per template even across conditional tabs; alternate tabs show it with {{field}} text (documented in vault-format.md and the skill). viewTemplate/cardTemplate no longer slice to the first tab; TemplateBody picks the first visible tab for cards. Full Playwright run: 309 passed, 1 failed in google-connect.spec.ts, unrelated, filed as 123. FORMAT_VERSION left at 1 per the ticket's rollout (apps 0.1.9 self-update first).
