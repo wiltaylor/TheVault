@@ -1,0 +1,6 @@
+# The test copy of deploy/Caddyfile: the same site, signed by Caddy's local CA.
+{$THEVAULT_DOMAIN} {
+	tls internal
+	encode zstd gzip
+	reverse_proxy thevault:8080
+}

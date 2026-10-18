@@ -1,0 +1,9 @@
+# Test-only override for docker/test-compose.sh: Caddy signs the test domain with its own local
+# CA (tls internal) instead of asking Let's Encrypt, and publishes 443 on a port Docker picks on
+# 127.0.0.1 instead of taking the host's 80 and 443.
+services:
+  caddy:
+    ports: !override
+      - "127.0.0.1::443"
+    volumes:
+      - ./Caddyfile.test:/etc/caddy/Caddyfile:ro

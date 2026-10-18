@@ -347,3 +347,8 @@ image-clients-build dir tag='thevault:local': (require-host-tool "docker") (requ
 [group('docker')]
 image-test clients='': (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl") (require-host-tool "python3")
 	docker/test-image.sh "{{clients}}"
+
+# Check deploy/compose.yaml end to end on an image built from this checkout, in a throwaway compose project on free ports: config of each profile, the default profile's login, password change, backup and restore, the https profile on Caddy's internal CA, and cloudflared refusing a dummy token; runs on the host
+[group('docker')]
+compose-test: (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl")
+	docker/test-compose.sh
