@@ -4,8 +4,8 @@ title: 'Integrations Google card gives no feedback while connecting or syncing: 
   a spinner on Connect and Save, show running state per side, and never make the finish
   request wait on the first runs'
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Integrations Google card gives no feedback while connecting or syncing: add a spinner on Connect and Save, show running state per side, and never make the finish request wait on the first runs
@@ -29,3 +29,15 @@ Correction to item 3 of the body (a word was lost when filing): GET /api/integra
 ### 2026-10-18T03:59:53Z — /work
 
 Claimed.
+
+### 2026-10-18T04:11:23Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T04:11:23Z — wil
+
+Branch ticket/113, commit 617de06. Slow finish not reproduced server-side: finish, status_of and the scheduler hold no lock across a run (trigger holds the plan lock only to mark running; the run happens outside it). With FakeGoogle gmail_delay(2s) finish answered in ms both before and after the change. The real defect fixed: finish spawned the triggers via spawn_blocking and could answer before they were marked running, so the card never showed them syncing; now Scheduler::trigger_in_background marks running synchronously. last_run normalised to ...Z in status_of (the Gmail script still stores +00:00). Run now still waits for the whole run (parked as 115); unreproduced live slowness parked as 116.
+
+### 2026-10-18T04:11:23Z — wil
+
+Status set to done.
