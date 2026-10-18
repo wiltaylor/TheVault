@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use testkit::TestServer;
+use testkit::{Reply, StandIn, TestServer};
 
 const STATUS: &str = r#"label = "Status"
 
@@ -79,6 +79,7 @@ struct Out {
     ok: bool,
     json: Value,
     stdout: String,
+    stderr: String,
 }
 
 /// Runs `vault` with its own config folder, against `url` with `token` when given.
@@ -147,6 +148,7 @@ impl Vault {
             ok: output.status.success(),
             json,
             stdout,
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         }
     }
 
@@ -1655,4 +1657,69 @@ fn a_cli_publish_while_the_server_runs_is_announced_and_offered_to_the_updater()
         .unwrap();
     assert_eq!(bytes.as_ref(), b"appimage");
     assert_eq!(update("0.5.0").status().as_u16(), 204, "up to date");
+}
+
+/// A stand-in server that answers `GET /api/health`, and `GET /api/version` with `version` when
+/// given.
+fn server_reporting(version: Option<&str>) -> (StandIn, Vault) {
+    let api = StandIn::start();
+    api.route("/api/health", Reply::json(200, &json!({ "status": "ok" })));
+    if let Some(v) = version {
+        api.route(
+            "/api/version",
+            Reply::json(200, &json!({ "server_version": v })),
+        );
+    }
+    let vault = Vault {
+        url: Some(api.url("")),
+        token: Some("tok".into()),
+        ..Vault::offline()
+    };
+    (api, vault)
+}
+
+#[test]
+fn a_newer_server_gets_one_update_line_on_stderr_and_stdout_is_unchanged() {
+    let (api, vault) = server_reporting(Some("99.0.0"));
+    let out = vault.run(&["health"], "");
+    assert!(out.ok, "{}", out.stdout);
+    assert_eq!(out.json, json!({ "status": "ok" }));
+    let arch = std::env::consts::ARCH;
+    let expected = format!(
+        "vault {} is older than the server 99.0.0; update with: curl -fsSL {}/api/clients/cli/linux-{arch} -o $(command -v vault)\n",
+        env!("CARGO_PKG_VERSION"),
+        api.url(""),
+    );
+    assert_eq!(out.stderr, expected);
+    let asked = api
+        .requests()
+        .iter()
+        .filter(|r| r.route() == "/api/version")
+        .count();
+    assert_eq!(asked, 1, "the version is asked for once per process");
+}
+
+#[test]
+fn the_same_or_an_older_server_or_one_without_a_version_adds_nothing() {
+    let same = TestServer::start();
+    let out = Vault::against(&same).run(&["health"], "");
+    assert!(out.ok, "{}", out.stdout);
+    assert_eq!(out.stderr, "", "the same version prints nothing extra");
+    for version in [Some("0.0.1"), Some("not a version"), None] {
+        let (_api, vault) = server_reporting(version);
+        let out = vault.run(&["health"], "");
+        assert!(out.ok, "{}", out.stdout);
+        assert_eq!(out.json, json!({ "status": "ok" }));
+        assert_eq!(out.stderr, "", "{version:?}");
+    }
+}
+
+#[test]
+fn local_commands_never_ask_a_server_for_its_version() {
+    let (api, mut vault) = server_reporting(Some("99.0.0"));
+    vault.token = None;
+    let out = vault.run(&["skill"], "");
+    assert!(out.ok, "{}", out.stdout);
+    assert_eq!(out.stderr, "");
+    assert!(api.requests().is_empty());
 }

@@ -299,3 +299,79 @@ fn the_updater_endpoint_offers_a_newer_signed_appimage_and_204_otherwise() {
     // A pre-release of the published version is older than it.
     assert_eq!(check("linux/x86_64/0.4.0-rc.1").status(), StatusCode::OK);
 }
+
+const CLI_AMD64: &[u8] = b"\x7fELF pretend static vault cli for x86_64";
+
+#[test]
+fn the_cli_builds_are_listed_and_served_by_architecture() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = serve_with(dir.path());
+    publish(dir.path());
+    let src = tempfile::tempdir().unwrap();
+    let cli = src.path().join("vault-0.3.0-linux-x86_64");
+    std::fs::write(&cli, CLI_AMD64).unwrap();
+    let manifest = clients::publish(dir.path(), &[Publish::file(&cli)], 1_700_000_000_001).unwrap();
+    let entry = manifest
+        .clients
+        .iter()
+        .find(|e| e.kind == "binary")
+        .expect("the CLI is in the manifest")
+        .clone();
+
+    let listed: Value = get(&server, "/api/clients").json().unwrap();
+    let list = listed["clients"].as_array().unwrap();
+    assert_eq!(list.len(), 3, "{listed}");
+    let listed_cli = list
+        .iter()
+        .find(|e| e["kind"] == "binary")
+        .unwrap_or_else(|| panic!("no CLI in {listed}"));
+    assert_eq!(listed_cli["platform"], "cli");
+    assert_eq!(listed_cli["arch"], "x86_64");
+    assert_eq!(listed_cli["version"], "0.3.0");
+    assert_eq!(listed_cli["build"], "release");
+    assert_eq!(listed_cli["size"], CLI_AMD64.len());
+    assert_eq!(listed_cli["sha256"], entry.sha256);
+    assert_eq!(listed_cli["filename"], "vault-0.3.0-linux-x86_64");
+    assert_eq!(listed_cli["path"], "/api/clients/vault-0.3.0-linux-x86_64");
+    assert!(listed_cli.get("qr_svg").is_none());
+
+    let res = get(&server, "/api/clients/vault-0.3.0-linux-x86_64");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.bytes().unwrap().as_ref(), CLI_AMD64);
+
+    // The address a one-line install fetches, with no manifest to parse.
+    let res = get(&server, "/api/clients/cli/linux-x86_64");
+    assert_eq!(res.status(), StatusCode::OK);
+    let h = res.headers().clone();
+    assert_eq!(h[CONTENT_TYPE], "application/octet-stream");
+    assert_eq!(h[ETAG], format!("\"{}\"", entry.sha256).as_str());
+    assert_eq!(h[CONTENT_LENGTH], CLI_AMD64.len().to_string().as_str());
+    assert_eq!(res.bytes().unwrap().as_ref(), CLI_AMD64);
+    let res = Client::new()
+        .get(server.url("/api/clients/cli/linux-x86_64"))
+        .header(RANGE, "bytes=0-3")
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(res.bytes().unwrap().as_ref(), &CLI_AMD64[..4]);
+
+    // No arm64 build is published, and nothing else answers there.
+    for path in [
+        "/api/clients/cli/linux-aarch64",
+        "/api/clients/cli/linux-",
+        "/api/clients/cli/darwin-x86_64",
+        "/api/clients/cli/x86_64",
+    ] {
+        assert_eq!(get(&server, path).status(), StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+#[test]
+fn the_cli_download_is_404_without_a_clients_folder_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = serve_with(&dir.path().join("empty"));
+    assert_eq!(
+        get(&server, "/api/clients/cli/linux-x86_64").status(),
+        StatusCode::NOT_FOUND
+    );
+}

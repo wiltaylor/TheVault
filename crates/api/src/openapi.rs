@@ -420,7 +420,12 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
         "/api/clients/latest/{kind}",
-        "Download the newest build of a kind (apk, appimage, deb, rpm), optionally for ?arch=; public",
+        "Download the newest build of a kind (apk, appimage, deb, rpm, binary), optionally for ?arch=; public",
+    ),
+    (
+        "GET",
+        "/api/clients/cli/{target}",
+        "Download the newest static vault CLI build for linux-<arch> (linux-x86_64, linux-aarch64); public",
     ),
     (
         "GET",

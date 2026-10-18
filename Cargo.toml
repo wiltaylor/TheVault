@@ -61,3 +61,10 @@ opt-level = 3
 
 [profile.dev.package.blake2]
 opt-level = 3
+
+# The static vault CLI builds the server hands out (`just cli-release`, D27): stripped, and with
+# thin LTO, to keep the download small.
+[profile.cli]
+inherits = "release"
+strip = true
+lto = "thin"

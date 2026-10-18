@@ -1,5 +1,13 @@
 //! The HTTP client every API command goes through. It adds no behaviour of its own (D32): it sends
 //! the request, and hands back the JSON the server answered with.
+//!
+//! The one thing it says besides is on stderr: before the first request of a process it asks the
+//! server for its version (`GET /api/version`), and when the server is newer than this binary it
+//! prints one line naming the command that downloads the matching CLI from the server (D27).
+//! stdout is untouched, and a server that does not answer the question is not asked again.
+
+use std::cell::Cell;
+use std::time::Duration;
 
 use reqwest::Method;
 use reqwest::Url;
@@ -14,6 +22,8 @@ pub struct Api {
     base: Url,
     token: Option<String>,
     http: Client,
+    /// Whether the server's version was asked for yet in this process.
+    version_checked: Cell<bool>,
 }
 
 /// A request body.
@@ -42,7 +52,29 @@ impl Api {
             base,
             token: token.filter(|t| !t.is_empty()),
             http,
+            version_checked: Cell::new(false),
         })
+    }
+
+    /// Once per process: when the server reports a version newer than this binary's, print the
+    /// line that says how to update on stderr. Any failure to learn the version says nothing.
+    fn check_version(&self) {
+        if self.version_checked.replace(true) {
+            return;
+        }
+        let server = self
+            .http
+            .get(self.url(&["api", "version"], &[]))
+            .header(ACCEPT, "application/json")
+            .timeout(Duration::from_secs(5))
+            .send()
+            .ok()
+            .filter(|r| r.status().is_success())
+            .and_then(|r| r.json::<Value>().ok())
+            .and_then(|v| v["server_version"].as_str().map(str::to_owned));
+        if let Some(line) = server.and_then(|s| update_line(self.base.as_str(), &s)) {
+            eprintln!("{line}");
+        }
     }
 
     /// The URL of `segments` under the base URL, each one percent-encoded, with `query` appended.
@@ -119,6 +151,7 @@ impl Api {
         query: &[(&str, String)],
         body: Body,
     ) -> Result<Response, Fail> {
+        self.check_version();
         let rb = self.request(method, segments, query);
         let rb = match body {
             Body::None => rb,
@@ -147,6 +180,18 @@ impl Api {
     pub fn delete(&self, segments: &[&str]) -> Result<Value, Fail> {
         self.call(Method::DELETE, segments, &[], Body::None)
     }
+}
+
+/// The line to print when `server_version` is newer than this binary, or `None`.
+fn update_line(base: &str, server_version: &str) -> Option<String> {
+    let own = env!("CARGO_PKG_VERSION");
+    clients::is_newer(server_version, own).then(|| {
+        format!(
+            "vault {own} is older than the server {server_version}; update with: curl -fsSL {}/api/clients/cli/linux-{} -o $(command -v vault)",
+            base.trim_end_matches('/'),
+            std::env::consts::ARCH,
+        )
+    })
 }
 
 fn connect(e: reqwest::Error) -> Fail {

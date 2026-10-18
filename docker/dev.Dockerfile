@@ -98,3 +98,25 @@ RUN apt-get update \
 ENV PATH=${PATH}:${ANDROID_HOME}/emulator ANDROID_AVD_HOME=/avd
 # The AVD lives in the thevault-avd volume ./dev mounts here, so it survives between containers.
 RUN mkdir -p /avd && chmod 1777 /avd
+
+# Static Linux builds of the vault CLI (`just cli-release`, ticket 130): the two musl targets,
+# zig as the C cross compiler and linker cargo-zigbuild drives (the CLI compiles SQLite, ring and
+# zstd), and qemu-user to run the aarch64 build here. Zig comes from its PyPI wheel, a zip of the
+# release tarball, since PyPI's CDN is far more dependable than ziglang.org. A layer of its own,
+# so adding it rebuilds nothing above.
+ARG ZIG_WHEEL=https://files.pythonhosted.org/packages/0c/b7/ecfdce6368cc3664d301f7f52db4fe1004aa7da7a12c4a9bf1de534ff6ab/ziglang-0.13.0-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl
+ARG ZIG_WHEEL_SHA256=3ce0c9f16547e5d61b32e0d226926e9a2552ef4b91fccf7ab5ea1a623a77824b
+ARG CARGO_ZIGBUILD_VERSION=0.23.4
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends qemu-user \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl -fsSL --retry 5 --retry-all-errors -o /tmp/zig.whl "${ZIG_WHEEL}" \
+ && echo "${ZIG_WHEEL_SHA256}  /tmp/zig.whl" | sha256sum -c - \
+ && unzip -q /tmp/zig.whl 'ziglang/*' -d /opt \
+ && rm /tmp/zig.whl \
+ && chmod -R a+rX /opt/ziglang && chmod a+x /opt/ziglang/zig \
+ && ln -s /opt/ziglang/zig /usr/local/bin/zig \
+ && rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+ && chmod -R a+rX /usr/local/rustup \
+ && CARGO_HOME=/usr/local/cargo cargo install --locked cargo-zigbuild --version "${CARGO_ZIGBUILD_VERSION}" \
+ && rm -rf /usr/local/cargo/registry /usr/local/cargo/git
