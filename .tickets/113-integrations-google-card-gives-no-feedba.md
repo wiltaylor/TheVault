@@ -4,7 +4,7 @@ title: 'Integrations Google card gives no feedback while connecting or syncing: 
   a spinner on Connect and Save, show running state per side, and never make the finish
   request wait on the first runs'
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -25,3 +25,7 @@ Acceptance criteria: web component tests for each spinner state and the running 
 ### 2026-10-18T03:59:22Z — wil
 
 Correction to item 3 of the body (a word was lost when filing): GET /api/integrations/google reports "running": true or false per side while a run is in progress, from the scheduler.
+
+### 2026-10-18T03:59:53Z — /work
+
+Claimed.

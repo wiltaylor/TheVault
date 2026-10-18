@@ -3,8 +3,8 @@ id: '112'
 title: Apps update themselves before syncing when the server is newer, and the Android
   updater resumes and verifies downloads
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Apps update themselves before syncing when the server is newer, and the Android updater resumes and verifies downloads
@@ -31,3 +31,15 @@ Acceptance criteria:
 ### 2026-10-18T03:30:49Z — /work
 
 Claimed.
+
+### 2026-10-18T04:04:41Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T04:04:41Z — wil
+
+Status set to done.
+
+### 2026-10-18T04:04:41Z — wil
+
+Branch ticket/112, commit 488119b. The pause lives in crates/sync/src/gate.rs (decide, apk_for, UpdateGate) and Engine::sync_gated: the Android core (plugins/.../src/core.rs sync_now) and the desktop sync loop (apps/desktop/src-tauri/src/sync_loop.rs Gate::check) both call it before any push or pull; it pauses both directions. Android: Kotlin passes {version, build, arches, failed} through VaultCore.setApp (UpdateGate.kt keeps failures in the thevault-update prefs); SyncWorker enqueues the gate update (unique 'thevault-update-gate', KEEP, initial delay 0/1/4/16 min). Desktop: GateUpdater runs Updates::prepare (same Tauri updater download) then install_ready + restart. The server's /api/clients Range support already existed; the test now covers 'bytes=N-' with If-Range. Silent install (USER_ACTION_NOT_REQUIRED, fallback to the confirm notice) already existed and stays covered by AppUpdateTest. Not exercised: a real phone or a real AppImage restart (no device); just desktop-test (tauri-driver E2E) was not run, only the desktop crate's cargo test --lib and clippy. A wrong-length complete download now counts as wrong bytes and starts over; only a dropped connection (IOException, or fewer bytes than Content-Length) is resumed.
