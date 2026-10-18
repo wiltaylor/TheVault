@@ -3,7 +3,7 @@ id: '119'
 title: Template tabs take a when condition in the query where syntax, evaluated live
   in the web client, so a tab only shows for notes that meet it
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -30,3 +30,7 @@ Acceptance criteria:
 ### 2026-10-18T04:32:43Z — wil
 
 Added by the user: the agent skill (crates/cli/SKILL.md, printed by vault skill) must teach the new tab condition. Ticket 118 adds a template-authoring section to that file; once 118 is merged to main, merge main into this branch and add to that section: the when attribute on a tab, its syntax with one worked example, the fallback rules (active tab hidden, all hidden), and that it needs apps at 0.1.10 or later; run the example against a real server. Acceptance: the skill's template section documents when with a worked example that was run.
+
+### 2026-10-18T04:33:02Z — /work
+
+Claimed.

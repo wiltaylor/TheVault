@@ -3,8 +3,8 @@ id: '118'
 title: The vault CLI skill teaches authoring types, taxonomies, templates, scripts,
   handlers, tasks and secrets, with stale facts fixed and a skillcheck test
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: unmet
 ---
 
 # The vault CLI skill teaches authoring types, taxonomies, templates, scripts, handlers, tasks and secrets, with stale facts fixed and a skillcheck test
@@ -32,3 +32,15 @@ Acceptance criteria:
 ### 2026-10-18T04:20:46Z — /work
 
 Claimed.
+
+### 2026-10-18T04:44:16Z — wil
+
+Commit fd01a38 on ticket/118. Worked examples: a fresh starter vault served on port 0 by ./dev (vault-server --listen 127.0.0.1:0, VAULT_SECRET_KEY_FILE in the temp dir), admin token by POST /api/login then POST /api/tokens (what vault token create sends; the CLI cannot make the first token), then every sh block of SKILL.md run in order in its own temp dir (.scratch/t118/allblocks.sh): all 25 passed. The new ones and what they printed: step 11 vault type put invoice + type get (warnings []); step 12 vault put --type invoice, type get, type change (plan), type change --apply (applied true); step 13 taxonomy put invoice_stage, taxonomy get, taxonomy put -f (path Disputed listed); step 14 template put invoice default (heading, columns with slots, control toggle, query_view table+calendar) and card, template get; step 15 script put invoice (problems []), type change + --apply adding handler after_create, put --type invoice, and the note then held received = today with a version by handler invoice; step 16 script put invoice_review, task put (schedule_text Mondays at 09:00 (Australia/Melbourne)), task run (outcome succeeded, log 2 unpaid invoices), task history, notifications --unread (unread 1); step 17 secret set, script put invoice_sync, task put, task run (outcome succeeded, log the key has 14 characters). Also tried by hand: type put on a type with notes (409 type_in_use), --rename amount=total, --migration, removing a field (flagged lists notes), stale plan (409 plan_stale), taxonomy dropping a held term (409 term_in_use), broken script (saved, problems listed), failed task run (exit 0, outcome failed). cargo test -p cli skill tests pass (every_command_in_the_skill_document_runs_against_a_starter_vault now runs the new blocks too); ./dev just check passed. test.py: checked without a model by .scratch/t118/smoke/smoke_test.py, which swaps run_skill for a script an ideal agent would run: 3 passed, and no server container was left running (the fixture stops the server with a stop file, since stopping the docker client leaves the container up). Live tests not run. skillcheck lint: SK005 error (name thevault vs directory cli) and SK010 warning (763 lines) remain: SK005 cannot be fixed without renaming the skill or moving the file, both forbidden here; filed 121. Test 3 accepts a before_create or after_create handler, since the outcome (the stamp) is what matters. Filed 120 (rename leaves template query views on the old field), 121 (SK005), 122 (./dev passes no stdin; containers outlive the client). Coordinator asked mid-task that templates be covered fully; step 14 now has Tabs, Slots, Fixed blocks, Query views and Write a template subheadings, with Tabs kept in one place for ticket 119 to extend.
+
+### 2026-10-18T04:44:16Z — wil
+
+Verified set to unmet.
+
+### 2026-10-18T04:44:16Z — wil
+
+Status set to done.
