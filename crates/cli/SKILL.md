@@ -1,6 +1,6 @@
 ---
 name: thevault
-description: Read and write notes in a TheVault vault with the `vault` CLI. Inspect the types first, write notes as WCL or JSON, import many notes with a dry-run batch, upsert by a key field, run queries and full-text search, fix validation errors from the error JSON, and notify the user when work is done. Use whenever a task involves TheVault notes, types or queries.
+description: Read and write a TheVault vault with the `vault` CLI. Use when a task reads, writes, archives or deletes TheVault notes; runs a query or full-text search; imports many notes in a batch or upserts them by a key field; creates a note type or changes one that already has notes; creates a taxonomy, adds terms, or lays out a template with tabs and query views; writes a script, an event handler on a type or a scheduled task, runs it and reads its log; stores a secret a script reads; notifies the user; or pairs and manages devices.
 ---
 
 # TheVault with the `vault` CLI
@@ -14,7 +14,7 @@ TheVault is a note app. Every note has a **type**, and the type lists the note's
 `vault` needs two environment variables:
 
 - `VAULT_URL`: the server, such as `http://127.0.0.1:8080`.
-- `VAULT_TOKEN`: an API token. Ask the user for one if it is not set. A `read` token can only read, a `write` token can change notes and assets, and an `admin` token can change types too.
+- `VAULT_TOKEN`: an API token. Ask the user for one if it is not set. A `read` token can only read, a `write` token can change notes and assets, and an `admin` token can also change types, taxonomies, templates, scripts, tasks and secrets.
 
 Check the connection:
 
@@ -47,6 +47,10 @@ vault taxonomy get status
 - `multiple`: the value is a list.
 - `options` for `select`, `taxonomy` for `taxonomy`, `target` for `reference`. A field declared as a list of terms (`items = "taxonomy"` in the type file) shows as a `multiple` taxonomy field with `items` set to `"taxonomy"`, and takes the same values.
 - `relation` and `inverse` for `reference`: see "Two-way references" below.
+- `labels` for a list of strings: another list field holding one label per value, in the same order. Write both lists together, as a person's `phones = ["+61400000000"]` with `phone_labels = ["mobile"]`.
+- `hidden`: the app's properties sidebar leaves the field out. It is still stored, written and queried like any field.
+
+Step 11 lists every attribute a type file can give a field.
 
 Every note also has `title`, which is required. The server sets `created` and `updated` itself and ignores yours.
 
@@ -64,12 +68,14 @@ Every note also has `title`, which is required. The server sets `created` and `u
 | `reference` | The 26-character id of a note of the `target` type |
 | `asset` | The id of an uploaded asset |
 | `list` | A list of the field's `items` kind |
-| `location` | `{ lat: -37.81, lng: 144.96 }` |
+| `location` | `{ lat: -37.81, lng: 144.96 }`, or `{ x: 412.0, y: 188.5 }` in pixels on an image map |
 | `content` | A `content <field> { ... }` block of paragraphs, headings and lists. In JSON it is a block, not a field: see step 3 |
+| `dict` | A `dict <field> { key = value }` block of named values of the field's `values` kind |
+| `ink`, `canvas` | A drawing or a canvas block, made in the app. `get` a note that has one to see its form |
 
 Write every field you care about. Do not rely on a field's `default` being filled in for you.
 
-Every vault has two built-in types, marked `"builtin": true` in `vault type list`: `dailynote`, one note per day, and `fleeting`, quick captures waiting in the inbox (see step 8). They can be customised but not deleted.
+Every vault has nine built-in types, marked `"builtin": true` in `vault type list`: `dailynote`, one note per day; `fleeting`, quick captures waiting in the inbox (see step 8); `message`, `call` and `conversation`, written from a paired phone; and `email`, `email_thread` and `event`, written by the Google sync. They can be customised but not deleted. Each server start adds back any field of a built-in type's shipped default that the vault's copy lacks, so to take a field out of sight set `hidden = true` on it rather than removing it. A vault without a `person` type gets one, because the phone and Google types refer to it.
 
 ### Two-way references
 
@@ -377,6 +383,375 @@ vault device list
 ```
 
 `vault device pair-code` prints a code that works once, for ten minutes (`--ttl <seconds>` changes that), with `payload`, the `{server_url, code}` the app's QR scanner reads, and `qr_svg`, the QR code as an SVG image. `server_url` is `--url` unless `--server-url` names the address the phone reaches the server on. `vault device list` shows each device with its `settings`: `commands` the server may send it, the `contacts_write` and `sms_send` switches, `exclusions` (`{kind, value}` with kind `contact`, `number` or `thread`) and `skip_pattern`, a regular expression for messages never captured. `vault device rename <id> <name>` renames one, `vault device settings <id>` reads a JSON object of the settings to change from stdin, and `vault device revoke <id>` revokes one: its token stops working at once.
+
+## 11. Create a type
+
+Change types, taxonomies, templates, scripts, tasks and secrets only when the user asks. These commands need an `admin` token.
+
+A type is a WCL file. Its name, such as `invoice`, is `[a-z][a-z0-9_]*`, and so is each field's; `title`, `created`, `updated` and `archived` are reserved. The file holds:
+
+| Item | Meaning |
+|------|---------|
+| `label` | Required. The display name, singular. `plural`, `description`, `icon` and `colour` (a palette colour, as in step 13) are optional |
+| `field <name> { ... }` | One field, in display order |
+| `template default { ... }` | Required. The note page's layout: see step 14 |
+| `handler "<event>" { ... }` | A script to run on the type's notes: see step 15 |
+
+Each field takes `kind` (step 1's table), and optionally `label`, `description`, `required`, `default`, `computed`, `hidden` and `multiple`. A `required` field cannot also be `computed` or `hidden`. `multiple` is allowed on `select`, `taxonomy`, `reference` and `asset`. Some kinds take more:
+
+| Kind | Items |
+|------|-------|
+| `select` | `options = ["low", "high"]`, required |
+| `taxonomy` | `taxonomy = "<name>"`, required |
+| `reference` | `target = "<type>"`, required, or `"*"` for any type. `relation`: `one_way` (the default), `two_way` with `inverse = "<field on the target>"` naming a field that names this one back, or `peer` (`multiple`, target this type). `on_delete`: `unlink` (the default), `restrict` or `cascade` |
+| `list` | `items`, required: `string`, `int`, `float`, `bool`, `date`, `datetime`, `url` or `taxonomy` (then `taxonomy = "<name>"` too). With `items = "string"`, `labels = "<field>"` names the list of strings that labels its values (step 1) |
+| `dict` | `values`, required: a scalar kind such as `string` |
+| `date_range` | `of`: `date` (the default), `datetime` or `date_or_datetime` |
+| `location` | `map`, required: `geo`, or `image` with `image = "<asset id>"` |
+| `asset` | `accept`: `any` (the default) or `image` |
+
+```sh
+vault type put invoice <<'EOF'
+label  = "Invoice"
+plural = "Invoices"
+
+field amount {
+  kind     = "float"
+  label    = "Amount"
+  required = true
+}
+
+field received {
+  kind = "date"
+}
+
+field body {
+  kind = "content"
+}
+
+template default {
+  tab "Invoice" {
+    slot "title"
+    slot "amount"
+    slot "received"
+    slot "body"
+  }
+}
+EOF
+vault type get invoice
+```
+
+The type exists when `vault type get invoice` prints it, and the answer of `type put` has an empty `warnings` list; a warning names an attribute the server does not know and ignored. A refused type answers `invalid_type` with each problem under `failures`, located by `at`. `type put` replaces only a type that has no notes. For one that has notes it answers 409 `type_in_use`: change it with step 12. `vault type delete <name>` deletes a type that has no notes.
+
+## 12. Change a type that has notes
+
+A change to a type that has notes is planned, then applied. The plan shows what every note would get, and applying it changes the type and the notes in one commit.
+
+1. Write the whole new type file. `vault type get <name>` prints the current one under `wcl`.
+2. Plan: `vault type change <name> -f <file>`. Read `added`, `removed`, `renamed`, `changes` (each note that would change, with its `edits`) and `flagged` (notes that would hold data the type no longer describes).
+3. Apply: the same command with the same file and flags, plus `--apply <plan>`, where `<plan>` is the plan's `plan` value. The change is done when the answer has `"applied": true` and `vault type get` shows it. A type or note that changed after the plan is refused with 409 `plan_stale`; plan again.
+
+```sh
+vault put --type invoice <<'EOF'
+title  = "March power bill"
+amount = 182.4
+EOF
+vault type get invoice | jq -r .wcl > invoice.wcl
+cat >> invoice.wcl <<'EOF'
+
+field paid {
+  kind     = "bool"
+  required = true
+  default  = false
+}
+EOF
+vault type change invoice -f invoice.wcl > plan.json
+vault type change invoice -f invoice.wcl --apply "$(jq -r .plan plan.json)"
+```
+
+- A `default` is written into every existing note, so it shows in `changes`. A field added with no `default` changes no note. A new `required` field must have a `default`.
+- `--rename old=new` renames a field and moves its values. Name the field `new` in the file.
+- `--migration <script>` runs that script's `migrate` function (`--function` names another) on each note, after renames and defaults. It takes the note as `{ id, type, event, version, note }` and returns the note body `{ fields, blocks }` to write, or `null` to leave the note.
+- A removed field's values stay in the notes, and `vault flagged` lists those notes.
+
+## 13. Taxonomies
+
+A taxonomy is a tree of terms that `taxonomy` fields and lists of terms take values from. Its file holds `label` (required), `description`, `allow_new` (`true` lets notes add terms, as in step 1's table) and `term "<name>"` blocks in display order, which is also the kanban column order. A term may hold `colour`, `description` and child `term` blocks. A colour is one of `gray`, `brown`, `orange`, `yellow`, `green`, `blue`, `purple`, `pink` and `red`; a term without one takes its parent's. A taxonomy without `allow_new` needs at least one term.
+
+`vault taxonomy put` replaces the whole file, so to add a term, write every existing term as well:
+
+```sh
+vault taxonomy put invoice_stage <<'EOF'
+label = "Invoice stage"
+
+term "Received" {
+  colour = "gray"
+}
+
+term "Paid" {
+  colour = "green"
+}
+EOF
+vault taxonomy get invoice_stage | jq -r .wcl > stage.wcl
+cat >> stage.wcl <<'EOF'
+
+term "Disputed" {
+  colour = "red"
+}
+EOF
+vault taxonomy put invoice_stage -f stage.wcl
+vault taxonomy get invoice_stage
+```
+
+The term is added when `vault taxonomy get` lists its `path`. A file that drops a term that notes hold is refused with 409 `term_in_use`, which lists the notes. To rename or move a term, add `--rename "Old/Path=New/Path"`: every note holding it is rewritten in the same commit. `vault taxonomy delete <name>` deletes a taxonomy that no field uses.
+
+## 14. Templates
+
+A template lays a type's notes out on the page. A type has at most two, and the server refuses any other name:
+
+| Template | Used by | When missing |
+|----------|---------|--------------|
+| `default` | The note page and `details` views | Required |
+| `card` | Cards, kanban and canvas views, map pins and canvas note nodes | The first tab of `default` |
+
+A template takes an optional `label` and one or more tabs.
+
+### Tabs
+
+`tab "<title>" { ... }` is one tab of the page, in order. A template with one tab shows no tab bar, and a card shows only its first tab. A tab holds an ordered mix of slots and fixed blocks.
+
+### Slots
+
+`slot "<field>"` places a field, or `title`, where it stands. A field has at most one slot in a template, columns included. A `label` inside the slot, as in `slot "amount" { label = "Total" }`, renames the field in this template only. A field with no slot is still stored, and the app's properties sidebar edits it.
+
+### Fixed blocks
+
+Any content block in a tab is shown on every note of the type. In a fixed block's `text`, and an image's `alt` and `caption`, `{{field}}` shows that field's value, read-only.
+
+| Block | Holds |
+|-------|-------|
+| `heading` | `level` (1 to 3) and `text` |
+| `paragraph`, `quote` | `text` |
+| `list` | `style` (`bullet`, `numbered` or `todo`) and `item { text = "..." }` blocks |
+| `image` | `asset = "<asset id>"`, or in a template `field = "<asset field>"` to show each note's own image; `alt`, `caption`, `width` |
+| `asset` | `asset = "<asset id>"`: a file card, or a PDF viewer |
+| `code`, `mermaid` | `source`; `code` also takes `language` and `caption` |
+| `columns` | 2 to 6 `column { width = 1 ... }` blocks side by side, each holding slots and fixed blocks. Columns do not nest |
+| `control` | `field` and `kind`: a form control that edits the field in place. The kinds are `text`, `textarea`, `number`, `slider` (with `min` and `max`), `rating`, `toggle`, `checkbox`, `dropdown`, `radio`, `chips`, `calendar`, `datetime` and `time`. A kind that does not fit the field is refused with the field kinds it fits |
+| `query_view` | A live query and its views: below |
+| `ink`, `canvas` | A drawing or a canvas, made in the app |
+
+### Query views
+
+`query_view { ... }` runs one query and shows its results. It takes `title`, `query` (step 2's language, in which `this` is the note being shown), `default_view`, and one or more `view <name> { kind = "..." }` blocks, each a tab of the view. A view may take `title`, and `template` (`default` or `card`) for the views that show notes as cards.
+
+| View `kind` | Shows | Takes |
+|-------------|-------|-------|
+| `table` | Rows | `columns`, the fields to show, default `["title"]` |
+| `list` | One line per note | |
+| `cards` | A grid of cards | |
+| `details` | Each note expanded | |
+| `kanban` | A column per term; dropping a card writes the field | `group`, required: a single-term taxonomy field |
+| `calendar` | Notes on their dates | `date`, required: a `date`, `datetime` or `date_range` field; `mode`: `month` (the default), `week` or `day` |
+| `timeline` | Notes along a time line | `date`, required, as for `calendar` |
+| `map` | A pin per note | `location`, required: a `location` field |
+| `canvas` | Cards on a canvas | |
+
+### Write a template
+
+`vault template put <type> <name>` creates or replaces one template from its `template <name> { ... }` block, on a type with notes too. Check it with `vault template get <type> <name>`:
+
+```sh
+vault template put invoice default <<'EOF'
+template default {
+  tab "Invoice" {
+    heading {
+      level = 2
+      text  = "{{title}}"
+    }
+    columns {
+      column {
+        width = 2
+        slot "amount" {
+          label = "Total"
+        }
+        slot "received"
+      }
+      column {
+        width = 1
+        control {
+          field = "paid"
+          kind  = "toggle"
+        }
+      }
+    }
+    slot "body"
+  }
+
+  tab "Unpaid" {
+    query_view {
+      title = "Every unpaid invoice"
+      query = "from invoice where !paid sort received asc"
+
+      view table {
+        kind    = "table"
+        columns = ["title", "amount", "received"]
+      }
+
+      view calendar {
+        kind = "calendar"
+        date = "received"
+      }
+    }
+  }
+}
+EOF
+vault template put invoice card <<'EOF'
+template card {
+  tab "Card" {
+    slot "title"
+    slot "amount"
+  }
+}
+EOF
+vault template get invoice default
+```
+
+The template is saved when `vault template get` prints it. A refused template answers `invalid_type`, and each issue's `at`, such as `template card > tab "Card" > slot "nope"`, names the item to fix. `vault template list <type>` lists a type's templates, and `vault template delete <type> card` deletes any template but `default`.
+
+## 15. Scripts and handlers
+
+A script is a wscript file, `scripts/<name>.ws`, of Rust-like functions. A handler on a type runs one of its functions on an event of the type's notes, and a scheduled task (step 16) runs one on a schedule.
+
+- `use <module>` at the top imports a module. A function that can fail returns `Result[T, string]`: `?` stops the run on an error, and `Err("message")` fails it with that message.
+- A note is a `Value`, `{ id, type, version, note }`, where `note` is `{ fields, blocks }`. Read one with `.get("id").unwrap().as_string().unwrap()`, or `.as_int()` and `.as_bool()` for other kinds. Build one with `Value::Map(#{ "key": Value::String("text") })`, `Value::Int(2)`, `Value::Bool(true)` or `Value::Null`.
+- `fmt("{} unpaid", count)` formats text, and `vault::log(text)` adds a line to the run's log.
+
+| `vault::` function | Does |
+|--------------------|------|
+| `get(id)`, `query(text)`, `query_page(text, size, cursor)`, `search(text, limit)` | Read notes. A query row is `{ id, type, title, fields }`; a page is `{ rows, total, next }`, with `""` as the first cursor |
+| `create(type, body)`, `update(id, body, version)`, `delete(id, version)` | Write a note through the normal write path, which runs that note's handlers too |
+| `patch(id, fields, version)` | Set some fields and keep the rest. `Value::Null` removes a field, and a `version` of `""` takes the note as it is now |
+| `append_text(id, field, text, version)` | Append paragraphs to a content field |
+| `daily(date)` | The daily note of `YYYY-MM-DD`, or of today for `""`, created when missing |
+| `notify(title, body, note)` | Notify the user, as in step 9. `""` for no body or no note |
+| `today()`, `now()` | Today as `YYYY-MM-DD` (in a task's `timezone`, else UTC), and now in milliseconds |
+
+The modules a run may use depend on what runs it. A script that uses a module its run lacks does not compile:
+
+| Run | `vault` | `http` | `secrets` | `fs` |
+|-----|---------|--------|-----------|------|
+| `before_*` handler, migration | yes, without `notify`, `daily`, `restore` or asset uploads | no | no | no |
+| `after_*` handler | yes | yes | yes | no |
+| Scheduled task | yes | yes | yes | yes |
+
+`http::get(url, headers)` and `http::post(url, headers, body)` return `{ status, headers, body }` and reach only the hosts in the run's `allow_domains`. `json::parse(text)` reads JSON. A run stops after its time limit (a task's `timeout`, 30 seconds by default) or 50 million instructions, and `vault::query` stops at 10,000 rows.
+
+A handler is a block in the type file, `handler "<event>" { script = "<script>" }`. It calls the function named after the event unless `function` names another, and an `after_*` handler takes `allow_domains` and `secrets` lists as a task does. Handlers of one event run in file order. The function takes the note as a `Value`, with `version` null on a create:
+
+| Event | Runs | Return |
+|-------|------|--------|
+| `before_create`, `before_update` | Inside the save | A note body to save in place of the note, `null` to keep it, or `Err` to refuse the save |
+| `before_delete` | Inside the delete | `Err` to refuse it |
+| `after_create`, `after_update`, `after_delete` | From a queue, just after the commit | `Err` records a failed run |
+
+Write the script, then add the handler with a planned change (step 12). Here every new invoice gets today's date in `received`:
+
+```sh
+vault script put invoice <<'EOF'
+use vault
+
+fn after_create(event: Value) -> Result[(), string] {
+    let id = event.get("id").unwrap().as_string().unwrap()
+    vault::patch(id, Value::Map(#{ "received": Value::String(vault::today()) }), "")?
+    Ok(())
+}
+EOF
+vault type get invoice | jq -r .wcl > invoice.wcl
+cat >> invoice.wcl <<'EOF'
+
+handler "after_create" {
+  script = "invoice"
+}
+EOF
+vault type change invoice -f invoice.wcl > plan.json
+vault type change invoice -f invoice.wcl --apply "$(jq -r .plan plan.json)"
+vault put --type invoice <<'EOF'
+title  = "April water bill"
+amount = 64.0
+paid   = false
+EOF
+```
+
+`script put` saves a script that does not compile, so check its answer: the script compiles when `problems` is `[]`, and each problem's `message` says what to fix. The handler works when the note, read again a moment after it is created, holds `received`, and `vault history <id>` lists a version by `handler invoice`. `vault script delete <name>` is refused while a handler or task names the script.
+
+## 16. Scheduled tasks
+
+A task runs a script's function, `run` unless `function` names another, on a schedule. Its file holds:
+
+| Item | Meaning |
+|------|---------|
+| `schedule` | Required. Five-field cron: minute, hour, day of month, month, day of week. `"0 9 * * 1"` is Mondays at 09:00 |
+| `script` | Required. The script name |
+| `timezone` | The IANA zone the schedule and `vault::today()` use, such as `"Australia/Melbourne"`. Default `"UTC"` |
+| `label`, `description` | Shown in Settings > Scheduled |
+| `allow_domains` | Hosts `http` may reach. `["*"]` allows any |
+| `secrets` | The secrets the script may read and write: see step 17 |
+| `read_paths`, `write_paths` | Absolute folders outside the vault that `fs` may read, or read and write |
+| `retries`, `retry_delay`, `timeout` | Retries after a failure (default `3`), the first retry's delay (`"PT1M"`, doubled each time), and the time limit per run (`"PT30S"`) |
+| `paused` | `true` stops it firing on its schedule. It can still run by hand |
+
+```sh
+vault script put invoice_review <<'EOF'
+use vault
+
+fn run() -> Result[(), string] {
+    let page = vault::query_page("from invoice where !paid", 1, "")?
+    let unpaid = page.get("total").unwrap().as_int().unwrap()
+    vault::log(fmt("{} unpaid invoices", unpaid))
+    vault::notify("Review the invoices", fmt("{} are unpaid.", unpaid), "")?
+    Ok(())
+}
+EOF
+vault task put invoice_review <<'EOF'
+label    = "Invoice review"
+schedule = "0 9 * * 1"
+timezone = "Australia/Melbourne"
+script   = "invoice_review"
+EOF
+vault task run invoice_review
+vault task history invoice_review --limit 5
+vault notifications --unread
+```
+
+`task put` answers with `schedule_text`, such as `Mondays at 09:00 (Australia/Melbourne)`, and `next_run`: check that it says what the user asked for. `vault task run` runs the task now and prints the run when it ends. It exits 0 whatever the outcome, so read the run: the task works when `outcome` is `succeeded`. A failed run has `outcome` `failed` and the error in `message`, and `log` holds what the script logged either way. `vault task history <name>` lists the runs newest first, `vault task show-run <name> <id>` prints one, and `vault task get <name>` shows the task with its `latest_run`. `vault task delete <name>` deletes a task and keeps its runs.
+
+## 17. Secrets
+
+A secret is a named value, such as an API key, stored encrypted on the server. No command or script can list or print a value: `vault secret list` and `vault secret get <name>` show only names and times. Set one from stdin, so the value stays out of the command line:
+
+```sh
+printf '%s' "sk-example-123" | vault secret set invoice_api_key
+vault script put invoice_sync <<'EOF'
+use secrets
+use vault
+
+fn run() -> Result[(), string] {
+    let key = secrets::get("invoice_api_key")?
+    vault::log(fmt("the key has {} characters", key.len()))
+    Ok(())
+}
+EOF
+vault task put invoice_sync <<'EOF'
+schedule = "0 * * * *"
+script   = "invoice_sync"
+secrets  = ["invoice_api_key"]
+paused   = true
+EOF
+vault task run invoice_sync
+```
+
+A script reads and writes only the secrets that its task, or its `after_*` handler, lists in `secrets`. `secrets::get(name)` returns the value, and `secrets::set(name, value)` replaces it, which suits state a task keeps between runs, such as a sync cursor. The task read the secret when the run's `outcome` is `succeeded`. Keep a secret's value out of logs, notifications and notes. `vault secret delete <name>` deletes one.
 
 ## Setting up a vault
 
