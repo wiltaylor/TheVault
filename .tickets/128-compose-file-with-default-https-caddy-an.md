@@ -4,8 +4,8 @@ title: Compose file with default, https (Caddy) and cloudflare (tunnel) profiles
   .env.example, and docs/install.md
 blocked_by:
 - '127'
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Compose file with default, https (Caddy) and cloudflare (tunnel) profiles, .env.example, and docs/install.md
@@ -33,3 +33,15 @@ Acceptance criteria:
 ### 2026-10-18T09:03:39Z — /work
 
 Claimed.
+
+### 2026-10-18T09:36:17Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T09:36:17Z — wil
+
+Proved with 'just compose-test' (docker/test-compose.sh, on the host, image built from this checkout and tagged ghcr.io/wiltaylor/thevault:<run> so compose.yaml runs unchanged with THEVAULT_VERSION from a test .env): 74 PASS, 0 FAIL, nothing left behind; './dev just check' exit 0. Covers: .env.example documents every variable compose reads (VAULT_PASSWORD first, passwd command named); config renders default, https, cloudflare and COMPOSE_PROFILES=https; default profile healthy on 127.0.0.1:<free>, login 200 and wrong 401, vault passwd, vault backup, docker compose cp, and restore-backup into a new data volume with login after; https profile through Caddy tls internal (docker/compose-test/https.yaml with ports !override) verified against Caddy's root CA for vault.test; cloudflared started after thevault healthy and logged 'Provided Tunnel token is not valid.' for a dummy token. UNMET by this ticket, for the user to try: a real Cloudflare Tunnel (needs an account) and a real Let's Encrypt certificate (needs a public domain). Notes for ticket 129: GHCR does not accept fine-grained tokens, so docs/install.md says classic token with read:packages, not what the ticket said; install.md downloads releases/latest/download/{compose.yaml,Caddyfile,.env.example}, so 129 must attach those names (check GitHub keeps the leading dot of .env.example). cloudflared has no major-version tag, so it is pinned to 2026.10.1 via CLOUDFLARED_VERSION. vault backup does not create its folder (ticket 133); install.md runs mkdir -p first. docker/Dockerfile not touched.
+
+### 2026-10-18T09:36:31Z — wil
+
+Status set to done.
