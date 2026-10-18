@@ -116,7 +116,8 @@ fn is_device_command_result(path: &str) -> bool {
 const PUBLIC_READ_PATHS: [&str; 1] = ["/api/clients"];
 
 /// The scope a request needs, or `None` for the public endpoints: health, login, device pairing,
-/// which checks the password or a pairing code itself, the sync handshake, which an app reads
+/// which checks the password or a pairing code itself, an agent install code's redemption, which
+/// checks the code itself, the agent install script, the sync handshake, which an app reads
 /// before it pairs (D27), the server's version, and the app downloads under
 /// [`PUBLIC_READ_PATHS`].
 pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
@@ -130,7 +131,12 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     if path == "/api/health"
         || (method == Method::GET && (path == "/api/sync/info" || path == "/api/version"))
         || (reads && PUBLIC_READ_PATHS.iter().any(|p| under(p)))
-        || (method == Method::POST && (path == "/api/login" || path == "/api/devices/pair"))
+        || (reads && path == "/agent/install.sh")
+        || (method == Method::POST
+            && matches!(
+                path,
+                "/api/login" | "/api/devices/pair" | "/api/agent-codes/redeem"
+            ))
     {
         return None;
     }
@@ -477,6 +483,12 @@ mod tests {
             (Method::DELETE, "/api/clients/x.apk", Some(Scope::Admin)),
             (Method::GET, "/api/clientsx", Some(Scope::Read)),
             (Method::GET, "/anything", Some(Scope::Read)),
+            (Method::POST, "/api/agent-codes", Some(Scope::Admin)),
+            (Method::POST, "/api/agent-codes/redeem", None),
+            (Method::GET, "/api/agent-codes/redeem", Some(Scope::Read)),
+            (Method::GET, "/agent/install.sh", None),
+            (Method::HEAD, "/agent/install.sh", None),
+            (Method::POST, "/agent/install.sh", Some(Scope::Admin)),
         ];
         for (method, path, want) in cases {
             assert_eq!(required_scope(&method, path), want, "{method} {path}");

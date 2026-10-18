@@ -3011,6 +3011,18 @@ button.link {
   min-width: min(32rem, 100%);
 }
 
+/* Settings > API tokens > Connect an AI agent */
+.connect-agent {
+  margin: 1.5rem 0;
+}
+
+.connect-agent .scope-warning {
+  margin: 0.5rem 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid var(--danger);
+  color: var(--danger);
+}
+
 /* Settings > Devices */
 .pair-code {
   display: flex;

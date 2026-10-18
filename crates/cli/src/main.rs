@@ -9,6 +9,7 @@
 
 mod backup;
 mod client;
+mod config;
 mod local;
 mod starter;
 
@@ -16,7 +17,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::parser::ValueSource;
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
@@ -59,7 +61,11 @@ impl Fail {
 #[command(
     name = "vault",
     version,
-    about = "Command-line client for TheVault. Every command prints JSON."
+    about = "Command-line client for TheVault. Every command prints JSON.",
+    after_help = "When neither --url nor VAULT_URL gives the server, or neither --token nor \
+VAULT_TOKEN gives the token, vault reads VAULT_URL and VAULT_TOKEN from \
+$XDG_CONFIG_HOME/thevault/cli.env (default ~/.config/thevault/cli.env), KEY=VALUE lines. The \
+agent install script from Settings > API tokens writes that file."
 )]
 struct Cli {
     /// The server's base URL.
@@ -700,7 +706,10 @@ enum Canvas {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    let url_defaulted = matches.value_source("url") == Some(ValueSource::DefaultValue);
+    fill_from_cli_env(&mut cli, url_defaulted);
     // The one output that is not JSON, and only when asked for.
     if let Command::Skill { raw: true } = cli.command {
         print!("{SKILL}");
@@ -715,6 +724,25 @@ fn main() -> ExitCode {
         serde_json::to_string_pretty(&out).unwrap_or_else(|_| "null".to_owned())
     );
     code
+}
+
+/// Takes the server URL and token from `cli.env` where no flag or environment variable gave one.
+fn fill_from_cli_env(cli: &mut Cli, url_defaulted: bool) {
+    if !url_defaulted && cli.token.is_some() {
+        return;
+    }
+    let Some(path) = config::path(
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    ) else {
+        return;
+    };
+    if url_defaulted && let Some(url) = config::lookup(&path, "VAULT_URL") {
+        cli.url = url;
+    }
+    if cli.token.is_none() {
+        cli.token = config::lookup(&path, "VAULT_TOKEN");
+    }
 }
 
 fn run(cli: Cli) -> Result<Value, Fail> {

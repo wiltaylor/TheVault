@@ -83,8 +83,19 @@ fn normalise_code(code: &str) -> String {
         .collect()
 }
 
-fn code_hash(code: &str) -> Vec<u8> {
+pub(crate) fn code_hash(code: &str) -> Vec<u8> {
     Sha256::digest(normalise_code(code).as_bytes()).to_vec()
+}
+
+/// A fresh one-time code: eight characters of [`CODE_ALPHABET`] in two groups of four.
+pub(crate) fn new_code() -> String {
+    let mut raw = [0u8; 8];
+    random_bytes(&mut raw);
+    let chars: String = raw
+        .iter()
+        .map(|b| CODE_ALPHABET[usize::from(b % 32)] as char)
+        .collect();
+    format!("{}-{}", &chars[..4], &chars[4..])
 }
 
 const DEVICE_COLUMNS: &str = "id, name, platform, capabilities, token_id, push_endpoint, \
@@ -121,13 +132,7 @@ impl State {
     /// Issue a pairing code that works once, until `ttl_ms` from now. Expired codes are removed
     /// on the way.
     pub fn create_pair_code(&self, ttl_ms: i64) -> Result<PairCode> {
-        let mut raw = [0u8; 8];
-        random_bytes(&mut raw);
-        let chars: String = raw
-            .iter()
-            .map(|b| CODE_ALPHABET[usize::from(b % 32)] as char)
-            .collect();
-        let code = format!("{}-{}", &chars[..4], &chars[4..]);
+        let code = new_code();
         let now = self.now();
         let expires_ms = now + ttl_ms;
         let conn = self.conn();

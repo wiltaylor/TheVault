@@ -11,6 +11,7 @@ A single-user, self-hosted note app: a Rust server, a SolidJS web client, deskto
 - [Install TheVault with Docker Compose](docs/install.md)
 - [Connecting Gmail and Google Calendar](docs/google.md)
 - [Handing out the apps from your server](docs/clients.md)
+- [Connecting an AI agent](docs/agents.md)
 - [The Linux desktop app](docs/desktop.md)
 - [Releasing the Android app](docs/android-release.md)
 - [Device sync on the server](docs/sync.md)

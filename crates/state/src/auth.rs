@@ -1,4 +1,10 @@
-//! API tokens (D11) and the login password (OQ-S3).
+//! API tokens (D11), the one-time install codes that give an AI agent one, and the login
+//! password (OQ-S3).
+//!
+//! An agent install code is stored as a hash, like a pairing code, and names the token it makes:
+//! `agent-<name>` with the scope chosen when the code was issued. Redeeming it works once and
+//! replaces any earlier token of that name, so installing an agent again with a new code rotates
+//! its token.
 
 use std::str::FromStr;
 
@@ -7,7 +13,19 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
+use crate::devices::{code_hash, new_code};
 use crate::{Error, Result, State, random_bytes, to_hex};
+
+/// An agent install code as issued. The code itself is shown once; only its hash is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCode {
+    /// Eight characters in two groups, such as `K7QM-3XRT`.
+    pub code: String,
+    /// The name of the token redeeming it makes, `agent-<name>`.
+    pub token_name: String,
+    pub scope: Scope,
+    pub expires_ms: i64,
+}
 
 /// What a token may do. Each scope includes the ones below it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -85,13 +103,17 @@ fn finish_token((mut info, scope): (TokenInfo, String)) -> Result<TokenInfo> {
     Ok(info)
 }
 
+fn new_secret() -> String {
+    let mut raw = [0u8; 32];
+    random_bytes(&mut raw);
+    format!("{TOKEN_PREFIX}{}", to_hex(&raw))
+}
+
 impl State {
     /// Creates a token and returns it with its secret. The secret is shown once; only its
     /// hash is stored.
     pub fn create_token(&self, name: &str, scope: Scope) -> Result<(TokenInfo, String)> {
-        let mut raw = [0u8; 32];
-        random_bytes(&mut raw);
-        let secret = format!("{TOKEN_PREFIX}{}", to_hex(&raw));
+        let secret = new_secret();
         let created_ms = self.now();
         let inserted = self.conn().execute(
             "INSERT INTO tokens (name, scope, secret_hash, created_ms) VALUES (?1, ?2, ?3, ?4)
@@ -149,6 +171,68 @@ impl State {
             0 => Err(Error::UnknownToken(name.to_owned())),
             _ => Ok(()),
         }
+    }
+
+    /// Issue an agent install code that works once, until `ttl_ms` from now, and makes the token
+    /// `agent-<name>` with `scope`. Expired codes are removed on the way.
+    pub fn create_agent_code(&self, name: &str, scope: Scope, ttl_ms: i64) -> Result<AgentCode> {
+        let code = new_code();
+        let now = self.now();
+        let expires_ms = now + ttl_ms;
+        let conn = self.conn();
+        conn.execute("DELETE FROM agent_codes WHERE expires_ms <= ?1", [now])?;
+        conn.execute(
+            "INSERT INTO agent_codes (code_hash, name, scope, created_ms, expires_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![code_hash(&code), name, scope.as_str(), now, expires_ms],
+        )?;
+        Ok(AgentCode {
+            code,
+            token_name: format!("agent-{name}"),
+            scope,
+            expires_ms,
+        })
+    }
+
+    /// Use up an agent install code: create its token, replacing any token of the same name, and
+    /// return it with its secret. `None` when the code is unknown, used or expired.
+    pub fn redeem_agent_code(&self, code: &str) -> Result<Option<(TokenInfo, String)>> {
+        let now = self.now();
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let taken = tx
+            .query_row(
+                "DELETE FROM agent_codes WHERE code_hash = ?1 RETURNING name, scope, expires_ms",
+                [code_hash(code)],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((name, scope, _)) = taken.filter(|(_, _, expires)| *expires > now) else {
+            tx.commit()?;
+            return Ok(None);
+        };
+        let scope: Scope = scope.parse()?;
+        let name = format!("agent-{name}");
+        let secret = new_secret();
+        tx.execute("DELETE FROM tokens WHERE name = ?1", [&name])?;
+        tx.execute(
+            "INSERT INTO tokens (name, scope, secret_hash, created_ms) VALUES (?1, ?2, ?3, ?4)",
+            params![name, scope.as_str(), token_hash(&secret), now],
+        )?;
+        tx.commit()?;
+        let info = TokenInfo {
+            name,
+            scope,
+            created_ms: now,
+            last_used_ms: None,
+        };
+        Ok(Some((info, secret)))
     }
 
     /// Sets or replaces the login password, stored as an Argon2id hash.

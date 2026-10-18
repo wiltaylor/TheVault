@@ -119,6 +119,8 @@ vault --url https://vault.example health
 
 `/api/clients` lists the CLI builds too, with their `sha256`, to check a download against.
 
+To set up an AI agent's machine, use the install command from Settings > API tokens instead. It installs the CLI, checks its SHA-256, and writes the token and the skill. See [Connecting an AI agent](agents.md).
+
 ### When the server is newer
 
 Every `vault` command that talks to a server first asks it for its version, `GET /api/version`, once per process. When the server's version is newer than the CLI's, by semver order, the CLI prints one line on stderr and carries on:

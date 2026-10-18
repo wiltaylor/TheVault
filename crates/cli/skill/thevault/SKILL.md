@@ -11,10 +11,12 @@ TheVault is a note app. Every note has a **type**, and the type lists the note's
 
 ## Before you start
 
-`vault` needs two environment variables:
+`vault` needs two settings:
 
 - `VAULT_URL`: the server, such as `http://127.0.0.1:8080`.
-- `VAULT_TOKEN`: an API token. Ask the user for one if it is not set. A `read` token can only read, a `write` token can change notes and assets, and an `admin` token can also change types, taxonomies, templates, scripts, tasks and secrets.
+- `VAULT_TOKEN`: an API token. A `read` token can only read, a `write` token can change notes and assets, and an `admin` token can also change types, taxonomies, templates, scripts, tasks and secrets.
+
+When neither is set in the environment or given as `--url` and `--token`, `vault` reads them from `~/.config/thevault/cli.env` (`$XDG_CONFIG_HOME/thevault/cli.env` when that is set). The install command from Settings > API tokens > Connect an AI agent writes that file, so on a machine it set up, `vault` needs nothing set. When `vault health` works but other commands answer 401, the token is missing or revoked: ask the user for a new install code or token. Never print the token or the contents of `cli.env`.
 
 Check the connection:
 

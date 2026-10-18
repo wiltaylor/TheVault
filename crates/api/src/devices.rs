@@ -296,7 +296,7 @@ pub(crate) fn server_url_from(headers: &HeaderMap) -> Option<String> {
     Some(format!("{scheme}://{host}"))
 }
 
-fn check_server_url(url: &str) -> Result<String, ApiError> {
+pub(crate) fn check_server_url(url: &str) -> Result<String, ApiError> {
     let url = url.trim().trim_end_matches('/');
     let rest = url
         .strip_prefix("https://")
