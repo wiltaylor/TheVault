@@ -85,6 +85,24 @@ field snapshot {
   hidden      = true
 }
 
+handler "after_create" {
+  script        = "google_event"
+  allow_domains = ["oauth2.googleapis.com", "www.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token"]
+}
+
+handler "after_update" {
+  script        = "google_event"
+  allow_domains = ["oauth2.googleapis.com", "www.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token"]
+}
+
+handler "after_delete" {
+  script        = "google_event"
+  allow_domains = ["oauth2.googleapis.com", "www.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token"]
+}
+
 template default {
   tab "Event" {
     columns {

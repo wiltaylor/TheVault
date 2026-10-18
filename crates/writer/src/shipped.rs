@@ -33,7 +33,8 @@ use store::Change;
 use wcl_lang::ast::{Block, Expr, Item, Source};
 
 use crate::builtin::{
-    BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, DEFAULT_PERSON_TYPE, PERSON_TYPE, TYPES_NEEDING_PERSON,
+    BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, DEFAULT_EVENT_TYPE, DEFAULT_PERSON_TYPE, EVENT_TYPE,
+    PERSON_TYPE, TYPES_NEEDING_PERSON,
 };
 use crate::defs::taxonomy_path;
 use crate::types::{NativeMigration, TypeChange, rebuild_schema};
@@ -57,7 +58,7 @@ pub struct ShippedFile {
 
 /// The shipped files: the default device scripts, then the device file that names them, then the
 /// Google sync's scripts, each before the task that names it (google-sync D19).
-pub const SHIPPED_FILES: [ShippedFile; 10] = [
+pub const SHIPPED_FILES: [ShippedFile; 11] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -125,6 +126,12 @@ pub const SHIPPED_FILES: [ShippedFile; 10] = [
         source: include_str!("../defaults/google/google_gmail.wcl"),
         hashes: &["aa11241f36d2c44865b144dc13b2fd0081a2e939da038fde89f3e8ef7cb3786c"],
     },
+    // The Google Calendar write-back, named by the shipped `event` type's handlers.
+    ShippedFile {
+        path: "scripts/google_event.ws",
+        source: include_str!("../defaults/google/google_event.ws"),
+        hashes: &["5f4a59e376bae6ab443affc0c0fdf241b1f26347a870f35ab03cedf110584cd3"],
+    },
 ];
 
 /// One one-time vault upgrade: a change that is not additive, such as a field rename with a
@@ -156,7 +163,59 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0002_person_labels",
         run: person_labels,
     },
+    UpgradeStep {
+        id: "0003_event_google_handler",
+        run: event_google_handler,
+    },
 ];
+
+/// The script the shipped `event` type's write-back handlers name (google-sync D9, D10, D20).
+const EVENT_HANDLER_SCRIPT: &str = "google_event";
+
+/// Step `0003_event_google_handler` (google-sync D9, D10, D20): an `event` type from before the
+/// write-back to Google Calendar has no handler naming `google_event`, and the seeding only ever
+/// adds fields to a type the vault has. One planned type change that edits no note gives it the
+/// shipped type's `handler` blocks, before its first template. A vault without the type gets it
+/// whole, handlers included, from the seeding.
+fn event_google_handler(w: &Writer) -> Result<()> {
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(EVENT_TYPE) else {
+        return Ok(());
+    };
+    if ty.handlers.iter().any(|h| h.script == EVENT_HANDLER_SCRIPT) {
+        return Ok(());
+    }
+    let path = type_path(EVENT_TYPE);
+    let shipped: Source = store::parse_data_only(DEFAULT_EVENT_TYPE, &path)?;
+    let handlers: Vec<Item> = shipped
+        .items
+        .into_iter()
+        .filter(|i| block(i, "handler").is_some())
+        .collect();
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    let at = ast
+        .items
+        .iter()
+        .position(|i| block(i, "template").is_some())
+        .unwrap_or(ast.items.len());
+    ast.items.splice(at..at, handlers);
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
+    let plan = w.plan_type_change(EVENT_TYPE, &change)?;
+    if !plan.changes.is_empty() {
+        eprintln!("step 0003_event_google_handler was not applied: it would edit notes");
+        return Ok(());
+    }
+    w.apply_type_change(
+        EVENT_TYPE,
+        &change,
+        &plan.token,
+        &Author::Task(SERVER_AUTHOR.to_owned()),
+    )?;
+    Ok(())
+}
 
 /// The person fields whose values carry labels, each with the field holding its labels.
 const LABELLED: [(&str, &str); 3] = [
@@ -939,6 +998,7 @@ mod tests {
         paths.push("tasks/google_calendar.wcl".to_owned());
         paths.push(crate::defs::script_path("google_gmail"));
         paths.push(crate::defs::task_path("google_gmail"));
+        paths.push(crate::defs::script_path("google_event"));
         let shipped: Vec<String> = SHIPPED_FILES.iter().map(|f| f.path.to_owned()).collect();
         assert_eq!(shipped, paths);
         for (name, source) in crate::DEFAULT_DEVICE_SCRIPTS {

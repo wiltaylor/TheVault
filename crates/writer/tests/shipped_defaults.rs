@@ -31,6 +31,9 @@ const OLD_DEVICE_CALLS: &str = include_str!("fixtures/shipped/device_calls_39d90
 /// `devices/android.wcl` as the first release with device files shipped it.
 const OLD_ANDROID: &str = include_str!("fixtures/shipped/android_39d9091.wcl");
 
+/// The `event` type as main shipped it before the Google Calendar write-back, with no handlers.
+const EVENT_BEFORE_HANDLERS: &str = include_str!("fixtures/shipped/event_4718609.wcl");
+
 const ALEX: &str = r#"title        = "Alex Example"
 email        = "alex@example.com"
 organisation = "Example Co"
@@ -105,7 +108,14 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
 
     // The step moved email into emails; the seeding added the rest.
-    assert_eq!(done.steps, ["0001_person_emails", "0002_person_labels"]);
+    assert_eq!(
+        done.steps,
+        [
+            "0001_person_emails",
+            "0002_person_labels",
+            "0003_event_google_handler"
+        ]
+    );
     let fields: Vec<&str> = done
         .fields_added
         .iter()
@@ -198,6 +208,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "device_messages",
             "device_share",
             "google_calendar",
+            "google_event",
             "google_gmail"
         ]
     );
@@ -439,7 +450,14 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
 
     let w = open(root);
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
-    assert_eq!(done.steps, ["0001_person_emails", "0002_person_labels"]);
+    assert_eq!(
+        done.steps,
+        [
+            "0001_person_emails",
+            "0002_person_labels",
+            "0003_event_google_handler"
+        ]
+    );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
     assert!(
         done.fields_added
@@ -609,7 +627,11 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
         let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
         assert_eq!(
             done.steps,
-            ["0001_person_emails", "0002_person_labels"],
+            [
+                "0001_person_emails",
+                "0002_person_labels",
+                "0003_event_google_handler"
+            ],
             "{name}"
         );
         assert!(
@@ -739,9 +761,12 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
     let mut added = done.types_added.clone();
     added.sort();
     assert_eq!(added, GOOGLE_TYPES);
-    // Step 0002 is the one 0.1.6 had not run. The seeding is then one commit, with no field
+    // Steps 0002 and 0003 are the ones 0.1.6 had not run; 0003 finds no event type yet. The seeding is then one commit, with no field
     // added to a new type and no note edited.
-    assert_eq!(done.steps, ["0002_person_labels"]);
+    assert_eq!(
+        done.steps,
+        ["0002_person_labels", "0003_event_google_handler"]
+    );
     assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 2);
     assert!(
         done.fields_added.iter().all(|(t, _)| t == "person"),
@@ -850,4 +875,74 @@ fn a_gmail_label_taxonomy_the_sync_grew_is_kept() {
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     assert!(done.taxonomies_added.is_empty());
     assert_eq!(read(root, "taxonomies/gmail_label.wcl").unwrap(), grown);
+}
+
+#[test]
+fn an_event_type_from_before_the_write_back_gains_its_handlers_and_no_note_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/event.wcl"), EVENT_BEFORE_HANDLERS).unwrap();
+    std::fs::write(root.join("types/person.wcl"), writer::DEFAULT_PERSON_TYPE).unwrap();
+    let w = open(root);
+    assert!(w.schema().type_def("event").unwrap().handlers.is_empty());
+    let id = w
+        .create(
+            "event",
+            &writer::Input::Json(json!({ "fields": {
+                "title": "Standup", "when": { "start": "2026-03-02", "end": "2026-03-02" },
+            }})),
+            &author(),
+        )
+        .unwrap()
+        .id;
+    let note_path = format!("notes/event/{id}.wcl");
+    let note_before = read(root, &note_path).unwrap();
+    let versions_before = w.history(&id).unwrap().len();
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    assert!(
+        done.steps.iter().any(|s| s == "0003_event_google_handler"),
+        "{:?}",
+        done.steps
+    );
+    // The type is now the shipped one: the handlers were all it lacked.
+    assert_eq!(
+        read(root, "types/event.wcl").unwrap(),
+        store::canonical(writer::DEFAULT_EVENT_TYPE, "types/event.wcl").unwrap()
+    );
+    let schema = w.schema();
+    let handlers = &schema.type_def("event").unwrap().handlers;
+    let events: Vec<&str> = handlers.iter().map(|h| h.event.as_str()).collect();
+    assert_eq!(events, ["after_create", "after_update", "after_delete"]);
+    for h in handlers {
+        assert_eq!(h.script, "google_event");
+        assert_eq!(
+            h.allow_domains,
+            ["oauth2.googleapis.com", "www.googleapis.com"]
+        );
+        assert_eq!(
+            h.secrets,
+            [
+                "google_client_id",
+                "google_client_secret",
+                "google_refresh_token"
+            ]
+        );
+    }
+    assert_eq!(
+        read(root, "scripts/google_event.ws").unwrap(),
+        shipped("scripts/google_event.ws")
+    );
+    assert_eq!(read(root, &note_path).unwrap(), note_before);
+    assert_eq!(w.history(&id).unwrap().len(), versions_before);
+
+    // The step is recorded; a second start changes nothing.
+    let type_after = read(root, "types/event.wcl").unwrap();
+    let before = generation(root);
+    let again = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert!(again.steps.is_empty(), "{:?}", again.steps);
+    assert_eq!(generation(root), before);
+    assert_eq!(read(root, "types/event.wcl").unwrap(), type_after);
 }

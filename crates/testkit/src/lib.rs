@@ -214,6 +214,35 @@ impl TestServer {
         self.vault.path()
     }
 
+    /// Waits until the server's `after_*` handler queue is empty, including every job the jobs
+    /// that ran set off, and returns each failed job as `<message>: <payload>`, oldest first.
+    ///
+    /// # Panics
+    ///
+    /// When the queue does not empty within the start timeout.
+    pub fn settle_handlers(&self) -> Vec<String> {
+        let state = state::State::open(&self.vault.path().join(".vault/state.db"), None)
+            .expect("open state.db");
+        let deadline = Instant::now() + start_timeout();
+        while !state
+            .queued_jobs()
+            .expect("read the handler queue")
+            .is_empty()
+        {
+            assert!(Instant::now() < deadline, "the handler queue did not empty");
+            thread::sleep(Duration::from_millis(25));
+        }
+        state
+            .failed_jobs()
+            .expect("read the failed handler jobs")
+            .into_iter()
+            .map(|j| match j.status {
+                state::JobStatus::Failed(m) => format!("{m}: {}", j.payload),
+                state::JobStatus::Queued => j.payload,
+            })
+            .collect()
+    }
+
     fn wait_healthy(&self) {
         let deadline = Instant::now() + start_timeout();
         loop {

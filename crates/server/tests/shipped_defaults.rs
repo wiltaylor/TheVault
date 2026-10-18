@@ -26,13 +26,14 @@ created      = "2026-10-01T00:00:00Z"
 updated      = "2026-10-01T00:00:00Z"
 "#;
 
-const SCRIPTS: [&str; 7] = [
+const SCRIPTS: [&str; 8] = [
     "device_calls",
     "device_contacts",
     "device_import",
     "device_messages",
     "device_share",
     "google_calendar",
+    "google_event",
     "google_gmail",
 ];
 

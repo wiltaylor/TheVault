@@ -440,3 +440,31 @@ The `snapshot` keys hold each synced field in the form the note holds it:
 | `meet_url` | `hangoutLink` | `meet_url` |
 
 A note's synced fields equal its `snapshot` in every key exactly when the vault has not changed them since the last sync. Applying a Google change to a note merges each field against the snapshot: a field changed only in Google takes Google's value, a field changed only in the vault keeps the vault's, and a field changed on both takes the side changed most recently, the note's `updated` against Google's `updated`. `start` and `end` merge as one field. The sync then writes Google's values as the new `snapshot` and Google's `etag`, so a field the vault kept still differs from the snapshot afterwards. A note Google did not change is not written.
+
+## The Google Calendar write-back
+
+The shipped `event` type runs `scripts/google_event.ws` after every create, update and delete of an event note, from the handler queue (google-sync D9, D10, D20). It reads the `google_sync` note's `endpoints` and `default_calendar` as the sync does, and refreshes an access token for each run that has something to send. A run with no settings note sends nothing and succeeds. An `invalid_grant` is handled as the sync handles it: `last_calendar_error`, one "Google sign-in expired" notification, and a run that does not fail.
+
+A handler cannot tell who wrote a note, so the snapshot is the loop guard. A note whose synced fields equal its `snapshot` has no change of the vault's, and the run sends nothing, not even a token refresh. Every note the sync writes is in that state unless the vault kept one of its own changes in a merge, which the next handler run then sends. Times compare as instants, so `10:00:00Z` and `21:00:00+11:00` are the same start.
+
+| Event | Sends |
+|-------|-------|
+| `after_update` | `PATCH` of the event, or of the one occurrence its `google_ref` names (D8), with `If-Match: <etag>` and only the field groups that differ from the snapshot. A 412 is answered by a `GET`, a field-by-field merge as the sync's (D10), and one more `PATCH` with Google's new etag of what still differs from Google; a second 412 fails the run. A 404 or 410 sends nothing more: the next sync trashes the note |
+| `after_create` | With no `google_ref`: a `POST` into the note's `calendar`, else `default_calendar`, else `primary`. A note with no `when` yet is not sent; the first update that gives it one inserts it. With a `google_ref`: nothing for a note the sync just made (its `created` equals its `updated` and it equals its snapshot). Any other, such as a note restored from the trash, is looked up with a `GET`; when Google answers 404 or 410 or the event is cancelled, it is inserted as a new event (D20) and loses `series`, since it is no longer an occurrence of a series |
+| `after_delete` | `DELETE` of the event or occurrence. A 404 or 410, as for a note the sync trashed because Google deleted the event, counts as done |
+
+After a `POST` or `PATCH`, the handler writes Google's answer back to the note with `vault::update`: `etag`, the `snapshot` of what Google now holds, and, for an insert, `google_ref` and `calendar`. Each field group the note still holds as it was sent takes Google's value, so the note equals its snapshot and the `after_update` that write sets off sends nothing. A group the user changed again meanwhile keeps the user's value, for that next run to send.
+
+The note fields map to the event as the sync's table above, inverted:
+
+| Note | Sent as |
+|------|---------|
+| `title` | `summary` |
+| `when` of dates | `start.date`, and `end.date` the day after the range's last day; `dateTime` set to null |
+| `when` of datetimes | `start.dateTime` and `end.dateTime` as the note holds them; `date` set to null |
+| `location` | `location` |
+| `description` | Its paragraphs joined with a line break |
+| `attendees_raw` | `attendees`, one `{ email }` each, in order |
+| `status` | `status` |
+
+`organiser` and `meet_url` are Google's own and are never sent; the write-back takes Google's values for them.
