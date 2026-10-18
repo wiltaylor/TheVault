@@ -632,3 +632,150 @@ fn put_settings_validates_and_saves_keeping_the_endpoints() {
         api.google.endpoints()
     );
 }
+
+impl Api {
+    /// The shipped `google_gmail` script as the `google_gmail` task, reaching the fake, and the
+    /// do-nothing `google_calendar` task, both paused.
+    fn slow_gmail_tasks(&self) {
+        self.tasks(true);
+        let task = format!(
+            r#"label         = "Gmail sync"
+schedule      = "*/10 * * * *"
+script        = "google_gmail"
+timeout       = "PT5M"
+retries       = 0
+allow_domains = ["{host}"]
+secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_state"]
+paused        = true
+"#,
+            host = self.google.host()
+        );
+        expect(
+            self.client
+                .put(self.server.url("/api/tasks/google_gmail"))
+                .body(task)
+                .send()
+                .unwrap(),
+            StatusCode::OK,
+        );
+    }
+
+    /// Wait until `side`'s status reports `running` as `want`.
+    fn wait_running(&self, side: &str, want: bool) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let status = self.status();
+            if status[side]["running"] == want {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{side} running never became {want}: {status:#}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+#[test]
+fn finish_answers_at_once_while_the_first_gmail_run_is_slow() {
+    let api = Api::with_google(
+        FakeGoogle::builder()
+            .gmail_delay(Duration::from_secs(2))
+            .start(),
+    );
+    api.slow_gmail_tasks();
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    let pasted = api.google.consent(&auth);
+
+    let began = Instant::now();
+    let out = expect(api.finish(&pasted), StatusCode::OK);
+    let took = began.elapsed();
+    assert!(took < Duration::from_secs(1), "finish took {took:?}");
+    assert_eq!(out["connected"], true);
+    // The first runs started before the answer, so the card shows both sides syncing.
+    assert_eq!(out["gmail"]["running"], true, "{out:#}");
+    assert_eq!(out["gmail"]["paused"], false);
+    assert_eq!(out["calendar"]["paused"], false);
+
+    // While the run waits on Gmail, the status and the other routes answer at once.
+    let began = Instant::now();
+    let status = api.status();
+    assert!(
+        began.elapsed() < Duration::from_secs(1),
+        "status took {:?}",
+        began.elapsed()
+    );
+    assert_eq!(status["gmail"]["running"], true, "{status:#}");
+    let began = Instant::now();
+    expect(api.get("/api/tasks").send().unwrap(), StatusCode::OK);
+    assert!(
+        began.elapsed() < Duration::from_secs(1),
+        "tasks took {:?}",
+        began.elapsed()
+    );
+
+    api.google.set_gmail_delay(None);
+    let status = api.wait_running("gmail", false);
+    assert_eq!(status["gmail"]["last_error"], Value::Null, "{status:#}");
+    let summary = status["gmail"]["summary"].as_str().unwrap_or_default();
+    assert!(summary.starts_with("Gmail: 0 new"), "{status:#}");
+    // The time is RFC 3339 in UTC, ending Z, whichever script wrote it.
+    let last = status["gmail"]["last_run"].as_str().unwrap();
+    assert!(last.ends_with('Z') && last.len() == 20, "{last}");
+}
+
+#[test]
+fn the_status_reports_running_per_side_from_the_scheduler() {
+    let api = Api::with_google(
+        FakeGoogle::builder()
+            .gmail_delay(Duration::from_millis(500))
+            .start(),
+    );
+    api.slow_gmail_tasks();
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+    let status = api.wait_running("gmail", false);
+    assert_eq!(status["calendar"]["running"], false, "{status:#}");
+
+    // A run started by hand shows as running until it ends.
+    let client = api.client.clone();
+    let url = api.server.url("/api/tasks/google_gmail/run");
+    let run = std::thread::spawn(move || client.post(url).send().unwrap().status());
+    let status = api.wait_running("gmail", true);
+    assert_eq!(status["calendar"]["running"], false, "{status:#}");
+    assert_eq!(run.join().unwrap(), StatusCode::OK);
+    let status = api.status();
+    assert_eq!(status["gmail"]["running"], false, "{status:#}");
+
+    // With no task, the side is not running.
+    expect(
+        api.client
+            .delete(api.server.url("/api/tasks/google_calendar"))
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    let status = api.status();
+    assert_eq!(status["calendar"]["installed"], false);
+    assert_eq!(status["calendar"]["running"], false);
+}
+
+#[test]
+fn the_status_writes_every_last_run_as_utc_ending_z() {
+    let api = Api::start();
+    api.tasks(false);
+    api.put_secret(
+        "google_gmail_state",
+        &json!({ "last_run": "2026-10-18T09:00:00+00:00" }).to_string(),
+    );
+    api.put_secret(
+        "google_calendar_state",
+        &json!({ "last_run": "2026-10-18T19:05:00+10:00" }).to_string(),
+    );
+    let status = api.status();
+    assert_eq!(status["gmail"]["last_run"], "2026-10-18T09:00:00Z");
+    assert_eq!(status["calendar"]["last_run"], "2026-10-18T09:05:00Z");
+}

@@ -13,12 +13,12 @@ import { showToast } from "./Toasts";
 const PANEL_ID = "sync-panel";
 
 /** Two arrows chasing each other round a circle. */
-function SyncGlyph() {
+function SyncGlyph(props: { class?: string; size?: number }) {
   return (
     <svg
-      class="icon sync-glyph"
-      width="18"
-      height="18"
+      class={`icon sync-glyph${props.class ? ` ${props.class}` : ""}`}
+      width={props.size ?? 18}
+      height={props.size ?? 18}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -33,6 +33,11 @@ function SyncGlyph() {
       <path d="M16 16h5v5" />
     </svg>
   );
+}
+
+/** The sync glyph turning, for a request or run in progress. Decorative: the busy control says so in words. */
+export function Spinner() {
+  return <SyncGlyph class="spinner" size={14} />;
 }
 
 /** The status dot: filled when synced, a ring while syncing, a filled dot with a bar when red. */

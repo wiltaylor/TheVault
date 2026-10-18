@@ -3916,8 +3916,14 @@ body.pin-dragging * {
   }
 }
 
+.sync-glyph.spinner {
+  vertical-align: -2px;
+  animation: sync-spin 1.6s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .sync-button.sync-syncing .sync-glyph {
+  .sync-button.sync-syncing .sync-glyph,
+  .sync-glyph.spinner {
     animation: none;
   }
 }
