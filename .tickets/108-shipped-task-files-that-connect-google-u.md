@@ -17,3 +17,7 @@ park_cause: needs-triage
 ### 2026-10-17T23:58:31Z — wil
 
 Same defect as ticket 107 (unpausing a shipped task rewrites the file so it stops matching shipped hashes); work it there.
+
+### 2026-10-18T00:32:27Z — wil
+
+Ticket 107 fixes this (branch ticket/107): the shipped-file comparison now ignores a task file's paused field.
