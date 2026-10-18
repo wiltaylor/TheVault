@@ -20,7 +20,9 @@
 //!    is written, the scripts before the device file or task that names them.
 //! 4. **Shipped file upgrades.** A file of [`SHIPPED_FILES`] whose content is still a version the
 //!    app shipped is replaced by the current one. A file the user changed is left alone, and the
-//!    user hears once, under the bell, that a newer shipped version exists.
+//!    user hears once, under the bell, that a newer shipped version exists. A task file's `paused`
+//!    field is the user's pause switch, not an edit: [`shipped_hash`] leaves it out, and an
+//!    upgrade carries the vault's `paused` value into the new version (google-sync D19).
 //!
 //! Steps 2 to 4 are one commit, and a start that finds nothing to do commits nothing.
 
@@ -50,7 +52,8 @@ pub struct ShippedFile {
     pub path: &'static str,
     /// The current shipped content.
     pub source: &'static str,
-    /// The SHA-256 hex of every version ever shipped, oldest first, ending with the current one.
+    /// The [`shipped_hash`] of every version ever shipped, oldest first, ending with the current
+    /// one.
     /// Changing a shipped file means appending its new hash here: a vault holding any listed
     /// version is upgraded, so one that skipped releases still is.
     pub hashes: &'static [&'static str],
@@ -114,7 +117,7 @@ pub const SHIPPED_FILES: [ShippedFile; 11] = [
     ShippedFile {
         path: "tasks/google_calendar.wcl",
         source: include_str!("../defaults/google/tasks/google_calendar.wcl"),
-        hashes: &["6d3a43e62acc5382f380dddcc8576631a0aca4bb97a20dee3ffc23d965bc8617"],
+        hashes: &["2fdbbc5d2d7417391ca5d633fd756efade9a79b858c372b0df5645f545967709"],
     },
     ShippedFile {
         path: "scripts/google_gmail.ws",
@@ -124,7 +127,7 @@ pub const SHIPPED_FILES: [ShippedFile; 11] = [
     ShippedFile {
         path: "tasks/google_gmail.wcl",
         source: include_str!("../defaults/google/google_gmail.wcl"),
-        hashes: &["aa11241f36d2c44865b144dc13b2fd0081a2e939da038fde89f3e8ef7cb3786c"],
+        hashes: &["94f9b68f9e0f6a9bcb001ce06304c1a791fb5dad6bb5eb5ed1cbead2d8997c51"],
     },
     // The Google Calendar write-back, named by the shipped `event` type's handlers.
     ShippedFile {
@@ -569,6 +572,47 @@ pub fn content_hash(text: &str) -> String {
         .collect()
 }
 
+/// Whether `path` is a task file, whose `paused` field [`shipped_hash`] ignores.
+fn is_task(path: &str) -> bool {
+    path.starts_with("tasks/") && path.ends_with(".wcl")
+}
+
+/// The hash the shipped-file comparison uses for `text` at vault path `path`: the
+/// [`content_hash`] of the text, except that a task file is hashed in canonical form without its
+/// top-level `paused` field, so pausing or unpausing a shipped task is not an edit of it
+/// (google-sync D19). A task file that does not parse is hashed as it is.
+pub fn shipped_hash(path: &str, text: &str) -> String {
+    if !is_task(path) {
+        return content_hash(text);
+    }
+    match store::parse_data_only(text, path) {
+        Ok(mut ast) => {
+            ast.items.retain(|i| !is_paused(i));
+            content_hash(&store::to_canonical(&ast))
+        }
+        Err(_) => content_hash(text),
+    }
+}
+
+fn is_paused(item: &Item) -> bool {
+    matches!(item, Item::Field(f) if f.name == "paused")
+}
+
+/// Task file `text` with the top-level `paused` field of the vault's `disk` version in place of
+/// its own, in canonical form: in the place `text` has its `paused`, else at the end. Without a
+/// `paused` in `disk` the task is not paused, and the result has none either.
+fn with_paused_of(text: &str, disk: &str, path: &str) -> Result<String> {
+    let disk = store::parse_data_only(disk, path)?;
+    let mut ast = store::parse_data_only(text, path)?;
+    let at = ast.items.iter().position(is_paused);
+    ast.items.retain(|i| !is_paused(i));
+    if let Some(paused) = disk.items.iter().find(|i| is_paused(i)) {
+        let at = at.unwrap_or(ast.items.len()).min(ast.items.len());
+        ast.items.insert(at, paused.clone());
+    }
+    Ok(store::to_canonical(&ast))
+}
+
 impl ShippedFile {
     /// The text the vault holds for the current version: `.wcl` files in canonical form.
     fn text(&self) -> Result<String> {
@@ -600,7 +644,7 @@ impl Writer {
             Upkeep::Home => self.run_upgrade_steps(UPGRADE_STEPS)?,
             Upkeep::Device => Vec::new(),
         };
-        let mut done = self.seed_shipped_defaults(upkeep)?;
+        let mut done = self.seed_shipped_defaults_with(upkeep, &SHIPPED_FILES)?;
         done.steps = steps;
         Ok(done)
     }
@@ -619,8 +663,14 @@ impl Writer {
         Ok(ran)
     }
 
-    /// Steps 2 to 4 of the module documentation, in one commit.
-    fn seed_shipped_defaults(&self, upkeep: Upkeep) -> Result<Upgraded> {
+    /// Steps 2 to 4 of the module documentation, in one commit, with `files` as the shipped
+    /// files. [`Writer::upgrade_shipped_defaults`] passes [`SHIPPED_FILES`]; tests pass their own,
+    /// to stand for a later release.
+    pub fn seed_shipped_defaults_with(
+        &self,
+        upkeep: Upkeep,
+        files: &[ShippedFile],
+    ) -> Result<Upgraded> {
         let _w = self.write_lock();
         let mut done = Upgraded::default();
         let mut current = self.schema();
@@ -704,27 +754,33 @@ impl Writer {
 
         // The shipped device scripts and device file.
         let mut plans = Vec::new();
-        for file in SHIPPED_FILES {
-            let text = file.text()?;
-            let hash = content_hash(&text);
+        for &file in files {
+            let mut text = file.text()?;
+            let hash = shipped_hash(file.path, &text);
             let on_disk = self.read_synced(file.path)?;
             let record = self.state.shipped_file(file.path)?;
             let plan = match on_disk {
                 None => Plan::Add,
                 Some(disk) => {
-                    let disk_hash = content_hash(&disk);
+                    let disk_hash = shipped_hash(file.path, &disk);
                     let written = record.as_ref().map(|r| r.hash.as_str()).unwrap_or("");
                     if disk_hash == hash {
                         Plan::Current
                     } else if file.hashes.contains(&disk_hash.as_str()) || disk_hash == written {
+                        // Pausing is not an edit, so the new version keeps the vault's switch.
+                        if is_task(file.path) {
+                            text = with_paused_of(&text, &disk, file.path)?;
+                        }
                         Plan::Upgrade
                     } else {
                         // The user changed a version the server wrote: a newer one exists unless
-                        // what it wrote is the current one.
+                        // what it wrote is the current one. A record from before task files were
+                        // hashed without `paused` holds the plain hash of the current text.
                         let notified = record.as_ref().and_then(|r| r.notified.as_deref());
                         Plan::Kept {
                             notify: upkeep == Upkeep::Home
                                 && written != hash
+                                && written != content_hash(&text)
                                 && notified != Some(hash.as_str()),
                         }
                     }
@@ -980,7 +1036,7 @@ mod tests {
             let text = file.text().unwrap();
             assert_eq!(
                 file.hashes.last().copied(),
-                Some(content_hash(&text).as_str()),
+                Some(shipped_hash(file.path, &text).as_str()),
                 "{}: append the new hash to its `hashes` when changing a shipped file",
                 file.path
             );

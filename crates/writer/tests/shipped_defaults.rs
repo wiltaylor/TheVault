@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde_json::json;
 use state::{Author, State};
 use store::Vault;
-use writer::{SHIPPED_FILES, UpgradeStep, Upgraded, Upkeep, Writer, content_hash};
+use writer::{
+    SHIPPED_FILES, ShippedFile, UpgradeStep, Upgraded, Upkeep, Writer, content_hash, shipped_hash,
+};
 
 /// The `person` type `vault init --starter` wrote before people had phones.
 const OLDEST_PERSON: &str = include_str!("fixtures/shipped/person_oldest_starter.wcl");
@@ -945,4 +947,170 @@ fn an_event_type_from_before_the_write_back_gains_its_handlers_and_no_note_chang
     assert!(again.steps.is_empty(), "{:?}", again.steps);
     assert_eq!(generation(root), before);
     assert_eq!(read(root, "types/event.wcl").unwrap(), type_after);
+}
+
+const GMAIL_TASK: &str = "tasks/google_gmail.wcl";
+
+/// Set the `paused` field of the shipped Gmail task as the scheduler's pause switch does, with
+/// the rest of the file as it is on disk.
+fn set_gmail_paused(w: &Writer, root: &Path, paused: bool) {
+    let text = read(root, GMAIL_TASK).unwrap();
+    let edited: String = text
+        .lines()
+        .map(|l| {
+            if l.starts_with("paused") {
+                format!("paused = {paused}\n")
+            } else {
+                format!("{l}\n")
+            }
+        })
+        .collect();
+    assert_ne!(edited, text);
+    w.put_task("google_gmail", &edited, |_| Ok(())).unwrap();
+}
+
+/// The shipped files with a newer release's Gmail task, whose timeout changed, in place of the
+/// current one. Its hash list ends with the newer version's, after every shipped one.
+fn with_newer_gmail_task() -> (Vec<ShippedFile>, String) {
+    let current = shipped(GMAIL_TASK);
+    let newer = current.replace("timeout       = \"PT5M\"", "timeout       = \"PT10M\"");
+    assert_ne!(newer, current);
+    let newer: &'static str = Box::leak(newer.into_boxed_str());
+    let files = SHIPPED_FILES
+        .iter()
+        .map(|f| {
+            if f.path != GMAIL_TASK {
+                return *f;
+            }
+            let mut hashes: Vec<&'static str> = f.hashes.to_vec();
+            hashes.push(Box::leak(shipped_hash(GMAIL_TASK, newer).into_boxed_str()));
+            ShippedFile {
+                path: f.path,
+                source: newer,
+                hashes: Box::leak(hashes.into_boxed_slice()),
+            }
+        })
+        .collect();
+    (files, newer.to_owned())
+}
+
+#[test]
+fn pausing_a_shipped_task_alone_earns_no_notice_and_is_kept_on_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    {
+        let w = open(root);
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+        set_gmail_paused(&w, root, false);
+    }
+    let unpaused = read(root, GMAIL_TASK).unwrap();
+    let gen_before = generation(root);
+
+    let w = open(root);
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    assert_eq!(done, Upgraded::default());
+    assert_eq!(generation(root), gen_before, "the start made a commit");
+    assert_eq!(read(root, GMAIL_TASK).unwrap(), unpaused);
+    assert!(notification_titles(&w).is_empty());
+}
+
+#[test]
+fn an_unpaused_shipped_task_is_upgraded_to_a_newer_version_and_stays_unpaused() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    {
+        let w = open(root);
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+        set_gmail_paused(&w, root, false);
+    }
+    let (files, newer) = with_newer_gmail_task();
+
+    let w = open(root);
+    let done = w.seed_shipped_defaults_with(Upkeep::Home, &files).unwrap();
+
+    assert_eq!(done.files_upgraded, [GMAIL_TASK]);
+    assert!(done.files_kept.is_empty());
+    let text = read(root, GMAIL_TASK).unwrap();
+    assert!(text.contains("timeout       = \"PT10M\""), "{text}");
+    assert!(text.contains("paused        = false"), "{text}");
+    assert!(!text.contains("paused        = true"), "{text}");
+    assert_eq!(
+        text,
+        newer.replace("paused        = true", "paused        = false")
+    );
+    assert!(notification_titles(&w).is_empty());
+    drop(w);
+
+    // The next start finds the newer version current and changes nothing.
+    let w = open(root);
+    let gen_before = generation(root);
+    let done = w.seed_shipped_defaults_with(Upkeep::Home, &files).unwrap();
+    assert_eq!(done, Upgraded::default());
+    assert_eq!(generation(root), gen_before);
+    assert!(notification_titles(&w).is_empty());
+}
+
+#[test]
+fn an_unpaused_shipped_task_with_no_record_of_what_was_written_is_upgraded_and_stays_unpaused() {
+    // A vault holding the shipped task, unpaused by a connect, with no record of what the
+    // server wrote: the hash list alone says it is unedited.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::create_dir_all(root.join("scripts")).unwrap();
+    std::fs::write(
+        root.join("scripts/google_gmail.ws"),
+        shipped("scripts/google_gmail.ws"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(GMAIL_TASK),
+        shipped(GMAIL_TASK).replace("paused        = true", "paused = false"),
+    )
+    .unwrap();
+    let (files, newer) = with_newer_gmail_task();
+
+    let w = open(root);
+    let done = w.seed_shipped_defaults_with(Upkeep::Home, &files).unwrap();
+
+    assert_eq!(done.files_upgraded, [GMAIL_TASK]);
+    assert_eq!(
+        read(root, GMAIL_TASK).unwrap(),
+        newer.replace("paused        = true", "paused        = false")
+    );
+    assert!(notification_titles(&w).is_empty());
+}
+
+#[test]
+fn a_schedule_edit_to_a_shipped_task_is_kept_and_notified_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    {
+        let w = open(root);
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+        set_gmail_paused(&w, root, false);
+        let text = read(root, GMAIL_TASK).unwrap();
+        let edited = text.replace("*/10 * * * *", "*/30 * * * *");
+        assert_ne!(edited, text);
+        w.put_task("google_gmail", &edited, |_| Ok(())).unwrap();
+    }
+    let edited = read(root, GMAIL_TASK).unwrap();
+    let (files, _) = with_newer_gmail_task();
+
+    let w = open(root);
+    let done = w.seed_shipped_defaults_with(Upkeep::Home, &files).unwrap();
+
+    assert!(done.files_upgraded.is_empty());
+    assert_eq!(done.files_kept, [GMAIL_TASK]);
+    assert_eq!(read(root, GMAIL_TASK).unwrap(), edited);
+    let titles = notification_titles(&w);
+    assert_eq!(titles.len(), 1, "{titles:?}");
+    assert!(titles[0].contains(GMAIL_TASK), "{titles:?}");
+    drop(w);
+
+    let w = open(root);
+    let done = w.seed_shipped_defaults_with(Upkeep::Home, &files).unwrap();
+    assert_eq!(done, Upgraded::default());
+    assert_eq!(notification_titles(&w).len(), 1);
 }

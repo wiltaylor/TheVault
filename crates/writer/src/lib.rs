@@ -87,7 +87,7 @@ pub use remote::{REMOTE_AUTHOR, Remote};
 pub use schema::NoteEdit;
 pub use shipped::{
     SERVER_AUTHOR, SHIPPED_FILES, ShippedFile, UPGRADE_STEPS, UpgradeStep, Upgraded, Upkeep,
-    content_hash,
+    content_hash, shipped_hash,
 };
 pub use types::{Flagged, Migration, PlannedNote, TypeChange, TypePlan};
 
