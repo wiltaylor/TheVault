@@ -3,7 +3,7 @@ id: '118'
 title: The vault CLI skill teaches authoring types, taxonomies, templates, scripts,
   handlers, tasks and secrets, with stale facts fixed and a skillcheck test
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -28,3 +28,7 @@ Acceptance criteria:
 - The CLI test that checks `vault skill` output (crates/cli/tests) still passes; ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-18T04:20:46Z — /work
+
+Claimed.

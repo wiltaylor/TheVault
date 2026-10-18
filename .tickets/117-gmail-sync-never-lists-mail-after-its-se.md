@@ -4,8 +4,8 @@ title: 'Gmail sync never lists mail after its settings change: a first run with 
   labels saves a history cursor, and later runs only read history, so switching to
   all mail or adding labels imports nothing'
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Gmail sync never lists mail after its settings change: a first run with no labels saves a history cursor, and later runs only read history, so switching to all mail or adding labels imports nothing
@@ -25,3 +25,15 @@ Acceptance criteria (server tests through TestServer and FakeGoogle): first run 
 ### 2026-10-18T04:13:57Z — /work
 
 Claimed.
+
+### 2026-10-18T04:22:57Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T04:22:57Z — wil
+
+Status set to done.
+
+### 2026-10-18T04:22:57Z — wil
+
+Done on ticket/117. State gains listed {mode, labels (sorted ids), window_days}; relist_of() picks all lists for a new mode/window or a missing record (legacy states with a history_id and no listed relist once), else only added labels. Back-fill cursor resets whenever listed differs, so adding a label re-pages the back-fill for every label (skipped by gmail_ref, costs list requests only). Disconnect (crates/api/src/google.rs) now nulls listed too. New hash a4f14497... appended to SHIPPED_FILES. Tests: 5 new in crates/server/tests/google_gmail.rs, one assertion in web/src/pages/Integrations.test.tsx.
