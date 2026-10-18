@@ -10,6 +10,7 @@ import type { SlotContext } from "../editor/SlotHolder";
 import { type TemplateModel, templateWcl, unplaced } from "../defs/typeModel";
 import { reloadDefinitions, typeDef } from "../session";
 import { errorText } from "./TypeEditor";
+import { whenProblem } from "../when";
 
 interface FieldInfo {
   name: string;
@@ -76,6 +77,11 @@ export function TemplateEditor() {
 
   const index = () => templates.findIndex((t) => t.name === selected());
   const current = (): TemplateModel | undefined => templates[index()];
+  /** What is wrong with the open tab's `when`, as the server would say when the template is saved. */
+  const whenError = (): string | null => {
+    const w = current()?.tabs[tab()]?.when?.trim();
+    return w ? whenProblem(w, fields()) : null;
+  };
 
   function edit(fn: (t: TemplateModel) => void) {
     const i = index();
@@ -272,6 +278,35 @@ export function TemplateEditor() {
                   })
                 }
               />
+              <label for="tab-when">Show this tab when</label>
+              <div class="tab-when">
+                <input
+                  id="tab-when"
+                  class="mono"
+                  placeholder='Always. Or a condition, such as status == "Active"'
+                  value={t().tabs[tab()]?.when ?? ""}
+                  aria-invalid={whenError() ? true : undefined}
+                  aria-describedby="tab-when-help"
+                  onInput={(e) =>
+                    edit((x) => {
+                      const tb = x.tabs[tab()];
+                      if (tb) tb.when = e.currentTarget.value || null;
+                    })
+                  }
+                />
+                <Show
+                  when={whenError()}
+                  fallback={
+                    <p id="tab-when-help" class="muted">
+                      Written as a query's where clause, on this note's fields. Empty shows the tab on every note.
+                    </p>
+                  }
+                >
+                  <p id="tab-when-help" class="error" role="alert">
+                    {whenError()}
+                  </p>
+                </Show>
+              </div>
             </div>
             <div class="actions">
               <button type="button" onClick={addTab}>
@@ -296,6 +331,7 @@ export function TemplateEditor() {
                       type="button"
                       role="tab"
                       aria-selected={tab() === i()}
+                      title={tb.when ? `Shows when ${tb.when}` : undefined}
                       classList={{ "drop-target": dragged() !== null && tab() !== i() }}
                       onClick={() => setTab(i())}
                       onDragOver={(e) => {

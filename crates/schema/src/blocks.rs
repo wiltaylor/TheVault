@@ -264,7 +264,9 @@ impl Check<'_> {
             match items.iter().find(|i| i.name == name) {
                 Some(item) => self.form(value, item.form, &path),
                 None if also.contains(&name.as_str()) => {}
-                None => match tolerant {
+                // Inside a template, every block's attributes are tolerated as a type's are, so
+                // a template written by a newer release still loads.
+                None => match tolerant.or(self.template.then_some("template blocks")) {
                     Some(owner) => self.warn(
                         &path,
                         format!("is not an attribute of {owner} in this version; it is ignored"),

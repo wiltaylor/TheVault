@@ -159,7 +159,7 @@ pub async fn search(
         return Err(ApiError::bad_request("`q` is empty"));
     }
     let archived = archived_param(p.archived.as_deref())?;
-    let q = query::Query::search_all(p.q, archived);
+    let q = query::search_all(p.q, archived);
     run_page(w, q, None, p.cursor, p.page_size).await
 }
 

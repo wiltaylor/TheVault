@@ -3,6 +3,7 @@
 import type { Block, FieldDef, Json, NoteDoc, Template, TypeDef } from "./api";
 import { slotsOf } from "./blocks/columns";
 import { controlledFields } from "./controls/model";
+import type { WhenNote } from "./when";
 
 /** The built-in title, treated as a string field wherever a template places it. */
 export const TITLE_FIELD: FieldDef = {
@@ -24,6 +25,16 @@ export function slotField(type: TypeDef, name: string): FieldDef | undefined {
 /** The note page's template: `default`, which every type has. */
 export function pageTemplate(type: TypeDef): Template | undefined {
   return type.templates.find((t) => t.name === "default") ?? type.templates[0];
+}
+
+/**
+ * The note a tab's `when` reads (src/when.ts): its fields as edited, a dict field's values from
+ * its block, and nothing for the other compound fields.
+ */
+export function whenNote(type: TypeDef, id: string, doc: NoteDoc): WhenNote {
+  const fields: Record<string, Json | undefined> = { ...doc.fields };
+  for (const f of type.fields) if (f.compound) fields[f.name] = f.kind === "dict" ? fieldValue(doc, f) : undefined;
+  return { id, type: type.name, fields, defs: type.fields };
 }
 
 /** A compound field's block: the block of the field's kind labelled with the field's name. */

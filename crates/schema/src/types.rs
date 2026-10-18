@@ -3,6 +3,8 @@
 
 use std::collections::HashSet;
 
+use query_syntax::Expr;
+
 use crate::blocks::{CONTENT_KINDS, Check, Form, opt, req};
 use crate::doc::{Doc, DocBlock, Value};
 use crate::encoding::{is_name, is_ulid};
@@ -309,6 +311,9 @@ pub struct Template {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tab {
     pub title: String,
+    /// The condition, in the syntax of a query's `where` clause, under which the tab shows for a
+    /// note. `None` shows it for every note. The web client evaluates it as the note is edited.
+    pub when: Option<String>,
     pub items: Vec<TabItem>,
 }
 
@@ -793,7 +798,7 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
         return None;
     }
     let d = &b.body;
-    c.items(d, &[opt("label", Form::Str)], &[], at);
+    c.attributes(d, &[opt("label", Form::Str)], &[], at, "templates");
     c.only_blocks(d, &["tab"], at);
     if d.blocks_of("tab").next().is_none() {
         c.fail(at, "needs at least one tab");
@@ -811,7 +816,11 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
                 continue;
             }
         };
-        c.items(&t.body, &[], &[], &tab_at);
+        c.attributes(&t.body, &[opt("when", Form::Str)], &[], &tab_at, "tabs");
+        let when = string(&t.body, "when");
+        if let Some(w) = &when {
+            check_when(c, w, fields, &format!("{tab_at}.when"));
+        }
         let mut items = Vec::new();
         for (n, block) in t.body.blocks.iter().enumerate() {
             if block.kind == "slot" {
@@ -846,7 +855,7 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
                 );
             }
         }
-        tabs.push(Tab { title, items });
+        tabs.push(Tab { title, when, items });
     }
     c.template = false;
     Some(Template {
@@ -854,6 +863,85 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
         label: string(d, "label"),
         tabs,
     })
+}
+
+/// Fields every note has, which a tab's `when` may read besides the type's own.
+const NOTE_BUILTINS: [&str; 6] = ["id", "type", "title", "created", "updated", "archived"];
+
+/// A tab's `when`: an expression in the syntax of a query's `where` clause that reads only the
+/// note shown, since the client evaluates it on that note alone. Every name is a field of the
+/// type or a built-in, `.` reads only `this` or a date range, location or dict field, and
+/// `linked_from()`, which reads other notes, is refused.
+fn check_when(c: &mut Check, text: &str, fields: &[FieldDef], at: &str) {
+    let expr = match query_syntax::parse_expr(text) {
+        Ok(e) => e,
+        Err(e) => {
+            c.fail(at, format!("does not parse: {e}"));
+            return;
+        }
+    };
+    if let Err(message) = when_expr(&expr, fields, &mut Vec::new()) {
+        c.fail(at, message);
+    }
+}
+
+fn when_name(name: &str, fields: &[FieldDef]) -> Result<(), String> {
+    if NOTE_BUILTINS.contains(&name) || fields.iter().any(|f| f.name == name) {
+        Ok(())
+    } else {
+        Err(format!("`{name}` is not a field of the type"))
+    }
+}
+
+fn when_expr(e: &Expr, fields: &[FieldDef], bound: &mut Vec<String>) -> Result<(), String> {
+    match e {
+        Expr::Lit(_) | Expr::This => Ok(()),
+        Expr::Name(n) if bound.contains(n) => Ok(()),
+        Expr::Name(n) => when_name(n, fields),
+        Expr::Field(base, member) => {
+            // `this.x` is the shown note's field `x`, as a bare `x` is.
+            let name = match base.as_ref() {
+                Expr::This => return when_name(member, fields),
+                Expr::Name(n) if !bound.contains(n) => n,
+                Expr::Field(inner, n) if matches!(inner.as_ref(), Expr::This) => n,
+                _ => {
+                    return Err(format!(
+                        "`.{member}` reads another note, which a tab condition cannot"
+                    ));
+                }
+            };
+            when_name(name, fields)?;
+            match fields.iter().find(|f| &f.name == name).map(|f| &f.kind) {
+                Some(
+                    FieldKind::DateRange { .. }
+                    | FieldKind::Location { .. }
+                    | FieldKind::Dict { .. },
+                ) => Ok(()),
+                Some(FieldKind::Reference(_)) => Err(format!(
+                    "`{name}.{member}` reads another note, which a tab condition cannot"
+                )),
+                _ => Err(format!(
+                    "`{name}` has no members: `.` reads a date range's start or end"
+                )),
+            }
+        }
+        Expr::Call(f, _) if f == "linked_from" => {
+            Err("linked_from() reads other notes, which a tab condition cannot".to_owned())
+        }
+        Expr::Call(_, args) => args.iter().try_for_each(|a| when_expr(a, fields, bound)),
+        Expr::Unary(_, inner) => when_expr(inner, fields, bound),
+        Expr::Binary(_, a, b) => {
+            when_expr(a, fields, bound)?;
+            when_expr(b, fields, bound)
+        }
+        Expr::Closure(params, body) => {
+            let before = bound.len();
+            bound.extend(params.iter().cloned());
+            let r = when_expr(body, fields, bound);
+            bound.truncate(before);
+            r
+        }
+    }
 }
 
 /// A `slot "<field>"`, in a tab or in a column of one: it names `title` or a field of the type,
@@ -877,7 +965,7 @@ fn slot(
             format!("places {field:?} a second time in this template"),
         );
     }
-    c.items(&block.body, &[opt("label", Form::Str)], &[], at);
+    c.attributes(&block.body, &[opt("label", Form::Str)], &[], at, "slots");
     c.only_blocks(&block.body, &[], at);
     Some(TabItem::Slot {
         field: field.clone(),

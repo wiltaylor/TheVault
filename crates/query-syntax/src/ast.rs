@@ -16,23 +16,6 @@ pub struct Query {
     pub limit: Option<u64>,
 }
 
-impl Query {
-    /// `from * search "text"`: full-text search over every note, best match first, reading
-    /// archived notes as `archived` says.
-    pub fn search_all(text: impl Into<String>, archived: index::Archived) -> Query {
-        Query {
-            from: From::All,
-            include_archived: archived == index::Archived::Include,
-            filter: (archived == index::Archived::Only).then(|| Expr::Name(ARCHIVED.to_owned())),
-            search: Some(text.into()),
-            sort: Vec::new(),
-            group_by: None,
-            select: Vec::new(),
-            limit: None,
-        }
-    }
-}
-
 /// The types a query reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum From {

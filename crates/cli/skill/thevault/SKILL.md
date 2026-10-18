@@ -518,7 +518,30 @@ A template takes an optional `label` and one or more tabs.
 
 ### Tabs
 
-`tab "<title>" { ... }` is one tab of the page, in order. A template with one tab shows no tab bar, and a card shows only its first tab. A tab holds an ordered mix of slots and fixed blocks.
+`tab "<title>" { ... }` is one tab of the page, in order. A template with one tab shows no tab bar, and a card shows only its first tab that shows for the note. A tab holds an optional `when`, then an ordered mix of slots and fixed blocks.
+
+`when = "<condition>"` shows the tab only for notes that meet the condition. The condition is a `where` clause of step 2's query language, on the note shown: its fields, `title`, `created`, `updated` and `archived`, `this` for the note itself, the operators, and `has()`, `under()`, `contains()`, `empty()`, `any()`, `all()`, `today()`, `now()` and `days()`. A missing field is false, as in a query. A condition that does not parse, names a field the type lacks, follows a reference with `.`, or calls `linked_from()` is refused with `invalid_type` at the tab, such as `template card > tab "Overdue".when`. The app evaluates the condition as the note is edited, so the tab appears or disappears before a save. When the open tab is hidden, the page moves to the first tab that shows; when no tab shows, the first tab shows. A vault that uses `when` needs the apps at 0.1.10 or later, since older apps refuse it.
+
+A field still has one slot per template, so a second tab that shows the same field uses `{{field}}` text. This card shows an invoice unpaid for over 30 days with its own tab, and every other invoice with the plain one:
+
+```sh
+vault template put invoice card <<'EOF'
+template card {
+  tab "Overdue" {
+    when = "!paid && received < today() - days(30)"
+    paragraph {
+      text = "**Overdue**: {{amount}}, received {{received}}."
+    }
+  }
+
+  tab "Card" {
+    slot "title"
+    slot "amount"
+  }
+}
+EOF
+vault template list invoice | jq -e '.templates[] | select(.name == "card") | .tabs[0].when'
+```
 
 ### Slots
 

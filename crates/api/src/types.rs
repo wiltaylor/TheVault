@@ -153,7 +153,11 @@ fn template_json(t: &Template) -> Value {
                     TabItem::Block(b) => json!({ "block": block_json(b) }),
                 })
                 .collect();
-            json!({ "title": tab.title, "items": items })
+            let mut out = json!({ "title": tab.title, "items": items });
+            if let Some(w) = &tab.when {
+                out["when"] = json!(w);
+            }
+            out
         })
         .collect();
     json!({ "name": t.name, "label": t.label, "tabs": tabs })

@@ -62,6 +62,8 @@ export type TemplateItem = { slot: string; label: string | null } | { block: Blo
 
 export interface Tab {
   title: string;
+  /** The condition, in a query's `where` syntax, under which the tab shows (src/when.ts). */
+  when?: string | null;
   items: TemplateItem[];
 }
 

@@ -129,13 +129,20 @@ pub(crate) fn template_json(t: &Template) -> Value {
     json!({
         "name": t.name,
         "label": t.label,
-        "tabs": t.tabs.iter().map(|tab| json!({
-            "title": tab.title,
-            "items": tab.items.iter().map(|item| match item {
-                TabItem::Slot { field, label } => json!({ "slot": field, "label": label }),
-                TabItem::Block(b) => json!({ "block": block_to_json(b) }),
-            }).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        "tabs": t.tabs.iter().map(|tab| {
+            let mut out = json!({
+                "title": tab.title,
+                "items": tab.items.iter().map(|item| match item {
+                    TabItem::Slot { field, label } => json!({ "slot": field, "label": label }),
+                    TabItem::Block(b) => json!({ "block": block_to_json(b) }),
+                }).collect::<Vec<_>>(),
+            });
+            // Only a conditional tab carries `when`, so the JSON of every other type is unchanged.
+            if let Some(w) = &tab.when {
+                out["when"] = json!(w);
+            }
+            out
+        }).collect::<Vec<_>>(),
     })
 }
 

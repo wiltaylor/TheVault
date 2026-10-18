@@ -1994,6 +1994,7 @@ name = "query"
 version = "0.1.9"
 dependencies = [
  "index",
+ "query-syntax",
  "rusqlite",
  "schema",
  "serde",
@@ -2002,6 +2003,10 @@ dependencies = [
  "tempfile",
  "thiserror",
 ]
+
+[[package]]
+name = "query-syntax"
+version = "0.1.9"
 
 [[package]]
 name = "quick-xml"
@@ -2376,6 +2381,7 @@ dependencies = [
 name = "schema"
 version = "0.1.9"
 dependencies = [
+ "query-syntax",
  "store",
  "tempfile",
  "thiserror",

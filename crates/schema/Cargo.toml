@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+query-syntax.workspace = true
 store.workspace = true
 wcl_lang.workspace = true
 thiserror.workspace = true

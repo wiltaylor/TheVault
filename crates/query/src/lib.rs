@@ -16,24 +16,36 @@
 //! `project.status` reads the status of the note in the `project` field. Missing values are
 //! false in a condition and never compare as less or greater than anything.
 
-mod ast;
 mod model;
-mod parser;
 mod plan;
-mod print;
 mod run;
 mod value;
 
-pub use ast::{ARCHIVED, BinOp, Dir, Expr, FUNCTIONS, From, Lit, Path, Query, SortKey, UnOp};
+use query_syntax::{ast, parser, print};
+
 pub use model::{Condition, Group, Item, Join, Model, ModelError, Op, Operand, Order, Sort};
 pub use parser::{ParseError, parse};
 #[doc(hidden)]
 pub use plan::set_hits_drive;
+pub use query_syntax::{
+    ARCHIVED, BinOp, Dir, Expr, FUNCTIONS, From, Lit, Path, Query, SortKey, UnOp, format,
+    parse_expr,
+};
 pub use run::{
     Context, Error, GroupCount, MAX_PAGE, Page, PageRequest, Result, Row, is_planned, run, run_scan,
 };
 
-/// Text in canonical form: one line, single spaces and only the parentheses that matter.
-pub fn format(text: &str) -> std::result::Result<String, ParseError> {
-    Ok(parse(text)?.to_string())
+/// `from * search "text"`: full-text search over every note, best match first, reading
+/// archived notes as `archived` says.
+pub fn search_all(text: impl Into<String>, archived: index::Archived) -> Query {
+    Query {
+        from: From::All,
+        include_archived: archived == index::Archived::Include,
+        filter: (archived == index::Archived::Only).then(|| Expr::Name(ARCHIVED.to_owned())),
+        search: Some(text.into()),
+        sort: Vec::new(),
+        group_by: None,
+        select: Vec::new(),
+        limit: None,
+    }
 }

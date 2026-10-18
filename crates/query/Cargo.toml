@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 index.workspace = true
+query-syntax.workspace = true
 schema.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

@@ -116,8 +116,8 @@ describe("viewTemplate", () => {
     expect(viewTemplate(type(["default"]), null, "default")?.tabs).toHaveLength(2);
   });
 
-  it("gives a card only the first tab", () => {
-    expect(viewTemplate(type(["default"]), null, "card")?.tabs.map((t) => t.title)).toEqual(["default 1"]);
-    expect(viewTemplate(type(["default", "card"]), null, "card")?.tabs).toHaveLength(1);
+  it("gives a card every tab, for TemplateBody to show the first that holds for the note", () => {
+    expect(viewTemplate(type(["default"]), null, "card")?.tabs.map((t) => t.title)).toEqual(["default 1", "default 2"]);
+    expect(viewTemplate(type(["default", "card"]), null, "card")?.tabs).toHaveLength(2);
   });
 });
