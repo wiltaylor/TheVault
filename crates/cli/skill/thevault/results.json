@@ -1,0 +1,32 @@
+{
+  "skill": "thevault",
+  "runs": {
+    "test_adds_a_field_to_a_type_with_notes[claude]": {
+      "harness": "claude",
+      "model": "claude-opus-5-5[1m]",
+      "cost_usd": 0.4007,
+      "tokens": 425906,
+      "outcome": "passed",
+      "ran_at": "2026-10-18T04:53:53Z",
+      "duration_s": 191.8
+    },
+    "test_adds_a_type_with_labelled_values[claude]": {
+      "harness": "claude",
+      "model": "claude-opus-5-5[1m]",
+      "cost_usd": 0.4159,
+      "tokens": 328139,
+      "outcome": "passed",
+      "ran_at": "2026-10-18T04:50:41Z",
+      "duration_s": 177.6
+    },
+    "test_stamps_new_invoices_and_schedules_a_reminder[claude]": {
+      "harness": "claude",
+      "model": "claude-opus-5-5[1m]",
+      "cost_usd": 0.5545,
+      "tokens": 789408,
+      "outcome": "passed",
+      "ran_at": "2026-10-18T04:58:27Z",
+      "duration_s": 273.6
+    }
+  }
+}
