@@ -294,14 +294,33 @@ fn every_notification_event_and_note_change_arrives_in_order() {
 }
 
 #[test]
-fn an_open_stream_does_not_stop_the_server_shutting_down() {
+fn an_open_stream_does_not_stop_the_server_shutting_down_on_sigint() {
+    stops_gracefully_with_a_stream_open("INT");
+}
+
+/// `docker stop`, systemd and Kubernetes send SIGTERM, which takes the same path as SIGINT.
+#[test]
+fn an_open_stream_does_not_stop_the_server_shutting_down_on_sigterm() {
+    stops_gracefully_with_a_stream_open("TERM");
+}
+
+/// How long a graceful shutdown may take once the signal is sent.
+const STOP: Duration = Duration::from_secs(5);
+
+/// Starts the real server, opens an event stream, sends `SIG<signal>`, and checks that the
+/// server ends the stream, exits 0 within [`STOP`], says it is shutting down and stopped, and
+/// leaves `state.db` standing on its own with an empty write-ahead log.
+fn stops_gracefully_with_a_stream_open(signal: &str) {
     let vault = tempfile::tempdir().unwrap();
     let token = testkit::seed_credentials(vault.path());
+    let db = vault.path().join(".vault/state.db");
+    let vault_id = state::State::open(&db, None).unwrap().vault_id().unwrap();
     let mut child = Command::new(testkit::server_binary())
         .arg("--vault")
         .arg(vault.path())
         .args(["--listen", "127.0.0.1:0"])
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let mut line = String::new();
@@ -310,29 +329,48 @@ fn an_open_stream_does_not_stop_the_server_shutting_down() {
         .unwrap();
     let listen: Value = serde_json::from_str(&line).unwrap();
     let url = format!("http://{}/api/events", listen["listen"].as_str().unwrap());
-    let _stream = Stream::open(
+    let stream = Stream::open(
         Client::new()
             .get(url)
             .header(AUTHORIZATION, format!("Bearer {token}"))
             .send()
             .unwrap(),
     );
+    let wal = vault.path().join(".vault/state.db-wal");
+    assert!(wal.exists(), "state.db is not open in WAL mode");
 
     let status = Command::new("kill")
-        .args(["-INT", &child.id().to_string()])
+        .args([&format!("-{signal}"), &child.id().to_string()])
         .status()
         .unwrap();
     assert!(status.success());
-    let deadline = Instant::now() + WAIT;
-    loop {
+    let deadline = Instant::now() + STOP;
+    let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
-            assert!(status.success(), "{status}");
-            break;
+            break status;
         }
         if Instant::now() > deadline {
             let _ = child.kill();
-            panic!("the server did not stop with an event stream open");
+            panic!("the server did not stop on SIG{signal} with an event stream open");
         }
         thread::sleep(Duration::from_millis(50));
-    }
+    };
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
+    assert!(status.success(), "SIG{signal}: {status}\n{stderr}");
+    assert!(
+        stderr.contains(&format!("received SIG{signal}, shutting down")),
+        "{stderr}"
+    );
+    // The stream ended rather than being cut off by a killed process.
+    assert!(
+        stream.frames.recv_timeout(WAIT).is_err(),
+        "the stream is still open"
+    );
+    assert!(stderr.contains("vault-server: stopped"), "{stderr}");
+    let left = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(left, 0, "SIG{signal} left {left} bytes in state.db-wal");
+    // state.db opens again as the same vault.
+    let reopened = state::State::open(&db, None).unwrap().vault_id().unwrap();
+    assert_eq!(reopened, vault_id);
 }

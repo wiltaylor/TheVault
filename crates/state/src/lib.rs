@@ -425,6 +425,14 @@ impl State {
         &self.events
     }
 
+    /// Moves everything in the write-ahead log into `state.db` and empties the log, so the file
+    /// stands on its own. The server calls it on shutdown.
+    pub fn checkpoint(&self) -> Result<()> {
+        self.conn()
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
     fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }

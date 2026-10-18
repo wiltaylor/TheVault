@@ -113,11 +113,19 @@ fn main() -> anyhow::Result<()> {
         let every = std::time::Duration::from_millis(args.clients_poll_ms.max(10));
         api::watch_clients(writer.clone(), clients, every)
     };
+    let closing = writer.clone();
     runtime.block_on(serve(args.listen, args.web, app, move || {
         // Open event streams never finish on their own, so end them before waiting on
         // requests in flight.
-        writer.state().events().close()
-    }))
+        closing.state().events().close()
+    }))?;
+    // Requests have drained, so fold the write-ahead log into state.db before exiting.
+    writer
+        .state()
+        .checkpoint()
+        .context("checkpointing state.db")?;
+    eprintln!("vault-server: stopped");
+    Ok(())
 }
 
 /// The clock `--test-clock` asks for. A release build refuses it.
@@ -189,6 +197,16 @@ async fn serve(
     Ok(())
 }
 
+/// Waits for SIGINT or SIGTERM, whichever comes first, and says which on stderr. `docker stop`,
+/// systemd and Kubernetes send SIGTERM; a terminal sends SIGINT. Both take the same graceful
+/// path.
 async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut int = signal(SignalKind::interrupt()).expect("installing the SIGINT handler");
+    let mut term = signal(SignalKind::terminate()).expect("installing the SIGTERM handler");
+    let name = tokio::select! {
+        _ = int.recv() => "SIGINT",
+        _ = term.recv() => "SIGTERM",
+    };
+    eprintln!("vault-server: received {name}, shutting down");
 }
