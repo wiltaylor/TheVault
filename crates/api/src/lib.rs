@@ -20,7 +20,9 @@
 //! they happen (D4).
 //!
 //! The desktop and Android apps pair under `/api/devices`, each getting a `write` token bound to
-//! the device (D2, D3).
+//! the device (D2, D3). An AI agent with a shell connects through a one-time install code from
+//! `/api/agent-codes` and the script `GET /agent/install.sh` serves, the one route outside `/api`
+//! (D11, D32).
 //!
 //! Settings > Integrations > Google signs in with the user's own OAuth client under
 //! `/api/integrations/google` (google-sync D1, D18).
@@ -37,12 +39,13 @@
 //! `/api/clients/{filename}` downloads one; both are public, so a phone can fetch the app before
 //! it pairs.
 //!
-//! Every route but health, login, device pairing, the sync handshake and the app downloads needs a session cookie or a bearer token,
+//! Every route but health, login, device pairing, agent install codes' redemption and script, the sync handshake and the app downloads needs a session cookie or a bearer token,
 //! and the scope [`auth::required_scope`] names for it (D11). [`owner_router`] serves the same
 //! routes to an in-process caller that is always the owner (D26).
 //!
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
+mod agents;
 mod apps;
 mod assets;
 mod auth;
@@ -248,6 +251,9 @@ fn build() -> Built {
         .delete("/api/assets/{id}", assets::delete)
         .post("/api/devices/pair", devices::pair)
         .post("/api/devices/pair-codes", devices::create_pair_code)
+        .post("/api/agent-codes", agents::create)
+        .post("/api/agent-codes/redeem", agents::redeem)
+        .get("/agent/install.sh", agents::install_script)
         .get("/api/devices", devices::list)
         .patch("/api/devices/{id}", devices::update)
         .delete("/api/devices/{id}", devices::revoke)

@@ -323,6 +323,21 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Issue a single-use pairing code and its QR code, payload {server_url, code}",
     ),
     (
+        "POST",
+        "/api/agent-codes",
+        "Issue a one-time install code for an AI agent {name, scope}; returns the code, its expiry and the one-line install command",
+    ),
+    (
+        "POST",
+        "/api/agent-codes/redeem",
+        "Use up an agent install code; returns {server_url, token, name, scope} for a new agent-<name> token",
+    ),
+    (
+        "GET",
+        "/agent/install.sh",
+        "The agent install script, with this server's URL in it: installs the vault CLI, its cli.env and the agent skill",
+    ),
+    (
         "GET",
         "/api/devices",
         "Every paired device with its settings",

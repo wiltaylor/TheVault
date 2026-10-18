@@ -308,6 +308,54 @@ fn pruning_by_age_keeps_the_current_version() {
 }
 
 #[test]
+fn an_agent_code_makes_its_token_once_and_a_new_code_replaces_it() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(5_000);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+
+    let issued = state
+        .create_agent_code("claude", Scope::Write, 600_000)
+        .unwrap();
+    assert_eq!(issued.token_name, "agent-claude");
+    assert_eq!(issued.expires_ms, 605_000);
+    let (info, first) = state
+        .redeem_agent_code(&issued.code.to_lowercase())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (info.name.as_str(), info.scope),
+        ("agent-claude", Scope::Write)
+    );
+    assert!(
+        state.redeem_agent_code(&issued.code).unwrap().is_none(),
+        "used twice"
+    );
+
+    // A second code for the same name rotates the token.
+    let again = state
+        .create_agent_code("claude", Scope::Read, 600_000)
+        .unwrap();
+    let (info, second) = state.redeem_agent_code(&again.code).unwrap().unwrap();
+    assert_eq!(info.scope, Scope::Read);
+    assert!(state.authenticate_token(&first).unwrap().is_none());
+    assert!(state.authenticate_token(&second).unwrap().is_some());
+    assert_eq!(state.list_tokens().unwrap().len(), 1);
+
+    let late = state
+        .create_agent_code("late", Scope::Write, 1_000)
+        .unwrap();
+    clock.advance(1_000);
+    assert!(
+        state.redeem_agent_code(&late.code).unwrap().is_none(),
+        "expired"
+    );
+    assert!(
+        state.redeem_agent_code("0000-0000").unwrap().is_none(),
+        "unknown"
+    );
+}
+
+#[test]
 fn tokens_authenticate_by_secret_and_record_last_use() {
     let dir = TempDir::new().unwrap();
     let clock = TestClock::new(5_000);
@@ -966,7 +1014,7 @@ fn a_version_6_state_db_gains_notifications() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, 13);
 }
 
 /// Every event waiting on `sub`, in order, with their sequence numbers.

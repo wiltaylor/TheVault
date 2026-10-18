@@ -24,7 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
-pub use auth::{Scope, TokenInfo};
+pub use auth::{AgentCode, Scope, TokenInfo};
 pub use changes::{ChangeKey, ChangePage, Journaled};
 pub use commands::{
     CommandStatus, DeviceCommand, NewCommand, RETENTION_MS as COMMAND_RETENTION_MS,
@@ -131,7 +131,7 @@ pub struct State {
     events: Events,
 }
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -358,6 +358,17 @@ ALTER TABLE devices ADD COLUMN health TEXT;
 ALTER TABLE devices ADD COLUMN health_ms INTEGER;
 ";
 
+/// What version 13 adds: one-time install codes for AI agents, each naming the token it makes.
+const SCHEMA_V13: &str = "
+CREATE TABLE IF NOT EXISTS agent_codes (
+    code_hash  BLOB PRIMARY KEY,
+    name       TEXT NOT NULL,
+    scope      TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    expires_ms INTEGER NOT NULL
+);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -455,7 +466,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=11 => {
+        0..=12 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -502,6 +513,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             )?;
             if !has_health {
                 tx.execute_batch(SCHEMA_V12)?;
+            }
+            if version <= 12 {
+                tx.execute_batch(SCHEMA_V13)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

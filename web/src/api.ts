@@ -430,6 +430,18 @@ export interface Secret {
 
 export type Scope = "read" | "write" | "admin";
 
+/** A one-time install code for an AI agent: redeeming it makes the token `name` with `scope`. */
+export interface AgentCode {
+  code: string;
+  expires: number;
+  /** The token redeeming it makes, `agent-<name>`. */
+  name: string;
+  scope: Scope;
+  server_url: string;
+  /** `curl -fsSL <server>/agent/install.sh | sh -s -- <code>`. */
+  command: string;
+}
+
 /** An API token. Only the response that creates it carries `secret` (D11). */
 export interface Token {
   name: string;
@@ -983,6 +995,9 @@ export const api = {
   /** Create a token. The answer is the only time its secret is shown. */
   createToken: (name: string, scope: Scope) => request<Token>("POST", "/api/tokens", { name, scope }),
   revokeToken: (name: string) => request<void>("DELETE", `/api/tokens/${enc(name)}`),
+  /** Issue a one-time install code for an AI agent, valid for ten minutes. */
+  createAgentCode: (name: string, scope: Scope, serverUrl: string) =>
+    request<AgentCode>("POST", "/api/agent-codes", { name, scope, server_url: serverUrl }),
   assets: async () => (await request<{ assets: Asset[] }>("GET", "/api/assets")).assets,
   /** One page of the asset library, filtered, searched and sorted by the server. */
   assetLibrary: (q: AssetQuery) => {

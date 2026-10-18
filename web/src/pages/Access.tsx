@@ -1,5 +1,6 @@
 import { For, type JSX, Show, createResource, createSignal } from "solid-js";
-import { type Scope, type Token, api } from "../api";
+import { type AgentCode, type Scope, type Token, api } from "../api";
+import { copyText } from "../clipboard";
 import { when } from "../admin/format";
 import { isName } from "../defs/typeModel";
 import { errorText } from "./TypeEditor";
@@ -140,6 +141,112 @@ const SCOPES: { scope: Scope; label: string }[] = [
   { scope: "admin", label: "Admin: also types, scripts, tasks, secrets and tokens" },
 ];
 
+const AGENT_SCOPES: { scope: Scope; label: string }[] = [
+  { scope: "read", label: "Read: query and read notes" },
+  { scope: "write", label: "Write: also create, change and delete notes" },
+  { scope: "admin", label: "Admin: everything" },
+];
+
+/**
+ * Settings > API tokens > Connect an AI agent (D11, D32): a one-time install code, shown as the
+ * one-line command that installs the vault CLI, its config and the agent skill on the agent's
+ * machine. The token it makes, `agent-<name>`, is listed and revoked with the others.
+ */
+export function ConnectAgent() {
+  const [name, setName] = createSignal("");
+  const [scope, setScope] = createSignal<Scope>("write");
+  const [issued, setIssued] = createSignal<AgentCode | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  const [copied, setCopied] = createSignal<string | null>(null);
+  const [busy, setBusy] = createSignal(false);
+
+  async function create(ev: SubmitEvent) {
+    ev.preventDefault();
+    setError(null);
+    setIssued(null);
+    setCopied(null);
+    setBusy(true);
+    try {
+      setIssued(await api.createAgentCode(name().trim(), scope(), window.location.origin));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy(text: string) {
+    setCopied((await copyText(text)) ? "Copied." : "Copy failed; select the command and copy it.");
+  }
+
+  return (
+    <section class="connect-agent" aria-labelledby="connect-agent-title">
+      <h2 id="connect-agent-title">Connect an AI agent</h2>
+      <p class="muted">
+        For a coding agent such as Claude Code or Codex. The agent needs a shell: the command runs on its machine and
+        installs the vault CLI, its config and the vault skill.
+      </p>
+      <form class="admin-form" aria-label="Connect an AI agent" onSubmit={create}>
+        <div class="form-grid">
+          <label for="agent-name">Agent name</label>
+          <input
+            id="agent-name"
+            value={name()}
+            placeholder="claude"
+            autocomplete="off"
+            onInput={(e) => setName(e.currentTarget.value)}
+          />
+          <label for="agent-scope">Agent scope</label>
+          <select id="agent-scope" value={scope()} onChange={(e) => setScope(e.currentTarget.value as Scope)}>
+            <For each={AGENT_SCOPES}>
+              {(s) => (
+                <option value={s.scope} selected={scope() === s.scope}>
+                  {s.label}
+                </option>
+              )}
+            </For>
+          </select>
+        </div>
+        <Show when={scope() === "admin"}>
+          <p class="scope-warning">An admin agent can change types, scripts and tasks and read secrets through scripts.</p>
+        </Show>
+        <button type="submit" class="primary" disabled={busy() || !name().trim()}>
+          Create install command
+        </button>
+      </form>
+      <Show when={error()}>
+        <p class="error" role="alert">
+          {error()}
+        </p>
+      </Show>
+      <Show when={issued()}>
+        {(c) => (
+          <div class="token-secret" role="region" aria-label="Agent install command">
+            <p>
+              Run this in the agent's shell. It makes the {c().scope} token <strong>{c().name}</strong>.
+            </p>
+            <div class="actions">
+              <input
+                readonly
+                value={c().command}
+                aria-label="Install command"
+                onFocus={(e) => e.currentTarget.select()}
+              />
+              <button type="button" onClick={() => void copy(c().command)}>
+                Copy
+              </button>
+            </div>
+            <Show when={copied()}>
+              <p role="status">{copied()}</p>
+            </Show>
+            <p class="muted">The code works once and expires in 10 minutes, at {when(c().expires)}.</p>
+          </div>
+        )}
+      </Show>
+    </section>
+  );
+}
+
 /**
  * API tokens for agents and the CLI (D11). A new token's secret is shown once, on the page that
  * created it; it is not stored in the browser and the API never returns it again.
@@ -233,6 +340,7 @@ function TokensPage() {
           </div>
         )}
       </Show>
+      <ConnectAgent />
       <Show when={tokens()}>
         {(list) => (
           <Show when={list().length > 0} fallback={<p class="muted">No tokens yet.</p>}>
