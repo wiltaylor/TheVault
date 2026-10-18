@@ -3,8 +3,8 @@ id: '130'
 title: The server distributes static Linux builds of the vault CLI (amd64, arm64)
   like the apps, and the CLI says when the server is newer
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # The server distributes static Linux builds of the vault CLI (amd64, arm64) like the apps, and the CLI says when the server is newer
@@ -28,3 +28,15 @@ Acceptance criteria:
 ### 2026-10-18T08:43:37Z — /work
 
 Claimed.
+
+### 2026-10-18T09:46:20Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T09:46:20Z — wil
+
+Status set to done.
+
+### 2026-10-18T09:46:20Z — wil
+
+Built through ./dev: just cli-release (cargo zigbuild, profile cli = release + strip + thin LTO; host build-script artifacts land in target/cli, outputs in target/cli-release). vault-0.1.11-linux-x86_64 16595840 bytes, vault-0.1.11-linux-aarch64 14790160 bytes, both 'statically linked, stripped' per file(1); x86_64 runs natively, aarch64 run under qemu-aarch64 (qemu-user, no binfmt needed) printing 'vault 0.1.11', and it reached https://github.com over rustls. Zig comes from the ziglang PyPI wheel (sha256-pinned) because ziglang.org downloads stalled from this network. The dev image rebuilds (new layer at the end of docker/dev.Dockerfile). Web Apps page filters by platform android/linux, so cli builds do not show there; the Settings panel is ticket 131. docker/Dockerfile (ticket 127) untouched.

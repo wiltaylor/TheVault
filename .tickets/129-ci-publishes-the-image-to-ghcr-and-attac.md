@@ -4,7 +4,7 @@ title: CI publishes the image to GHCR and attaches the compose files on a v* tag
 blocked_by:
 - '127'
 - '128'
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -26,3 +26,7 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-18T09:37:35Z — /work
+
+Claimed.
