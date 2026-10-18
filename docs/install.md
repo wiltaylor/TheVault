@@ -37,16 +37,16 @@ Docker keeps the login in `~/.docker/config.json`, so `docker compose pull` work
    mkdir thevault && cd thevault
    ```
 
-2. Download `compose.yaml`, `Caddyfile` and `.env.example` from the latest GitHub Release:
+2. Download `compose.yaml`, `Caddyfile` and `env.example` from the latest GitHub Release, saving `env.example` as `.env`:
 
    ```sh
    base=https://github.com/wiltaylor/TheVault/releases/latest/download
    curl -fLO "$base/compose.yaml"
    curl -fLO "$base/Caddyfile"
-   curl -fL -o .env "$base/.env.example"
+   curl -fL -o .env "$base/env.example"
    ```
 
-   The same files are in `deploy/` in the repository.
+   The same files are in `deploy/` in the repository, where `env.example` is `deploy/.env.example`. The release names it without the dot because GitHub renames a release file whose name starts with one.
 
 3. Open `.env` and set `VAULT_PASSWORD` to the password you want to log in with.
 4. Start the server:
@@ -214,6 +214,15 @@ The container writes a backup to `/data/backups` before it starts the new versio
 The desktop and Android apps update themselves from the server once it hands out builds of the new version. You do not need to install them again.
 
 To stay on one version, set `THEVAULT_VERSION` in `.env` to that version, such as `0.1.12`, instead of `latest`.
+
+### How a release is published
+
+Each release is cut by pushing a `v<version>` tag, and GitHub Actions then publishes it in this order:
+
+1. `release.yml` builds the desktop AppImage, deb, rpm and AUR package and the static `vault` CLI for Linux `x86_64` and `aarch64`, and creates the tag's GitHub Release with them. At the same time `android-release.yml` builds the signed APK and attaches it to that release.
+2. When both have finished, `image.yml` downloads the APK, the AppImage and the two CLI builds from the release, checks them against its `SHA256SUMS` files, and builds the image with them baked in. It starts the image, checks that it serves all four, and pushes `ghcr.io/wiltaylor/thevault` tagged `<version>`, `<major>.<minor>` and `latest`. Then it attaches `compose.yaml`, `Caddyfile` and `env.example` to the release.
+
+So `docker compose pull` gets a new version only after its apps are on the release. The image carries the source, version, revision and licence as OCI labels: `docker image inspect ghcr.io/wiltaylor/thevault:latest` shows them. `just image-release <assets>` builds and checks the same image on your machine from a folder of the release's files, without pushing it.
 
 ## Restore a backup
 

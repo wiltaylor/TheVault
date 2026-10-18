@@ -372,6 +372,11 @@ image-clients-build dir tag='thevault:local': (require-host-tool "docker") (requ
 	docker/stage-clients.sh "{{dir}}" "$stage" "$version"
 	docker build -f docker/Dockerfile --platform linux/amd64 --build-context "clients=$stage" -t {{tag}} .
 
+# Build and check the release image exactly as .github/workflows/image.yml does, from assets, a folder of the release's APK, AppImage and SHA256SUMS files (read only), tagging ghcr.io/wiltaylor/thevault (or image) <version>, <major>.<minor> and latest locally without pushing; runs on the host
+[group('docker')]
+image-release assets image='ghcr.io/wiltaylor/thevault': (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl")
+	IMAGE={{image}} docker/release-image.sh "{{assets}}"
+
 # Build the image and check it end to end in throwaway containers on free ports: first-run refusal and init, login, version, healthcheck, uid, upgrade backups, an outside vault, and with clients (a publish-clients folder) the downloads; runs on the host
 [group('docker')]
 image-test clients='': (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl") (require-host-tool "python3")

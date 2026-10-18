@@ -118,6 +118,13 @@ Sync everything first: uninstalling deletes the phone's local vault.
 
 `.github/workflows/android-release.yml` runs on a `v*` tag. It builds the APK with `just android-release` in the dev container, and attaches the APK and `SHA256SUMS-android` to the tag's GitHub Release. It waits for the desktop workflow, `release.yml`, to create that release, and creates it itself only when the desktop workflow has not done so within 90 minutes.
 
+The tag runs three workflows, in this order:
+
+1. `release.yml` (desktop, AUR and the static `vault` CLI builds) and `android-release.yml` (the APK) run side by side. The desktop workflow creates the release, and the Android one adds the APK to it.
+2. `image.yml` starts each time one of them succeeds. The run that finds the APK, the AppImage and both CLI builds on the release builds the server image with them baked in, checks that it serves them, pushes `ghcr.io/wiltaylor/thevault` as `<version>`, `<major>.<minor>` and `latest`, and attaches `compose.yaml`, `Caddyfile` and `env.example` to the release. The other run stops. To publish the image again, run `image.yml` by hand from the Actions tab with the tag.
+
+The image workflow checks that the tag matches the workspace version in `Cargo.toml` and that both apps have that version, so set all three together. It uses the workflow's own `GITHUB_TOKEN` to push, and the package stays private while the repository is. `just image-release <assets>` runs the same build and check on your machine from a folder of the release's files, without pushing, as [docs/install.md](install.md#how-a-release-is-published) says.
+
 Set these repository secrets once, under Settings > Secrets and variables > Actions:
 
 | Secret | Value |
@@ -131,7 +138,9 @@ To release:
 
 1. Set `version` in `apps/android/src-tauri/tauri.conf.json` to the new version. Each release needs a higher version, because Android refuses an update whose version code is lower than the installed one.
 2. Run `./dev just android-release-smoke` and fix anything it finds. Then run the checks in `docs/android-manual-checks.md` on a phone.
-3. Tag the commit as `v<version>`, for example `v0.2.0`, and push the tag. The workflow stops when the tag does not match the version.
+3. Set the same `version` in `apps/desktop/src-tauri/tauri.conf.json` and in `[workspace.package]` of `Cargo.toml`.
+4. Tag the commit as `v<version>`, for example `v0.2.0`, and push the tag. Each workflow stops when the tag does not match the version.
+5. When `image.yml` has finished, check the release lists the APK, the AppImage, `compose.yaml`, `Caddyfile` and `env.example`, and that `docker pull ghcr.io/wiltaylor/thevault:<version>` works.
 
 ### Releasing a format change
 

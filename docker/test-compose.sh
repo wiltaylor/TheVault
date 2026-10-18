@@ -8,7 +8,8 @@
 # set in a test .env. It copies compose.yaml, Caddyfile and .env.example into a temporary folder,
 # as a user downloading them from a release would, and checks:
 #
-# - .env.example documents every variable compose.yaml reads, VAULT_PASSWORD first;
+# - .env.example documents every variable compose.yaml reads, VAULT_PASSWORD first, and
+#   docs/install.md and .github/workflows/image.yml agree on the release file names;
 # - `docker compose config` renders the default, https and cloudflare profiles;
 # - the default profile comes up healthy on a free port, the login works, and the documented
 #   password change, backup and restore work;
@@ -132,6 +133,16 @@ for want in 'docker login ghcr.io' 'read:packages' 'releases/latest/download' 'd
   '/config/vault.key' 'docker compose pull && docker compose up -d' 'restore-backup' \
   'docker compose down -v' 'docker compose exec thevault vault passwd'; do
   check "docs/install.md mentions $want" grep -qF -- "$want" docs/install.md
+done
+
+# The release attaches the files docs/install.md downloads, under names GitHub keeps: it renames a
+# release file whose name starts with a dot, so .env.example goes up as env.example.
+check "docs/install.md downloads env.example" grep -qF 'curl -fL -o .env "$base/env.example"' docs/install.md
+check "docs/install.md downloads no dotted release file" sh -c "! grep -qF '\$base/.' docs/install.md"
+check "image.yml attaches deploy/.env.example as env.example" \
+  grep -qF 'cp deploy/.env.example "$RUNNER_TEMP/env.example"' .github/workflows/image.yml
+for f in '"$RUNNER_TEMP/env.example"' deploy/Caddyfile deploy/compose.yaml; do
+  check "image.yml uploads $f" sh -c "grep 'gh release upload' .github/workflows/image.yml | grep -qF -- '$f'"
 done
 
 # 2. docker compose config renders each profile.

@@ -1,6 +1,8 @@
 # Builds the Linux desktop release on a version tag and publishes it on the tag's GitHub Release
-# (D11): the AppImage, deb and rpm, their SHA256SUMS, and the AUR thevault-bin PKGBUILD and
-# .SRCINFO for that release. Everything builds in the dev container, as it does locally.
+# (D11): the AppImage, deb and rpm, their SHA256SUMS, the AUR thevault-bin PKGBUILD and .SRCINFO
+# for that release, and the static vault CLI builds for Linux x86_64 and aarch64 with
+# SHA256SUMS-cli (D27), which image.yml bakes into the server image. Everything builds in the dev
+# container, as it does locally.
 
 name: release
 
@@ -35,6 +37,11 @@ jobs:
       - name: Write the AUR package for this release
         run: ./dev just aur-release
 
+      - name: Build the static vault CLI for x86_64 and aarch64
+        run: |
+          ./dev just cli-release
+          mv target/cli-release/SHA256SUMS target/cli-release/SHA256SUMS-cli
+
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,4 +51,6 @@ jobs:
             target/desktop-release/*.deb \
             target/desktop-release/*.rpm \
             target/desktop-release/SHA256SUMS \
-            target/desktop-release/thevault-bin-aur.tar.gz
+            target/desktop-release/thevault-bin-aur.tar.gz \
+            target/cli-release/vault-*-linux-* \
+            target/cli-release/SHA256SUMS-cli

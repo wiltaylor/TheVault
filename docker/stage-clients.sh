@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage the clients build context for docker/Dockerfile: copy from <src>, a folder that
-# `just publish-clients` wrote, the APK and AppImage builds of <version> into <dest>, with a
-# manifest.json listing only them. <src> is only read.
+# `just publish-clients` wrote, the APK, AppImage and static vault CLI builds of <version> into
+# <dest>, with a manifest.json listing only them. <src> is only read.
 #
 # Usage: docker/stage-clients.sh <src> <dest> <version>
 set -euo pipefail
@@ -18,11 +18,11 @@ if [ ! -f "$src/manifest.json" ]; then
 fi
 mkdir -p "$dest"
 jq --arg v "$version" \
-  '{clients: [.clients[] | select(.version == $v and (.kind == "apk" or .kind == "appimage"))]}' \
+  '{clients: [.clients[] | select(.version == $v and (.kind == "apk" or .kind == "appimage" or .kind == "binary"))]}' \
   "$src/manifest.json" > "$dest/manifest.json"
 mapfile -t files < <(jq -r '.clients[].filename' "$dest/manifest.json")
 if [ ${#files[@]} -eq 0 ]; then
-  echo "$src/manifest.json lists no APK or AppImage of version $version" >&2
+  echo "$src/manifest.json lists no APK, AppImage or CLI build of version $version" >&2
   exit 1
 fi
 for f in "${files[@]}"; do
