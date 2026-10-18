@@ -3,8 +3,8 @@ id: '126'
 title: Toggle blocks with a heading or text summary that expand and collapse nested
   blocks, and admonition blocks whose kind sets colour and icon with presets
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Toggle blocks with a heading or text summary that expand and collapse nested blocks, and admonition blocks whose kind sets colour and icon with presets
@@ -40,3 +40,19 @@ Acceptance criteria:
 - Docs and skill updated; ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-18T06:04:02Z — /work
+
+Claimed.
+
+### 2026-10-18T06:45:02Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T06:45:02Z — wil
+
+Branch ticket/126 commit 735e2c3. Toggle shortcut is '>> ' because '> ' is StarterKit's quote rule. Content blocks have no ids, so open state is keyed by note id/field and the block's index path (heading line not counted), e.g. thevault.toggle:<id>/body:1.0. Toggles and admonitions hold any content block but columns (layouts stay top level, as in a column); a card's canvas ban is checked at any depth. Admonition icon names are checked against crates/schema/src/icons.txt, generated from lucide 1.56; web/src/components/Icon.test.tsx fails if lucide changes, regenerate the file then. Search result rows now link /notes/<id>?find=<text> and NoteView opens toggles whose nested text holds every word; existing e2e (search, shell) updated for the URL, inline-editing/columns/canvas for the new Toggle heading menu items. Not done: no block-targeting links exist, so 'a link that targets a block inside a toggle opens it' has nothing to hook; the drag-handle gutter does not appear on blocks nested inside toggles (top-level and column blocks only). Full e2e suite: 312 passed before the menu/URL test updates; the 3 failures were those expectations, fixed and re-run green.
+
+### 2026-10-18T06:45:02Z — wil
+
+Status set to done.
