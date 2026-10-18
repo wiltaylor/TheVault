@@ -1029,7 +1029,7 @@ A vault that uses `when` needs apps at 0.1.10 or later: an older app refuses a t
 
 ### Field references
 
-The text of a fixed content block in a template can show a field's value inline: `{{name}}` in any `text` item (a heading, paragraph, quote or list item, including one inside a canvas card), or in an image's `alt` or `caption`, renders the current value of field `name` of the note being shown, read-only. `name` is `title` or a field of the type; the schema rejects any other name with "`{{name}}` names no field of the type". A reference is not a slot: it places nothing, so the field still has no entry on the page and stays editable in the properties sidebar.
+The text of a fixed content block in a template can show a field's value inline: `{{name}}` in any `text` item (a heading, paragraph, quote, list item or toggle summary, including one inside a canvas card), in an admonition's `title`, or in an image's `alt` or `caption`, renders the current value of field `name` of the note being shown, read-only. `name` is `title` or a field of the type; the schema rejects any other name with "`{{name}}` names no field of the type". A reference is not a slot: it places nothing, so the field still has no entry on the page and stays editable in the properties sidebar.
 
 - `name` is an identifier written directly between the braces, with no spaces: `{{ due }}` is plain text.
 - `\{{name}}`, with the first brace escaped, and `{{name}}` inside a code span are plain text and are not checked.
@@ -1460,6 +1460,85 @@ columns {
 }
 ```
 
+### `toggle`
+
+A summary line, always shown, that opens and closes the blocks nested under it.
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `text` | string, markup | Required. The summary. It may be empty |
+| `level` | int | Optional, default `0`. `0` shows the summary as plain text; `1`, `2` or `3` shows it as a heading of that level, which counts as a heading wherever the app lists headings |
+| any [content block](#content-blocks) but `columns` | block | The nested blocks, in order. A toggle may hold none |
+
+Rules:
+
+- Whether a toggle is open is not stored in the note, so opening one is not an edit, a version or a sync change. Each device remembers it for itself, per note and per block. The web client keys it by the block's place in the content, as `2` or `3.0`, since content blocks have no ids; a block that moves takes the state of the place it moves to. A toggle starts closed.
+- A toggle holds no `columns` block: layouts stay at the top of the content, as a column holds none. `schema` rejects one with "a toggle cannot hold a columns block". A toggle in a canvas card follows the card's rule, at any depth: no canvas.
+- Text in the summary and in the nested blocks is searched, and its mentions are links, whether the toggle is open or not. Opening a note from a search, with the search's text, opens every toggle whose nested blocks hold that text.
+
+```wcl
+toggle {
+  level = 2
+  text  = "Rollback steps"
+
+  list {
+    style = "numbered"
+
+    item {
+      text = "Restore the last export"
+    }
+  }
+}
+```
+
+### `admonition`
+
+A callout: nested blocks in a coloured box with an icon and a title, whose `kind` sets the colour, the icon and the title shown when it has none.
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `kind` | string | Required. One of the kinds below |
+| `title` | string, markup | Optional. When absent, the kind's label is shown |
+| `colour` | string | Optional. A [palette](#inline-markup) colour, in place of the kind's |
+| `icon` | string | Optional. An icon name, as a type's `icon` takes, in place of the kind's. `schema` rejects a name the client has no icon for |
+| `collapsible` | bool | Optional, default `false`. When `true`, the admonition opens and closes as a toggle does, with the same per-device state, starting open |
+| any [content block](#content-blocks) but `columns` | block | The nested blocks, in order. An admonition may hold none |
+
+| `kind` | Colour | Icon | Label |
+|--------|--------|------|-------|
+| `note` | `gray` | `pencil` | Note |
+| `info` | `blue` | `info` | Info |
+| `tip` | `green` | `lightbulb` | Tip |
+| `success` | `green` | `circle-check` | Success |
+| `warning` | `orange` | `triangle-alert` | Warning |
+| `danger` | `red` | `octagon-alert` | Danger |
+| `question` | `purple` | `circle-question-mark` | Question |
+| `quote` | `brown` | `quote` | Quote |
+
+An admonition, like a toggle, holds no `columns` block ("an admonition cannot hold a columns block"), and its title and nested blocks are searched with their mentions as links.
+
+```wcl
+admonition {
+  kind  = "warning"
+  title = "Exports **expire** after a week"
+
+  paragraph {
+    text = "Run the import before then."
+  }
+}
+
+admonition {
+  kind        = "tip"
+  colour      = "pink"
+  icon        = "flame"
+  collapsible = true
+
+  paragraph {
+    text = "Hidden until the reader opens it."
+  }
+}
+```
+
 ### `control`
 
 A form control bound to one field of the note it is shown on: a text box, a slider, a toggle, a calendar and so on. It shows the field's current value and editing it writes the field, so the field stays the only place the value lives. A control, a slot, a `{{name}}` reference and the properties sidebar showing one field always agree, and two controls may bind the same field. Controls are mostly placed in [templates](#templates), to lay a type out as a form, but a note's own content and a canvas card may hold them too.
@@ -1542,7 +1621,7 @@ columns {
 
 ## Inline markup
 
-These text items use the inline markup in PRD Appendix A (D41): `heading.text`, `paragraph.text`, `item.text` and `quote.text`, wherever the block sits, a canvas card included. No other string is parsed as markup.
+These text items use the inline markup in PRD Appendix A (D41): `heading.text`, `paragraph.text`, `item.text`, `quote.text`, `toggle.text` and `admonition.title`, wherever the block sits, a canvas card included. No other string is parsed as markup.
 
 | Markup | Renders as |
 |--------|------------|
@@ -2093,7 +2172,7 @@ A vault file is checked in three layers. Each catches what the one before cannot
 
 | File | Declares |
 |------|----------|
-| `common.wcl` | Date range and location records, every content block, ink, query view, canvas, `columns`, `control`, `slot`, `content` and `dict`. No `@document` |
+| `common.wcl` | Date range and location records, every content block, ink, query view, canvas, `columns`, `control`, `toggle`, `admonition`, `slot`, `content` and `dict`. No `@document` |
 | `type.wcl` | The `@document` of a type file, with `field`, `template`, `tab` and `handler` |
 | `taxonomy.wcl` | The `@document` of a taxonomy file |
 | `task.wcl` | The `@document` of a task file |

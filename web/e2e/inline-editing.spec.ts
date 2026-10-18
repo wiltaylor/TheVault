@@ -223,10 +223,10 @@ test("the / menu inserts a block, filters as you type and closes on Escape", asy
   const menu = page.getByRole("listbox", { name: "Insert block" });
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("option", { name: "Code" })).toBeVisible();
-  await expect(menu.getByRole("option", { name: "Heading 1" })).toBeVisible();
+  await expect(menu.getByRole("option", { name: /^Heading 1/ })).toBeVisible();
 
   await page.keyboard.type("head");
-  await expect(menu.getByRole("option")).toHaveText([/Heading 1/, /Heading 2/, /Heading 3/]);
+  await expect(menu.getByRole("option")).toHaveText([/^Heading 1/, /^Heading 2/, /^Heading 3/, /^Toggle heading 1/, /^Toggle heading 2/, /^Toggle heading 3/]);
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
   // Escape leaves the text as typed.

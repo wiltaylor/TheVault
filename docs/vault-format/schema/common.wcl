@@ -187,6 +187,8 @@ type CanvasNode {
   @children("query_view") query_views: list<QueryView>
   @children("columns")    columns:     list<Columns>
   @children("control")    controls:    list<Control>
+  @children("toggle")     toggles:     list<Toggle>
+  @children("admonition") admonitions: list<Admonition>
 }
 
 @block("edge", required_fields = ["from", "to"])
@@ -243,6 +245,55 @@ type Control {
 }
 
 # ---------------------------------------------------------------------------
+# Toggles and admonitions. Each holds any content block but a columns layout;
+# `schema` checks the admonition kind, colour and icon names, and that a card's
+# toggle holds no canvas.
+# ---------------------------------------------------------------------------
+
+@block("toggle", required_fields = ["text"])
+type Toggle {
+  @min(0) @max(3) level: i64?
+  text: utf8
+  @children("heading")    headings:    list<Heading>
+  @children("paragraph")  paragraphs:  list<Paragraph>
+  @children("list")       lists:       list<ListBlock>
+  @children("quote")      quotes:      list<Quote>
+  @children("image")      images:      list<Image>
+  @children("asset")      assets:      list<AssetBlock>
+  @children("code")       codes:       list<Code>
+  @children("mermaid")    mermaids:    list<Mermaid>
+  @children("ink")        inks:        list<Ink>
+  @children("query_view") query_views: list<QueryView>
+  @children("canvas")     canvases:    list<Canvas>
+  @children("control")    controls:    list<Control>
+  @children("toggle")     toggles:     list<Toggle>
+  @children("admonition") admonitions: list<Admonition>
+}
+
+@block("admonition", required_fields = ["kind"])
+type Admonition {
+  kind:        utf8
+  title:       utf8?
+  colour:      utf8?
+  icon:        utf8?
+  collapsible: bool?
+  @children("heading")    headings:    list<Heading>
+  @children("paragraph")  paragraphs:  list<Paragraph>
+  @children("list")       lists:       list<ListBlock>
+  @children("quote")      quotes:      list<Quote>
+  @children("image")      images:      list<Image>
+  @children("asset")      assets:      list<AssetBlock>
+  @children("code")       codes:       list<Code>
+  @children("mermaid")    mermaids:    list<Mermaid>
+  @children("ink")        inks:        list<Ink>
+  @children("query_view") query_views: list<QueryView>
+  @children("canvas")     canvases:    list<Canvas>
+  @children("control")    controls:    list<Control>
+  @children("toggle")     toggles:     list<Toggle>
+  @children("admonition") admonitions: list<Admonition>
+}
+
+# ---------------------------------------------------------------------------
 # Column layouts. A column holds any content block but another columns block,
 # and in a template tab, slots too; `schema` rejects a slot in a note and
 # checks the column count and widths.
@@ -268,6 +319,8 @@ type Control {
   @children("query_view") query_views: list<QueryView>
   @children("canvas")     canvases:    list<Canvas>
   @children("control")    controls:    list<Control>
+  @children("toggle")     toggles:     list<Toggle>
+  @children("admonition") admonitions: list<Admonition>
 }
 
 @block("columns") type Columns {
@@ -289,6 +342,8 @@ type Control {
   @children("canvas")     canvases:    list<Canvas>
   @children("columns")    columns:     list<Columns>
   @children("control")    controls:    list<Control>
+  @children("toggle")     toggles:     list<Toggle>
+  @children("admonition") admonitions: list<Admonition>
 }
 
 @doc("A dict field value. Keys are identifiers; TheVault checks every value against the field's value kind.")

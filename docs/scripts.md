@@ -99,6 +99,36 @@ fn run() -> Result[(), string] {
 
 `append_text` and `append_blocks` name the field as the type does. The daily type's content field is the one its type file defines; check it with `vault::types()`.
 
+A block's JSON form is the block of `docs/vault-format.md` "Content blocks": `kind`, its items under `fields`, and the blocks inside it under `blocks`. A toggle holds the blocks it opens to show, and an admonition (a callout) holds its own:
+
+```rust
+use vault
+
+fn run() -> Result[(), string] {
+    let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"
+    let folded = Value::Map(#{
+        "kind": Value::String("toggle"),
+        "fields": Value::Map(#{ "level": Value::Int(2), "text": Value::String("Details") }),
+        "blocks": Value::List([Value::Map(#{
+            "kind": Value::String("paragraph"),
+            "fields": Value::Map(#{ "text": Value::String("Shown when opened") }),
+        })]),
+    })
+    let callout = Value::Map(#{
+        "kind": Value::String("admonition"),
+        "fields": Value::Map(#{ "kind": Value::String("warning"), "title": Value::String("Backup failed") }),
+        "blocks": Value::List([Value::Map(#{
+            "kind": Value::String("paragraph"),
+            "fields": Value::Map(#{ "text": Value::String("Check the disk.") }),
+        })]),
+    })
+    vault::append_blocks(id, "body", Value::List([folded, callout]), "")?
+    Ok(())
+}
+```
+
+An admonition's `kind` is one of `note`, `info`, `tip`, `success`, `warning`, `danger`, `question` and `quote`; `title`, `colour`, `icon` and `collapsible` are optional. A wrong kind, a colour outside the palette or an unknown icon name fails the write with the reason.
+
 In a `before_*` handler, `create`, `update`, `patch`, `append_*` and `delete` join the write in progress. `restore`, `daily`, `upload_asset` and `add_term` are refused there; use an `after_*` handler. A migration cannot change other notes at all.
 
 ### Assets

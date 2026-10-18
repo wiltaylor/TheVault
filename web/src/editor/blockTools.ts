@@ -123,12 +123,18 @@ export function suggestion(options: SuggestOptions) {
 // ---------------------------------------------------------------------------------------------
 // Moving blocks
 
-/** Whether `node` holds a sequence of blocks the block tools work in: the document or a column. */
+/**
+ * Whether `node` holds a sequence of blocks the block tools work in: the document, a column, or
+ * the blocks nested in a toggle or an admonition after its heading line.
+ */
 export function isContainer(node: PMNode | null | undefined): boolean {
-  return node?.type.name === "doc" || node?.type.name === "column";
+  return ["doc", "column", "toggle", "admonition"].includes(node?.type.name ?? "");
 }
 
-/** A block of a container: the document or a column. */
+/** The heading line of a toggle or an admonition: part of that block, not a block of its own. */
+const isHeadLine = (node: PMNode) => node.type.name === "toggleSummary" || node.type.name === "admonitionTitle";
+
+/** A block of a container: the document, a column, a toggle or an admonition. */
 export interface ContainerBlock {
   pos: number;
   node: PMNode;
@@ -150,6 +156,7 @@ export function blockOfSelection(state: EditorState): ContainerBlock | null {
   }
   const $f = sel.$from;
   for (let d = $f.depth; d > 0; d--) {
+    if (isHeadLine($f.node(d))) continue;
     const parent = $f.node(d - 1);
     if (isContainer(parent)) return { pos: $f.before(d), node: $f.node(d), index: $f.index(d - 1), parent, start: $f.start(d - 1) };
   }
@@ -177,7 +184,9 @@ export function moveBlockTr(
   const parent = within?.parent ?? state.doc;
   const base = within?.start ?? 0;
   const target = index + by;
-  if (target < 0 || target >= parent.childCount) return null;
+  // Inside a toggle or an admonition, its heading line stays first.
+  const head = parent.childCount > 0 && isHeadLine(parent.child(0)) ? 1 : 0;
+  if (index < head || target < head || target >= parent.childCount) return null;
   const first = Math.min(index, target);
   const a = parent.child(first);
   const b = parent.child(first + 1);
@@ -363,7 +372,7 @@ function blockAtSelection(view: EditorView): BlockHit | null {
   const at = blockOfSelection(view.state);
   if (!at) return null;
   const dom = view.nodeDOM(at.pos);
-  return dom instanceof HTMLElement ? { pos: at.pos, node: at.node, dom, nested: at.parent.type.name === "column" } : null;
+  return dom instanceof HTMLElement ? { pos: at.pos, node: at.node, dom, nested: at.parent.type.name !== "doc" } : null;
 }
 
 /**
@@ -649,9 +658,9 @@ export function placeholder(text: string) {
               const { doc, selection } = state;
               const marks: Decoration[] = [];
               const lone = doc.childCount === 1;
-              // Paragraphs at the top level and in columns: a column's empty line shows it too.
+              // Paragraphs at the top level, in columns, toggles and admonitions: their empty lines show it too.
               doc.descendants((node, pos, parent) => {
-                if (node.type.name === "columns" || node.type.name === "column") return true;
+                if (["columns", "column", "toggle", "admonition"].includes(node.type.name)) return true;
                 if (node.type.name !== "paragraph" || node.content.size > 0) return false;
                 const here = selection.empty && selection.from === pos + 1;
                 if ((lone && parent === doc) || here) {

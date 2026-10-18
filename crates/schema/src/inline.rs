@@ -5,8 +5,24 @@
 use crate::doc::{Doc, DocBlock};
 use crate::encoding::is_name;
 
-/// The content blocks whose `text` item is inline markup.
-pub const MARKUP_BLOCKS: [&str; 4] = ["heading", "paragraph", "item", "quote"];
+/// The content blocks with an item of inline markup, and that item: `text` for most, an
+/// admonition's `title`.
+pub const MARKUP_ITEMS: [(&str, &str); 6] = [
+    ("heading", "text"),
+    ("paragraph", "text"),
+    ("item", "text"),
+    ("quote", "text"),
+    ("toggle", "text"),
+    ("admonition", "title"),
+];
+
+/// The item of a block of `kind` that holds inline markup, if it has one.
+pub fn markup_item(kind: &str) -> Option<&'static str> {
+    MARKUP_ITEMS
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .map(|(_, item)| *item)
+}
 
 /// One `[[+type|title]]` in inline markup. `title` is unescaped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,11 +112,11 @@ pub fn placeholders(text: &str) -> Vec<Placeholder> {
 pub(crate) fn placeholders_in(blocks: &[DocBlock], at: &str, out: &mut Vec<(String, Placeholder)>) {
     for (n, b) in blocks.iter().enumerate() {
         let path = format!("{at} > {}#{}", b.kind, n + 1);
-        if MARKUP_BLOCKS.contains(&b.kind.as_str())
-            && let Some(text) = b.body.field("text").and_then(|v| v.as_str())
+        if let Some(item) = markup_item(&b.kind)
+            && let Some(text) = b.body.field(item).and_then(|v| v.as_str())
         {
             for p in placeholders(text) {
-                out.push((format!("{path}.text"), p));
+                out.push((format!("{path}.{item}"), p));
             }
         }
         placeholders_in(&b.body.blocks, &path, out);

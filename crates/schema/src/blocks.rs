@@ -12,7 +12,7 @@ use crate::encoding::{PALETTE, is_ident, is_ink_colour, is_palette, is_ulid};
 use crate::types::{FieldDef, FieldKind, RangeOf, Scalar};
 
 /// The closed set of content block kinds.
-pub const CONTENT_KINDS: [&str; 13] = [
+pub const CONTENT_KINDS: [&str; 15] = [
     "heading",
     "paragraph",
     "list",
@@ -26,10 +26,12 @@ pub const CONTENT_KINDS: [&str; 13] = [
     "canvas",
     "columns",
     "control",
+    "toggle",
+    "admonition",
 ];
 
 /// The content block kinds a canvas card holds: every content block kind but a canvas.
-pub const CARD_BLOCK_KINDS: [&str; 12] = [
+pub const CARD_BLOCK_KINDS: [&str; 14] = [
     "heading",
     "paragraph",
     "list",
@@ -42,7 +44,54 @@ pub const CARD_BLOCK_KINDS: [&str; 12] = [
     "query_view",
     "columns",
     "control",
+    "toggle",
+    "admonition",
 ];
+
+/// The kinds of an `admonition` block, in the order the editor offers them.
+pub const ADMONITION_KINDS: [&str; 8] = [
+    "note", "info", "tip", "success", "warning", "danger", "question", "quote",
+];
+
+/// What an admonition of one kind looks like when it names no `colour`, `icon` or `title`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdmonitionPreset {
+    /// A palette colour (OQ-S4).
+    pub colour: &'static str,
+    /// An icon name, as [`is_icon`] knows them.
+    pub icon: &'static str,
+    /// The title shown when the block has none.
+    pub label: &'static str,
+}
+
+/// The preset of admonition `kind`, or `None` for a kind outside [`ADMONITION_KINDS`].
+pub fn admonition_preset(kind: &str) -> Option<AdmonitionPreset> {
+    let (colour, icon, label) = match kind {
+        "note" => ("gray", "pencil", "Note"),
+        "info" => ("blue", "info", "Info"),
+        "tip" => ("green", "lightbulb", "Tip"),
+        "success" => ("green", "circle-check", "Success"),
+        "warning" => ("orange", "triangle-alert", "Warning"),
+        "danger" => ("red", "octagon-alert", "Danger"),
+        "question" => ("purple", "circle-question-mark", "Question"),
+        "quote" => ("brown", "quote", "Quote"),
+        _ => return None,
+    };
+    Some(AdmonitionPreset {
+        colour,
+        icon,
+        label,
+    })
+}
+
+/// The icon names the web client draws, one per line and sorted: Lucide's names at the version
+/// `web/package.json` pins, in the client's kebab-case form. A web test keeps the two the same.
+const ICONS: &str = include_str!("icons.txt");
+
+/// Whether `name` is an icon the client can draw, such as `triangle-alert`.
+pub fn is_icon(name: &str) -> bool {
+    ICONS.lines().any(|l| l == name)
+}
 
 /// The kinds of a `control` block: the form controls a note field can be edited with.
 pub const CONTROL_KINDS: [&str; 13] = [
@@ -179,6 +228,7 @@ pub(crate) enum Form {
     Positive,
     Ulid,
     Palette,
+    Icon,
     InkColour,
     Ident,
     StrList,
@@ -297,6 +347,10 @@ impl Check<'_> {
                 "{s:?} is not a palette colour; use one of {}",
                 PALETTE.join(", ")
             )),
+            (Form::Icon, Value::Str(s)) if is_icon(s) => None,
+            (Form::Icon, Value::Str(s)) => Some(format!(
+                "{s:?} is not an icon name; use a Lucide icon name such as \"triangle-alert\""
+            )),
             (Form::InkColour, Value::Str(s)) if is_ink_colour(s) => None,
             (Form::InkColour, Value::Str(s)) => Some(format!(
                 "{s:?} is not a lower-case #rrggbb colour or \"ink\""
@@ -312,7 +366,7 @@ impl Check<'_> {
                 "must be a list of strings, not {}",
                 value.describe()
             )),
-            (Form::Str | Form::Ulid | Form::Palette, _)
+            (Form::Str | Form::Ulid | Form::Palette | Form::Icon, _)
             | (Form::InkColour | Form::Ident | Form::OneOf(_), _) => {
                 Some(format!("must be a string, not {}", value.describe()))
             }
@@ -408,6 +462,19 @@ impl Check<'_> {
         }
     }
 
+    /// The blocks nested in a toggle or an admonition (`what`): any content block but a column
+    /// layout, which stays at the top of a content sequence or a card, as a column holds none.
+    fn nested(&mut self, d: &Doc, what: &str, at: &str) {
+        for (n, b) in d.blocks.iter().enumerate() {
+            let path = format!("{at} > {}#{}", b.kind, n + 1);
+            if b.kind == "columns" {
+                self.fail(&path, format!("{what} cannot hold a columns block"));
+                continue;
+            }
+            self.content_item(b, &path);
+        }
+    }
+
     /// One content block's body. The caller has checked its kind and label.
     pub fn content_block(&mut self, b: &DocBlock, at: &str) {
         let d = &b.body;
@@ -459,6 +526,26 @@ impl Check<'_> {
             "canvas" => self.canvas(d, at),
             "columns" => self.columns(d, at, &mut |c, b, path| c.content_item(b, path)),
             "control" => self.control(d, at),
+            "toggle" => {
+                self.items(
+                    d,
+                    &[opt("level", Form::Int(0, 3)), req("text", Form::Str)],
+                    &[],
+                    at,
+                );
+                self.nested(d, "a toggle", at);
+            }
+            "admonition" => {
+                let items = [
+                    req("kind", Form::OneOf(&ADMONITION_KINDS)),
+                    opt("title", Form::Str),
+                    opt("colour", Form::Palette),
+                    opt("icon", Form::Icon),
+                    opt("collapsible", Form::Bool),
+                ];
+                self.items(d, &items, &[], at);
+                self.nested(d, "an admonition", at);
+            }
             _ => {}
         }
     }
@@ -897,6 +984,39 @@ impl Check<'_> {
         }
     }
 
+    /// Fail every canvas nested anywhere inside `b`, a block of a card at `at`.
+    fn no_canvas_within(&mut self, b: &DocBlock, at: &str) {
+        let inner: Vec<(String, &DocBlock)> = if b.kind == "columns" {
+            b.body
+                .blocks_of("column")
+                .enumerate()
+                .flat_map(|(k, col)| {
+                    col.body.blocks.iter().enumerate().map(move |(j, cb)| {
+                        (
+                            format!("{at} > column#{} > {}#{}", k + 1, cb.kind, j + 1),
+                            cb,
+                        )
+                    })
+                })
+                .collect()
+        } else if matches!(b.kind.as_str(), "toggle" | "admonition") {
+            b.body
+                .blocks
+                .iter()
+                .enumerate()
+                .map(|(j, cb)| (format!("{at} > {}#{}", cb.kind, j + 1), cb))
+                .collect()
+        } else {
+            return;
+        };
+        for (path, cb) in inner {
+            if cb.kind == "canvas" {
+                self.fail(&path, "a card cannot hold a canvas");
+            }
+            self.no_canvas_within(cb, &path);
+        }
+    }
+
     fn node(&mut self, d: &Doc, frame: &[Item], groups: &HashSet<&str>, at: &str) {
         let mut items = vec![
             req("kind", Form::OneOf(&NODE_KINDS)),
@@ -912,30 +1032,12 @@ impl Check<'_> {
         self.items(d, &items, &[], at);
         if kind == "card" {
             for (n, b) in d.blocks.iter().enumerate() {
+                let path = format!("{at} > {}#{}", b.kind, n + 1);
                 if b.kind == "canvas" {
-                    self.fail(
-                        &format!("{at} > canvas#{}", n + 1),
-                        "a card cannot hold a canvas",
-                    );
+                    self.fail(&path, "a card cannot hold a canvas");
                 }
-                // Nor can a column of a card.
-                if b.kind == "columns" {
-                    for (k, col) in b.body.blocks_of("column").enumerate() {
-                        for (j, cb) in col.body.blocks.iter().enumerate() {
-                            if cb.kind == "canvas" {
-                                self.fail(
-                                    &format!(
-                                        "{at} > columns#{} > column#{} > canvas#{}",
-                                        n + 1,
-                                        k + 1,
-                                        j + 1
-                                    ),
-                                    "a card cannot hold a canvas",
-                                );
-                            }
-                        }
-                    }
-                }
+                // Nor can a column, a toggle or an admonition inside it, at any depth.
+                self.no_canvas_within(b, &path);
             }
             let blocks = d.blocks.iter().filter(|b| b.kind != "canvas");
             self.content_blocks(blocks, at);

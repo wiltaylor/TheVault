@@ -153,7 +153,51 @@ vault put --type task --json < note.json
 
 To see any other block in JSON, `get` a note that has one and read its `note.blocks`.
 
-The `text` of a paragraph, heading, list item or quote is inline markup: `**bold**`, `*italic*`, `[label](https://example.com)`, and so on. `[[<ULID>]]` or `[[<ULID>|label]]` mentions an existing note. `[[+<type>|<title>]]` is a placeholder link to a note that does not exist yet, such as `[[+task|Fix the pump]]`: the type must exist, and a `|`, `]` or `\` in the title is escaped with a backslash. A placeholder links nowhere until someone clicks it in the app, which creates the note and rewrites the placeholder as a mention. Write a placeholder when a note should exist but you are not creating it now; to link a note you have created, mention its id instead.
+A `toggle` is a summary line that the reader opens to see the blocks nested in it. `text` is the summary; `level` 1, 2 or 3 shows it as a heading, and 0 or none as plain text. Whether it is open is kept on each device, not in the note, so leave that out:
+
+```sh
+vault put --type task <<'EOF'
+title  = "Plan the move"
+status = "Todo"
+
+content body {
+  toggle {
+    level = 2
+    text  = "Packing list"
+
+    list {
+      style = "todo"
+
+      item {
+        text = "Books"
+      }
+    }
+  }
+}
+EOF
+```
+
+An `admonition` is a callout box. Its `kind` sets the colour, icon and title: `note`, `info`, `tip`, `success`, `warning`, `danger`, `question` or `quote`. `title`, `colour` (a palette colour), `icon` (an icon name such as `flame`) and `collapsible = true` are optional. Its blocks nest inside it as a toggle's do. Neither holds a `columns` block.
+
+```sh
+cat > callout.json <<'EOF'
+{
+  "fields": { "title": "Check the lease", "status": "Todo" },
+  "blocks": [
+    { "kind": "content", "labels": ["body"],
+      "blocks": [
+        { "kind": "admonition", "fields": { "kind": "warning", "title": "Notice is **30 days**" },
+          "blocks": [
+            { "kind": "paragraph", "fields": { "text": "Give notice before the 1st." } }
+          ] }
+      ] }
+  ]
+}
+EOF
+vault put --type task --json < callout.json
+```
+
+The `text` of a paragraph, heading, list item, quote or toggle is inline markup, and so is an admonition's `title`: `**bold**`, `*italic*`, `[label](https://example.com)`, and so on. `[[<ULID>]]` or `[[<ULID>|label]]` mentions an existing note. `[[+<type>|<title>]]` is a placeholder link to a note that does not exist yet, such as `[[+task|Fix the pump]]`: the type must exist, and a `|`, `]` or `\` in the title is escaped with a backslash. A placeholder links nowhere until someone clicks it in the app, which creates the note and rewrites the placeholder as a mention. Write a placeholder when a note should exist but you are not creating it now; to link a note you have created, mention its id instead.
 
 To change a note, send the whole note with the version you read. A note that changed since you read it is refused with `"status": 409` and `"error": "conflict"`; read it again, reapply your change, and retry.
 
@@ -549,7 +593,7 @@ vault template list invoice | jq -e '.templates[] | select(.name == "card") | .t
 
 ### Fixed blocks
 
-Any content block in a tab is shown on every note of the type. In a fixed block's `text`, and an image's `alt` and `caption`, `{{field}}` shows that field's value, read-only.
+Any content block in a tab is shown on every note of the type. In a fixed block's `text`, an admonition's `title`, and an image's `alt` and `caption`, `{{field}}` shows that field's value, read-only.
 
 | Block | Holds |
 |-------|-------|
@@ -560,6 +604,8 @@ Any content block in a tab is shown on every note of the type. In a fixed block'
 | `asset` | `asset = "<asset id>"`: a file card, or a PDF viewer |
 | `code`, `mermaid` | `source`; `code` also takes `language` and `caption` |
 | `columns` | 2 to 6 `column { width = 1 ... }` blocks side by side, each holding slots and fixed blocks. Columns do not nest |
+| `toggle` | `text`, the summary, and optional `level` (0 to 3); the blocks it opens to show nest inside it |
+| `admonition` | `kind` (`note`, `info`, `tip`, `success`, `warning`, `danger`, `question` or `quote`), optional `title`, `colour`, `icon` and `collapsible`; its blocks nest inside it |
 | `control` | `field` and `kind`: a form control that edits the field in place. The kinds are `text`, `textarea`, `number`, `slider` (with `min` and `max`), `rating`, `toggle`, `checkbox`, `dropdown`, `radio`, `chips`, `calendar`, `datetime` and `time`. A kind that does not fit the field is refused with the field kinds it fits |
 | `query_view` | A live query and its views: below |
 | `ink`, `canvas` | A drawing or a canvas, made in the app |

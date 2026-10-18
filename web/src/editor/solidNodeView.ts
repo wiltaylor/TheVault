@@ -51,6 +51,19 @@ export function adoptOwner(editor: Editor, owner: Owner | null) {
   if (owner) owners.set(editor, owner);
 }
 
+/**
+ * Render `fn` into `el`, a part of a node view that ProseMirror does not own (a toolbar beside a
+ * node's editable content), with the editor's context. Returns the function that disposes it.
+ */
+export function mountSolid(editor: Editor, el: HTMLElement, fn: () => JSX.Element): () => void {
+  let dispose = () => {};
+  createRoot((d) => {
+    dispose = d;
+    insert(el, () => untrack(fn));
+  }, owners.get(editor) ?? getOwner() ?? undefined);
+  return dispose;
+}
+
 export function solidNodeView(Component: (props: SolidNodeViewProps) => JSX.Element): NodeViewRenderer {
   return (props) => {
     const dom = document.createElement(props.node.isInline ? "span" : "div");

@@ -144,6 +144,8 @@ From 0.1.9 the apps update themselves before they sync with a newer server ([The
 
 Apps before 0.1.10 also refuse an attribute inside a template, which 0.1.10 tolerates the same way. So a vault whose types use a tab's `when` ([Conditional tabs](vault-format.md#conditional-tabs)) needs apps at 0.1.10 or later. Apps from 0.1.9 update themselves before they sync, so the server-first order above brings them to 0.1.10 before they read such a type. Publish the 0.1.10 builds with the server before any type uses `when`.
 
+Content block kinds are closed, so an app refuses a note holding a block kind it does not know. Apps at 0.1.10 and earlier do not know `toggle` and `admonition` ([toggle](vault-format.md#toggle), [admonition](vault-format.md#admonition)), so a vault whose notes use them needs apps from the release that added them, the first after 0.1.10, or later. Apps from 0.1.9 update themselves before they sync, so the server-first order above brings them up to date before they read such a note. Publish those builds with the server before anyone adds a toggle or a callout.
+
 When the new builds cannot be published with the server, or a phone runs 0.1.8 or earlier, use the apps-first order instead:
 
 1. Publish the new app first: `./dev just publish-clients <clients dir>`, with the old server still running. The old server announces the update.

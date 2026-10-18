@@ -11,7 +11,7 @@
 
 import { ApiError, type Block, type NoteDoc, type TypeDef, api } from "./api";
 import { knowTitle } from "./editor/titles";
-import { MARKUP_KINDS, replacePlaceholder } from "./editor/markup";
+import { MARKUP_ITEMS, replacePlaceholder } from "./editor/markup";
 import { missingRequired } from "./notes";
 import { typeDef } from "./session";
 import { followLink } from "./workspace/events";
@@ -92,12 +92,13 @@ export function replacePlaceholderInDoc(doc: NoteDoc, noteType: string, title: s
   const walk = (blocks: Block[]): Block[] =>
     blocks.map((b) => {
       if (done) return b;
-      const text = b.fields?.text;
-      if (MARKUP_KINDS.has(b.kind) && typeof text === "string") {
+      const item = MARKUP_ITEMS[b.kind];
+      const text = item ? b.fields?.[item] : undefined;
+      if (item && typeof text === "string") {
         const next = replacePlaceholder(text, noteType, title, id);
         if (next !== null) {
           done = true;
-          return { ...b, fields: { ...b.fields, text: next } };
+          return { ...b, fields: { ...b.fields, [item]: next } };
         }
       }
       if (!b.blocks?.length) return b;

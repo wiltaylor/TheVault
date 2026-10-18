@@ -104,7 +104,7 @@ test("search finds a note and opens it", async ({ page, admin }) => {
   const rows = page.getByTestId("note-row");
   await expect(rows).toHaveCount(1);
   await rows.first().click();
-  await expect(page).toHaveURL(new RegExp(`/notes/${created.id}$`));
+  await expect(page).toHaveURL(new RegExp(`/notes/${created.id}\\?find=${word}$`));
 });
 
 test("a concurrent API write then a save from the UI shows the conflict view", async ({ page, admin }) => {

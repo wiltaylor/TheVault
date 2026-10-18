@@ -125,7 +125,7 @@ test("3 columns from the / menu take typing in each column and are there after a
   // A heading inside a column, from the / menu there, which offers no layouts.
   await page.keyboard.press("Enter");
   await page.keyboard.type("/");
-  await expect(menu.getByRole("option", { name: "Heading 2" })).toBeVisible();
+  await expect(menu.getByRole("option", { name: /^Heading 2/ })).toBeVisible();
   await expect(menu.getByRole("option", { name: "2 columns" })).toHaveCount(0);
   await page.keyboard.type("h2");
   await page.keyboard.press("Enter");

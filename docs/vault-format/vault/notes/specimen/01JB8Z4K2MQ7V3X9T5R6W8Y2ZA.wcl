@@ -107,6 +107,28 @@ content body {
     text = "Make it work, make it right, make it fast."
   }
 
+  toggle {
+    level = 3
+    text  = "Rollback steps"
+
+    list {
+      style = "numbered"
+
+      item {
+        text = "Restore the last export"
+      }
+    }
+  }
+
+  admonition {
+    kind  = "warning"
+    title = "Exports **expire** after a week"
+
+    paragraph {
+      text = "Run the import before then."
+    }
+  }
+
   image {
     asset   = "01JB9A0C3D4E5F6G7H8J9K0M1N"
     alt     = "Importer architecture sketch"

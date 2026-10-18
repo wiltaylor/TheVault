@@ -95,7 +95,8 @@ test("full text finds a note by a word in its content, as you type", async ({ pa
   await expect(rows(page).first().locator(".note-type")).toHaveText("Task");
   await expect(rows(page).first().locator("time")).not.toBeEmpty();
   await rows(page).first().click();
-  await expect(page).toHaveURL(new RegExp(`/notes/${note.id}$`));
+  // The note opens with the search's text, so a toggle holding the hit opens.
+  await expect(page).toHaveURL(new RegExp(`/notes/${note.id}\\?find=${word}$`));
 });
 
 test("a partial word finds the note as you type, and a space after it asks for the whole word", async ({ page, admin }) => {

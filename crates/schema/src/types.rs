@@ -973,12 +973,14 @@ fn slot(
     })
 }
 
-/// Every `{{name}}` in the `text` items of a fixed template block, and in an image's `alt` and
+/// Every `{{name}}` in the `text` items of a fixed template block, an admonition's `title`, and an image's `alt` and
 /// `caption`, at any depth, must name `title` or a field of the type. `{{name}}` is
 /// template-only markup: in a note it is text.
 fn check_field_refs(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) {
     let items: &[&str] = if b.kind == "image" {
         &["text", "alt", "caption"]
+    } else if b.kind == "admonition" {
+        &["title"]
     } else {
         &["text"]
     };

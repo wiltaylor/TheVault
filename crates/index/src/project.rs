@@ -326,10 +326,10 @@ fn scalars(out: &mut Vec<FieldValue>, field: &str, pos: i64, part: &str, kind: K
     });
 }
 
-/// Items of content and canvas blocks whose text is searched. `text` items in the blocks named
-/// by [`MARKUP_BLOCKS`] are inline markup and may hold mentions.
+/// Items of content and canvas blocks whose text is searched. The item [`schema::markup_item`]
+/// names for a block, such as a paragraph's `text` or an admonition's `title`, is inline markup
+/// and may hold mentions.
 const TEXT_ITEMS: [&str; 6] = ["text", "source", "alt", "caption", "title", "label"];
-const MARKUP_BLOCKS: [&str; 4] = ["heading", "paragraph", "item", "quote"];
 
 fn block_text(body: &Doc, text: &mut Vec<String>, mentioned: &mut Vec<String>) {
     for b in &body.blocks {
@@ -338,14 +338,14 @@ fn block_text(body: &Doc, text: &mut Vec<String>, mentioned: &mut Vec<String>) {
 }
 
 fn visit(b: &DocBlock, text: &mut Vec<String>, mentioned: &mut Vec<String>) {
-    let markup = MARKUP_BLOCKS.contains(&b.kind.as_str());
+    let markup = schema::markup_item(&b.kind);
     for (name, v) in &b.body.fields {
         let Some(s) = v.as_str() else { continue };
         if !TEXT_ITEMS.contains(&name.as_str()) {
             continue;
         }
         text.push(s.to_owned());
-        if markup && name == "text" {
+        if markup == Some(name.as_str()) {
             mentioned.extend(mentions(s));
         }
     }

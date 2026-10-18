@@ -697,6 +697,73 @@ content body {{
 }
 
 #[test]
+fn text_and_mentions_inside_toggles_and_admonitions_are_indexed() {
+    let (_dir, vault) = fixture();
+    let mut index = Index::open(&vault).unwrap();
+    index.rebuild(&vault).unwrap();
+    let schema = Schema::load(&vault).unwrap();
+    let text = format!(
+        r#"title   = "Folded"
+created = "2026-10-01T09:00:00Z"
+updated = "2026-10-01T09:00:00Z"
+
+content body {{
+  toggle {{
+    level = 2
+    text  = "A bilby summary for [[{PROJECT}|the project]]"
+
+    paragraph {{
+      text = "A narwhal hidden inside"
+    }}
+  }}
+
+  admonition {{
+    kind  = "warning"
+    title = "Beware the echidna, see [[{TASK_B}]]"
+
+    toggle {{
+      text = "Nested"
+
+      code {{
+        source = "let pangolin = 1;"
+      }}
+    }}
+  }}
+}}
+"#
+    );
+    index
+        .update(&schema, &[put(&schema, "task", SCRATCH, &text)])
+        .unwrap();
+    for word in ["bilby", "narwhal", "echidna", "pangolin"] {
+        let ids: Vec<String> = index
+            .search(word, None)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        assert_eq!(ids, vec![SCRATCH], "{word}");
+    }
+    let mut stmt = index
+        .connection()
+        .prepare("SELECT via || ' ' || field || ' ' || dst FROM links WHERE src = ?1 ORDER BY pos")
+        .unwrap();
+    let links: Vec<String> = stmt
+        .query_map([SCRATCH], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    // The mention in the toggle's summary and the one in the admonition's title are backlinks.
+    assert_eq!(
+        links,
+        vec![
+            format!("mention body {PROJECT}"),
+            format!("mention body {TASK_B}")
+        ]
+    );
+}
+
+#[test]
 fn placeholder_links_are_searched_but_link_nowhere() {
     let (_dir, vault) = fixture();
     let mut index = Index::open(&vault).unwrap();

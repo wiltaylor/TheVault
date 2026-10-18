@@ -56,6 +56,29 @@ describe("rewriting a placeholder in a stored note", () => {
     expect(replacePlaceholderInDoc(doc, "task", "Other", ID)).toBeNull();
   });
 
+  it("rewrites one in an admonition's title and a toggle's summary, nested in each other", () => {
+    const nested: NoteDoc = {
+      fields: {},
+      blocks: [
+        {
+          kind: "content",
+          labels: ["body"],
+          blocks: [
+            {
+              kind: "admonition",
+              fields: { kind: "tip", title: "see [[+task|Fix]]" },
+              blocks: [{ kind: "toggle", fields: { text: "and [[+task|Plan]]" } }],
+            },
+          ],
+        },
+      ],
+    };
+    const first = replacePlaceholderInDoc(nested, "task", "Fix", ID)!;
+    expect(first.blocks[0]!.blocks![0]!.fields!.title).toBe(`see [[${ID}]]`);
+    const second = replacePlaceholderInDoc(nested, "task", "Plan", ID)!;
+    expect(second.blocks[0]!.blocks![0]!.blocks![0]!.fields!.text).toBe(`and [[${ID}]]`);
+  });
+
   it("opens the new-note form with the title and where it came from", () => {
     expect(placeholderFormUrl("task", "Fix & go", ID)).toBe(`/notes/new?type=task&title=Fix+%26+go&from=${ID}`);
     expect(placeholderFormUrl("task", "x", undefined)).toBe("/notes/new?type=task&title=x");

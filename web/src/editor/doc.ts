@@ -1,7 +1,9 @@
 // A content field's blocks (docs/vault-format.md, "Content blocks", D34) to and from the editor's
 // ProseMirror JSON. Headings, paragraphs, lists and quotes become editable nodes with their text
 // parsed as inline markup (D41). A `columns` layout becomes `columns` and `column` nodes holding
-// the same editable blocks. Every other block kind rides along untouched in a `vaultBlock`.
+// the same editable blocks, and a `toggle` or an `admonition` becomes a node holding its heading
+// line (the summary, the title) and then its editable blocks. Every other block kind rides along
+// untouched in a `vaultBlock`.
 
 import type { JSONContent } from "@tiptap/core";
 import type { Block, TemplateItem } from "../api";
@@ -65,6 +67,35 @@ function blockToDoc(block: Block): JSONContent {
           return { type: "column", attrs: { width: columnWidth(col) }, content: content.length ? content : [{ type: "paragraph" }] };
         }),
       };
+    case "toggle": {
+      const level = Math.min(3, Math.max(0, Math.trunc(Number(block.fields?.level ?? 0)) || 0));
+      const summary = inline(str(block, "text"));
+      return {
+        type: "toggle",
+        content: [
+          summary ? { type: "toggleSummary", attrs: { level }, content: summary } : { type: "toggleSummary", attrs: { level } },
+          ...(block.blocks ?? []).map(blockToDoc),
+        ],
+      };
+    }
+    case "admonition": {
+      const title = inline(str(block, "title"));
+      const inner = (block.blocks ?? []).map(blockToDoc);
+      return {
+        type: "admonition",
+        attrs: {
+          kind: str(block, "kind") || "note",
+          colour: str(block, "colour") || null,
+          icon: str(block, "icon") || null,
+          collapsible: block.fields?.collapsible === true,
+        },
+        content: [
+          title ? { type: "admonitionTitle", content: title } : { type: "admonitionTitle" },
+          // An admonition in the editor always has a line to type on.
+          ...(inner.length ? inner : [{ type: "paragraph" }]),
+        ],
+      };
+    }
     case "slot":
       // A property block inside a template's column.
       if (fieldRefs) {
@@ -115,6 +146,11 @@ function itemsOf(list: JSONContent, style: string): Block[] {
   });
 }
 
+/** The blocks nested in a toggle or an admonition, without the empty lines at their end. */
+function nestedBlocks(nodes: JSONContent[]): Block[] {
+  return trimmed(nodes.map(docToBlock).filter((b): b is Block => b !== null));
+}
+
 function docToBlock(node: JSONContent): Block | null {
   switch (node.type) {
     case "heading":
@@ -141,6 +177,24 @@ function docToBlock(node: JSONContent): Block | null {
             return out;
           }),
       };
+    case "toggle": {
+      const [summary, ...rest] = node.content ?? [];
+      const level = Number(summary?.attrs?.level ?? 0) || 0;
+      const fields: Block["fields"] = level ? { level, text: summary ? textOf(summary) : "" } : { text: summary ? textOf(summary) : "" };
+      const blocks = nestedBlocks(rest);
+      return blocks.length ? { kind: "toggle", fields, blocks } : { kind: "toggle", fields };
+    }
+    case "admonition": {
+      const [title, ...rest] = node.content ?? [];
+      const fields: Block["fields"] = { kind: String(node.attrs?.kind ?? "note") };
+      const text = title ? textOf(title) : "";
+      if (text) fields.title = text;
+      if (node.attrs?.colour) fields.colour = String(node.attrs.colour);
+      if (node.attrs?.icon) fields.icon = String(node.attrs.icon);
+      if (node.attrs?.collapsible === true) fields.collapsible = true;
+      const blocks = nestedBlocks(rest);
+      return blocks.length ? { kind: "admonition", fields, blocks } : { kind: "admonition", fields };
+    }
     case "templateSlot": {
       // A property block inside a template's column: `slot "<field>"`, with its label if any.
       const label = node.attrs?.label;

@@ -34,8 +34,15 @@ export interface ParseOptions {
 /** `{{name}}` at the start of a string: a field reference, when parsing a template's text. */
 const FIELD_REF = /^\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/;
 
-/** The content blocks whose `text` is inline markup. */
-export const MARKUP_KINDS: ReadonlySet<string> = new Set(["heading", "paragraph", "item", "quote"]);
+/** The item of inline markup of each content block that has one: `text`, or an admonition's `title`. */
+export const MARKUP_ITEMS: Readonly<Record<string, string>> = {
+  heading: "text",
+  paragraph: "text",
+  item: "text",
+  quote: "text",
+  toggle: "text",
+  admonition: "title",
+};
 
 /** Mark order: outermost first when opening. Code is always innermost. */
 const RANK = ["link", "colour", "bold", "italic", "underline", "strike", "highlight", "code"] as const;

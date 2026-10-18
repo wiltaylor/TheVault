@@ -20,6 +20,7 @@ import { adoptOwner } from "./solidNodeView";
 import { useControlBinding } from "../controls/binding";
 import { CONTROL_INFO, CONTROL_KINDS, fieldKindText, fittingFields, newControl } from "../controls/model";
 import { TITLE_FIELD } from "../notes";
+import { ADMONITION_KINDS, PRESETS } from "../blocks/toggle";
 
 type MarkName = "bold" | "italic" | "underline" | "strike" | "code" | "highlight";
 
@@ -120,6 +121,11 @@ export function ContentEditor(props: {
   exclude?: string[];
   /** Escape pressed in the editor when no menu, picker or field inside it took it. */
   onEscape?: () => void;
+  /**
+   * The note and field this editor edits, as `id/field`: this device remembers its toggles open
+   * or closed under it (blocks/toggle.ts). Without it, they start as new ones do on every load.
+   */
+  toggleScope?: string;
 }) {
   // The fields a control inserted here can bind: the note's, or the template's type's.
   const binding = useControlBinding();
@@ -188,6 +194,7 @@ export function ContentEditor(props: {
           onStart: () => setUploadError(null),
           onError: (file, e) => setUploadError(uploadFailed(file, e)),
         },
+        toggleScope: () => props.toggleScope,
       }),
       content: withTrailingParagraph(props.doc ?? blocksToDoc(props.blocks)),
       editorProps: {
@@ -243,6 +250,37 @@ export function ContentEditor(props: {
       { id: "todo", label: "To-do list", section: "Text", keywords: "task checkbox check", run: run((c) => c.toggleTaskList()) },
       { id: "quote", label: "Quote", section: "Text", keywords: "blockquote", run: run((c) => c.setParagraph().setBlockquote()) },
       { id: "mention", label: "Mention a note", section: "Text", keywords: "reference note @", run: run((c) => c.insertMentionPicker()) },
+      {
+        id: "toggle",
+        label: "Toggle",
+        section: "Text",
+        keywords: "collapse expand fold details disclosure",
+        hint: ">>",
+        run: () => place(toggleJSON(0)),
+      },
+      ...([1, 2, 3] as const).map((level) => ({
+        id: `toggle-h${level}`,
+        label: `Toggle heading ${level}`,
+        section: "Text",
+        keywords: "collapse expand fold",
+        run: () => place(toggleJSON(level)),
+      })),
+      {
+        id: "callout",
+        label: "Callout",
+        section: "Text",
+        keywords: "admonition note info tip success warning danger question quote alert",
+        run: () => {},
+        submenu: () =>
+          ADMONITION_KINDS.map((kind) => ({
+            id: `callout-${kind}`,
+            label: PRESETS[kind].label,
+            section: "Callout: choose a kind",
+            keywords: `${kind} callout admonition`,
+            hint: PRESETS[kind].colour,
+            run: () => place(admonitionJSON(kind)),
+          })),
+      },
     ];
     const blockItems: MenuItem[] = [
       ...INSERTS.map((b) => ({
@@ -397,11 +435,24 @@ export function ContentEditor(props: {
     // At the end, add an empty line to type on after the block. Elsewhere the caret goes to the
     // start of the block after it, and no empty paragraph is left in the middle of the content.
     tr = tr.replaceWith(from, to, next ? [node] : [node, schema.nodes.paragraph!.create()]);
-    // A new layout takes the caret into its first column.
+    // A new layout takes the caret into its first column, a toggle into its summary and a
+    // callout into its first line.
     if (node.type.name === "columns") tr.setSelection(TextSelection.create(tr.doc, from + 3));
+    else if (node.type.name === "toggle") tr.setSelection(TextSelection.create(tr.doc, from + 2));
+    else if (node.type.name === "admonition") tr.setSelection(TextSelection.create(tr.doc, from + 1 + node.child(0).nodeSize + 1));
     else tr.setSelection(Selection.near(tr.doc.resolve(from + node.nodeSize)));
     view.dispatch(tr.scrollIntoView());
     view.focus();
+  }
+
+  /** The editor node for a new toggle, its summary a heading of `level` or plain text for 0. */
+  function toggleJSON(level: number): JSONContent {
+    return { type: "toggle", content: [{ type: "toggleSummary", attrs: { level } }] };
+  }
+
+  /** The editor node for a new callout of `kind`, with a line to type on. */
+  function admonitionJSON(kind: string): JSONContent {
+    return { type: "admonition", attrs: { kind }, content: [{ type: "admonitionTitle" }, { type: "paragraph" }] };
   }
 
   /** The editor node for a new layout of `n` equal columns, each with a line to type on. */

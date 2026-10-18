@@ -1,8 +1,15 @@
+import { readFileSync } from "node:fs";
 import { render, waitFor } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 import { TypeIcon, iconNames, kebabName, pascalName } from "./Icon";
 
 describe("type icons", () => {
+  it("are the names the schema crate accepts for an admonition's icon, no more and no fewer", async () => {
+    // crates/schema/src/icons.txt is written from this list; refresh it when lucide changes.
+    const rust = readFileSync(`${process.cwd()}/../crates/schema/src/icons.txt`, "utf8").trim().split("\n");
+    expect(rust).toEqual(await iconNames());
+  });
+
   it("turns a vault icon name into Lucide's export name", () => {
     expect(pascalName("file-text")).toBe("FileText");
     expect(pascalName("check-square")).toBe("CheckSquare");

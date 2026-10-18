@@ -44,6 +44,7 @@ import { activePane } from "../workspace/model";
 import { usePane } from "../workspace/pane";
 import { workspace } from "../workspace/store";
 import { ThisNote } from "../views/thisNote";
+import { setFindText } from "../blocks/toggle";
 import { offerPlaceholders, replacePlaceholderInDoc, resolvePlaceholder } from "../placeholders";
 import { PlaceholdersInert } from "../components/PlaceholderLink";
 import { ArchiveIcon, TrashIcon, TypeIcon, UnarchiveIcon } from "../components/Icon";
@@ -132,6 +133,13 @@ function PropertiesIcon() {
  */
 export function NoteView(props: { newType?: string; id?: string; prefill?: { title: string; from?: string } }) {
   const params = useParams();
+  // `?find=`: the text a search opened the note with. A toggle holding it opens (blocks/toggle.ts).
+  const [query] = useSearchParams();
+  createEffect(() => {
+    const find = query.find;
+    setFindText(props.id ?? params.id ?? "", typeof find === "string" ? find : null);
+  });
+  onCleanup(() => setFindText("", null));
   const navigate = useNavigate();
   const pane = usePane();
   // Element ids are per pane, so the same note open twice keeps its labels on its own fields.
@@ -1065,7 +1073,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
       if (f.kind === "content") {
         return (
           <div class="content-readonly" role="document" aria-label={p.label}>
-            <Blocks blocks={compoundBlock(shown(), f)?.blocks ?? []} />
+            <Blocks blocks={compoundBlock(shown(), f)?.blocks ?? []} scope={note()?.id ? `${note()!.id}/${f.name}` : undefined} />
           </div>
         );
       }
@@ -1079,6 +1087,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
             label={p.label}
             blocks={compoundBlock(shown(), f)?.blocks ?? []}
             onChange={(blocks) => edit((d) => applyBlocks(d, f, blocks))}
+            toggleScope={note()?.id ? `${note()!.id}/${f.name}` : undefined}
           />
         );
       case "ink":

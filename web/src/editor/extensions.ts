@@ -1,6 +1,6 @@
 // The editor's schema: TipTap's text blocks and marks, plus TheVault's colour mark, mentions,
-// the mention picker, column layouts and a holder for content blocks this editor does not edit
-// yet (D29, D34).
+// the mention picker, column layouts, toggles and admonitions, and a holder for content blocks
+// this editor does not edit yet (D29, D34).
 
 import { type AnyExtension, Extension, InputRule, Mark, Node, mergeAttributes, nodeInputRule } from "@tiptap/core";
 import Code from "@tiptap/extension-code";
@@ -33,6 +33,7 @@ import { PlaceholderChip, placeholderActions } from "./PlaceholderChip";
 import { ImageUpload, type ImageUploadOptions } from "./pasteImages";
 import { AT_TRIGGER } from "./trigger";
 import { solidNodeView } from "./solidNodeView";
+import { Admonition, AdmonitionTitle, Toggle, type ToggleScope, ToggleKeys, ToggleSummary } from "./toggles";
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
@@ -356,10 +357,12 @@ export interface EditorOptions {
   handle?: BlockHandleOptions;
   /** Pasted and dropped images: how to upload one, and what to do when that fails. */
   images?: Omit<ImageUploadOptions, "upload"> & { upload: (file: File) => Promise<string> };
+  /** The note and field whose toggles this device remembers open or closed (blocks/toggle.ts). */
+  toggleScope?: ToggleScope;
 }
 
 export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
-  const tools: AnyExtension[] = [MoveBlock, SteadyFocus, blockHandle(options.handle), EdgeDropColumns, ColumnRules];
+  const tools: AnyExtension[] = [MoveBlock, SteadyFocus, blockHandle(options.handle), EdgeDropColumns, ColumnRules, ToggleKeys];
   if (options.slash) tools.push(placeholder(options.template ? "Type / for blocks and properties, {{ for a field" : "Type / for blocks"));
   if (options.slash) {
     tools.push(suggestion({ key: "slashMenu", topLevelOnly: true, match: matchSlash, ...options.slash }));
@@ -381,6 +384,10 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
     VaultDoc,
     Columns,
     Column,
+    Toggle.configure({ scope: options.toggleScope ?? (() => undefined) }),
+    ToggleSummary,
+    Admonition.configure({ scope: options.toggleScope ?? (() => undefined) }),
+    AdmonitionTitle,
     StarterKit.configure({
       document: false,
       heading: { levels: [1, 2, 3] },

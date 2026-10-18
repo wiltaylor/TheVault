@@ -309,7 +309,7 @@ export function Search() {
           >
             {(i) => (
               <Show when={rows()[i]} fallback={<span class="note-row placeholder">…</span>}>
-                {(row) => <ResultRow row={row()} />}
+                {(row) => <ResultRow row={row()} find={committed().text} />}
               </Show>
             )}
           </VirtualList>
@@ -319,11 +319,16 @@ export function Search() {
   );
 }
 
-function ResultRow(props: { row: Row }) {
+/** One result. With search text, the note opens with it, so a toggle holding a hit opens too. */
+function ResultRow(props: { row: Row; find: string }) {
   const t = () => typeDef(props.row.type);
   const updated = () => props.row.fields.updated;
+  const href = () => {
+    const find = props.find.trim();
+    return find ? `/notes/${props.row.id}?find=${encodeURIComponent(find)}` : `/notes/${props.row.id}`;
+  };
   return (
-    <A class="note-row search-row" href={`/notes/${props.row.id}`} data-testid="note-row">
+    <A class="note-row search-row" href={href()} data-testid="note-row">
       <span class="search-row-icon">
         <TypeIcon name={t()?.icon} size={16} />
       </span>

@@ -21,9 +21,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub use blocks::{
-    ARROWS, CANVAS_HEIGHT_DEFAULT, CANVAS_HEIGHT_MAX, CANVAS_HEIGHT_MIN, CARD_BLOCK_KINDS,
-    COLUMNS_MAX, COLUMNS_MIN, CONTENT_KINDS, CONTROL_KINDS, INK_HEIGHT_DEFAULT, INK_HEIGHT_MAX,
-    INK_HEIGHT_MIN, NODE_KINDS, RATING_MAX_DEFAULT, RATING_MAX_LIMIT, VIEW_KINDS, control_fits,
+    ADMONITION_KINDS, ARROWS, AdmonitionPreset, CANVAS_HEIGHT_DEFAULT, CANVAS_HEIGHT_MAX,
+    CANVAS_HEIGHT_MIN, CARD_BLOCK_KINDS, COLUMNS_MAX, COLUMNS_MIN, CONTENT_KINDS, CONTROL_KINDS,
+    INK_HEIGHT_DEFAULT, INK_HEIGHT_MAX, INK_HEIGHT_MIN, NODE_KINDS, RATING_MAX_DEFAULT,
+    RATING_MAX_LIMIT, VIEW_KINDS, admonition_preset, control_fits, is_icon,
 };
 pub use change::{FieldChanges, NoteEdit};
 pub use devices::{DEVICE_COMMANDS, DEVICE_EVENTS, DEVICE_PLATFORMS, DeviceFile, DeviceHook};
@@ -32,7 +33,7 @@ pub use encoding::{
     PALETTE, is_date, is_datetime, is_duration, is_ident, is_ink_colour, is_name, is_palette,
     is_ulid, is_url, is_utc_datetime,
 };
-pub use inline::{MARKUP_BLOCKS, Placeholder, placeholder_at, placeholders};
+pub use inline::{MARKUP_ITEMS, Placeholder, markup_item, placeholder_at, placeholders};
 pub use note::{NoteLookup, NoteReport};
 pub use taxonomy::{Taxonomy, Term};
 pub use types::{
