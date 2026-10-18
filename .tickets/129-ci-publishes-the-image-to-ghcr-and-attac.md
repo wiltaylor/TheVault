@@ -4,8 +4,8 @@ title: CI publishes the image to GHCR and attaches the compose files on a v* tag
 blocked_by:
 - '127'
 - '128'
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # CI publishes the image to GHCR and attaches the compose files on a v* tag
@@ -30,3 +30,15 @@ Acceptance criteria:
 ### 2026-10-18T09:37:35Z — /work
 
 Claimed.
+
+### 2026-10-18T09:56:06Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T09:56:06Z — wil
+
+Done on ticket/129 (90409a9). New .github/workflows/image.yml runs on workflow_run of release and android-release (plus workflow_dispatch with a tag): the run that finds the APK, AppImage and both CLI builds on the release builds, checks and pushes ghcr.io/wiltaylor/thevault <version>, <major>.<minor>, latest via docker/release-image.sh --push, then attaches compose.yaml, Caddyfile and env.example (GitHub renames leading-dot assets to default.*, so .env.example is uploaded as env.example; docs/install.md updated). release.yml now also runs just cli-release and attaches vault-<v>-linux-{x86_64,aarch64} + SHA256SUMS-cli. stage-clients.sh now stages kind binary. Local mirror: just image-release <assets-dir> (no push). Proven: actionlint (rhysd/actionlint) 0 errors on all three workflows; docker/release-image.sh on local 0.1.11 artifacts built the image and its own docker run served the APK, AppImage (as TheVault_0.1.11_x86_64.AppImage) and both CLI builds with matching sha256; wrong tag, missing asset and bad checksum each exit 1 before building; docker/test-compose.sh all checks passed; ./dev just check exit 0. NOT done (needs user approval): a real tag run. Release command: merge ticket/129 into main and push main FIRST (workflow_run only fires for workflows on the default branch), set version 0.1.12 in Cargo.toml [workspace.package], apps/desktop/src-tauri/tauri.conf.json and apps/android/src-tauri/tauri.conf.json, commit, push, then: git tag v0.1.12 && git push origin v0.1.12. Afterwards check: Actions shows release, android-release, then image (one image run publishes, the other says it stops); the release lists the APK, AppImage, deb, rpm, AUR tarball, vault-0.1.12-linux-x86_64/aarch64, SHA256SUMS, SHA256SUMS-android, SHA256SUMS-cli, compose.yaml, Caddyfile, env.example; github.com/wiltaylor?tab=packages shows thevault private with tags 0.1.12, 0.1 and latest linked to the repo; docker pull ghcr.io/wiltaylor/thevault:0.1.12 then docker image inspect shows the org.opencontainers.image.* labels; curl -fLO .../releases/latest/download/env.example works. Filed: AppImage has no updater signature in CI; CI APK skips the smoke gate.
+
+### 2026-10-18T09:56:06Z — wil
+
+Status set to done.

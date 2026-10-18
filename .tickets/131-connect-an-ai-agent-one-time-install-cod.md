@@ -4,7 +4,7 @@ title: 'Connect an AI agent: one-time install codes, a served install.sh that in
   the CLI, its config and the skill, and a Settings panel with the one-line command'
 blocked_by:
 - '130'
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -27,3 +27,7 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-18T09:47:03Z — /work
+
+Claimed.
