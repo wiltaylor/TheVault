@@ -149,7 +149,7 @@ impl Vault for Writer {
         if text.trim().is_empty() {
             return Err("the search text is empty".into());
         }
-        let q = query::Query::search_all(text, archived);
+        let q = query::search_all(text, archived);
         let page = run_page(
             self,
             &q,

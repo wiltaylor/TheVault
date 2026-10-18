@@ -38,6 +38,7 @@ writer = { path = "crates/writer" }
 index = { path = "crates/index" }
 state = { path = "crates/state" }
 query = { path = "crates/query" }
+query-syntax = { path = "crates/query-syntax" }
 script = { path = "crates/script" }
 script-core = { path = "crates/script-core" }
 vocab = { path = "crates/vocab" }

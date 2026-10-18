@@ -116,6 +116,8 @@ export type TemplateItemModel = { slot: string; label: string | null } | { block
 
 export interface TabModel {
   title: string;
+  /** The tab's `when` condition, or none to show it for every note. */
+  when?: string | null;
   items: TemplateItemModel[];
 }
 
@@ -370,6 +372,8 @@ export function templateWcl(t: TemplateModel): string {
       const head = `    slot ${wclString(item.slot)}`;
       return item.label ? `${head} {\n${wclField("label", item.label, "      ")}    }\n` : `${head}\n`;
     });
+    const when = tab.when?.trim();
+    if (when) items.unshift(wclField("when", when, "    "));
     parts.push(`  tab ${wclString(tab.title)}${items.length ? ` {\n${items.join("")}  }` : ""}\n`);
   }
   return `template ${t.name} {\n${parts.join("\n")}}\n`;

@@ -7,7 +7,8 @@ import { FieldRefs } from "../components/fieldRefs";
 import { refText } from "../components/refText";
 import { BlockView, Blocks, ColumnsView, FieldValue } from "../components/Render";
 import { slotOfBlock } from "../blocks/columns";
-import { compoundBlock, fieldValue, labelFields, slotField } from "../notes";
+import { compoundBlock, fieldValue, labelFields, slotField, whenNote } from "../notes";
+import { shownTabs } from "../when";
 import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { typeDef } from "../session";
 import { ThisNote } from "./thisNote";
@@ -57,11 +58,18 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
     value: (f) => (props.doc ? fieldValue(props.doc, f) : f.name === "title" ? props.row.title : props.row.fields[f.name]),
     reason: "Open the note to change this.",
   };
+  // The tabs whose `when` holds for this note; a card, without tab titles, shows the first.
+  const tabs = () => {
+    const t = type();
+    const all = props.template?.tabs ?? [];
+    const doc = props.doc ?? { fields: { ...props.row.fields, title: props.row.title }, blocks: [] };
+    return t ? shownTabs(all, whenNote(t, props.row.id, doc), !props.tabTitles) : all.slice(0, props.tabTitles ? undefined : 1);
+  };
   // On a card, an image from a field that leads the template is the card's cover: drawn first,
   // above the title (styles.css, `.card-cover`).
   const cover = () => {
     if (props.tabTitles) return undefined;
-    const first = props.template?.tabs[0]?.items[0];
+    const first = tabs()[0]?.items[0];
     return first && !("slot" in first) && first.block.kind === "image" && typeof first.block.fields?.field === "string"
       ? first.block
       : undefined;
@@ -77,10 +85,10 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
         </FieldRefs.Provider>
       )}
     </Show>
-    <For each={props.template?.tabs ?? []}>
+    <For each={tabs()}>
       {(tab) => (
         <section class="template-tab">
-          <Show when={props.tabTitles && (props.template?.tabs.length ?? 0) > 1}>
+          <Show when={props.tabTitles && tabs().length > 1}>
             <h4>{tab.title}</h4>
           </Show>
           <For each={tab.items}>

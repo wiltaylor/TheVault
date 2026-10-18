@@ -30,7 +30,9 @@ import {
   slotField,
   TITLE_FIELD,
   unplacedFields,
+  whenNote,
 } from "../notes";
+import { visibleTabs } from "../when";
 import { changes, onNoteChangedElsewhere } from "../changes";
 import { isPinned, togglePin } from "../pins";
 import { typeDef } from "../session";
@@ -508,6 +510,21 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     const t = type();
     return (t && pageTemplate(t)?.tabs) ?? [];
   };
+  /**
+   * The tabs that show for the note as it is shown now, each with its index in the template: a
+   * tab whose `when` is false is left out, and changes as fields are edited, before any save.
+   */
+  const visible = () => {
+    const t = type();
+    const n = note();
+    return t && n ? visibleTabs(tabs(), whenNote(t, n.id, shown())) : [];
+  };
+  // The open tab, hidden by an edit, gives way to the first tab that shows.
+  createEffect(() => {
+    const v = visible();
+    const i = untrack(tab);
+    if (v.length && !v.some((x) => x.index === i)) setTab(v[0]!.index);
+  });
 
   /** Apply an edit to the note, and save it after a pause (a draft waits for Create). */
   function edit(fn: (d: NoteDoc) => NoteDoc) {
@@ -927,22 +944,22 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
               fallback={
                 <div class="note-layout">
                   <div class="note-main">
-                    <Show when={tabs().length > 1}>
+                    <Show when={visible().length > 1}>
                       <div class="tabs" role="tablist">
-                        <For each={tabs()}>
-                          {(t, i) => (
+                        <For each={visible()}>
+                          {(t) => (
                             <button
                               type="button"
                               role="tab"
-                              id={`${uid}tab-${i()}`}
-                              aria-selected={tab() === i()}
+                              id={`${uid}tab-${t.index}`}
+                              aria-selected={tab() === t.index}
                               aria-controls={`${uid}tab-panel`}
                               onClick={() => {
                                 flush();
-                                setTab(i());
+                                setTab(t.index);
                               }}
                             >
-                              {t.title}
+                              {t.tab.title}
                             </button>
                           )}
                         </For>
@@ -956,8 +973,8 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                         <fieldset class="preview-lock" disabled={!!preview()}>
                         <div
                           id={`${uid}tab-panel`}
-                          role={tabs().length > 1 ? "tabpanel" : undefined}
-                          aria-labelledby={tabs().length > 1 ? `${uid}tab-${tab()}` : undefined}
+                          role={visible().length > 1 ? "tabpanel" : undefined}
+                          aria-labelledby={visible().length > 1 ? `${uid}tab-${tab()}` : undefined}
                           class="tab-panel"
                         >
                           <For each={tabs()[tab()]?.items ?? []}>

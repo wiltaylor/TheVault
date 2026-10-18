@@ -50,7 +50,8 @@ impl Display for Query {
     }
 }
 
-pub(crate) fn path(p: &Path) -> String {
+/// A path as written: its names joined by dots.
+pub fn path(p: &Path) -> String {
     p.join(".")
 }
 

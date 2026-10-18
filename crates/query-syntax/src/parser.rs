@@ -250,19 +250,33 @@ struct Parser {
 
 /// Parse query text.
 pub fn parse(text: &str) -> Result<Query> {
-    let toks = Lexer {
-        src: text,
-        i: 0,
-        line: 1,
-        column: 1,
-    }
-    .tokens()?;
-    let mut p = Parser { toks, i: 0 };
+    let mut p = Parser::new(text)?;
     let q = p.query()?;
     Ok(q)
 }
 
+/// Parse an expression on its own, in the syntax of a `where` clause: a template tab's `when`.
+pub fn parse_expr(text: &str) -> Result<Expr> {
+    let mut p = Parser::new(text)?;
+    let e = p.expr()?;
+    if *p.tok() != Tok::Eof {
+        return Err(p.unexpected("an operator or the end of the expression"));
+    }
+    Ok(e)
+}
+
 impl Parser {
+    fn new(text: &str) -> Result<Parser> {
+        let toks = Lexer {
+            src: text,
+            i: 0,
+            line: 1,
+            column: 1,
+        }
+        .tokens()?;
+        Ok(Parser { toks, i: 0 })
+    }
+
     fn tok(&self) -> &Tok {
         &self.toks[self.i].0
     }

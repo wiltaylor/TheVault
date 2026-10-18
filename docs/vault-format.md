@@ -173,13 +173,13 @@ template default {
 
 ### Attributes a reader does not know
 
-A reader tolerates an attribute of a type, or of a field, that it does not know. This keeps a type file from a newer server readable in an older app, so that a release can add an attribute without raising the format version. The rule covers the items at the top of a type file and the items of a `field` block, including an item that belongs to another kind, such as `accept` on a `string` field:
+A reader tolerates an attribute of a type, or of a field, that it does not know. This keeps a type file from a newer server readable in an older app, so that a release can add an attribute without raising the format version. The rule covers the items at the top of a type file, the items of a `field` block, including an item that belongs to another kind, such as `accept` on a `string` field, and every attribute inside a template: of the `template` block, of a `tab`, of a `slot`, and of a fixed content block in a tab, such as `tone` on a `paragraph`:
 
 - The reader ignores the attribute. The type loads, and notes of the type are written and checked against what the reader knows.
 - The reader reports the attribute as a warning, `<path>: is not an attribute of <owner> in this version; it is ignored`. `GET /api/types` and `GET /api/schema` list each type's `warnings`, the JSON answer of `PUT /api/types/<name>` carries them, and the type editor shows them, so a misspelt attribute is seen. Each warning is `{ "at", "message", "severity": "warning" }`.
 - The file keeps the attribute. Saving the type from the type editor rewrites the file from what the editor knows, which leaves the attribute out.
 
-Everything else stays an error that refuses the type: a malformed value of an attribute the reader knows, such as `accept = "video"` or `required = "yes"`, a missing required attribute, a `kind` the reader does not know, and an unknown block, template item or handler item. A change that an older reader would misread rather than ignore still raises the format version (D27).
+Everything else stays an error that refuses the type: a malformed value of an attribute the reader knows, such as `accept = "video"` or `required = "yes"`, a missing required attribute, a `kind` the reader does not know, an unknown block, inside a template or anywhere else, and an unknown handler item. A change that an older reader would misread rather than ignore still raises the format version (D27).
 
 A release that adds an attribute is rolled out apps first. See [Releasing a format change](android-release.md#releasing-a-format-change).
 
@@ -949,12 +949,13 @@ A template takes these items:
 | Item | Form | Meaning |
 |------|------|---------|
 | `label` | string | Optional display name |
-| `tab "<title>" { ... }` | block | At least one tab. A template with one tab shows no tab bar. Card views render only the first tab |
+| `tab "<title>" { ... }` | block | At least one tab. A template with one tab shows no tab bar. Card views render only the first tab that shows for the note |
 
-A tab holds an ordered mix of slots and content blocks:
+A tab holds an optional `when` and an ordered mix of slots and content blocks:
 
 | Item | Form | Meaning |
 |------|------|---------|
+| `when` | string | Optional. A condition on the note shown, in the syntax of a query's `where` clause. The tab shows only for a note that meets it. See [Conditional tabs](#conditional-tabs) |
 | `slot "<field>"` | block | Places a field. `<field>` is a field of the type or `title`. A field appears at most once per template |
 | `label` inside a slot | string | Overrides the field's label in this template |
 | any [content block](#content-blocks) | block | Fixed content shown on every note. In a `query_view`, `this` is the note being shown. An `image` may show an asset field of the note instead of a fixed asset: see [Images from fields](#images-from-fields) |
@@ -986,6 +987,45 @@ template default {
 ```
 
 A field that no slot places is still stored and editable through the API and in the note page's properties sidebar. The template only controls the layout.
+
+### Conditional tabs
+
+A tab with `when` shows only for a note that meets the condition (D14). The condition is an expression in the syntax of a query's `where` clause ([PRD Appendix B](plans/thevault-prd/PRD.md), D42), and it reads the note shown:
+
+- The names are the type's fields and the built-ins `id`, `type`, `title`, `created`, `updated` and `archived`. `this` is the note shown, so `this.status` is `status`.
+- The operators are `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, the arithmetic operators, and parentheses, with the query language's literals and precedence.
+- The functions are `has()`, `under()`, `contains()`, `empty()`, `any()`, `all()`, `today()`, `now()` and `days()`. `linked_from()` reads other notes, so a condition refuses it.
+- `.` reads the `start` or `end` of a date range, and the members of a location or dict field. It does not follow a reference, since that reads another note.
+- A missing value behaves as in a query: it is false in a condition and never compares as less or greater than anything, so `!(due < today())` holds for a note with no `due`. A condition that fails to evaluate, such as `estimate == "3"` on an `int` field, is false.
+
+The schema checks the condition when the type is saved. A condition that does not parse, names a field the type lacks, or reads another note is an error at the tab's path, as `template default > tab "Review".when: `stage` is not a field of the type`.
+
+The web client evaluates the condition on the note as it is edited, so a tab appears or disappears as soon as a field changes, before the note is saved. `today()` is the browser's local date. On the page:
+
+- A tab whose condition is false is not in the tab bar.
+- When the open tab becomes hidden, the page moves to the first tab that shows.
+- When no tab shows, the first tab shows, so a note never renders empty.
+
+The `card` template follows the same rules: a card renders the first of its tabs that shows for the note, or its first tab when none does.
+
+A condition does not change the rule of one slot per field per template. Two tabs that show for different notes can still show the same field: one places it with a slot, the other with a `{{name}}` reference.
+
+```wcl
+template default {
+  tab "Overview" {
+    slot "title"
+    slot "status"
+  }
+
+  tab "Review" {
+    when = "under(status, \"Active\") && !(due > today() + days(7))"
+    slot "due"
+    slot "reviewer"
+  }
+}
+```
+
+A vault that uses `when` needs apps at 0.1.10 or later: an older app refuses a tab attribute it does not know. See [Releasing a format change](android-release.md#releasing-a-format-change).
 
 ### Field references
 

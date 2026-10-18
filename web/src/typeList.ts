@@ -41,10 +41,12 @@ export function saveTypeView(type: string, view: TypeListView) {
   }
 }
 
-/** The type's `card` template, first tab only, or undefined when it has none. */
+/**
+ * The type's `card` template, or undefined when it has none. A card shows only the first of its
+ * tabs that shows for the note (`TemplateBody`).
+ */
 export function cardTemplate(type: TypeDef): Template | undefined {
-  const t = type.templates.find((x) => x.name === "card");
-  return t ? { ...t, tabs: t.tabs.slice(0, 1) } : undefined;
+  return type.templates.find((x) => x.name === "card");
 }
 
 /** Fields a List view cell can show on one line. */
@@ -65,7 +67,7 @@ export function listColumns(type: TypeDef): FieldDef[] {
   const labels = labelFields(type);
   const byName = new Map(type.fields.filter((f) => !labels.has(f.name)).map((f) => [f.name, f]));
   if (card) {
-    const placed = [...new Set(card.tabs.flatMap((tab) => slotsOf(tab.items)))]
+    const placed = [...new Set(card.tabs.slice(0, 1).flatMap((tab) => slotsOf(tab.items)))]
       .map((s) => byName.get(s))
       .filter((f): f is FieldDef => !!f && scalar(f));
     if (placed.length) return placed;
