@@ -6,3 +6,4 @@ node_modules/
 *.vault-test/
 /web/test-results/
 /web/playwright-report/
+__pycache__/
