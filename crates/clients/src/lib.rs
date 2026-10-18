@@ -1,4 +1,5 @@
-//! The app builds a server hands out: the Android APK and the Linux AppImage, deb and rpm.
+//! The app builds a server hands out: the Android APK, the Linux AppImage, deb and rpm, and the
+//! static Linux builds of the `vault` CLI (platform `cli`, kind `binary`, D27).
 //!
 //! They live in one folder, by default `<vault>/.vault/clients`, outside every folder that syncs
 //! or is indexed. Beside them, `manifest.json` lists each build:
@@ -13,6 +14,9 @@
 //! `just publish-clients` call it. The server reads the manifest with [`read`] and serves only the
 //! files it lists, through [`find`]. The folder holds one build per platform, kind and
 //! architecture: publishing a build replaces the one before it.
+//!
+//! A CLI build is a bare executable named `vault-<version>-linux-<arch>`, as `just cli-release`
+//! writes it, and keeps that name in the folder.
 //!
 //! An AppImage published with its updater signature beside it, `<file>.AppImage.sig` as
 //! `tauri signer` writes it, carries that signature in the manifest, and [`update_for`] offers
@@ -31,9 +35,9 @@ pub const MANIFEST: &str = "manifest.json";
 /// One published build.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
-    /// `android` or `linux`.
+    /// `android`, `linux` or `cli`.
     pub platform: String,
-    /// `apk`, `appimage`, `deb` or `rpm`.
+    /// `apk`, `appimage`, `deb`, `rpm` or `binary`.
     pub kind: String,
     /// `aarch64`, `x86_64`, `armv7`, `x86` or `universal`.
     pub arch: String,
@@ -69,18 +73,27 @@ pub enum Kind {
     AppImage,
     Deb,
     Rpm,
+    /// A static build of the `vault` CLI.
+    Binary,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Apk, Kind::AppImage, Kind::Deb, Kind::Rpm];
+    pub const ALL: [Kind; 5] = [
+        Kind::Apk,
+        Kind::AppImage,
+        Kind::Deb,
+        Kind::Rpm,
+        Kind::Binary,
+    ];
 
-    /// The name the manifest records: `apk`, `appimage`, `deb` or `rpm`.
+    /// The name the manifest records: `apk`, `appimage`, `deb`, `rpm` or `binary`.
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Apk => "apk",
             Kind::AppImage => "appimage",
             Kind::Deb => "deb",
             Kind::Rpm => "rpm",
+            Kind::Binary => "binary",
         }
     }
 
@@ -92,17 +105,19 @@ impl Kind {
     pub fn platform(self) -> &'static str {
         match self {
             Kind::Apk => "android",
+            Kind::Binary => "cli",
             _ => "linux",
         }
     }
 
-    /// The file extension, without the dot.
+    /// The file extension, without the dot; empty for the CLI, which has none.
     pub fn extension(self) -> &'static str {
         match self {
             Kind::Apk => "apk",
             Kind::AppImage => "AppImage",
             Kind::Deb => "deb",
             Kind::Rpm => "rpm",
+            Kind::Binary => "",
         }
     }
 
@@ -113,6 +128,7 @@ impl Kind {
             Kind::AppImage => "application/octet-stream",
             Kind::Deb => "application/vnd.debian.binary-package",
             Kind::Rpm => "application/x-rpm",
+            Kind::Binary => "application/octet-stream",
         }
     }
 
@@ -133,12 +149,31 @@ impl Kind {
     }
 }
 
-/// The kind of build a file name ends in, by its extension.
+/// The kind of build a file name ends in, by its extension, or [`Kind::Binary`] for a CLI build
+/// named `vault-<version>-linux-<arch>`.
 pub fn kind_of(filename: &str) -> Option<Kind> {
+    if is_cli_name(filename) {
+        return Some(Kind::Binary);
+    }
     let ext = filename.rsplit_once('.')?.1.to_ascii_lowercase();
     Kind::ALL
         .into_iter()
-        .find(|k| k.extension().eq_ignore_ascii_case(&ext))
+        .find(|k| !k.extension().is_empty() && k.extension().eq_ignore_ascii_case(&ext))
+}
+
+/// Whether `filename` is a CLI build's: `vault-<version>-linux-<arch>`, with nothing after the
+/// architecture.
+fn is_cli_name(filename: &str) -> bool {
+    let Some(rest) = filename.strip_prefix("vault-") else {
+        return false;
+    };
+    let Some((version, arch)) = rest.split_once("-linux-") else {
+        return false;
+    };
+    let arch = arch.strip_suffix("-debug").unwrap_or(arch);
+    is_version(version)
+        && !arch.is_empty()
+        && arch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 /// The architecture a build's file name names, such as `aarch64` in `app-arm64-debug.apk` or
@@ -429,7 +464,7 @@ fn describe(item: &Publish) -> Result<Entry, Error> {
         .ok_or_else(|| Error(format!("{shown} is not a file")))?;
     let kind = kind_of(&name).ok_or_else(|| {
         Error(format!(
-            "{shown}: only .apk, .AppImage, .deb and .rpm files are published"
+            "{shown}: only .apk, .AppImage, .deb and .rpm files and vault-<version>-linux-<arch> CLI builds are published"
         ))
     })?;
     let version = match &item.version {
@@ -471,7 +506,10 @@ fn describe(item: &Publish) -> Result<Entry, Error> {
             .to_owned(),
     };
     let suffix = if build == "debug" { "-debug" } else { "" };
-    let filename = format!("TheVault_{version}_{arch}{suffix}.{}", kind.extension());
+    let filename = match kind {
+        Kind::Binary => format!("vault-{version}-linux-{arch}{suffix}"),
+        _ => format!("TheVault_{version}_{arch}{suffix}.{}", kind.extension()),
+    };
     Ok(Entry {
         platform: kind.platform().to_owned(),
         kind: kind.as_str().to_owned(),
@@ -601,6 +639,63 @@ mod tests {
             Some("0.12.3")
         );
         assert_eq!(version_of("app-arm64-debug.apk"), None);
+    }
+
+    #[test]
+    fn a_vault_cli_build_publishes_as_a_cli_binary() {
+        assert_eq!(kind_of("vault-0.1.11-linux-x86_64"), Some(Kind::Binary));
+        assert_eq!(kind_of("vault-0.1.11-linux-aarch64"), Some(Kind::Binary));
+        assert_eq!(kind_of("vault-server"), None);
+        assert_eq!(kind_of("vault-0.1.11-linux-x86_64.deb"), Some(Kind::Deb));
+        let src = tempfile::tempdir().unwrap();
+        let clients = tempfile::tempdir().unwrap();
+        let amd64 = build(src.path(), "vault-0.2.0-linux-x86_64", b"amd64");
+        let arm64 = build(src.path(), "vault-0.2.0-linux-aarch64", b"arm64");
+        let image = build(src.path(), "TheVault_0.2.0_amd64.AppImage", b"img");
+        let manifest = publish(
+            clients.path(),
+            &[
+                Publish::file(&arm64),
+                Publish::file(&image),
+                Publish::file(&amd64),
+            ],
+            5,
+        )
+        .unwrap();
+        let names: Vec<(&str, &str, &str)> = manifest
+            .clients
+            .iter()
+            .map(|e| (e.platform.as_str(), e.kind.as_str(), e.filename.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("linux", "appimage", "TheVault_0.2.0_x86_64.AppImage"),
+                ("cli", "binary", "vault-0.2.0-linux-aarch64"),
+                ("cli", "binary", "vault-0.2.0-linux-x86_64"),
+            ]
+        );
+        let cli = latest(&manifest, Kind::Binary, Some("aarch64")).unwrap();
+        assert_eq!(
+            (cli.version.as_str(), cli.build.as_str()),
+            ("0.2.0", "release")
+        );
+        assert_eq!(cli.size, 5);
+        assert_eq!(
+            latest(&manifest, Kind::Binary, None).unwrap().arch,
+            "x86_64"
+        );
+        // A newer build replaces the one for its architecture alone.
+        let newer = build(src.path(), "vault-0.3.0-linux-x86_64", b"newer");
+        let manifest = publish(clients.path(), &[Publish::file(&newer)], 6).unwrap();
+        assert_eq!(
+            latest(&manifest, Kind::Binary, Some("x86_64"))
+                .unwrap()
+                .filename,
+            "vault-0.3.0-linux-x86_64"
+        );
+        assert!(!clients.path().join("vault-0.2.0-linux-x86_64").exists());
+        assert!(latest(&manifest, Kind::Binary, Some("aarch64")).is_some());
     }
 
     #[test]

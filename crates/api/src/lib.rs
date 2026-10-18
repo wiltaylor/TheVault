@@ -32,7 +32,8 @@
 //! every note and definition file, and record the base versions they hold under
 //! `/api/devices/{id}/bases` (D20, D27, D29).
 //!
-//! `/api/clients` lists the desktop and Android app builds the server hands out, and
+//! `/api/clients` lists the desktop and Android app builds and the `vault` CLI builds the server
+//! hands out, and
 //! `/api/clients/{filename}` downloads one; both are public, so a phone can fetch the app before
 //! it pairs.
 //!
@@ -287,6 +288,7 @@ fn build() -> Built {
         .get("/api/clients", apps::list)
         .get("/api/clients/{filename}", apps::download)
         .get("/api/clients/latest/{kind}", apps::latest)
+        .get("/api/clients/cli/{target}", apps::cli)
         .get(
             "/api/clients/update/{target}/{arch}/{current_version}",
             apps::update,

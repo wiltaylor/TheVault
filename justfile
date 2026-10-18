@@ -8,6 +8,9 @@ mod ci '.just/ci'
 alias server := server-run
 alias test-e2e := web-e2e-test
 
+# The workspace version, which every crate and the vault CLI carry
+version := `sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1`
+
 [default, private]
 main:
 	@just --list
@@ -241,7 +244,22 @@ android-test: (require-tool "java") android-build
 	cd apps/android/src-tauri && cargo rustc -p tauri-plugin-vault-device --lib --crate-type cdylib
 	cd apps/android/src-tauri/gen/android && VAULT_CORE_LIBRARY="$PWD/../../target/debug/libtauri_plugin_vault_device.so" ./gradlew --no-daemon testDebugUnitTest
 
-# Copy the newest app builds into a server's clients folder (its --clients, by default <vault>/.vault/clients) and rewrite its manifest.json, which a running server announces to the apps so they update themselves; build='missing' builds what is not built yet, build='all' builds everything again, build='none' publishes only what is there; a release APK is published only when android-release-smoke passed it, unless smoke='skip' (emergencies only)
+# Build the static vault CLI for both Linux architectures into target/cli-release, as vault-<version>-linux-<arch>, with their SHA256SUMS (D27)
+[group('cli')]
+cli-release: (cli-release-build "x86_64") (cli-release-build "aarch64")
+	cd target/cli-release && sha256sum -- vault-{{version}}-linux-* > SHA256SUMS
+	cat target/cli-release/SHA256SUMS
+
+# Build the static vault CLI for one architecture, x86_64 or aarch64, against musl with zig as the linker, into target/cli-release/vault-<version>-linux-<arch>
+[group('cli')]
+cli-release-build arch: (require-tool "cargo-zigbuild") (require-tool "zig")
+	cargo zigbuild -q --profile cli -p cli --bin vault --target {{arch}}-unknown-linux-musl
+	mkdir -p target/cli-release
+	rm -f target/cli-release/vault-*-linux-{{arch}}
+	cp target/{{arch}}-unknown-linux-musl/cli/vault target/cli-release/vault-{{version}}-linux-{{arch}}
+	file target/cli-release/vault-{{version}}-linux-{{arch}}
+
+# Copy the newest app builds and static vault CLI builds into a server's clients folder (its --clients, by default <vault>/.vault/clients) and rewrite its manifest.json, which a running server announces to the apps so they update themselves; build='missing' builds what is not built yet, build='all' builds everything again, build='none' publishes only what is there; a release APK is published only when android-release-smoke passed it, unless smoke='skip' (emergencies only)
 [group('clients')]
 publish-clients dir build='missing' smoke='required': (require-tool "cargo") (require-tool "jq")
 	#!/usr/bin/env bash
@@ -319,6 +337,17 @@ publish-clients dir build='missing' smoke='required': (require-tool "cargo") (re
 	if [ ${#desktop[@]} -gt 0 ]; then
 		"$vault" clients publish --dir "$dir" --build release "${desktop[@]}" > /dev/null
 		printf 'published %s\n' "${desktop[@]}"
+	fi
+	# The static vault CLI for both architectures (platform cli), which agents download from the
+	# server at /api/clients/cli/linux-<arch> (D27).
+	cli=(target/cli-release/vault-*-linux-x86_64 target/cli-release/vault-*-linux-aarch64)
+	if [ "{{build}}" = all ] || { [ ${#cli[@]} -lt 2 ] && [ "{{build}}" = missing ]; }; then
+		just cli-release
+		cli=(target/cli-release/vault-*-linux-x86_64 target/cli-release/vault-*-linux-aarch64)
+	fi
+	if [ ${#cli[@]} -gt 0 ]; then
+		"$vault" clients publish --dir "$dir" --build release "${cli[@]}" > /dev/null
+		printf 'published %s\n' "${cli[@]}"
 	fi
 	if [ -f "$dir/manifest.json" ]; then
 		jq -r '.clients[] | "\(.platform)\t\(.kind)\t\(.arch)\t\(.version)\t\(.build)\t\(.size)\t\(.filename)\t\(if .signature then "signed" else "" end)"' "$dir/manifest.json"

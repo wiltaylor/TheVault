@@ -2,7 +2,9 @@
 //! the folder's `manifest.json`, and `GET /api/clients/{filename}` downloads one. Both are public,
 //! so a phone's browser or Obtainium reaches them before the app is installed or paired: the
 //! builds carry no secrets. `GET /api/clients/latest/{kind}` downloads the newest build of a kind
-//! at an address that never changes, for an updater that tracks one URL.
+//! at an address that never changes, for an updater that tracks one URL, and
+//! `GET /api/clients/cli/linux-{arch}` the newest static `vault` CLI build for `arch` (`x86_64`,
+//! `aarch64`), so an install script needs no manifest parsing (D27).
 //!
 //! Only files the manifest lists are served, so a name that tries to leave the folder, or any
 //! file the manifest does not name, is 404. A download carries its SHA-256 as the `ETag`, and
@@ -135,6 +137,39 @@ pub async fn latest(
         .cloned()
         .ok_or_else(not_found)?;
     let filename = entry.filename.clone();
+    let found = tokio::task::spawn_blocking(move || clients::find(&dir, &filename))
+        .await
+        .map_err(internal)?
+        .map_err(internal)?;
+    let (entry, path) = found.ok_or_else(not_found)?;
+    send(entry, path, &headers).await
+}
+
+/// `GET /api/clients/cli/linux-{arch}`: the newest `vault` CLI build for `arch`. Anything but
+/// `linux-<arch>` with a build published for it is 404.
+pub async fn cli(
+    State(folder): Shared,
+    Path(target): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let arch = target
+        .strip_prefix("linux-")
+        .filter(|a| !a.is_empty())
+        .ok_or_else(not_found)?;
+    let Some(dir) = folder.0.clone() else {
+        return Err(not_found());
+    };
+    let manifest = manifest(&folder).await?;
+    let entry = manifest
+        .clients
+        .iter()
+        .filter(|e| e.kind == Kind::Binary.as_str() && e.arch == arch)
+        .max_by(|a, b| {
+            clients::Version::parse(&a.version).cmp(&clients::Version::parse(&b.version))
+        })
+        .cloned()
+        .ok_or_else(not_found)?;
+    let filename = entry.filename;
     let found = tokio::task::spawn_blocking(move || clients::find(&dir, &filename))
         .await
         .map_err(internal)?
