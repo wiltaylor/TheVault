@@ -4,7 +4,7 @@ title: 'Docker image for the server: multi-stage build, non-root, /data and /con
   volumes, first-run init requiring VAULT_PASSWORD, backup before an upgrade, the
   version''s APK and AppImage baked in'
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -33,3 +33,7 @@ Acceptance criteria (prove by running Docker on this host; the host has docker):
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-18T08:33:13Z — /work
+
+Claimed.
