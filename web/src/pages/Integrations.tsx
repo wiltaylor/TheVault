@@ -104,6 +104,8 @@ export function GoogleSettingsForm(props: {
           emptyText="No labels yet"
           onChange={setLabels}
         />
+        <span />
+        <p class="muted">Changing the labels or the mode lists the window again on the next run.</p>
         <label for="google-window-days">Window (days)</label>
         <input
           id="google-window-days"

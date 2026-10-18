@@ -238,7 +238,7 @@ The Google sync keeps its settings and state in secrets, never in notes (google-
 | `google_client_id`, `google_client_secret`, `google_refresh_token` | Settings > Integrations | every Google script | The OAuth client and the sign-in |
 | `google_account` | Settings > Integrations, on connect | the Integrations page | The connected address, as plain text |
 | `google_settings` | Settings > Integrations | every Google script | The settings, below |
-| `google_gmail_state` | the `google_gmail` task | the `google_gmail` task | `{ history_id, backfill_page, last_run, last_error, notified_invalid_grant }` |
+| `google_gmail_state` | the `google_gmail` task | the `google_gmail` task | `{ history_id, listed, backfill_page, last_run, last_error, notified_invalid_grant }` |
 | `google_calendar_state` | the `google_calendar` task | the `google_calendar` task | `{ sync_tokens, window_end, last_run, last_error, notified_invalid_grant }` |
 
 `google_settings` is `{ gmail_mode, gmail_labels, gmail_window_days, gmail_backfill_to, calendars, default_calendar, endpoints }`:
@@ -253,7 +253,7 @@ The Google sync keeps its settings and state in secrets, never in notes (google-
 | `default_calendar` | The calendar a new event note goes to when it names none | `primary` |
 | `endpoints` | The test seam: `{ token, gmail, calendar, userinfo }` URLs. The Integrations page never shows or sets it | Google's own hosts |
 
-A missing `google_settings` means every default. In the two state objects, `last_run` is an RFC 3339 time, `last_error` the last run's error or null, and `notified_invalid_grant` is true once the run has told the user Google refused the sign-in; it goes back to false when a token refresh succeeds. `history_id` and `backfill_page` are Gmail's history id and back-fill page token, `sync_tokens` holds each calendar's sync token by calendar id, and `window_end` is the date recurring events have occurrence notes up to. Disconnecting Google sets the cursors (`history_id`, `backfill_page`, `sync_tokens`, `window_end`) back to null or empty.
+A missing `google_settings` means every default. In the two state objects, `last_run` is an RFC 3339 time, `last_error` the last run's error or null, and `notified_invalid_grant` is true once the run has told the user Google refused the sign-in; it goes back to false when a token refresh succeeds. `history_id` and `backfill_page` are Gmail's history id and back-fill page token. `listed` is what the last finished window listing covered, `{ mode, labels, window_days }` with `labels` the sorted Gmail label ids, or null before one: a run whose settings differ lists the window again besides reading history (all of it for a new mode or window, only the added labels otherwise, nothing when labels were only removed) and starts the back-fill over, and a run with nothing to list saves no `history_id`. `sync_tokens` holds each calendar's sync token by calendar id, and `window_end` is the date recurring events have occurrence notes up to. Disconnecting Google sets the cursors (`history_id`, `listed`, `backfill_page`, `sync_tokens`, `window_end`) back to null or empty.
 
 Each task writes only its own state secret, so the two never overwrite each other, and its task file's `secrets` list names exactly what it reads and writes. The write-back handler reads `google_settings` and writes nothing but notes.
 

@@ -446,7 +446,7 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
             if state.is_empty() {
                 continue;
             }
-            for cursor in ["history_id", "backfill_page", "window_end"] {
+            for cursor in ["history_id", "listed", "backfill_page", "window_end"] {
                 if state.contains_key(cursor) {
                     state.insert(cursor.to_owned(), Value::Null);
                 }

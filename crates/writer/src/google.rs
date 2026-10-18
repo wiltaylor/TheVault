@@ -4,7 +4,7 @@
 //! | Secret | Written by | Holds |
 //! |--------|------------|-------|
 //! | [`SETTINGS`] | the Integrations page | `gmail_mode`, `gmail_labels`, `gmail_window_days`, `gmail_backfill_to`, `calendars`, `default_calendar`, `endpoints` |
-//! | [`GMAIL_STATE`] | the `google_gmail` task | `history_id`, `backfill_page`, `last_run`, `last_error`, `notified_invalid_grant` |
+//! | [`GMAIL_STATE`] | the `google_gmail` task | `history_id`, `listed`, `backfill_page`, `last_run`, `last_error`, `notified_invalid_grant` |
 //! | [`CALENDAR_STATE`] | the `google_calendar` task | `sync_tokens`, `window_end`, `last_run`, `last_error`, `notified_invalid_grant` |
 //! | [`ACCOUNT`] | connecting Google | the connected address |
 //!
