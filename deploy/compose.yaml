@@ -1,0 +1,70 @@
+# TheVault on Docker Compose. Copy .env.example to .env beside this file, fill it in, then:
+#
+#   docker compose up -d                        # LAN or Tailscale, http on THEVAULT_PORT
+#   docker compose --profile https up -d        # your own domain, Caddy with automatic TLS
+#   docker compose --profile cloudflare up -d   # a Cloudflare Tunnel, no ports opened
+#
+# docs/install.md walks through each one.
+name: thevault
+
+services:
+  thevault:
+    image: ghcr.io/wiltaylor/thevault:${THEVAULT_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      # Only read when /data holds no vault yet: the first start creates one with this password.
+      VAULT_PASSWORD: ${VAULT_PASSWORD:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Named volumes unless .env names host folders.
+      - ${THEVAULT_DATA:-data}:/data
+      - ${THEVAULT_CONFIG:-config}:/config
+    ports:
+      # All interfaces by default. Behind Caddy or a tunnel, set THEVAULT_PORT=127.0.0.1:8080 so
+      # only this machine reaches the plain http port.
+      - ${THEVAULT_PORT:-8080}:8080
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/thevault-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 1s
+    # vault-server shuts down gracefully on SIGINT; the image sets the same.
+    stop_signal: SIGINT
+    stop_grace_period: 20s
+
+  caddy:
+    image: caddy:2
+    profiles: [https]
+    restart: unless-stopped
+    depends_on:
+      thevault:
+        condition: service_healthy
+    environment:
+      THEVAULT_DOMAIN: ${THEVAULT_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.1}
+    profiles: [cloudflare]
+    restart: unless-stopped
+    depends_on:
+      thevault:
+        condition: service_healthy
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+
+volumes:
+  data:
+  config:
+  caddy-data:
+  caddy-config:

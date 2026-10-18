@@ -1,0 +1,7 @@
+# Caddy for the https profile: serves THEVAULT_DOMAIN from .env with a certificate it gets and
+# renews from Let's Encrypt on its own, and passes every request to TheVault. The domain's DNS
+# must point at this machine and ports 80 and 443 must reach it from the internet.
+{$THEVAULT_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy thevault:8080
+}
