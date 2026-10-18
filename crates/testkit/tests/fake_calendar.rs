@@ -227,3 +227,28 @@ fn insert_patch_with_if_match_and_delete() {
         .requests_to("/calendar/v3/calendars/primary/events");
     assert_eq!(inserts[0].json()["summary"], "Lunch");
 }
+
+#[test]
+fn a_calendar_delay_holds_requests_until_it_is_cleared() {
+    use std::time::{Duration, Instant};
+    let cal = Cal::start();
+    cal.google.set_calendar_delay(Some(Duration::from_secs(60)));
+    let held = std::thread::scope(|s| {
+        let began = Instant::now();
+        let req = s.spawn(|| cal.get("/users/me/calendarList").0);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!req.is_finished(), "the request answered under the delay");
+        cal.google.set_calendar_delay(None);
+        let status = req.join().unwrap();
+        (status, began.elapsed())
+    });
+    assert_eq!(held.0, 200);
+    assert!(
+        held.1 < Duration::from_secs(10),
+        "released after {:?}",
+        held.1
+    );
+    let began = Instant::now();
+    assert_eq!(cal.get("/users/me/calendarList").0, 200);
+    assert!(began.elapsed() < Duration::from_secs(1));
+}

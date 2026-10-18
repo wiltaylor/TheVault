@@ -386,3 +386,39 @@ fn the_consent_page_over_http_redirects_with_a_code_as_consent_does() {
         .unwrap();
     assert_eq!(res.status().as_u16(), 400);
 }
+
+#[test]
+fn a_gmail_delay_holds_requests_until_it_is_cleared() {
+    use std::time::{Duration, Instant};
+    let google = FakeGoogle::start();
+    let (_, tokens) = refresh(&google, DEFAULT_REFRESH_TOKEN);
+    let access = tokens["access_token"].as_str().unwrap().to_owned();
+    let url = format!(
+        "{}/users/me/profile",
+        google.endpoints()["gmail"].as_str().unwrap()
+    );
+    let get = || {
+        Client::new()
+            .get(&url)
+            .bearer_auth(&access)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    google.set_gmail_delay(Some(Duration::from_secs(60)));
+    let began = Instant::now();
+    let status = std::thread::scope(|s| {
+        let req = s.spawn(get);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!req.is_finished(), "the request answered under the delay");
+        google.set_gmail_delay(None);
+        req.join().unwrap()
+    });
+    assert_eq!(status, 200);
+    assert!(
+        began.elapsed() < Duration::from_secs(10),
+        "released after {:?}",
+        began.elapsed()
+    );
+}

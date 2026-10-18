@@ -28,6 +28,15 @@ interface Fake {
 
 let google: ChildProcess;
 let fake: Fake;
+/** Waiters for the fake's answers to the commands sent on its standard input, oldest first. */
+const answers: ((line: string) => void)[] = [];
+
+/** Send `line` to the fake (see `testkit-fake-google`) and wait until it has taken effect. */
+async function tell(line: string): Promise<void> {
+  const answer = new Promise<string>((resolve) => answers.push(resolve));
+  google.stdin!.write(`${line}\n`);
+  expect(JSON.parse(await answer)).toEqual({ ok: line });
+}
 
 test.beforeAll(async () => {
   google = spawn(binary("TESTKIT_FAKE_GOOGLE_BIN", "testkit-fake-google"), [], { stdio: ["pipe", "pipe", "inherit"] });
@@ -37,7 +46,7 @@ test.beforeAll(async () => {
     lines.once("line", (line) => {
       clearTimeout(timer);
       resolve(JSON.parse(line) as Fake);
-      lines.on("line", () => {});
+      lines.on("line", (answer) => answers.shift()?.(answer));
     });
     google.once("exit", (code) => reject(new Error(`testkit-fake-google exited with ${code}`)));
   });
@@ -51,11 +60,18 @@ test("the Google card connects through a pasted loopback address, shows the acco
   page,
   admin,
 }) => {
-  // The sync's tasks, running a script that does nothing, paused as shipped.
-  expect((await admin.put("/api/scripts/google_noop", { data: { source: "fn run() { }\n" } })).ok()).toBe(true);
-  for (const task of ["google_gmail", "google_calendar"]) {
+  // The sync's tasks, running the shipped scripts against the fake, paused as shipped.
+  for (const [task, state] of [
+    ["google_gmail", "google_gmail_state"],
+    ["google_calendar", "google_calendar_state"],
+  ]) {
+    const secrets = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", state];
     const res = await admin.put(`/api/tasks/${task}`, {
-      data: { wcl: `schedule = "*/5 * * * *"\nscript = "google_noop"\npaused = true\n` },
+      data: {
+        wcl:
+          `schedule = "*/5 * * * *"\nscript = "${task}"\ntimeout = "PT5M"\nretries = 0\n` +
+          `allow_domains = ["${fake.host}"]\nsecrets = ${JSON.stringify(secrets)}\npaused = true\n`,
+      },
     });
     expect(res.ok(), await res.text()).toBe(true);
   }
@@ -92,12 +108,28 @@ test("the Google card connects through a pasted loopback address, shows the acco
   expect(pasted).toMatch(/^http:\/\/127\.0\.0\.1:53682\/\?state=.*&code=/);
   await browser.dispose();
 
+  // The first runs wait on the fake until it is told to answer, so the card shows them syncing
+  // however quickly it reads the status (ticket 123).
+  await tell("gmail-delay 600000");
+  await tell("calendar-delay 600000");
   await card.getByLabel("Address from the browser").fill(pasted);
   await card.getByRole("button", { name: "Finish connecting" }).click();
   await expect(card.getByText("Connected as me@example.com")).toBeVisible();
-  await expect(card.getByRole("row", { name: "Gmail" })).toContainText("Syncing");
-  await expect(card.getByRole("row", { name: "Calendar" })).toContainText("Syncing");
-  await expect(card.getByRole("button", { name: "Run Gmail now" })).toBeVisible();
+  const gmail = card.getByRole("row", { name: "Gmail" });
+  const calendar = card.getByRole("row", { name: "Calendar" });
+  await expect(gmail).toContainText("Syncing");
+  await expect(calendar).toContainText("Syncing");
+  await expect(card.getByRole("button", { name: "Run Gmail now" })).toBeDisabled();
+
+  // Released, the runs finish and the card, polling, shows what each pulled.
+  await tell("gmail-delay off");
+  await tell("calendar-delay off");
+  await expect(gmail).toContainText("Gmail: 0 new", { timeout: 30_000 });
+  await expect(gmail).not.toContainText("Syncing");
+  await expect(gmail).toContainText("No errors");
+  await expect(calendar).toContainText("0 created, 0 updated, 0 trashed", { timeout: 30_000 });
+  await expect(calendar).not.toContainText("Syncing");
+  await expect(card.getByRole("button", { name: "Run Gmail now" })).toBeEnabled();
   await expect(card.getByRole("button", { name: "Disconnect" })).toBeVisible();
 
   const secrets = (await (await admin.get("/api/secrets")).json()) as { secrets: { name: string }[] };
@@ -124,6 +156,10 @@ test("the Google card connects through a pasted loopback address, shows the acco
   await expect(card.getByRole("button", { name: "Connect Google" })).toBeVisible();
   await expect(card.getByRole("row", { name: "Gmail" })).toContainText("Paused");
   const after = (await (await admin.get("/api/secrets")).json()) as { secrets: { name: string }[] };
-  // The settings outlast the sign-in.
-  expect(after.secrets.map((s) => s.name).filter((n) => n.startsWith("google_"))).toEqual(["google_settings"]);
+  // The settings outlast the sign-in, and so do the runs' state secrets, their cursors cleared (docs/google.md).
+  expect(after.secrets.map((s) => s.name).filter((n) => n.startsWith("google_"))).toEqual([
+    "google_calendar_state",
+    "google_gmail_state",
+    "google_settings",
+  ]);
 });
