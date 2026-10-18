@@ -63,8 +63,8 @@ desktop-build: (require-tool "cargo-tauri") web-build
 
 # Run the desktop app's unit tests, then the S6 end-to-end tests with tauri-driver under Xvfb
 [group('desktop')]
-desktop-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-tool "gnome-keyring-daemon") desktop-build
-	cd apps/desktop/src-tauri && cargo test && cargo build --example fake-notifyd
+desktop-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-tool "gnome-keyring-daemon") desktop-build desktop-notifyd-build
+	cd apps/desktop/src-tauri && cargo test
 	cargo build -p server -p testkit -p cli --bins
 	xvfb-run -a pnpm -C apps/desktop/e2e test
 
@@ -95,8 +95,13 @@ desktop-release: (require-tool "cargo-tauri") (require-tool "jq") web-build
 
 # Build the release bundles, then check that the AppImage starts to the setup page under Xvfb
 [group('desktop')]
-desktop-release-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-tool "gnome-keyring-daemon") desktop-release
+desktop-release-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-tool "gnome-keyring-daemon") desktop-release desktop-notifyd-build
 	xvfb-run -a node --test --test-timeout=600000 apps/desktop/e2e/appimage.smoke.mjs
+
+# Build the fake notification daemon the desktop end-to-end tests run on the session bus, into apps/desktop/src-tauri/target/debug/examples/fake-notifyd
+[private]
+desktop-notifyd-build: (require-tool "cargo")
+	cd apps/desktop/src-tauri && cargo build --example fake-notifyd
 
 # Check that packaging/aur/.SRCINFO matches the PKGBUILD, as makepkg prints it
 [group('desktop')]
