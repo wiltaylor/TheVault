@@ -3,7 +3,7 @@ id: '112'
 title: Apps update themselves before syncing when the server is newer, and the Android
   updater resumes and verifies downloads
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -27,3 +27,7 @@ Acceptance criteria:
 - ./dev just check and ./dev just android-test pass.
 
 ## Worklog
+
+### 2026-10-18T03:30:49Z — /work
+
+Claimed.
