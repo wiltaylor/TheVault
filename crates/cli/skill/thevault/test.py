@@ -3,14 +3,14 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest-skillcheck"]
 # ///
-"""Tests for the thevault skill, crates/cli/SKILL.md, the document `vault skill` prints.
+"""Tests for the thevault skill, crates/cli/skill/thevault/SKILL.md, the document `vault skill` prints.
 
 Each test starts a real vault server on port 0 in a fresh vault under the test's temporary
 directory, builds and runs everything through ./dev (the host has no Rust toolchain), and puts a
 `vault` wrapper first on PATH that runs the built CLI through ./dev. The agent inherits VAULT_URL
 and VAULT_TOKEN, an admin token. Nothing touches the user's own server or $HOME.
 
-Run it directly: crates/cli/test.py
+Run it directly: crates/cli/skill/thevault/test.py
 """
 
 import json
@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 from skillcheck import main
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[4]
 DEV = REPO / "dev"
 PASSWORD = "skillcheck-password"
 

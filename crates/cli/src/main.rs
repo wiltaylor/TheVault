@@ -1126,7 +1126,7 @@ fn publish_clients(
 }
 
 /// The agent skill document that ships with the binary (D32).
-const SKILL: &str = include_str!("../SKILL.md");
+const SKILL: &str = include_str!("../skill/thevault/SKILL.md");
 
 /// Every leaf command, as the words that name it, with its one-line description.
 fn commands() -> Value {
