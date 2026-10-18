@@ -11,6 +11,13 @@
 //! it does not, the app is offline: local writes wait in the queue and the check repeats every
 //! few seconds, so the round after the network or the server comes back runs within seconds.
 //!
+//! Each round then asks the version gate ([`sync::gate`], D27), with the server's version from
+//! that check: when the server runs a newer version than the app and publishes a signed build of
+//! it, the round neither pushes nor pulls; the loop has the [`Updater`] download and verify the
+//! build, install it and restart into it, and the new version syncs. With no such build the round
+//! syncs and the status warns. A failed update is tried again, later each time, and after three
+//! failures the rounds sync with the warning.
+//!
 //! Once the loop has the device token it hands the server and the token to the live link
 //! ([`crate::live`]), which reads the token from nowhere else.
 
@@ -42,6 +49,17 @@ const AFTER_REMOTE: Duration = Duration::from_secs(1);
 /// Far enough away to mean "not until asked".
 const NEVER: Duration = Duration::from_secs(365 * 24 * 60 * 60);
 
+/// What the version gate asks of the app's updater (D27).
+pub trait Updater: Send {
+    /// Find the newest signed build the server publishes for this app, and download and verify
+    /// it. Answers its version, `None` when the server publishes none newer than the app or this
+    /// install cannot update itself, and an error when the check or the download failed.
+    fn prepare(&self, server_url: &str) -> Result<Option<String>, String>;
+    /// Install the build [`Updater::prepare`] made ready and start it. Returns only when that
+    /// did not happen.
+    fn install_and_restart(&self) -> Result<(), String>;
+}
+
 /// Why the loop should look again.
 pub enum Trigger {
     /// A write reached the local vault.
@@ -72,6 +90,9 @@ pub struct Status {
     pub last_sync_ms: Option<u64>,
     /// The device name the setup page suggests.
     pub default_name: String,
+    /// What the version gate warns about while sync goes on: the server is newer than the app
+    /// and the app cannot update to it.
+    pub warning: Option<String>,
 }
 
 /// The loop's handle: send it triggers and read its status.
@@ -89,6 +110,7 @@ impl SyncLoop {
         device: Option<Device>,
         tokens: Box<dyn TokenStore>,
         remote: tokio::sync::watch::Sender<Option<Remote>>,
+        updater: Option<Box<dyn Updater>>,
     ) -> SyncLoop {
         let status = Arc::new(Mutex::new(Status {
             paired: device.is_some(),
@@ -103,6 +125,7 @@ impl SyncLoop {
             pending: 0,
             last_sync_ms: None,
             default_name: crate::device::default_name(),
+            warning: None,
         }));
         let (tx, rx) = channel();
         let worker = Worker {
@@ -112,6 +135,11 @@ impl SyncLoop {
             device,
             engine: None,
             remote,
+            gate: Gate {
+                installed: env!("CARGO_PKG_VERSION").to_owned(),
+                state: sync::gate::UpdateGate::new(),
+                updater,
+            },
         };
         std::thread::Builder::new()
             .name("sync".to_owned())
@@ -162,6 +190,7 @@ impl embedded::SyncSource for Source {
             message: s.message.clone(),
             last_ok_ms: s.last_sync_ms,
             server: s.server_url.clone(),
+            warning: s.warning.clone(),
         }
     }
 
@@ -209,6 +238,66 @@ impl Outcome {
     }
 }
 
+/// The version gate as the loop runs it.
+struct Gate {
+    /// The app's version.
+    installed: String,
+    state: sync::gate::UpdateGate,
+    updater: Option<Box<dyn Updater>>,
+}
+
+impl Gate {
+    /// Whether the round may sync with the server at `server_url`, at version `server`: `Ok`
+    /// with the warning to show, if any, or the outcome of a round the gate paused.
+    fn check(&self, server_url: &str, server: &str) -> Result<Option<String>, Outcome> {
+        use sync::gate::{Verdict, compare};
+        if compare(server, &self.installed) != Some(std::cmp::Ordering::Greater) {
+            self.state.judge(&self.installed, server, None);
+            return Ok(None);
+        }
+        let mut ready = false;
+        let published = match self.updater.as_ref().map(|u| u.prepare(server_url)) {
+            None | Some(Ok(None)) => None,
+            Some(Ok(Some(version))) => {
+                ready = true;
+                Some(version)
+            }
+            // The check or the download failed: it counts against the server's version.
+            Some(Err(e)) => {
+                self.state.failed(server, &e);
+                Some(server.to_owned())
+            }
+        };
+        match self
+            .state
+            .judge(&self.installed, server, published.as_deref())
+        {
+            Verdict::Sync => Ok(None),
+            Verdict::Warn { message } => Ok(Some(message)),
+            Verdict::Pause { version, message } => {
+                let failures = self.state.failures().of(&version);
+                // A ready build is installed; a failed check is tried again later.
+                if ready
+                    && let Some(updater) = &self.updater
+                    && let Err(e) = updater.install_and_restart()
+                {
+                    let n = self.state.failed(&version, &e);
+                    return Err(Outcome::new(
+                        Phase::Updating,
+                        Some(format!("{message} Installing it failed: {e}")),
+                        sync::gate::backoff(n),
+                    ));
+                }
+                Err(Outcome::new(
+                    Phase::Updating,
+                    Some(message),
+                    sync::gate::backoff(failures.max(1)),
+                ))
+            }
+        }
+    }
+}
+
 struct Worker {
     embedded: Arc<Embedded>,
     status: Arc<Mutex<Status>>,
@@ -216,6 +305,7 @@ struct Worker {
     device: Option<Device>,
     engine: Option<sync::Engine>,
     remote: tokio::sync::watch::Sender<Option<Remote>>,
+    gate: Gate,
 }
 
 impl Worker {
@@ -316,12 +406,23 @@ impl Worker {
             }
         }
         let info = format!("{}/api/sync/info", device.server_url);
-        if let Err(e) = probe.get(&info).send() {
-            return Outcome::new(
-                Phase::Offline,
-                Some(format!("cannot reach the server: {e}")),
-                OFFLINE_RETRY,
-            );
+        let server_version = match probe.get(&info).send() {
+            Ok(res) => res
+                .json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| v["server_version"].as_str().map(str::to_owned))
+                .unwrap_or_default(),
+            Err(e) => {
+                return Outcome::new(
+                    Phase::Offline,
+                    Some(format!("cannot reach the server: {e}")),
+                    OFFLINE_RETRY,
+                );
+            }
+        };
+        match self.gate.check(&device.server_url, &server_version) {
+            Ok(warning) => lock(&self.status).warning = warning,
+            Err(paused) => return paused,
         }
         lock(&self.status).phase = Phase::Syncing;
         let engine = self.engine.as_ref().expect("the engine was just built");
@@ -335,6 +436,96 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const HOME: &str = "http://home.test";
+
+    /// An updater that publishes `published`, or fails its check, and counts its installs.
+    struct FakeUpdater {
+        published: Result<Option<String>, String>,
+        installs: Arc<AtomicUsize>,
+    }
+
+    impl Updater for FakeUpdater {
+        fn prepare(&self, _server_url: &str) -> Result<Option<String>, String> {
+            self.published.clone()
+        }
+        fn install_and_restart(&self) -> Result<(), String> {
+            self.installs.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn gate(published: Result<Option<&str>, &str>) -> (Gate, Arc<AtomicUsize>) {
+        let installs = Arc::new(AtomicUsize::new(0));
+        let updater = FakeUpdater {
+            published: published
+                .map(|p| p.map(str::to_owned))
+                .map_err(str::to_owned),
+            installs: installs.clone(),
+        };
+        let gate = Gate {
+            installed: "0.1.8".to_owned(),
+            state: sync::gate::UpdateGate::new(),
+            updater: Some(Box::new(updater)),
+        };
+        (gate, installs)
+    }
+
+    #[test]
+    fn a_newer_server_with_a_signed_build_pauses_sync_and_installs_it() {
+        let (gate, installs) = gate(Ok(Some("0.1.9")));
+        let paused = gate.check(HOME, "0.1.9").unwrap_err();
+        assert_eq!(paused.phase, Phase::Updating);
+        assert_eq!(
+            paused.message.as_deref(),
+            Some("Updating TheVault to 0.1.9 before syncing.")
+        );
+        assert_eq!(
+            installs.load(Ordering::SeqCst),
+            1,
+            "installed and restarted"
+        );
+    }
+
+    #[test]
+    fn a_newer_server_with_no_signed_build_warns_and_keeps_syncing() {
+        let (gate, installs) = gate(Ok(None));
+        let warning = gate.check(HOME, "0.1.9").unwrap().unwrap();
+        assert!(warning.contains("no matching app build"), "{warning}");
+        assert_eq!(installs.load(Ordering::SeqCst), 0);
+        // A deb or rpm install cannot update itself: the same.
+        let no_updater = Gate {
+            installed: "0.1.8".to_owned(),
+            state: sync::gate::UpdateGate::new(),
+            updater: None,
+        };
+        assert!(no_updater.check(HOME, "0.1.9").unwrap().is_some());
+    }
+
+    #[test]
+    fn the_same_version_syncs_without_asking_the_updater() {
+        let (gate, installs) = gate(Err("must not be asked"));
+        assert_eq!(gate.check(HOME, "0.1.8").unwrap(), None);
+        assert_eq!(gate.check(HOME, "0.1.7").unwrap(), None);
+        assert_eq!(installs.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn three_failed_updates_resume_sync_with_the_warning() {
+        let (gate, installs) = gate(Err("the download failed"));
+        let mut waits = Vec::new();
+        for _ in 0..2 {
+            let paused = gate.check(HOME, "0.1.9").unwrap_err();
+            assert_eq!(paused.phase, Phase::Updating);
+            assert!(paused.message.unwrap().contains("the download failed"));
+            waits.push(paused.next);
+        }
+        assert!(waits[1] > waits[0], "later tries wait longer: {waits:?}");
+        let warning = gate.check(HOME, "0.1.9").unwrap().unwrap();
+        assert!(warning.contains("failed 3 times"), "{warning}");
+        assert_eq!(installs.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn a_newer_server_asks_for_an_update_and_keeps_the_changes() {

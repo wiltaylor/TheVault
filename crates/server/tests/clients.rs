@@ -8,7 +8,7 @@ use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{
     ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
-    IF_NONE_MATCH, RANGE,
+    IF_NONE_MATCH, IF_RANGE, RANGE,
 };
 use serde_json::Value;
 use testkit::TestServer;
@@ -139,6 +139,29 @@ fn lists_and_downloads_published_builds_without_credentials() {
     );
     assert_eq!(res.headers()[CONTENT_LENGTH], "6");
     assert_eq!(res.bytes().unwrap().as_ref(), &APK[4..10]);
+    // The rest of a short download, as the Android updater resumes one: from its byte count to
+    // the end, while the ETag (the SHA-256) still names the same file.
+    let res = Client::new()
+        .get(server.url("/api/clients/TheVault_0.3.0_aarch64.apk"))
+        .header(RANGE, "bytes=10-")
+        .header(IF_RANGE, &etag)
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        res.headers()[CONTENT_RANGE],
+        format!("bytes 10-{}/{}", APK.len() - 1, APK.len()).as_str()
+    );
+    assert_eq!(res.bytes().unwrap().as_ref(), &APK[10..]);
+    // A file replaced since is sent whole.
+    let res = Client::new()
+        .get(server.url("/api/clients/TheVault_0.3.0_aarch64.apk"))
+        .header(RANGE, "bytes=10-")
+        .header(IF_RANGE, "\"an-older-build\"")
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.bytes().unwrap().as_ref(), APK);
     let res = Client::new()
         .get(server.url("/api/clients/TheVault_0.3.0_aarch64.apk"))
         .header(RANGE, "bytes=9999-")

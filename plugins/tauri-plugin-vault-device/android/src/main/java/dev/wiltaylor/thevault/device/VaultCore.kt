@@ -62,6 +62,15 @@ object VaultCore {
     @JvmStatic
     external fun foreground(on: Boolean): String?
 
+    /**
+     * Tells the core which app it runs in, `{version, build, arches, failed: {version, count,
+     * message}}` as JSON, for the version gate each round asks first (D27): with a home server
+     * newer than the app and an APK of it published for this phone, the round throws instead of
+     * syncing and [status]'s `update` says why. Null turns the gate off. [UpdateGate] calls it.
+     */
+    @JvmStatic
+    external fun setApp(app: String?): String?
+
     /** Runs one sync round now and answers its report as JSON. It blocks for the whole round. */
     @JvmStatic
     external fun sync(): String
@@ -119,7 +128,10 @@ object VaultCore {
     @JvmStatic
     external fun setCaptureHealth(health: String): String?
 
-    /** `{paired, pending, last_sync_ms, last_error}` as JSON. */
+    /**
+     * `{paired, pending, last_sync_ms, last_error, live, update}` as JSON; `update` is the version
+     * gate's last verdict, `{state, version, message}` with `state` `sync`, `warn` or `pause`.
+     */
     @JvmStatic
     external fun status(): String
 

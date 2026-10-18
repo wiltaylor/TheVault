@@ -9,7 +9,8 @@
 //! Until the device is paired the window shows the setup page, which pairs with the home server
 //! by password or pairing code ([`device`]). Afterwards [`sync_loop`] keeps the local vault and
 //! the home server in step, and a small badge injected into every page shows where sync stands,
-//! including the "update the app" refusal when the server is newer (D27).
+//! including the "update the app" refusal when the server is newer (D27). When the server runs a
+//! newer version and publishes a signed build, the sync loop updates the app before it syncs.
 //!
 //! The desktop extras (D9, D12, D27): a tray icon with the home server's unread count and a
 //! menu ([`tray`]); server notifications mirrored on the desktop and closed when read anywhere
@@ -218,7 +219,18 @@ pub fn run() {
                 (Some(_), None) => "/".to_owned(),
             };
             let (remote_tx, remote_rx) = tokio::sync::watch::channel(None);
-            let sync = SyncLoop::start(embedded.clone(), paired, Box::new(Keyring), remote_tx);
+            let updates = Arc::new(Updates::new());
+            let gate = self_update::GateUpdater {
+                app: app.handle().clone(),
+                updates: updates.clone(),
+            };
+            let sync = SyncLoop::start(
+                embedded.clone(),
+                paired,
+                Box::new(Keyring),
+                remote_tx,
+                Some(Box::new(gate)),
+            );
             embedded.set_sync_source(Box::new(sync.source()));
             let settings = settings::load(&dir);
             let handle = app.handle().clone();
@@ -227,7 +239,6 @@ pub fn run() {
             let tray = Tray::build(&handle, &settings);
             let live = Live::start(Arc::new(LiveShell(handle.clone())), remote_rx);
             let hotkey = Arc::new(Mutex::new(hotkey::Status::Starting));
-            let updates = Arc::new(Updates::new());
             embedded.set_app(app_build(&handle, updates.install()));
             app.manage(App {
                 app: handle.clone(),

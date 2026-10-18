@@ -4,6 +4,7 @@ import { when } from "../admin/format";
 import { inAndroidApp } from "../deviceImport";
 import { appInfo } from "../inApp";
 import { ClientDownloads } from "./Apps";
+import { gateNotice } from "../sync/model";
 import { healthWarning } from "./CaptureHealth";
 import { CaptureProblemsBadge } from "./CaptureProblems";
 import { PhoneImport, ThisDevice } from "./DeviceImport";
@@ -237,6 +238,9 @@ function DeviceCard(props: {
           {d.last_seen === null ? "never" : when(d.last_seen)}
           {d.push ? " · push on" : ""}
         </span>
+        <Show when={props.thisDevice}>
+          <UpdateGateNotice />
+        </Show>
         <Show when={healthWarning(d)}>
           {(w) => (
             <p class="device-health-warning" role="alert">
@@ -361,5 +365,27 @@ function DeviceCard(props: {
         />
       </Show>
     </article>
+  );
+}
+
+/**
+ * This device's word on the version gate (D27): "Updating TheVault to X before syncing" while
+ * sync waits for the app to update itself, or the warning that the server is newer and no
+ * matching app build is published.
+ */
+function UpdateGateNotice() {
+  const [sync] = createResource(() => api.appSync().catch(() => null));
+  const notice = () => {
+    const s = sync();
+    return s ? gateNotice(s) : null;
+  };
+  return (
+    <Show when={notice()}>
+      {(text) => (
+        <p class="device-update-gate" role="status">
+          {text()}
+        </p>
+      )}
+    </Show>
   );
 }

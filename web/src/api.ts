@@ -605,7 +605,16 @@ export interface AppSync {
   /** What the sidebar's sync icon shows: green, yellow or red. */
   state: "synced" | "syncing" | "error";
   /** Where the app's sync loop stands, in more detail. */
-  phase: "unpaired" | "starting" | "syncing" | "synced" | "offline" | "update_required" | "revoked" | "error";
+  phase:
+    | "unpaired"
+    | "starting"
+    | "syncing"
+    | "synced"
+    | "offline"
+    | "update_required"
+    | "updating"
+    | "revoked"
+    | "error";
   /** Local changes waiting for the home server. */
   queued: number;
   /** When a round last succeeded, in milliseconds since the epoch. */
@@ -614,6 +623,8 @@ export interface AppSync {
   last_error: string | null;
   /** The home server's address, once paired. */
   server: string | null;
+  /** The version gate's warning while sync goes on: the server is newer than the app and the app cannot update to it (D27). */
+  warning?: string | null;
 }
 
 /** A device event that failed for good or was skipped, from the app's embedded server (ticket 88). */

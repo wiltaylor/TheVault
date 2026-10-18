@@ -10,12 +10,32 @@ import org.json.JSONObject
 /**
  * A home server just big enough for pairing, a sync round that takes pushed notes as sent, the notification list, the
  * push endpoint, and the device's settings and commands, on a free port (OkHttp's MockWebServer). It records each request as
- * `METHOD /path` (query included) and its body.
+ * `METHOD /path` (query included) and its body. It publishes the APKs [publish] adds at `GET /api/clients`, each
+ * downloading as [apk].
  */
-class FakeHome(private val protocol: Int = 1) : AutoCloseable {
+class FakeHome(private val protocol: Int = 1, private val serverVersion: String = "fake") : AutoCloseable {
     val requests: MutableList<String> = Collections.synchronizedList(mutableListOf())
     val bodies: MutableList<String> = Collections.synchronizedList(mutableListOf())
     private val server = MockWebServer()
+
+    /** The app builds `GET /api/clients` lists. */
+    val clients = org.json.JSONArray()
+
+    /** What every published APK downloads as. */
+    @Volatile
+    var apk: ByteArray = "PK\u0003\u0004 a pretend newer TheVault".toByteArray()
+
+    /** Publishes an APK of [version], whose listed SHA-256 is [sha256] (by default the one of [apk]). */
+    fun publish(version: String, arch: String = "aarch64", build: String = "release", sha256: String? = null) {
+        val name = "TheVault_${version}_$arch${if (build == "debug") "-debug" else ""}.apk"
+        val sha = sha256 ?: java.security.MessageDigest.getInstance("SHA-256").digest(apk).joinToString("") { "%02x".format(it) }
+        clients.put(
+            JSONObject()
+                .put("platform", "android").put("kind", "apk").put("arch", arch).put("version", version)
+                .put("build", build).put("size", apk.size).put("sha256", sha).put("filename", name)
+                .put("published", 1).put("path", "/api/clients/$name"),
+        )
+    }
 
     /** The server's notifications, newest first, as `GET /api/notifications` sends them. */
     val notifications: MutableList<JSONObject> = Collections.synchronizedList(mutableListOf())
@@ -103,6 +123,9 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
                 val body = request.body.readUtf8()
                 requests.add("$method $path")
                 bodies.add(body)
+                if (method == "GET" && path.startsWith("/api/clients/")) {
+                    return MockResponse().setBody(okio.Buffer().write(apk))
+                }
                 val (status, answer) = answer(method, path, body)
                 return MockResponse()
                     .setResponseCode(status)
@@ -130,7 +153,9 @@ class FakeHome(private val protocol: Int = 1) : AutoCloseable {
             }
         }
         path == "/api/sync/info" ->
-            200 to """{"protocol":$protocol,"format_version":1,"server_version":"fake"}"""
+            200 to """{"protocol":$protocol,"format_version":1,"server_version":"$serverVersion"}"""
+        method == "GET" && path == "/api/clients" ->
+            200 to JSONObject().put("clients", clients).put("enabled", true).toString()
         method == "PUT" && path == "/api/devices/$DEVICE_ID/bases" -> 200 to """{"bases":{}}"""
         path.startsWith("/api/sync/changes") -> {
             val since = path.substringAfter("since=", "0").substringBefore('&').toLongOrNull() ?: 0L

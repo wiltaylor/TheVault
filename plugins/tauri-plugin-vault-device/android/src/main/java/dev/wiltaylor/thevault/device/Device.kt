@@ -85,6 +85,7 @@ object Device {
     fun openCore(context: Context): Boolean {
         val app = context.applicationContext
         val paired = Vault.open(app)
+        UpdateGate.tell(app)
         val id = deviceId(app) ?: UNPAIRED
         VaultCore.openDevice(id, AndroidDeviceData(app, capture(app)))
         openedFor = id

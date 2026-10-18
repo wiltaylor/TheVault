@@ -25,6 +25,9 @@ pub enum SyncPhase {
     Offline,
     /// The server is newer than this app: sync stops until the app is updated (D27).
     UpdateRequired,
+    /// The server is newer than this app and publishes a build of it: sync waits while the app
+    /// updates itself (the version gate, `sync::gate`, D27).
+    Updating,
     /// The server refused the device token: the device was revoked.
     Revoked,
     /// The last round failed for another reason.
@@ -39,6 +42,7 @@ impl SyncPhase {
                 SyncPhase::UpdateRequired,
                 format!("Update the app to keep syncing. {e}"),
             ),
+            sync::Error::Updating { message, .. } => (SyncPhase::Updating, message.clone()),
             sync::Error::Http(_) => (SyncPhase::Offline, e.to_string()),
             sync::Error::Server { status, .. } if *status == 401 || *status == 403 => (
                 SyncPhase::Revoked,
@@ -67,7 +71,7 @@ impl SyncState {
     /// The state of `phase` with `queued` local writes waiting.
     pub fn of(phase: SyncPhase, queued: usize) -> SyncState {
         match phase {
-            SyncPhase::Starting | SyncPhase::Syncing => SyncState::Syncing,
+            SyncPhase::Starting | SyncPhase::Syncing | SyncPhase::Updating => SyncState::Syncing,
             SyncPhase::Synced if queued > 0 => SyncState::Syncing,
             SyncPhase::Synced => SyncState::Synced,
             SyncPhase::Unpaired
@@ -89,6 +93,9 @@ pub struct SyncReport {
     pub last_ok_ms: Option<u64>,
     /// The home server's address, once paired.
     pub server: Option<String>,
+    /// What the version gate warns about while sync goes on: the server is newer than the app
+    /// and the app cannot update to it (`sync::gate`, D27).
+    pub warning: Option<String>,
 }
 
 impl SyncReport {
@@ -99,6 +106,7 @@ impl SyncReport {
             message: Some("This device is not paired with a server.".to_owned()),
             last_ok_ms: None,
             server: None,
+            warning: None,
         }
     }
 
@@ -111,6 +119,7 @@ impl SyncReport {
             "last_ok_ms": self.last_ok_ms,
             "last_error": self.message,
             "server": self.server,
+            "warning": self.warning,
         })
     }
 }
@@ -133,6 +142,7 @@ mod tests {
         assert_eq!(SyncState::of(SyncPhase::Synced, 2), SyncState::Syncing);
         assert_eq!(SyncState::of(SyncPhase::Syncing, 0), SyncState::Syncing);
         assert_eq!(SyncState::of(SyncPhase::Starting, 0), SyncState::Syncing);
+        assert_eq!(SyncState::of(SyncPhase::Updating, 0), SyncState::Syncing);
         for phase in [
             SyncPhase::Unpaired,
             SyncPhase::Offline,

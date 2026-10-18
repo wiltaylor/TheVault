@@ -135,7 +135,14 @@ To release:
 
 ### Releasing a format change
 
-A release that adds an attribute to a type or a field, such as `labels` on a list field, ships type files that an older app has never seen. An app tolerates an attribute it does not know: it ignores it with a warning and keeps loading the type ([Attributes a reader does not know](vault-format.md#attributes-a-reader-does-not-know)). Apps from before that rule, 0.1.6 and earlier, refuse such a type file, and then refuse to open their vault on the next start. Roll out such a release in this order:
+A release that adds an attribute to a type or a field, such as `labels` on a list field, ships type files that an older app has never seen. An app tolerates an attribute it does not know: it ignores it with a warning and keeps loading the type ([Attributes a reader does not know](vault-format.md#attributes-a-reader-does-not-know)). Apps from before that rule, 0.1.6 and earlier, refuse such a type file, and then refuse to open their vault on the next start.
+
+From 0.1.9 the apps update themselves before they sync with a newer server ([The app updates before it syncs](#the-app-updates-before-it-syncs)), so the server goes first:
+
+1. Restart the server on the new version, with the new app builds published in its clients folder: `./dev just publish-clients <clients dir>`.
+2. Each app sees the newer server at its next sync round, pauses sync, updates itself and then syncs. Open the app on each phone to check that it shows the new version.
+
+When the new builds cannot be published with the server, or a phone runs 0.1.8 or earlier, use the apps-first order instead:
 
 1. Publish the new app first: `./dev just publish-clients <clients dir>`, with the old server still running. The old server announces the update.
 2. Let the phones update, and open the app on each phone to check that it shows the new version.
@@ -165,10 +172,19 @@ The app updates itself from the server it is paired with, once you allow it to i
 1. Publish a newer build on the server: `./dev just publish-clients <clients dir>` (see [`docs/clients.md`](clients.md)). The version in `apps/android/src-tauri/tauri.conf.json` must be higher than the installed one, and the release APK must have passed [the release smoke test](#the-release-smoke-test).
 2. The server pushes `clients.updated` to the phone over UnifiedPush. Without push, the app checks when it opens and once a day.
 3. The app reads `GET /api/clients`, and takes the APK for the phone's architecture when it is newer than the installed app and the same kind of build: a release app takes only release APKs, a debug app only debug APKs. It never installs the same or a lower version.
-4. It downloads the APK from the server and checks its SHA-256 against the server's list. A mismatch deletes the download and shows "TheVault update failed".
+4. It downloads the APK from the server and checks the byte count against the list's `size` and the answer's `Content-Length`, and the SHA-256 against the list. A download that stops short is resumed where it stopped with an HTTP `Range` request (with `If-Range` naming the SHA-256, so a build replaced meanwhile is sent whole); one with the wrong bytes starts over. After 3 tries the app deletes the download and shows "TheVault update failed" with the SHA-256 and byte count it got, which Settings > General's About section shows too.
 5. It installs the APK with an Android PackageInstaller session. The session asks for no user action, which the app's `UPDATE_PACKAGES_WITHOUT_USER_ACTION` permission allows on Android 12 and later for an app updating itself, so updates install silently, the first one after you installed the APK by hand too. If Android asks anyway, for example because another app store owns TheVault's updates, the phone shows "Update TheVault to <version>": tap it and confirm Android's dialog. When the new version starts, it shows "TheVault updated to <version>".
 
 The check needs the phone online, but not idle or charging.
+
+#### The app updates before it syncs
+
+Before every sync round, in the foreground and in the background, the app compares the server's version (`server_version` in `GET /api/sync/info`) with its own (D27). The rule lives in the Rust sync core, `crates/sync/src/gate.rs`, which the Linux desktop app uses too:
+
+- **Server newer, and an APK of the app's kind for the phone, at least as new as the server, published**: the round neither pushes nor pulls. The app runs the update at once, shows "Updating TheVault to <version> before syncing" in a notification and in Settings > Devices > This device, and the sync icon says sync waits. The new version syncs once it starts.
+- **Server newer, and no such APK**: sync goes on, and This device warns that the server is newer than the app and publishes no matching app build.
+- **An update that fails** (a download that stays wrong, the installer refusing it, no permission to install apps) keeps sync paused and is tried again after 1, then 4, then 16 minutes. After 3 failures to install one version, sync goes on with the warning, which names the last failure.
+- **Server not newer**: sync runs as before.
 
 #### Allow TheVault to install apps
 

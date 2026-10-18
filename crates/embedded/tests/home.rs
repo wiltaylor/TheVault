@@ -585,6 +585,7 @@ impl FakeLoop {
             message: message.map(str::to_owned),
             last_ok_ms,
             server: Some("http://home.test".to_owned()),
+            warning: None,
         });
     }
 }
@@ -636,6 +637,7 @@ fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
             "last_ok_ms": 1_700_000_000_000u64,
             "last_error": null,
             "server": "http://home.test",
+            "warning": null,
         })
     );
 

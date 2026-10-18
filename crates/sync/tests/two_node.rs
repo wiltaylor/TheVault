@@ -439,6 +439,47 @@ fn a_newer_server_refuses_sync_and_keeps_the_queue() {
 }
 
 #[test]
+fn the_version_gate_pauses_pushing_and_pulling_until_it_lets_the_round_through() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Http::admin(&server);
+    let (id, v1) = admin.create(memo("Plan", "1", "1", &[]));
+    let laptop = Device::pair(&server, "Laptop");
+    laptop.sync();
+    laptop.update(&id, memo("Plan", "2", "1", &[]));
+    let (other, _) = admin.create(memo("Elsewhere", "1", "1", &[]));
+    let queued = laptop.embedded.queue().pending().unwrap();
+
+    // The gate hears the server's own version, and pauses the round before anything moves.
+    let mut heard = String::new();
+    let err = laptop
+        .engine(AssetPolicy::desktop())
+        .sync_gated(&mut |server| {
+            heard = server.to_owned();
+            Err(Error::Updating {
+                version: "9.9.9".into(),
+                message: "Updating TheVault to 9.9.9 before syncing.".into(),
+            })
+        })
+        .unwrap_err();
+    assert!(matches!(err, Error::Updating { .. }), "{err}");
+    assert_eq!(heard, env!("CARGO_PKG_VERSION"));
+    assert_eq!(laptop.embedded.queue().pending().unwrap(), queued);
+    assert_eq!(admin.history(&id), vec![v1.clone()], "nothing was pushed");
+    assert!(
+        laptop.embedded.writer().read(&other).is_err(),
+        "nothing was pulled"
+    );
+
+    // Let through, the round pushes and pulls.
+    laptop
+        .engine(AssetPolicy::desktop())
+        .sync_gated(&mut |_| Ok(()))
+        .unwrap();
+    assert_eq!(shape(&admin.note(&id)).1, "2");
+    assert!(laptop.embedded.writer().read(&other).is_ok());
+}
+
+#[test]
 fn the_base_survives_a_browser_session_merge_and_pruning() {
     let server = TestServer::start_seeded(seed);
     let browser = Http::browser(&server);
