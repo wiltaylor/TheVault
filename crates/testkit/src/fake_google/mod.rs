@@ -47,6 +47,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -200,6 +201,19 @@ impl Drop for FakeGoogle {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Wait until the delay `delay` reads has passed since the request arrived, reading it again
+/// every few milliseconds, so a test that shortens or clears the delay releases a request
+/// already waiting. `delay` must not hold its lock past the call.
+fn hold(delay: impl Fn() -> Option<Duration>) {
+    let began = Instant::now();
+    while let Some(d) = delay() {
+        let Some(left) = d.checked_sub(began.elapsed()).filter(|l| !l.is_zero()) else {
+            return;
+        };
+        thread::sleep(left.min(Duration::from_millis(20)));
+    }
 }
 
 fn serve(conn: TcpStream, shared: &Shared) -> std::io::Result<()> {

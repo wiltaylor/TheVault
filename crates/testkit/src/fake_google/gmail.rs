@@ -22,6 +22,7 @@
 //! google.delete_message(&id); // recorded in history as messagesDeleted
 //! google.set_history_not_found(true); // history.list answers 404
 //! google.set_gmail_delay(Some(std::time::Duration::from_secs(2))); // each request waits 2 s
+//! google.set_gmail_delay(None); // and any request still waiting answers now
 //! ```
 //!
 //! Every path needs a bearer token the token endpoint issued ([`super::authorized`]), and
@@ -359,7 +360,8 @@ impl FakeGoogle {
         self.gmail().config.history_not_found = on;
     }
 
-    /// Wait `delay` before answering each later Gmail request, or answer at once with `None`.
+    /// Wait `delay` before answering each Gmail request, or answer at once with `None`. A request
+    /// already waiting is held to the new delay, so `None` releases it.
     pub fn set_gmail_delay(&self, delay: Option<Duration>) {
         self.gmail().config.delay = delay;
     }
@@ -387,10 +389,7 @@ pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
         ));
     }
     // Wait without holding the mailbox, so the test can still change it.
-    let delay = lock(&shared.gmail).config.delay;
-    if let Some(delay) = delay {
-        std::thread::sleep(delay);
-    }
+    super::hold(|| lock(&shared.gmail).config.delay);
     let gmail = lock(&shared.gmail);
     let parts: Vec<&str> = rest.split('/').collect();
     Some(match parts.as_slice() {

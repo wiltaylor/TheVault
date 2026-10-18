@@ -15,6 +15,8 @@
 //! `"<n>"` with the quotes as Google sends them, and an `updated` time: the event's own when a
 //! test stores it with one, else the fake's clock, which [`FakeGoogle::set_calendar_time`] sets.
 //!
+//! [`FakeGoogle::set_calendar_delay`] holds every request for a while, so a sync run is slow.
+//!
 //! Series expand from their first `RRULE` with `FREQ` `DAILY` or `WEEKLY`, `INTERVAL`, `COUNT`
 //! and `UNTIL`. An occurrence's id is the series id, `_`, and its original start: `YYYYMMDD` for
 //! an all-day series, `YYYYMMDDTHHMMSSZ` in UTC for a timed one, as Google's are.
@@ -66,6 +68,8 @@ pub(super) struct State {
     /// Sync tokens carry this; [`FakeGoogle::expire_sync_tokens`] moves it on.
     generation: u64,
     time: String,
+    /// How long each request waits before it is answered, from [`FakeGoogle::set_calendar_delay`].
+    delay: Option<std::time::Duration>,
 }
 
 impl State {
@@ -80,6 +84,7 @@ impl State {
             ids: 0,
             generation: 1,
             time: DEFAULT_TIME.to_owned(),
+            delay: None,
         }
     }
 
@@ -212,6 +217,12 @@ impl FakeGoogle {
     pub fn set_calendar_time(&self, at: &str) {
         self.calendar().time = at.to_owned();
     }
+
+    /// Wait `delay` before answering each Calendar request, or answer at once with `None`, so a
+    /// sync run is slow. A request already waiting is held to the new delay, so `None` releases it.
+    pub fn set_calendar_delay(&self, delay: Option<std::time::Duration>) {
+        self.calendar().delay = delay;
+    }
 }
 
 /// Set each member of `changes` on `event`.
@@ -229,6 +240,8 @@ pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
     if !super::authorized(shared, request) {
         return Some(super::unauthorized());
     }
+    // Wait without holding the calendars, so the test can still change them.
+    super::hold(|| lock(&shared.calendar).delay);
     let parts: Vec<String> = rest
         .split('/')
         .filter(|p| !p.is_empty())
