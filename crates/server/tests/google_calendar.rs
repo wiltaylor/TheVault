@@ -77,17 +77,27 @@ impl Api {
         api
     }
 
-    /// [`Api::bare`] with the settings note pointing at the fake.
+    /// [`Api::bare`] with the `google_settings` secret pointing at the fake.
     fn start() -> Api {
         let api = Api::bare();
-        api.create_note(
-            "google_sync",
-            json!({
-                "fields": { "title": "Google" },
-                "blocks": [dict("endpoints", api.google.endpoints())],
-            }),
-        );
+        api.put_settings(json!({}));
         api
+    }
+
+    /// Store `settings`, with the fake's endpoints, as the `google_settings` secret.
+    fn put_settings(&self, mut settings: Value) {
+        settings["endpoints"] = self.google.endpoints();
+        self.put_secret("google_settings", &settings.to_string());
+    }
+
+    fn put_secret(&self, name: &str, value: &str) {
+        expect(
+            self.req("PUT", &format!("/api/secrets/{name}"))
+                .json(&json!({ "value": value }))
+                .send()
+                .unwrap(),
+            200,
+        );
     }
 
     fn req(&self, method: &str, path: &str) -> RequestBuilder {
@@ -162,9 +172,9 @@ impl Api {
         self.events()[google_ref]["id"].as_str().unwrap().to_owned()
     }
 
-    fn settings(&self) -> Value {
-        let rows = self.query("from google_sync");
-        self.note(rows[0]["id"].as_str().unwrap())
+    /// The Calendar task's state: the JSON object in the `google_calendar_state` secret.
+    fn state(&self) -> Value {
+        self.server.secret_json("google_calendar_state")
     }
 
     fn trashed(&self) -> Vec<String> {
@@ -208,11 +218,6 @@ impl Api {
             .unwrap()
             .clone()
     }
-}
-
-/// Dict field `name` holding `fields`, as a note block.
-fn dict(name: &str, fields: Value) -> Value {
-    json!({ "kind": "dict", "labels": [name], "fields": fields })
 }
 
 /// The members of note `note`'s block of `kind` labelled `name`.
@@ -263,7 +268,7 @@ fn a_new_vault_ships_the_calendar_task_paused_and_a_run_without_settings_does_no
         "script        = \"google_calendar\"",
         "timeout       = \"PT5M\"",
         "\"oauth2.googleapis.com\", \"gmail.googleapis.com\", \"www.googleapis.com\"",
-        "secrets       = [\"google_client_id\", \"google_client_secret\", \"google_refresh_token\"]",
+        "secrets       = [\"google_client_id\", \"google_client_secret\", \"google_refresh_token\", \"google_settings\", \"google_calendar_state\"]",
     ] {
         assert!(wcl.contains(want), "{want}: {wcl}");
     }
@@ -274,11 +279,22 @@ fn a_new_vault_ships_the_calendar_task_paused_and_a_run_without_settings_does_no
             .exists()
     );
 
+    // Without a refresh token Google is not connected, and the run ends doing nothing.
+    expect(
+        api.req("DELETE", "/api/secrets/google_refresh_token")
+            .send()
+            .unwrap(),
+        200,
+    );
     let run = api.sync();
     assert!(
-        run["log"].as_str().unwrap().contains("No google_sync note"),
+        run["log"]
+            .as_str()
+            .unwrap()
+            .contains("Google is not connected"),
         "{run}"
     );
+    assert!(api.state().is_null());
     assert!(api.google.requests().is_empty());
 }
 
@@ -382,14 +398,13 @@ fn the_first_run_imports_single_events_all_day_as_dates_and_timed_with_offsets()
         })
     );
 
-    let settings = api.settings();
-    let f = &settings["note"]["fields"];
-    assert_eq!(f["calendar_window_end"], "2027-03-01");
-    assert_eq!(f["last_calendar_run"], START);
-    assert!(f.get("last_calendar_error").is_none(), "{f}");
-    let tokens = &block(&settings, "dict", "calendar_sync_tokens")["fields"];
+    let f = api.state();
+    assert_eq!(f["window_end"], "2027-03-01");
+    assert_eq!(f["last_run"], START);
+    assert!(f["last_error"].is_null(), "{f}");
+    let tokens = &f["sync_tokens"];
     assert!(
-        tokens["c_primary"].as_str().is_some_and(|t| !t.is_empty()),
+        tokens["primary"].as_str().is_some_and(|t| !t.is_empty()),
         "{tokens}"
     );
 
@@ -566,7 +581,7 @@ fn an_incremental_run_uses_the_sync_token_and_a_410_resyncs_without_duplicates()
         }),
     );
     api.sync();
-    let token = block(&api.settings(), "dict", "calendar_sync_tokens")["fields"]["c_primary"]
+    let token = api.state()["sync_tokens"]["primary"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -583,7 +598,7 @@ fn an_incremental_run_uses_the_sync_token_and_a_410_resyncs_without_duplicates()
     assert_eq!(lists.len(), 1, "{lists:?}");
     assert_eq!(lists[0].query("syncToken"), Some(token.clone()));
     assert_eq!(api.events().len(), 2 + 4);
-    let next = block(&api.settings(), "dict", "calendar_sync_tokens")["fields"]["c_primary"]
+    let next = api.state()["sync_tokens"]["primary"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -671,10 +686,7 @@ fn the_daily_window_roll_adds_the_new_days_occurrences() {
         rolled[0].query("timeMax").as_deref(),
         Some("2027-03-02T00:00:00Z")
     );
-    assert_eq!(
-        api.settings()["note"]["fields"]["calendar_window_end"],
-        "2027-03-02"
-    );
+    assert_eq!(api.state()["window_end"], "2027-03-02");
 
     // The same day again rolls nothing.
     api.google.clear_requests();
@@ -775,7 +787,7 @@ fn invalid_grant_notifies_once_across_two_runs_and_does_not_fail_the_run() {
         .map(|n| n["title"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(titles, ["Google sign-in expired"]);
-    let error = api.settings()["note"]["fields"]["last_calendar_error"].clone();
+    let error = api.state()["last_error"].clone();
     assert!(
         error
             .as_str()
@@ -800,8 +812,9 @@ fn invalid_grant_notifies_once_across_two_runs_and_does_not_fail_the_run() {
     // Connected again: the next run syncs and clears the error.
     api.google.set_invalid_grant(false);
     api.sync();
-    let f = &api.settings()["note"]["fields"];
-    assert!(f.get("last_calendar_error").is_none(), "{f}");
+    let f = api.state();
+    assert!(f["last_error"].is_null(), "{f}");
+    assert_eq!(f["notified_invalid_grant"], false, "{f}");
 }
 
 #[test]
@@ -809,13 +822,7 @@ fn each_listed_calendar_syncs_with_its_own_token_and_names_itself_on_its_notes()
     let google = "team@group.calendar.google.com";
     let mut api = Api::bare();
     api.google = FakeGoogle::builder().calendar(google, "Team").start();
-    api.create_note(
-        "google_sync",
-        json!({
-            "fields": { "title": "Google", "calendars": ["primary", google] },
-            "blocks": [dict("endpoints", api.google.endpoints())],
-        }),
-    );
+    api.put_settings(json!({ "calendars": ["primary", google] }));
     let all_day = |id: &str| json!({ "id": id, "summary": id, "start": { "date": "2026-03-04" }, "end": { "date": "2026-03-05" } });
     api.google.put_event("primary", all_day("mine"));
     api.google.put_event(google, all_day("ours"));
@@ -824,16 +831,90 @@ fn each_listed_calendar_syncs_with_its_own_token_and_names_itself_on_its_notes()
     let events = api.events();
     assert_eq!(events["mine"]["fields"]["calendar"], "primary");
     assert_eq!(events["ours"]["fields"]["calendar"], google);
-    let tokens = &block(&api.settings(), "dict", "calendar_sync_tokens")["fields"];
-    let keys: Vec<&String> = tokens.as_object().unwrap().keys().collect();
-    assert_eq!(
-        keys,
-        ["c_primary", "c_team_40group_2ecalendar_2egoogle_2ecom"]
-    );
+    let state = api.state();
+    let mut keys: Vec<&String> = state["sync_tokens"].as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(keys, ["primary", google]);
     assert_eq!(
         api.google
             .requests_to("/calendar/v3/calendars/team%40group.calendar.google.com/events")
             .len(),
         1
     );
+}
+
+#[test]
+fn a_gmail_run_and_a_calendar_run_each_change_only_their_own_state_and_write_no_note_history() {
+    let api = Api::start();
+    api.put_settings(json!({ "gmail_mode": "all" }));
+    let task = std::fs::read_to_string(api.server.vault_path().join("tasks/google_gmail.wcl"))
+        .unwrap()
+        .replace(
+            "allow_domains = [",
+            &format!("allow_domains = [\"{}\", ", api.google.host()),
+        );
+    expect(
+        api.req("PUT", "/api/tasks/google_gmail")
+            .body(task)
+            .send()
+            .unwrap(),
+        200,
+    );
+    api.google.put_event(
+        "primary",
+        json!({ "id": "one", "summary": "One", "start": { "date": "2026-03-04" }, "end": { "date": "2026-03-05" } }),
+    );
+    let gmail_run = || {
+        let run = expect(
+            api.req("POST", "/api/tasks/google_gmail/run")
+                .send()
+                .unwrap(),
+            200,
+        );
+        assert_eq!(run["outcome"], "succeeded", "{run}");
+    };
+    let gmail_state = || api.server.secret_json("google_gmail_state");
+    let settings = api.server.secret("google_settings");
+
+    gmail_run();
+    let gmail = gmail_state();
+    assert!(gmail["history_id"].as_str().is_some(), "{gmail}");
+    assert!(
+        api.state().is_null(),
+        "the Gmail run wrote the Calendar state"
+    );
+
+    api.sync();
+    let calendar = api.state();
+    assert!(calendar["sync_tokens"]["primary"].is_string(), "{calendar}");
+    assert_eq!(
+        gmail_state(),
+        gmail,
+        "the Calendar run changed the Gmail state"
+    );
+    assert_eq!(api.server.secret("google_settings"), settings);
+
+    // A later pair of runs moves both states on, and no note gains a version for it.
+    let versions = || {
+        let state =
+            state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+        state
+            .live_notes()
+            .unwrap()
+            .iter()
+            .map(|id| state.history(id).unwrap().len())
+            .sum::<usize>()
+    };
+    let before = versions();
+    api.advance("PT10M");
+    gmail_run();
+    let gmail_after = gmail_state();
+    assert_ne!(gmail_after["last_run"], gmail["last_run"], "{gmail_after}");
+    assert_eq!(api.state(), calendar);
+    api.sync();
+    let calendar_after = api.state();
+    assert_ne!(calendar_after["last_run"], calendar["last_run"]);
+    assert_eq!(gmail_state(), gmail_after);
+    assert_eq!(versions(), before, "a cursor move wrote note history");
+    assert_eq!(api.server.secret("google_settings"), settings);
 }

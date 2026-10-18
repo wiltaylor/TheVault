@@ -34,8 +34,8 @@ struct Api {
 
 impl Api {
     /// A server on the test clock whose `google_calendar` task and `event` handlers reach
-    /// `google`, with the three secrets set and a settings note pointing at the fake, holding
-    /// `settings` besides.
+    /// `google`, with the three secrets set and the `google_settings` secret pointing at the fake,
+    /// holding `settings` besides.
     fn start_with(google: FakeGoogle, settings: Value) -> Api {
         let server =
             TestServer::start_with_args(|_| {}, &[OsStr::new("--test-clock"), OsStr::new(START)]);
@@ -87,16 +87,14 @@ impl Api {
                 .unwrap(),
             200,
         );
-        let mut fields = json!({ "title": "Google" });
-        for (k, v) in settings.as_object().unwrap() {
-            fields[k] = v.clone();
-        }
-        api.create_note(
-            "google_sync",
-            json!({
-                "fields": fields,
-                "blocks": [dict("endpoints", api.google.endpoints())],
-            }),
+        let mut settings = settings;
+        settings["endpoints"] = api.google.endpoints();
+        expect(
+            api.req("PUT", "/api/secrets/google_settings")
+                .json(&json!({ "value": settings.to_string() }))
+                .send()
+                .unwrap(),
+            200,
         );
         api
     }
@@ -223,11 +221,6 @@ impl Api {
             .filter(|r| r.method != "GET")
             .collect()
     }
-}
-
-/// Dict field `name` holding `fields`, as a note block.
-fn dict(name: &str, fields: Value) -> Value {
-    json!({ "kind": "dict", "labels": [name], "fields": fields })
 }
 
 /// The members of note `note`'s block of `kind` labelled `name`.

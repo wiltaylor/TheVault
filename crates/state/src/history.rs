@@ -313,6 +313,13 @@ impl State {
         )?)
     }
 
+    /// Removes note `note_id` from the trash for good, if it is there.
+    pub fn purge_from_trash(&self, note_id: &str) -> Result<()> {
+        self.conn()
+            .execute("DELETE FROM trash WHERE note_id = ?1", [note_id])?;
+        Ok(())
+    }
+
     /// Takes a note out of the trash and returns its last content. The caller writes the
     /// file back and records a new version.
     pub fn restore_from_trash(&self, note_id: &str) -> Result<TrashEntry> {

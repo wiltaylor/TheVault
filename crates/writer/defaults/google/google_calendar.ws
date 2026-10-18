@@ -7,11 +7,18 @@ use regex
 // Google Calendar events become `event` notes (google-sync D7, D8, D9, D10, D12, D16). The task
 // `google_calendar` runs this every five minutes once Google is connected.
 //
-// For each calendar the `google_sync` note lists, events.list runs with the calendar's sync
+// The settings are the JSON object in the `google_settings` secret: `calendars`, and the
+// `endpoints` test seam. The run's state is the JSON object in the `google_calendar_state` secret,
+// written with `secrets::set` and by nothing else, so no note history is written for it:
+// `sync_tokens` (by calendar id), `window_end`, `last_run`, `last_error` and
+// `notified_invalid_grant` (google-sync D21). Without a refresh token Google is not connected,
+// and the run ends successfully with a log line.
+//
+// For each calendar the settings list, events.list runs with the calendar's sync
 // token, so only what changed since the last run arrives; the first run, and any run after Google
 // answers 410 for an expired token, lists everything. A single event becomes one note, found
 // again by `google_ref`. A recurring series becomes one note per occurrence from 30 days ago to
-// `calendar_window_end`, a year ahead, fetched with events.instances, each with the series rule as
+// the window end, a year ahead, fetched with events.instances, each with the series rule as
 // text in `series`. A changed occurrence updates its note; a cancelled event, series or
 // occurrence moves its notes to the trash. Once a day the window end moves forward and every
 // series with a note gets the new days' occurrences.
@@ -54,6 +61,14 @@ fn list_of(v: Value, key: string) -> List[Value] {
     match v.get(key) {
         Some(Value::List(items)) => items,
         _ => [],
+    }
+}
+
+// The string at `key` of `m`, or `fallback` when there is none.
+fn text_or(m: Map[string, Value], key: string, fallback: string) -> string {
+    match m.get(key) {
+        Some(Value::String(s)) => if s == "" { fallback } else { s },
+        _ => fallback,
     }
 }
 
@@ -726,83 +741,73 @@ fn known_notes() -> Result[Map[string, Known], string] {
     Ok(out)
 }
 
-// The key of a calendar's token in `calendar_sync_tokens`: a dict key is an identifier, so
-// `c_` and the id with each other character as `_` and its two hex digits.
-fn token_key(calendar: string) -> string {
-    let out = "c_"
-    for c in calendar {
-        let n = int(c)
-        let plain = (n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122)
-        if plain {
-            out = out + str(c)
-        } else {
-            out = out + fmt("_{:02x}", n)
-        }
+// ---- settings and state --------------------------------------------------------------------
+
+fn as_map(v: Value) -> Map[string, Value] {
+    match v {
+        Value::Map(m) => m,
+        _ => #{},
     }
-    out
 }
 
-// ---- the settings note ----------------------------------------------------------------------
+// The JSON object in secret `name`, or null when there is none or it is not JSON.
+fn secret_json(name: string) -> Value {
+    match secrets::get(name) {
+        Ok(text) => match json::parse(text) {
+            Ok(v) => v,
+            Err(_) => Value::Null,
+        },
+        Err(_) => Value::Null,
+    }
+}
 
-// Save `changes` to the settings note's fields, and `tokens` as its sync tokens unless null.
-fn save_settings(id: string, changes: Map[string, Value], tokens: Option[Map[string, Value]]) -> Result[(), string] {
-    let note = vault::get(id)?
-    let body = note.get("note").unwrap()
-    let fields = map_of(body, "fields")
-    for k in changes.keys() {
-        if changes[k].is_null() {
-            fields.remove(k);
-        } else {
-            fields[k] = changes[k];
-        }
-    }
-    fields.remove("created");
-    fields.remove("updated");
-    let blocks = list_of(body, "blocks")
-    if let Some(t) = tokens {
-        blocks = blocks.filter(|b| !is_field_block(b, "dict", "calendar_sync_tokens"))
-        blocks.push(Value::Map(#{
-            "kind": Value::String("dict"),
-            "labels": Value::List([Value::String("calendar_sync_tokens")]),
-            "fields": Value::Map(t),
-        }))
-    }
-    vault::update(id, Value::Map(#{ "fields": Value::Map(fields), "blocks": Value::List(blocks) }), text_of(note, "version"))?
-    Ok(())
+fn save_state(state: Map[string, Value]) -> Result[(), string] {
+    secrets::set("google_calendar_state", json::to_string(Value::Map(state)))
+}
+
+fn record_error(state: Map[string, Value], error: string, now: string) -> Result[(), string] {
+    state["last_error"] = Value::String(error);
+    state["last_run"] = Value::String(now);
+    save_state(state)
 }
 
 fn run() -> Result[string, string] {
-    let rows = vault::query("from google_sync limit 1")?
-    let Some(row) = rows.get(0) else {
-        vault::log("No google_sync note: Google is not connected, so there is nothing to sync.")
-        return Ok("not connected")
+    match secrets::get("google_refresh_token") {
+        Ok(_) => {},
+        Err(_) => {
+            vault::log("Google is not connected: there is no google_refresh_token secret, so there is nothing to sync.")
+            return Ok("not connected")
+        },
     }
-    let id = text_of(row, "id")
-    let settings = vault::get(id)?
-    let body = settings.get("note").unwrap()
-    let fields = body.get("fields").unwrap_or(Value::Null)
-    let blocks = list_of(body, "blocks")
-    let endpoints = dict_of(blocks, "endpoints")
-    let token_url = endpoints.get("token").unwrap_or("https://oauth2.googleapis.com/token")
-    let base = endpoints.get("calendar").unwrap_or("https://www.googleapis.com/calendar/v3")
+    let fields = secret_json("google_settings")
+    let state = as_map(secret_json("google_calendar_state"))
+    let endpoints = map_of(fields, "endpoints")
+    let token_url = text_or(endpoints, "token", "https://oauth2.googleapis.com/token")
+    let base = text_or(endpoints, "calendar", "https://www.googleapis.com/calendar/v3")
     let now = iso_of_ms(vault::now())
 
     let token = match access_token(token_url) {
         Ok(t) => t,
         Err(e) => {
             if e.starts_with("invalid_grant") {
-                // Notify once: a later run finds the error it wrote and stays quiet.
-                if !text_of(fields, "last_calendar_error").starts_with("invalid_grant") {
+                // Notify once: a later run finds the flag it wrote and stays quiet.
+                let notified = match state.get("notified_invalid_grant") {
+                    Some(Value::Bool(b)) => b,
+                    _ => false,
+                }
+                if !notified {
                     vault::notify("Google sign-in expired", "Connect Google again in Settings > Integrations.", "")?;
                 }
-                save_settings(id, #{ "last_calendar_error": Value::String(e), "last_calendar_run": Value::String(now) }, None)?
+                state["notified_invalid_grant"] = Value::Bool(true);
+                record_error(state, e, now)?
                 vault::log("Google refused the refresh token: " + e)
                 return Ok("sign-in expired")
             }
-            save_settings(id, #{ "last_calendar_error": Value::String(e), "last_calendar_run": Value::String(now) }, None)?
+            record_error(state, e, now)?
             return Err(e)
         }
     }
+    state["notified_invalid_grant"] = Value::Bool(false);
 
     let sync = Sync {
         token: token,
@@ -821,26 +826,29 @@ fn run() -> Result[string, string] {
     let today = vault::today()
     let start = add_days(today, -30)
     let end = add_days(today, 365)
-    let old_end = text_of(fields, "calendar_window_end")
-    let old_tokens = dict_of(blocks, "calendar_sync_tokens")
+    let old_end = text_of(Value::Map(state), "window_end")
+    let old_tokens = map_of(Value::Map(state), "sync_tokens")
     let tokens: Map[string, Value] = #{}
     for calendar in calendars {
-        let key = token_key(calendar)
-        match sync_calendar(sync, calendar, value(old_tokens, key), start, end, old_end) {
+        let old = match old_tokens.get(calendar) {
+            Some(Value::String(t)) => t,
+            _ => "",
+        }
+        match sync_calendar(sync, calendar, old, start, end, old_end) {
             Ok(next) => {
-                tokens[key] = Value::String(next)
+                tokens[calendar] = Value::String(next)
             }
             Err(e) => {
-                save_settings(id, #{ "last_calendar_error": Value::String(e), "last_calendar_run": Value::String(now) }, None)?
+                record_error(state, e, now)?
                 return Err(e)
             }
         }
     }
-    save_settings(id, #{
-        "calendar_window_end": Value::String(end),
-        "last_calendar_run": Value::String(now),
-        "last_calendar_error": Value::Null,
-    }, Some(tokens))?
+    state["sync_tokens"] = Value::Map(tokens);
+    state["window_end"] = Value::String(end);
+    state["last_run"] = Value::String(now);
+    state["last_error"] = Value::Null;
+    save_state(state)?
     let summary = fmt("{} created, {} updated, {} trashed", sync.created, sync.changed, sync.trashed)
     vault::log(summary)
     Ok(summary)

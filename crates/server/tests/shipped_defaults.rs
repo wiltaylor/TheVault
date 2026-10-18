@@ -261,3 +261,106 @@ fn a_deleted_device_script_comes_back_on_the_next_start() {
         writer::DEFAULT_ANDROID_DEVICE_FILE
     );
 }
+
+/// The `google_sync` type 0.1.7 shipped (google-sync D21 removes it).
+const GOOGLE_SYNC_0_1_7: &str =
+    include_str!("../../writer/tests/fixtures/shipped/google_sync_0_1_7.wcl");
+
+/// The `event` type 0.1.7 shipped.
+const EVENT_0_1_7: &str = include_str!("../../writer/tests/fixtures/shipped/event_0_1_7.wcl");
+
+const SYNC_ID: &str = "01JABCDEFGHJKMNPQRSTVWXYZ0";
+
+/// A 0.1.7 vault: its `event`, `person` and `google_sync` types, and a settings note holding
+/// labels and a history id when `note`.
+fn vault_0_1_7(vault: &std::path::Path, note: bool) {
+    std::fs::create_dir_all(vault.join("types")).unwrap();
+    std::fs::write(vault.join("types/event.wcl"), EVENT_0_1_7).unwrap();
+    std::fs::write(vault.join("types/person.wcl"), writer::DEFAULT_PERSON_TYPE).unwrap();
+    std::fs::write(vault.join("types/google_sync.wcl"), GOOGLE_SYNC_0_1_7).unwrap();
+    if note {
+        std::fs::create_dir_all(vault.join("notes/google_sync")).unwrap();
+        std::fs::write(
+            vault.join(format!("notes/google_sync/{SYNC_ID}.wcl")),
+            "title = \"Google\"\ncreated = \"2026-10-01T00:00:00Z\"\nupdated = \"2026-10-01T00:00:00Z\"\n\
+             gmail_labels = [\"Work\", \"INBOX\"]\naccount = \"me@example.com\"\n\
+             gmail_history_id = \"12345\"\n",
+        )
+        .unwrap();
+    }
+}
+
+fn type_names(server: &TestServer) -> Vec<String> {
+    get(server, "/api/types")["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_once() {
+    let mut server = TestServer::start_seeded(|vault| vault_0_1_7(vault, true));
+
+    let settings = server.secret_json("google_settings");
+    assert_eq!(
+        settings["gmail_labels"],
+        serde_json::json!(["Work", "INBOX"])
+    );
+    assert_eq!(settings["gmail_mode"], "labels");
+    assert_eq!(settings["calendars"], serde_json::json!(["primary"]));
+    assert_eq!(
+        server.secret_json("google_gmail_state")["history_id"],
+        "12345"
+    );
+    assert!(server.secret("google_calendar_state").is_some());
+    assert_eq!(
+        server.secret("google_account").as_deref(),
+        Some("me@example.com")
+    );
+    assert!(!type_names(&server).iter().any(|t| t == "google_sync"));
+    assert!(
+        !server
+            .vault_path()
+            .join(format!("notes/google_sync/{SYNC_ID}.wcl"))
+            .exists()
+    );
+    let trash = get(&server, "/api/trash");
+    assert!(trash["notes"].as_array().unwrap().is_empty(), "{trash}");
+    let status = get(&server, "/api/integrations/google");
+    assert_eq!(status["account"], "me@example.com");
+    assert_eq!(
+        status["settings"]["gmail_labels"],
+        serde_json::json!(["Work", "INBOX"])
+    );
+
+    // A second start does nothing.
+    let before = generation(&server);
+    let secrets: Vec<Option<String>> = ["google_settings", "google_gmail_state", "google_account"]
+        .iter()
+        .map(|n| server.secret(n))
+        .collect();
+    server.restart();
+    assert_eq!(generation(&server), before);
+    let after: Vec<Option<String>> = ["google_settings", "google_gmail_state", "google_account"]
+        .iter()
+        .map(|n| server.secret(n))
+        .collect();
+    assert_eq!(after, secrets);
+}
+
+#[test]
+fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type() {
+    let server = TestServer::start_seeded(|vault| vault_0_1_7(vault, false));
+    assert!(!type_names(&server).iter().any(|t| t == "google_sync"));
+    assert!(!server.vault_path().join("types/google_sync.wcl").exists());
+    for name in [
+        "google_settings",
+        "google_gmail_state",
+        "google_calendar_state",
+        "google_account",
+    ] {
+        assert!(server.secret(name).is_none(), "{name}");
+    }
+}

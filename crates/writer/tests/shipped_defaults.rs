@@ -115,7 +115,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
         [
             "0001_person_emails",
             "0002_person_labels",
-            "0003_event_google_handler"
+            "0003_event_google_handler",
+            "0004_remove_google_sync"
         ]
     );
     let fields: Vec<&str> = done
@@ -166,7 +167,6 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "email_thread",
             "event",
             "fleeting",
-            "google_sync",
             "message"
         ]
     );
@@ -457,7 +457,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
         [
             "0001_person_emails",
             "0002_person_labels",
-            "0003_event_google_handler"
+            "0003_event_google_handler",
+            "0004_remove_google_sync"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
@@ -632,7 +633,8 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
             [
                 "0001_person_emails",
                 "0002_person_labels",
-                "0003_event_google_handler"
+                "0003_event_google_handler",
+                "0004_remove_google_sync"
             ],
             "{name}"
         );
@@ -715,7 +717,7 @@ fn a_photo_that_is_not_an_image_keeps_the_photo_field_open_to_any_asset() {
 
 /// The Google sync's built-in types, which a vault from before them gains (google-sync D4, D6,
 /// D15, D17).
-const GOOGLE_TYPES: [&str; 4] = ["email", "email_thread", "event", "google_sync"];
+const GOOGLE_TYPES: [&str; 3] = ["email", "email_thread", "event"];
 
 /// Copy the vault fixture `from` into `to`, keeping its folders.
 fn copy_tree(from: &Path, to: &Path) {
@@ -763,11 +765,15 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
     let mut added = done.types_added.clone();
     added.sort();
     assert_eq!(added, GOOGLE_TYPES);
-    // Steps 0002 and 0003 are the ones 0.1.6 had not run; 0003 finds no event type yet. The seeding is then one commit, with no field
+    // Steps 0002 to 0004 are the ones 0.1.6 had not run; 0003 and 0004 find no event type yet. The seeding is then one commit, with no field
     // added to a new type and no note edited.
     assert_eq!(
         done.steps,
-        ["0002_person_labels", "0003_event_google_handler"]
+        [
+            "0002_person_labels",
+            "0003_event_google_handler",
+            "0004_remove_google_sync"
+        ]
     );
     assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 2);
     assert!(
@@ -781,7 +787,6 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
         ("email", writer::DEFAULT_EMAIL_TYPE),
         ("email_thread", writer::DEFAULT_EMAIL_THREAD_TYPE),
         ("event", writer::DEFAULT_EVENT_TYPE),
-        ("google_sync", writer::DEFAULT_GOOGLE_SYNC_TYPE),
     ];
     for (name, source) in sources {
         let path = format!("types/{name}.wcl");
@@ -929,7 +934,8 @@ fn an_event_type_from_before_the_write_back_gains_its_handlers_and_no_note_chang
             [
                 "google_client_id",
                 "google_client_secret",
-                "google_refresh_token"
+                "google_refresh_token",
+                "google_settings"
             ]
         );
     }
@@ -1113,4 +1119,220 @@ fn a_schedule_edit_to_a_shipped_task_is_kept_and_notified_once() {
     let done = w.seed_shipped_defaults_with(Upkeep::Home, &files).unwrap();
     assert_eq!(done, Upgraded::default());
     assert_eq!(notification_titles(&w).len(), 1);
+}
+
+/// The `google_sync` type 0.1.7 shipped, which step `0004_remove_google_sync` removes.
+const GOOGLE_SYNC_0_1_7: &str = include_str!("fixtures/shipped/google_sync_0_1_7.wcl");
+
+/// The `event` type 0.1.7 shipped, whose write-back handlers read no `google_settings`.
+const EVENT_0_1_7: &str = include_str!("fixtures/shipped/event_0_1_7.wcl");
+
+/// A 0.1.7 settings note: labels, a history id, calendar tokens, the account and the endpoints.
+const SYNC_NOTE_0_1_7: &str = r#"title               = "Google"
+created             = "2026-10-01T00:00:00Z"
+updated             = "2026-10-18T09:05:00Z"
+gmail_mode          = "labels"
+gmail_labels        = ["Work", "INBOX"]
+gmail_window_days   = 45
+calendars           = ["primary", "team@example.com"]
+default_calendar    = "primary"
+account             = "me@example.com"
+gmail_history_id    = "12345"
+calendar_window_end = "2027-10-18"
+last_gmail_run      = "2026-10-18T09:00:00Z"
+last_gmail_error    = "invalid_grant: Token has been expired or revoked."
+last_calendar_run   = "2026-10-18T09:05:00Z"
+
+dict calendar_sync_tokens {
+  c_primary                = "tok-primary"
+  c_team_40example_2ecom   = "tok-team"
+}
+
+dict endpoints {
+  token = "http://127.0.0.1:9/token"
+}
+"#;
+
+/// The steps 0.1.7 had run.
+const STEPS_0_1_7: [&str; 3] = [
+    "0001_person_emails",
+    "0002_person_labels",
+    "0003_event_google_handler",
+];
+
+fn open_with(root: &Path, key: Option<state::SecretKey>) -> Writer {
+    let vault = Vault::init(root).unwrap();
+    let state = State::open(&vault.server_dir().join("state.db"), key).unwrap();
+    Writer::open(vault, state).unwrap()
+}
+
+/// A vault as 0.1.7 left it: its `event` and `google_sync` types, the steps it had run, and a
+/// settings note when `note`. Returns the note's id.
+fn vault_0_1_7(root: &Path, key: Option<state::SecretKey>, note: bool) -> Option<String> {
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/event.wcl"), EVENT_0_1_7).unwrap();
+    std::fs::write(root.join("types/person.wcl"), writer::DEFAULT_PERSON_TYPE).unwrap();
+    std::fs::write(root.join("types/google_sync.wcl"), GOOGLE_SYNC_0_1_7).unwrap();
+    let w = open_with(root, key);
+    for step in STEPS_0_1_7 {
+        w.state().record_upgrade(step).unwrap();
+    }
+    drop(w);
+    note.then(|| {
+        // As the 0.1.7 server wrote it: only the server writes the computed fields.
+        let id = "01JABCDEFGHJKMNPQRSTVWXYZ0";
+        std::fs::create_dir_all(root.join("notes/google_sync")).unwrap();
+        std::fs::write(
+            root.join(format!("notes/google_sync/{id}.wcl")),
+            SYNC_NOTE_0_1_7,
+        )
+        .unwrap();
+        id.to_owned()
+    })
+}
+
+fn secret_json(w: &Writer, name: &str) -> serde_json::Value {
+    serde_json::from_str(&w.state().get_secret(name).unwrap().unwrap()).unwrap()
+}
+
+#[test]
+fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let key = state::SecretKey::generate();
+    let id = vault_0_1_7(root, Some(key.clone()), true).unwrap();
+    let w = open_with(root, Some(key));
+    // A key a secret holds already is kept.
+    w.state()
+        .set_secret("google_calendar_state", r#"{"last_error":"kept"}"#)
+        .unwrap();
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert_eq!(done.steps, ["0004_remove_google_sync"]);
+
+    assert_eq!(
+        secret_json(&w, "google_settings"),
+        json!({
+            "gmail_mode": "labels",
+            "gmail_labels": ["Work", "INBOX"],
+            "gmail_window_days": 45,
+            "gmail_backfill_to": null,
+            "calendars": ["primary", "team@example.com"],
+            "default_calendar": "primary",
+            "endpoints": { "token": "http://127.0.0.1:9/token" },
+        })
+    );
+    assert_eq!(
+        secret_json(&w, "google_gmail_state"),
+        json!({
+            "history_id": "12345",
+            "backfill_page": null,
+            "last_run": "2026-10-18T09:00:00Z",
+            "last_error": "invalid_grant: Token has been expired or revoked.",
+            "notified_invalid_grant": true,
+        })
+    );
+    assert_eq!(
+        secret_json(&w, "google_calendar_state"),
+        json!({
+            "sync_tokens": { "primary": "tok-primary", "team@example.com": "tok-team" },
+            "window_end": "2027-10-18",
+            "last_run": "2026-10-18T09:05:00Z",
+            "last_error": "kept",
+            "notified_invalid_grant": false,
+        })
+    );
+    assert_eq!(
+        w.state().get_secret("google_account").unwrap().as_deref(),
+        Some("me@example.com")
+    );
+
+    // No note, type or trash entry is left of it.
+    assert!(w.schema().type_def("google_sync").is_none());
+    assert!(read(root, "types/google_sync.wcl").is_none());
+    assert!(read(root, &format!("notes/google_sync/{id}.wcl")).is_none());
+    assert!(w.trash().unwrap().iter().all(|t| t.note_id != id));
+    // The write-back handlers read the settings now.
+    for h in &w.schema().type_def("event").unwrap().handlers {
+        assert!(h.secrets.iter().any(|s| s == "google_settings"), "{h:?}");
+    }
+
+    // A second start does nothing.
+    let before = generation(root);
+    let secrets: Vec<Option<String>> = [
+        "google_settings",
+        "google_gmail_state",
+        "google_calendar_state",
+        "google_account",
+    ]
+    .iter()
+    .map(|n| w.state().get_secret(n).unwrap())
+    .collect();
+    let again = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert!(again.steps.is_empty(), "{:?}", again.steps);
+    assert_eq!(again, Upgraded::default());
+    assert_eq!(generation(root), before);
+    let after: Vec<Option<String>> = [
+        "google_settings",
+        "google_gmail_state",
+        "google_calendar_state",
+        "google_account",
+    ]
+    .iter()
+    .map(|n| w.state().get_secret(n).unwrap())
+    .collect();
+    assert_eq!(after, secrets);
+}
+
+#[test]
+fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    vault_0_1_7(root, None, false);
+    let w = open_with(root, None);
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert_eq!(done.steps, ["0004_remove_google_sync"]);
+    assert!(w.schema().type_def("google_sync").is_none());
+    assert!(read(root, "types/google_sync.wcl").is_none());
+    assert!(w.state().list_secrets().unwrap().is_empty());
+    assert!(
+        w.state()
+            .applied_upgrades()
+            .unwrap()
+            .iter()
+            .any(|s| s == "0004_remove_google_sync")
+    );
+}
+
+#[test]
+fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let id = vault_0_1_7(root, None, true).unwrap();
+    let note_path = format!("notes/google_sync/{id}.wcl");
+    let note = read(root, &note_path).unwrap();
+    {
+        let w = open_with(root, None);
+        let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+        assert!(done.steps.is_empty(), "{:?}", done.steps);
+        assert!(w.schema().type_def("google_sync").is_some());
+        assert_eq!(read(root, &note_path).unwrap(), note);
+        assert!(
+            !w.state()
+                .applied_upgrades()
+                .unwrap()
+                .iter()
+                .any(|s| s == "0004_remove_google_sync")
+        );
+    }
+
+    // The next start has the key, and finishes the step.
+    let key = state::SecretKey::generate();
+    let w = open_with(root, Some(key));
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert_eq!(done.steps, ["0004_remove_google_sync"]);
+    assert!(w.schema().type_def("google_sync").is_none());
+    assert!(read(root, &note_path).is_none());
+    assert_eq!(secret_json(&w, "google_gmail_state")["history_id"], "12345");
 }

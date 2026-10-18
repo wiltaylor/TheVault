@@ -7,7 +7,7 @@ import { request } from "@playwright/test";
 import { expect, logIn, test } from "./fixtures";
 
 // Settings > Integrations > Google (google-sync D1, D18): the loopback paste flow against the fake
-// Google server, which the settings note's endpoints point at. The consent page is the fake's too:
+// Google server, which the `google_settings` secret's endpoints point at. The consent page is the fake's too:
 // the test plays the browser's part by sending the consent URL's query to it and pasting the
 // address it redirects to.
 
@@ -59,13 +59,11 @@ test("the Google card connects through a pasted loopback address, shows the acco
     });
     expect(res.ok(), await res.text()).toBe(true);
   }
-  // One settings note, pointing at the fake.
-  const existing = (await (await admin.get("/api/notes?type=google_sync")).json()) as { notes: { id: string; version: string }[] };
-  for (const n of existing.notes) await admin.delete(`/api/notes/${n.id}?base_version=${n.version}`);
-  const made = await admin.post("/api/notes?type=google_sync", {
-    data: { note: { fields: { title: "Google" }, blocks: [{ kind: "dict", labels: ["endpoints"], fields: fake.endpoints }] } },
+  // The settings secret, pointing at the fake (google-sync D21).
+  const settings = await admin.put("/api/secrets/google_settings", {
+    data: { value: JSON.stringify({ endpoints: fake.endpoints }) },
   });
-  expect(made.status(), await made.text()).toBe(201);
+  expect(settings.ok(), await settings.text()).toBe(true);
 
   await logIn(page, "/settings");
   await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Integrations" }).click();
@@ -109,6 +107,14 @@ test("the Google card connects through a pasted loopback address, shows the acco
   const task = (await (await admin.get("/api/tasks/google_gmail")).json()) as { paused: boolean };
   expect(task.paused).toBe(false);
 
+  // The settings form saves what the sync pulls.
+  const form = card.getByRole("form", { name: "Google sync settings" });
+  await form.getByLabel("Window (days)").fill("30");
+  await form.getByRole("button", { name: "Save" }).click();
+  await expect(card.getByText("Saved. The next runs use these settings.")).toBeVisible();
+  const status = (await (await admin.get("/api/integrations/google")).json()) as { settings: { gmail_window_days: number } };
+  expect(status.settings.gmail_window_days).toBe(30);
+
   const shots = join(repo, ".scratch", "shots");
   mkdirSync(shots, { recursive: true });
   await card.screenshot({ path: join(shots, "ticket-google-connect.png") });
@@ -118,5 +124,6 @@ test("the Google card connects through a pasted loopback address, shows the acco
   await expect(card.getByRole("button", { name: "Connect Google" })).toBeVisible();
   await expect(card.getByRole("row", { name: "Gmail" })).toContainText("Paused");
   const after = (await (await admin.get("/api/secrets")).json()) as { secrets: { name: string }[] };
-  expect(after.secrets.map((s) => s.name).filter((n) => n.startsWith("google_"))).toEqual([]);
+  // The settings outlast the sign-in.
+  expect(after.secrets.map((s) => s.name).filter((n) => n.startsWith("google_"))).toEqual(["google_settings"]);
 });

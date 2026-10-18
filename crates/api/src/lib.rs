@@ -293,6 +293,7 @@ fn build() -> Built {
         );
     let google = Routes::new()
         .get("/api/integrations/google", google::status)
+        .put("/api/integrations/google/settings", google::put_settings)
         .post("/api/integrations/google/start", google::start)
         .post("/api/integrations/google/finish", google::finish)
         .post("/api/integrations/google/disconnect", google::disconnect);

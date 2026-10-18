@@ -224,7 +224,38 @@ fn run() -> Result[string, string] {
 
 | Function | Returns |
 |----------|---------|
-| `secrets::get(name: string)` | `Result[string, string]`: the value of a secret the run names in `secrets`. Values are set in Settings > Secrets and never shown again |
+| `secrets::get(name: string)` | `Result[string, string]`: the value of a secret the run names in `secrets`. Values are set in Settings > Secrets, or by `secrets::set`, and never shown again |
+| `secrets::set(name: string, value: string)` | `Result[(), string]`: store `value` as secret `name`, encrypted like `PUT /api/secrets/<name>`, replacing what it held. Refused for a name the run's `secrets` list does not name, and for a value over 64 KiB |
+
+A script reads and writes only the secrets its run names, and cannot list them. `secrets::set` writes no note and no note history, so it suits state a scheduled script keeps between runs, such as a sync cursor. A `before_*` handler or a migration has no `secrets` module, so it can neither read nor write one.
+
+### The Google sync's secrets
+
+The Google sync keeps its settings and state in secrets, never in notes (google-sync D21). Each is a JSON object string, except `google_account`:
+
+| Secret | Written by | Read by | Holds |
+|--------|------------|---------|-------|
+| `google_client_id`, `google_client_secret`, `google_refresh_token` | Settings > Integrations | every Google script | The OAuth client and the sign-in |
+| `google_account` | Settings > Integrations, on connect | the Integrations page | The connected address, as plain text |
+| `google_settings` | Settings > Integrations | every Google script | The settings, below |
+| `google_gmail_state` | the `google_gmail` task | the `google_gmail` task | `{ history_id, backfill_page, last_run, last_error, notified_invalid_grant }` |
+| `google_calendar_state` | the `google_calendar` task | the `google_calendar` task | `{ sync_tokens, window_end, last_run, last_error, notified_invalid_grant }` |
+
+`google_settings` is `{ gmail_mode, gmail_labels, gmail_window_days, gmail_backfill_to, calendars, default_calendar, endpoints }`:
+
+| Key | Holds | When missing |
+|-----|-------|--------------|
+| `gmail_mode` | `labels` pulls the labels in `gmail_labels`; `all` pulls all mail | `labels` |
+| `gmail_labels` | Gmail label names or ids, matched without case | `[]` |
+| `gmail_window_days` | How many days back the first pull reaches, 1 to 3650 | `90` |
+| `gmail_backfill_to` | A date, `YYYY-MM-DD`, older mail is paged back to, a page each run; or null | null |
+| `calendars` | The ids of the calendars to pull, such as `primary` | `["primary"]` |
+| `default_calendar` | The calendar a new event note goes to when it names none | `primary` |
+| `endpoints` | The test seam: `{ token, gmail, calendar, userinfo }` URLs. The Integrations page never shows or sets it | Google's own hosts |
+
+A missing `google_settings` means every default. In the two state objects, `last_run` is an RFC 3339 time, `last_error` the last run's error or null, and `notified_invalid_grant` is true once the run has told the user Google refused the sign-in; it goes back to false when a token refresh succeeds. `history_id` and `backfill_page` are Gmail's history id and back-fill page token, `sync_tokens` holds each calendar's sync token by calendar id, and `window_end` is the date recurring events have occurrence notes up to. Disconnecting Google sets the cursors (`history_id`, `backfill_page`, `sync_tokens`, `window_end`) back to null or empty.
+
+Each task writes only its own state secret, so the two never overwrite each other, and its task file's `secrets` list names exactly what it reads and writes. The write-back handler reads `google_settings` and writes nothing but notes.
 
 ## `fs`
 
@@ -403,18 +434,18 @@ The Android app fetches its pending commands when a `device.command` push arrive
 
 ## The Google Calendar sync
 
-The shipped task `google_calendar` runs `scripts/google_calendar.ws` every five minutes once it is unpaused (google-sync D12, D19). It reads the one `google_sync` note, `vault::query("from google_sync limit 1")`, and ends successfully with a log line when there is none. It exchanges the `google_refresh_token` secret for an access token at the note's `endpoints.token` (Google's own token endpoint when the key is absent), and calls the Calendar API at `endpoints.calendar`, by default `https://www.googleapis.com/calendar/v3`. The run's log ends with what it did, such as `2 created, 1 updated, 0 trashed`.
+The shipped task `google_calendar` runs `scripts/google_calendar.ws` every five minutes once it is unpaused (google-sync D12, D19). It reads `google_settings` and its own `google_calendar_state` (see [The Google sync's secrets](#the-google-syncs-secrets)), and ends successfully with a log line when there is no `google_refresh_token`: Google is not connected. It exchanges the refresh token for an access token at the settings' `endpoints.token` (Google's own token endpoint when the key is absent), and calls the Calendar API at `endpoints.calendar`, by default `https://www.googleapis.com/calendar/v3`. The run's log ends with what it did, such as `2 created, 1 updated, 0 trashed`.
 
-For each calendar id in the note's `calendars` (`["primary"]` when empty):
+For each calendar id in the settings' `calendars` (`["primary"]` when empty):
 
-- **Listing.** `events.list` with `singleEvents=false` and the calendar's sync token, or with none on the first run. A 410 drops the token and lists the calendar in full. A full listing names every event there is, so a note of that calendar whose event or series it leaves out goes to the trash. The next sync token is stored in the note's `calendar_sync_tokens` dict under the key `c_` followed by the calendar id with every character other than a letter or digit written as `_` and its two lower-case hex digits: `primary` is `c_primary`, `me@example.com` is `c_me_40example_2ecom`.
+- **Listing.** `events.list` with `singleEvents=false` and the calendar's sync token, or with none on the first run. A 410 drops the token and lists the calendar in full. A full listing names every event there is, so a note of that calendar whose event or series it leaves out goes to the trash. The next sync token is stored in the state's `sync_tokens` under the calendar id.
 - **Single events** become one `event` note each, found again by `google_ref`, the event id.
-- **Series.** A series master that is new or changed has its occurrences fetched with `events.instances` from 30 days before today to `calendar_window_end` (a year after today), each occurrence one note whose `google_ref` is the occurrence id, `<series id>_<original start>`, and whose `series` is the master's `recurrence` lines joined by a line break. An occurrence note in that span that Google no longer lists goes to the trash. The master itself has no note. A changed occurrence arrives on its own and updates its note.
+- **Series.** A series master that is new or changed has its occurrences fetched with `events.instances` from 30 days before today to the state's `window_end` (a year after today), each occurrence one note whose `google_ref` is the occurrence id, `<series id>_<original start>`, and whose `series` is the master's `recurrence` lines joined by a line break. An occurrence note in that span that Google no longer lists goes to the trash. The master itself has no note. A changed occurrence arrives on its own and updates its note.
 - **Deletes.** A cancelled event or occurrence moves its note to the trash; a cancelled series moves every note of its occurrences there (D9).
-- **Window roll.** When today has moved on since `calendar_window_end` was written, every series with an occurrence note on the calendar has the new days' occurrences fetched, from the old window end to the new one.
+- **Window roll.** When today has moved on since `window_end` was written, every series with an occurrence note on the calendar has the new days' occurrences fetched, from the old window end to the new one.
 - `event.calendar` holds the calendar id as `calendars` lists it, such as `primary`.
 
-Afterwards the run writes `calendar_window_end`, `last_calendar_run` and the tokens, and removes `last_calendar_error`. A failure writes the error to `last_calendar_error` and fails the run. An `invalid_grant` answer from the token endpoint writes `last_calendar_error` as `invalid_grant: <Google's description>`, adds the notification "Google sign-in expired" unless the error it found there already started `invalid_grant`, and ends the run successfully, so the task-failure notification does not fire as well (D18).
+Afterwards the run writes `window_end`, `last_run` and the tokens to its state, and sets `last_error` to null. A failure writes the error to `last_error` and fails the run. An `invalid_grant` answer from the token endpoint writes `last_error` as `invalid_grant: <Google's description>`, adds the notification "Google sign-in expired" unless `notified_invalid_grant` is already true, sets it, and ends the run successfully, so the task-failure notification does not fire as well (D18). No note is written for any of it.
 
 ### Snapshot and etag
 
@@ -443,7 +474,7 @@ A note's synced fields equal its `snapshot` in every key exactly when the vault 
 
 ## The Google Calendar write-back
 
-The shipped `event` type runs `scripts/google_event.ws` after every create, update and delete of an event note, from the handler queue (google-sync D9, D10, D20). It reads the `google_sync` note's `endpoints` and `default_calendar` as the sync does, and refreshes an access token for each run that has something to send. A run with no settings note sends nothing and succeeds. An `invalid_grant` is handled as the sync handles it: `last_calendar_error`, one "Google sign-in expired" notification, and a run that does not fail.
+The shipped `event` type runs `scripts/google_event.ws` after every create, update and delete of an event note, from the handler queue (google-sync D9, D10, D20). Its handlers name the three credential secrets and `google_settings`. It reads the settings' `endpoints` and `default_calendar` as the sync does, and refreshes an access token for each run that has something to send. A run with no `google_refresh_token` sends nothing and succeeds. An `invalid_grant` sends nothing and does not fail the run; the `google_calendar` task records it and notifies the user. The handler writes no secret.
 
 A handler cannot tell who wrote a note, so the snapshot is the loop guard. A note whose synced fields equal its `snapshot` has no change of the vault's, and the run sends nothing, not even a token refresh. Every note the sync writes is in that state unless the vault kept one of its own changes in a merge, which the next handler run then sends. Times compare as instants, so `10:00:00Z` and `21:00:00+11:00` are the same start.
 

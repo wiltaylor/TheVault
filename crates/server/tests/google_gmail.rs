@@ -50,25 +50,25 @@ struct Gmail {
     server: TestServer,
     client: Client,
     google: FakeGoogle,
-    sync: String,
 }
 
 impl Gmail {
-    /// A server whose `google_gmail` task may reach `google`, with the three secrets set and a
-    /// `google_sync` note holding `fields` and the fake's endpoints.
-    fn start(google: FakeGoogle, mut fields: Value) -> Gmail {
-        fields["title"] = json!("Google sync");
+    /// A server whose `google_gmail` task may reach `google`, with the three secrets set and the
+    /// `google_settings` secret holding `settings` and the fake's endpoints.
+    fn start(google: FakeGoogle, mut settings: Value) -> Gmail {
+        settings["endpoints"] = google.endpoints();
         let server = TestServer::start();
-        let mut gmail = Gmail {
+        let gmail = Gmail {
             server,
             client: Client::new(),
             google,
-            sync: String::new(),
         };
+        let settings = settings.to_string();
         for (name, value) in [
             ("google_client_id", DEFAULT_CLIENT_ID),
             ("google_client_secret", DEFAULT_CLIENT_SECRET),
             ("google_refresh_token", DEFAULT_REFRESH_TOKEN),
+            ("google_settings", settings.as_str()),
         ] {
             expect(
                 gmail
@@ -86,7 +86,7 @@ script        = "google_gmail"
 timeout       = "PT5M"
 retries       = 0
 allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com", "{host}"]
-secrets       = ["google_client_id", "google_client_secret", "google_refresh_token"]
+secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_state"]
 paused        = true
 "#,
             host = gmail.google.host()
@@ -99,18 +99,6 @@ paused        = true
                 .unwrap(),
             200,
         );
-        let made = expect(
-            gmail
-                .req("POST", "/api/notes?type=google_sync")
-                .json(&json!({ "note": {
-                    "fields": fields,
-                    "blocks": [{ "kind": "dict", "labels": ["endpoints"], "fields": gmail.google.endpoints() }],
-                } }))
-                .send()
-                .unwrap(),
-            201,
-        );
-        gmail.sync = made["id"].as_str().unwrap().to_owned();
         gmail
     }
 
@@ -172,8 +160,9 @@ paused        = true
         )
     }
 
-    fn settings(&self) -> Value {
-        self.note(&self.sync)["note"]["fields"].clone()
+    /// The Gmail task's state: the JSON object in the `google_gmail_state` secret.
+    fn state(&self) -> Value {
+        self.server.secret_json("google_gmail_state")
     }
 
     fn create(&self, type_name: &str, fields: Value) -> String {
@@ -293,7 +282,10 @@ fn the_shipped_task_is_paused_and_a_vault_without_settings_ends_successfully() {
     );
     assert_eq!(run["outcome"], "succeeded", "{run:#}");
     assert!(
-        run["log"].as_str().unwrap().contains("google_sync"),
+        run["log"]
+            .as_str()
+            .unwrap()
+            .contains("Google is not connected"),
         "{run:#}"
     );
 }
@@ -328,18 +320,15 @@ fn labels_mode_imports_only_the_configured_labels_inside_the_window() {
         assert!(r.query("q").unwrap().starts_with("after:"), "{r:?}");
         assert!(r.query("labelIds").is_some(), "{r:?}");
     }
-    let settings = gmail.settings();
+    let settings = gmail.state();
     assert!(
-        settings["gmail_history_id"]
+        settings["history_id"]
             .as_str()
             .is_some_and(|h| !h.is_empty()),
         "{settings:#}"
     );
-    assert!(
-        settings["last_gmail_run"].as_str().is_some(),
-        "{settings:#}"
-    );
-    assert!(settings.get("last_gmail_error").is_none(), "{settings:#}");
+    assert!(settings["last_run"].as_str().is_some(), "{settings:#}");
+    assert!(settings["last_error"].is_null(), "{settings:#}");
 }
 
 #[test]
@@ -473,7 +462,7 @@ fn back_fill_pages_older_mail_over_runs_and_stops_at_the_back_fill_date() {
     gmail.run_ok();
     assert_eq!(gmail.refs(), ["old-100", "recent"]);
     assert!(
-        gmail.settings()["gmail_backfill_page"]
+        gmail.state()["backfill_page"]
             .as_str()
             .is_some_and(|p| !p.is_empty())
     );
@@ -663,7 +652,7 @@ fn invalid_grant_notifies_once_across_two_runs_and_does_not_fail_the_run() {
     let first = gmail.run_ok();
     let second = gmail.run_ok();
     assert!(gmail.refs().is_empty());
-    let error = gmail.settings()["last_gmail_error"].clone();
+    let error = gmail.state()["last_error"].clone();
     assert!(
         error.as_str().is_some_and(|e| e.contains("invalid_grant")),
         "{error} {first:#} {second:#}"
@@ -684,7 +673,7 @@ fn invalid_grant_notifies_once_across_two_runs_and_does_not_fail_the_run() {
     gmail.google.set_invalid_grant(false);
     gmail.run_ok();
     assert_eq!(gmail.refs(), ["one"]);
-    assert!(gmail.settings().get("last_gmail_error").is_none());
+    assert!(gmail.state()["last_error"].is_null());
 }
 
 #[test]
@@ -724,10 +713,10 @@ fn a_run_with_more_mail_than_it_may_decode_stops_early_and_the_next_run_carries_
         "{first:#}"
     );
     // The window listing did not finish, so there is no history id yet.
-    assert!(gmail.settings().get("gmail_history_id").is_none());
+    assert!(gmail.state()["history_id"].is_null());
     gmail.run_ok();
     assert_eq!(gmail.refs().len(), 15);
-    assert!(gmail.settings()["gmail_history_id"].as_str().is_some());
+    assert!(gmail.state()["history_id"].as_str().is_some());
     let wide = gmail.email("wide");
     let lines = paragraphs(&wide, "body");
     assert_eq!(lines.len(), 1000);

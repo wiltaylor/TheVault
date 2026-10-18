@@ -476,6 +476,64 @@ fn run() -> List[string] { [read("granted"), read("other"), read("missing")] }
 }
 
 #[test]
+fn a_script_writes_only_the_secrets_it_was_granted_and_a_later_run_reads_them() {
+    let f = fixture();
+    let src = r#"use secrets
+fn put(name: string, value: string) -> string {
+    match secrets::set(name, value) {
+        Ok(_) => "ok",
+        Err(e) => e,
+    }
+}
+fn run() -> List[string] {
+    let big = "x".repeat(65537)
+    [put("state", "cursor 7"), put("other", "no"), put("state2", big), put("state2", "x".repeat(65536))]
+}
+"#;
+    let mut j = job(Kind::Task, src);
+    j.secrets = vec!["state".into(), "state2".into()];
+    let out = f.host.run(j).result.unwrap();
+    assert_eq!(out[0], json!("ok"));
+    assert_eq!(
+        out[1],
+        json!("secret \"other\" is not granted to this script")
+    );
+    assert!(out[2].as_str().unwrap().contains("64 KiB"), "{out:#}");
+    assert_eq!(out[3], json!("ok"));
+    assert_eq!(f.writer.state().get_secret("other").unwrap(), None);
+    assert_eq!(
+        f.writer
+            .state()
+            .get_secret("state2")
+            .unwrap()
+            .unwrap()
+            .len(),
+        65536
+    );
+
+    // A later run, an after_* handler this time, reads what the first wrote.
+    let read = "use secrets\nfn run() -> Result[string, string] { secrets::get(\"state\") }\n";
+    let mut j = job(Kind::After, read);
+    j.secrets = vec!["state".into()];
+    assert_eq!(f.host.run(j).result.unwrap(), json!("cursor 7"));
+}
+
+#[test]
+fn secrets_set_does_not_compile_in_a_before_handler_or_a_migration() {
+    let f = fixture();
+    let src = "use secrets\nfn run() -> Result[(), string] { secrets::set(\"x\", \"v\") }\n";
+    for kind in [Kind::Before, Kind::Migration] {
+        let mut j = job(kind, src);
+        j.secrets = vec!["x".into()];
+        let err = f.host.run(j).result.unwrap_err();
+        assert!(matches!(err, Error::Compile { .. }), "{kind:?}: {err:?}");
+    }
+    assert_eq!(f.writer.state().get_secret("x").unwrap(), None);
+    assert!(f.host.check(Kind::After, "specimen", src).is_ok());
+    assert!(f.host.check(Kind::Task, "specimen", src).is_ok());
+}
+
+#[test]
 fn arguments_go_in_and_errors_come_out() {
     let f = fixture();
     let src = r#"fn before_update(note: Value) -> Result[Value, string] {

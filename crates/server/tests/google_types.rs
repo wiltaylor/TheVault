@@ -1,5 +1,6 @@
-//! S1: the Google sync's built-in types `email`, `email_thread`, `event` and `google_sync`, and
-//! the `gmail_label` taxonomy (google-sync D4, D6, D14, D15, D17).
+//! S1: the Google sync's built-in types `email`, `email_thread` and `event`, and the
+//! `gmail_label` taxonomy (google-sync D4, D14, D15, D17). Its settings are secrets, with no
+//! note type (google-sync D21).
 
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
@@ -7,7 +8,7 @@ use reqwest::header::AUTHORIZATION;
 use serde_json::{Value, json};
 use testkit::TestServer;
 
-const GOOGLE_TYPES: [&str; 4] = ["email", "email_thread", "event", "google_sync"];
+const GOOGLE_TYPES: [&str; 3] = ["email", "email_thread", "event"];
 
 struct Api {
     server: TestServer,
@@ -170,6 +171,10 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
     for name in GOOGLE_TYPES {
         assert_eq!(find(&types, name)["builtin"], true, "{name}");
     }
+    assert!(
+        types.iter().all(|t| t["name"] != "google_sync"),
+        "a new vault has no google_sync type"
+    );
 
     let email = find(&types, "email");
     assert_eq!(
@@ -269,65 +274,6 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
         event["handlers"].as_array().is_none_or(Vec::is_empty),
         "{event}"
     );
-
-    let sync = find(&types, "google_sync");
-    assert_eq!(
-        field_names(sync),
-        [
-            "gmail_mode",
-            "gmail_labels",
-            "gmail_window_days",
-            "gmail_backfill_to",
-            "calendars",
-            "default_calendar",
-            "account",
-            "gmail_history_id",
-            "gmail_backfill_page",
-            "calendar_sync_tokens",
-            "calendar_window_end",
-            "last_gmail_run",
-            "last_gmail_error",
-            "last_calendar_run",
-            "last_calendar_error",
-            "endpoints"
-        ]
-    );
-    assert_eq!(
-        field(sync, "gmail_mode")["options"],
-        json!(["labels", "all"])
-    );
-    assert_eq!(field(sync, "gmail_mode")["default"], "labels");
-    assert_eq!(field(sync, "gmail_labels")["items"], "string");
-    assert_eq!(field(sync, "gmail_window_days")["kind"], "int");
-    assert_eq!(field(sync, "gmail_window_days")["default"], 90);
-    assert_eq!(field(sync, "gmail_backfill_to")["kind"], "date");
-    assert_eq!(field(sync, "calendars")["default"], json!(["primary"]));
-    assert_eq!(field(sync, "default_calendar")["default"], "primary");
-    for name in [
-        "account",
-        "gmail_history_id",
-        "gmail_backfill_page",
-        "calendar_sync_tokens",
-        "calendar_window_end",
-        "last_gmail_run",
-        "last_gmail_error",
-        "last_calendar_run",
-        "last_calendar_error",
-    ] {
-        assert_eq!(field(sync, name)["computed"], true, "{name}");
-        assert_eq!(field(sync, name)["hidden"], false, "{name}");
-    }
-    assert_eq!(field(sync, "calendar_sync_tokens")["kind"], "dict");
-    assert_eq!(field(sync, "calendar_window_end")["kind"], "date");
-    assert_eq!(field(sync, "last_gmail_run")["kind"], "datetime");
-    // The test seam: hidden, and written by the API like any other field.
-    assert_eq!(field(sync, "endpoints")["kind"], "dict");
-    assert_eq!(field(sync, "endpoints")["hidden"], true);
-    assert_eq!(field(sync, "endpoints")["computed"], false);
-    assert!(
-        sync["handlers"].as_array().is_none_or(Vec::is_empty),
-        "{sync}"
-    );
 }
 
 #[test]
@@ -376,10 +322,6 @@ fn the_google_templates_resolve_with_their_slots() {
         );
     }
     assert_eq!(template_items(event, "card"), ["title", "when", "location"]);
-    let sync = find(&types, "google_sync");
-    let page = template_items(sync, "default");
-    assert!(page.contains(&"account".to_owned()), "{page:?}");
-    assert!(!page.contains(&"endpoints".to_owned()), "{page:?}");
 }
 
 #[test]
@@ -486,24 +428,6 @@ fn the_types_take_what_the_syncs_will_write() {
         json!({ "note": { "fields": { "title": "Weekly", "series": "RRULE:FREQ=WEEKLY" } } }),
     );
     assert!(res.status().is_client_error(), "{}", res.text().unwrap());
-
-    // The settings note: its defaults, and the endpoints seam written through the API.
-    let sync = api.create_note(
-        "google_sync",
-        json!({
-            "fields": { "title": "Google" },
-            "blocks": [dict("endpoints", json!({ "token": "http://127.0.0.1:9/token" }))],
-        }),
-    );
-    let fields = api.fields(&sync);
-    assert_eq!(fields["gmail_mode"], "labels");
-    assert_eq!(fields["gmail_window_days"], 90);
-    assert_eq!(fields["calendars"], json!(["primary"]));
-    assert_eq!(fields["default_calendar"], "primary");
-    assert_eq!(
-        api.dict(&sync, "endpoints")["token"],
-        "http://127.0.0.1:9/token"
-    );
 }
 
 #[test]

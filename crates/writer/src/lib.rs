@@ -40,6 +40,7 @@ mod defs;
 mod devices;
 mod feed;
 mod fleeting;
+pub mod google;
 mod note;
 mod notify;
 mod refs;
@@ -65,9 +66,9 @@ pub use batch::{Item, Op, Outcome, Report};
 pub use builtin::{
     BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, CALL_TYPE, CONVERSATION_TYPE, DEFAULT_CALL_TYPE,
     DEFAULT_CONVERSATION_TYPE, DEFAULT_EMAIL_THREAD_TYPE, DEFAULT_EMAIL_TYPE, DEFAULT_EVENT_TYPE,
-    DEFAULT_GMAIL_LABEL_TAXONOMY, DEFAULT_GOOGLE_SYNC_TYPE, DEFAULT_MESSAGE_TYPE,
-    DEFAULT_PERSON_TYPE, EMAIL_THREAD_TYPE, EMAIL_TYPE, EVENT_TYPE, GMAIL_LABEL_TAXONOMY,
-    GOOGLE_SYNC_TYPE, MESSAGE_TYPE, PERSON_TYPE, TYPES_NEEDING_PERSON, is_built_in_type,
+    DEFAULT_GMAIL_LABEL_TAXONOMY, DEFAULT_MESSAGE_TYPE, DEFAULT_PERSON_TYPE, EMAIL_THREAD_TYPE,
+    EMAIL_TYPE, EVENT_TYPE, GMAIL_LABEL_TAXONOMY, MESSAGE_TYPE, PERSON_TYPE, TYPES_NEEDING_PERSON,
+    is_built_in_type,
 };
 pub use contacts::{CONTACTS_SOURCE, UPSERT_CONTACT, contact_link_key};
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
@@ -187,6 +188,10 @@ pub enum Error {
         message: String,
         by: Vec<String>,
     },
+    /// An upgrade step cannot run yet, for the reason given: it is not recorded as applied, so it
+    /// runs again on the next start.
+    #[error("{0}")]
+    StepDeferred(String),
     #[error(transparent)]
     Store(store::Error),
     #[error(transparent)]

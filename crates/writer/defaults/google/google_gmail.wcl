@@ -4,5 +4,5 @@ schedule      = "*/10 * * * *"
 script        = "google_gmail"
 timeout       = "PT5M"
 allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com"]
-secrets       = ["google_client_id", "google_client_secret", "google_refresh_token"]
+secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_state"]
 paused        = true

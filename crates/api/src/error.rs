@@ -184,7 +184,7 @@ impl From<Error> for ApiError {
                 (StatusCode::CONFLICT, json!({ "error": code, "by": by }))
             }
             Error::State(e) => return ApiError::from_state(e),
-            Error::Schema(_) | Error::Store(_) | Error::Index(_) => (
+            Error::Schema(_) | Error::Store(_) | Error::Index(_) | Error::StepDeferred(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": "internal" }),
             ),

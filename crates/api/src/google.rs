@@ -12,18 +12,24 @@
 //! - `POST /api/integrations/google/finish` takes `{ url }`, that pasted or callback address. It
 //!   checks the state, exchanges the code with the verifier at the token endpoint, stores
 //!   `google_refresh_token`, reads the account's address from userinfo, writes it to the
-//!   `google_sync` settings note's `account` (making the note when there is none), unpauses the
-//!   `google_gmail` and `google_calendar` tasks that exist, and runs each once in the
-//!   background. An error from Google is a 400 carrying Google's message.
-//! - `POST /api/integrations/google/disconnect` deletes the three secrets, pauses the tasks and
-//!   clears `account`.
-//! - `GET /api/integrations/google` answers `{ connected, account, client_stored, gmail,
-//!   calendar }`, each side `{ installed, paused, last_run, last_error }`, from the settings note,
-//!   the tasks and which secrets exist. `paused` is `null` when the task does not exist.
+//!   `google_account` secret and writes `google_settings` (the current settings, keeping the
+//!   endpoints the start used), unpauses the `google_gmail` and `google_calendar` tasks that
+//!   exist, and runs each once in the background. An error from Google is a 400 carrying
+//!   Google's message.
+//! - `POST /api/integrations/google/disconnect` deletes the three credential secrets and
+//!   `google_account`, pauses the tasks, keeps `google_settings`, and clears the cursors in both
+//!   state secrets, so a later connection lists everything again.
+//! - `PUT /api/integrations/google/settings` saves `{ gmail_mode, gmail_labels,
+//!   gmail_window_days, gmail_backfill_to, calendars, default_calendar }` into `google_settings`,
+//!   keeping its `endpoints`. `gmail_mode` is `labels` or `all`, the window 1 to 3650 days, the
+//!   back-fill date `YYYY-MM-DD` or null, and `calendars` not empty.
+//! - `GET /api/integrations/google` answers `{ connected, account, client_stored, settings,
+//!   gmail, calendar }`, each side `{ task, installed, paused, last_run, last_error }`, from the
+//!   secrets of [`writer::google`] and the tasks. `paused` is `null` when the task does not exist.
 //!
-//! The token and userinfo endpoints come from the settings note's hidden `endpoints` dict when it
-//! names them, else Google's own (the test seam). A flow keeps the endpoints it started with, so
-//! a settings note made by `finish` carries them on.
+//! No note holds any of it (google-sync D21). The token and userinfo endpoints come from the
+//! settings' `endpoints` object when it names them, else Google's own (the test seam). A flow
+//! keeps the endpoints it started with.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -36,17 +42,13 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::Url;
 use scheduler::Scheduler;
-use schema::Value as Field;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use vocab::Author;
-use writer::{Input, Writer};
+use writer::Writer;
+use writer::google::{ACCOUNT, CALENDAR_STATE, GMAIL_STATE, SETTINGS};
 
 use crate::ApiError;
-
-/// The settings note's type.
-const SETTINGS_TYPE: &str = "google_sync";
 
 /// The secrets the sign-in stores and the sync scripts read (google-sync D19).
 pub const CLIENT_ID: &str = "google_client_id";
@@ -54,9 +56,12 @@ pub const CLIENT_SECRET: &str = "google_client_secret";
 pub const REFRESH_TOKEN: &str = "google_refresh_token";
 const SECRETS: [&str; 3] = [CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN];
 
-/// The tasks a connection unpauses and a disconnection pauses, with the prefix of their fields
-/// on the settings note.
-const TASKS: [(&str, &str); 2] = [("google_gmail", "gmail"), ("google_calendar", "calendar")];
+/// The tasks a connection unpauses and a disconnection pauses, with the side of the status each
+/// is and the secret holding its state.
+const TASKS: [(&str, &str, &str); 2] = [
+    ("google_gmail", "gmail", GMAIL_STATE),
+    ("google_calendar", "calendar", CALENDAR_STATE),
+];
 
 /// The scopes the consent page asks for.
 pub const SCOPES: &str = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar openid email";
@@ -132,20 +137,12 @@ struct Endpoints {
 }
 
 impl Endpoints {
-    fn of(note: Option<&writer::Note>) -> Endpoints {
-        let dict = note.and_then(|n| {
-            n.doc
-                .blocks
-                .iter()
-                .find(|b| b.kind == "dict" && b.label() == Some("endpoints"))
-                .map(|b| {
-                    b.body
-                        .fields
-                        .iter()
-                        .map(|(k, v)| (k.clone(), writer::value_to_json(v)))
-                        .collect::<Map<String, Value>>()
-                })
-        });
+    /// From the settings' `endpoints` object, when it has one.
+    fn of(settings: &Map<String, Value>) -> Endpoints {
+        let dict = settings
+            .get("endpoints")
+            .and_then(Value::as_object)
+            .cloned();
         let get = |key: &str, default: &str| {
             dict.as_ref()
                 .and_then(|d| d.get(key))
@@ -172,56 +169,28 @@ async fn on_writer<T: Send + 'static>(
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
 }
 
-/// The settings note: the first `google_sync` note, when there is one.
-fn settings(w: &Writer) -> Result<Option<writer::Note>, ApiError> {
-    if w.schema().type_def(SETTINGS_TYPE).is_none() {
-        return Ok(None);
+/// The settings: the defaults with `google_settings` over them. The defaults alone when the
+/// server has no secrets key.
+fn settings(w: &Writer) -> Result<Map<String, Value>, ApiError> {
+    if !w.state().has_secret_key() {
+        return Ok(writer::google::default_settings());
     }
-    match w.list(Some(SETTINGS_TYPE))?.into_iter().next() {
-        Some(s) => Ok(Some(w.read(&s.id)?)),
-        None => Ok(None),
-    }
+    Ok(writer::google::settings(w.state())?)
 }
 
-fn author() -> Author {
-    Author::Task(writer::SERVER_AUTHOR.to_owned())
+/// The JSON object in secret `name`, empty when there is none or no secrets key.
+fn object(w: &Writer, name: &str) -> Result<Map<String, Value>, ApiError> {
+    if !w.state().has_secret_key() {
+        return Ok(Map::new());
+    }
+    Ok(writer::google::read_object(w.state(), name)?)
 }
 
-/// Set the settings note's `account`, or remove it for `None`. Makes the note, with
-/// `endpoints`, when there is none and `account` is set.
-fn write_account(
-    w: &Writer,
-    account: Option<&str>,
-    endpoints: Option<&Map<String, Value>>,
-) -> Result<(), ApiError> {
-    match settings(w)? {
-        Some(note) => {
-            let mut doc = note.doc.clone();
-            doc.fields.retain(|(n, _)| n != "account");
-            if let Some(a) = account {
-                doc.fields
-                    .push(("account".to_owned(), Field::Str(a.to_owned())));
-            }
-            if doc == note.doc {
-                return Ok(());
-            }
-            let input = Input::Json(writer::doc_to_json(&doc));
-            w.update(&note.id, &input, Some(&note.version), &author())?;
-        }
-        None => {
-            let Some(a) = account else { return Ok(()) };
-            let mut blocks = Vec::new();
-            if let Some(d) = endpoints {
-                blocks.push(json!({ "kind": "dict", "labels": ["endpoints"], "fields": d }));
-            }
-            let input = Input::Json(json!({
-                "fields": { "title": "Google", "account": a },
-                "blocks": blocks,
-            }));
-            w.create(SETTINGS_TYPE, &input, &author())?;
-        }
+fn delete_secret(w: &Writer, name: &str) -> Result<(), ApiError> {
+    match w.state().delete_secret(name) {
+        Ok(()) | Err(state::Error::UnknownSecret(_)) => Ok(()),
+        Err(e) => Err(e.into()),
     }
-    Ok(())
 }
 
 /// 64 random hex digits: a PKCE verifier (43 to 128 characters) or a state value.
@@ -300,7 +269,7 @@ pub async fn start(
     let endpoints = on_writer(&g, move |w| {
         w.state().set_secret(CLIENT_ID, &id)?;
         w.state().set_secret(CLIENT_SECRET, &client_secret)?;
-        Ok(Endpoints::of(settings(w)?.as_ref()))
+        Ok(Endpoints::of(&settings(w)?))
     })
     .await?;
 
@@ -431,13 +400,20 @@ pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<
     let dict = pending.endpoints.dict.clone();
     on_writer(&g, move |w| {
         w.state().set_secret(REFRESH_TOKEN, &refresh)?;
-        write_account(w, Some(&account), dict.as_ref())
+        w.state().set_secret(ACCOUNT, &account)?;
+        let mut s = settings(w)?;
+        match dict {
+            Some(d) => s.insert("endpoints".to_owned(), Value::Object(d)),
+            None => s.remove("endpoints"),
+        };
+        writer::google::write_object(w.state(), SETTINGS, &s)?;
+        Ok(())
     })
     .await?;
     let s = g.scheduler.clone();
     let existing = tokio::task::spawn_blocking(move || {
         let mut existing = Vec::new();
-        for (task, _) in TASKS {
+        for (task, _, _) in TASKS {
             if s.set_paused(task, false)? {
                 existing.push(task);
             }
@@ -459,24 +435,117 @@ pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<
 /// `POST /api/integrations/google/disconnect`.
 pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
     on_writer(&g, |w| {
-        for name in SECRETS {
-            match w.state().delete_secret(name) {
-                Ok(()) | Err(state::Error::UnknownSecret(_)) => {}
-                Err(e) => return Err(e.into()),
-            }
+        for name in SECRETS.into_iter().chain([ACCOUNT]) {
+            delete_secret(w, name)?;
         }
-        write_account(w, None, None)
+        // The cursors belong to the account: a later connection lists everything again.
+        for (_, _, name) in TASKS {
+            let mut state = object(w, name)?;
+            if state.is_empty() {
+                continue;
+            }
+            for cursor in ["history_id", "backfill_page", "window_end"] {
+                if state.contains_key(cursor) {
+                    state.insert(cursor.to_owned(), Value::Null);
+                }
+            }
+            if state.contains_key("sync_tokens") {
+                state.insert("sync_tokens".to_owned(), json!({}));
+            }
+            writer::google::write_object(w.state(), name, &state)?;
+        }
+        Ok(())
     })
     .await?;
     let s = g.scheduler.clone();
     tokio::task::spawn_blocking(move || {
-        for (task, _) in TASKS {
+        for (task, _, _) in TASKS {
             s.set_paused(task, true)?;
         }
         Ok::<_, scheduler::Error>(())
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
+    status_of(&g).await.map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsBody {
+    gmail_mode: String,
+    gmail_labels: Vec<String>,
+    gmail_window_days: i64,
+    gmail_backfill_to: Option<String>,
+    calendars: Vec<String>,
+    default_calendar: String,
+}
+
+/// The longest Gmail window, in days: ten years.
+const MAX_WINDOW_DAYS: i64 = 3650;
+
+/// Every non-empty entry of `items`, trimmed, once each, in order.
+fn cleaned(items: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let item = item.trim().to_owned();
+        if !item.is_empty() && !out.contains(&item) {
+            out.push(item);
+        }
+    }
+    out
+}
+
+/// `PUT /api/integrations/google/settings`.
+pub async fn put_settings(
+    State(g): Shared,
+    Json(b): Json<SettingsBody>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(b.gmail_mode.as_str(), "labels" | "all") {
+        return Err(ApiError::bad_request(format!(
+            "gmail_mode must be labels or all, not {:?}",
+            b.gmail_mode
+        )));
+    }
+    if !(1..=MAX_WINDOW_DAYS).contains(&b.gmail_window_days) {
+        return Err(ApiError::bad_request(format!(
+            "the Gmail window must be 1 to {MAX_WINDOW_DAYS} days, not {}",
+            b.gmail_window_days
+        )));
+    }
+    let backfill = b
+        .gmail_backfill_to
+        .map(|d| d.trim().to_owned())
+        .filter(|d| !d.is_empty());
+    if let Some(d) = &backfill
+        && !schema::is_date(d)
+    {
+        return Err(ApiError::bad_request(format!(
+            "the back-fill date must be a date as YYYY-MM-DD, not {d:?}"
+        )));
+    }
+    let calendars = cleaned(b.calendars);
+    if calendars.is_empty() {
+        return Err(ApiError::bad_request(
+            "list at least one calendar, such as primary",
+        ));
+    }
+    let default_calendar = match b.default_calendar.trim() {
+        "" => calendars[0].clone(),
+        c => c.to_owned(),
+    };
+    let labels = cleaned(b.gmail_labels);
+    on_writer(&g, move |w| {
+        let mut s = settings(w)?;
+        s.insert("gmail_mode".into(), json!(b.gmail_mode));
+        s.insert("gmail_labels".into(), json!(labels));
+        s.insert("gmail_window_days".into(), json!(b.gmail_window_days));
+        s.insert("gmail_backfill_to".into(), json!(backfill));
+        s.insert("calendars".into(), json!(calendars));
+        s.insert("default_calendar".into(), json!(default_calendar));
+        writer::google::write_object(w.state(), SETTINGS, &s)?;
+        Ok(())
+    })
+    .await?;
     status_of(&g).await.map(Json)
 }
 
@@ -496,31 +565,34 @@ async fn status_of(g: &Arc<Google>) -> Result<Value, ApiError> {
             .map(|s| s.name)
             .collect();
         let has = |n: &str| names.iter().any(|x| x == n);
-        let note = settings(w)?;
-        let field = |name: &str| {
-            note.as_ref()
-                .and_then(|n| n.doc.field(name))
-                .and_then(Field::as_str)
-                .map(str::to_owned)
+        let account = if has(ACCOUNT) && w.state().has_secret_key() {
+            w.state().get_secret(ACCOUNT)?
+        } else {
+            None
         };
+        let mut settings = settings(w)?;
+        // The test seam is the server's own business.
+        settings.remove("endpoints");
         let mut out = json!({
             "connected": has(CLIENT_ID) && has(CLIENT_SECRET) && has(REFRESH_TOKEN),
             "client_stored": has(CLIENT_ID) && has(CLIENT_SECRET),
-            "account": field("account"),
-            "settings": note.as_ref().map(|n| n.id.clone()),
+            "account": account,
+            "settings": settings,
         });
-        for (task, side) in TASKS {
+        for (task, side, secret) in TASKS {
             let (installed, paused) = match s.status(task) {
                 Ok(st) => (true, st.def.as_ref().ok().map(|d| d.paused)),
                 Err(scheduler::Error::NoTask(_)) => (false, None),
                 Err(e) => return Err(ApiError::from(e)),
             };
+            let state = object(w, secret)?;
+            let text = |k: &str| state.get(k).and_then(Value::as_str).map(str::to_owned);
             out[side] = json!({
                 "task": task,
                 "installed": installed,
                 "paused": paused,
-                "last_run": field(&format!("last_{side}_run")),
-                "last_error": field(&format!("last_{side}_error")),
+                "last_run": text("last_run"),
+                "last_error": text("last_error"),
             });
         }
         Ok(out)

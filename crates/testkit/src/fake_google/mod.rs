@@ -8,7 +8,7 @@
 //!     .client("client-id", "client-secret")
 //!     .account("me@example.com")
 //!     .start();
-//! let endpoints = google.endpoints(); // the `google_sync` note's `endpoints` dict
+//! let endpoints = google.endpoints(); // the `endpoints` object of the `google_settings` secret
 //! let host = google.host(); // for a task's `allow_domains`
 //! // ... after a script ran:
 //! let refreshes = google.requests_to("/token");
@@ -146,7 +146,7 @@ impl FakeGoogle {
         format!("{}{path}", self.base_url())
     }
 
-    /// The `google_sync` note's `endpoints` dict pointing at this server: keys `token`,
+    /// The `endpoints` object of the `google_settings` secret pointing at this server: keys `token`,
     /// `userinfo`, `gmail` and `calendar`.
     pub fn endpoints(&self) -> Value {
         json!({

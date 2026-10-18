@@ -15,11 +15,14 @@ use regex
 // - after_update: PATCH the event (or the one occurrence) with only the fields that differ from
 //   the snapshot and `If-Match: <etag>`. On 412, GET the event, merge field by field as the task
 //   does (D10), and PATCH once more. Then write Google's `etag` and the new `snapshot`.
-// - after_create: a note with no `google_ref` is inserted into its `calendar`, or the settings
-//   note's `default_calendar`. A note with one that the task just made is left alone. Any other,
+// - after_create: a note with no `google_ref` is inserted into its `calendar`, or the settings'
+//   `default_calendar`. A note with one that the task just made is left alone. Any other,
 //   such as a note restored from the trash, is looked up: when Google no longer has the event it
 //   is inserted as a new event under a new `google_ref` (D20).
 // - after_delete: DELETE the event or occurrence (D9).
+//
+// The settings are the JSON object in the `google_settings` secret: `default_calendar`, and the
+// `endpoints` test seam (google-sync D21). The handler reads it and writes nothing but notes.
 //
 // The conversion from note to Google is the inverse of `google_calendar.ws`'s; see
 // `docs/scripts.md`, "The Google Calendar sync".
@@ -164,22 +167,40 @@ fn not_connected() -> Ctx {
     Ctx { ok: false, token: "", base: "", default_calendar: "", people: #{} }
 }
 
-// The Calendar API with an access token, from the `google_sync` note. `ok` is false when there
-// is no settings note, or Google refused the refresh token: that is recorded on the settings note
-// and notified once, as the task does, and the run ends without failing.
-fn connect() -> Result[Ctx, string] {
-    let rows = vault::query("from google_sync limit 1")?
-    let Some(row) = rows.get(0) else {
-        vault::log("No google_sync note: Google is not connected, so nothing is sent.")
-        return Ok(not_connected())
+// The JSON object in secret `name`, or null when there is none or it is not JSON.
+fn secret_json(name: string) -> Value {
+    match secrets::get(name) {
+        Ok(text) => match json::parse(text) {
+            Ok(v) => v,
+            Err(_) => Value::Null,
+        },
+        Err(_) => Value::Null,
     }
-    let id = text_of(row, "id")
-    let settings = vault::get(id)?
-    let body = settings.get("note").unwrap()
-    let fields = body.get("fields").unwrap_or(Value::Null)
-    let endpoints = dict_of(list_of(body, "blocks"), "endpoints")
-    let token_url = endpoints.get("token").unwrap_or("https://oauth2.googleapis.com/token")
-    let base = endpoints.get("calendar").unwrap_or("https://www.googleapis.com/calendar/v3")
+}
+
+// The string at `key` of `m`, or `fallback` when there is none.
+fn text_or(m: Map[string, Value], key: string, fallback: string) -> string {
+    match m.get(key) {
+        Some(Value::String(s)) => if s == "" { fallback } else { s },
+        _ => fallback,
+    }
+}
+
+// The Calendar API with an access token, from the `google_settings` secret. `ok` is false when
+// Google is not connected (there is no refresh token), or Google refused the refresh token: the
+// `google_calendar` task records that and notifies the user, and this run ends without failing.
+fn connect() -> Result[Ctx, string] {
+    match secrets::get("google_refresh_token") {
+        Ok(_) => {},
+        Err(_) => {
+            vault::log("Google is not connected: there is no google_refresh_token secret, so nothing is sent.")
+            return Ok(not_connected())
+        },
+    }
+    let fields = secret_json("google_settings")
+    let endpoints = map_of(fields, "endpoints")
+    let token_url = text_or(endpoints, "token", "https://oauth2.googleapis.com/token")
+    let base = text_or(endpoints, "calendar", "https://www.googleapis.com/calendar/v3")
     let default_calendar = text_of(fields, "default_calendar")
     match access_token(token_url) {
         Ok(t) => Ok(Ctx {
@@ -192,10 +213,6 @@ fn connect() -> Result[Ctx, string] {
         Err(e) => {
             if !e.starts_with("invalid_grant") {
                 return Err(e)
-            }
-            if !text_of(fields, "last_calendar_error").starts_with("invalid_grant") {
-                vault::notify("Google sign-in expired", "Connect Google again in Settings > Integrations.", "")?;
-                vault::patch(id, Value::Map(#{ "last_calendar_error": Value::String(e) }), "")?;
             }
             vault::log("Google refused the refresh token, so nothing is sent: " + e)
             Ok(not_connected())

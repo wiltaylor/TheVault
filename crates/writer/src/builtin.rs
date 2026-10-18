@@ -1,6 +1,6 @@
 //! The built-in types every vault has: `dailynote`, `fleeting`, the phone data types `message`,
-//! `call` and `conversation` (D15), and the Google sync types `email`, `email_thread`, `event` and
-//! `google_sync` (google-sync D4, D6, D15, D17), with the `gmail_label` taxonomy `email` uses
+//! `call` and `conversation` (D15), and the Google sync types `email`, `email_thread` and `event`
+//! (google-sync D4, D15, D17), with the `gmail_label` taxonomy `email` uses
 //! (google-sync D14).
 //!
 //! A built-in type is added when a vault lacks it, can be customised, and cannot be deleted.
@@ -33,10 +33,6 @@ pub const EMAIL_THREAD_TYPE: &str = "email_thread";
 /// The name of the built-in event type: one note per Google Calendar event or occurrence.
 pub const EVENT_TYPE: &str = "event";
 
-/// The name of the built-in Google sync settings type: one note holds the sync's settings and
-/// cursors.
-pub const GOOGLE_SYNC_TYPE: &str = "google_sync";
-
 /// The name of the built-in open taxonomy of Gmail labels.
 pub const GMAIL_LABEL_TAXONOMY: &str = "gmail_label";
 
@@ -61,9 +57,6 @@ pub const DEFAULT_EMAIL_THREAD_TYPE: &str = include_str!("../defaults/email_thre
 /// The `event` type a vault without it gets.
 pub const DEFAULT_EVENT_TYPE: &str = include_str!("../defaults/event.wcl");
 
-/// The `google_sync` type a vault without it gets.
-pub const DEFAULT_GOOGLE_SYNC_TYPE: &str = include_str!("../defaults/google_sync.wcl");
-
 /// The `gmail_label` taxonomy a vault without it gets. It is open, so the Gmail sync adds each
 /// label it meets; the file is never replaced once written.
 pub const DEFAULT_GMAIL_LABEL_TAXONOMY: &str =
@@ -74,7 +67,7 @@ pub const DEFAULT_GMAIL_LABEL_TAXONOMY: &str =
 pub const DEFAULT_PERSON_TYPE: &str = include_str!("../defaults/person.wcl");
 
 /// Every built-in type, as `(name, the type file a vault without it gets)`.
-pub const BUILT_IN_TYPES: [(&str, &str); 9] = [
+pub const BUILT_IN_TYPES: [(&str, &str); 8] = [
     (daily::DAILY_TYPE, daily::DEFAULT_DAILY_TYPE),
     (fleeting::FLEETING_TYPE, fleeting::DEFAULT_FLEETING_TYPE),
     (MESSAGE_TYPE, DEFAULT_MESSAGE_TYPE),
@@ -83,7 +76,6 @@ pub const BUILT_IN_TYPES: [(&str, &str); 9] = [
     (EMAIL_TYPE, DEFAULT_EMAIL_TYPE),
     (EMAIL_THREAD_TYPE, DEFAULT_EMAIL_THREAD_TYPE),
     (EVENT_TYPE, DEFAULT_EVENT_TYPE),
-    (GOOGLE_SYNC_TYPE, DEFAULT_GOOGLE_SYNC_TYPE),
 ];
 
 /// The built-in types that reference `person`, so a vault given one of them without a `person`

@@ -103,6 +103,11 @@ pub struct SecretInfo {
 }
 
 impl State {
+    /// Whether a key file was loaded, so secrets can be read and written.
+    pub fn has_secret_key(&self) -> bool {
+        self.key.is_some()
+    }
+
     fn key(&self) -> Result<&SecretKey> {
         self.key.as_ref().ok_or(Error::KeyMissing { path: None })
     }

@@ -76,6 +76,8 @@ pub struct TestServer {
     vault: TempDir,
     /// Holds the secret key file, outside the vault.
     _config: TempDir,
+    /// The secret key file the server reads, when the testkit wrote it.
+    key_file: Option<PathBuf>,
     admin_token: String,
 }
 
@@ -117,12 +119,20 @@ impl TestServer {
         state::SecretKey::create_file(&key).expect("write the secret key file");
         let (program, args): (PathBuf, Vec<std::ffi::OsString>) =
             (binary.to_owned(), args.iter().map(|a| a.into()).collect());
+        let key_file = Some(key.clone());
         let command = move || {
             let mut command = Command::new(&program);
             command.env("VAULT_SECRET_KEY_FILE", &key).args(&args);
             command
         };
-        Self::launch(Box::new(command), binary, vault, config, admin_token)
+        Self::launch(
+            Box::new(command),
+            binary,
+            vault,
+            config,
+            key_file,
+            admin_token,
+        )
     }
 
     /// Serves a vault folder that already holds its `state.db`, such as one `vault init` made or
@@ -140,6 +150,10 @@ impl TestServer {
             .iter()
             .map(|(name, value)| ((*name).to_owned(), value.to_path_buf()))
             .collect();
+        let key_file = env
+            .iter()
+            .find(|(name, _)| name == "VAULT_SECRET_KEY_FILE")
+            .map(|(_, path)| path.clone());
         let command = move || {
             let mut command = Command::new(&program);
             command.env_remove("VAULT_SECRET_KEY_FILE");
@@ -153,6 +167,7 @@ impl TestServer {
             &binary,
             vault,
             config,
+            key_file,
             admin_token.to_owned(),
         )
     }
@@ -162,6 +177,7 @@ impl TestServer {
         binary: &Path,
         vault: TempDir,
         config: TempDir,
+        key_file: Option<PathBuf>,
         admin_token: String,
     ) -> Self {
         let (child, addr) = spawn(&command, binary, vault.path());
@@ -172,6 +188,7 @@ impl TestServer {
             addr,
             vault,
             _config: config,
+            key_file,
             admin_token,
         };
         server.wait_healthy();
@@ -212,6 +229,31 @@ impl TestServer {
     /// The temporary vault folder the server is serving.
     pub fn vault_path(&self) -> &Path {
         self.vault.path()
+    }
+
+    /// The value of secret `name`, read from the vault's `state.db` with the server's key file,
+    /// or `None` when there is no such secret. The API never answers a secret's value (D10).
+    ///
+    /// # Panics
+    ///
+    /// When the testkit did not write or was not given the server's key file.
+    pub fn secret(&self, name: &str) -> Option<String> {
+        let path = self
+            .key_file
+            .as_ref()
+            .expect("the server's key file is known to the testkit");
+        let key = state::SecretKey::load_file(path).expect("read the secret key file");
+        state::State::open(&self.vault.path().join(".vault/state.db"), Some(key))
+            .expect("open state.db")
+            .get_secret(name)
+            .expect("read the secret")
+    }
+
+    /// The JSON value of secret `name`, or `Value::Null` when there is none.
+    pub fn secret_json(&self, name: &str) -> serde_json::Value {
+        self.secret(name).map_or(serde_json::Value::Null, |s| {
+            serde_json::from_str(&s).expect("the secret holds JSON")
+        })
     }
 
     /// Waits until the server's `after_*` handler queue is empty, including every job the jobs

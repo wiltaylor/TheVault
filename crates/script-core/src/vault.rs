@@ -143,6 +143,12 @@ pub trait Vault: Send + Sync {
     /// The value of secret `name`, or `None` when there is none (D10).
     fn secret(&self, name: &str) -> Result<Option<String>, String>;
 
+    /// Store `value` as secret `name`, encrypted like `PUT /api/secrets/<name>` stores it
+    /// (google-sync D21).
+    fn set_secret(&self, _name: &str, _value: &str) -> Result<(), String> {
+        Err("secrets cannot be written here".into())
+    }
+
     /// Notify the user: store a notification from `source`, such as `task:<name>`, opening note
     /// `note` when it is not empty. Returns `{ id, title, body, note, source }`.
     fn notify(

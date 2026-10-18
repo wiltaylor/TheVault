@@ -1,7 +1,7 @@
 //! `testkit-fake-google`: run a [`testkit::FakeGoogle`] with its defaults on a free port and print
 //! one JSON line, `{ "base_url", "host", "endpoints", "auth" }`, where `endpoints` is the
-//! `google_sync` note's dict and `auth` the fake consent page. The browser tests (S5) start it and
-//! point a settings note at it. It runs until its standard input closes or it is killed.
+//! `endpoints` object of the `google_settings` secret and `auth` the fake consent page. The
+//! browser tests (S5) start it and point the `google_settings` secret at it. It runs until its standard input closes or it is killed.
 
 use std::io::Read;
 

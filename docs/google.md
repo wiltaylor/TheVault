@@ -84,8 +84,25 @@ The card then shows **Connected as** your Google address.
 ### What connecting changes
 
 - TheVault stores three secrets, encrypted with the vault's secret key: `google_client_id`, `google_client_secret` and `google_refresh_token`. Settings > Secrets lists them; no page or API shows their values.
-- The vault gets one **Google sync** settings note if it had none, holding the connected address and the sync settings, such as which Gmail labels to pull.
+- TheVault stores the connected address as the secret `google_account`, and the sync settings as the secret `google_settings`. No note holds either.
 - The scheduled tasks `google_gmail` and `google_calendar` are unpaused, and each runs once straight away. The Integrations card shows each side's last run and last error, with **Run now** buttons.
+
+## Choose what to sync
+
+The Google card's **What to sync** form holds the sync's settings. It is the only place to change them: they are kept as the secret `google_settings`, not as a note. Select **Save** after a change; the next run of each sync uses it.
+
+| Setting | What it does | Default |
+|---|---|---|
+| **Gmail mode** | **The labels below** pulls only the Gmail labels listed; **All mail** pulls everything | The labels below |
+| **Gmail labels** | The labels to pull, by name, such as `INBOX` or `Work/Clients`. Type a label and press Enter to add it | None |
+| **Window (days)** | How many days back the first Gmail pull reaches, 1 to 3650 | 90 |
+| **Back-fill to** | Pull older mail, one page each run, back to this date. Leave it empty to pull nothing older than the window | Empty |
+| **Calendars** | The ids of the Google calendars to pull. `primary` is your main calendar; another calendar's id is under its **Integrate calendar** settings in Google Calendar | `primary` |
+| **Default calendar** | Where a new event note goes when it names no calendar | `primary` |
+
+Each sync also keeps its progress, such as Gmail's history id and each calendar's sync token, in a secret of its own: `google_gmail_state` and `google_calendar_state`. A sync run writes no note history for them. `docs/scripts.md`, "The Google sync's secrets", describes every Google secret.
+
+A vault from 0.1.7 had a **Google sync** settings note instead. The first start of a newer server moves its settings and progress into these secrets and deletes the note and its type. That needs the vault's secret key; a server started without it keeps the note and moves it on a later start that has the key.
 
 ## The permissions TheVault asks for
 
@@ -116,7 +133,7 @@ When this happens, the next sync run gets `invalid_grant` from Google. TheVault 
 
 ## Disconnect
 
-Select **Disconnect** on the Google card. TheVault deletes the three secrets, pauses both sync tasks and clears the connected address. Notes that were already synced stay in the vault. To stop Google from accepting the old token as well, remove TheVault's access in your Google account's security settings.
+Select **Disconnect** on the Google card. TheVault deletes the three sign-in secrets and the connected address, pauses both sync tasks, and clears each sync's progress, so the next connection pulls from the start. The **What to sync** settings stay. Notes that were already synced stay in the vault. To stop Google from accepting the old token as well, remove TheVault's access in your Google account's security settings.
 
 ## Troubleshooting
 

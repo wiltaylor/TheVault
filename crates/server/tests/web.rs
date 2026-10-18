@@ -80,7 +80,6 @@ fn lists_every_type_with_its_fields_and_templates() {
             "email_thread",
             "event",
             "fleeting",
-            "google_sync",
             "message",
             "person",
             "task"

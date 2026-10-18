@@ -8,11 +8,15 @@ use regex
 // runs `run` every 10 minutes. It pulls Gmail messages into `email` notes, grouped into
 // `email_thread` notes, with senders and recipients linked to the `person` holding the address.
 //
-// - The settings are the one `google_sync` note: `gmail_mode` (`labels` pulls the labels named in
-//   `gmail_labels`, `all` pulls all mail), `gmail_window_days` (how far back the first pull
-//   reaches) and `gmail_backfill_to` (a date older mail is paged back to, a page each run). Its
-//   hidden `endpoints` dict points the script at other hosts than Google's, for tests.
-// - The first run lists the window. Later runs read Gmail's history from `gmail_history_id`:
+// - The settings are the JSON object in the `google_settings` secret (google-sync D21):
+//   `gmail_mode` (`labels` pulls the labels named in `gmail_labels`, `all` pulls all mail),
+//   `gmail_window_days` (how far back the first pull reaches) and `gmail_backfill_to` (a date
+//   older mail is paged back to, a page each run). Its `endpoints` object points the script at
+//   other hosts than Google's, for tests. A missing secret means the defaults.
+// - The run's state is the JSON object in the `google_gmail_state` secret, written with
+//   `secrets::set` and by nothing else: `history_id`, `backfill_page`, `last_run`, `last_error`
+//   and `notified_invalid_grant`. No note is written for it.
+// - The first run lists the window. Later runs read Gmail's history from `history_id`:
 //   new messages are pulled, a label change updates the email's labels and nothing else, and a
 //   message deleted in Gmail archives its note. A history id Gmail no longer keeps (404) lists
 //   the window again; messages already pulled are skipped, by their `gmail_ref`.
@@ -20,8 +24,9 @@ use regex
 //   The HTML part is kept as an asset in `html`. Attachments up to 700 KB are kept in
 //   `attachments`; larger ones are listed by name and size. A message too large to fetch keeps
 //   its headers and snippet.
-// - Each run refreshes an access token with the three secrets and stores none. A refresh token
-//   Google refuses (`invalid_grant`) is written to `last_gmail_error`, notified once, and ends
+// - Each run refreshes an access token with the three secrets and stores none. Without a refresh
+//   token Google is not connected, and the run ends successfully with a log line. A refresh token
+//   Google refuses (`invalid_grant`) is written to `last_error`, notified once, and ends
 //   the run successfully. Any other failure is written there too and fails the run.
 // - A run stops early, before its time or work limit, and leaves the cursor where it was, so the
 //   next run carries on.
@@ -1029,43 +1034,50 @@ fn endpoint(endpoints: Value, key: string, fallback: string) -> string {
     if base.ends_with("/") { base.slice(0, base.len() - 1) } else { base }
 }
 
-// The settings note's `endpoints` dict, or null.
-fn endpoints_of(note: Value) -> Value {
-    let body = note.get("note").unwrap_or(Value::Null)
-    for block in list_of(body, "blocks") {
-        let label = match list_of(block, "labels").get(0) {
-            Some(l) => l.as_string().unwrap_or(""),
-            None => "",
-        }
-        if text_of(block, "kind") == "dict" && label == "endpoints" {
-            return block.get("fields").unwrap_or(Value::Null)
-        }
+fn as_map(v: Value) -> Map[string, Value] {
+    match v {
+        Value::Map(m) => m,
+        _ => #{},
     }
-    Value::Null
+}
+
+// The JSON object in secret `name`, or null when there is none or it is not JSON.
+fn secret_json(name: string) -> Value {
+    match secrets::get(name) {
+        Ok(text) => match json::parse(text) {
+            Ok(v) => v,
+            Err(_) => Value::Null,
+        },
+        Err(_) => Value::Null,
+    }
+}
+
+fn save_state(state: Map[string, Value]) -> Result[(), string] {
+    secrets::set("google_gmail_state", json::to_string(Value::Map(state)))
 }
 
 fn now_text() -> string {
     rfc3339(vault::now())
 }
 
-fn record_error(sync_id: string, error: string) -> Result[(), string] {
-    vault::patch(sync_id, Value::Map(#{
-        "last_gmail_run": Value::String(now_text()),
-        "last_gmail_error": Value::String(error),
-    }), "")?;
-    Ok(())
+fn record_error(state: Map[string, Value], error: string) -> Result[(), string] {
+    state["last_run"] = Value::String(now_text());
+    state["last_error"] = Value::String(error);
+    save_state(state)
 }
 
 fn run() -> Result[(), string] {
     let started = vault::now()
-    let settings = first_row("from google_sync limit 1")?
-    if settings.is_null() {
-        vault::log("There is no google_sync settings note, so there is nothing to sync.")
-        return Ok(())
+    match secrets::get("google_refresh_token") {
+        Ok(_) => {},
+        Err(_) => {
+            vault::log("Google is not connected: there is no google_refresh_token secret, so there is nothing to sync.")
+            return Ok(())
+        },
     }
-    let sync_id = text_of(settings, "id")
-    let fields = settings.get("fields").unwrap_or(Value::Null)
-    let endpoints = endpoints_of(vault::get(sync_id)?)
+    let fields = secret_json("google_settings")
+    let state = as_map(secret_json("google_gmail_state"))
+    let endpoints = fields.get("endpoints").unwrap_or(Value::Null)
     let token_url = endpoint(endpoints, "token", "https://oauth2.googleapis.com/token")
     let token = match access_token(token_url) {
         Ok(t) => t,
@@ -1073,17 +1085,23 @@ fn run() -> Result[(), string] {
             if e.starts_with("invalid_grant") {
                 // The user must connect again: say so once, not on every run (D18).
                 let message = e + ". Connect Google again in Settings > Integrations."
-                if !text_of(fields, "last_gmail_error").starts_with("invalid_grant") {
+                let notified = match state.get("notified_invalid_grant") {
+                    Some(Value::Bool(b)) => b,
+                    _ => false,
+                }
+                if !notified {
                     vault::notify(expired_title(), expired_body(), "")?;
                 }
-                record_error(sync_id, message)?
+                state["notified_invalid_grant"] = Value::Bool(true);
+                record_error(state, message)?
                 vault::log(message)
                 return Ok(())
             }
-            record_error(sync_id, e)?
+            record_error(state, e)?
             return Err(e)
         },
     }
+    state["notified_invalid_grant"] = Value::Bool(false);
     let ctx = Ctx {
         codec: codec(),
         gmail: endpoint(endpoints, "gmail", "https://gmail.googleapis.com/gmail/v1"),
@@ -1100,16 +1118,16 @@ fn run() -> Result[(), string] {
         failed: 0,
         first_failure: "",
     }
-    match sync(ctx, sync_id, fields) {
+    match sync(ctx, state, fields) {
         Ok(_) => Ok(()),
         Err(e) => {
-            record_error(sync_id, e)?
+            record_error(state, e)?
             Err(e)
         },
     }
 }
 
-fn sync(ctx: Ctx, sync_id: string, fields: Value) -> Result[(), string] {
+fn sync(ctx: Ctx, state: Map[string, Value], fields: Value) -> Result[(), string] {
     let all = text_of(fields, "gmail_mode") == "all"
     let labels = load_labels(ctx)?
     let wanted: List[string] = []
@@ -1130,7 +1148,7 @@ fn sync(ctx: Ctx, sync_id: string, fields: Value) -> Result[(), string] {
     let window_start = ctx.started - days * day_ms()
     let q = fmt("after:{}", window_start / 1000)
 
-    let history = text_of(fields, "gmail_history_id")
+    let history = text_of(Value::Map(state), "history_id")
     let next_history = history
     if history != "" {
         let got = incremental(ctx, history, wanted, all)?
@@ -1151,7 +1169,7 @@ fn sync(ctx: Ctx, sync_id: string, fields: Value) -> Result[(), string] {
         }
     }
 
-    let cursor = text_of(fields, "gmail_backfill_page")
+    let cursor = text_of(Value::Map(state), "backfill_page")
     let to = text_of(fields, "gmail_backfill_to")
     let next_cursor = if ctx.stopped { cursor } else { backfill(ctx, cursor, to, lists, window_start)? }
 
@@ -1160,13 +1178,11 @@ fn sync(ctx: Ctx, sync_id: string, fields: Value) -> Result[(), string] {
     } else {
         Value::Null
     }
-    let changes = #{
-        "last_gmail_run": Value::String(now_text()),
-        "last_gmail_error": error,
-        "gmail_history_id": if next_history == "" { Value::Null } else { Value::String(next_history) },
-        "gmail_backfill_page": if next_cursor == "" { Value::Null } else { Value::String(next_cursor) },
-    }
-    vault::patch(sync_id, Value::Map(changes), "")?;
+    state["last_run"] = Value::String(now_text());
+    state["last_error"] = error;
+    state["history_id"] = if next_history == "" { Value::Null } else { Value::String(next_history) };
+    state["backfill_page"] = if next_cursor == "" { Value::Null } else { Value::String(next_cursor) };
+    save_state(state)?;
     vault::log(fmt("Gmail: {} new, {} relabelled, {} archived, {} not saved.", ctx.imported, ctx.updated, ctx.archived, ctx.failed))
     Ok(())
 }

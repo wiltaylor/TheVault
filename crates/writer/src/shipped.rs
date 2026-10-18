@@ -112,28 +112,43 @@ pub const SHIPPED_FILES: [ShippedFile; 11] = [
     ShippedFile {
         path: "scripts/google_calendar.ws",
         source: include_str!("../defaults/google/google_calendar.ws"),
-        hashes: &["c3f42196166b550d457a9c1f3aa9db7b89c0502a36924efc072448bd61e70e64"],
+        hashes: &[
+            "c3f42196166b550d457a9c1f3aa9db7b89c0502a36924efc072448bd61e70e64",
+            "c8645c85e00a3fe1ede2ac7e41e98788d6936550744afc791261e7ce80a7266b",
+        ],
     },
     ShippedFile {
         path: "tasks/google_calendar.wcl",
         source: include_str!("../defaults/google/tasks/google_calendar.wcl"),
-        hashes: &["2fdbbc5d2d7417391ca5d633fd756efade9a79b858c372b0df5645f545967709"],
+        hashes: &[
+            "2fdbbc5d2d7417391ca5d633fd756efade9a79b858c372b0df5645f545967709",
+            "8ab13d82a86b53887922f967406c5b7661e1e8f49e2018cd163f28902dca6a40",
+        ],
     },
     ShippedFile {
         path: "scripts/google_gmail.ws",
         source: include_str!("../defaults/google/google_gmail.ws"),
-        hashes: &["40629abecc581c745657b98ad630af864b35e87eb287d0217103ea8dbd4288c7"],
+        hashes: &[
+            "40629abecc581c745657b98ad630af864b35e87eb287d0217103ea8dbd4288c7",
+            "0d42ff00a0888f1a7b51fc693e75e2b150373d3a22a17f085aa76dffdc7d802a",
+        ],
     },
     ShippedFile {
         path: "tasks/google_gmail.wcl",
         source: include_str!("../defaults/google/google_gmail.wcl"),
-        hashes: &["94f9b68f9e0f6a9bcb001ce06304c1a791fb5dad6bb5eb5ed1cbead2d8997c51"],
+        hashes: &[
+            "94f9b68f9e0f6a9bcb001ce06304c1a791fb5dad6bb5eb5ed1cbead2d8997c51",
+            "07fca002b04da1462058d2959114609243cf4068dec3dcd383f1bc93d641b2d4",
+        ],
     },
     // The Google Calendar write-back, named by the shipped `event` type's handlers.
     ShippedFile {
         path: "scripts/google_event.ws",
         source: include_str!("../defaults/google/google_event.ws"),
-        hashes: &["5f4a59e376bae6ab443affc0c0fdf241b1f26347a870f35ab03cedf110584cd3"],
+        hashes: &[
+            "5f4a59e376bae6ab443affc0c0fdf241b1f26347a870f35ab03cedf110584cd3",
+            "87423adde9c434f260c4d07f2cb1196cb7d89a91411c783838391cf2434c9e1d",
+        ],
     },
 ];
 
@@ -141,6 +156,11 @@ pub const SHIPPED_FILES: [ShippedFile; 11] = [
 /// migration script. It runs once per vault, on the home server, before the shipped defaults are
 /// seeded, and is recorded in `state.db` by its id once it returns `Ok`. A step that fails stops
 /// the server from starting and runs again on the next start.
+///
+/// A step that cannot run yet, such as one that needs the secrets key on a server started without
+/// it, returns [`crate::Error::StepDeferred`]: it is logged and not recorded, so it runs again on
+/// the next start, and the steps after it still run. A step only defers when no later step
+/// depends on what it does.
 ///
 /// A step makes its changes through the writer's own calls, such as
 /// [`Writer::plan_type_change`] and [`Writer::apply_type_change`], authored by
@@ -170,7 +190,238 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0003_event_google_handler",
         run: event_google_handler,
     },
+    UpgradeStep {
+        id: "0004_remove_google_sync",
+        run: remove_google_sync,
+    },
 ];
+
+/// The settings type of 0.1.7, which step `0004_remove_google_sync` removes.
+const GOOGLE_SYNC_TYPE: &str = "google_sync";
+
+/// Step `0004_remove_google_sync` (google-sync D21): the Google sync's settings and state moved
+/// from the `google_sync` note type into secrets. The step:
+///
+/// 1. gives every handler of the `event` type naming `google_event` the `google_settings` secret
+///    it now reads, as one planned type change that edits no note;
+/// 2. when the vault has a `google_sync` note, moves the first one's settings, cursors and account
+///    into the four secrets of [`crate::google`], setting only keys a secret does not hold
+///    already. Without the secrets key it changes nothing more and defers, to run again on the
+///    next start;
+/// 3. deletes every `google_sync` note for good, not to the trash, then the type.
+fn remove_google_sync(w: &Writer) -> Result<()> {
+    event_handlers_read_settings(w)?;
+    if w.schema().type_def(GOOGLE_SYNC_TYPE).is_none() {
+        return Ok(());
+    }
+    let notes = w.note_ids(GOOGLE_SYNC_TYPE)?;
+    if let Some(first) = notes.first() {
+        if !w.state.has_secret_key() {
+            let why = "step 0004_remove_google_sync needs the secrets key to move the google_sync \
+                       note into secrets: start the server with its key file to finish it";
+            return Err(crate::Error::StepDeferred(why.to_owned()));
+        }
+        let note = w.read(first)?;
+        move_google_sync_note(w, &crate::doc_to_json(&note.doc))?;
+    }
+    let author = Author::Task(SERVER_AUTHOR.to_owned());
+    for id in &notes {
+        w.delete(id, Some(&w.read(id)?.version), &author)?;
+        w.state.purge_from_trash(id)?;
+    }
+    w.delete_type(GOOGLE_SYNC_TYPE)?;
+    Ok(())
+}
+
+/// Move the settings, cursors and account of a 0.1.7 `google_sync` note, in its JSON form, into
+/// the Google secrets, keeping every key a secret already holds.
+fn move_google_sync_note(w: &Writer, note: &serde_json::Value) -> Result<()> {
+    use serde_json::{Map, Value};
+
+    use crate::google;
+
+    let fields = &note["fields"];
+    let dict = |name: &str| -> Option<Map<String, Value>> {
+        note["blocks"].as_array()?.iter().find_map(|b| {
+            (b["kind"] == "dict" && b["labels"][0] == name)
+                .then(|| b["fields"].as_object().cloned().unwrap_or_default())
+        })
+    };
+    let field = |name: &str| fields.get(name).cloned().unwrap_or(Value::Null);
+    let invalid = |name: &str| {
+        Value::Bool(
+            fields[name]
+                .as_str()
+                .is_some_and(|e| e.starts_with("invalid_grant")),
+        )
+    };
+
+    let mut settings = google::default_settings();
+    for key in [
+        "gmail_mode",
+        "gmail_labels",
+        "gmail_window_days",
+        "gmail_backfill_to",
+        "calendars",
+        "default_calendar",
+    ] {
+        if let Some(v) = fields.get(key) {
+            settings.insert(key.to_owned(), v.clone());
+        }
+    }
+    if let Some(e) = dict("endpoints") {
+        settings.insert("endpoints".to_owned(), Value::Object(e));
+    }
+
+    let mut gmail = Map::new();
+    gmail.insert("history_id".into(), field("gmail_history_id"));
+    gmail.insert("backfill_page".into(), field("gmail_backfill_page"));
+    gmail.insert("last_run".into(), field("last_gmail_run"));
+    gmail.insert("last_error".into(), field("last_gmail_error"));
+    gmail.insert("notified_invalid_grant".into(), invalid("last_gmail_error"));
+
+    let tokens: Map<String, Value> = dict("calendar_sync_tokens")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (calendar_of_token_key(&k), v))
+        .collect();
+    let mut calendar = Map::new();
+    calendar.insert("sync_tokens".into(), Value::Object(tokens));
+    calendar.insert("window_end".into(), field("calendar_window_end"));
+    calendar.insert("last_run".into(), field("last_calendar_run"));
+    calendar.insert("last_error".into(), field("last_calendar_error"));
+    calendar.insert(
+        "notified_invalid_grant".into(),
+        invalid("last_calendar_error"),
+    );
+
+    for (name, moved) in [
+        (google::SETTINGS, settings),
+        (google::GMAIL_STATE, gmail),
+        (google::CALENDAR_STATE, calendar),
+    ] {
+        let mut kept = google::read_object(&w.state, name)?;
+        let before = kept.clone();
+        for (k, v) in moved {
+            kept.entry(k).or_insert(v);
+        }
+        if kept != before {
+            google::write_object(&w.state, name, &kept)?;
+        }
+    }
+    if let Some(account) = fields["account"].as_str().filter(|a| !a.is_empty())
+        && w.state.get_secret(google::ACCOUNT)?.is_none()
+    {
+        w.state.set_secret(google::ACCOUNT, account)?;
+    }
+    Ok(())
+}
+
+/// The calendar id of a 0.1.7 `calendar_sync_tokens` key: `c_` and the id with each character
+/// other than a letter or digit written as `_` and its two hex digits. A key not in that form is
+/// kept as it is.
+fn calendar_of_token_key(key: &str) -> String {
+    let Some(rest) = key.strip_prefix("c_") else {
+        return key.to_owned();
+    };
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        if c != '_' {
+            out.push(c);
+            continue;
+        }
+        let hex: String = chars.by_ref().take(2).collect();
+        match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+            Some(c) if hex.len() == 2 => out.push(c),
+            _ => return key.to_owned(),
+        }
+    }
+    out
+}
+
+/// The secret the write-back now reads besides the three credentials (google-sync D21).
+const SETTINGS_SECRET: &str = "google_settings";
+
+/// Give every handler of the vault's `event` type that names `google_event` the
+/// `google_settings` secret, as one planned type change that edits no note.
+fn event_handlers_read_settings(w: &Writer) -> Result<()> {
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(EVENT_TYPE) else {
+        return Ok(());
+    };
+    let lacking = ty.handlers.iter().any(|h| {
+        h.script == EVENT_HANDLER_SCRIPT && !h.secrets.iter().any(|s| s == SETTINGS_SECRET)
+    });
+    if !lacking {
+        return Ok(());
+    }
+    let path = type_path(EVENT_TYPE);
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    for item in &mut ast.items {
+        let Some(handler) = block_mut(item, "handler") else {
+            continue;
+        };
+        let names_script = handler.items.iter().any(|i| {
+            matches!(i, Item::Field(f) if f.name == "script"
+                && matches!(&f.expr, Expr::Utf8(s) if s == EVENT_HANDLER_SCRIPT))
+        });
+        if !names_script {
+            continue;
+        }
+        let mut secrets: Vec<String> = handler
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Field(f) if f.name == "secrets" => match &f.expr {
+                    Expr::ListLit { elements, .. } => Some(
+                        elements
+                            .iter()
+                            .filter_map(|e| match e {
+                                Expr::Utf8(s) => Some(s.clone()),
+                                _ => None,
+                            })
+                            .collect(),
+                    ),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or_default();
+        if secrets.iter().any(|s| s == SETTINGS_SECRET) {
+            continue;
+        }
+        secrets.push(SETTINGS_SECRET.to_owned());
+        let src = store::parse_data_only(&format!("secrets = {secrets:?}\n"), &path)?;
+        let field = src.items.into_iter().next().expect("one attribute");
+        match handler
+            .items
+            .iter()
+            .position(|i| matches!(i, Item::Field(f) if f.name == "secrets"))
+        {
+            Some(k) => handler.items[k] = field,
+            None => handler.items.push(field),
+        }
+    }
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
+    let plan = w.plan_type_change(EVENT_TYPE, &change)?;
+    if !plan.changes.is_empty() {
+        eprintln!(
+            "step 0004_remove_google_sync left the event handlers alone: it would edit notes"
+        );
+        return Ok(());
+    }
+    w.apply_type_change(
+        EVENT_TYPE,
+        &change,
+        &plan.token,
+        &Author::Task(SERVER_AUTHOR.to_owned()),
+    )?;
+    Ok(())
+}
 
 /// The script the shipped `event` type's write-back handlers name (google-sync D9, D10, D20).
 const EVENT_HANDLER_SCRIPT: &str = "google_event";
@@ -656,7 +907,17 @@ impl Writer {
         let applied: BTreeSet<String> = self.state.applied_upgrades()?.into_iter().collect();
         let mut ran = Vec::new();
         for step in steps.iter().filter(|s| !applied.contains(s.id)) {
-            (step.run)(self)?;
+            match (step.run)(self) {
+                Ok(()) => {}
+                Err(crate::Error::StepDeferred(why)) => {
+                    eprintln!(
+                        "upgrade step {} will run again on the next start: {why}",
+                        step.id
+                    );
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
             self.state.record_upgrade(step.id)?;
             ran.push(step.id.to_owned());
         }

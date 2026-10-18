@@ -1,16 +1,18 @@
 import { Route } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GoogleSide, GoogleStatus } from "../api";
+import type { GoogleSettings, GoogleSide, GoogleStatus } from "../api";
 
 const googleStatus = vi.fn();
 const googleStart = vi.fn();
 const googleFinish = vi.fn();
 const googleDisconnect = vi.fn();
 const runTask = vi.fn();
+const googleSaveSettings = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, googleStatus, googleStart, googleFinish, googleDisconnect, runTask } };
+  return { ...real, api: { ...real.api, googleStatus, googleStart, googleFinish, googleDisconnect, googleSaveSettings, runTask },
+  };
 });
 
 const { GoogleCard, GoogleCallback, redirectMode } = await import("./Integrations");
@@ -22,11 +24,20 @@ function side(task: string, over: Partial<GoogleSide> = {}): GoogleSide {
   return { task, installed: true, paused: true, last_run: null, last_error: null, ...over };
 }
 
+const defaults: GoogleSettings = {
+  gmail_mode: "labels",
+  gmail_labels: [],
+  gmail_window_days: 90,
+  gmail_backfill_to: null,
+  calendars: ["primary"],
+  default_calendar: "primary",
+};
+
 const disconnected: GoogleStatus = {
   connected: false,
   client_stored: false,
   account: null,
-  settings: null,
+  settings: defaults,
   gmail: side("google_gmail"),
   calendar: side("google_calendar"),
 };
@@ -35,7 +46,7 @@ const connected: GoogleStatus = {
   connected: true,
   client_stored: true,
   account: "me@example.com",
-  settings: "01JABCDEFGHJKMNPQRSTVWXYZ0",
+  settings: { ...defaults, gmail_labels: ["INBOX"] },
   gmail: side("google_gmail", { paused: false, last_run: "2026-10-18T09:00:00Z" }),
   calendar: side("google_calendar", { paused: false, last_error: "Google answered 500: backend error" }),
 };
@@ -161,6 +172,83 @@ describe("GoogleCard", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
     expect(googleDisconnect).not.toHaveBeenCalled();
     confirm.mockRestore();
+  });
+});
+
+describe("GoogleSettingsForm", () => {
+  /** Type `text` into the chip box labelled `label` and press Enter. */
+  function addChip(label: string, text: string) {
+    fireEvent.click(screen.getByRole("button", { name: `Add to ${label}` }));
+    const box = screen.getByRole("combobox", { name: `Add to ${label}` }) as HTMLInputElement;
+    box.value = text;
+    fireEvent.input(box);
+    fireEvent.keyDown(box, { key: "Enter" });
+  }
+
+  it("shows the saved settings and saves the edited ones", async () => {
+    googleStatus.mockResolvedValue(connected);
+    const saved: GoogleSettings = {
+      gmail_mode: "labels",
+      gmail_labels: ["INBOX", "Work/Clients"],
+      gmail_window_days: 30,
+      gmail_backfill_to: "2025-01-31",
+      calendars: ["primary", "team@group.calendar.google.com"],
+      default_calendar: "team@group.calendar.google.com",
+    };
+    googleSaveSettings.mockResolvedValue({ ...connected, settings: saved });
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+
+    const form = await screen.findByRole("form", { name: "Google sync settings" });
+    expect((screen.getByLabelText("Gmail mode") as HTMLSelectElement).value).toBe("labels");
+    expect(screen.getByRole("list", { name: "Gmail labels values" }).textContent).toContain("INBOX");
+    expect((screen.getByLabelText("Window (days)") as HTMLInputElement).value).toBe("90");
+    expect(screen.getByRole("list", { name: "Calendars values" }).textContent).toContain("primary");
+
+    addChip("Gmail labels", "Work/Clients");
+    fireEvent.input(screen.getByLabelText("Window (days)"), { target: { value: "30" } });
+    fireEvent.input(screen.getByLabelText("Back-fill to"), { target: { value: "2025-01-31" } });
+    addChip("Calendars", "team@group.calendar.google.com");
+    fireEvent.input(screen.getByLabelText("Default calendar"), { target: { value: "team@group.calendar.google.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(googleSaveSettings).toHaveBeenCalledWith(saved));
+    expect(await screen.findByText("Saved. The next runs use these settings.")).toBeTruthy();
+    expect(form).toBeTruthy();
+  });
+
+  it("saves all mail with no back-fill date, and refuses a window out of range or no calendar", async () => {
+    googleStatus.mockResolvedValue(disconnected);
+    googleSaveSettings.mockResolvedValue(disconnected);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+    await screen.findByRole("form", { name: "Google sync settings" });
+
+    fireEvent.input(screen.getByLabelText("Window (days)"), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("1 to 3650");
+    fireEvent.input(screen.getByLabelText("Window (days)"), { target: { value: "90" } });
+    fireEvent.click(screen.getByRole("button", { name: "Remove primary" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("at least one calendar");
+    expect(googleSaveSettings).not.toHaveBeenCalled();
+
+    addChip("Calendars", "primary");
+    fireEvent.change(screen.getByLabelText("Gmail mode"), { target: { value: "all" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(googleSaveSettings).toHaveBeenCalledWith({ ...defaults, gmail_mode: "all" }),
+    );
+  });
+
+  it("shows why the server refused the settings", async () => {
+    googleStatus.mockResolvedValue(connected);
+    const { ApiError } = await import("../api");
+    googleSaveSettings.mockRejectedValue(
+      new ApiError(400, { error: "bad_request", message: "the back-fill date must be a date as YYYY-MM-DD" }),
+    );
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+    await screen.findByRole("form", { name: "Google sync settings" });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("YYYY-MM-DD");
   });
 });
 

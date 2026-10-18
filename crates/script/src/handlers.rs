@@ -228,8 +228,12 @@ impl Shared {
     }
 
     /// Run the `before_*` handlers of `change`, in file order.
+    /// Before [`Handlers::start`], as during the start-up upgrade steps, no handler runs, as
+    /// [`Shared::after`] queues none.
     fn before(&self, change: &mut NoteChange) -> Result<(), String> {
-        let writer = self.writer()?;
+        let Ok(writer) = self.writer() else {
+            return Ok(());
+        };
         let event = format!("before_{}", event_name(change.event));
         let handlers =
             writer.read_index(|_, schema| handlers_of(schema, &change.type_name, &event));
@@ -714,6 +718,11 @@ impl Vault for HandlerVault {
 
     fn secret(&self, name: &str) -> Result<Option<String>, String> {
         Vault::secret(&*bound(&self.binding)?, name)
+    }
+
+    fn set_secret(&self, name: &str, value: &str) -> Result<(), String> {
+        // Not a vault change, but nothing may outlast a write a dry run or a migration takes.
+        self.side_write("secrets::set", |w| Vault::set_secret(w, name, value))
     }
 
     fn notify(&self, source: &str, title: &str, body: &str, note: &str) -> Result<Json, String> {

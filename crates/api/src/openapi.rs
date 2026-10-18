@@ -481,7 +481,12 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
         "/api/integrations/google",
-        "The Google sync's connection, account, and each side's last run, error and pause",
+        "The Google sync's connection, account, settings, and each side's last run, error and pause",
+    ),
+    (
+        "PUT",
+        "/api/integrations/google/settings",
+        "Save the Google sync's settings: Gmail mode, labels, window and back-fill date, calendars",
     ),
     (
         "POST",
@@ -496,7 +501,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/integrations/google/disconnect",
-        "Delete the Google secrets, pause the sync and clear the account",
+        "Delete the Google sign-in and account, pause the sync and clear its cursors",
     ),
 ];
 

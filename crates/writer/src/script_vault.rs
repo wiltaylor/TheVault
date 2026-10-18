@@ -318,6 +318,10 @@ impl Vault for Writer {
         self.state().get_secret(name).map_err(err)
     }
 
+    fn set_secret(&self, name: &str, value: &str) -> Result<(), String> {
+        self.state().set_secret(name, value).map_err(err)
+    }
+
     fn notify(&self, source: &str, title: &str, body: &str, note: &str) -> Result<Json, String> {
         let n = Writer::notify(
             self,

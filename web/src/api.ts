@@ -377,21 +377,37 @@ export interface GoogleSide {
   installed: boolean;
   /** Whether the task is paused, or null when it does not exist or does not check. */
   paused: boolean | null;
-  /** When the sync last ran, as the settings note records it. */
+  /** When the sync last ran, as its state secret records it. */
   last_run: string | null;
   last_error: string | null;
 }
 
-/** The Google sync's connection (google-sync D1, D18). */
+/** What the Google sync pulls, kept in the `google_settings` secret (google-sync D21). */
+export interface GoogleSettings {
+  /** `labels` pulls the labels in `gmail_labels`; `all` pulls all mail. */
+  gmail_mode: "labels" | "all";
+  /** Gmail label names. */
+  gmail_labels: string[];
+  /** How many days back the first pull reaches, 1 to 3650. */
+  gmail_window_days: number;
+  /** A date, `YYYY-MM-DD`, older mail is paged back to, or null. */
+  gmail_backfill_to: string | null;
+  /** The ids of the Google calendars to pull; never empty. */
+  calendars: string[];
+  /** The calendar a new event note goes to when it names none. */
+  default_calendar: string;
+}
+
+/** The Google sync's connection (google-sync D1, D18, D21). */
 export interface GoogleStatus {
   /** Whether the client id, client secret and refresh token are all stored. */
   connected: boolean;
   /** Whether the OAuth client's id and secret are stored. */
   client_stored: boolean;
-  /** The connected address, from the settings note. */
+  /** The connected address, from the `google_account` secret. */
   account: string | null;
-  /** The settings note's id, or null when there is none yet. */
-  settings: string | null;
+  /** The settings, the defaults where none are saved. */
+  settings: GoogleSettings;
   gmail: GoogleSide;
   calendar: GoogleSide;
 }
@@ -900,6 +916,9 @@ export const api = {
   googleFinish: (url: string) => request<GoogleStatus>("POST", "/api/integrations/google/finish", { url }),
   /** Delete the Google secrets and pause the sync. */
   googleDisconnect: () => request<GoogleStatus>("POST", "/api/integrations/google/disconnect"),
+  /** Save what the Google sync pulls. */
+  googleSaveSettings: (settings: GoogleSettings) =>
+    request<GoogleStatus>("PUT", "/api/integrations/google/settings", settings),
   devices: async () => (await request<{ devices: Device[] }>("GET", "/api/devices")).devices,
   /** The app builds the server hands out. Public: it needs no session. */
   clients: () => request<{ clients: ClientBuild[]; enabled: boolean }>("GET", "/api/clients"),

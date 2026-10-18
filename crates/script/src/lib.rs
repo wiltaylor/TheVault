@@ -7,7 +7,7 @@
 //! |--------|---------------------------------|--------------------|-------|
 //! | `vault` | yes | yes | yes |
 //! | `http` | no | yes | yes |
-//! | `secrets` | no | yes | yes |
+//! | `secrets` (read and write) | no | yes | yes |
 //! | `fs` | no | no | yes |
 //! | `value`, `json`, `math`, `regex` | yes | yes | yes |
 //!
@@ -33,7 +33,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use wscript::std_modules::DynValue;
-use wscript::{Fault, Module};
+use wscript::{Fault, HostError, Module};
 
 pub use handlers::{Handlers, MAX_DEPTH};
 pub use http::Response;
@@ -117,15 +117,41 @@ impl Extensions for Server {
     }
 }
 
+/// The largest value `secrets::set` stores (google-sync D21).
+pub const MAX_SECRET_VALUE: usize = 64 * 1024;
+
+/// Whether the running job names secret `name`.
+fn granted(name: &str) -> Result<bool, HostError> {
+    run::with(|r| {
+        r.remaining()?;
+        Ok(r.job.secrets.iter().any(|s| s == name))
+    })
+}
+
 fn secrets_module(v: Arc<dyn Vault>) -> Module {
     let mut m = Module::new("secrets");
-    m.doc("Read the secrets this script was granted, by name (D10)");
+    m.doc("Read and write the secrets this script was granted, by name (D10, google-sync D21)");
+    let w = v.clone();
+    m.fn_named(
+        "set",
+        ["name", "value"],
+        move |name: String, value: String| -> Reply<()> {
+            Fault(granted(&name).map(|granted| {
+                if !granted {
+                    return Err(format!("secret {name:?} is not granted to this script"));
+                }
+                if value.len() > MAX_SECRET_VALUE {
+                    return Err(format!(
+                        "secret {name:?} is {} bytes: a secret holds at most 64 KiB",
+                        value.len()
+                    ));
+                }
+                w.set_secret(&name, &value)
+            }))
+        },
+    );
     m.fn_named("get", ["name"], move |name: String| -> Reply<String> {
-        let granted = run::with(|r| {
-            r.remaining()?;
-            Ok(r.job.secrets.contains(&name))
-        });
-        Fault(granted.map(|granted| {
+        Fault(granted(&name).map(|granted| {
             if !granted {
                 return Err(format!("secret {name:?} is not granted to this script"));
             }
