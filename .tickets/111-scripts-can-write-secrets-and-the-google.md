@@ -3,8 +3,8 @@ id: '111'
 title: Scripts can write secrets, and the Google sync keeps its settings and state
   in secrets instead of a google_sync note type
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Scripts can write secrets, and the Google sync keeps its settings and state in secrets instead of a google_sync note type
@@ -36,3 +36,19 @@ Acceptance criteria:
 - ./dev just check and ./dev just android-test pass.
 
 ## Worklog
+
+### 2026-10-18T02:44:38Z — /work
+
+Claimed.
+
+### 2026-10-18T03:10:51Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T03:10:51Z — wil
+
+Status set to done.
+
+### 2026-10-18T03:10:51Z — wil
+
+Branch ticket/111 commit 9e1483f. Design notes: step 0004 defers via writer::Error::StepDeferred (logged, not recorded, later steps still run) when a google_sync note exists and no secrets key is loaded; with no note it just deletes the type (no key needed). It also adds google_settings to the event type's google_event handler secrets, since the write-back now reads it. Notes are deleted with Writer::delete then State::purge_from_trash. Handlers' before hook now no-ops before Handlers::start (as after already did), so start-up upgrade steps can delete notes. sync_tokens are keyed by calendar id; the step decodes 0.1.7 c_ keys. The write-back handler on invalid_grant only logs (no notify, no write); the calendar task notifies once via notified_invalid_grant. GET status hides settings.endpoints. TestServer::secret/secret_json read secrets from state.db for tests. e2e google-connect.spec.ts updated and passed locally.
