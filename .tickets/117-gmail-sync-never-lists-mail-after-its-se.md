@@ -4,7 +4,7 @@ title: 'Gmail sync never lists mail after its settings change: a first run with 
   labels saves a history cursor, and later runs only read history, so switching to
   all mail or adding labels imports nothing'
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -21,3 +21,7 @@ Fix:
 Acceptance criteria (server tests through TestServer and FakeGoogle): first run with no labels then labels added imports those labels' window; switching labels to all imports the window; adding a label imports only its messages; nothing duplicates; ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-18T04:13:57Z — /work
+
+Claimed.
