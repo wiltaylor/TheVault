@@ -1,0 +1,16 @@
+# The build context of docker/Dockerfile is the repository root; send only what the image builds
+# from.
+*
+!Cargo.toml
+!Cargo.lock
+!clippy.toml
+!crates/
+!docs/vault-format/
+!web/
+!docker/entrypoint.sh
+!docker/healthcheck.sh
+**/target/
+**/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/

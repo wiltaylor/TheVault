@@ -12,3 +12,7 @@ web-deps-install: (require-tool "pnpm")
 [private]
 require-path path ticket:
 	@test -e {{path}} || (echo "{{path}} does not exist yet; it lands with {{ticket}}" >&2 && exit 1)
+
+[private]
+require-host-tool tool:
+	@command -v {{tool}} > /dev/null 2>&1 || (echo "{{tool}} is required; run this on the host, not through ./dev" >&2 && exit 1)

@@ -326,3 +326,24 @@ publish-clients dir build='missing' smoke='required': (require-tool "cargo") (re
 		echo "nothing is published in $dir"
 	fi
 	if [ -n "$refused" ]; then exit 1; fi
+
+# Build the server image (docker/Dockerfile) for linux/amd64 without app downloads; runs on the host, not through ./dev
+[group('docker')]
+image-build tag='thevault:local': (require-host-tool "docker")
+	docker build -f docker/Dockerfile --platform linux/amd64 -t {{tag}} .
+
+# Build the server image with this version's APK and AppImage baked in, from dir, a clients folder publish-clients wrote (read only); runs on the host
+[group('docker')]
+image-clients-build dir tag='thevault:local': (require-host-tool "docker") (require-host-tool "jq")
+	#!/usr/bin/env bash
+	set -euo pipefail
+	version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)"/\1/p' Cargo.toml)
+	stage=$(mktemp -d)
+	trap 'rm -rf "$stage"' EXIT
+	docker/stage-clients.sh "{{dir}}" "$stage" "$version"
+	docker build -f docker/Dockerfile --platform linux/amd64 --build-context "clients=$stage" -t {{tag}} .
+
+# Build the image and check it end to end in throwaway containers on free ports: first-run refusal and init, login, version, healthcheck, uid, upgrade backups, an outside vault, and with clients (a publish-clients folder) the downloads; runs on the host
+[group('docker')]
+image-test clients='': (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl") (require-host-tool "python3")
+	docker/test-image.sh "{{clients}}"
