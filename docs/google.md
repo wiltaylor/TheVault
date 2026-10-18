@@ -85,7 +85,7 @@ The card then shows **Connected as** your Google address.
 
 - TheVault stores three secrets, encrypted with the vault's secret key: `google_client_id`, `google_client_secret` and `google_refresh_token`. Settings > Secrets lists them; no page or API shows their values.
 - TheVault stores the connected address as the secret `google_account`, and the sync settings as the secret `google_settings`. No note holds either.
-- The scheduled tasks `google_gmail` and `google_calendar` are unpaused, and each runs once straight away. The Integrations card shows each side's last run and last error, with **Run now** buttons.
+- The scheduled tasks `google_gmail` and `google_calendar` are unpaused, and each runs once straight away. The Integrations card shows **Syncing…** for each side while its run is going; a first run can take minutes. When a run ends, the card shows its time, its summary line (for example `Gmail: 12 new, 0 relabelled, 0 archived, 0 not saved.`) and the last error, with **Run now** buttons.
 
 ## Choose what to sync
 

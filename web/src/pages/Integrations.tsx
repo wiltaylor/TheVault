@@ -1,7 +1,8 @@
 import { A, useLocation, useNavigate } from "@solidjs/router";
-import { For, Show, createSignal, onMount } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { type GoogleRedirect, type GoogleSettings, type GoogleSide, type GoogleStatus, api } from "../api";
 import { ChipPicker } from "../components/ChipPicker";
+import { Spinner } from "../components/SyncStatus";
 import { errorText } from "./TypeEditor";
 
 // Settings > Integrations (google-sync D1, D18, D21): the Google card signs in with the user's own
@@ -9,6 +10,11 @@ import { errorText } from "./TypeEditor";
 // are a secret on the server, not a note, so this card is their only editor. On an https page Google sends the
 // browser straight back to /integrations/google/callback; on http, where Google accepts no
 // redirect but a loopback one, the user pastes the address the browser failed to load.
+// Every button shows a spinner while its request is in flight, and a side that is running shows
+// "Syncing…" while the card polls the status every few seconds (ticket 113).
+
+/** How often the card reads the status again while a side is running. */
+export const POLL_MS = 3000;
 
 /** Where the Google Cloud setup is written down. */
 export const GOOGLE_SETUP_DOC = "https://github.com/wiltaylor/TheVault/blob/main/docs/google.md";
@@ -32,13 +38,15 @@ function whenText(iso: string | null): string {
 function stateText(s: GoogleSide): string {
   if (!s.installed) return "Not installed";
   if (s.paused === null) return "Broken task file";
-  return s.paused ? "Paused" : "Syncing";
+  return s.paused ? "Paused" : "Scheduled";
 }
 
 /** What the Google sync pulls: Gmail mode, labels, window and back-fill date, and the calendars. */
 export function GoogleSettingsForm(props: {
   settings: GoogleSettings;
   busy: boolean;
+  /** Whether the save is in flight, which the Save button shows. */
+  saving?: boolean;
   onSave: (settings: GoogleSettings) => void;
 }) {
   const [mode, setMode] = createSignal(props.settings.gmail_mode);
@@ -135,15 +143,31 @@ export function GoogleSettingsForm(props: {
           {problem()}
         </p>
       </Show>
-      <button type="submit" class="primary" disabled={props.busy}>
+      <button type="submit" class="primary" disabled={props.busy} aria-busy={props.saving ? "true" : undefined}>
+        <Busy on={!!props.saving} />
         Save
       </button>
     </form>
   );
 }
 
-/** The Google card. `protocol` and `assign` are the page's own unless a test gives others. */
-export function GoogleCard(props: { protocol?: string; assign?: (url: string) => void }) {
+/** The spinner a button shows while its request is in flight. */
+function Busy(props: { on: boolean }) {
+  return (
+    <Show when={props.on}>
+      <Spinner />{" "}
+    </Show>
+  );
+}
+
+/** The request in flight: which button started it. */
+type Action = "connect" | "finish" | "save" | "disconnect" | "run:gmail" | "run:calendar";
+
+/**
+ * The Google card. `protocol` and `assign` are the page's own unless a test gives others, and
+ * `pollMs` is [`POLL_MS`] unless a test gives another.
+ */
+export function GoogleCard(props: { protocol?: string; assign?: (url: string) => void; pollMs?: number }) {
   const mode = () => redirectMode(props.protocol ?? window.location.protocol);
   const assign = (url: string) => (props.assign ?? ((u: string) => window.location.assign(u)))(url);
   const [status, setStatus] = createSignal<GoogleStatus | null>(null);
@@ -153,7 +177,11 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
   const [pasted, setPasted] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
-  const [busy, setBusy] = createSignal(false);
+  const [pending, setPending] = createSignal<Action | null>(null);
+  const busy = () => pending() !== null;
+  const doing = (a: Action) => pending() === a;
+  /** Whether `key`'s side is running: the server says so, or its Run now is in flight. */
+  const running = (key: (typeof SIDES)[number][0]) => !!status()?.[key].running || doing(`run:${key}`);
 
   async function load() {
     try {
@@ -164,16 +192,23 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
   }
   onMount(load);
 
-  async function act(f: () => Promise<void>) {
+  // While either side runs, read the status again every few seconds, until neither does.
+  createEffect(() => {
+    if (!status() || !SIDES.some(([key]) => running(key))) return;
+    const timer = setTimeout(() => void load(), props.pollMs ?? POLL_MS);
+    onCleanup(() => clearTimeout(timer));
+  });
+
+  async function act(action: Action, f: () => Promise<void>) {
     setError(null);
     setNotice(null);
-    setBusy(true);
+    setPending(action);
     try {
       await f();
     } catch (e) {
       setError(errorText(e));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
@@ -185,7 +220,7 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
       setError("Enter the OAuth client's client ID and client secret from Google Cloud.");
       return;
     }
-    void act(async () => {
+    void act("connect", async () => {
       const { auth_url } = await api.googleStart(id, secret, mode());
       if (mode() === "direct") {
         assign(auth_url);
@@ -198,7 +233,7 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
 
   function finish(ev: SubmitEvent) {
     ev.preventDefault();
-    void act(async () => {
+    void act("finish", async () => {
       setStatus(await api.googleFinish(pasted().trim()));
       setAuthUrl(null);
       setPasted("");
@@ -208,21 +243,21 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
 
   function disconnect() {
     if (!confirm("Disconnect Google? The sync stops and TheVault forgets the sign-in. Notes already synced stay.")) return;
-    void act(async () => {
+    void act("disconnect", async () => {
       setStatus(await api.googleDisconnect());
       setNotice("Disconnected. The Gmail and Calendar sync are paused.");
     });
   }
 
   function saveSettings(settings: GoogleSettings) {
-    void act(async () => {
+    void act("save", async () => {
       setStatus(await api.googleSaveSettings(settings));
       setNotice("Saved. The next runs use these settings.");
     });
   }
 
-  function runNow(label: string, task: string) {
-    void act(async () => {
+  function runNow(key: (typeof SIDES)[number][0], label: string, task: string) {
+    void act(`run:${key}`, async () => {
       const run = await api.runTask(task);
       setNotice(run.outcome === "failed" ? `${label} ran and failed: ${run.message ?? "see its run log"}` : `${label} ran.`);
       await load();
@@ -272,7 +307,13 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
                       <Show when={s().client_stored}>
                         <p class="muted">A client is stored already; enter it again to connect.</p>
                       </Show>
-                      <button type="submit" class="primary" disabled={busy()}>
+                      <button
+                        type="submit"
+                        class="primary"
+                        disabled={busy()}
+                        aria-busy={doing("connect") ? "true" : undefined}
+                      >
+                        <Busy on={doing("connect")} />
                         Connect Google
                       </button>
                     </form>
@@ -302,10 +343,16 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
                         onInput={(e) => setPasted(e.currentTarget.value)}
                       />
                       <div class="actions">
-                        <button type="submit" class="primary" disabled={busy() || !pasted().trim()}>
+                        <button
+                          type="submit"
+                          class="primary"
+                          disabled={busy() || !pasted().trim()}
+                          aria-busy={doing("finish") ? "true" : undefined}
+                        >
+                          <Busy on={doing("finish")} />
                           Finish connecting
                         </button>
-                        <button type="button" onClick={() => setAuthUrl(null)}>
+                        <button type="button" disabled={doing("finish")} onClick={() => setAuthUrl(null)}>
                           Cancel
                         </button>
                       </div>
@@ -336,11 +383,33 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
                       <tr aria-label={label}>
                         <td>{label}</td>
                         <td>{stateText(side())}</td>
-                        <td>{whenText(side().last_run)}</td>
+                        <td>
+                          <Show
+                            when={running(key)}
+                            fallback={
+                              <>
+                                {whenText(side().last_run)}
+                                <Show when={side().summary}>
+                                  <div class="muted">{side().summary}</div>
+                                </Show>
+                              </>
+                            }
+                          >
+                            <span class="google-syncing" role="status" aria-busy="true">
+                              <Spinner /> Syncing…
+                            </span>
+                          </Show>
+                        </td>
                         <td classList={{ error: !!side().last_error }}>{side().last_error ?? "No errors"}</td>
                         <td class="actions">
                           <Show when={s().connected && side().installed}>
-                            <button type="button" disabled={busy()} onClick={() => runNow(label, side().task)}>
+                            <button
+                              type="button"
+                              disabled={busy() || running(key)}
+                              aria-busy={doing(`run:${key}`) ? "true" : undefined}
+                              onClick={() => runNow(key, label, side().task)}
+                            >
+                              <Busy on={doing(`run:${key}`)} />
                               Run {label} now
                             </button>
                           </Show>
@@ -351,9 +420,16 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
                 </For>
               </tbody>
             </table>
-            <GoogleSettingsForm settings={s().settings} busy={busy()} onSave={saveSettings} />
+            <GoogleSettingsForm settings={s().settings} busy={busy()} saving={doing("save")} onSave={saveSettings} />
             <Show when={s().connected}>
-              <button type="button" class="danger" disabled={busy()} onClick={disconnect}>
+              <button
+                type="button"
+                class="danger"
+                disabled={busy()}
+                aria-busy={doing("disconnect") ? "true" : undefined}
+                onClick={disconnect}
+              >
+                <Busy on={doing("disconnect")} />
                 Disconnect
               </button>
             </Show>

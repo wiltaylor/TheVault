@@ -21,6 +21,7 @@
 //! google.set_message_labels(&id, &["INBOX"]); // recorded in history as label changes
 //! google.delete_message(&id); // recorded in history as messagesDeleted
 //! google.set_history_not_found(true); // history.list answers 404
+//! google.set_gmail_delay(Some(std::time::Duration::from_secs(2))); // each request waits 2 s
 //! ```
 //!
 //! Every path needs a bearer token the token endpoint issued ([`super::authorized`]), and
@@ -46,6 +47,8 @@
 //! Body data and attachment data are base64url with padding, as Gmail sends them. Each change
 //! (a message added, labels changed, a message deleted) takes the next history id.
 
+use std::time::Duration;
+
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE;
 use serde_json::{Value, json};
@@ -70,6 +73,7 @@ const SYSTEM_LABELS: [&str; 8] = [
 pub(super) struct Config {
     page_size: Option<usize>,
     history_not_found: bool,
+    delay: Option<Duration>,
 }
 
 impl FakeGoogleBuilder {
@@ -82,6 +86,12 @@ impl FakeGoogleBuilder {
     /// Start with history.list answering 404, as Gmail does for a history id it no longer keeps.
     pub fn history_not_found(mut self, on: bool) -> Self {
         self.gmail.history_not_found = on;
+        self
+    }
+
+    /// Wait `delay` before answering each Gmail request, so a sync run is slow.
+    pub fn gmail_delay(mut self, delay: Duration) -> Self {
+        self.gmail.delay = Some(delay);
         self
     }
 }
@@ -349,6 +359,11 @@ impl FakeGoogle {
         self.gmail().config.history_not_found = on;
     }
 
+    /// Wait `delay` before answering each later Gmail request, or answer at once with `None`.
+    pub fn set_gmail_delay(&self, delay: Option<Duration>) {
+        self.gmail().config.delay = delay;
+    }
+
     /// The mailbox's current history id.
     pub fn gmail_history_id(&self) -> u64 {
         self.gmail().history_id
@@ -370,6 +385,11 @@ pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
             "METHOD_NOT_ALLOWED",
             "The fake Gmail answers GET only.",
         ));
+    }
+    // Wait without holding the mailbox, so the test can still change it.
+    let delay = lock(&shared.gmail).config.delay;
+    if let Some(delay) = delay {
+        std::thread::sleep(delay);
     }
     let gmail = lock(&shared.gmail);
     let parts: Vec<&str> = rest.split('/').collect();

@@ -21,7 +21,7 @@ const { PaneRouter } = await import("../workspace/pane");
 const { resetWorkspace, workspace } = await import("../workspace/store");
 
 function side(task: string, over: Partial<GoogleSide> = {}): GoogleSide {
-  return { task, installed: true, paused: true, last_run: null, last_error: null, ...over };
+  return { task, installed: true, paused: true, running: false, last_run: null, last_error: null, summary: null, ...over };
 }
 
 const defaults: GoogleSettings = {
@@ -171,6 +171,150 @@ describe("GoogleCard", () => {
     render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
     expect(googleDisconnect).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+});
+
+/** A promise and the functions that settle it, so a test sees the request in flight. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Whether `button` shows its request in flight: disabled, aria-busy and a turning glyph. */
+function inFlight(button: HTMLElement): boolean {
+  return (
+    (button as HTMLButtonElement).disabled &&
+    button.getAttribute("aria-busy") === "true" &&
+    button.querySelector("svg.spinner") !== null
+  );
+}
+
+function idle(button: HTMLElement): boolean {
+  return button.getAttribute("aria-busy") === null && button.querySelector("svg.spinner") === null;
+}
+
+describe("GoogleCard feedback", () => {
+  it("spins Connect Google while the start is in flight, and shows its error inline", async () => {
+    googleStatus.mockResolvedValue(disconnected);
+    const start = deferred<{ auth_url: string }>();
+    googleStart.mockReturnValue(start.promise);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+    fireEvent.input(await screen.findByLabelText("Client ID"), { target: { value: "abc" } });
+    fireEvent.input(screen.getByLabelText("Client secret"), { target: { value: "shh" } });
+    const button = screen.getByRole("button", { name: "Connect Google" });
+    expect(idle(button)).toBe(true);
+    fireEvent.click(button);
+    await waitFor(() => expect(inFlight(button)).toBe(true));
+    const { ApiError } = await import("../api");
+    start.reject(new ApiError(500, { error: "internal", message: "the secrets key is missing" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("secrets key is missing");
+    expect(idle(button)).toBe(true);
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("spins Finish connecting, then shows the connected card with both sides syncing", async () => {
+    googleStatus.mockResolvedValue(disconnected);
+    googleStart.mockResolvedValue({ auth_url: AUTH_URL });
+    const finish = deferred<GoogleStatus>();
+    googleFinish.mockReturnValue(finish.promise);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} pollMs={60_000} />);
+    fireEvent.input(await screen.findByLabelText("Client ID"), { target: { value: "abc" } });
+    fireEvent.input(screen.getByLabelText("Client secret"), { target: { value: "shh" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect Google" }));
+    fireEvent.input(await screen.findByLabelText("Address from the browser"), {
+      target: { value: "http://127.0.0.1:53682/?state=s1&code=c1" },
+    });
+    const button = screen.getByRole("button", { name: "Finish connecting" });
+    fireEvent.click(button);
+    await waitFor(() => expect(inFlight(button)).toBe(true));
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+
+    finish.resolve({
+      ...connected,
+      gmail: { ...connected.gmail, running: true },
+      calendar: { ...connected.calendar, running: true },
+    });
+    expect(await screen.findByText("Connected as me@example.com")).toBeTruthy();
+    for (const name of [/Gmail/, /Calendar/]) {
+      const row = screen.getByRole("row", { name });
+      expect(row.textContent).toContain("Syncing…");
+      expect(row.querySelector('[aria-busy="true"] svg.spinner')).not.toBeNull();
+      expect((row.querySelector("button") as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  it("polls while a side runs, then shows its last run and summary", async () => {
+    const done: GoogleStatus = {
+      ...connected,
+      gmail: { ...connected.gmail, running: false, last_run: "2026-10-18T10:00:00Z", summary: "Gmail: 0 new, 0 relabelled, 0 archived, 0 not saved." },
+    };
+    googleStatus
+      .mockResolvedValueOnce({ ...connected, gmail: { ...connected.gmail, running: true } })
+      .mockResolvedValue(done);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} pollMs={10} />);
+    const gmail = await screen.findByRole("row", { name: /Gmail/ });
+    await waitFor(() => expect(gmail.textContent).toContain("Syncing…"));
+    // The calendar side is not running: its last run shows as before.
+    expect(screen.getByRole("row", { name: /Calendar/ }).textContent).toContain("Never");
+
+    await waitFor(() => expect(screen.getByRole("row", { name: /Gmail/ }).textContent).toContain("Gmail: 0 new, 0 relabelled, 0 archived"));
+    const row = screen.getByRole("row", { name: /Gmail/ });
+    expect(row.textContent).not.toContain("Syncing…");
+    expect(row.textContent).toContain(new Date("2026-10-18T10:00:00Z").toLocaleString());
+    // Nothing runs now, so the polling stops.
+    const calls = googleStatus.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 60));
+    expect(googleStatus.mock.calls.length).toBe(calls);
+  });
+
+  it("spins Run now and shows that side syncing while the run is in flight", async () => {
+    googleStatus.mockResolvedValue(connected);
+    const run = deferred<{ outcome: string; message?: string }>();
+    runTask.mockReturnValue(run.promise);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} pollMs={60_000} />);
+    const button = await screen.findByRole("button", { name: "Run Gmail now" });
+    fireEvent.click(button);
+    await waitFor(() => expect(inFlight(button)).toBe(true));
+    expect(screen.getByRole("row", { name: /Gmail/ }).textContent).toContain("Syncing…");
+    expect(screen.getByRole("row", { name: /Calendar/ }).textContent).not.toContain("Syncing…");
+    run.resolve({ outcome: "failed", message: "Google answered 500" });
+    expect(await screen.findByText("Gmail ran and failed: Google answered 500")).toBeTruthy();
+    await waitFor(() => expect(idle(screen.getByRole("button", { name: "Run Gmail now" }))).toBe(true));
+  });
+
+  it("spins Save while the settings are saving, and shows a refusal inline", async () => {
+    googleStatus.mockResolvedValue(connected);
+    const save = deferred<GoogleStatus>();
+    googleSaveSettings.mockReturnValue(save.promise);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+    await screen.findByRole("form", { name: "Google sync settings" });
+    const button = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(button);
+    await waitFor(() => expect(inFlight(button)).toBe(true));
+    const { ApiError } = await import("../api");
+    save.reject(new ApiError(400, { error: "bad_request", message: "list at least one calendar" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("at least one calendar");
+    expect(idle(button)).toBe(true);
+  });
+
+  it("spins Disconnect while it is in flight", async () => {
+    googleStatus.mockResolvedValue(connected);
+    const gone = deferred<GoogleStatus>();
+    googleDisconnect.mockReturnValue(gone.promise);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+    const button = await screen.findByRole("button", { name: "Disconnect" });
+    fireEvent.click(button);
+    await waitFor(() => expect(inFlight(button)).toBe(true));
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    gone.resolve(disconnected);
+    expect(await screen.findByRole("button", { name: "Connect Google" })).toBeTruthy();
     confirm.mockRestore();
   });
 });

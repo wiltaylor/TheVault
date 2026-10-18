@@ -14,7 +14,8 @@
 //!   `google_refresh_token`, reads the account's address from userinfo, writes it to the
 //!   `google_account` secret and writes `google_settings` (the current settings, keeping the
 //!   endpoints the start used), unpauses the `google_gmail` and `google_calendar` tasks that
-//!   exist, and runs each once in the background. An error from Google is a 400 carrying
+//!   exist, and starts a run of each on its own thread. It answers once the runs are marked
+//!   running, never waiting on them (ticket 113). An error from Google is a 400 carrying
 //!   Google's message.
 //! - `POST /api/integrations/google/disconnect` deletes the three credential secrets and
 //!   `google_account`, pauses the tasks, keeps `google_settings`, and clears the cursors in both
@@ -24,8 +25,10 @@
 //!   keeping its `endpoints`. `gmail_mode` is `labels` or `all`, the window 1 to 3650 days, the
 //!   back-fill date `YYYY-MM-DD` or null, and `calendars` not empty.
 //! - `GET /api/integrations/google` answers `{ connected, account, client_stored, settings,
-//!   gmail, calendar }`, each side `{ task, installed, paused, last_run, last_error }`, from the
-//!   secrets of [`writer::google`] and the tasks. `paused` is `null` when the task does not exist.
+//!   gmail, calendar }`, each side `{ task, installed, paused, running, last_run, last_error,
+//!   summary }`, from the secrets of [`writer::google`] and the tasks. `paused` is `null` when the
+//!   task does not exist; `running` is the scheduler's, true while a run is going; `last_run` is
+//!   RFC 3339 in UTC ending `Z`; `summary` is the last line the latest finished run logged.
 //!
 //! No note holds any of it (google-sync D21). The token and userinfo endpoints come from the
 //! settings' `endpoints` object when it names them, else Google's own (the test seam). A flow
@@ -410,25 +413,24 @@ pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<
         Ok(())
     })
     .await?;
+    // Unpause the tasks and start their first runs. Each run goes on its own thread and is
+    // marked running before this answers, so the answer shows both sides syncing and never waits
+    // on a run.
     let s = g.scheduler.clone();
-    let existing = tokio::task::spawn_blocking(move || {
-        let mut existing = Vec::new();
+    tokio::task::spawn_blocking(move || {
         for (task, _, _) in TASKS {
             if s.set_paused(task, false)? {
-                existing.push(task);
+                match s.trigger_in_background(task) {
+                    // A run already going is as good as this one.
+                    Ok(()) | Err(scheduler::Error::Running(_)) => {}
+                    Err(e) => eprintln!("google: starting {task}: {e}"),
+                }
             }
         }
-        Ok::<_, scheduler::Error>(existing)
+        Ok::<_, scheduler::Error>(())
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
-    for task in existing {
-        let s = g.scheduler.clone();
-        tokio::task::spawn_blocking(move || {
-            // A run already going is as good as this one.
-            let _ = s.trigger(task);
-        });
-    }
     status_of(&g).await.map(Json)
 }
 
@@ -580,9 +582,14 @@ async fn status_of(g: &Arc<Google>) -> Result<Value, ApiError> {
             "settings": settings,
         });
         for (task, side, secret) in TASKS {
-            let (installed, paused) = match s.status(task) {
-                Ok(st) => (true, st.def.as_ref().ok().map(|d| d.paused)),
-                Err(scheduler::Error::NoTask(_)) => (false, None),
+            let (installed, paused, running, summary) = match s.status(task) {
+                Ok(st) => (
+                    true,
+                    st.def.as_ref().ok().map(|d| d.paused),
+                    st.running,
+                    st.latest_run.as_ref().and_then(summary_of),
+                ),
+                Err(scheduler::Error::NoTask(_)) => (false, None, false, None),
                 Err(e) => return Err(ApiError::from(e)),
             };
             let state = object(w, secret)?;
@@ -591,12 +598,37 @@ async fn status_of(g: &Arc<Google>) -> Result<Value, ApiError> {
                 "task": task,
                 "installed": installed,
                 "paused": paused,
-                "last_run": text("last_run"),
+                "running": running,
+                "last_run": text("last_run").map(|t| utc(&t)),
                 "last_error": text("last_error"),
+                "summary": summary,
             });
         }
         Ok(out)
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
+}
+
+/// The last line a finished run logged, such as `Gmail: 3 new, 1 relabelled, 0 archived, 0 not
+/// saved.`: the sync scripts end on their summary. `None` while it runs or when it logged none.
+fn summary_of(run: &state::TaskRun) -> Option<String> {
+    run.ended_ms?;
+    run.log
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .map(str::to_owned)
+}
+
+/// An RFC 3339 time in UTC to the second, ending `Z`, whatever offset it was written with; the
+/// Gmail script writes `+00:00` and the Calendar script `Z`. Text that is not a time stays as it
+/// is.
+fn utc(text: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(text) {
+        Ok(t) => t
+            .with_timezone(&chrono::Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        Err(_) => text.to_owned(),
+    }
 }

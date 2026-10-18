@@ -377,9 +377,13 @@ export interface GoogleSide {
   installed: boolean;
   /** Whether the task is paused, or null when it does not exist or does not check. */
   paused: boolean | null;
-  /** When the sync last ran, as its state secret records it. */
+  /** Whether a run of the task is going now, from the scheduler. */
+  running: boolean;
+  /** When the sync last ran, as its state secret records it: RFC 3339 in UTC, ending Z. */
   last_run: string | null;
   last_error: string | null;
+  /** The last line the latest finished run logged, such as "Gmail: 0 new, 0 relabelled, 0 archived, 0 not saved." */
+  summary: string | null;
 }
 
 /** What the Google sync pulls, kept in the `google_settings` secret (google-sync D21). */

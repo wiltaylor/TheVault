@@ -283,26 +283,50 @@ impl Scheduler {
     /// Run task `name` now, as a first attempt, whether or not it is paused. A failure schedules
     /// retries as a scheduled run's does. Returns the run record.
     pub fn trigger(&self, name: &str) -> Result<TaskRun> {
-        let def = {
-            let mut plan = self.plan();
-            let slot = plan
-                .slots
-                .get_mut(name)
-                .ok_or_else(|| Error::NoTask(name.to_owned()))?;
-            let def = slot.def.clone().map_err(|message| Error::Broken {
-                name: name.to_owned(),
-                message,
-            })?;
-            if slot.running {
-                return Err(Error::Running(name.to_owned()));
-            }
-            slot.running = true;
-            slot.retry = None;
-            def
-        };
+        let def = self.claim(name)?;
         self.run(&def, 1)
             .ok_or_else(|| Error::Running(name.to_owned()))
             .and_then(|r| self.writer.state().run(r.id)?.ok_or(Error::NoTask(r.task)))
+    }
+
+    /// Start task `name` now, as [`Scheduler::trigger`] does, on its own thread, and return once
+    /// it is marked running: its status reports `running` from the moment this returns.
+    pub fn trigger_in_background(self: &Arc<Self>, name: &str) -> Result<()> {
+        let def = self.claim(name)?;
+        let s = self.clone();
+        thread::Builder::new()
+            .name(format!("task-{name}"))
+            .spawn(move || s.run(&def, 1))
+            .map(drop)
+            .map_err(|e| {
+                // No thread, no run: let the task run again.
+                if let Some(slot) = self.plan().slots.get_mut(name) {
+                    slot.running = false;
+                }
+                Error::Broken {
+                    name: name.to_owned(),
+                    message: format!("could not start a thread for it: {e}"),
+                }
+            })
+    }
+
+    /// Mark task `name` running for a first attempt, dropping any waiting retry, and return it.
+    fn claim(&self, name: &str) -> Result<TaskDef> {
+        let mut plan = self.plan();
+        let slot = plan
+            .slots
+            .get_mut(name)
+            .ok_or_else(|| Error::NoTask(name.to_owned()))?;
+        let def = slot.def.clone().map_err(|message| Error::Broken {
+            name: name.to_owned(),
+            message,
+        })?;
+        if slot.running {
+            return Err(Error::Running(name.to_owned()));
+        }
+        slot.running = true;
+        slot.retry = None;
+        Ok(def)
     }
 
     /// Tick on a background thread until [`Scheduler::stop`], sleeping until the next firing or
