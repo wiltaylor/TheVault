@@ -27,6 +27,8 @@ export function syncLabel(s: AppSync, now: number): string {
       return `Sync failed: cannot reach the server — retrying${waiting ? ` · ${waiting}` : ""}`;
     case "update_required":
       return "Sync stopped: update the app to keep syncing";
+    case "updating":
+      return "Sync waits: TheVault is updating itself to match the server";
     case "revoked":
       return "Sync stopped: this device was revoked — pair it again";
     case "unpaired":
@@ -47,6 +49,15 @@ export function needsAction(s: AppSync): string | null {
   if (s.phase === "update_required") return "TheVault needs an update to keep syncing with your server.";
   if (s.phase === "revoked") return "Your server revoked this device. Pair it again to keep syncing.";
   return null;
+}
+
+/**
+ * What This device says about the version gate (D27): the update sync waits for, or the warning
+ * that the server is newer than the app and the app cannot update to it. Null when neither.
+ */
+export function gateNotice(s: AppSync): string | null {
+  if (s.phase === "updating") return s.last_error ?? "Updating TheVault before syncing.";
+  return s.warning ?? null;
 }
 
 /** "Last synced" in the popover: relative, or "Never" before the first good round. */

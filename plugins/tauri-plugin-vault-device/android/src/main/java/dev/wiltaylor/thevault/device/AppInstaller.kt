@@ -103,6 +103,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
                     .putString(AppUpdateWorker.STATUS, AppUpdateWorker.FAILED)
                     .putString(AppUpdateWorker.MESSAGE, "The installer refused $version: $message")
                     .apply()
+                UpdateGate.failed(context, version, "the installer refused it: $message")
                 UpdateNotices.failed(context, version, message)
             }
         }
@@ -111,11 +112,18 @@ class UpdateInstallReceiver : BroadcastReceiver() {
 
 /**
  * The updated app's first moment: Android sends `MY_PACKAGE_REPLACED` once it has replaced the
- * app, whoever installed it. When the update was this app's own, it says so.
+ * app, whoever installed it. When the update was this app's own, it says so. Either way sync,
+ * which the version gate may have paused for the update ([UpdateGate]), runs again now.
  */
 class PackageReplacedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        try {
+            UpdateGate.installed(context, AppUpdateWorker.installed(context).first)
+        } catch (e: Exception) {
+            Log.w("VaultUpdate", "the update gate was not reset", e)
+        }
+        SyncWorker.soon(context)
         val prefs = context.getSharedPreferences(AppUpdateWorker.PREFS, Context.MODE_PRIVATE)
         if (prefs.getString(AppInstaller.PENDING, null) == null) return
         val version = try {
@@ -136,7 +144,7 @@ object UpdateNotices {
 
     private fun manager(context: Context) = context.getSystemService(NotificationManager::class.java)
 
-    private fun post(context: Context, title: String, text: String, tap: PendingIntent?) {
+    private fun post(context: Context, title: String, text: String, tap: PendingIntent?, quiet: Boolean = false) {
         val nm = manager(context)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL, "App updates", NotificationManager.IMPORTANCE_DEFAULT).apply {
@@ -152,6 +160,8 @@ object UpdateNotices {
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))
             .setAutoCancel(true)
+            // A notice posted again each round while the update runs sounds only the first time.
+            .setOnlyAlertOnce(quiet)
         if (tap != null) builder.setContentIntent(tap)
         nm.notify(ID, builder.build())
     }
@@ -166,6 +176,14 @@ object UpdateNotices {
         val open = context.packageManager.getLaunchIntentForPackage(context.packageName)
             ?.let { PendingIntent.getActivity(context, ID, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }
         post(context, "TheVault updated", "TheVault updated to $version.", open)
+    }
+
+    /**
+     * Sync waits while the app updates itself to [version] (the version gate, [UpdateGate]);
+     * [message] says so, and why the last try failed when one did.
+     */
+    fun updating(context: Context, version: String, message: String) {
+        post(context, "Updating TheVault to $version before syncing", message, null, quiet = true)
     }
 
     /** The update failed with [message]. */

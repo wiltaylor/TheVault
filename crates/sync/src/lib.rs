@@ -30,6 +30,9 @@
 //!    evicts the least recently used beyond its cache size (D19).
 //! 7. **Bases** again, now for what is still queued.
 //!
+//! Before the round an app asks the version gate ([`gate`]) whether to run it at all: with a
+//! server newer than the app and a build of the app published, the app updates itself first.
+//!
 //! Local writes reach the queue through [`Queue::record`], which `crates/embedded` calls from its
 //! writer hooks after every committed write. What the pull writes goes through
 //! [`writer::Writer::apply_remote`], which runs no hooks, so it is never queued back. Definitions
@@ -40,6 +43,7 @@
 //! blocking writer. Call it from a thread of its own, never from inside an async runtime.
 
 mod client;
+pub mod gate;
 pub mod live;
 pub mod merge;
 mod queue;
@@ -134,6 +138,9 @@ pub enum Error {
         protocol: u32,
         format: u32,
     },
+    /// The version gate paused sync: the app updates itself to `version` first ([`gate`], D27).
+    #[error("{message}")]
+    Updating { version: String, message: String },
     /// The server could not be reached, or the connection failed part way.
     #[error("cannot reach the server: {0}")]
     Http(String),
@@ -255,7 +262,19 @@ impl Engine {
 
     /// Step 1: check the server is not newer than this build (D27).
     pub fn handshake(&self) -> Result<()> {
+        self.handshake_gated(&mut |_| Ok(()))
+    }
+
+    /// The handshake, asking `gate` first with the server's own version (`server_version`, empty
+    /// when the server names none). The version gate ([`gate`]) answers
+    /// [`Error::Updating`] to pause the round before it pushes or pulls anything.
+    fn handshake_gated(&self, gate: &mut dyn FnMut(&str) -> Result<()>) -> Result<()> {
         let info = self.home.info()?.ok("reading the server's sync info")?;
+        gate(
+            info.get("server_version")
+                .and_then(Json::as_str)
+                .unwrap_or_default(),
+        )?;
         let num = |k: &str| {
             info.get(k)
                 .and_then(Json::as_u64)
@@ -276,9 +295,22 @@ impl Engine {
         Ok(())
     }
 
+    /// The app builds the server publishes, `GET /api/clients`.
+    pub fn clients(&self) -> Result<Json> {
+        self.home
+            .get("/api/clients")?
+            .ok("reading the server's app builds")
+    }
+
     /// Run one round: handshake, push, pull and assets. See the crate documentation.
     pub fn sync(&self) -> Result<Report> {
-        self.handshake()?;
+        self.sync_gated(&mut |_| Ok(()))
+    }
+
+    /// [`Engine::sync`], with the version gate: `gate` hears the server's version first and may
+    /// stop the round, with [`Error::Updating`], before it pushes or pulls anything (D27).
+    pub fn sync_gated(&self, gate: &mut dyn FnMut(&str) -> Result<()>) -> Result<Report> {
+        self.handshake_gated(gate)?;
         let mut report = Report::default();
         self.report_bases()?;
         self.push_assets()?;

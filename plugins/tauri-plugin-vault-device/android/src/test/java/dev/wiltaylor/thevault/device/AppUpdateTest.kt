@@ -53,6 +53,13 @@ class AppUpdateTest {
     private val apk = "PK\u0003\u0004 a pretend newer TheVault".toByteArray()
     private var builds = JSONArray()
 
+    /** Answers the APK downloads when set, instead of sending [apk] whole. */
+    @Volatile
+    private var download: ((RecordedRequest) -> MockResponse)? = null
+
+    /** Each download's `Range` and `If-Range` headers, `-` for none. */
+    private val ranges: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
     @Before
     fun setUp() {
         PairingStore.defaultCipher = FakeCipher
@@ -68,7 +75,10 @@ class AppUpdateTest {
                     path == "/api/clients" -> MockResponse()
                         .setHeader("content-type", "application/json")
                         .setBody(JSONObject().put("clients", builds).put("enabled", true).toString())
-                    path.startsWith("/api/clients/") -> MockResponse().setBody(Buffer().write(apk))
+                    path.startsWith("/api/clients/") -> {
+                        ranges.add("${request.getHeader("Range") ?: "-"} ${request.getHeader("If-Range") ?: "-"}")
+                        download?.invoke(request) ?: MockResponse().setBody(Buffer().write(apk))
+                    }
                     else -> MockResponse().setResponseCode(404)
                 }
             }
@@ -239,6 +249,76 @@ class AppUpdateTest {
         assertNull(AppInstaller.lastParams)
         assertTrue(updateDir().listFiles().isNullOrEmpty())
         assertEquals("TheVault update failed", notices().single().extras.getString("android.title"))
+    }
+
+    @Test
+    fun aTruncatedDownloadIsResumedWithRangeAndThenVerifies() {
+        publish("0.2.0")
+        val half = apk.size / 2
+        var calls = 0
+        download = { _ ->
+            calls += 1
+            if (calls == 1) {
+                // The connection drops half way: the answer says the whole size, half arrives.
+                MockResponse()
+                    .setBody(Buffer().write(apk.copyOfRange(0, half)))
+                    .setHeader("Content-Length", apk.size)
+                    .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_END)
+            } else {
+                MockResponse()
+                    .setResponseCode(206)
+                    .setHeader("Content-Range", "bytes $half-${apk.size - 1}/${apk.size}")
+                    .setBody(Buffer().write(apk.copyOfRange(half, apk.size)))
+            }
+        }
+        val result = check()
+        assertTrue("$result", result is ListenableWorker.Result.Success)
+        assertEquals(AppUpdateWorker.INSTALLING, result.outputData.getString(AppUpdateWorker.STATUS))
+        assertEquals(listOf("- -", "bytes=$half- \"${sha(apk)}\""), ranges.toList())
+        assertEquals(1, sessions().size)
+    }
+
+    @Test
+    fun aDownloadThatStaysWrongReportsTheHashAndSizeItGot() {
+        publish("0.2.0")
+        val wrong = "PK\u0003\u0004 a different build".toByteArray()
+        download = { _ -> MockResponse().setBody(Buffer().write(wrong)) }
+        val result = check()
+        assertTrue("$result", result is ListenableWorker.Result.Failure)
+        assertEquals(AppUpdateWorker.SHA_MISMATCH, result.outputData.getString(AppUpdateWorker.STATUS))
+        assertEquals("three tries, each from the start", listOf("- -", "- -", "- -"), ranges.toList())
+        val message = result.outputData.getString(AppUpdateWorker.MESSAGE)!!
+        assertTrue(message, message.contains(sha(wrong)))
+        assertTrue(message, message.contains("got ${wrong.size} bytes"))
+        assertTrue(message, message.contains("expected ${apk.size} bytes"))
+        assertEquals(message, AppUpdateWorker.lastStatus(context)!!.second)
+        val text = notices().single().extras.getCharSequence("android.text").toString()
+        assertTrue(text, text.contains(sha(wrong)))
+        assertTrue(text, text.contains("${wrong.size} bytes"))
+        assertTrue(sessions().isEmpty())
+        assertTrue(updateDir().listFiles().isNullOrEmpty())
+    }
+
+    @Test
+    fun aDownloadThatKeepsStoppingShortFailsWithTheBytesItGot() {
+        publish("0.2.0")
+        download = { r ->
+            // The server sends at most four bytes at a time, and drops the connection.
+            val from = r.getHeader("Range")?.removePrefix("bytes=")?.removeSuffix("-")?.toInt() ?: 0
+            val part = apk.copyOfRange(from, minOf(apk.size, from + 4))
+            MockResponse()
+                .setResponseCode(if (from == 0) 200 else 206)
+                .setBody(Buffer().write(part))
+                .setHeader("Content-Length", apk.size - from)
+                .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_END)
+        }
+        val result = check()
+        assertTrue("$result", result is ListenableWorker.Result.Failure)
+        assertEquals(AppUpdateWorker.FAILED, result.outputData.getString(AppUpdateWorker.STATUS))
+        assertEquals(listOf("- -", "bytes=4- \"${sha(apk)}\"", "bytes=8- \"${sha(apk)}\""), ranges.toList())
+        val message = result.outputData.getString(AppUpdateWorker.MESSAGE)!!
+        assertTrue(message, message.contains("12 bytes received"))
+        assertTrue(sessions().isEmpty())
     }
 
     @Test

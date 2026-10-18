@@ -22,7 +22,12 @@
 //! - for assets, on demand: [`Core::fetch_asset`] when a note shows an asset the device does not
 //!   hold, and [`Core::note_opened`] when a note is opened, so its assets are prefetched next time.
 //!
-//! Every round first takes the device's settings from Settings > Devices on the home server
+//! Every round first asks the version gate ([`sync::gate`], D27) whether to run: when the home
+//! server runs a newer version than the app and publishes an APK of it for this phone, the round
+//! pauses, pushing and pulling both, and Kotlin updates the app; the new version syncs. Kotlin
+//! tells the core which app it is with [`set_app`].
+//!
+//! Every round then takes the device's settings from Settings > Devices on the home server
 //! (D22, D23, D25), so a switch turned on or off reaches the device runtime by the next round,
 //! and the `device.settings` event and push make that round come at once.
 //!
@@ -50,6 +55,7 @@ use embedded::device::{DeviceConfig, DeviceData, DeviceRuntime, ImportReport, Im
 use embedded::{Config, Embedded, SyncPhase, SyncReport, SyncSource};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sync::gate::{self, Failures, UpdateGate, Verdict};
 use sync::live::{self, Seen};
 use sync::{AssetPolicy, Report};
 
@@ -73,6 +79,42 @@ pub const DEFAULT_CACHE_MB: u64 = 512;
 
 /// How many recently opened notes have their assets prefetched.
 const RECENT_NOTES: usize = 50;
+
+/// The installed app, as Kotlin knows it, for the version gate ([`sync::gate`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct AppBuild {
+    /// The app's version name, such as `0.1.8`.
+    pub version: String,
+    /// `release` or `debug`: only an APK of the same kind can update the app.
+    pub build: String,
+    /// The phone's architectures in the server's names, preferred first.
+    #[serde(default)]
+    pub arches: Vec<String>,
+    /// The updates that failed, which Kotlin keeps across restarts.
+    #[serde(default)]
+    pub failed: Option<FailedUpdates>,
+}
+
+/// [`Failures`] as Kotlin sends them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct FailedUpdates {
+    pub version: String,
+    pub count: u32,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+static APP: Mutex<Option<AppBuild>> = Mutex::new(None);
+
+/// Tell the core which app it runs in, or `None` to turn the version gate off. Kotlin calls it
+/// before each round, with the failed updates it keeps.
+pub fn set_app(app: Option<AppBuild>) {
+    *lock(&APP) = app;
+}
+
+fn app() -> Option<AppBuild> {
+    lock(&APP).clone()
+}
 
 /// The vault folder inside the app's data folder. Kotlin builds the same path.
 pub fn vault_dir(data_dir: &Path) -> PathBuf {
@@ -159,6 +201,8 @@ pub struct Core {
     health: Mutex<Option<Value>>,
     /// The capture health the home server last took, with the device id it was sent for.
     health_sent: Mutex<Option<(String, Value)>>,
+    /// The version gate's last verdict.
+    gate: UpdateGate,
 }
 
 /// The platform the device runtime runs as, which names its device file.
@@ -206,6 +250,7 @@ pub fn open(vault: &Path) -> anyhow::Result<Arc<Core>> {
         commands: Mutex::new(()),
         health: Mutex::new(None),
         health_sent: Mutex::new(None),
+        gate: UpdateGate::new(),
     });
     core.server
         .set_sync_source(Box::new(Source(Arc::downgrade(&core))));
@@ -275,7 +320,7 @@ impl Core {
     }
 
     /// Run one round now, waiting for any round already running: take the device's settings from
-    /// the home server, sync, then queue the person changes for their phone contacts. It blocks:
+    /// the home server, sync behind the version gate, then queue the person changes for their phone contacts. It blocks:
     /// never call it from inside an async runtime.
     pub fn sync_now(&self) -> anyhow::Result<Report> {
         let link = self.linked()?;
@@ -290,7 +335,7 @@ impl Core {
         let result = self
             .server
             .sync_engine(link.remote(), link.assets())
-            .and_then(|engine| engine.sync());
+            .and_then(|engine| engine.sync_gated(&mut |server| self.gate(&engine, server)));
         let at_ms = now_ms();
         {
             let mut last = lock(&self.last);
@@ -321,6 +366,66 @@ impl Core {
             log::warn!("failed device events not reported to the home server: {e:#}");
         }
         Ok(report)
+    }
+
+    /// The version gate (D27): fails with [`sync::Error::Updating`] when the home server, at
+    /// version `server`, is newer than the app and publishes an APK of it for this phone, so the
+    /// round neither pushes nor pulls. Without [`set_app`] it lets every round through.
+    fn gate(&self, engine: &sync::Engine, server: &str) -> sync::Result<()> {
+        let Some(app) = app() else {
+            self.gate.clear();
+            return Ok(());
+        };
+        self.gate
+            .set_failures(app.failed.map_or_else(Failures::default, |f| Failures {
+                version: f.version,
+                count: f.count,
+                message: f.message,
+            }));
+        let newer = gate::compare(server, &app.version) == Some(std::cmp::Ordering::Greater);
+        let published = if newer {
+            match engine.clients() {
+                Ok(manifest) => gate::apk_for(&manifest, &app.arches, &app.build),
+                Err(e @ sync::Error::Http(_)) => return Err(e),
+                Err(e) => {
+                    log::warn!("the server's app builds were not read: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        match self.gate.judge(&app.version, server, published.as_deref()) {
+            Verdict::Pause { version, message } => Err(sync::Error::Updating { version, message }),
+            Verdict::Warn { message } => {
+                log::warn!("{message}");
+                Ok(())
+            }
+            Verdict::Sync => Ok(()),
+        }
+    }
+
+    /// The version gate's last verdict, as JSON: `{state, version, message}`, `state` being
+    /// `sync`, `warn` or `pause`; null before the first round with [`set_app`].
+    pub fn update_gate(&self) -> Value {
+        match self.gate.verdict() {
+            None => Value::Null,
+            Some(Verdict::Sync) => json!({ "state": "sync", "version": null, "message": null }),
+            Some(Verdict::Warn { message }) => {
+                json!({ "state": "warn", "version": null, "message": message })
+            }
+            Some(Verdict::Pause { version, message }) => {
+                json!({ "state": "pause", "version": version, "message": message })
+            }
+        }
+    }
+
+    /// The version gate's warning, while sync goes on without the update.
+    fn gate_warning(&self) -> Option<String> {
+        match self.gate.verdict() {
+            Some(Verdict::Warn { message }) => Some(message),
+            _ => None,
+        }
     }
 
     /// Take the device's settings from the home server into the device runtime, when one is
@@ -447,6 +552,7 @@ impl Core {
             message: last.as_ref().and_then(|l| l.error.clone()),
             last_ok_ms: last.and_then(|l| l.ok_ms).map(|ms| ms.max(0) as u64),
             server: Some(link.server_url),
+            warning: self.gate_warning(),
         }
     }
 
@@ -656,6 +762,7 @@ impl Core {
             "last_sync_ms": last.as_ref().map(|l| l.at_ms),
             "last_error": last.and_then(|l| l.error),
             "live": lock(&self.live).connected,
+            "update": self.update_gate(),
         }))
     }
 }

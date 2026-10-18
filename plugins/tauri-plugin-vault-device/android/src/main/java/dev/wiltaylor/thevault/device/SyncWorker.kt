@@ -30,6 +30,11 @@ import java.util.concurrent.TimeUnit
  * The output carries the round's report as JSON under [REPORT], or the error under [ERROR]. A
  * server that cannot be reached retries later; a server newer than the app fails the run and
  * keeps the queue until the app is updated (D27).
+ *
+ * Each round first tells the core which app it is ([UpdateGate.tell]), so the core's version gate
+ * can pause the round when the home server runs a newer version and publishes an APK of it for
+ * this phone. The worker then runs the update ([UpdateGate.updateFirst]) and answers with the
+ * version under [PAUSED]; the new version syncs once it starts.
  */
 class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
     override fun doWork(): Result {
@@ -50,6 +55,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         return try {
             // The round sends the phone's capture health with the device's settings (ticket 91).
             CaptureHealth.refresh(applicationContext)
+            UpdateGate.tell(applicationContext)
             val report = VaultCore.sync()
             // The round may have run device events, the person changes it pulled; it reported
             // the failures among them to the home server, and the phone says so too.
@@ -57,6 +63,11 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
             Result.success(workDataOf(REPORT to report))
         } catch (e: IllegalStateException) {
             val message = e.message ?: "sync failed"
+            val pause = UpdateGate.pause()
+            if (pause != null && message.contains(pause.message)) {
+                UpdateGate.updateFirst(applicationContext, pause)
+                return Result.success(workDataOf(PAUSED to pause.version, ERROR to pause.message))
+            }
             if (message.contains(UPDATE_THE_APP)) {
                 Result.failure(workDataOf(ERROR to message))
             } else {
@@ -68,6 +79,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
     companion object {
         const val REPORT = "report"
         const val ERROR = "error"
+
+        /** The output key of the version a round waits for, when the version gate paused it. */
+        const val PAUSED = "paused"
         const val UNIQUE_NAME = "thevault-sync"
 
         /** The unique name of the prompt round [soon] asks for. */

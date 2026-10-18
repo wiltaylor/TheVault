@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppSync } from "../api";
-import { lastSynced, needsAction, syncLabel } from "./model";
+import { gateNotice, lastSynced, needsAction, syncLabel } from "./model";
 
 const NOW = Date.UTC(2026, 9, 17, 12, 0, 0);
 
@@ -50,6 +50,19 @@ describe("the sync icon's words", () => {
       "Sync failed: the sync tables: locked",
     );
     expect(syncLabel(status({ state: "error", phase: "error", last_error: null }), NOW)).toBe("Sync failed: unknown error");
+  });
+
+  it("says when sync waits for the app to update itself", () => {
+    const updating = status({ state: "syncing", phase: "updating", last_error: "Updating TheVault to 0.1.9 before syncing." });
+    expect(syncLabel(updating, NOW)).toBe("Sync waits: TheVault is updating itself to match the server");
+    expect(gateNotice(updating)).toBe("Updating TheVault to 0.1.9 before syncing.");
+    expect(needsAction(updating)).toBeNull();
+  });
+
+  it("passes on the version gate's warning while sync goes on", () => {
+    const warned = status({ warning: "The server runs TheVault 0.1.9, newer than this app's 0.1.8, and publishes no matching app build." });
+    expect(gateNotice(warned)).toMatch(/no matching app build/);
+    expect(gateNotice(status({}))).toBeNull();
   });
 
   it("asks the user to act only when waiting will not help", () => {

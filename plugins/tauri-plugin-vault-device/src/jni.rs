@@ -190,6 +190,25 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_sync<'local>
     })
 }
 
+/// `VaultCore.setApp(app: String?)`: the installed app, `{version, build, arches, failed:
+/// {version, count, message}}` as JSON, for the version gate before each round; null turns the
+/// gate off ([`core::set_app`]). Needs no open vault.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_setApp<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    app: JString<'local>,
+) -> jstring {
+    answer(&mut env, |env| {
+        let app = match arg(env, &app)? {
+            Some(json) => Some(serde_json::from_str(&json)?),
+            None => None,
+        };
+        core::set_app(app);
+        Ok(None)
+    })
+}
+
 /// `VaultCore.share(shared: String): String`: store a share (`{text, subject, files: [{path,
 /// filename, mime}]}`) and run it as a `share_received` event ([`Core::share`]). Answers
 /// `{event, status, message, notes}` as JSON: `event` is null when the share fell back to a note

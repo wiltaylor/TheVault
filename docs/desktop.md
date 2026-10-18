@@ -153,6 +153,10 @@ When the version found is newer than the app, by semver order, the window shows 
 
 The tray's **Check for updates** item turns the check off, the self-update too. `THEVAULT_UPDATE_URL` replaces the GitHub address, and `THEVAULT_UPDATE_URL=off` turns the whole check off, the server's part too. A build can name another repository with `THEVAULT_RELEASES_REPO` at compile time. `GET /_desktop/status` reports the check under `update` (the offer, with `ready` and `install`) and `updater` (`install`, `checks`, `ready`, `error`).
 
+### The app updates before it syncs
+
+Before every sync round the app compares the server's version (`server_version` in `GET /api/sync/info`) with its own, with the rule Android uses (`crates/sync/src/gate.rs`, D27). When the server is newer and its updater endpoint offers a signed AppImage, the round neither pushes nor pulls: the app downloads and verifies the AppImage, installs it and restarts into it, and the new version syncs. The sync icon says sync waits meanwhile. When the server offers no signed AppImage, the app is a deb or rpm install, or `THEVAULT_UPDATE_URL=off`, sync goes on and Settings > Devices warns on this device's card. A failed check, download or install is tried again after 1, then 4, then 16 minutes; after 3 failures sync goes on with the warning.
+
 ### The updater signing key
 
 The AppImage's signature is made with a minisign key pair from `cargo tauri signer generate`. The private key and its password live outside the repository:

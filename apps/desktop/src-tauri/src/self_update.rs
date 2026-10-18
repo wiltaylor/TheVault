@@ -8,6 +8,10 @@
 //! [`Ready`], and the window and the tray say "Update ready — restart to update". Restarting
 //! installs it; with "Install updates on quit" on, quitting installs it too.
 //!
+//! The sync loop's version gate ([`crate::sync_loop`], D27) uses the same check through
+//! [`GateUpdater`]: when the server runs a newer version than the app, sync waits while the app
+//! downloads the server's signed AppImage, installs it and restarts into it.
+//!
 //! When the server has no signed AppImage newer than the app, and for a deb or rpm install, the
 //! check falls back to [`crate::update`]'s offer: the server's download, else GitHub's release.
 //!
@@ -327,6 +331,52 @@ impl Updates {
             bytes,
         });
         Ok(true)
+    }
+}
+
+impl Updates {
+    /// The version gate's check (D27, [`crate::sync_loop::Updater`]): ask the paired server at
+    /// `server` for a newer signed AppImage and download and verify it, as the timed check does.
+    /// Answers the version waiting to be installed, or `None` when the server publishes none
+    /// newer, the app is no AppImage, or checking is turned off (`THEVAULT_UPDATE_URL=off`).
+    pub fn prepare(&self, app: &AppHandle, server: &str) -> Result<Option<String>, String> {
+        if update::endpoint().is_none() {
+            return Ok(None);
+        }
+        let (Some(endpoint), Some(appimage)) = (
+            update::updater_endpoint(self.install, Some(server)),
+            self.appimage.clone(),
+        ) else {
+            return Ok(None);
+        };
+        let current = app.package_info().version.to_string();
+        match tauri::async_runtime::block_on(self.self_update(app, &endpoint, appimage, &current)) {
+            Ok(true) => Ok(self.ready_version()),
+            Ok(false) => Ok(None),
+            Err(e) => {
+                *lock(&self.error) = Some(e.clone());
+                Err(e)
+            }
+        }
+    }
+}
+
+/// The version gate's updater: the paired server's signed AppImage, installed by restarting.
+pub struct GateUpdater {
+    pub app: AppHandle,
+    pub updates: Arc<Updates>,
+}
+
+impl crate::sync_loop::Updater for GateUpdater {
+    fn prepare(&self, server_url: &str) -> Result<Option<String>, String> {
+        self.updates.prepare(&self.app, server_url)
+    }
+
+    fn install_and_restart(&self) -> Result<(), String> {
+        if self.updates.install_ready()?.is_some() {
+            self.app.restart();
+        }
+        Err("no update was waiting to be installed".to_owned())
     }
 }
 
