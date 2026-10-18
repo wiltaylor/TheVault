@@ -4,8 +4,8 @@ title: 'Connect an AI agent: one-time install codes, a served install.sh that in
   the CLI, its config and the skill, and a Settings panel with the one-line command'
 blocked_by:
 - '130'
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Connect an AI agent: one-time install codes, a served install.sh that installs the CLI, its config and the skill, and a Settings panel with the one-line command
@@ -31,3 +31,15 @@ Acceptance criteria:
 ### 2026-10-18T09:47:03Z — /work
 
 Claimed.
+
+### 2026-10-18T10:04:24Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T10:04:24Z — wil
+
+Status set to done.
+
+### 2026-10-18T10:04:24Z — wil
+
+Branch ticket/131 commit 087c49e, ./dev just check green. Panel lives on Settings > API tokens (Access.tsx TokensPage). Redeeming a code for an existing agent-<name> replaces that token (rotation). Unknown codes also answer 410. install.sh is crates/api/src/install.sh with @VAULT_URL@ substituted; it also runs vault schema to prove the token. Script test publishes the test's own debug vault build as vault-<ver>-linux-<host arch>, not the musl cli-release build. The tokens table does not refresh by itself once the agent redeems; reload shows agent-<name>. state schema is now v13 (agent_codes).
