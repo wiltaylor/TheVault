@@ -4,7 +4,7 @@ title: Compose file with default, https (Caddy) and cloudflare (tunnel) profiles
   .env.example, and docs/install.md
 blocked_by:
 - '127'
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -29,3 +29,7 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-18T09:03:39Z — /work
+
+Claimed.
