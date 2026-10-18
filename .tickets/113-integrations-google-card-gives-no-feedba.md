@@ -21,3 +21,7 @@ Build:
 Acceptance criteria: web component tests for each spinner state and the running rows; server test that finish answers within 1 s while a slow run holds the task; server test of running true/false in GET; ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-18T03:59:22Z — wil
+
+Correction to item 3 of the body (a word was lost when filing): GET /api/integrations/google reports "running": true or false per side while a run is in progress, from the scheduler.
