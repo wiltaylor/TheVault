@@ -4,8 +4,8 @@ title: 'Docker image for the server: multi-stage build, non-root, /data and /con
   volumes, first-run init requiring VAULT_PASSWORD, backup before an upgrade, the
   version''s APK and AppImage baked in'
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Docker image for the server: multi-stage build, non-root, /data and /config volumes, first-run init requiring VAULT_PASSWORD, backup before an upgrade, the version's APK and AppImage baked in
@@ -37,3 +37,19 @@ Acceptance criteria (prove by running Docker on this host; the host has docker):
 ### 2026-10-18T08:33:13Z — /work
 
 Claimed.
+
+### 2026-10-18T08:59:44Z — wil
+
+Proved with 'just image-test /home/wil/dev/TheVault/.scratch/phone/vault/.vault/clients' (docker/test-image.sh, run on the host): 43 PASS, 0 FAIL; and './dev just check' exit 0. Image sizes (containerd store): without clients 56.3MB compressed / 226MB on disk; with the 0.1.11 aarch64 APK and x86_64 AppImage 197.8MB compressed / 553MB on disk. linux/amd64 confirmed by docker image inspect. The server records no version of its own, so the entrypoint records the image version in /data/.vault/server-version after init and after each upgrade backup; an unrecorded version (a vault made outside) is backed up as unknown-to-<v>; a newer recorded version starts without a backup and keeps the record. Backups are vault backup sqlar files /data/backups/<old>-to-<new>-<UTC>.sqlar, newest 5 kept by mtime. ca-certificates is installed but not needed: Cargo.lock has webpki-roots and no rustls-native-certs or openssl. STOPSIGNAL SIGINT because vault-server shuts down gracefully only on ctrl_c. BuildKit reused a COPY --from=<empty scratch stage> layer from an earlier with-clients build, so the clients go in through RUN --mount=type=bind,from=clients and cp; the test builds plain after clients to catch a regression. A mounted vault whose key is not at /config/vault.key starts with a warning and falls back to /config/thevault/<vault-id>.key.
+
+### 2026-10-18T08:59:44Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T09:00:27Z — wil
+
+Status set to done.
+
+### 2026-10-18T09:00:56Z — wil
+
+Committed on ticket/127. MAP.md has no deployment decision, so the commit cites D11 (password login), D22 (layout, .vault/), D25 (vault backup), OQ-S2 and OQ-S3. test-image.sh now also rebuilds the plain image after the clients build and checks it carries no clients (passed). Filed ticket 132 (SIGTERM shutdown) as needs-triage.

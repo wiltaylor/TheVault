@@ -3,7 +3,7 @@ id: '130'
 title: The server distributes static Linux builds of the vault CLI (amd64, arm64)
   like the apps, and the CLI says when the server is newer
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -24,3 +24,7 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-18T08:43:37Z — /work
+
+Claimed.
