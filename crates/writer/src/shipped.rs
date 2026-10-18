@@ -131,6 +131,7 @@ pub const SHIPPED_FILES: [ShippedFile; 11] = [
         hashes: &[
             "40629abecc581c745657b98ad630af864b35e87eb287d0217103ea8dbd4288c7",
             "0d42ff00a0888f1a7b51fc693e75e2b150373d3a22a17f085aa76dffdc7d802a",
+            "a4f144978e8d41264463826d12ca54bb75e765b0401b1e9bdc8a74204f7c54b8",
         ],
     },
     ShippedFile {

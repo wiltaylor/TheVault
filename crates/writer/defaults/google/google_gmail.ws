@@ -14,12 +14,17 @@ use regex
 //   older mail is paged back to, a page each run). Its `endpoints` object points the script at
 //   other hosts than Google's, for tests. A missing secret means the defaults.
 // - The run's state is the JSON object in the `google_gmail_state` secret, written with
-//   `secrets::set` and by nothing else: `history_id`, `backfill_page`, `last_run`, `last_error`
-//   and `notified_invalid_grant`. No note is written for it.
+//   `secrets::set` and by nothing else: `history_id`, `listed`, `backfill_page`, `last_run`,
+//   `last_error` and `notified_invalid_grant`. No note is written for it.
 // - The first run lists the window. Later runs read Gmail's history from `history_id`:
 //   new messages are pulled, a label change updates the email's labels and nothing else, and a
 //   message deleted in Gmail archives its note. A history id Gmail no longer keeps (404) lists
 //   the window again; messages already pulled are skipped, by their `gmail_ref`.
+// - `listed` is what the last finished window listing covered: `{ mode, labels, window_days }`,
+//   the labels as sorted Gmail ids (google-sync D11, D21). A run whose settings differ lists the
+//   window again besides reading history: all of it for a new mode or window, only the added
+//   labels otherwise, nothing when labels were only removed. The back-fill starts over too. A
+//   run with nothing to list (labels mode, no labels) saves no `history_id`.
 // - The body is the text/plain part as paragraphs, or else the text/html part turned into text.
 //   The HTML part is kept as an asset in `html`. Attachments up to 700 KB are kept in
 //   `attachments`; larger ones are listed by name and size. A message too large to fetch keeps
@@ -1001,8 +1006,16 @@ fn backfill(ctx: Ctx, cursor: string, to: string, lists: List[string], window_st
     if to == "" || cursor == "done:" + to {
         return Ok(cursor)
     }
+    if lists.len() == 0 {
+        return Ok("")
+    }
     let to_ms = date_ms(to)
-    if to_ms < 0 || to_ms >= window_start {
+    if to_ms < 0 {
+        return Ok("done:" + to)
+    }
+    if to_ms >= window_start {
+        // Said once: the cursor is done from here, and a done cursor returns above.
+        vault::log(fmt("Gmail: the back-fill date is inside the window; nothing older to fetch ({} is not before the window's start, {}).", to, rfc3339(window_start).slice(0, 10)))
         return Ok("done:" + to)
     }
     let at = cursor.find(":").unwrap_or(-1)
@@ -1024,6 +1037,39 @@ fn backfill(ctx: Ctx, cursor: string, to: string, lists: List[string], window_st
         return Ok(fmt("{}:", index + 1))
     }
     Ok("done:" + to)
+}
+
+// What a window listing covered (google-sync D11, D21): the mode, the label ids sorted, and the
+// window in days.
+fn listing_of(all: bool, wanted: List[string], days: int) -> Value {
+    let labels: List[string] = []
+    for id in wanted {
+        if !labels.contains(id) {
+            labels.push(id)
+        }
+    }
+    labels.sort()
+    Value::Map(#{
+        "mode": Value::String(if all { "all" } else { "labels" }),
+        "labels": ids(labels),
+        "window_days": Value::Int(days),
+    })
+}
+
+// The listings to run again when the settings moved from listing `before` to `now`: every one
+// for a new mode or window, or a listing never recorded; else only the labels added.
+fn relist_of(before: Value, now: Value, lists: List[string]) -> List[string] {
+    if before.is_null() || text_of(before, "mode") != text_of(now, "mode") || int_of(before, "window_days") != int_of(now, "window_days") {
+        return lists
+    }
+    let had = strings_of(before, "labels")
+    let added: List[string] = []
+    for label in lists {
+        if !had.contains(label) {
+            added.push(label)
+        }
+    }
+    added
 }
 
 // ---- the run --------------------------------------------------------------------------------
@@ -1148,6 +1194,12 @@ fn sync(ctx: Ctx, state: Map[string, Value], fields: Value) -> Result[(), string
     let window_start = ctx.started - days * day_ms()
     let q = fmt("after:{}", window_start / 1000)
 
+    // What the last finished window listing covered. Settings that differ list again.
+    let listing = listing_of(all, wanted, days)
+    let before = state.get("listed").unwrap_or(Value::Null)
+    let same = !before.is_null() && json::to_string(before) == json::to_string(listing)
+    let next_listed = before
+
     let history = text_of(Value::Map(state), "history_id")
     let next_history = history
     if history != "" {
@@ -1160,16 +1212,36 @@ fn sync(ctx: Ctx, state: Map[string, Value], fields: Value) -> Result[(), string
         }
     }
     if history == "" {
-        // The mailbox's history id before the listing, so later changes are read from history.
-        let profile = get_json(ctx, ctx.gmail + "/users/me/profile")?
-        if full_list(ctx, lists, q)? {
-            next_history = text_of(profile, "historyId")
-        } else {
+        if lists.len() == 0 {
+            // Nothing to list: no history id either, so the first listing happens once there
+            // are labels to list.
+            vault::log("Gmail has no labels to sync, so nothing is listed.")
             next_history = ""
+            next_listed = Value::Null
+        } else {
+            // The mailbox's history id before the listing, so later changes are read from history.
+            let profile = get_json(ctx, ctx.gmail + "/users/me/profile")?
+            if full_list(ctx, lists, q)? {
+                next_history = text_of(profile, "historyId")
+                next_listed = listing
+            } else {
+                next_history = ""
+            }
+        }
+    } else if !same && !ctx.stopped {
+        // The settings changed since the window was listed: history covers only changes after
+        // the cursor, so list what the new settings add. Imported messages skip by gmail_ref.
+        let relist = relist_of(before, listing, lists)
+        if relist.len() > 0 {
+            vault::log("The Gmail settings changed, so the window is listed again for them.")
+        }
+        if full_list(ctx, relist, q)? {
+            next_listed = listing
         }
     }
 
-    let cursor = text_of(Value::Map(state), "backfill_page")
+    // New settings page the back-fill again from the start.
+    let cursor = if same { text_of(Value::Map(state), "backfill_page") } else { "" }
     let to = text_of(fields, "gmail_backfill_to")
     let next_cursor = if ctx.stopped { cursor } else { backfill(ctx, cursor, to, lists, window_start)? }
 
@@ -1182,6 +1254,7 @@ fn sync(ctx: Ctx, state: Map[string, Value], fields: Value) -> Result[(), string
     state["last_error"] = error;
     state["history_id"] = if next_history == "" { Value::Null } else { Value::String(next_history) };
     state["backfill_page"] = if next_cursor == "" { Value::Null } else { Value::String(next_cursor) };
+    state["listed"] = next_listed;
     save_state(state)?;
     vault::log(fmt("Gmail: {} new, {} relabelled, {} archived, {} not saved.", ctx.imported, ctx.updated, ctx.archived, ctx.failed))
     Ok(())

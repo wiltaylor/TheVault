@@ -347,6 +347,8 @@ describe("GoogleSettingsForm", () => {
     expect(screen.getByRole("list", { name: "Gmail labels values" }).textContent).toContain("INBOX");
     expect((screen.getByLabelText("Window (days)") as HTMLInputElement).value).toBe("90");
     expect(screen.getByRole("list", { name: "Calendars values" }).textContent).toContain("primary");
+    // Changing labels or mode lists the window again on the next run (google-sync D11, D21).
+    expect(form.textContent).toContain("Changing the labels or the mode lists the window again on the next run.");
 
     addChip("Gmail labels", "Work/Clients");
     fireEvent.input(screen.getByLabelText("Window (days)"), { target: { value: "30" } });

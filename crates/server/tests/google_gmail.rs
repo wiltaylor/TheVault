@@ -190,6 +190,33 @@ paused        = true
         res.bytes().unwrap().to_vec()
     }
 
+    /// Replace the `google_settings` secret with `settings` and the fake's endpoints.
+    fn set_settings(&self, mut settings: Value) {
+        settings["endpoints"] = self.google.endpoints();
+        self.put_secret("google_settings", &settings.to_string());
+    }
+
+    fn put_secret(&self, name: &str, value: &str) {
+        expect(
+            self.req("PUT", &format!("/api/secrets/{name}"))
+                .json(&json!({ "value": value }))
+                .send()
+                .unwrap(),
+            200,
+        );
+    }
+
+    /// The `labelIds` of every message listing since the requests were last cleared, "" for a
+    /// listing of all mail.
+    fn listings(&self) -> Vec<String> {
+        self.google
+            .requests_to("/gmail/v1/users/me/messages")
+            .iter()
+            .filter(|r| r.route() == "/gmail/v1/users/me/messages")
+            .map(|r| r.query("labelIds").unwrap_or_default())
+            .collect()
+    }
+
     /// The gmail_ref of every email note, sorted.
     fn refs(&self) -> Vec<String> {
         let mut refs: Vec<String> = self
@@ -734,5 +761,151 @@ fn a_run_with_more_mail_than_it_may_decode_stops_early_and_the_next_run_carries_
     assert_eq!(
         paragraphs(&note, "body").last().unwrap(),
         "The rest of the message is longer than the sync keeps."
+    );
+}
+
+// ---- settings changes (google-sync D11, D21) ----------------------------------------------------
+
+#[test]
+fn a_first_run_with_no_labels_saves_no_history_and_adding_labels_imports_their_window() {
+    let google = FakeGoogle::start();
+    let work = google.add_label("Work");
+    google.add_message(mail("work-1", &[&work], 3));
+    google.add_message(mail("work-2", &["INBOX", &work], 20));
+    google.add_message(mail("inbox", &["INBOX"], 2));
+    let gmail = Gmail::start(
+        google,
+        json!({ "gmail_mode": "labels", "gmail_labels": [] }),
+    );
+    gmail.run_ok();
+    assert!(gmail.refs().is_empty());
+    let state = gmail.state();
+    assert!(state["history_id"].is_null(), "{state:#}");
+    assert!(state["listed"].is_null(), "{state:#}");
+
+    gmail.set_settings(json!({ "gmail_mode": "labels", "gmail_labels": ["Work"] }));
+    gmail.run_ok();
+    assert_eq!(gmail.refs(), ["work-1", "work-2"]);
+    let state = gmail.state();
+    assert!(state["history_id"].as_str().is_some(), "{state:#}");
+    assert_eq!(
+        state["listed"],
+        json!({ "mode": "labels", "labels": [work], "window_days": 90 })
+    );
+}
+
+#[test]
+fn switching_labels_to_all_lists_the_window_again_and_restarts_the_back_fill() {
+    let google = FakeGoogle::start();
+    let other = google.add_label("Other");
+    google.add_message(mail("inbox", &["INBOX"], 1));
+    google.add_message(mail("other", &[&other], 2));
+    google.add_message(mail("unlabelled", &[], 30));
+    google.add_message(mail("old-inbox", &["INBOX"], 100));
+    google.add_message(mail("old-other", &[&other], 110));
+    google.add_message(mail("too-old", &[&other], 300));
+    let backfill = date_of(ago(200));
+    let gmail = Gmail::start(
+        google,
+        json!({ "gmail_labels": ["INBOX"], "gmail_backfill_to": backfill }),
+    );
+    gmail.run_ok();
+    assert_eq!(gmail.refs(), ["inbox", "old-inbox"]);
+    // A later run with the same settings reads history only.
+    gmail.google.clear_requests();
+    gmail.run_ok();
+    assert!(gmail.listings().is_empty(), "{:#?}", gmail.listings());
+
+    gmail.set_settings(json!({ "gmail_mode": "all", "gmail_backfill_to": backfill }));
+    gmail.google.clear_requests();
+    let run = gmail.run_ok();
+    assert_eq!(
+        gmail.refs(),
+        ["inbox", "old-inbox", "old-other", "other", "unlabelled"],
+        "{run:#}"
+    );
+    // History was still read for incremental changes, and the window listed all mail.
+    assert_eq!(
+        gmail.google.requests_to("/gmail/v1/users/me/history").len(),
+        1
+    );
+    assert!(gmail.listings().iter().all(String::is_empty));
+    assert_eq!(
+        gmail.state()["listed"],
+        json!({ "mode": "all", "labels": [], "window_days": 90 })
+    );
+
+    // Nothing duplicates, and the next run lists nothing.
+    gmail.google.clear_requests();
+    gmail.run_ok();
+    assert!(gmail.listings().is_empty(), "{:#?}", gmail.listings());
+    assert_eq!(gmail.emails().len(), 5);
+}
+
+#[test]
+fn adding_a_label_lists_only_that_label_and_removing_one_lists_nothing() {
+    let google = FakeGoogle::start();
+    let work = google.add_label("Work");
+    let home = google.add_label("Home");
+    google.add_message(mail("work", &[&work], 1));
+    google.add_message(mail("both", &[&work, &home], 2));
+    google.add_message(mail("home", &[&home], 3));
+    google.add_message(mail("inbox", &["INBOX"], 4));
+    let gmail = Gmail::start(google, json!({ "gmail_labels": ["Work"] }));
+    gmail.run_ok();
+    assert_eq!(gmail.refs(), ["both", "work"]);
+
+    gmail.set_settings(json!({ "gmail_labels": ["Work", "Home"] }));
+    gmail.google.clear_requests();
+    gmail.run_ok();
+    assert_eq!(gmail.refs(), ["both", "home", "work"]);
+    assert_eq!(gmail.listings(), std::slice::from_ref(&home));
+    let mut labels = vec![work.clone(), home.clone()];
+    labels.sort();
+    assert_eq!(gmail.state()["listed"]["labels"], json!(labels));
+
+    gmail.set_settings(json!({ "gmail_labels": ["Home"] }));
+    gmail.google.clear_requests();
+    gmail.run_ok();
+    assert!(gmail.listings().is_empty(), "{:#?}", gmail.listings());
+    assert_eq!(gmail.state()["listed"]["labels"], json!([home]));
+    assert_eq!(gmail.emails().len(), 3);
+}
+
+#[test]
+fn a_state_with_a_history_id_but_no_listing_record_lists_the_window_once() {
+    // The state an earlier version left after a first run with no labels.
+    let google = FakeGoogle::start();
+    google.add_message(mail("a", &["INBOX"], 1));
+    google.add_message(mail("b", &[], 5));
+    let history = google.gmail_history_id().to_string();
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    gmail.put_secret(
+        "google_gmail_state",
+        &json!({ "history_id": history }).to_string(),
+    );
+    gmail.run_ok();
+    assert_eq!(gmail.refs(), ["a", "b"]);
+    gmail.google.clear_requests();
+    gmail.run_ok();
+    assert!(gmail.listings().is_empty());
+    assert_eq!(gmail.emails().len(), 2);
+}
+
+#[test]
+fn a_back_fill_date_inside_the_window_is_reported_once() {
+    let google = FakeGoogle::start();
+    google.add_message(mail("a", &["INBOX"], 1));
+    let gmail = Gmail::start(
+        google,
+        json!({ "gmail_mode": "all", "gmail_backfill_to": date_of(ago(10)) }),
+    );
+    let note = "back-fill date is inside the window; nothing older to fetch";
+    let first = gmail.run_ok();
+    assert!(first["log"].as_str().unwrap().contains(note), "{first:#}");
+    let second = gmail.run_ok();
+    assert!(
+        !second["log"].as_str().unwrap().contains(note),
+        "{second:#}"
     );
 }
