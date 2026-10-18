@@ -202,7 +202,9 @@ The package installs the release's deb contents: `/usr/bin/thevault`, its deskto
 
 ## Releasing
 
-Pushing a tag `v<version>` runs `.github/workflows/release.yml`. The tag must match `version` in `apps/desktop/src-tauri/tauri.conf.json`. The workflow runs `just desktop-release-test` and `just aur-release` in the dev container, then creates the tag's GitHub Release with the AppImage, deb, rpm, `SHA256SUMS` and `thevault-bin-aur.tar.gz`.
+Pushing a tag `v<version>` runs `.github/workflows/release.yml`. The tag must match `version` in `apps/desktop/src-tauri/tauri.conf.json`. The workflow runs `just desktop-release-test` and `just aur-release` in the dev container, then creates the tag's GitHub Release with the AppImage, its updater signature `.AppImage.sig`, the deb, rpm, `SHA256SUMS` and `thevault-bin-aur.tar.gz`.
+
+The workflow signs the AppImage with the updater key from two repository secrets: `TAURI_SIGNING_PRIVATE_KEY`, the text of `thevault-updater.key` (not its path), and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, its password. It fails before building when either is missing, and after building when an AppImage has no `.sig`, so a release never carries an AppImage the installed apps will not update to. `image.yml` downloads the `.sig` with the AppImage, and the server image's clients manifest gives the AppImage its `signature`.
 
 `thevault-bin-aur.tar.gz` holds the release's `PKGBUILD` and `.SRCINFO`, with the version and the deb's checksum filled in. To update the AUR package, copy both into a clone of `ssh://aur@aur.archlinux.org/thevault-bin.git`, then commit and push. `packaging/aur/PKGBUILD` is the template, and `./dev just aur-check` checks that `packaging/aur/.SRCINFO` still matches it.
 

@@ -3,6 +3,12 @@
 # for that release, and the static vault CLI builds for Linux x86_64 and aarch64 with
 # SHA256SUMS-cli (D27), which image.yml bakes into the server image. Everything builds in the dev
 # container, as it does locally.
+#
+# The AppImage is signed for the desktop updater (D27) with the key from two repository secrets:
+# TAURI_SIGNING_PRIVATE_KEY, the text of the key file `cargo tauri signer generate` wrote, and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD, its password. The release carries the signature as
+# TheVault_<version>_amd64.AppImage.sig, which image.yml publishes with the AppImage. Without the
+# key the workflow fails rather than release an AppImage installed apps will not update to.
 
 name: release
 
@@ -31,8 +37,42 @@ jobs:
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
 
-      - name: Build the bundles and smoke-test the AppImage
-        run: ./dev just desktop-release-test
+      - name: Check the updater signing key is set
+        env:
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "${UPDATER_KEY}" ] || missing="$missing TAURI_SIGNING_PRIVATE_KEY"
+          [ -n "${UPDATER_KEY_PASSWORD}" ] || missing="$missing TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::the repository secrets${missing} are not set: without the updater key the AppImage has no signature and installed apps will not update to it (docs/desktop.md)" >&2
+            exit 1
+          fi
+
+      # ./dev passes the key itself into the container; base64 holds no whitespace, so a newline
+      # pasted with the secret is dropped.
+      - name: Build the bundles, sign the AppImage and smoke-test it
+        env:
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: TAURI_SIGNING_PRIVATE_KEY=$(printf '%s' "$UPDATER_KEY" | tr -d '[:space:]') ./dev just desktop-release-test
+
+      - name: Check the AppImage has its updater signature
+        run: |
+          shopt -s nullglob
+          images=(target/desktop-release/*.AppImage)
+          if [ ${#images[@]} -eq 0 ]; then
+            echo "::error::target/desktop-release has no AppImage" >&2
+            exit 1
+          fi
+          for image in "${images[@]}"; do
+            if [ ! -s "$image.sig" ]; then
+              echo "::error::$image has no updater signature $image.sig" >&2
+              exit 1
+            fi
+            echo "$image is signed for the updater"
+          done
 
       - name: Write the AUR package for this release
         run: ./dev just aur-release
@@ -48,6 +88,7 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" --verify-tag --title "TheVault ${GITHUB_REF_NAME}" --generate-notes \
             target/desktop-release/*.AppImage \
+            target/desktop-release/*.AppImage.sig \
             target/desktop-release/*.deb \
             target/desktop-release/*.rpm \
             target/desktop-release/SHA256SUMS \
