@@ -13,6 +13,7 @@ serde_json.workspace = true
 tantivy.workspace = true
 vocab.workspace = true
 pdf-extract.workspace = true
+lopdf.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -2,22 +2,26 @@
 //!
 //! A PDF's text is extracted once, when it is uploaded or when a rebuild finds a PDF with no
 //! text yet, and kept in `.vault/asset-text/v1/<ULID>.txt`. Assets never change, so the file
-//! stays good until the asset is deleted. A PDF the extractor could not read keeps an empty
-//! file, so a rebuild does not try it again. Like the rest of the index, the folder is derived
+//! stays good until the asset is deleted. A PDF the extractors could not read keeps an empty
+//! file, so a rebuild does not try it again, and `<ULID>.unreadable` beside it holding why. Like the rest of the index, the folder is derived
 //! data: delete it and the next rebuild extracts every PDF again.
 //!
 //! A note's full-text document takes in the text of every PDF it names, in a field or in a
 //! block's `asset` item, so a search for a word inside a PDF finds the notes holding it.
 //!
 //! Extraction runs on a thread of its own, capped at [`MAX_PDF_BYTES`] of input,
-//! [`EXTRACT_TIMEOUT`] of time and [`MAX_TEXT`] of output, and a panic in the extractor is
-//! caught. A thread that runs past its time cannot be stopped: it is left to finish, and while
-//! [`MAX_RUNNING`] are still running no new extraction starts.
+//! [`EXTRACT_TIMEOUT`] of time and [`MAX_TEXT`] of output. pdf-extract reads the text first;
+//! when it fails or panics, which it does on some real PDFs, lopdf's more tolerant extractor
+//! reads what it can. A panic on that thread is caught and prints nothing: its message becomes
+//! the reason the caller logs. A thread that runs past its time cannot be stopped: it is left
+//! to finish, and while [`MAX_RUNNING`] are still running no new extraction starts.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::panic::PanicHookInfo;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{Once, mpsc};
 use std::time::Duration;
 
 use schema::{Doc, Value};
@@ -38,15 +42,21 @@ pub const MAX_RUNNING: usize = 4;
 
 static RUNNING: AtomicUsize = AtomicUsize::new(0);
 
+/// The name of the threads extraction runs on, whose panics the hook keeps quiet.
+const THREAD: &str = "pdf-text";
+
 /// What extracting a PDF's text came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Extracted {
     /// The PDF's text, white space collapsed, at most [`MAX_TEXT`] bytes. It may be empty: a
     /// scanned PDF has no text.
     Text(String),
-    /// The file is too large, is not a PDF, could not be read, panicked the extractor or ran
-    /// past its time. Kept as no text.
-    Failed,
+    /// pdf-extract failed for `reason`, and the fallback extractor read `text`, tidied as for
+    /// [`Extracted::Text`] and never empty.
+    Recovered { text: String, reason: String },
+    /// The file is too large, is not a PDF, could not be read by either extractor or ran past
+    /// its time, for `reason`, one line. Kept as no text.
+    Failed(String),
     /// Too many extractions are running: try again later. Nothing is kept.
     Busy,
 }
@@ -58,22 +68,56 @@ pub fn is_pdf(filename: &str) -> bool {
         .is_some_and(|(_, e)| e.eq_ignore_ascii_case("pdf"))
 }
 
-/// Extract the text of the PDF `bytes`, within the caps in the module documentation.
-pub fn extract_pdf_text(bytes: Vec<u8>) -> Extracted {
-    extract_with(bytes, EXTRACT_TIMEOUT, |b| {
-        pdf_extract::extract_text_from_mem(b).ok()
-    })
+impl Extracted {
+    /// The text extracted, when there is any to keep.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Extracted::Text(t) | Extracted::Recovered { text: t, .. } => Some(t),
+            Extracted::Failed(_) | Extracted::Busy => None,
+        }
+    }
 }
 
-/// [`extract_pdf_text`] with the time cap and the extractor given, for tests.
+/// An extractor: the text of a PDF, or why it has none.
+type Extractor = fn(&[u8]) -> std::result::Result<String, String>;
+
+/// Extract the text of the PDF `bytes`, within the caps in the module documentation.
+pub fn extract_pdf_text(bytes: Vec<u8>) -> Extracted {
+    extract_with(
+        bytes,
+        EXTRACT_TIMEOUT,
+        |b| pdf_extract::extract_text_from_mem(b).map_err(|e| one_line(&e.to_string())),
+        lopdf_text,
+    )
+}
+
+/// The text lopdf finds on every page, skipping the pages and runs it cannot decode and the
+/// characters it could not map.
+fn lopdf_text(bytes: &[u8]) -> std::result::Result<String, String> {
+    let doc = lopdf::Document::load_mem(bytes).map_err(|e| one_line(&e.to_string()))?;
+    let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+    let mut out = String::new();
+    for chunk in doc.extract_text_chunks(&pages).into_iter().flatten() {
+        out.push_str(&chunk);
+        out.push('\n');
+    }
+    Ok(out.replace('\u{FFFD}', " "))
+}
+
+/// [`extract_pdf_text`] with the time cap and the extractors given, for tests.
 pub(crate) fn extract_with(
     bytes: Vec<u8>,
     timeout: Duration,
-    extract: fn(&[u8]) -> Option<String>,
+    extract: Extractor,
+    fallback: Extractor,
 ) -> Extracted {
-    if bytes.len() > MAX_PDF_BYTES || !looks_like_pdf(&bytes) {
-        return Extracted::Failed;
+    if bytes.len() > MAX_PDF_BYTES {
+        return Extracted::Failed(format!("larger than {MAX_PDF_BYTES} bytes"));
     }
+    if !looks_like_pdf(&bytes) {
+        return Extracted::Failed("no PDF header".to_owned());
+    }
+    quiet_panics_on_extraction_threads();
     // Take a slot, or give up when every slot is taken.
     if RUNNING
         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
@@ -85,9 +129,15 @@ pub(crate) fn extract_with(
     }
     let (tx, rx) = mpsc::channel();
     let spawned = std::thread::Builder::new()
-        .name("pdf-text".to_owned())
+        .name(THREAD.to_owned())
         .spawn(move || {
-            let out = std::panic::catch_unwind(|| extract(&bytes)).ok().flatten();
+            let out = match guarded(extract, &bytes) {
+                Ok(text) => Extracted::Text(tidy(&text)),
+                Err(reason) => match guarded(fallback, &bytes).map(|t| tidy(&t)) {
+                    Ok(text) if !text.is_empty() => Extracted::Recovered { text, reason },
+                    _ => Extracted::Failed(reason),
+                },
+            };
             RUNNING.fetch_sub(1, Ordering::SeqCst);
             let _ = tx.send(out);
         });
@@ -95,9 +145,64 @@ pub(crate) fn extract_with(
         RUNNING.fetch_sub(1, Ordering::SeqCst);
         return Extracted::Busy;
     }
-    match rx.recv_timeout(timeout) {
-        Ok(Some(text)) => Extracted::Text(tidy(&text)),
-        Ok(None) | Err(_) => Extracted::Failed,
+    rx.recv_timeout(timeout).unwrap_or_else(|_| {
+        Extracted::Failed(format!("ran past {} seconds", timeout.as_secs_f32()))
+    })
+}
+
+thread_local! {
+    /// The last panic on this extraction thread, as the hook described it.
+    static LAST_PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Run `extract` on `bytes`, a panic becoming its message as the error.
+fn guarded(extract: Extractor, bytes: &[u8]) -> std::result::Result<String, String> {
+    match std::panic::catch_unwind(|| extract(bytes)) {
+        Ok(out) => out,
+        Err(_) => Err(LAST_PANIC
+            .with_borrow_mut(Option::take)
+            .unwrap_or_else(|| "panicked".to_owned())),
+    }
+}
+
+/// Install, once, a panic hook that keeps a panic on an extraction thread to itself, for
+/// [`guarded`] to report, and hands every other panic to the hook it replaced.
+fn quiet_panics_on_extraction_threads() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info: &PanicHookInfo<'_>| {
+            if std::thread::current().name() != Some(THREAD) {
+                return previous(info);
+            }
+            let message = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_owned())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            let at = info
+                .location()
+                .map(|l| {
+                    format!(
+                        " at {}:{}",
+                        l.file().rsplit('/').next().unwrap_or(""),
+                        l.line()
+                    )
+                })
+                .unwrap_or_default();
+            let described = one_line(&format!("panicked{at}: {message}"));
+            LAST_PANIC.with_borrow_mut(|p| *p = Some(described));
+        }));
+    });
+}
+
+/// `text` on one line, at most 300 characters.
+fn one_line(text: &str) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.char_indices().nth(300) {
+        Some((i, _)) => format!("{}...", &flat[..i]),
+        None => flat,
     }
 }
 
@@ -182,6 +287,13 @@ impl AssetTexts {
         Ok(())
     }
 
+    /// Keep asset `id` as having no text because it could not be read, for `reason`.
+    pub fn set_unreadable(&mut self, id: &str, reason: &str) -> Result<()> {
+        let path = self.dir.join(format!("{id}.unreadable"));
+        std::fs::write(&path, format!("{reason}\n")).map_err(io_err(&path))?;
+        self.set(id, "")
+    }
+
     /// Whether asset `id`'s text holds `part`, which is already lowercase.
     pub fn matches(&self, id: &str, part: &str) -> bool {
         self.known.get(id) == Some(&true)
@@ -193,6 +305,7 @@ impl AssetTexts {
     pub fn forget(&mut self, id: &str) {
         if self.known.remove(id).is_some() {
             let _ = std::fs::remove_file(self.path(id));
+            let _ = std::fs::remove_file(self.dir.join(format!("{id}.unreadable")));
         }
     }
 
@@ -257,16 +370,20 @@ mod tests {
 
     #[test]
     fn refuses_what_is_not_a_pdf_or_too_large() {
-        let ok = |_: &[u8]| Some("x".to_owned());
+        let ok = |_: &[u8]| Ok("x".to_owned());
+        let none = |_: &[u8]| Err("none".to_owned());
         assert_eq!(
-            extract_with(b"hello".to_vec(), EXTRACT_TIMEOUT, ok),
-            Extracted::Failed
+            extract_with(b"hello".to_vec(), EXTRACT_TIMEOUT, ok, ok),
+            Extracted::Failed("no PDF header".to_owned())
         );
         let mut big = b"%PDF-1.4\n".to_vec();
         big.resize(MAX_PDF_BYTES + 1, b' ');
-        assert_eq!(extract_with(big, EXTRACT_TIMEOUT, ok), Extracted::Failed);
+        assert!(matches!(
+            extract_with(big, EXTRACT_TIMEOUT, ok, ok),
+            Extracted::Failed(r) if r.starts_with("larger than")
+        ));
         assert_eq!(
-            extract_with(b"%PDF-1.4\n".to_vec(), EXTRACT_TIMEOUT, ok),
+            extract_with(b"%PDF-1.4\n".to_vec(), EXTRACT_TIMEOUT, ok, none),
             Extracted::Text("x".to_owned())
         );
     }
@@ -275,18 +392,37 @@ mod tests {
     fn a_slow_or_panicking_extractor_counts_as_failed() {
         let slow = |_: &[u8]| {
             std::thread::sleep(Duration::from_millis(400));
-            Some("late".to_owned())
+            Ok("late".to_owned())
         };
+        let none = |_: &[u8]| Err("none".to_owned());
         let started = std::time::Instant::now();
-        assert_eq!(
-            extract_with(b"%PDF-1.4".to_vec(), Duration::from_millis(20), slow),
-            Extracted::Failed
-        );
+        assert!(matches!(
+            extract_with(b"%PDF-1.4".to_vec(), Duration::from_millis(20), slow, none),
+            Extracted::Failed(r) if r.starts_with("ran past")
+        ));
         assert!(started.elapsed() < Duration::from_millis(300));
-        let panics = |_: &[u8]| -> Option<String> { panic!("hostile pdf") };
+        let panics = |_: &[u8]| -> std::result::Result<String, String> { panic!("hostile pdf") };
+        let Extracted::Failed(reason) =
+            extract_with(b"%PDF-1.4".to_vec(), EXTRACT_TIMEOUT, panics, panics)
+        else {
+            panic!("not failed");
+        };
+        assert!(reason.starts_with("panicked at asset_text.rs:"), "{reason}");
+        assert!(reason.ends_with(": hostile pdf"), "{reason}");
+        // The fallback reads what the first extractor panicked on.
+        let fallback = |_: &[u8]| Ok("  rescued  text ".to_owned());
         assert_eq!(
-            extract_with(b"%PDF-1.4".to_vec(), EXTRACT_TIMEOUT, panics),
-            Extracted::Failed
+            extract_with(b"%PDF-1.4".to_vec(), EXTRACT_TIMEOUT, panics, fallback),
+            Extracted::Recovered {
+                text: "rescued text".to_owned(),
+                reason,
+            }
+        );
+        // A fallback with no text leaves the first extractor's reason.
+        let blank = |_: &[u8]| Ok(" \u{FFFD} ".replace('\u{FFFD}', " "));
+        assert_eq!(
+            extract_with(b"%PDF-1.4".to_vec(), EXTRACT_TIMEOUT, none, blank),
+            Extracted::Failed("none".to_owned())
         );
     }
 
@@ -294,7 +430,7 @@ mod tests {
     fn a_corrupt_pdf_has_no_text() {
         let corrupt =
             b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 9 0 R >>\ntrailer\n%%EOF".to_vec();
-        assert_eq!(extract_pdf_text(corrupt), Extracted::Failed);
+        assert!(matches!(extract_pdf_text(corrupt), Extracted::Failed(_)));
     }
 
     #[test]

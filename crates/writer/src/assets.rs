@@ -113,7 +113,9 @@ impl Writer {
         if index::is_pdf(filename) {
             let extracted = match pdf {
                 Some(bytes) => index::extract_pdf_text(bytes),
-                None => index::Extracted::Failed,
+                None => {
+                    index::Extracted::Failed(format!("larger than {} bytes", index::MAX_PDF_BYTES))
+                }
             };
             // The asset is stored; text that cannot be kept only means search misses it.
             let _ = self.lock().index.set_asset_text(&asset.id, &extracted);

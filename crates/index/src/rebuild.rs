@@ -122,7 +122,10 @@ fn extract_missing(index: &mut Index, vault: &store::Vault) -> Result<()> {
             .metadata()
             .is_ok_and(|m| m.len() > asset_text::MAX_PDF_BYTES as u64);
         let extracted = if too_big {
-            asset_text::Extracted::Failed
+            asset_text::Extracted::Failed(format!(
+                "larger than {} bytes",
+                asset_text::MAX_PDF_BYTES
+            ))
         } else {
             match std::fs::read(file.path()) {
                 Ok(bytes) => asset_text::extract_pdf_text(bytes),

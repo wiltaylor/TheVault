@@ -154,11 +154,19 @@ impl Index {
 
     /// Keep what extracting asset `id`'s text came to. Notes indexed from now on take the text
     /// in; notes already indexed do so when next saved or rebuilt. [`Extracted::Busy`] keeps
-    /// nothing, so a later rebuild tries again.
+    /// nothing, so a later rebuild tries again. A PDF pdf-extract could not read is logged in
+    /// one line on standard error, once, since it is kept and not tried again.
     pub fn set_asset_text(&mut self, id: &str, extracted: &Extracted) -> Result<()> {
         match extracted {
             Extracted::Text(t) => self.assets.set(id, t),
-            Extracted::Failed => self.assets.set(id, ""),
+            Extracted::Recovered { text, reason } => {
+                eprintln!("asset {id}: PDF text read by the fallback extractor: {reason}");
+                self.assets.set(id, text)
+            }
+            Extracted::Failed(reason) => {
+                eprintln!("asset {id}: PDF text not extracted, kept as unreadable: {reason}");
+                self.assets.set_unreadable(id, reason)
+            }
             Extracted::Busy => Ok(()),
         }
     }

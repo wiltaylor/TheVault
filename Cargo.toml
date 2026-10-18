@@ -28,6 +28,8 @@ rustix = { version = "1", features = ["termios", "fs"] }
 sha2 = "0.10"
 tantivy = "0.26"
 pdf-extract = "0.12"
+# pdf-extract's own lopdf, as the fallback text extractor. pdf-extract turns its default features off.
+lopdf = { version = "0.42", default-features = false }
 thiserror = "2"
 ulid = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
