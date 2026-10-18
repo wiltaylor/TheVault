@@ -4,8 +4,8 @@ title: 'Google Calendar write-back: the event type''s google_event handler creat
   patches with If-Match, deletes and recreates on restore'
 blocked_by:
 - '98'
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Google Calendar write-back: the event type's google_event handler creates, patches with If-Match, deletes and recreates on restore
@@ -28,3 +28,15 @@ Acceptance criteria (server tests through TestServer, vault edits through the no
 ### 2026-10-17T23:52:28Z — /work
 
 Claimed.
+
+### 2026-10-18T00:09:20Z — wil
+
+Verified set to verified.
+
+### 2026-10-18T00:09:20Z — wil
+
+Branch ticket/99. Tests: crates/server/tests/google_event.rs (7, through TestServer + FakeGoogle requests), writer test an_event_type_from_before_the_write_back_gains_its_handlers_and_no_note_changes. A handler block on a shipped built-in type does not reach an existing vault through seeding (fields only), so upgrade step 0003_event_google_handler adds the three handler blocks once. after_create with a google_ref is skipped when created == updated and the note equals its snapshot (a note the task just made); a restore in the same second as the note's creation is therefore not recognised (seconds-precision stamps). A delete the task makes (Google cancelled the event) still sends one DELETE, answered 410 and treated as done. Attendee RSVPs lost on attendees PATCH filed as 110. TestServer::settle_handlers added to testkit.
+
+### 2026-10-18T00:09:20Z — wil
+
+Status set to done.
