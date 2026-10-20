@@ -127,7 +127,7 @@ check ".env.example says how to change the password" grep -q 'docker compose exe
 
 # docs/install.md covers each step, and the README links it.
 check "README.md links docs/install.md" grep -q '(docs/install.md)' README.md
-for want in 'docker login ghcr.io' 'read:packages' 'releases/latest/download' 'docker compose up -d' \
+for want in 'is public, so no registry login is needed' 'releases/latest/download' 'docker compose up -d' \
   'Pair a device' '--profile https' '--profile cloudflare' 'URL**: `thevault:8080`' \
   'integrations/google/callback' 'vault backup' '/data/backups/<old>-to-<new>-<time>.sqlar' \
   '/config/vault.key' 'docker compose pull && docker compose up -d' 'restore-backup' \

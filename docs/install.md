@@ -8,26 +8,8 @@ The server is one container, `thevault`. It keeps the vault in the `/data` volum
 
 - A Linux machine with Docker Engine and the Docker Compose plugin, version 2.20 or later. Run `docker compose version` to check.
 - The image is `linux/amd64`, so the machine needs an x86-64 processor.
-- While the image is private, a GitHub account that can read `ghcr.io/wiltaylor/thevault`.
 
-## Log in to the GitHub container registry
-
-Skip this section when the image is public.
-
-GitHub's container registry accepts a personal access token (classic). It does not accept fine-grained tokens.
-
-1. On GitHub, open **Settings > Developer settings > Personal access tokens > Tokens (classic)** and select **Generate new token (classic)**.
-2. Tick only the `read:packages` scope, set an expiry, and select **Generate token**.
-3. Copy the token.
-4. On the server, log in with your GitHub user name:
-
-   ```sh
-   docker login ghcr.io -u <github-user>
-   ```
-
-5. Paste the token when Docker asks for the password.
-
-Docker keeps the login in `~/.docker/config.json`, so `docker compose pull` works from then on.
+The image, `ghcr.io/wiltaylor/thevault`, is public, so no registry login is needed.
 
 ## Install
 
