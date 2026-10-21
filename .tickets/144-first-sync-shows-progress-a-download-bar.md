@@ -3,8 +3,8 @@ id: '144'
 title: 'First sync shows progress: a download bar on the desktop setup page and in
   the sync popover with notes and files done, bytes and time left'
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # First sync shows progress: a download bar on the desktop setup page and in the sync popover with notes and files done, bytes and time left
@@ -29,3 +29,15 @@ Acceptance criteria:
 ### 2026-10-21T10:39:54Z — wil
 
 Claimed.
+
+### 2026-10-21T10:58:34Z — wil
+
+Built on ticket/144 (74b72b1). Server: GET /api/sync/changes adds remaining (entries after the page). crates/sync/src/progress.rs: SyncProgress with stage, notes/files/bytes done and total, ETA = notes left / notes rate + bytes left / bytes rate over the last 10 s of the stage (feed byte rate stands in before asset bytes arrive). Embedded exposes it as progress in GET /api/app/sync and the desktop's /_desktop/status. Setup page: bar, Notes, Files, time left, Retry. Popover: progress line and bar for large rounds. Tests: crates/sync/tests/progress.rs, apps/desktop/e2e/first-sync.test.mjs, SyncStatus.test.tsx. ./dev just check and ./dev just desktop-test pass (10/10). Screenshot /home/wil/dev/TheVault/.scratch/shots/first-sync-progress.png.
+
+### 2026-10-21T10:58:34Z — wil
+
+Verified set to verified.
+
+### 2026-10-21T10:58:34Z — wil
+
+Status set to done.
