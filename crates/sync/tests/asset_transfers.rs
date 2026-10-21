@@ -328,7 +328,7 @@ fn a_stalled_upload_fails_alone_and_the_notes_that_do_not_need_it_sync() {
     assert_eq!(pushed, want, "{report:?}");
     assert_eq!(report.held.len(), 1, "{report:?}");
     assert_eq!(report.held[0].note_id, with_big);
-    assert_eq!(report.held[0].asset_id, big);
+    assert_eq!(report.held[0].asset_id.as_deref(), Some(big.as_str()));
     let problem = report.problem().unwrap();
     assert!(problem.contains("big.mp4 (32.0 MB)"), "{problem}");
     assert!(problem.contains("1 note waits"), "{problem}");

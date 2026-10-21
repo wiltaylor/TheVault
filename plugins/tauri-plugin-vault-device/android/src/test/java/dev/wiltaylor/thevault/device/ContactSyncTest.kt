@@ -44,10 +44,13 @@ class ContactSyncTest {
                 .put("server_url", home.url)
                 .put("device_id", FakeHome.DEVICE_ID)
                 .put("device_name", "Pixel")
-                .put("token", FakeHome.TOKEN),
+                .put("token", FakeHome.TOKEN)
+                .put("vault_id", VAULT),
         )
         phone = FakePhone(context)
         phone.contact(3, "Ada Lovelace", 1_000, listOf("0412 345 678" to "+61412345678"), listOf("ada@example.com"))
+        // The contacts' person links belong to the local vault's vault, as in the app.
+        phone.links = Device.vaultLinks(context)
         // Photos go into the local vault through the core, as in the app.
         capture = phone.install(assets = CoreAssets)
         assertTrue(Device.openCore(context))
@@ -85,6 +88,11 @@ class ContactSyncTest {
     }
 
     private fun person(): JSONObject = people().single()
+
+    private companion object {
+        /** The vault the home server holds, as pairing named it. */
+        const val VAULT = "01VAULTB000000000000000000"
+    }
 
     private fun vaultRow(contact: Long): String = phone.rows(contact, ContactsReader.PERSON_MIME).single()
 
@@ -275,6 +283,32 @@ class ContactSyncTest {
         assertEquals("1815-12-10", synced.getString("birthday"))
         assertEquals("[\"home\",\"work\"]", synced.getJSONArray("email_labels").toString())
         assertEquals(asset, synced.getJSONObject("photo").getString("asset"))
+    }
+
+    /**
+     * Ticket 143: a contact whose link row names another vault's person is filed as a new person
+     * of this vault, and with contacts write on its row is written again for this vault.
+     */
+    @Test
+    fun aContactLinkedInAnotherVaultMakesAFreshPersonAndItsRowIsRewritten() {
+        val here = VAULT
+        assertEquals(here, PairingStore(context).link()!!.getString("vault_id"))
+        assertEquals(here, VaultCore.vaultId())
+
+        val stale = "01M54NTRRY755C5BKDRZPEVDEC"
+        val agreed = JSONObject().put("name", "Ada Byron").toString()
+        phone.data(3, ContactsReader.PERSON_MIME, "data1" to stale, "data2" to agreed, "data3" to ContactsReader.SYNCED_FORMAT, "data4" to "01VAULTA000000000000000000")
+        assertTrue("read as never linked", capture.contacts.get("3").isNull("person"))
+        changed(3)
+
+        val ada = person()
+        assertTrue(ada.getString("id") != stale)
+        assertEquals("Ada Lovelace", ada.getJSONObject("fields").getString("title"))
+        val row = phone.personRow(3)!!
+        assertEquals(ada.getString("id"), row[0])
+        assertEquals(here, row[3])
+        assertEquals("Ada Lovelace", JSONObject(row[1]!!).getString("name"))
+        assertEquals(ada.getString("id"), capture.contacts.get("3").getString("person"))
     }
 
     @Test

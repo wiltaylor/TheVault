@@ -36,13 +36,17 @@ const DEFAULT_LIMIT: i64 = 500;
 /// The most entries a page of the feed may ask for.
 const MAX_LIMIT: i64 = 5000;
 
-/// `GET /api/sync/info`: the protocol and vault format versions, and the server's own version.
-pub async fn info() -> Json<Value> {
-    Json(json!({
+/// `GET /api/sync/info`: the protocol and vault format versions, the server's own version, and the
+/// vault's id, by which a device tells one vault from another: a device whose local vault came
+/// from another vault starts fresh rather than pushing that vault's notes here (ticket 143, D20).
+pub async fn info(State(w): Shared) -> Result<Json<Value>, ApiError> {
+    let vault_id = blocking(w, |w| w.state().vault_id()).await?;
+    Ok(Json(json!({
         "protocol": vocab::SYNC_PROTOCOL,
         "format_version": vocab::FORMAT_VERSION,
         "server_version": env!("CARGO_PKG_VERSION"),
-    }))
+        "vault_id": vault_id,
+    })))
 }
 
 /// `GET /api/version`: the server's own version, for Settings > General's About section. Like

@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_COMMANDS, commandChoices, declares } from "./Devices";
+import { BUILTIN_COMMANDS, commandChoices, declares, freshStartText } from "./Devices";
+
+describe("freshStartText", () => {
+  it("says the device joined another vault, where the old local vault went and for how long", () => {
+    const text = freshStartText(
+      {
+        at_ms: 1_000,
+        previous: "/data/user/0/dev.wiltaylor.thevault/vault.prev-1000",
+        from_vault: "a",
+        to_vault: "b",
+      },
+      () => "21 Oct 2026",
+    );
+    expect(text).toContain("joined a different vault on 21 Oct 2026");
+    expect(text).toContain("moved to vault.prev-1000 on the device");
+    expect(text).toContain("removed 7 days after the move");
+  });
+});
 
 describe("commandChoices", () => {
   it("offers the built-in commands when none are enabled", () => {

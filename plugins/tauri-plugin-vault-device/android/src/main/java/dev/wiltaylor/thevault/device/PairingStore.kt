@@ -74,6 +74,7 @@ class PairingStore(context: Context, private val cipher: TokenCipher = defaultCi
             .putString(SERVER_URL, paired.getString("server_url"))
             .putString(DEVICE_ID, paired.getString("device_id"))
             .putString(DEVICE_NAME, paired.getString("device_name"))
+            .putString(VAULT_ID, paired.optString("vault_id").takeIf(String::isNotEmpty))
             .putString(TOKEN, Base64.encodeToString(sealed, Base64.NO_WRAP))
             .putLong(CACHE_MB, cacheMb.coerceAtLeast(1))
             .commit()
@@ -110,13 +111,22 @@ class PairingStore(context: Context, private val cipher: TokenCipher = defaultCi
         } catch (e: Exception) {
             return null
         }
-        return JSONObject()
+        val link = JSONObject()
             .put("server_url", prefs.getString(SERVER_URL, ""))
             .put("token", token)
             .put("device_id", prefs.getString(DEVICE_ID, ""))
             .put("device_name", prefs.getString(DEVICE_NAME, ""))
             .put("cache_mb", cacheMb)
+        vaultId?.let { link.put("vault_id", it) }
+        return link
     }
+
+    /**
+     * The id of the vault the home server holds, as pairing answered it (ticket 143); null for a
+     * pairing made before vaults were named.
+     */
+    val vaultId: String?
+        get() = prefs.getString(VAULT_ID, null)?.takeIf { isPaired && it.isNotEmpty() }
 
     fun clear() {
         prefs.edit().clear().commit()
@@ -128,6 +138,7 @@ class PairingStore(context: Context, private val cipher: TokenCipher = defaultCi
         private const val SERVER_URL = "server_url"
         private const val DEVICE_ID = "device_id"
         private const val DEVICE_NAME = "device_name"
+        private const val VAULT_ID = "vault_id"
         private const val TOKEN = "token_sealed"
         private const val CACHE_MB = "asset_cache_mb"
 

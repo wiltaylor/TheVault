@@ -414,6 +414,84 @@ class ReadersTest {
         assertEquals(1, phone.assets.stored.size)
     }
 
+    /** Ticket 143: a link row counts only for the vault it names, or, naming none, where its person is. */
+    @Test
+    fun aLinkRowFromAnotherVaultReadsAsUnlinked() {
+        val people = mutableSetOf("01PERSONHERE00000000000000")
+        phone.links = ContactLinks(vaultId = { "vault-b" }, personExists = { it in people })
+        capture = phone.capture()
+        val synced = JSONObject().put("name", "Ada Lovelace").toString()
+        fun link(id: Long, person: String, vault: String?) {
+            phone.contact(id, "Contact $id", 1_000L + id)
+            val values = mutableListOf<Pair<String, Any?>>("data1" to person, "data2" to synced, "data3" to ContactsReader.SYNCED_FORMAT)
+            if (vault != null) values.add("data4" to vault)
+            phone.data(id, ContactsReader.PERSON_MIME, *values.toTypedArray())
+        }
+        link(10, "01PERSONOTHER0000000000000", "vault-a")
+        link(11, "01PERSONHERE00000000000000", "vault-b")
+        link(12, "01PERSONHERE00000000000000", null)
+        link(13, "01PERSONGONE00000000000000", null)
+
+        // Another vault's link: as never linked, `synced` and all.
+        val other = capture.contacts.get("10")
+        assertTrue(other.isNull("person"))
+        assertTrue(other.isNull("synced"))
+        // This vault's link.
+        val here = capture.contacts.get("11")
+        assertEquals("01PERSONHERE00000000000000", here.getString("person"))
+        assertEquals("Ada Lovelace", here.getJSONObject("synced").getString("name"))
+        // An older row, naming no vault: linked when the local vault has its person, not otherwise.
+        assertEquals("01PERSONHERE00000000000000", capture.contacts.get("12").getString("person"))
+        val gone = capture.contacts.get("13")
+        assertTrue(gone.isNull("person"))
+        assertTrue(gone.isNull("synced"))
+        // Capture reports them the same way.
+        val captured = capture.contacts.changedSince(0).associate { it.data.getString("contact_id") to it.data.opt("person") }
+        assertEquals(JSONObject.NULL, captured["10"])
+        assertEquals("01PERSONHERE00000000000000", captured["11"])
+        assertEquals(JSONObject.NULL, captured["13"])
+
+        // An upsert for the contact writes the row again, for this vault and its person.
+        capture.contacts.upsert(JSONObject().put("contact_id", "10").put("person", "01PERSONNEW000000000000000").put("name", "Contact 10"))
+        val row = phone.personRow(10)!!
+        assertEquals("01PERSONNEW000000000000000", row[0])
+        assertEquals("vault-b", row[3])
+        assertEquals("what vault A agreed is dropped", "{\"name\":\"Contact 10\"}", row[1])
+        assertEquals("01PERSONNEW000000000000000", capture.contacts.get("10").getString("person"))
+        // An older row whose person is here is marked as this vault's when written again.
+        capture.contacts.upsert(JSONObject().put("contact_id", "12").put("person", "01PERSONHERE00000000000000"))
+        assertEquals("vault-b", phone.personRow(12)!![3])
+        assertEquals("Ada Lovelace", JSONObject(phone.personRow(12)!![1]!!).getString("name"))
+    }
+
+    /** Ticket 143: the cleanup after joining a vault removes the links of any other vault. */
+    @Test
+    fun forgettingOtherVaultsRemovesTheirLinksAndAdoptsOlderOnesWhosePersonIsHere() {
+        phone.links = ContactLinks(vaultId = { "vault-b" }, personExists = { it == "01PERSONHERE00000000000000" })
+        capture = phone.capture()
+        for ((id, row) in listOf(
+            20L to listOf("data1" to "01PERSONOTHER0000000000000", "data4" to "vault-a"),
+            21L to listOf("data1" to "01PERSONHERE00000000000000", "data4" to "vault-b"),
+            22L to listOf("data1" to "01PERSONHERE00000000000000"),
+            23L to listOf("data1" to "01PERSONGONE00000000000000"),
+        )) {
+            phone.contact(id, "Contact $id", 1_000L + id)
+            phone.data(id, ContactsReader.PERSON_MIME, *row.toTypedArray())
+        }
+        assertEquals(2, capture.contacts.forgetOtherVaults("vault-b"))
+        assertEquals(null, phone.personRow(20))
+        assertEquals("vault-b", phone.personRow(21)!![3])
+        assertEquals("vault-b", phone.personRow(22)!![3])
+        assertEquals(null, phone.personRow(23))
+        assertEquals("the contacts stay", "Contact 20", phone.name(20))
+        assertEquals("nothing is left to remove", 0, capture.contacts.forgetOtherVaults("vault-b"))
+
+        // Through the device bridge, as the core asks for it.
+        val data = AndroidDeviceData(ApplicationProvider.getApplicationContext(), capture)
+        val answer = JSONObject(data.call("contacts_forget_links", JSONObject().put("vault_id", "vault-c").toString()))
+        assertEquals(2, answer.getJSONObject("ok").getInt("removed"))
+    }
+
     @Test
     fun syncedStateFromAnOlderVersionHasItsEmailsMigrated() {
         val old = JSONObject()

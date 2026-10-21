@@ -44,11 +44,22 @@
 //!
 //! A share from another app is a `share_received` device event too: [`Core::share`] queues it and
 //! runs it at once, before pairing as well, since its handler needs only the local vault.
+//!
+//! Joining another vault starts fresh (ticket 143, D20, D29). The local vault records the id of
+//! the home server's vault it is a copy of. When a new pairing ([`Core::set_link`] with the
+//! pairing's `vault_id`) or a round's handshake names a different vault, or a pairing finds a
+//! local vault that synced before vault ids were recorded, the core moves the local vault folder
+//! aside, to `vault.prev-<milliseconds>` beside it, and opens a fresh one in its place: no queued
+//! change, cursor or device event of the other vault reaches this one, and the next round pulls
+//! this vault whole. [`Core::fresh_start`] remembers it for Settings > Devices. A folder moved
+//! aside is removed once it is 7 days old, when the core opens or after a round. Once a round
+//! of the new vault succeeds with the contacts write switch on, the phone's contact links to any
+//! other vault are removed ([`DeviceRuntime::forget_contact_links`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use embedded::device::{DeviceConfig, DeviceData, DeviceRuntime, ImportReport, ImportRequest};
@@ -79,6 +90,13 @@ pub const DEFAULT_CACHE_MB: u64 = 512;
 
 /// How many recently opened notes have their assets prefetched.
 const RECENT_NOTES: usize = 50;
+
+/// The name of a local vault folder moved aside by a fresh start, before its time in
+/// milliseconds: `vault.prev-<ms>`.
+const PREVIOUS: &str = "vault.prev-";
+
+/// How long a local vault moved aside is kept.
+const KEEP_PREVIOUS: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// The installed app, as Kotlin knows it, for the version gate ([`sync::gate`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -131,6 +149,10 @@ pub struct Link {
     /// The asset cache size in MiB.
     #[serde(default = "default_cache_mb")]
     pub cache_mb: u64,
+    /// The id of the vault the home server holds, as pairing answered it; `None` for a pairing
+    /// made before ticket 143, or with a server too old to say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_id: Option<String>,
 }
 
 fn default_cache_mb() -> u64 {
@@ -183,7 +205,10 @@ struct Live {
 /// The core of one process.
 pub struct Core {
     vault: PathBuf,
-    server: Embedded,
+    /// Itself, for the sync source of a server opened after a fresh start.
+    me: Weak<Core>,
+    /// The embedded server of the local vault, replaced by a fresh start.
+    server: RwLock<Arc<Embedded>>,
     link: Mutex<Option<Link>>,
     /// Held for the whole of a round, so rounds never overlap.
     round: Mutex<()>,
@@ -234,14 +259,12 @@ pub fn open(vault: &Path) -> anyhow::Result<Arc<Core>> {
         return Ok(core.clone());
     }
     std::fs::create_dir_all(vault)?;
-    let server = Embedded::open(Config {
+    prune_previous(vault, SystemTime::now());
+    let server = Arc::new(open_embedded(vault)?);
+    let core = Arc::new_cyclic(|me| Core {
         vault: vault.to_owned(),
-        web: None,
-        secret_key: None,
-    })?;
-    let core = Arc::new(Core {
-        vault: vault.to_owned(),
-        server,
+        me: me.clone(),
+        server: RwLock::new(server),
         link: Mutex::new(None),
         round: Mutex::new(()),
         kicks: Mutex::new(None),
@@ -254,10 +277,61 @@ pub fn open(vault: &Path) -> anyhow::Result<Arc<Core>> {
         health_sent: Mutex::new(None),
         gate: UpdateGate::new(),
     });
-    core.server
+    core.server()
         .set_sync_source(Box::new(Source(Arc::downgrade(&core))));
     *current = Some(core.clone());
     Ok(core)
+}
+
+fn open_embedded(vault: &Path) -> anyhow::Result<Embedded> {
+    Embedded::open(Config {
+        vault: vault.to_owned(),
+        web: None,
+        secret_key: None,
+    })
+}
+
+/// Where a fresh start moves the local vault folder `vault` at `at_ms`: `vault.prev-<at_ms>`
+/// beside it.
+pub fn previous_dir(vault: &Path, at_ms: i64) -> PathBuf {
+    vault.with_file_name(format!("{PREVIOUS}{at_ms}"))
+}
+
+/// Remove the local vaults a fresh start moved aside beside `vault` that are older than 7 days
+/// at `now`. Answers the folders removed.
+pub fn prune_previous(vault: &Path, now: SystemTime) -> Vec<PathBuf> {
+    let Some(parent) = vault.parent() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let now_ms = now
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64);
+    let mut removed = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(at_ms) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix(PREVIOUS))
+            .and_then(|ms| ms.parse::<i64>().ok())
+        else {
+            continue;
+        };
+        if now_ms - at_ms < KEEP_PREVIOUS.as_millis() as i64 {
+            continue;
+        }
+        let path = entry.path();
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {
+                log::info!("removed the previous local vault {}", path.display());
+                removed.push(path);
+            }
+            Err(e) => log::warn!("the previous local vault {} stays: {e}", path.display()),
+        }
+    }
+    removed
 }
 
 /// The process's core, once [`open`] has run.
@@ -270,9 +344,13 @@ impl Core {
         &self.vault
     }
 
-    /// The in-process server the webview talks to.
-    pub fn server(&self) -> &Embedded {
-        &self.server
+    /// The in-process server the webview talks to. A fresh start replaces it: take it again for
+    /// each request rather than keeping it.
+    pub fn server(&self) -> Arc<Embedded> {
+        self.server
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The device runtime of device `id`, opened with `data` unless one is open for `id` already.
@@ -289,12 +367,13 @@ impl Core {
         {
             return Ok(runtime.clone());
         }
-        let runtime = Arc::new(self.server.device(DeviceConfig {
+        let server = self.server();
+        let runtime = Arc::new(server.device(DeviceConfig {
             id: id.to_owned(),
             platform: PLATFORM.to_owned(),
             data: data(),
         })?);
-        self.server.set_device(&runtime);
+        server.set_device(&runtime);
         *device = Some((id.to_owned(), runtime.clone()));
         Ok(runtime)
     }
@@ -309,12 +388,114 @@ impl Core {
             })
     }
 
-    /// Set the pairing Kotlin holds, or clear it when the device is not paired.
-    pub fn set_link(&self, link: Option<Link>) {
+    /// Set the pairing Kotlin holds, or clear it when the device is not paired. A pairing that
+    /// names another vault than the local vault is a copy of starts a fresh local vault first
+    /// ([`Core::start_fresh`]), as does one that finds a local vault synced before vault ids
+    /// were recorded. Answers the folder the old local vault moved to, if it moved.
+    pub fn set_link(&self, link: Option<Link>) -> anyhow::Result<Option<PathBuf>> {
+        let mut moved = None;
+        if let Some(vault_id) = link.as_ref().and_then(|l| l.vault_id.as_deref()) {
+            let queue = self.server().queue().clone();
+            let recorded = queue.server_vault()?;
+            match recorded {
+                Some(r) if r == vault_id => {}
+                Some(_) => moved = Some(self.start_fresh_now(vault_id)?),
+                None if queue.has_synced()? => moved = Some(self.start_fresh_now(vault_id)?),
+                None => queue.set_server_vault(vault_id)?,
+            }
+        }
         // The embedded server sends the home server's own routes, such as Settings > Devices and
         // the notifications, to the same server.
-        self.server.set_remote(link.as_ref().map(Link::remote));
+        self.server().set_remote(link.as_ref().map(Link::remote));
         *lock(&self.link) = link;
+        Ok(moved)
+    }
+
+    /// [`Core::start_fresh`], once no round runs.
+    fn start_fresh_now(&self, vault_id: &str) -> anyhow::Result<PathBuf> {
+        let _round = lock(&self.round);
+        self.start_fresh(vault_id)
+    }
+
+    /// Start a fresh local vault for the home server's vault `vault_id`: move the local vault
+    /// folder aside to `vault.prev-<ms>`, with its queue, cursors and device events, and open an
+    /// empty one in its place, which the next round fills from the server. The device runtime
+    /// opens again over the new vault, reaching the same phone. Call it with the round lock held.
+    fn start_fresh(&self, vault_id: &str) -> anyhow::Result<PathBuf> {
+        let _commands = lock(&self.commands);
+        let old = self.server();
+        let from = old.queue().server_vault().ok().flatten();
+        let build = old.app_build();
+        let remote = old.remote();
+        let device = lock(&self.device).take();
+        let at_ms = now_ms();
+        let previous = previous_dir(&self.vault, at_ms);
+        std::fs::rename(&self.vault, &previous).map_err(|e| {
+            anyhow::anyhow!(
+                "moving the local vault {} aside to {}: {e}",
+                self.vault.display(),
+                previous.display()
+            )
+        })?;
+        std::fs::create_dir_all(&self.vault)?;
+        let fresh = Arc::new(open_embedded(&self.vault)?);
+        fresh.set_sync_source(Box::new(Source(self.me.clone())));
+        fresh.set_remote(remote);
+        if let Some(build) = build {
+            fresh.set_app(build);
+        }
+        let queue = fresh.queue();
+        queue.set_server_vault(vault_id)?;
+        queue.set_fresh_start(&json!({
+            "at_ms": at_ms,
+            "previous": previous.display().to_string(),
+            "from_vault": from,
+            "to_vault": vault_id,
+        }))?;
+        *self.server.write().unwrap_or_else(PoisonError::into_inner) = fresh.clone();
+        if let Some((id, runtime)) = device {
+            let data = runtime.data();
+            drop(runtime);
+            let reopened = Arc::new(fresh.device(DeviceConfig {
+                id: id.clone(),
+                platform: PLATFORM.to_owned(),
+                data,
+            })?);
+            fresh.set_device(&reopened);
+            *lock(&self.device) = Some((id, reopened));
+        }
+        *lock(&self.last) = None;
+        *lock(&self.health_sent) = None;
+        log::info!(
+            "joined vault {vault_id}{}: the local vault moved to {} and a fresh one opened",
+            from.map_or_else(String::new, |f| format!(" from vault {f}")),
+            previous.display()
+        );
+        // The old server closes once the last request that holds it lets go.
+        drop(old);
+        Ok(previous)
+    }
+
+    /// The last fresh start of the local vault, `{ at_ms, previous, from_vault, to_vault }`, or
+    /// null.
+    pub fn fresh_start(&self) -> Value {
+        self.server()
+            .queue()
+            .fresh_start()
+            .ok()
+            .flatten()
+            .unwrap_or(Value::Null)
+    }
+
+    /// The id of the home server's vault the local vault is a copy of: as a handshake recorded
+    /// it, or as the pairing names it before the first round. `None` before either.
+    pub fn vault_id(&self) -> Option<String> {
+        self.server()
+            .queue()
+            .server_vault()
+            .ok()
+            .flatten()
+            .or_else(|| self.link().and_then(|l| l.vault_id))
     }
 
     pub fn link(&self) -> Option<Link> {
@@ -334,10 +515,19 @@ impl Core {
         if let Err(e) = self.report_health(&link) {
             log::warn!("the capture health was not reported: {e:#}");
         }
-        let result = self
-            .server
-            .sync_engine(link.remote(), link.assets())
-            .and_then(|engine| engine.sync_gated(&mut |server| self.gate(&engine, server)));
+        let mut result = self.round(&link);
+        if let Err(sync::Error::OtherVault { server, .. }) = &result {
+            // The home server holds another vault than the local copy: start fresh, then sync
+            // the new vault whole.
+            let server = server.clone();
+            result = match self.start_fresh(&server) {
+                Ok(_) => self.round(&link),
+                Err(e) => Err(sync::Error::Protocol(format!(
+                    "the home server holds another vault, and a fresh local vault could not be \
+                     started: {e:#}"
+                ))),
+            };
+        }
         let at_ms = now_ms();
         {
             let mut last = lock(&self.last);
@@ -377,6 +567,10 @@ impl Core {
             Err(e) => log::info!("sync round failed: {e}"),
         }
         let report = result?;
+        prune_previous(&self.vault, SystemTime::now());
+        if let Err(e) = self.forget_contact_links() {
+            log::warn!("the phone's links to another vault's people were not removed: {e:#}");
+        }
         if let Err(e) = self.people_to_contacts() {
             log::warn!("person changes not queued for the phone: {e:#}");
         }
@@ -384,6 +578,34 @@ impl Core {
             log::warn!("failed device events not reported to the home server: {e:#}");
         }
         Ok(report)
+    }
+
+    /// One round with the home server behind the version gate.
+    fn round(&self, link: &Link) -> sync::Result<Report> {
+        self.server()
+            .sync_engine(link.remote(), link.assets())
+            .and_then(|engine| engine.sync_gated(&mut |server| self.gate(&engine, server)))
+    }
+
+    /// Once per vault, with the contacts write switch on: remove the phone's contact links to
+    /// any other vault (ticket 143). With the switch off they stay, and capture ignores them.
+    fn forget_contact_links(&self) -> anyhow::Result<()> {
+        let Ok(runtime) = self.runtime() else {
+            return Ok(());
+        };
+        let server = self.server();
+        let queue = server.queue();
+        let Some(vault) = queue.server_vault()? else {
+            return Ok(());
+        };
+        if queue.links_cleaned()?.as_deref() == Some(vault.as_str()) {
+            return Ok(());
+        }
+        if let Some(n) = runtime.forget_contact_links(&vault)? {
+            log::info!("removed {n} phone contact links to another vault");
+            queue.set_links_cleaned(&vault)?;
+        }
+        Ok(())
     }
 
     /// The version gate (D27): fails with [`sync::Error::Updating`] when the home server, at
@@ -552,7 +774,7 @@ impl Core {
     /// while unpaired.
     pub fn sync_soon(self: &Arc<Self>) {
         // Asked for by the user: a stuck asset is tried again now, not after its wait.
-        if let Err(e) = self.server.queue().retry_assets_now() {
+        if let Err(e) = self.server().queue().retry_assets_now() {
             log::warn!("the stuck assets were not set to retry: {e}");
         }
         self.nudge(Duration::ZERO);
@@ -640,7 +862,8 @@ impl Core {
         if shared.is_empty() {
             anyhow::bail!("nothing was shared");
         }
-        let writer = self.server.writer();
+        let server = self.server();
+        let writer = server.writer();
         let attachments = share::store(writer, shared)?;
         let payload = share::payload(shared, &attachments);
         let runtime = match self.runtime() {
@@ -678,10 +901,11 @@ impl Core {
         let Some(link) = self.link() else {
             return Ok(false);
         };
-        if self.server.queue().asset(id)?.is_none() {
+        let server = self.server();
+        if server.queue().asset(id)?.is_none() {
             return Ok(false);
         }
-        let engine = self.server.sync_engine(link.remote(), link.assets())?;
+        let engine = server.sync_engine(link.remote(), link.assets())?;
         engine.fetch_asset(id)?;
         Ok(true)
     }
@@ -690,7 +914,8 @@ impl Core {
     /// them: a person's photo the phone writes to its contact. `Ok(None)` when neither has it.
     /// It may block on the network.
     pub fn asset_bytes(&self, id: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        let writer = self.server.writer();
+        let server = self.server();
+        let writer = server.writer();
         if writer.asset_info(id).is_err() && !self.fetch_asset(id)? {
             return Ok(None);
         }
@@ -702,10 +927,10 @@ impl Core {
     pub fn note_opened(&self, id: &str) -> anyhow::Result<()> {
         match self.link() {
             Some(link) => self
-                .server
+                .server()
                 .sync_engine(link.remote(), link.assets())?
                 .note_opened(id)?,
-            None => self.server.queue().opened(id)?,
+            None => self.server().queue().opened(id)?,
         }
         Ok(())
     }
@@ -714,9 +939,10 @@ impl Core {
     /// the assets its fields and blocks name: `[{id, type, fields, blocks, assets: [{id,
     /// filename, size}]}]`.
     pub fn queued(&self) -> anyhow::Result<Value> {
-        let writer = self.server.writer();
+        let server = self.server();
+        let writer = server.writer();
         let mut out = Vec::new();
-        for p in self.server.queue().pending()? {
+        for p in server.queue().pending()? {
             let Ok(note) = writer.read(&p.note_id) else {
                 out.push(json!({ "id": p.note_id, "deleted": true }));
                 continue;
@@ -781,7 +1007,9 @@ impl Core {
         let last = lock(&self.last).clone();
         Ok(json!({
             "paired": self.link().is_some(),
-            "pending": self.server.queue().pending()?.len(),
+            "pending": self.server().queue().pending()?.len(),
+            "vault_id": self.vault_id(),
+            "fresh_start": self.fresh_start(),
             "last_sync_ms": last.as_ref().map(|l| l.at_ms),
             "last_error": last.and_then(|l| l.error),
             "live": lock(&self.live).connected,
@@ -832,7 +1060,7 @@ fn follow_events(core: Weak<Core>) {
                     lock(&core.live).connected = true;
                     true
                 }
-                Seen::NoteChanged(change) => live::is_news(core.server.queue(), &change),
+                Seen::NoteChanged(change) => live::is_news(core.server().queue(), &change),
                 // The round takes the new settings first, then catches up the contacts.
                 Seen::DeviceSettings(device) => device == link.device_id,
             };

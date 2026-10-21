@@ -67,6 +67,15 @@ class ContactLookup(private val resolver: ContentResolver) {
  * the row. [SYNCED_FORMAT] in its `DATA3` marks the `synced` written by this version: an older
  * one used `addresses` for the email addresses, which [migrateSynced] renames to `emails`.
  *
+ * A link belongs to one vault (ticket 143): `DATA4` holds the id of the home server's vault the
+ * person is in. The row lives in the phone's contacts database, so it outlives the app being
+ * uninstalled, its data cleared and the phone paired with another vault. A link is reported only
+ * when its vault is the one the local vault is a copy of ([ContactLinks.vaultId]); a link from
+ * another vault is reported as never linked, so the device file matches or creates a person in
+ * this vault. A row an older version wrote names no vault: it counts as this vault's when the
+ * local vault holds its person ([ContactLinks.personExists]), and as never linked otherwise.
+ * [upsert] writes the row for this vault; [forgetOtherVaults] removes those of other vaults.
+ *
  * A changed contact's key is its last-updated time, and a deleted one's its deletion time, in
  * milliseconds: the provider gives no other order for changes. The provider moves that time for
  * an edit to any data row of the contact, so every detail above is change-detected.
@@ -75,6 +84,7 @@ class ContactsReader(
     private val resolver: ContentResolver,
     private val numbers: PhoneNumbers,
     private val photos: ContactPhotos,
+    private val links: ContactLinks = ContactLinks(),
 ) {
     private val columns = arrayOf(
         Contacts._ID,
@@ -164,7 +174,10 @@ class ContactsReader(
         val existing = contact.text("contact_id") ?: person?.let(::contactOfPerson)
         val found = existing?.let(::find)
         val now = found?.let { (id, name, updated) -> read(id, name, updated) } ?: Details.EMPTY
-        val held = found?.let { personRow(it.first) }
+        val vault = links.vaultId()
+        val row = found?.let { personRow(it.first) }
+        // What another vault's person agreed with the contact means nothing to this one's.
+        val held = row?.takeIf { belongs(it, vault) }
         val want = wanted(contact, now)
 
         val ops = ArrayList<ContentProviderOperation>()
@@ -282,9 +295,9 @@ class ContactsReader(
         if (photoBytes != null) writePhoto(firstRaw!!, photoBytes)
 
         if (person != null) {
-            val synced = upgraded(held?.second, held?.third) ?: JSONObject()
+            val synced = upgraded(held?.synced, held?.format) ?: JSONObject()
             want.copy(photo = photoAgreed).agreed(now, photo).forEach { (key, value) -> synced.put(key, value) }
-            if (held?.first != person || held.second?.toString() != synced.toString() || held.third != SYNCED_FORMAT) {
+            if (held?.person != person || held.synced?.toString() != synced.toString() || held.format != SYNCED_FORMAT || row?.vault != vault) {
                 val raw = firstRaw!!
                 val personOps = ArrayList<ContentProviderOperation>()
                 rawContactsOf(contactId!!).let { personOps.add(deleteRows(it, PERSON_MIME)) }
@@ -293,6 +306,7 @@ class ContactsReader(
                         .withValue(Data.DATA1, person)
                         .withValue(Data.DATA2, synced.toString())
                         .withValue(Data.DATA3, SYNCED_FORMAT)
+                        .withValue(VAULT, vault)
                         .build(),
                 )
                 resolver.applyBatch(ContactsContract.AUTHORITY, personOps)
@@ -331,6 +345,47 @@ class ContactsReader(
         return old.size
     }
 
+    /**
+     * The one-time cleanup after joining vault [vaultId] (ticket 143): removes every
+     * [PERSON_MIME] row of another vault, and every row of an older version, which names no
+     * vault, whose person the local vault does not have; an older row whose person it has is
+     * marked as [vaultId]'s. Returns how many rows it removed.
+     */
+    fun forgetOtherVaults(vaultId: String): Int {
+        val rows = resolver.rows(
+            Data.CONTENT_URI,
+            arrayOf(Data._ID, Data.DATA1, VAULT),
+            "${Data.MIMETYPE} = ?",
+            arrayOf(PERSON_MIME),
+        ) { c -> Triple(c.long(Data._ID), c.string(Data.DATA1), c.string(VAULT)) }
+        val ops = ArrayList<ContentProviderOperation>()
+        var removed = 0
+        for ((id, person, vault) in rows) {
+            val uri = ContentUris.withAppendedId(Data.CONTENT_URI, id)
+            when {
+                vault == vaultId -> {}
+                vault == null && person != null && links.personExists(person) ->
+                    ops.add(ContentProviderOperation.newUpdate(uri).withValue(VAULT, vaultId).build())
+                else -> {
+                    ops.add(ContentProviderOperation.newDelete(uri).build())
+                    removed++
+                }
+            }
+        }
+        if (ops.isNotEmpty()) resolver.applyBatch(ContactsContract.AUTHORITY, ops)
+        return removed
+    }
+
+    /**
+     * Whether [row] links its contact to a person of the vault [vault] (the current one, or null
+     * when not known yet): a row naming a vault belongs to that vault; one naming none, from an
+     * older version, belongs where its person is.
+     */
+    private fun belongs(row: PersonLink, vault: String? = links.vaultId()): Boolean {
+        val person = row.person ?: return false
+        return if (row.vault != null && vault != null) row.vault == vault else links.personExists(person)
+    }
+
     private fun find(contactId: String): Triple<Long, String?, Long> {
         val id = contactId.toLongOrNull() ?: throw IllegalArgumentException("$contactId is not a contact id")
         return resolver.rows(
@@ -352,23 +407,26 @@ class ContactsReader(
         "${RawContacts._ID} ASC",
     ) { it.long(RawContacts._ID) }.ifEmpty { throw NoSuchElementException("no contact $contactId") }
 
-    /** The contact holding person note [person], if any. */
-    private fun contactOfPerson(person: String): String? = resolver.rows(
-        Data.CONTENT_URI,
-        arrayOf(Data.CONTACT_ID),
-        "${Data.MIMETYPE} = ? AND ${Data.DATA1} = ?",
-        arrayOf(PERSON_MIME, person),
-        limit = 1,
-    ) { it.long(Data.CONTACT_ID).toString() }.firstOrNull()
+    /** The contact holding person note [person] of the current vault, if any. */
+    private fun contactOfPerson(person: String): String? {
+        val vault = links.vaultId()
+        return resolver.rows(
+            Data.CONTENT_URI,
+            arrayOf(Data.CONTACT_ID, VAULT),
+            "${Data.MIMETYPE} = ? AND ${Data.DATA1} = ?",
+            arrayOf(PERSON_MIME, person),
+        ) { c -> c.long(Data.CONTACT_ID).toString() to c.string(VAULT) }
+            .firstOrNull { (_, v) -> v == null || vault == null || v == vault }?.first
+    }
 
-    /** The contact's [PERSON_MIME] row: the person's id, what the sides last agreed on, and its format. */
-    private fun personRow(contactId: Long): Triple<String?, JSONObject?, String?>? = resolver.rows(
+    /** The contact's [PERSON_MIME] row, whichever vault it belongs to. */
+    private fun personRow(contactId: Long): PersonLink? = resolver.rows(
         Data.CONTENT_URI,
-        arrayOf(Data.DATA1, Data.DATA2, Data.DATA3),
+        arrayOf(Data.DATA1, Data.DATA2, Data.DATA3, VAULT),
         "${Data.CONTACT_ID} = ? AND ${Data.MIMETYPE} = ?",
         arrayOf(contactId.toString(), PERSON_MIME),
         limit = 1,
-    ) { c -> Triple(c.string(Data.DATA1), c.string(Data.DATA2)?.let(::parse), c.string(Data.DATA3)) }.firstOrNull()
+    ) { c -> PersonLink(c.string(Data.DATA1), c.string(Data.DATA2)?.let(::parse), c.string(Data.DATA3), c.string(VAULT)) }.firstOrNull()
 
     private fun deleteRows(raws: List<Long>, mime: String, extra: Pair<String, Array<String>>? = null): ContentProviderOperation =
         ContentProviderOperation.newDelete(Data.CONTENT_URI)
@@ -455,7 +513,8 @@ class ContactsReader(
 
     /** [details] as a payload; with [store], a photo not stored yet is stored as an asset. */
     private fun payload(id: Long, details: Details, store: Boolean): JSONObject {
-        val vault = personRow(id)
+        // A link to another vault's person reads as no link at all (ticket 143).
+        val vault = personRow(id)?.takeIf { belongs(it) }
         val photo = details.photo?.let { if (store) photos.store(id, it) else photos.known(it) }
         val out = JSONObject()
             .put("contact_id", id.toString())
@@ -463,8 +522,8 @@ class ContactsReader(
         details.put(out, photo)
         return out
             .put("updated", Payloads.time(details.updated))
-            .put("person", vault?.first ?: JSONObject.NULL)
-            .put("synced", upgraded(vault?.second, vault?.third) ?: JSONObject.NULL)
+            .put("person", vault?.person ?: JSONObject.NULL)
+            .put("synced", upgraded(vault?.synced, vault?.format) ?: JSONObject.NULL)
     }
 
     /** What an upsert asks for, each null when its key is left out, with labels settled. */
@@ -568,6 +627,9 @@ class ContactsReader(
 
     private data class Labelled(val values: List<String>, val labels: List<String>)
 
+    /** A [PERSON_MIME] row: the person's id, what the sides last agreed on, its format, and its vault. */
+    private data class PersonLink(val person: String?, val synced: JSONObject?, val format: String?, val vault: String?)
+
     private data class DataRow(val mime: String, val data1: String?, val data2: String?, val data3: String?, val data4: String?)
 
     /** A contact photo's bytes and their SHA-256. */
@@ -605,6 +667,9 @@ class ContactsReader(
 
         /** The `DATA3` of a [PERSON_MIME] row whose `synced` names email addresses `emails`. */
         const val SYNCED_FORMAT = "2"
+
+        /** The column of a [PERSON_MIME] row holding the id of the vault its person is in. */
+        const val VAULT = Data.DATA4
 
         private const val OTHER = "other"
         private const val TYPE = Data.DATA2
@@ -658,6 +723,17 @@ class ContactsReader(
         }
     }
 }
+
+/**
+ * Which vault a contact's person link must belong to for [ContactsReader] to report it (ticket
+ * 143). The defaults take every link as the current vault's, as before vaults were named.
+ */
+class ContactLinks(
+    /** The id of the home server's vault the local vault is a copy of, or null before it is known. */
+    val vaultId: () -> String? = { null },
+    /** Whether the local vault holds person note [id]: decides a link row that names no vault. */
+    val personExists: (String) -> Boolean = { true },
+)
 
 /**
  * Contact photos as assets of the local vault: each photo's bytes are stored once, and a photo

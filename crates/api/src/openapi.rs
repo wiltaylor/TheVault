@@ -370,7 +370,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
         "/api/sync/info",
-        "The sync protocol, vault format and server versions; needs no credentials",
+        "The sync protocol, vault format and server versions, and the vault's id; needs no credentials",
     ),
     (
         "GET",

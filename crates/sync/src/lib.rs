@@ -7,7 +7,10 @@
 //!
 //! 1. **Handshake.** `GET /api/sync/info`. When the server's protocol or format version is newer
 //!    than this build supports, the round stops with [`Error::ServerNewer`] and the queue stays as
-//!    it is, until the app is updated (D27).
+//!    it is, until the app is updated (D27). The first handshake records the server's vault id in
+//!    the local vault; a server whose vault id differs from the recorded one is another vault, and
+//!    the round stops with [`Error::OtherVault`] before it pushes anything, for the app to start
+//!    a fresh local vault (ticket 143).
 //! 2. **Bases.** `PUT /api/devices/{id}/bases` with the base version of every queued change, so
 //!    the server keeps those versions through pruning and browser-save merging (D29).
 //! 3. **Assets the device stored** go up first with `PUT /api/assets/{id}`, under their own ids,
@@ -25,7 +28,11 @@
 //!    server's version. A clash keeps the server's version, saves the device's as a conflict copy
 //!    titled `<title> (conflict, <device name>)` whose `conflict_of` field names the original,
 //!    and adds a notification that opens the copy. Either way the device takes the server's
-//!    result as its own.
+//!    result as its own. A change whose base the server never had, and that is not in the
+//!    server's trash either, is pushed as a create under the note's id with what the device
+//!    holds. A note the server still refuses (a 4xx other than the 409 merge) is held back with
+//!    the reason ([`Held`]) and the rest of the queue goes on: the round completes and the
+//!    report names it (ticket 143).
 //!    Then the notifications made on the device, such as by a device script, move to the server
 //!    with `POST /api/notifications`: the app's bell shows the server's.
 //! 5. **Pull.** `GET /api/sync/changes` from the stored cursor, a page at a time. Definitions and
@@ -164,6 +171,13 @@ pub enum Error {
     /// The server answered something the protocol does not allow.
     #[error("{0}")]
     Protocol(String),
+    /// The server holds another vault than the one the local vault is a copy of: the app starts
+    /// a fresh local vault before it syncs (ticket 143).
+    #[error(
+        "the server holds vault {server}, but this device's local vault is a copy of vault \
+         {local}"
+    )]
+    OtherVault { local: String, server: String },
     #[error(transparent)]
     Writer(#[from] writer::Error),
     #[error("the sync tables: {0}")]
@@ -204,8 +218,22 @@ pub struct Report {
     /// Every asset still waiting to reach the server after the round, because it failed in this
     /// round or an earlier one.
     pub stuck: Vec<AssetFailure>,
-    /// The queued notes held back because they name a stuck asset.
+    /// The queued notes held back, because they name a stuck asset or the server refused them.
     pub held: Vec<Held>,
+}
+
+/// Whether a failed push of one note is that note's own problem, which holds it back while the
+/// rest of the queue goes on: the server refused the note (a 4xx other than a refused token or
+/// a request to slow down) or answered it with something the protocol does not allow. A server
+/// that cannot be reached, refuses the token or fails ends the round.
+fn held_for(e: &Error) -> bool {
+    match e {
+        Error::Server { status, .. } => {
+            (400..500).contains(status) && !matches!(status, 401 | 403 | 408 | 429)
+        }
+        Error::Protocol(_) => true,
+        _ => false,
+    }
 }
 
 /// `size` bytes in words, such as `800 KB` or `72.0 MB`.
@@ -218,9 +246,33 @@ pub fn size_text(size: u64) -> String {
 }
 
 impl Report {
-    /// What went wrong in a round that otherwise finished: the assets that cannot reach the
-    /// server and the notes waiting for them. `None` when nothing did.
+    /// What went wrong in a round that otherwise finished: the notes the server refused, the
+    /// assets that cannot reach the server and the notes waiting for them. `None` when nothing
+    /// did.
     pub fn problem(&self) -> Option<String> {
+        let refused: Vec<&Held> = self.held.iter().filter(|h| h.asset_id.is_none()).collect();
+        let notes = refused.first().map(|first| {
+            let n = refused.len();
+            let mut out = format!(
+                "{n} {} could not be sent to the server: note {}: {}",
+                if n == 1 { "note" } else { "notes" },
+                first.note_id,
+                first.reason,
+            );
+            if n > 1 {
+                out.push_str(&format!(" (and {} more)", n - 1));
+            }
+            out.push_str(". The others synced; it is tried again on later rounds.");
+            out
+        });
+        let assets = self.asset_problem();
+        match (notes, assets) {
+            (Some(n), Some(a)) => Some(format!("{n} {a}")),
+            (n, a) => n.or(a),
+        }
+    }
+
+    fn asset_problem(&self) -> Option<String> {
         let first = self.stuck.first()?;
         let n = self.stuck.len();
         let mut out = format!(
@@ -234,7 +286,7 @@ impl Report {
             out.push_str(&format!(" (and {} more)", n - 1));
         }
         out.push('.');
-        let held = self.held.len();
+        let held = self.held.iter().filter(|h| h.asset_id.is_some()).count();
         if held > 0 {
             out.push_str(&format!(
                 " {held} {} for {}; the others synced.",
@@ -392,7 +444,35 @@ impl Engine {
                 format: self.supported.format_version,
             });
         }
+        // An older server names no vault: nothing to check.
+        if let Some(server) = info
+            .get("vault_id")
+            .and_then(Json::as_str)
+            .filter(|v| !v.is_empty())
+        {
+            match self.queue.server_vault()? {
+                Some(local) if local != server => {
+                    return Err(Error::OtherVault {
+                        local,
+                        server: server.to_owned(),
+                    });
+                }
+                Some(_) => {}
+                None => self.queue.set_server_vault(server)?,
+            }
+        }
         Ok(())
+    }
+
+    /// The id of the vault the home server holds, from `GET /api/sync/info`; `None` from a server
+    /// too old to say.
+    pub fn server_vault(&self) -> Result<Option<String>> {
+        let info = self.home.info()?.ok("reading the server's sync info")?;
+        Ok(info
+            .get("vault_id")
+            .and_then(Json::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned))
     }
 
     /// The app builds the server publishes, `GET /api/clients`.
@@ -420,7 +500,17 @@ impl Engine {
                 held.push(h);
                 continue;
             }
-            self.push_one(&p, &mut report)?;
+            match self.push_one(&p, &mut report) {
+                Ok(()) => {}
+                Err(e) if held_for(&e) => {
+                    held.push(Held {
+                        note_id: p.note_id.clone(),
+                        asset_id: None,
+                        reason: e.to_string(),
+                    });
+                }
+                Err(e) => return Err(e),
+            }
         }
         self.queue.set_held(&held)?;
         report.held = held;
@@ -561,7 +651,7 @@ impl Engine {
     fn push_put(&self, p: &Pending, note: writer::Note, report: &mut Report) -> Result<()> {
         let id = &p.note_id;
         let local_doc = note.doc.clone();
-        let base_doc = match &p.base_wcl {
+        let mut base_doc = match &p.base_wcl {
             Some(text) => Some(parse(id, &note.type_name, text)?),
             None => None,
         };
@@ -591,9 +681,11 @@ impl Engine {
                     // it back, and merges with what it held.
                     base_version = self.restore(id)?;
                     if base_version.is_none() {
-                        return Err(Error::Protocol(format!(
-                            "note {id} is gone from the server and its trash"
-                        )));
+                        // Neither the note nor its trash: the server never had the base, as for
+                        // a note from another vault. What the device holds goes up as a create
+                        // under the note's id (ticket 143).
+                        base_doc = None;
+                        body = json!({ "wcl": note.wcl });
                     }
                 }
                 409 => {
@@ -871,7 +963,7 @@ impl Engine {
             let f = missing.get(&id)?;
             Some(Held {
                 note_id: p.note_id.clone(),
-                asset_id: id,
+                asset_id: Some(id),
                 reason: format!(
                     "waits for asset {} ({}), which has not reached the server: {}",
                     f.filename,

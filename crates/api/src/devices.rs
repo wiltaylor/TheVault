@@ -230,7 +230,7 @@ pub async fn pair(State(w): Shared, Json(body): Json<PairBody>) -> Result<Respon
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let settings = serde_json::to_string(&Settings::default())
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let (device, token) = blocking(w, move |w| {
+    let (device, token, vault_id) = blocking(w, move |w| {
         let state = w.state();
         let ok = match (&body.password, &body.code) {
             (Some(password), None) => state.verify_password(password)?,
@@ -253,17 +253,21 @@ pub async fn pair(State(w): Shared, Json(body): Json<PairBody>) -> Result<Respon
                 what,
             ));
         }
-        Ok(state.pair_device(&NewDevice {
+        let (device, token) = state.pair_device(&NewDevice {
             name: &name,
             platform: &body.platform,
             capabilities: &capabilities,
             settings: &settings,
-        })?)
+        })?;
+        Ok((device, token, state.vault_id()?))
     })
     .await?;
+    // The vault's id goes into the device's pairing record: a device paired with another vault
+    // than its local copy came from starts fresh (ticket 143).
     let out = json!({
         "device_id": device.id,
         "token": token,
+        "vault_id": vault_id,
         "device": device_json(&device),
     });
     Ok((StatusCode::CREATED, Json(out)).into_response())

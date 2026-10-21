@@ -150,6 +150,9 @@ fn sync_info_needs_no_credentials() {
     assert_eq!(info["protocol"], 1);
     assert_eq!(info["format_version"], 1);
     assert_eq!(info["server_version"], env!("CARGO_PKG_VERSION"));
+    // The vault's id tells a device which vault its local copy belongs to (ticket 143).
+    let vault_id = open_state(&server).vault_id().unwrap();
+    assert_eq!(info["vault_id"], vault_id.as_str());
     // The feed itself needs credentials.
     send(Client::new().get(server.url("/api/sync/changes")), 401);
 }

@@ -45,11 +45,21 @@ object VaultCore {
     external fun pair(serverUrl: String, password: String?, code: String?, name: String): String
 
     /**
-     * Hands the core the pairing, `{server_url, token, device_id, device_name, cache_mb}` as
-     * JSON, or null when the device is not paired. The core keeps it in memory only.
+     * Hands the core the pairing, `{server_url, token, device_id, device_name, cache_mb,
+     * vault_id}` as JSON, or null when the device is not paired. The core keeps it in memory
+     * only. A pairing with another vault than the local vault is a copy of moves the local vault
+     * aside and opens a fresh one (ticket 143): it answers the folder the old one moved to, and
+     * null otherwise.
      */
     @JvmStatic
     external fun link(link: String?): String?
+
+    /**
+     * The id of the home server's vault the local vault is a copy of, or null before pairing or
+     * the first round names it (ticket 143).
+     */
+    @JvmStatic
+    external fun vaultId(): String?
 
     /** Asks the foreground sync loop for a round once writes settle. */
     @JvmStatic

@@ -636,6 +636,7 @@ fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
             "phase": "synced",
             "queued": 0,
             "held": 0,
+            "refused_notes": [],
             "assets_waiting": 0,
             "stuck_assets": [],
             "last_ok_ms": 1_700_000_000_000u64,

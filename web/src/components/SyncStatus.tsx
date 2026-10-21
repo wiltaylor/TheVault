@@ -6,7 +6,7 @@ import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid
 import { Portal } from "solid-js/web";
 import type { AppSync } from "../api";
 import { appInfo } from "../inApp";
-import { lastSynced, needsAction, showsError, stuckText, syncLabel, waitingText } from "../sync/model";
+import { lastSynced, needsAction, refusedText, showsError, stuckText, syncLabel, waitingText } from "../sync/model";
 import { followSync, syncNow, syncStatus } from "../sync/store";
 import { showToast } from "./Toasts";
 
@@ -133,8 +133,8 @@ function Button(props: { status: AppSync }) {
 
 /**
  * The popover's details: when sync last worked (or "Never", and when it was last tried), what
- * waits, the server, the assets that would not upload, and the last error whenever a round failed
- * or did not do everything (ticket 141).
+ * waits, the server, the notes the server refused (ticket 143) and the assets that would not upload,
+ * and the last error whenever a round failed or did not do everything (ticket 141).
  */
 export function SyncDetails(props: { status: AppSync; now: number }) {
   const at = (ms: number | null | undefined) => (ms == null ? undefined : new Date(ms).toLocaleString());
@@ -147,11 +147,12 @@ export function SyncDetails(props: { status: AppSync; now: number }) {
       <dd>{waitingText(props.status)}</dd>
       <dt>Server</dt>
       <dd class="sync-server">{props.status.server ?? "Not paired"}</dd>
-      <Show when={props.status.stuck_assets?.length}>
+      <Show when={props.status.stuck_assets?.length || props.status.refused_notes?.length}>
         <dt>Not sent</dt>
         <dd class="sync-stuck">
           <ul>
-            <For each={props.status.stuck_assets}>
+            <For each={props.status.refused_notes ?? []}>{(n) => <li>{refusedText(n)}</li>}</For>
+            <For each={props.status.stuck_assets ?? []}>
               {(a) => <li title={`Last tried ${at(a.last_ms)}`}>{stuckText(a, props.now)}</li>}
             </For>
           </ul>

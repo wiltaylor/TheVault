@@ -24,7 +24,9 @@
     <!-- Capture health (ticket 91): asking to leave the app out of battery optimisation. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <application>
+    <!-- The pairing, the local vault and its sync queue are never backed up (ticket 143); the app
+         also gives its data extraction rules, which exclude everything. -->
+    <application android:allowBackup="false">
         <!-- First-run setup and pairing (D2). -->
         <activity
             android:name=".OnboardingActivity"

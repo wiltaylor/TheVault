@@ -86,8 +86,15 @@ export function waitingText(s: AppSync): string {
   if (s.queued > 0) parts.push(changes(s.queued));
   if (s.assets_waiting) parts.push(assets(s.assets_waiting));
   if (parts.length === 0) return "Nothing";
-  const held = s.held ? ` (${s.held} held for ${s.assets_waiting === 1 ? "the asset" : "the assets"})` : "";
-  return parts.join(", ") + held;
+  const why: string[] = [];
+  if (s.held) why.push(`${s.held} held for ${s.assets_waiting === 1 ? "the asset" : "the assets"}`);
+  if (s.refused_notes?.length) why.push(`${s.refused_notes.length} refused by the server`);
+  return parts.join(", ") + (why.length ? ` (${why.join(", ")})` : "");
+}
+
+/** A note the server refused, in the popover: which, and why (ticket 143). */
+export function refusedText(n: { note_id: string; reason: string }): string {
+  return `Note ${n.note_id}: ${n.reason}`;
 }
 
 /** A stuck asset in the popover: its name and size, why it failed, and when it is tried again. */

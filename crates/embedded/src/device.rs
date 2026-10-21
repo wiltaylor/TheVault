@@ -366,6 +366,24 @@ impl DeviceRuntime {
         })
     }
 
+    /// The phone this runtime reaches, to open the runtime again over another local vault.
+    pub fn data(&self) -> Arc<dyn DeviceData> {
+        self.data.clone()
+    }
+
+    /// Remove the phone's contact links to any vault but `vault_id` ([`DeviceData::
+    /// contacts_forget_links`]), when the device may write contacts. Answers how many it removed,
+    /// or `None` when the contacts write switch is off and the links stay, ignored (ticket 143).
+    pub fn forget_contact_links(&self, vault_id: &str) -> anyhow::Result<Option<u64>> {
+        if !self.settings().contacts_write {
+            return Ok(None);
+        }
+        self.data
+            .contacts_forget_links(vault_id)
+            .map(Some)
+            .map_err(anyhow::Error::msg)
+    }
+
     /// The device's id.
     pub fn device_id(&self) -> &str {
         self.access.id()

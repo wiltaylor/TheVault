@@ -66,12 +66,14 @@ class DeviceCapture(
     selfNumbers: () -> Set<String> = { emptySet() },
     /** The asset each contact photo was stored as, by hash, kept across processes in the app. */
     photoAssets: MutableMap<String, String> = HashMap(),
+    /** Which vault the contacts' person links must belong to (ticket 143). */
+    links: ContactLinks = ContactLinks(),
 ) {
     private val contactLookup = ContactLookup(resolver)
     val sms = SmsReader(resolver, numbers, contactLookup)
     val mms = MmsReader(resolver, numbers, contactLookup, assets, selfNumbers)
     val calls = CallLogReader(resolver, numbers, contactLookup)
-    val contacts = ContactsReader(resolver, numbers, ContactPhotos(assets, photoAssets))
+    val contacts = ContactsReader(resolver, numbers, ContactPhotos(assets, photoAssets), links)
 
     /** Whether this process has rewritten the contacts' `synced` an older version stored. */
     @Volatile

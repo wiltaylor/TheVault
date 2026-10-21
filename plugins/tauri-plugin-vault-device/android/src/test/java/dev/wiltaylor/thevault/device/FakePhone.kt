@@ -145,10 +145,10 @@ class FakePhone(private val context: Context) {
             buildList { while (c.moveToNext()) add(columns.indices.mapNotNull { c.getString(it) }.joinToString(" ")) }
         }
 
-    /** The contact's [ContactsReader.PERSON_MIME] row: `data1`, `data2` and `data3`. */
+    /** The contact's [ContactsReader.PERSON_MIME] row: `data1`, `data2`, `data3` and `data4`. */
     fun personRow(id: Long): List<String?>? =
-        db.rawQuery("SELECT data1, data2, data3 FROM data_view WHERE contact_id = ? AND mimetype = ?", arrayOf(id.toString(), ContactsReader.PERSON_MIME)).use { c ->
-            if (c.moveToNext()) listOf(c.getString(0), c.getString(1), c.getString(2)) else null
+        db.rawQuery("SELECT data1, data2, data3, data4 FROM data_view WHERE contact_id = ? AND mimetype = ?", arrayOf(id.toString(), ContactsReader.PERSON_MIME)).use { c ->
+            if (c.moveToNext()) listOf(c.getString(0), c.getString(1), c.getString(2), c.getString(3)) else null
         }
 
     fun deleteContact(id: Long, at: Long) {
@@ -205,7 +205,11 @@ class FakePhone(private val context: Context) {
         assets,
         { setOf(SELF) },
         photoAssets,
+        links,
     )
+
+    /** Which vault the contacts' person links must belong to; every link by default. */
+    var links = ContactLinks()
 
     /** The asset each contact photo was stored as, kept across captures as the app keeps it. */
     val photoAssets = HashMap<String, String>()
@@ -324,6 +328,12 @@ class FakePhone(private val context: Context) {
                         buildSet { while (c.moveToNext()) add(c.getLong(0)) }
                     }
                     phone.db.delete("data", selection, args).also { phone.touched(raws) }
+                }
+                uri.authority == "com.android.contacts" && p.size == 2 && p[0] == "data" -> {
+                    val raws = phone.db.query("data", arrayOf("raw_contact_id"), "_id = ?", arrayOf(p[1]), null, null, null).use { c ->
+                        buildSet { while (c.moveToNext()) add(c.getLong(0)) }
+                    }
+                    phone.db.delete("data", "_id = ?", arrayOf(p[1])).also { phone.touched(raws) }
                 }
                 uri.authority == "com.android.contacts" && p.size == 2 && p[0] == "contacts" -> {
                     phone.deleteContact(p[1].toLong(), System.currentTimeMillis())

@@ -431,6 +431,8 @@ impl Embedded {
                         "version": build.as_ref().map(|b| &b.version),
                         "platform": build.as_ref().map(|b| &b.platform),
                         "build": build.as_ref().map(|b| &b.build),
+                        // The app moved a local vault from another vault aside (ticket 143).
+                        "fresh_start": self.queue().fresh_start().ok().flatten(),
                     }),
                 )
             }
