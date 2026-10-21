@@ -6,7 +6,17 @@ import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid
 import { Portal } from "solid-js/web";
 import type { AppSync } from "../api";
 import { appInfo } from "../inApp";
-import { lastSynced, needsAction, showsError, stuckText, syncLabel, waitingText } from "../sync/model";
+import {
+  lastSynced,
+  needsAction,
+  progressShare,
+  progressText,
+  showsError,
+  shownProgress,
+  stuckText,
+  syncLabel,
+  waitingText,
+} from "../sync/model";
 import { followSync, syncNow, syncStatus } from "../sync/store";
 import { showToast } from "./Toasts";
 
@@ -132,15 +142,27 @@ function Button(props: { status: AppSync }) {
 }
 
 /**
- * The popover's details: when sync last worked (or "Never", and when it was last tried), what
- * waits, the server, the assets that would not upload, and the last error whenever a round failed
- * or did not do everything (ticket 141).
+ * The popover's details: the progress of a round that pulls or downloads a lot, such as a first
+ * sync (ticket 144), when sync last worked (or "Never", and when it was last tried), what waits,
+ * the server, the assets that would not upload, and the last error whenever a round failed or did
+ * not do everything (ticket 141).
  */
 export function SyncDetails(props: { status: AppSync; now: number }) {
   const at = (ms: number | null | undefined) => (ms == null ? undefined : new Date(ms).toLocaleString());
   const exact = () => at(props.status.last_ok_ms ?? props.status.last_attempt_ms);
   return (
     <dl class="sync-details">
+      <Show when={shownProgress(props.status)}>
+        {(p) => (
+          <>
+            <dt>Progress</dt>
+            <dd class="sync-progress">
+              <progress max="1" value={progressShare(p())} aria-label="Sync progress" />
+              <span>{progressText(p())}</span>
+            </dd>
+          </>
+        )}
+      </Show>
       <dt>Last synced</dt>
       <dd title={exact()}>{lastSynced(props.status, props.now)}</dd>
       <dt>Waiting</dt>

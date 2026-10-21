@@ -8,7 +8,7 @@ The desktop and Android apps keep a copy of the vault and sync it with the home 
 |---|---|---|
 | `GET /api/sync/info` | none | Returns `{protocol, format_version, server_version}`. An app refuses to sync, and keeps its queued writes, when either version is newer than it supports (D27). |
 | `GET /api/version` | none | Returns `{server_version}`, for Settings > General's About section. |
-| `GET /api/sync/changes?since=<seq>&limit=<n>` | any token or session | Returns every note and synced file whose latest change comes after `since`, oldest first, with `next` and `latest`. |
+| `GET /api/sync/changes?since=<seq>&limit=<n>` | any token or session | Returns every note and synced file whose latest change comes after `since`, oldest first, with `next`, `latest` and `remaining`. |
 | `PUT /api/devices/{id}/bases` | the device's own token, or `admin` | Replaces the base versions the device holds: `{"bases": {"<note id>": "<version>"}}`. |
 
 A device pushes its own changes through the normal notes API, with the base version in `If-Match`. Two more writes keep the ids a device made offline (D19, D20):
@@ -20,7 +20,7 @@ A device pushes its own changes through the normal notes API, with the base vers
 
 ## The change feed
 
-Each note and each synced file appears in the feed at most once, at its latest change. Each change gets a new `seq` that is larger than every earlier one. A device stores the `next` of each page and asks for the next page from it. The device is up to date when `next` equals `latest`. `since` defaults to 0, which returns everything. `limit` defaults to 500 and can be at most 5000.
+Each note and each synced file appears in the feed at most once, at its latest change. Each change gets a new `seq` that is larger than every earlier one. A device stores the `next` of each page and asks for the next page from it. The device is up to date when `next` equals `latest`. `remaining` is how many entries come after the page, so a device knows from the first page how many entries its pull reads, which its progress bar shows; `latest - next` would overstate it, since a key that changes again leaves a gap in `seq`. `since` defaults to 0, which returns everything. `limit` defaults to 500 and can be at most 5000.
 
 Each entry has `seq`, `at` (milliseconds since the epoch) and `kind`. It shows the note or file as it is when the page is read:
 
@@ -61,7 +61,7 @@ When a forwarded route cannot be answered, the embedded server says why instead 
 
 The device token is never widened to `admin`. In the apps, Settings hides the Secrets and API tokens sections, and Settings > Devices lists the devices read-only, marked "This device" for the app's own, and says to pair, rename, revoke and change settings in the web app. `GET /api/app`, answered only by the embedded server, tells the web client it runs in an app, which device it is, and which app build: `version` (from the app's `tauri.conf.json`), `platform` (`linux-appimage`, `linux-package`, `linux` or `android`) and `build` (`release` or `debug`). The home server answers it 404.
 
-`GET /api/app/sync`, also answered only by the embedded server, says where the app's sync stands for the sidebar's sync icon: `state` (`synced`, green, when the last round succeeded and nothing waits; `syncing`, yellow, while a round runs or local writes wait for one; `error`, red, otherwise), `phase` (`unpaired`, `starting`, `syncing`, `synced`, `offline`, `update_required`, `updating` while sync waits for the app to update itself to a newer server's version, `revoked` or `error`), `queued` (local writes waiting), `held` (of those, the notes held back for an asset that has not reached the server), `assets_waiting` and `stuck_assets` (the assets that failed to upload, each `{id, filename, size, error, attempts, last_ms, next_ms}`), `last_ok_ms` (when a round last succeeded), `last_attempt_ms` (when the last round ended, succeeded or not), `last_error` (why the last round failed, or what a round that finished could not do, such as an asset that would not upload; the popover shows it whenever it is set), `server` and `warning` (the version gate's warning that the server is newer than the app and no matching app build is published, else null). The web client asks for it every few seconds, every second while yellow, and at once after each note write. `POST /api/app/sync` asks the app's sync loop for a round now and answers 202 with the status, or 503 `not_paired` when the app has no sync loop.
+`GET /api/app/sync`, also answered only by the embedded server, says where the app's sync stands for the sidebar's sync icon: `state` (`synced`, green, when the last round succeeded and nothing waits; `syncing`, yellow, while a round runs or local writes wait for one; `error`, red, otherwise), `phase` (`unpaired`, `starting`, `syncing`, `synced`, `offline`, `update_required`, `updating` while sync waits for the app to update itself to a newer server's version, `revoked` or `error`), `queued` (local writes waiting), `held` (of those, the notes held back for an asset that has not reached the server), `assets_waiting` and `stuck_assets` (the assets that failed to upload, each `{id, filename, size, error, attempts, last_ms, next_ms}`), `last_ok_ms` (when a round last succeeded), `last_attempt_ms` (when the last round ended, succeeded or not), `last_error` (why the last round failed, or what a round that finished could not do, such as an asset that would not upload; the popover shows it whenever it is set), `server`, `warning` (the version gate's warning that the server is newer than the app and no matching app build is published, else null) and `progress` (how far the current or the last round got, null before the first; see "Progress" below). The web client asks for it every few seconds, every second while yellow, and at once after each note write. `POST /api/app/sync` asks the app's sync loop for a round now and answers 202 with the status, or 503 `not_paired` when the app has no sync loop.
 
 `GET /api/app/device-events`, answered only by the Android app's embedded server, lists the device events that failed for good or were skipped, newest first, for Settings > Devices > This device: `{ device, failed, events: [{ id, event, at, status, attempts, message, who }] }`, where `device` says whether a device runtime runs and `failed` counts the failed events. `POST /api/app/device-events/<id>/retry` gives a failed event three more passes, runs the first at once and answers the event as it then stands with the new `failed` count; `POST /api/app/device-events/<id>/dismiss` hides it. Both answer 404 for an event that is not failed (docs/scripts.md, "Device events").
 
@@ -117,6 +117,27 @@ A device script's `vault::notify` writes to the local `state.db`. Each sync roun
 - **Bases.** The engine records the base of every queued change with `PUT /api/devices/{id}/bases` at the start and the end of each round (D29).
 - **Assets.** The desktop keeps every asset. Android fetches an asset when a note needs it, prefetches the assets of pinned and recently opened notes, and evicts the least recently used ones beyond its cache size; a note may name an asset the device does not hold while the server does (D19).
 - **Definitions** are never queued, so types, templates, taxonomies, scripts and tasks changed on a device stay there until the server's version replaces them (D20).
+
+### Progress
+
+Each round keeps a progress report up to date, which `GET /api/app/sync` answers as `progress` and the desktop's `GET /_desktop/status` as `progress` too (ticket 144):
+
+| Field | Meaning |
+| --- | --- |
+| `stage` | `handshake`, `pushing`, `pulling`, `fetching`, then `done` or `failed`. |
+| `running` | Whether the round still runs. |
+| `notes_done`, `notes_total` | Feed entries, notes and definition files, applied out of those the pull reads: what it has read, plus the page, plus the page's `remaining`. A server too old to send `remaining` gives `latest - next` instead, an overestimate. |
+| `files_done`, `files_total` | Asset files fetched out of those to fetch. The pull starts with `GET /api/assets`, so the desktop knows them, every asset the server lists that it does not hold, from the start; Android knows them once it has worked out which assets its pins and recent notes need. |
+| `bytes_done`, `bytes_total` | Asset bytes, counted as each block of a download arrives, out of the sizes `GET /api/assets` lists. |
+| `eta_secs` | About how many seconds are left, null until there is a rate to go by. |
+| `elapsed_ms` | How long the round has run. |
+| `large` | Whether the round reads more than 200 feed entries or fetches more than 20 MB. |
+
+Every count and total only grows during a round; the next round starts from zero.
+
+The time left is measured, not guessed from sizes alone. About four times a second the engine keeps a sample of the counts, and the rates are those over the last 10 seconds of the current stage: feed entries a second and asset bytes a second. The time left is the entries left over the entries rate, plus the bytes left over the bytes rate, rounded to the nearest second. While the pull runs and no asset byte has arrived, the bytes rate is that of the feed pages themselves, the best guess at how fast the network moves data. There is no estimate until a rate has been measured over at least a second.
+
+The sync popover shows a bar and a line such as `Notes 1200 / 1200 · Files 3 / 10 (12.0 / 40.0 MB) · about 2 min left` while a `large` round runs, so a phone's first sync shows it as the desktop's setup page does.
 
 ## When the Android app syncs
 

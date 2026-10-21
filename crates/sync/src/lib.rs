@@ -28,12 +28,17 @@
 //!    result as its own.
 //!    Then the notifications made on the device, such as by a device script, move to the server
 //!    with `POST /api/notifications`: the app's bell shows the server's.
-//! 5. **Pull.** `GET /api/sync/changes` from the stored cursor, a page at a time. Definitions and
-//!    `devices/*.wcl` are written first, then the notes, exactly as the server holds them, and
+//! 5. **Pull.** `GET /api/assets` first, so the round knows the files it will fetch and their
+//!    sizes, then `GET /api/sync/changes` from the stored cursor, a page at a time. Definitions
+//!    and `devices/*.wcl` are written first, then the notes, exactly as the server holds them, and
 //!    indexed. A note with a change still queued is left for the next push to merge.
 //! 6. **Assets** follow the [`AssetPolicy`]: the desktop keeps every asset; Android fetches
 //!    assets when a note needs them, prefetches those of pinned and recently opened notes, and
 //!    evicts the least recently used beyond its cache size (D19).
+//!
+//! While a round runs it keeps a [`SyncProgress`] up to date: its stage, the feed entries and
+//! asset files done out of those to do, the asset bytes as they arrive, and about how long is
+//! left ([`progress`], ticket 144).
 //! 7. **Bases** again, now for what is still queued.
 //!
 //! Before the round an app asks the version gate ([`gate`]) whether to run it at all: with a
@@ -52,6 +57,7 @@ mod client;
 pub mod gate;
 pub mod live;
 pub mod merge;
+pub mod progress;
 mod queue;
 
 use std::collections::{BTreeMap, HashSet};
@@ -66,6 +72,7 @@ use writer::{
 use client::Home;
 pub use client::Timeouts;
 pub use merge::{Merged, merge};
+pub use progress::{Progress, Stage, SyncProgress};
 pub use queue::{AssetFailure, Held, KnownAsset, Pending, Queue, Synced};
 
 /// How many feed entries one pull request asks for.
@@ -258,6 +265,7 @@ pub struct Engine {
     home: Home,
     supported: Supported,
     assets: AssetPolicy,
+    progress: SyncProgress,
 }
 
 /// How long after its `attempts`-th failure in a row an asset waits to be tried again: `first`,
@@ -340,7 +348,20 @@ impl Engine {
             home: Home::new(remote, Timeouts::default())?,
             supported: Supported::default(),
             assets,
+            progress: SyncProgress::new(),
         })
+    }
+
+    /// Report each round's progress to `progress`, which the app reads, rather than to one of
+    /// the engine's own.
+    pub fn with_progress(mut self, progress: SyncProgress) -> Engine {
+        self.progress = progress;
+        self
+    }
+
+    /// Where the current or the last round got to.
+    pub fn progress(&self) -> &SyncProgress {
+        &self.progress
     }
 
     /// Wait on the network as `timeouts` says rather than [`Timeouts::default`].
@@ -410,7 +431,17 @@ impl Engine {
     /// [`Engine::sync`], with the version gate: `gate` hears the server's version first and may
     /// stop the round, with [`Error::Updating`], before it pushes or pulls anything (D27).
     pub fn sync_gated(&self, gate: &mut dyn FnMut(&str) -> Result<()>) -> Result<Report> {
-        self.handshake_gated(gate)?;
+        self.progress.begin();
+        let result = self.handshake_gated(gate).and_then(|()| {
+            self.progress.stage(Stage::Pushing);
+            self.round()
+        });
+        self.progress.finish(result.is_ok());
+        result
+    }
+
+    /// A round after its handshake.
+    fn round(&self) -> Result<Report> {
         let mut report = Report::default();
         self.report_bases()?;
         let missing = self.push_assets(&mut report)?;
@@ -780,18 +811,35 @@ impl Engine {
         Ok(copy_id)
     }
 
-    /// Step 5: apply the change feed from the stored cursor.
+    /// Step 5: learn the server's assets, then apply the change feed from the stored cursor.
     fn pull(&self, report: &mut Report) -> Result<()> {
+        self.progress.stage(Stage::Pulling);
+        self.learn_assets()?;
+        if self.assets == AssetPolicy::All {
+            self.plan_fetch(&self.missing_assets()?);
+        }
         loop {
             let since = self.queue.cursor()?;
-            let page = self
+            let answer = self
                 .home
-                .get(&format!("/api/sync/changes?since={since}&limit={PAGE}"))?
-                .ok("reading the change feed")?;
+                .get(&format!("/api/sync/changes?since={since}&limit={PAGE}"))?;
+            let read = answer.bytes;
+            let page = answer.ok("reading the change feed")?;
             let changes = page
                 .get("changes")
                 .and_then(Json::as_array)
                 .ok_or_else(|| Error::Protocol(format!("the feed page has no changes: {page}")))?;
+            let page_next = page.get("next").and_then(Json::as_i64).unwrap_or(since);
+            // An older server says only `latest`, which overstates what remains.
+            let remaining = page
+                .get("remaining")
+                .and_then(Json::as_u64)
+                .unwrap_or_else(|| {
+                    let latest = page.get("latest").and_then(Json::as_i64).unwrap_or(0);
+                    latest.saturating_sub(page_next).max(0) as u64
+                });
+            self.progress
+                .feed_page(changes.len() as u64, read, remaining);
             let files: Vec<(String, Option<String>)> = changes
                 .iter()
                 .filter(|c| c.get("kind").and_then(Json::as_str) != Some("note"))
@@ -810,6 +858,7 @@ impl Engine {
             {
                 self.apply_pulled(c)?;
             }
+            self.progress.notes_applied(changes.len() as u64);
             report.pulled += changes.len();
             let next = page.get("next").and_then(Json::as_i64).unwrap_or(since);
             let latest = page.get("latest").and_then(Json::as_i64).unwrap_or(next);
@@ -952,8 +1001,8 @@ impl Engine {
         Ok(missing)
     }
 
-    /// Step 6: learn the server's assets, then fetch and evict under the policy.
-    fn sync_assets(&self, report: &mut Report) -> Result<()> {
+    /// What the server lists of its assets, recorded as known: the start of step 5.
+    fn learn_assets(&self) -> Result<()> {
         let list = self.home.get("/api/assets")?.ok("listing the assets")?;
         for a in list
             .get("assets")
@@ -972,14 +1021,35 @@ impl Engine {
             // The server has it after all, such as from an upload whose answer was lost.
             self.queue.clear_asset_failure(id)?;
         }
-        let known = self.queue.assets()?;
+        Ok(())
+    }
+
+    /// The assets the server holds and the device does not.
+    fn missing_assets(&self) -> Result<Vec<KnownAsset>> {
+        Ok(self
+            .queue
+            .assets()?
+            .into_iter()
+            .filter(|a| a.on_server && !self.is_local(&a.id))
+            .collect())
+    }
+
+    /// Tell the progress the round fetches `assets`.
+    fn plan_fetch(&self, assets: &[KnownAsset]) {
+        self.progress
+            .plan_files(assets.len() as u64, assets.iter().map(|a| a.size).sum());
+    }
+
+    /// Step 6: fetch and evict under the policy, the server's assets learnt in step 5.
+    fn sync_assets(&self, report: &mut Report) -> Result<()> {
+        self.progress.stage(Stage::Fetching);
         match self.assets {
             AssetPolicy::All => {
-                for a in known.iter().filter(|a| a.on_server) {
-                    if !self.is_local(&a.id) {
-                        self.fetch_asset(&a.id)?;
-                        report.assets_fetched += 1;
-                    }
+                let missing = self.missing_assets()?;
+                self.plan_fetch(&missing);
+                for a in missing {
+                    self.fetch_counted(&a.id)?;
+                    report.assets_fetched += 1;
                 }
             }
             AssetPolicy::OnDemand {
@@ -992,9 +1062,15 @@ impl Engine {
                 for note in notes {
                     wanted.extend(self.assets_of(&note)?);
                 }
+                let fetch: Vec<KnownAsset> = self
+                    .missing_assets()?
+                    .into_iter()
+                    .filter(|a| wanted.contains(&a.id))
+                    .collect();
+                self.plan_fetch(&fetch);
                 for id in &wanted {
                     if !self.is_local(id) {
-                        self.fetch_asset(id)?;
+                        self.fetch_counted(id)?;
                         report.assets_fetched += 1;
                     }
                 }
@@ -1052,12 +1128,23 @@ impl Engine {
 
     /// Fetch asset `id` from the server into the local vault, as a note being shown needs it.
     pub fn fetch_asset(&self, id: &str) -> Result<()> {
+        self.fetch_with(id, &mut |_| {})
+    }
+
+    /// [`Engine::fetch_asset`] in a round: its bytes count in the round's progress.
+    fn fetch_counted(&self, id: &str) -> Result<()> {
+        self.fetch_with(id, &mut |n| self.progress.bytes(n))?;
+        self.progress.file_fetched();
+        Ok(())
+    }
+
+    fn fetch_with(&self, id: &str, on_bytes: &mut dyn FnMut(u64)) -> Result<()> {
         let known = self
             .queue
             .asset(id)?
             .ok_or_else(|| Error::Protocol(format!("asset {id} is not one the server listed")))?;
         let incoming = self.writer.incoming_file()?;
-        self.home.download_asset(id, &incoming)?;
+        self.home.download_asset(id, &incoming, on_bytes)?;
         self.writer
             .put_asset_file_with_id(id, &known.filename, &incoming)?;
         self.queue.touch_asset(id)?;

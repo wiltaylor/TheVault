@@ -78,6 +78,11 @@ export class Session {
     return this.run("const el = document.querySelector(arguments[0]); return el ? el.textContent : null;", css);
   }
 
+  /** A PNG of the window, as a Buffer. */
+  async screenshot() {
+    return Buffer.from(await this.cmd("GET", "/screenshot"), "base64");
+  }
+
   quit() {
     return this.cmd("DELETE", "");
   }

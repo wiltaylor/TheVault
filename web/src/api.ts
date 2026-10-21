@@ -651,6 +651,29 @@ export interface AppSync {
   server: string | null;
   /** The version gate's warning while sync goes on: the server is newer than the app and the app cannot update to it (D27). */
   warning?: string | null;
+  /** How far the current or the last round got; null before any round ran (ticket 144). */
+  progress?: SyncProgress | null;
+}
+
+/** A sync round's progress, from `GET /api/app/sync` (ticket 144). */
+export interface SyncProgress {
+  stage: "handshake" | "pushing" | "pulling" | "fetching" | "done" | "failed";
+  /** Whether the round is still running. */
+  running: boolean;
+  /** Feed entries, notes and definition files, pulled out of those the round pulls. */
+  notes_done: number;
+  notes_total: number;
+  /** Asset files fetched out of those the round fetches. */
+  files_done: number;
+  files_total: number;
+  /** Asset bytes received, out of the sizes of the files the round fetches. */
+  bytes_done: number;
+  bytes_total: number;
+  /** About how many seconds are left; null until there is a rate to go by. */
+  eta_secs: number | null;
+  elapsed_ms: number;
+  /** Whether the round pulls more than 200 changes or fetches more than 20 MB: the popover shows its progress. */
+  large: boolean;
 }
 
 /** An asset an app stored that has not reached the home server: its last upload failed (ticket 141). */

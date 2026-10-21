@@ -380,7 +380,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
         "/api/sync/changes",
-        "Every note and definition file changed after ?since=, oldest first, paged by ?limit=, with next and latest",
+        "Every note and definition file changed after ?since=, oldest first, paged by ?limit=, with next, latest and remaining (the entries after the page)",
     ),
     (
         "GET",

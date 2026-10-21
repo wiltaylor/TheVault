@@ -79,4 +79,87 @@ describe("the sync popover's details", () => {
     expect(row("Last error")).toBeNull();
     expect(row("Not sent")).toBeNull();
   });
+
+  it("shows a progress line and bar while a first sync pulls a lot", () => {
+    const syncing: AppSync = {
+      state: "syncing",
+      phase: "syncing",
+      queued: 0,
+      last_ok_ms: null,
+      last_attempt_ms: null,
+      last_error: null,
+      server: "https://vault.example.net",
+      progress: {
+        stage: "fetching",
+        running: true,
+        notes_done: 1200,
+        notes_total: 1200,
+        files_done: 3,
+        files_total: 10,
+        bytes_done: 12 * 1024 * 1024,
+        bytes_total: 40 * 1024 * 1024,
+        eta_secs: 130,
+        elapsed_ms: 60_000,
+        large: true,
+      },
+    };
+    const { row, container } = details(syncing);
+    expect(row("Progress")).toBe("Notes 1200 / 1200 · Files 3 / 10 (12.0 / 40.0 MB) · about 2 min left");
+    const bar = container.querySelector<HTMLProgressElement>(".sync-progress progress");
+    expect(bar?.value).toBeCloseTo((1 + 12 / 40) / 2);
+    expect(bar?.getAttribute("aria-label")).toBe("Sync progress");
+  });
+
+  it("estimates the time left once it can, and counts the notes while it pulls", () => {
+    const { row } = details({
+      state: "syncing",
+      phase: "syncing",
+      queued: 0,
+      last_ok_ms: null,
+      last_error: null,
+      server: null,
+      progress: {
+        stage: "pulling",
+        running: true,
+        notes_done: 500,
+        notes_total: 1450,
+        files_done: 0,
+        files_total: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        eta_secs: null,
+        elapsed_ms: 400,
+        large: true,
+      },
+    });
+    expect(row("Progress")).toBe("Notes 500 / 1450 · estimating time left");
+  });
+
+  it("shows no progress for a small round, nor once a round ended", () => {
+    const base: AppSync = {
+      state: "syncing",
+      phase: "syncing",
+      queued: 0,
+      last_ok_ms: NOW - 60_000,
+      last_error: null,
+      server: null,
+    };
+    const progress = {
+      stage: "pulling" as const,
+      running: true,
+      notes_done: 2,
+      notes_total: 3,
+      files_done: 0,
+      files_total: 1,
+      bytes_done: 0,
+      bytes_total: 1024,
+      eta_secs: 1,
+      elapsed_ms: 100,
+      large: false,
+    };
+    expect(details({ ...base, progress }).row("Progress")).toBeNull();
+    const ended = { ...progress, stage: "done" as const, running: false, large: true };
+    expect(details({ ...base, state: "synced", phase: "synced", progress: ended }).row("Progress")).toBeNull();
+    expect(details({ ...base, progress: null }).row("Progress")).toBeNull();
+  });
 });

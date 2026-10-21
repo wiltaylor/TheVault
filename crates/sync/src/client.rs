@@ -57,6 +57,8 @@ const MIN_RATE: u64 = 16 * 1024;
 pub(crate) struct Answer {
     pub status: StatusCode,
     pub body: Value,
+    /// The size of the body as it came, for the progress estimate's feed rate.
+    pub bytes: u64,
 }
 
 impl Answer {
@@ -225,7 +227,11 @@ impl Home {
         let status = res.status();
         let text = res.text().map_err(|e| Error::Http(e.to_string()))?;
         let body = serde_json::from_str(&text).unwrap_or(Value::Null);
-        Ok(Answer { status, body })
+        Ok(Answer {
+            status,
+            body,
+            bytes: text.len() as u64,
+        })
     }
 
     pub fn get(&self, path: &str) -> Result<Answer> {
@@ -333,6 +339,7 @@ impl Home {
                 Ok(Answer {
                     status,
                     body: serde_json::from_str(&text).unwrap_or(Value::Null),
+                    bytes: text.len() as u64,
                 })
             };
             tokio::select! {
@@ -344,10 +351,15 @@ impl Home {
         })
     }
 
-    /// Download asset `id` into a new file at `dest`, streamed to disk. On failure the partial
-    /// file is removed. Fails with [`Error::Transfer`] when no bytes move for
-    /// [`Timeouts::stall`].
-    pub fn download_asset(&self, id: &str, dest: &Path) -> Result<()> {
+    /// Download asset `id` into a new file at `dest`, streamed to disk, telling `on_bytes` the
+    /// size of each block as it arrives (ticket 144). On failure the partial file is removed.
+    /// Fails with [`Error::Transfer`] when no bytes move for [`Timeouts::stall`].
+    pub fn download_asset(
+        &self,
+        id: &str,
+        dest: &Path,
+        on_bytes: &mut dyn FnMut(u64),
+    ) -> Result<()> {
         let (rt, client) = self.transfers()?;
         let what = format!("fetching asset {id}");
         let stall = self.timeouts.stall;
@@ -376,6 +388,7 @@ impl Home {
                     progress.touch();
                     out.write_all(&chunk)
                         .map_err(|e| Error::Transfer(format!("writing {}: {e}", dest.display())))?;
+                    on_bytes(chunk.len() as u64);
                 }
                 out.sync_all()
                     .map_err(|e| Error::Transfer(format!("writing {}: {e}", dest.display())))?;

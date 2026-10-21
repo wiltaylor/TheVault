@@ -148,6 +148,30 @@ impl SyncReport {
     }
 }
 
+/// A round's progress in the `GET /api/app/sync` answer, `progress` (ticket 144): its stage, the
+/// feed entries (`notes_*`), asset files (`files_*`) and asset bytes (`bytes_*`) done out of the
+/// totals, about how many seconds are left (`eta_secs`, null until there is a rate to go by), and
+/// whether the round is `large` enough for the sync popover to show a progress bar. Null before
+/// any round ran.
+pub fn progress_json(p: &sync::Progress) -> Value {
+    if p.stage == sync::Stage::Idle {
+        return Value::Null;
+    }
+    json!({
+        "stage": p.stage.as_str(),
+        "running": p.stage.running(),
+        "notes_done": p.notes_done,
+        "notes_total": p.notes_total,
+        "files_done": p.files_done,
+        "files_total": p.files_total,
+        "bytes_done": p.bytes_done,
+        "bytes_total": p.bytes_total,
+        "eta_secs": p.eta_secs,
+        "elapsed_ms": p.elapsed_ms,
+        "large": p.is_large(),
+    })
+}
+
 /// What waits for the home server, from the sync tables.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Waiting {
@@ -232,6 +256,40 @@ mod tests {
         assert_eq!(out["last_error"], "1 asset could not be sent", "{out}");
         assert_eq!(out["last_attempt_ms"], 1_000, "{out}");
         assert_eq!(out["last_ok_ms"], Value::Null, "{out}");
+    }
+
+    #[test]
+    fn a_round_s_progress_reads_as_counts_totals_and_time_left() {
+        assert_eq!(
+            progress_json(&sync::SyncProgress::new().snapshot()),
+            Value::Null
+        );
+        let p = sync::Progress {
+            stage: sync::Stage::Fetching,
+            notes_done: 1200,
+            notes_total: 1200,
+            files_done: 3,
+            files_total: 10,
+            bytes_done: 12 * 1024 * 1024,
+            bytes_total: 40 * 1024 * 1024,
+            eta_secs: Some(42),
+            elapsed_ms: 9_000,
+        };
+        let out = progress_json(&p);
+        assert_eq!(out["stage"], "fetching", "{out}");
+        assert_eq!(out["running"], true, "{out}");
+        assert_eq!(out["files_total"], 10, "{out}");
+        assert_eq!(out["bytes_done"], 12 * 1024 * 1024, "{out}");
+        assert_eq!(out["eta_secs"], 42, "{out}");
+        assert_eq!(out["large"], true, "{out}");
+        let small = progress_json(&sync::Progress {
+            notes_total: 3,
+            bytes_total: 1024,
+            eta_secs: None,
+            ..p
+        });
+        assert_eq!(small["large"], false, "{small}");
+        assert_eq!(small["eta_secs"], Value::Null, "{small}");
     }
 
     #[test]

@@ -36,7 +36,7 @@ mod home;
 mod sync_status;
 
 pub use home::{NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE, OFFLINE_MESSAGE};
-pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState, Waiting};
+pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState, Waiting, progress_json};
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock, Weak};
@@ -95,6 +95,9 @@ struct Parts {
     build: RwLock<Option<AppBuild>>,
     /// The app's sync loop, once the app hands it over ([`Embedded::set_sync_source`]).
     sync: RwLock<Option<Box<dyn SyncSource>>>,
+    /// The progress of the sync rounds of every engine [`Embedded::sync_engine`] makes
+    /// (ticket 144).
+    progress: sync::SyncProgress,
     /// The app's device runtime, once the app hands it over ([`Embedded::set_device`]).
     device: RwLock<Weak<DeviceRuntime>>,
     /// Keeps the `before_*` handler host alive; it holds only a weak link to the writer.
@@ -175,6 +178,7 @@ impl Embedded {
                 home: Home::new().context("building the home server's HTTP client")?,
                 build: RwLock::new(None),
                 sync: RwLock::new(None),
+                progress: sync::SyncProgress::new(),
                 device: RwLock::new(Weak::new()),
                 _handlers: handlers,
             }),
@@ -192,13 +196,23 @@ impl Embedded {
     }
 
     /// The sync engine of this vault with its home server (D19, D20). It blocks: run it on a
-    /// thread of its own, not inside an async runtime.
+    /// thread of its own, not inside an async runtime. Its rounds report their progress to
+    /// [`Embedded::sync_progress`].
     pub fn sync_engine(
         &self,
         remote: sync::Remote,
         assets: sync::AssetPolicy,
     ) -> sync::Result<sync::Engine> {
-        sync::Engine::new(self.writer().clone(), self.queue().clone(), remote, assets)
+        Ok(
+            sync::Engine::new(self.writer().clone(), self.queue().clone(), remote, assets)?
+                .with_progress(self.sync_progress().clone()),
+        )
+    }
+
+    /// How far the current or the last sync round got, which `GET /api/app/sync` and the desktop
+    /// setup page show (ticket 144).
+    pub fn sync_progress(&self) -> &sync::SyncProgress {
+        &self.parts().progress
     }
 
     /// The device event runtime of the device `config` names, over this vault. Open one per
@@ -354,7 +368,7 @@ impl Embedded {
     }
 
     /// Where sync stands, as `GET /api/app/sync` answers it: the app's sync loop's report with the
-    /// local writes waiting counted now.
+    /// local writes waiting counted now and the progress of the round, if one runs.
     pub fn sync_status(&self) -> serde_json::Value {
         let report = self
             .parts()
@@ -363,7 +377,9 @@ impl Embedded {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map_or_else(SyncReport::unpaired, |s| s.report());
-        report.to_json(&Waiting::of(self.queue()))
+        let mut out = report.to_json(&Waiting::of(self.queue()));
+        out["progress"] = sync_status::progress_json(&self.sync_progress().snapshot());
+        out
     }
 
     /// Ask the app's sync loop for a round now. `false` when the app gave no sync loop.

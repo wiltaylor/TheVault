@@ -52,6 +52,10 @@ pub struct ChangePage {
     pub next: i64,
     /// The newest `seq` in the feed. A device is up to date once `next` reaches it.
     pub latest: i64,
+    /// How many entries come after this page: with the entries a device has read so far, the
+    /// size of the whole pull, which its progress bar shows (ticket 144). `latest - next`
+    /// overstates it, since a key that changes again leaves a gap in `seq`.
+    pub remaining: i64,
 }
 
 /// Record that `key` changed. Replacing the row gives it a new, larger `seq`.
@@ -147,10 +151,16 @@ impl State {
             r.get(0)
         })?;
         let next = changes.last().map_or(since, |c| c.seq);
+        let remaining: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM changes WHERE seq > ?1",
+            params![next],
+            |r| r.get(0),
+        )?;
         Ok(ChangePage {
             changes,
             next,
             latest,
+            remaining,
         })
     }
 
