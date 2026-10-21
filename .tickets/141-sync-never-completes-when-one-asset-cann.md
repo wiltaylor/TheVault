@@ -3,8 +3,8 @@ id: '141'
 title: 'Sync never completes when one asset cannot upload: flat 30 s timeout, whole-file
   uploads, and a failed asset blocks every note; the popover shows no error'
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Sync never completes when one asset cannot upload: flat 30 s timeout, whole-file uploads, and a failed asset blocks every note; the popover shows no error
@@ -29,3 +29,19 @@ Acceptance criteria:
 - ./dev just check and ./dev just android-test pass.
 
 ## Worklog
+
+### 2026-10-21T06:57:46Z — wil
+
+Claimed.
+
+### 2026-10-21T07:28:39Z — wil
+
+Done on ticket/141 (fade24d). Proven: crates/sync/tests/asset_transfers.rs against a testkit server behind a TCP proxy in the test: a 9 MiB upload throttled to 200 KiB/s takes about 46 s with the default timeouts and completes (the old flat 30 s timeout would have failed it); with every connection stalled after 1 MiB a 32 MiB upload fails after the 2 s stall timeout set in the test, the round still returns Ok, the two notes that do not name it are pushed, the one that does is held, Report.stuck and GET /api/app/sync name big.mp4 with size, error and attempts; the next round leaves it alone during its retry wait, and after retry_assets_now the next round uploads it and pushes the held note; an asset the server refuses with 409 does not stop the round. Streaming: client::tests uploads a 200 MiB file to a counting axum server with peak RSS growth under 64 MiB, and the body is a stream (as_bytes is None). Status: embedded sync_status unit test and home.rs JSON; web SyncStatus.test.tsx renders the popover details for the phone's case (Never (last tried 2 min ago), stuck VID_0042.mp4 (72.0 MB) with its error, Last error while yellow). MMS: MmsCapTest (Robolectric, 3 tests) proves parts over the cap are listed in the body and not stored, the cap is 50 MB, and the production store streams a part through a file that VaultCore.putAssetFile moves into the vault, reading at most 64 KiB at once. Server check: notes create/update validate asset fields (schema::note FieldKind::Asset: asset X does not exist), so notes naming a failed asset are held, not pushed. ./dev just check exit 0; ./dev just android-test exit 0. Not tried on the phone itself. Timeouts: connect 15 s, JSON request 60 s, stall 60 s (plus up to 512 s grace after the last block for OS buffers to drain), retry 30 s doubling to 1 h. Filed 142 for the server's and the share path's whole-file buffers. The desktop Cargo.lock was at 0.1.11 on main; cargo restamped it to 0.1.12.
+
+### 2026-10-21T07:28:39Z — wil
+
+Verified set to verified.
+
+### 2026-10-21T07:28:39Z — wil
+
+Status set to done.
