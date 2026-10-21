@@ -141,11 +141,11 @@ The sync popover shows a bar and a line such as `Notes 1200 / 1200 · Files 3 / 
 
 ## Joining another vault starts fresh
 
-A device's local vault is a copy of one vault (D20, D29). Its queued changes are based on that vault's versions, its feed cursor counts that vault's changes, and the phone's contact links name that vault's people. None of it means anything to another vault, so a device that joins another vault starts fresh (ticket 143):
+A device's local vault is a copy of one vault (D20, D29). Its queued changes are based on that vault's versions, its feed cursor counts that vault's changes, and the phone's contact links name that vault's people. None of it means anything to another vault, so a device that joins another vault starts fresh (ticket 143 for Android, ticket 145 for the desktop app, which share the code in `crates/embedded/src/fresh.rs`, `embedded::LocalVault`):
 
-- The local vault records the id of the vault it is a copy of: the pairing's `vault_id`, or the first handshake's.
+- The local vault records the id of the vault it is a copy of: the pairing's `vault_id`, or the first handshake's. The pairing record keeps it too: Android's in the pairing store, the desktop's in `device.json`.
 - Pairing with a server whose `vault_id` differs from the recorded one, or finding a local vault that synced before vault ids were recorded (a feed cursor or synced notes, but no id), moves the local vault folder aside to `vault.prev-<milliseconds>` beside it and opens an empty one in its place. Local writes made before the first pairing, such as a share, are not a reason: they go to the first vault the device joins. A round whose handshake names another vault than the recorded one does the same, then runs again.
-- The fresh vault has no queue, no cursor and no device events of the other vault; the next round pulls the new vault whole. The device runtime opens again over it.
+- The fresh vault has no queue, no cursor and no device events of the other vault; the next round pulls the new vault whole, with the first sync's progress. On Android the device runtime opens again over it.
 - A folder moved aside is kept for 7 days, then removed when the app opens or after a round. Settings > Devices says when the device started fresh and where the old local vault went.
 - The phone's contact links to people of another vault are ignored by capture at once, and removed after the first successful round of the new vault when the contacts-write switch is on (`docs/scripts.md`).
 - The Android app turns backup off (`android:allowBackup="false"`, and data extraction rules that exclude everything from cloud backup and device transfer), so a reinstall or a new phone never gets back an old local vault, its queue or its device token.

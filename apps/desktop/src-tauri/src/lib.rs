@@ -11,6 +11,9 @@
 //! the home server in step, and a small badge injected into every page shows where sync stands,
 //! including the "update the app" refusal when the server is newer (D27). When the server runs a
 //! newer version and publishes a signed build, the sync loop updates the app before it syncs.
+//! When the server holds another vault than the local vault is a copy of, the sync loop starts a
+//! fresh local vault ([`embedded::LocalVault`], ticket 145), so the embedded server is taken
+//! afresh for each request.
 //!
 //! The desktop extras (D9, D12, D27): a tray icon with the home server's unread count and a
 //! menu ([`tray`]); server notifications mirrored on the desktop and closed when read anywhere
@@ -42,7 +45,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use embedded::{AppBuild, Config, Embedded};
+use embedded::{AppBuild, LocalVault};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tauri::http::{Method, Request, Response, StatusCode, header};
@@ -76,7 +79,8 @@ const CAPTURE_FLAG: &str = "--capture";
 /// The app's state, managed by Tauri.
 struct App {
     app: AppHandle,
-    embedded: Arc<Embedded>,
+    /// The local vault and its embedded server, which a fresh start replaces.
+    local: Arc<LocalVault>,
     sync: SyncLoop,
     /// The folder of the local vault and the device file.
     dir: PathBuf,
@@ -205,13 +209,20 @@ pub fn run() {
         })
         .setup(move |app| {
             let dir = app.path().data_dir()?.join("thevault");
-            let vault = dir.join("vault");
-            std::fs::create_dir_all(&vault)?;
-            let embedded = Arc::new(Embedded::open(Config {
-                vault,
-                web: None,
-                secret_key: None,
-            })?);
+            let (local, pruned) = LocalVault::open(&dir.join("vault"))?;
+            for path in pruned.removed {
+                eprintln!(
+                    "thevault: removed the previous local vault {}",
+                    path.display()
+                );
+            }
+            for (path, e) in pruned.kept {
+                eprintln!(
+                    "thevault: the previous local vault {} stays: {e}",
+                    path.display()
+                );
+            }
+            let local = Arc::new(local);
             let paired = device::load(&dir)?;
             let start = match (&paired, &link) {
                 (None, _) => SETUP_PATH.to_owned(),
@@ -220,18 +231,21 @@ pub fn run() {
             };
             let (remote_tx, remote_rx) = tokio::sync::watch::channel(None);
             let updates = Arc::new(Updates::new());
+            // Before the first round, so a fresh start carries it over.
+            local
+                .server()
+                .set_app(app_build(app.handle(), updates.install()));
             let gate = self_update::GateUpdater {
                 app: app.handle().clone(),
                 updates: updates.clone(),
             };
             let sync = SyncLoop::start(
-                embedded.clone(),
+                local.clone(),
                 paired,
                 Box::new(Keyring),
                 remote_tx,
                 Some(Box::new(gate)),
             );
-            embedded.set_sync_source(Box::new(sync.source()));
             let settings = settings::load(&dir);
             let handle = app.handle().clone();
             apply_autostart(&handle, &settings);
@@ -239,10 +253,9 @@ pub fn run() {
             let tray = Tray::build(&handle, &settings);
             let live = Live::start(Arc::new(LiveShell(handle.clone())), remote_rx);
             let hotkey = Arc::new(Mutex::new(hotkey::Status::Starting));
-            embedded.set_app(app_build(&handle, updates.install()));
             app.manage(App {
                 app: handle.clone(),
-                embedded,
+                local,
                 sync,
                 dir,
                 capture: AtomicBool::new(capture),
@@ -453,7 +466,8 @@ async fn api(state: &App, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
         Method::GET | Method::HEAD | Method::OPTIONS
     );
     let (parts, body) = state
-        .embedded
+        .local
+        .server()
         .handle(request.map(axum::body::Body::from))
         .await
         .into_parts();

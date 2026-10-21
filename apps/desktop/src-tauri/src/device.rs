@@ -4,7 +4,9 @@
 //! Pairing posts the vault password or a pairing code to `POST /api/devices/pair` and gets a
 //! `write` token bound to a new device row. The token goes into the keyring under the device id;
 //! the server URL, the device id and its name go into `device.json` beside the local vault, so the
-//! app knows it is paired without unlocking the keyring.
+//! app knows it is paired without unlocking the keyring. So does the id of the vault the server
+//! holds, which the pairing answers: a pairing with a server that holds another vault than the
+//! local vault is a copy of starts a fresh local vault ([`crate::sync_loop`], ticket 145).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,6 +26,10 @@ pub struct Device {
     pub server_url: String,
     pub device_id: String,
     pub device_name: String,
+    /// The id of the vault the home server holds, as pairing answered it; `None` for a pairing
+    /// made before ticket 145, or with a server too old to say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_id: Option<String>,
 }
 
 impl Device {
@@ -176,10 +182,22 @@ pub fn pair(dir: &Path, tokens: &dyn TokenStore, req: &PairRequest) -> Result<De
             .map(str::to_owned)
             .ok_or_else(|| format!("the server's pairing answer has no `{k}`"))
     };
+    let vault_id = match answer["vault_id"].as_str().filter(|v| !v.is_empty()) {
+        Some(v) => Some(v.to_owned()),
+        // A server from before pairing named the vault names it in its sync info, if at all.
+        None => client
+            .get(format!("{server_url}/api/sync/info"))
+            .send()
+            .ok()
+            .and_then(|r| r.json::<Value>().ok())
+            .and_then(|info| info["vault_id"].as_str().map(str::to_owned))
+            .filter(|v| !v.is_empty()),
+    };
     let device = Device {
         server_url,
         device_id: field("device_id")?,
         device_name: name,
+        vault_id,
     };
     tokens.set(&device.device_id, &field("token")?)?;
     save(dir, &device)?;
@@ -212,8 +230,22 @@ mod tests {
             server_url: "https://vault.example.net".into(),
             device_id: "01J00000000000000000000000".into(),
             device_name: "laptop".into(),
+            vault_id: Some("0123456789abcdef0123456789abcdef".into()),
         };
         save(dir.path(), &device).unwrap();
         assert_eq!(load(dir.path()).unwrap(), Some(device));
+    }
+
+    #[test]
+    fn a_device_file_from_before_vault_ids_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("device.json"),
+            r#"{"server_url":"https://vault.example.net","device_id":"d1","device_name":"laptop"}"#,
+        )
+        .unwrap();
+        let device = load(dir.path()).unwrap().unwrap();
+        assert_eq!(device.vault_id, None);
+        assert_eq!(device.device_id, "d1");
     }
 }

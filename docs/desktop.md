@@ -7,9 +7,10 @@
 | What | Where |
 |---|---|
 | The local vault | `$XDG_DATA_HOME/thevault/vault`, normally `~/.local/share/thevault/vault` |
-| The device file: server URL, device id and device name | `$XDG_DATA_HOME/thevault/device.json` |
+| The device file: server URL, device id, device name and the id of the vault the server held at pairing | `$XDG_DATA_HOME/thevault/device.json` |
 | The device token | The Secret Service keyring, service `thevault`, user the device id (D2) |
-| The sync queue and cursor | The `sync_*` tables of the local vault's `state.db` |
+| The sync queue and cursor, and the id of the vault the local vault is a copy of | The `sync_*` tables of the local vault's `state.db` |
+| A local vault moved aside when the app joined another vault, kept 7 days | `$XDG_DATA_HOME/thevault/vault.prev-<milliseconds>` |
 | The app's settings: start on login, update check, a skipped version, install on quit, the application menu entry | `$XDG_DATA_HOME/thevault/settings.json` |
 | The autostart entry, while "Start on login" is on | `$XDG_CONFIG_HOME/autostart/dev.wiltaylor.thevault.desktop` |
 | An AppImage's installed copy | `~/Applications/TheVault.AppImage` |
@@ -30,6 +31,12 @@ The window loads `vault://localhost/` through a custom URI scheme, with no netwo
 Until it is paired, the app shows its setup page. The user enters the server URL and either the vault password or a pairing code from Settings > Devices; pasting the QR code's payload as the code fills in the server URL too. The app posts them to `POST /api/devices/pair` with platform `linux`, stores the token it gets in the keyring, writes the device file, and runs the first sync before it opens the web client.
 
 While the first sync runs, the setup page shows a progress bar under **Downloading your vault**, with **Notes** `N / M` (every note and definition file the pull reads), **Files** `X / Y (a / b MB)` (the assets it downloads, and their megabytes as they arrive) and **Time left**, such as `about 2 min left`, measured from the last 10 seconds' transfer rates (`docs/sync.md` "Progress"). It asks `GET /_desktop/status` twice a second and opens the web client when the sync finishes. A round that fails shows its error with **Retry**, which runs a round at once; the app also tries again by itself. Closing the window during the first sync hides it in the tray and the sync carries on; quitting the app stops it, and the next start, already paired, opens the web client and carries on syncing there, with the same progress in the sync popover.
+
+Pairing again, from the setup page at `vault://localhost/_desktop/setup`, replaces the device file and the token the app uses. When the new server holds another vault than the local vault is a copy of, the app starts fresh, as below.
+
+## Joining another vault starts fresh
+
+The app starts a fresh local vault, as the Android app does, when a pairing names another vault than the local vault is a copy of, when it finds a local vault that synced before vault ids were recorded, or when a round's handshake meets a server whose vault changed under the same pairing (`docs/sync.md` "Joining another vault starts fresh", ticket 145). It moves `~/.local/share/thevault/vault` aside to `vault.prev-<milliseconds>` beside it, opens an empty vault in its place and pulls the server's vault whole, with the first sync's progress on the setup page after a pairing and in the sync popover otherwise. Nothing queued for the other vault is sent. Settings > Devices says that the app started fresh and names the folder the old local vault went to. A folder moved aside is removed once it is 7 days old, when the app starts or after a round succeeds. The move and the 7-day cleanup are `embedded::LocalVault`'s (`crates/embedded/src/fresh.rs`), which the Android core shares.
 
 ## When it syncs
 
@@ -225,3 +232,5 @@ S6 (`apps/desktop/e2e`) starts a testkit home server on port 0, a private D-Bus 
 The desktop extras' cases: a notification created on the server sets the tray badge and is raised on the desktop; reading it through the API closes it and clears the badge; closing one on the desktop marks it read on the server; clicking one opens its note. A note created and then renamed on the server reaches the local vault within seconds, through the live link. A `thevault://note/<id>` argument opens the note, and a newer release brings up the update prompt, which **Later** hides. The self-update case runs the debug app as an AppImage: `THEVAULT_TEST_APPIMAGE` names a file to treat as the running AppImage and `THEVAULT_TEST_UPDATER_PUBKEY` a throwaway public key, both read by debug builds only. With the app running and its first check done, the test signs a fake 97.0.0 AppImage with the throwaway key, publishes it with `vault clients publish` into the home server's clients folder, and checks that one check, started by the server's `clients.updated`, downloads and verifies it and that the window and the tray offer the restart. Installing and restarting are left to a real install.
 
 The first-sync case (`first-sync.test.mjs`) fills a home server with 400 notes and six 4 MB assets and pairs the app with it through a proxy that lets the server send 2 MB a second, so the first sync takes several seconds. It checks the setup page's notes, files and time left part way through the files, that they change every second, and that the page opens the web client once every byte has arrived. It saves a screenshot of the page to its temporary folder, and copies it to `FIRST_SYNC_SHOT` when that is set.
+
+The fresh-start case (`fresh-start.test.mjs`) runs two home servers. The app pairs with A and syncs it, then pairs again from the setup page with B: it checks that the local copy of A moved to a `vault.prev-<ms>` folder, whole, that the local vault holds B's note and none of A's, that B got nothing of A's, and that Settings > Devices shows the notice. It then stops B, changes the vault id in B's `state.db` and starts B again on the same address, and checks that the next round starts fresh again under the same pairing and syncs the changed vault.

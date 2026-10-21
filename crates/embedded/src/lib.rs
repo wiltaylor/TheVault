@@ -30,11 +30,16 @@
 //! app hands the runtime over ([`Embedded::set_device`]), `GET /api/app/device-events` lists the
 //! events that failed or were skipped, and `POST /api/app/device-events/{id}/retry` and
 //! `.../dismiss` act on a failed one, for Settings > Devices > This device.
+//!
+//! [`LocalVault`] holds an app's local vault folder and the embedded server open on it, which a
+//! fresh start replaces when the device joins another vault ([`fresh`], tickets 143 and 145).
 
 pub mod device;
+pub mod fresh;
 mod home;
 mod sync_status;
 
+pub use fresh::{FreshStart, LocalVault};
 pub use home::{NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE, OFFLINE_MESSAGE};
 pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState, Waiting, progress_json};
 

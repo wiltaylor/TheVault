@@ -20,12 +20,22 @@
 //!
 //! Once the loop has the device token it hands the server and the token to the live link
 //! ([`crate::live`]), which reads the token from nowhere else.
+//!
+//! Joining another vault starts fresh, as on Android (tickets 143 and 145; D20, D29). When a
+//! pairing names a different vault than the local vault is a copy of, or finds a local vault that
+//! synced before vault ids were recorded, or a round's handshake meets a server that holds
+//! another vault ([`sync::Error::OtherVault`]), the loop moves the local vault aside to
+//! `vault.prev-<ms>` beside it and opens a fresh one ([`embedded::LocalVault::start_fresh`]),
+//! then runs the round, which pulls the server's vault whole with the first sync's progress.
+//! Nothing queued for the other vault reaches this one. Settings > Devices says so, from
+//! `GET /api/app`'s `fresh_start`. A folder moved aside is removed once it is 7 days old, when the
+//! app starts and after each round that succeeds.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use embedded::Embedded;
+use embedded::{FreshStart, LocalVault};
 use serde::Serialize;
 
 use crate::device::{Device, TokenStore};
@@ -104,14 +114,14 @@ pub struct Status {
 pub struct SyncLoop {
     tx: Mutex<Sender<Trigger>>,
     status: Arc<Mutex<Status>>,
-    embedded: Arc<Embedded>,
+    local: Arc<LocalVault>,
 }
 
 impl SyncLoop {
-    /// Starts the loop for the local vault behind `embedded`, paired as `device` when it is. The
-    /// first round runs at once.
+    /// Starts the loop for the local vault `local`, paired as `device` when it is, and hands it
+    /// to the local vault's embedded server as its sync source. The first round runs at once.
     pub fn start(
-        embedded: Arc<Embedded>,
+        local: Arc<LocalVault>,
         device: Option<Device>,
         tokens: Box<dyn TokenStore>,
         remote: tokio::sync::watch::Sender<Option<Remote>>,
@@ -136,7 +146,8 @@ impl SyncLoop {
         }));
         let (tx, rx) = channel();
         let worker = Worker {
-            embedded: embedded.clone(),
+            local: local.clone(),
+            tx: tx.clone(),
             status: status.clone(),
             tokens,
             device,
@@ -152,15 +163,17 @@ impl SyncLoop {
             .name("sync".to_owned())
             .spawn(move || worker.run(rx))
             .expect("the sync thread starts");
-        SyncLoop {
+        let sync = SyncLoop {
             tx: Mutex::new(tx),
             status,
-            embedded,
-        }
+            local,
+        };
+        sync.local.server().set_sync_source(Box::new(sync.source()));
+        sync
     }
 
     /// The loop as the embedded server's sync source, for the web client's sync icon.
-    pub fn source(&self) -> Source {
+    fn source(&self) -> Source {
         Source {
             tx: Mutex::new(lock(&self.tx).clone()),
             status: self.status.clone(),
@@ -168,18 +181,20 @@ impl SyncLoop {
     }
 
     pub fn trigger(&self, trigger: Trigger) {
+        if let Trigger::Paired(device, _) = &trigger {
+            // At once, so the setup page waits for the new pairing's first sync rather than
+            // reading the last one of an earlier pairing.
+            paired_status(&mut lock(&self.status), device);
+        }
         let _ = lock(&self.tx).send(trigger);
     }
 
     /// The status, with the queue counted now and the round's progress as it is now.
     pub fn status(&self) -> Status {
         let mut status = lock(&self.status).clone();
-        status.pending = self
-            .embedded
-            .queue()
-            .pending()
-            .map_or(status.pending, |p| p.len());
-        status.progress = embedded::progress_json(&self.embedded.sync_progress().snapshot());
+        let server = self.local.server();
+        status.pending = server.queue().pending().map_or(status.pending, |p| p.len());
+        status.progress = embedded::progress_json(&server.sync_progress().snapshot());
         status
     }
 }
@@ -206,6 +221,17 @@ impl embedded::SyncSource for Source {
     fn sync_now(&self) {
         let _ = lock(&self.tx).send(Trigger::Now);
     }
+}
+
+/// The status of a device just paired as `device`, before its first round.
+fn paired_status(s: &mut Status, device: &Device) {
+    s.paired = true;
+    s.server_url = Some(device.server_url.clone());
+    s.device_name = Some(device.device_name.clone());
+    s.phase = Phase::Starting;
+    s.message = None;
+    s.last_sync_ms = None;
+    s.last_attempt_ms = None;
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -308,7 +334,9 @@ impl Gate {
 }
 
 struct Worker {
-    embedded: Arc<Embedded>,
+    local: Arc<LocalVault>,
+    /// The loop's own triggers, for the sync source of a server a fresh start opens.
+    tx: Sender<Trigger>,
     status: Arc<Mutex<Status>>,
     tokens: Box<dyn TokenStore>,
     device: Option<Device>,
@@ -333,12 +361,13 @@ impl Worker {
                 }
                 Ok(Trigger::Now) => {
                     // Asked for by the user: a stuck asset is tried again now (ticket 141).
-                    let _ = self.embedded.queue().retry_assets_now();
+                    let _ = self.local.server().queue().retry_assets_now();
                     due = Instant::now();
                 }
                 Ok(Trigger::ServerChanged(change)) => {
                     let news = change.is_none_or(|c| {
-                        self.device.is_some() && sync::live::is_news(self.embedded.queue(), &c)
+                        self.device.is_some()
+                            && sync::live::is_news(self.local.server().queue(), &c)
                     });
                     if news {
                         due = due.min(Instant::now() + AFTER_REMOTE);
@@ -347,17 +376,26 @@ impl Worker {
                 }
                 Ok(Trigger::Paired(device, token)) => {
                     self.engine = None;
-                    self.build_engine(&device, token);
-                    {
-                        let mut s = lock(&self.status);
-                        s.paired = true;
-                        s.server_url = Some(device.server_url.clone());
-                        s.device_name = Some(device.device_name.clone());
-                        s.phase = Phase::Starting;
-                        s.message = None;
-                        s.last_sync_ms = None;
-                        s.last_attempt_ms = None;
+                    // A pairing with another vault than the local copy's starts fresh first.
+                    let joined = match device.vault_id.as_deref() {
+                        Some(vault_id) => self
+                            .local
+                            .joins_another_vault(vault_id)
+                            .map_err(|e| format!("{e:#}"))
+                            .and_then(|another| {
+                                if another {
+                                    self.start_fresh(vault_id).map(|_| ())
+                                } else {
+                                    Ok(())
+                                }
+                            }),
+                        None => Ok(()),
+                    };
+                    if let Err(e) = joined {
+                        eprintln!("thevault: {e}");
                     }
+                    self.build_engine(&device, token);
+                    paired_status(&mut lock(&self.status), &device);
                     self.device = Some(device);
                     due = Instant::now();
                 }
@@ -381,21 +419,52 @@ impl Worker {
         }
     }
 
+    /// Start a fresh local vault for the home server's vault `vault_id`
+    /// ([`LocalVault::start_fresh`]): the engine of the old one goes, and the fresh server gets
+    /// the loop as its sync source.
+    fn start_fresh(&mut self, vault_id: &str) -> Result<FreshStart, String> {
+        self.engine = None;
+        let source = Source {
+            tx: Mutex::new(self.tx.clone()),
+            status: self.status.clone(),
+        };
+        let moved = self
+            .local
+            .start_fresh(vault_id, |fresh| {
+                fresh.set_sync_source(Box::new(source));
+                Ok(())
+            })
+            .map_err(|e| {
+                format!(
+                    "the home server holds another vault, and a fresh local vault could not be \
+                     started: {e:#}"
+                )
+            })?;
+        eprintln!(
+            "thevault: joined vault {vault_id}{}: the local vault moved to {} and a fresh one \
+             opened",
+            moved
+                .from_vault
+                .as_ref()
+                .map_or_else(String::new, |f| format!(" from vault {f}")),
+            moved.previous.display()
+        );
+        Ok(moved)
+    }
+
     fn build_engine(&mut self, device: &Device, token: String) -> Option<Outcome> {
         let remote = Remote {
             url: device.server_url.clone(),
             token: token.clone(),
         };
         let paired = device.remote(token);
-        match self
-            .embedded
-            .sync_engine(paired.clone(), sync::AssetPolicy::desktop())
-        {
+        let server = self.local.server();
+        match server.sync_engine(paired.clone(), sync::AssetPolicy::desktop()) {
             Ok(engine) => {
                 self.engine = Some(engine);
                 // The embedded server sends the home server's own routes, such as Settings >
                 // Devices and the notifications, to the same server.
-                self.embedded.set_remote(Some(paired));
+                server.set_remote(Some(paired));
                 self.remote.send_replace(Some(remote));
                 None
             }
@@ -443,9 +512,41 @@ impl Worker {
         }
         lock(&self.status).phase = Phase::Syncing;
         let engine = self.engine.as_ref().expect("the engine was just built");
-        match engine.sync() {
+        let mut result = engine.sync();
+        if let Err(sync::Error::OtherVault { server, .. }) = &result {
+            // The home server holds another vault than the local copy: start fresh, then sync
+            // the new vault whole.
+            let server = server.clone();
+            if let Err(e) = self.start_fresh(&server) {
+                return Outcome::new(Phase::Error, Some(e), INTERVAL);
+            }
+            let token = match self.tokens.get(&device.device_id) {
+                Ok(token) => token,
+                Err(e) => {
+                    return Outcome::new(
+                        Phase::Error,
+                        Some(format!("Cannot read the device token: {e}")),
+                        INTERVAL,
+                    );
+                }
+            };
+            if let Some(failed) = self.build_engine(&device, token) {
+                return failed;
+            }
+            let engine = self.engine.as_ref().expect("the engine was just built");
+            result = engine.sync();
+        }
+        match result {
             // A round that finished with an asset stuck says so, and syncs again on the timer.
-            Ok(report) => Outcome::new(Phase::Synced, report.problem(), INTERVAL),
+            Ok(report) => {
+                for path in self.local.prune().removed {
+                    eprintln!(
+                        "thevault: removed the previous local vault {}",
+                        path.display()
+                    );
+                }
+                Outcome::new(Phase::Synced, report.problem(), INTERVAL)
+            }
             Err(e) => Outcome::of_error(&e),
         }
     }
