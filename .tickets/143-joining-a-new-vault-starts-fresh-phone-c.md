@@ -4,8 +4,8 @@ title: 'Joining a new vault starts fresh: phone contact links from another vault
   ignored, a change based on a version the server never had is pushed as new instead
   of stopping sync, and app backup is off'
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Joining a new vault starts fresh: phone contact links from another vault are ignored, a change based on a version the server never had is pushed as new instead of stopping sync, and app backup is off
@@ -36,3 +36,15 @@ Acceptance criteria:
 ### 2026-10-21T10:04:13Z — wil
 
 Claimed.
+
+### 2026-10-21T10:43:15Z — wil
+
+Evidence. Robolectric (just android-test, 141 tests, 0 failures): ReadersTest.aLinkRowFromAnotherVaultReadsAsUnlinked (other vault -> person/synced null; current vault -> linked; old format linked only when the person note exists locally; upsert rewrites the row with data4 = current vault and drops the other vault's synced), ReadersTest.forgettingOtherVaultsRemovesTheirLinksAndAdoptsOlderOnesWhosePersonIsHere, ContactSyncTest.aContactLinkedInAnotherVaultMakesAFreshPersonAndItsRowIsRewritten (real core, contacts_write on). crates/embedded tests/import.rs contacts_linked_to_another_vault_import_as_fresh_people_and_queue_only_creates. crates/sync tests/two_node.rs: a_change_based_on_a_version_the_server_never_had_is_pushed_as_a_create, a_note_the_server_refuses_is_held_back_while_the_others_push_and_the_round_completes, a_device_whose_local_vault_came_from_another_vault_stops_before_pushing; embedded sync_status a_note_the_server_refused_is_named_with_its_reason; web SyncStatus.test.tsx names the refused note. Pairing: plugin tests/core.rs pairing_with_another_vault_moves_the_local_vault_aside_and_syncs_the_new_one_fresh, a_handshake_with_another_vault_starts_fresh_and_syncs_it, a_local_vault_moved_aside_is_removed_after_seven_days. Merged manifest (app/build/intermediates/merged_manifests/universalDebug) has allowBackup=false, fullBackupContent=false, dataExtractionRules=@xml/data_extraction_rules. ./dev just check and ./dev just android-test exit 0. device_contacts.ws unchanged: the reader reports foreign links as unlinked, so the script's never-linked path already matches or creates; no SHIPPED_FILES hash added. Filed 145 (desktop fresh start).
+
+### 2026-10-21T10:43:15Z — wil
+
+Verified set to verified.
+
+### 2026-10-21T10:43:36Z — wil
+
+Status set to done.

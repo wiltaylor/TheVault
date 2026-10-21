@@ -3,7 +3,7 @@ id: '144'
 title: 'First sync shows progress: a download bar on the desktop setup page and in
   the sync popover with notes and files done, bytes and time left'
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -25,3 +25,7 @@ Acceptance criteria:
 - ./dev just check passes (and the desktop tests the justfile runs for the app).
 
 ## Worklog
+
+### 2026-10-21T10:39:54Z — wil
+
+Claimed.
