@@ -3,7 +3,7 @@
 // failed or cannot run. The words go in the icon's accessible name and tooltip, so the state is
 // never shown by colour alone.
 
-import type { AppSync, StuckAsset } from "../api";
+import type { AppSync, StuckAsset, SyncProgress } from "../api";
 import { sizeText } from "../assetLibrary";
 import { relativeTime } from "../notifications/model";
 
@@ -95,6 +95,47 @@ export function waitingText(s: AppSync): string {
 /** A note the server refused, in the popover: which, and why (ticket 143). */
 export function refusedText(n: { note_id: string; reason: string }): string {
   return `Note ${n.note_id}: ${n.reason}`;
+}
+
+/** The progress the popover shows: that of a running round that pulls or downloads a lot (ticket 144). */
+export function shownProgress(s: AppSync): SyncProgress | null {
+  const p = s.progress;
+  return p && p.running && p.large ? p : null;
+}
+
+function megabytes(n: number): string {
+  return (n / (1024 * 1024)).toFixed(1);
+}
+
+/** About how long is left, such as "about 40 s left" or "about 3 min left". */
+export function timeLeft(secs: number | null): string {
+  if (secs === null) return "estimating time left";
+  if (secs === 0) return "finishing";
+  if (secs < 60) return `about ${secs} s left`;
+  const min = Math.round(secs / 60);
+  if (min < 60) return `about ${min} min left`;
+  return `about ${Math.floor(min / 60)} h ${min % 60} min left`;
+}
+
+/** The popover's progress line, such as "Notes 120 / 1200 · Files 3 / 10 (12.0 / 40.0 MB) · about 2 min left". */
+export function progressText(p: SyncProgress): string {
+  const pulled = p.stage === "pulling" || p.stage === "fetching";
+  if (!pulled) return p.stage === "pushing" ? "Sending changes first" : "Starting";
+  const parts = [`Notes ${p.notes_done} / ${p.notes_total}`];
+  if (p.files_total > 0) {
+    parts.push(`Files ${p.files_done} / ${p.files_total} (${megabytes(p.bytes_done)} / ${megabytes(p.bytes_total)} MB)`);
+  }
+  parts.push(timeLeft(p.eta_secs));
+  return parts.join(" · ");
+}
+
+/** How much of the round is done, from 0 to 1: the notes and the bytes, each half when both are to do. */
+export function progressShare(p: SyncProgress): number {
+  const parts: number[] = [];
+  if (p.notes_total > 0) parts.push(p.notes_done / p.notes_total);
+  if (p.bytes_total > 0) parts.push(p.bytes_done / p.bytes_total);
+  if (parts.length === 0) return 0;
+  return Math.min(1, parts.reduce((a, b) => a + b, 0) / parts.length);
 }
 
 /** A stuck asset in the popover: its name and size, why it failed, and when it is tried again. */

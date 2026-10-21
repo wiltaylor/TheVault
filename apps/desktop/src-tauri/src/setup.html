@@ -85,6 +85,37 @@
       #progress {
         margin-top: 1rem;
       }
+      #first-sync h2 {
+        font-size: 1.1rem;
+        margin: 0 0 0.75rem;
+      }
+      #first-sync progress {
+        width: 100%;
+        height: 0.6rem;
+        accent-color: var(--accent);
+      }
+      #first-sync dl {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.3rem 1rem;
+        margin: 0.75rem 0 0;
+        font-variant-numeric: tabular-nums;
+      }
+      #first-sync dt {
+        font-weight: 600;
+      }
+      #first-sync dd {
+        margin: 0;
+      }
+      #first-sync .note {
+        margin-top: 1rem;
+        font-size: 0.9rem;
+      }
+      #retry {
+        width: auto;
+        padding: 0.4rem 1rem;
+        margin-top: 0.5rem;
+      }
     </style>
   </head>
   <body>
@@ -117,6 +148,21 @@
         <div id="error" role="alert"></div>
         <div id="progress" role="status"></div>
       </form>
+      <section id="first-sync" hidden aria-labelledby="first-sync-heading">
+        <h2 id="first-sync-heading">Downloading your vault</h2>
+        <progress id="sync-bar" max="1" aria-label="First sync"></progress>
+        <dl>
+          <dt>Notes</dt>
+          <dd id="sync-notes">…</dd>
+          <dt>Files</dt>
+          <dd id="sync-files">…</dd>
+          <dt>Time left</dt>
+          <dd id="sync-eta" role="status">Estimating…</dd>
+        </dl>
+        <div id="sync-error" role="alert"></div>
+        <button id="retry" type="button" hidden>Retry</button>
+        <p class="note">You can close this window: the download carries on in the background, and goes on the next time TheVault starts.</p>
+      </section>
     </main>
     <script>
       const $ = (id) => document.getElementById(id);
@@ -149,17 +195,71 @@
         })
         .catch(() => {});
 
-      async function waitForFirstSync() {
-        $("progress").textContent = "Paired. Downloading your notes…";
-        for (;;) {
-          const s = await (await fetch("/_desktop/status")).json();
-          if (s.last_sync_ms) break;
-          if (s.phase === "update_required" || s.phase === "revoked" || s.phase === "error") {
-            $("error").textContent = s.message || "Sync failed.";
-            break;
-          }
-          await new Promise((r) => setTimeout(r, 300));
+      // The first sync's progress, from the status's `progress` (ticket 144).
+      const MB = 1024 * 1024;
+      const mb = (n) => (n / MB).toFixed(1);
+      function left(secs) {
+        if (secs < 60) return `about ${Math.max(1, secs)} s left`;
+        const min = Math.round(secs / 60);
+        if (min < 60) return `about ${min} min left`;
+        return `about ${Math.floor(min / 60)} h ${min % 60} min left`;
+      }
+      let shown = 0;
+      function showProgress(p) {
+        if (!p || !p.running) return;
+        const pulled = p.stage === "pulling" || p.stage === "fetching";
+        $("sync-notes").textContent = pulled ? `${p.notes_done} / ${p.notes_total}` : "…";
+        $("sync-files").textContent = pulled
+          ? `${p.files_done} / ${p.files_total} (${mb(p.bytes_done)} / ${mb(p.bytes_total)} MB)`
+          : "…";
+        $("sync-eta").textContent = p.eta_secs == null ? "Estimating…" : p.eta_secs === 0 ? "Finishing…" : left(p.eta_secs);
+        // The bar: the share of the round's time gone once there is an estimate, else the share of
+        // the work done. It never moves back.
+        let share;
+        if (p.eta_secs != null && p.elapsed_ms > 0) share = p.elapsed_ms / (p.elapsed_ms + p.eta_secs * 1000);
+        else {
+          const parts = [];
+          if (p.notes_total > 0) parts.push(p.notes_done / p.notes_total);
+          if (p.bytes_total > 0) parts.push(p.bytes_done / p.bytes_total);
+          share = parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : 0;
         }
+        shown = Math.max(shown, Math.min(1, share));
+        $("sync-bar").value = shown;
+      }
+
+      const FAILED = ["update_required", "revoked", "error", "offline"];
+      // The failed round the user asked to retry: its error stays hidden.
+      let retried = null;
+      $("retry").addEventListener("click", async () => {
+        retried = lastFailure;
+        $("sync-error").textContent = "";
+        $("retry").hidden = true;
+        await fetch("/_desktop/sync", { method: "POST" }).catch(() => {});
+      });
+      let lastFailure = null;
+
+      async function waitForFirstSync() {
+        $("progress").textContent = "";
+        $("pair").hidden = true;
+        $("first-sync").hidden = false;
+        for (;;) {
+          let s;
+          try {
+            s = await (await fetch("/_desktop/status")).json();
+          } catch {
+            await new Promise((r) => setTimeout(r, 500));
+            continue;
+          }
+          if (s.last_sync_ms) break;
+          showProgress(s.progress);
+          if (FAILED.includes(s.phase) && s.last_attempt_ms !== retried) {
+            lastFailure = s.last_attempt_ms;
+            $("sync-error").textContent = s.message || "Sync failed.";
+            $("retry").hidden = false;
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        $("sync-bar").value = 1;
         location.replace("/");
       }
 

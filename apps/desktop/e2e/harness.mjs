@@ -6,7 +6,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -92,6 +92,45 @@ function stop(child) {
     child.kill("SIGTERM");
     setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
   });
+}
+
+/**
+ * A TCP proxy on a free port in front of `upstream` (`host:port`): what the client sends passes as
+ * it comes, and what the server sends at no more than `rate` bytes a second on each connection,
+ * so a sync from it takes long enough to watch. Returns its address and a function that stops it.
+ */
+export async function throttlingProxy(upstream, rate) {
+  const [host, port] = upstream.split(":");
+  const sockets = new Set();
+  const server = createServer((down) => {
+    const up = connect(Number(port), host);
+    sockets.add(down).add(up);
+    const close = () => {
+      down.destroy();
+      up.destroy();
+    };
+    down.on("error", close).on("close", close);
+    up.on("error", close).on("close", close);
+    down.pipe(up);
+    // When the connection may send again: an idle connection saves up no allowance.
+    let free = 0;
+    up.on("data", (chunk) => {
+      up.pause();
+      down.write(chunk);
+      free = Math.max(free, Date.now()) + (chunk.length / rate) * 1000;
+      setTimeout(() => up.resume(), Math.max(0, free - Date.now()));
+    });
+    up.on("end", () => down.end());
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    address: `127.0.0.1:${server.address().port}`,
+    stop: () =>
+      new Promise((resolve) => {
+        for (const s of sockets) s.destroy();
+        server.close(() => resolve());
+      }),
+  };
 }
 
 /** A vault-server on a seeded vault, which can be stopped and started again on the same port. */

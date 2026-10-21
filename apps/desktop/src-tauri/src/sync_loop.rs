@@ -95,6 +95,9 @@ pub struct Status {
     /// What the version gate warns about while sync goes on: the server is newer than the app
     /// and the app cannot update to it.
     pub warning: Option<String>,
+    /// How far the current or the last round got, which the setup page's first-sync bar shows
+    /// (`embedded::progress_json`, ticket 144).
+    pub progress: serde_json::Value,
 }
 
 /// The loop's handle: send it triggers and read its status.
@@ -129,6 +132,7 @@ impl SyncLoop {
             last_attempt_ms: None,
             default_name: crate::device::default_name(),
             warning: None,
+            progress: serde_json::Value::Null,
         }));
         let (tx, rx) = channel();
         let worker = Worker {
@@ -167,7 +171,7 @@ impl SyncLoop {
         let _ = lock(&self.tx).send(trigger);
     }
 
-    /// The status, with the queue counted now.
+    /// The status, with the queue counted now and the round's progress as it is now.
     pub fn status(&self) -> Status {
         let mut status = lock(&self.status).clone();
         status.pending = self
@@ -175,6 +179,7 @@ impl SyncLoop {
             .queue()
             .pending()
             .map_or(status.pending, |p| p.len());
+        status.progress = embedded::progress_json(&self.embedded.sync_progress().snapshot());
         status
     }
 }

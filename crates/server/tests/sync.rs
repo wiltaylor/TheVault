@@ -281,6 +281,12 @@ fn the_change_feed_returns_every_kind_of_change_in_order_and_pages() {
         paged.extend(got);
         cursor = p["next"].as_i64().unwrap();
         assert_eq!(p["latest"], page["latest"]);
+        // `remaining` counts the entries still to come after the page (ticket 144).
+        assert_eq!(
+            p["remaining"].as_u64().unwrap() as usize,
+            summary(&page).len() - paged.len(),
+            "{p}"
+        );
     }
     assert_eq!(paged, summary(&page));
     assert_eq!(cursor, page["latest"].as_i64().unwrap());

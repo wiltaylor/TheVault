@@ -67,9 +67,14 @@ fn each_key_appears_once_at_its_latest_change() {
     let page = state.changes_since(0, 2).unwrap();
     assert_eq!(page.changes.len(), 2);
     assert_eq!(page.next, page.changes[1].seq);
+    // `remaining` counts the entries after the page, not the seqs: note A's first change left a
+    // gap.
+    assert_eq!(page.remaining, 1);
     let rest = state.changes_since(page.next, 2).unwrap();
     assert_eq!(rest.changes.len(), 1);
     assert_eq!(rest.next, rest.latest);
+    assert_eq!(rest.remaining, 0);
+    assert_eq!(state.changes_since(0, 10).unwrap().remaining, 0);
     let empty = state.changes_since(rest.next, 2).unwrap();
     assert!(empty.changes.is_empty());
     assert_eq!(empty.next, rest.next);

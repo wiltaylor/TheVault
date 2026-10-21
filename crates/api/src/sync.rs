@@ -93,8 +93,9 @@ fn entry(w: &Writer, c: &Journaled) -> Result<Value, ApiError> {
 }
 
 /// `GET /api/sync/changes?since=<seq>&limit=`: every note and synced file whose latest change
-/// comes after `since`, oldest first, with `next`, the cursor for the next page, and `latest`, the
-/// newest change there is. A note entry carries its type, version and WCL, or `deleted` and
+/// comes after `since`, oldest first, with `next`, the cursor for the next page, `latest`, the
+/// newest change there is, and `remaining`, how many entries come after this page, so a device
+/// can show how far its pull has got (ticket 144). A note entry carries its type, version and WCL, or `deleted` and
 /// whether it went to the trash; a file entry carries its kind, path, name and text, or `deleted`.
 pub async fn changes(
     State(w): Shared,
@@ -118,7 +119,12 @@ pub async fn changes(
             .iter()
             .map(|c| entry(w, c))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(json!({ "changes": entries, "next": page.next, "latest": page.latest }))
+        Ok(json!({
+            "changes": entries,
+            "next": page.next,
+            "latest": page.latest,
+            "remaining": page.remaining,
+        }))
     })
     .await?;
     Ok(Json(page))
