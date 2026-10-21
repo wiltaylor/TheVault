@@ -34,6 +34,18 @@ pub fn compare(a: &str, b: &str) -> Option<Ordering> {
     }))
 }
 
+/// Whether an app may update to version `candidate` while it talks to a server at version
+/// `server`: a release always, a pre-release (`0.1.13-alpha.1`) only when the server runs a
+/// pre-release too, so a stable server never moves its apps onto an alpha while a server on an
+/// alpha can bring its apps up to it (ticket 139). A candidate that is not a version never.
+pub fn may_take(candidate: &str, server: &str) -> bool {
+    match parse(candidate) {
+        Some((_, None)) => true,
+        Some((_, Some(_))) => matches!(parse(server), Some((_, Some(_)))),
+        None => false,
+    }
+}
+
 fn parse(v: &str) -> Option<([u64; 3], Option<&str>)> {
     let v = v.trim();
     let core = v.strip_prefix('v').unwrap_or(v);
@@ -123,7 +135,8 @@ pub fn decide(
     if compare(server, installed) != Some(Ordering::Greater) {
         return Verdict::Sync;
     }
-    let usable = published.filter(|p| compare(p, server).is_some_and(|c| c != Ordering::Less));
+    let usable = published
+        .filter(|p| may_take(p, server) && compare(p, server).is_some_and(|c| c != Ordering::Less));
     let Some(version) = usable else {
         return Verdict::Warn {
             message: format!(
@@ -156,8 +169,9 @@ pub fn decide(
 
 /// The newest APK in a `GET /api/clients` answer for an Android app of `build` (`release` or
 /// `debug`) on a phone whose architectures, in the server's names, are `arches`; a universal APK
-/// counts for any phone.
-pub fn apk_for(manifest: &Json, arches: &[String], build: &str) -> Option<String> {
+/// counts for any phone. A pre-release counts only when `server`, the server's version, is one
+/// too ([`may_take`]).
+pub fn apk_for(manifest: &Json, arches: &[String], build: &str, server: &str) -> Option<String> {
     manifest
         .get("clients")?
         .as_array()?
@@ -170,7 +184,7 @@ pub fn apk_for(manifest: &Json, arches: &[String], build: &str) -> Option<String
                 .is_some_and(|a| a == "universal" || arches.iter().any(|x| x == a))
         })
         .filter_map(|e| e.get("version").and_then(Json::as_str))
-        .filter(|v| parse(v).is_some())
+        .filter(|v| may_take(v, server))
         .max_by(|a, b| compare(a, b).unwrap_or(Ordering::Equal))
         .map(str::to_owned)
 }
@@ -334,15 +348,66 @@ mod tests {
             { "kind": "appimage", "arch": "aarch64", "version": "0.4.0" },
         ]});
         let arm = ["aarch64".to_owned()];
-        assert_eq!(apk_for(&m, &arm, "release").as_deref(), Some("0.1.10"));
-        assert_eq!(apk_for(&m, &arm, "debug").as_deref(), Some("0.2.0"));
-        assert_eq!(apk_for(&m, &["armv7".to_owned()], "release"), None);
+        assert_eq!(
+            apk_for(&m, &arm, "release", "0.1.10").as_deref(),
+            Some("0.1.10")
+        );
+        assert_eq!(
+            apk_for(&m, &arm, "debug", "0.1.10").as_deref(),
+            Some("0.2.0")
+        );
+        assert_eq!(
+            apk_for(&m, &["armv7".to_owned()], "release", "0.1.10"),
+            None
+        );
         let universal = json!({ "clients": [
             { "kind": "apk", "arch": "universal", "version": "0.5.0" },
         ]});
         assert_eq!(
-            apk_for(&universal, &["armv7".to_owned()], "release").as_deref(),
+            apk_for(&universal, &["armv7".to_owned()], "release", "0.5.0").as_deref(),
             Some("0.5.0")
+        );
+    }
+
+    #[test]
+    fn a_pre_release_is_taken_only_from_a_pre_release_server() {
+        // A server on an alpha brings its apps up to it, from the last release or an older alpha.
+        for installed in ["0.1.12", "0.1.13-alpha.1"] {
+            assert!(matches!(
+                decide(installed, "0.1.13-alpha.2", Some("0.1.13-alpha.2"), &none()),
+                Verdict::Pause { version, .. } if version == "0.1.13-alpha.2"
+            ));
+        }
+        // And to its release once it runs that.
+        assert!(matches!(
+            decide("0.1.13-alpha.2", "0.1.13", Some("0.1.13"), &none()),
+            Verdict::Pause { version, .. } if version == "0.1.13"
+        ));
+        // A stable server never moves its apps onto an alpha it happens to publish.
+        let v = decide("0.1.12", "0.1.13", Some("0.1.14-alpha.1"), &none());
+        assert!(matches!(v, Verdict::Warn { .. }), "{v:?}");
+        assert!(may_take("0.1.13", "0.1.12"));
+        assert!(may_take("0.1.13", "fake"));
+        assert!(may_take("0.1.14-alpha.1", "0.1.13-alpha.1"));
+        assert!(!may_take("0.1.14-alpha.1", "0.1.13"));
+        assert!(!may_take("0.1.14-alpha.1", "fake"));
+        assert!(!may_take("garbage", "0.1.13-alpha.1"));
+    }
+
+    #[test]
+    fn the_apk_for_a_stable_server_is_its_newest_release() {
+        let m = json!({ "clients": [
+            { "kind": "apk", "arch": "aarch64", "build": "release", "version": "0.1.13" },
+            { "kind": "apk", "arch": "aarch64", "build": "release", "version": "0.1.14-alpha.1" },
+        ]});
+        let arm = ["aarch64".to_owned()];
+        assert_eq!(
+            apk_for(&m, &arm, "release", "0.1.13").as_deref(),
+            Some("0.1.13")
+        );
+        assert_eq!(
+            apk_for(&m, &arm, "release", "0.1.14-alpha.1").as_deref(),
+            Some("0.1.14-alpha.1")
         );
     }
 

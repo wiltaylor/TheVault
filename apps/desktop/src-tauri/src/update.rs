@@ -54,6 +54,9 @@ struct ServerBuild {
 struct ServerBuilds {
     #[serde(default)]
     clients: Vec<ServerBuild>,
+    /// The server's version; a server before 0.1.13 sends none, and is a release.
+    #[serde(default)]
+    server_version: Option<String>,
 }
 
 /// What the GitHub Releases API says about one release, as far as the check reads it.
@@ -201,7 +204,8 @@ pub fn check_server(
     Ok(server_release(base, &builds, current, arch))
 }
 
-/// The AppImage in `builds` for `arch`, as a release when it is newer than `current`.
+/// The AppImage in `builds` for `arch`, as a release when it is newer than `current`. A
+/// pre-release counts only when the server runs a pre-release too.
 fn server_release(
     base: &str,
     builds: &ServerBuilds,
@@ -212,6 +216,10 @@ fn server_release(
         .clients
         .iter()
         .filter(|b| b.kind == "appimage" && b.arch == arch)
+        // A pre-release only from a server that runs one (ticket 139).
+        .filter(|b| {
+            sync::gate::may_take(&b.version, builds.server_version.as_deref().unwrap_or(""))
+        })
         .filter_map(|b| tag_version(&b.version).map(|v| (v, b)))
         .max_by(|a, b| a.0.cmp_precedence(&b.0))?
         .1;
@@ -332,6 +340,30 @@ mod tests {
             "build": "release", "size": 3, "sha256": "x", "filename": name,
             "path": format!("/api/clients/{name}"),
         })
+    }
+
+    #[test]
+    fn the_server_offers_a_pre_release_only_when_it_runs_one() {
+        let list = |server: Option<&str>| -> ServerBuilds {
+            serde_json::from_value(serde_json::json!({
+                "clients": [appimage("0.1.13", "x86_64"), appimage("0.1.14-alpha.1", "x86_64")],
+                "server_version": server,
+            }))
+            .unwrap()
+        };
+        let offered = |server| {
+            server_release("http://vault", &list(server), "0.1.12", "x86_64")
+                .flatten()
+                .map(|r| r.version)
+        };
+        // A stable server, or one too old to say, offers its release and never the alpha.
+        assert_eq!(offered(Some("0.1.13")).as_deref(), Some("0.1.13"));
+        assert_eq!(offered(None).as_deref(), Some("0.1.13"));
+        // A server on an alpha offers the alpha.
+        assert_eq!(
+            offered(Some("0.1.14-alpha.1")).as_deref(),
+            Some("0.1.14-alpha.1")
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@ A single-user, self-hosted note app: a Rust server, a SolidJS web client, deskto
 - [Connecting an AI agent](docs/agents.md)
 - [The Linux desktop app](docs/desktop.md)
 - [Releasing the Android app](docs/android-release.md)
+- [Releasing TheVault](docs/releasing.md)
 - [Device sync on the server](docs/sync.md)
 - [Scripts reference](docs/scripts.md)
 - [Vault file format](docs/vault-format.md)

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build the release image of this checkout's version with the release's APK, AppImage and static
 # vault CLI builds baked in,
-# check it, and push it with --push. .github/workflows/image.yml runs this on a v* tag once the
-# desktop and Android workflows have attached their builds to the release; run it the same way
+# check it, and push it with --push. .github/workflows/image.yml runs this once a release train
+# has put the desktop and Android builds on the release (docs/releasing.md); run it the same way
 # locally, without --push, to see exactly what CI would publish (D10, ticket 129).
 #
 #   docker/release-image.sh <assets-dir> [--push]
@@ -17,7 +17,9 @@
 #   TAG       the git tag being released; when set it must be v<version>
 #   REVISION  the commit the image is built from, default `git rev-parse HEAD`
 #
-# Tags <version>, <major>.<minor> and latest. Without --push the tagged image stays local.
+# A release is tagged <version>, <major>.<minor>, latest and edge; a pre-release, such as
+# 0.1.13-alpha.1, only <version> and edge (scripts/release/image-tags.sh, ticket 139). Without
+# --push the tagged image stays local.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -55,8 +57,7 @@ if [ -n "${TAG:-}" ] && [ "$TAG" != "v$version" ]; then
   echo "tag $TAG does not match the workspace version $version" >&2
   exit 1
 fi
-minor=$(cut -d. -f1-2 <<< "$version")
-tags=("$image:$version" "$image:$minor" "$image:latest")
+mapfile -t tags < <(scripts/release/image-tags.sh "$image" "$version")
 
 # 2. The release's builds of this version, matching the release's SHA256SUMS.
 apk="TheVault_${version}_aarch64.apk"

@@ -48,7 +48,11 @@ fn the_manifest_is_public_and_empty_when_nothing_is_published() {
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(
         res.json::<Value>().unwrap(),
-        serde_json::json!({ "clients": [], "enabled": true })
+        serde_json::json!({
+            "clients": [],
+            "enabled": true,
+            "server_version": env!("CARGO_PKG_VERSION"),
+        })
     );
     assert_eq!(
         get(&server, "/api/clients/TheVault_0.3.0_aarch64.apk").status(),
@@ -298,6 +302,38 @@ fn the_updater_endpoint_offers_a_newer_signed_appimage_and_204_otherwise() {
     }
     // A pre-release of the published version is older than it.
     assert_eq!(check("linux/x86_64/0.4.0-rc.1").status(), StatusCode::OK);
+}
+
+#[test]
+fn the_updater_endpoint_offers_a_pre_release_only_from_a_pre_release_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = serve_with(dir.path());
+    let check = |path: &str| get(&server, &format!("/api/clients/update/{path}"));
+    publish_signed(
+        dir.path(),
+        "99.0.0-alpha.1",
+        "c2lnbmF0dXJl
+",
+    );
+    let res = check("linux/x86_64/0.1.0");
+    // This server runs the workspace's version, a release unless a release train stamped an
+    // alpha into it (docs/releasing.md).
+    if env!("CARGO_PKG_VERSION").contains('-') {
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.json::<Value>().unwrap()["version"], "99.0.0-alpha.1");
+    } else {
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        // A release beside it is offered as usual.
+        publish_signed(
+            dir.path(),
+            "98.0.0",
+            "c2lnbmF0dXJl
+",
+        );
+        let res = check("linux/x86_64/0.1.0");
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.json::<Value>().unwrap()["version"], "98.0.0");
+    }
 }
 
 const CLI_AMD64: &[u8] = b"\x7fELF pretend static vault cli for x86_64";

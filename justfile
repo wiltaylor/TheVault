@@ -15,7 +15,7 @@ version := `sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1`
 main:
 	@just --list
 
-# Run the full merge gate: formatting, clippy, Rust tests, web typecheck and unit tests
+# Run the full merge gate: formatting, clippy, Rust tests, web typecheck and unit tests, and the release scripts' tests
 [group('check')]
 check: ci::check
 
@@ -68,20 +68,30 @@ desktop-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-t
 	cargo build -p server -p testkit -p cli --bins
 	xvfb-run -a pnpm -C apps/desktop/e2e test
 
-# Build the release bundles, AppImage, deb and rpm, into target/desktop-release with their SHA256SUMS (D11); with the updater key (TAURI_SIGNING_PRIVATE_KEY, docs/desktop.md) the AppImage gets its updater signature, .AppImage.sig
+# Build the release bundles, AppImage, deb and rpm, into target/desktop-release with their SHA256SUMS (D11), a pre-release's deb and rpm versioned to sort before the release (docs/releasing.md); with the updater key (TAURI_SIGNING_PRIVATE_KEY, docs/desktop.md) the AppImage gets its updater signature, .AppImage.sig
 [group('desktop')]
-desktop-release: (require-tool "cargo-tauri") (require-tool "jq") web-build
+desktop-release: (require-tool "cargo-tauri") (require-tool "jq") (require-tool "dpkg-deb") (require-tool "rpmbuild") web-build
 	#!/usr/bin/env bash
 	set -euo pipefail
 	updater_env="${XDG_CONFIG_HOME:-$HOME/.config}/thevault/updater/updater.env"
 	if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -f "$updater_env" ]; then . "$updater_env"; fi
 	rm -rf apps/desktop/src-tauri/target/release/bundle target/desktop-release
+	version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
 	# The updater signature is made below, bound to the version, so the build makes none itself.
-	(cd apps/desktop && env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD XDG_CACHE_HOME="$PWD/src-tauri/target/tauri-cache" APPIMAGE_EXTRACT_AND_RUN=1 cargo tauri build --bundles appimage,deb,rpm)
+	tauri() { (cd apps/desktop && env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD XDG_CACHE_HOME="$PWD/src-tauri/target/tauri-cache" APPIMAGE_EXTRACT_AND_RUN=1 cargo tauri "$@"); }
+	if [[ $version == *-* ]]; then
+		# An rpm version holds no -, so Tauri cannot write a pre-release's rpm: bundle the same build
+		# as an rpm of the release version, which linux-packages.sh below renames to the pre-release.
+		tauri build --bundles appimage,deb
+		tauri bundle --bundles rpm --config "{\"version\": \"${version%%-*}\"}"
+	else
+		tauri build --bundles appimage,deb,rpm
+	fi
 	mkdir -p target/desktop-release
 	cp apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage apps/desktop/src-tauri/target/release/bundle/deb/*.deb apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm target/desktop-release/
+	# A pre-release's deb and rpm get the version dpkg and rpm sort before the release (ticket 139).
+	scripts/release/linux-packages.sh target/desktop-release "$version"
 	if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-		version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
 		key=(-k "$TAURI_SIGNING_PRIVATE_KEY")
 		if [ -f "$TAURI_SIGNING_PRIVATE_KEY" ]; then key=(-f "$TAURI_SIGNING_PRIVATE_KEY"); fi
 		for image in target/desktop-release/*.AppImage; do
@@ -108,18 +118,19 @@ desktop-notifyd-build: (require-tool "cargo")
 aur-check: (require-tool "makepkg")
 	cd packaging/aur && makepkg --printsrcinfo | diff -u .SRCINFO -
 
-# Write the AUR thevault-bin PKGBUILD and .SRCINFO for the deb in target/desktop-release into target/desktop-release/thevault-bin-aur.tar.gz
+# Write the AUR thevault-bin PKGBUILD and .SRCINFO for the deb in target/desktop-release into target/desktop-release/thevault-bin-aur.tar.gz, with pacman's spelling of a pre-release as pkgver (0.1.13alpha1)
 [group('desktop')]
 aur-release: (require-tool "makepkg") (require-tool "jq")
 	#!/usr/bin/env bash
 	set -euo pipefail
 	version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+	pkgver=$(scripts/release/package-version.sh aur "$version")
 	deb="target/desktop-release/TheVault_${version}_amd64.deb"
 	test -f "$deb" || { echo "$deb is missing; run just desktop-release" >&2; exit 1; }
 	sum=$(sha256sum "$deb" | cut -d' ' -f1)
 	out=target/desktop-release/aur/thevault-bin
 	rm -rf target/desktop-release/aur && mkdir -p "$out"
-	sed -e "s/^pkgver=.*/pkgver=${version}/" -e "s/^sha256sums=.*/sha256sums=('${sum}')/" packaging/aur/PKGBUILD > "$out/PKGBUILD"
+	sed -e "s/^pkgver=.*/pkgver=${pkgver}/" -e "s/^_version=.*/_version=${version}/" -e "s/^sha256sums=.*/sha256sums=('${sum}')/" packaging/aur/PKGBUILD > "$out/PKGBUILD"
 	(cd "$out" && makepkg --printsrcinfo > .SRCINFO)
 	tar -czf target/desktop-release/thevault-bin-aur.tar.gz -C target/desktop-release/aur thevault-bin
 	rm -rf target/desktop-release/aur
@@ -364,6 +375,16 @@ publish-clients dir build='missing' smoke='required': (require-tool "cargo") (re
 	fi
 	if [ -n "$refused" ]; then exit 1; fi
 
+# Write a release version into this checkout as a release train does before it builds: Cargo.toml, both app crates, the three Cargo.lock files, both tauri.conf.json files and the Android versionCode (docs/releasing.md); undo it with git checkout
+[group('release')]
+release-stamp version: (require-tool "jq")
+	scripts/release/stamp.sh {{version}}
+
+# Print the version a release train would cut here, kind pre-release or release, version an X.Y.Z as the version trailer sets it (docs/releasing.md)
+[group('release')]
+release-version kind version='': (require-tool "git")
+	scripts/release/version.sh {{kind}} {{version}}
+
 # Build the server image (docker/Dockerfile) for linux/amd64 without app downloads; runs on the host, not through ./dev
 [group('docker')]
 image-build tag='thevault:local': (require-host-tool "docker")
@@ -380,7 +401,7 @@ image-clients-build dir tag='thevault:local': (require-host-tool "docker") (requ
 	docker/stage-clients.sh "{{dir}}" "$stage" "$version"
 	docker build -f docker/Dockerfile --platform linux/amd64 --build-context "clients=$stage" -t {{tag}} .
 
-# Build and check the release image exactly as .github/workflows/image.yml does, from assets, a folder of the release's APK, AppImage and SHA256SUMS files (read only), tagging ghcr.io/wiltaylor/thevault (or image) <version>, <major>.<minor> and latest locally without pushing; runs on the host
+# Build and check the release image exactly as .github/workflows/image.yml does, from assets, a folder of the release's APK, AppImage and SHA256SUMS files (read only), tagging ghcr.io/wiltaylor/thevault (or image) <version>, <major>.<minor>, latest and edge, or for a pre-release <version> and edge, locally without pushing; runs on the host
 [group('docker')]
 image-release assets image='ghcr.io/wiltaylor/thevault': (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl")
 	IMAGE={{image}} docker/release-image.sh "{{assets}}"

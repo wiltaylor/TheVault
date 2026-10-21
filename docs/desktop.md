@@ -202,7 +202,7 @@ The package installs the release's deb contents: `/usr/bin/thevault`, its deskto
 
 ## Releasing
 
-Pushing a tag `v<version>` runs `.github/workflows/release.yml`. The tag must match `version` in `apps/desktop/src-tauri/tauri.conf.json`. The workflow runs `just desktop-release-test` and `just aur-release` in the dev container, then creates the tag's GitHub Release with the AppImage, its updater signature `.AppImage.sig`, the deb, rpm, `SHA256SUMS` and `thevault-bin-aur.tar.gz`.
+A release train runs `.github/workflows/release.yml` with the version it cut ([docs/releasing.md](releasing.md)). The workflow writes that version into its checkout, runs `just desktop-release-test` and `just aur-release` in the dev container, and hands the train the AppImage, its updater signature `.AppImage.sig`, the deb, rpm, `SHA256SUMS` and `thevault-bin-aur.tar.gz`, which the train puts on the release. A pre-release's deb and rpm carry the version their package managers sort before the release, `0.1.13~alpha.1` for `0.1.13-alpha.1`, and its AUR `pkgver` is `0.1.13alpha1`.
 
 The workflow signs the AppImage with the updater key from two repository secrets: `TAURI_SIGNING_PRIVATE_KEY`, the text of `thevault-updater.key` (not its path), and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, its password. It fails before building when either is missing, and after building when an AppImage has no `.sig`, so a release never carries an AppImage the installed apps will not update to. `image.yml` downloads the `.sig` with the AppImage, and the server image's clients manifest gives the AppImage its `signature`.
 

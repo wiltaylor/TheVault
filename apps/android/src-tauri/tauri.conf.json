@@ -24,7 +24,8 @@
     ],
     "android": {
       "minSdkVersion": 33,
-      "debugApplicationIdSuffix": ".debug"
+      "debugApplicationIdSuffix": ".debug",
+      "versionCode": 101299
     }
   }
 }

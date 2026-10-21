@@ -60,7 +60,13 @@ class AppUpdateWorker(context: Context, params: WorkerParameters) : Worker(conte
         }
         val (installed, debuggable) = installed(context)
         UpdateGate.installed(context, installed)
-        val decision = AppUpdate.decide(ClientBuild.apks(manifest), abis(), installed, debuggable)
+        val decision = AppUpdate.decide(
+            ClientBuild.apks(manifest),
+            abis(),
+            installed,
+            debuggable,
+            manifest.optString("server_version").ifEmpty { null },
+        )
         val build = when (decision) {
             is UpdateDecision.Skip -> return done(decision.reason, decision.message)
             is UpdateDecision.Install -> decision.build

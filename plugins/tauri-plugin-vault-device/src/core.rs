@@ -385,7 +385,7 @@ impl Core {
         let newer = gate::compare(server, &app.version) == Some(std::cmp::Ordering::Greater);
         let published = if newer {
             match engine.clients() {
-                Ok(manifest) => gate::apk_for(&manifest, &app.arches, &app.build),
+                Ok(manifest) => gate::apk_for(&manifest, &app.arches, &app.build, server),
                 Err(e @ sync::Error::Http(_)) => return Err(e),
                 Err(e) => {
                     log::warn!("the server's app builds were not read: {e}");

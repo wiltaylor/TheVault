@@ -45,6 +45,9 @@ pub struct Folder(pub Option<PathBuf>);
 
 type Shared = State<Arc<Folder>>;
 
+/// This server's version, which `GET /api/version` reports too.
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// How much of a file each body chunk carries.
 const CHUNK: usize = 64 * 1024;
 
@@ -68,7 +71,9 @@ async fn manifest(folder: &Folder) -> Result<clients::Manifest, ApiError> {
 
 /// `GET /api/clients`: every published build, with its download `path`, its absolute `url` as
 /// the request reached the server, and for an APK the QR code of that URL as an SVG image.
-/// `enabled` is false when the server has no clients folder at all.
+/// `enabled` is false when the server has no clients folder at all. `server_version` is this
+/// server's version, by which an app takes a pre-release build only from a pre-release server
+/// (ticket 139).
 pub async fn list(State(folder): Shared, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
     let manifest = manifest(&folder).await?;
     let base = server_url_from(&headers).map(|u| u.trim_end_matches('/').to_owned());
@@ -94,7 +99,7 @@ pub async fn list(State(folder): Shared, headers: HeaderMap) -> Result<Json<Valu
     // An app's own embedded server hands out nothing, and says so, so its pages leave the
     // downloads out rather than explain how to publish.
     Ok(Json(
-        json!({ "clients": clients, "enabled": folder.0.is_some() }),
+        json!({ "clients": clients, "enabled": folder.0.is_some(), "server_version": SERVER_VERSION }),
     ))
 }
 
@@ -180,7 +185,7 @@ pub async fn cli(
 
 /// `GET /api/clients/update/{target}/{arch}/{current_version}`: the Tauri updater's check. 204
 /// when the server publishes no signed release AppImage for `target` and `arch` newer than
-/// `current_version`; else the updater's JSON, whose `url` downloads the AppImage itself and
+/// `current_version`, counting a pre-release only when this server runs one; else the updater's JSON, whose `url` downloads the AppImage itself and
 /// whose `signature` is the one published beside it.
 pub async fn update(
     State(folder): Shared,
@@ -188,7 +193,8 @@ pub async fn update(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let manifest = manifest(&folder).await?;
-    let Some(entry) = clients::update_for(&manifest, &target, &arch, &current) else {
+    let Some(entry) = clients::update_for(&manifest, &target, &arch, &current, SERVER_VERSION)
+    else {
         return Ok(no_update());
     };
     let path = format!("/api/clients/{}", percent_encode(&entry.filename));

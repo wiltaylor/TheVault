@@ -1,7 +1,7 @@
 # Runs the release smoke test (`just android-release-smoke`) on a GitHub-hosted runner by hand,
 # through the same reusable workflow android-release.yml gates every release on. By default the
 # x86_64 release build is signed with the debug key; set release-key to sign it with the release
-# keystore from the repository secrets, as a tag's run does.
+# keystore from the repository secrets, as a release train's run does.
 
 name: android-smoke
 

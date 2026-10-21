@@ -1,0 +1,168 @@
+# The release train (D10, D27, ticket 139; docs/releasing.md). A push to main whose HEAD commit
+# carries the trailer `pre-release: true` cuts a pre-release, X.Y.Z-alpha.N; `release: true` cuts
+# a release, X.Y.Z. A `version: X.Y.Z` trailer sets X.Y.Z, for a minor or major bump; without it
+# X.Y.Z is the patch after the last release tag (scripts/release/version.sh). A push without
+# either trailer only computes that there is nothing to do.
+#
+# The train runs, in order:
+#   version  computes the version and fails when its tag already exists
+#   desktop  release.yml: the AppImage, deb, rpm, AUR package and static vault CLI builds
+#   android  android-release.yml: the signed APK, gated on the emulator smoke test
+#   publish  creates the tag on this commit and the GitHub Release with every build, marked as a
+#            pre-release for an alpha, so releases/latest keeps naming the last release
+#   image    image.yml: the server image with the builds baked in, and the compose files
+# desktop and android run side by side. Each job writes the version into its checkout before it
+# builds (scripts/release/stamp.sh); nothing is committed to main.
+#
+# Run it by hand (workflow_dispatch) to cut a release from main's HEAD without a trailer commit.
+# To finish a train that failed, use "Re-run failed jobs" on its run, which keeps its version.
+
+name: release-train
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: What to cut from main's HEAD
+        type: choice
+        options: [pre-release, release]
+        required: true
+      version:
+        description: The X.Y.Z to cut, as a version trailer sets it; empty for the patch after the last release
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# Trains run one at a time, so two never pick the same alpha number. A push without a release
+# trailer gets a group of its own and never delays or displaces a train.
+concurrency:
+  group: "release-train-${{ (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'release: true')) && 'train' || github.sha }}"
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.calc.outputs.release }}
+      version: ${{ steps.calc.outputs.version }}
+      prerelease: ${{ steps.calc.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the trailers and compute the version
+        id: calc
+        env:
+          EVENT: ${{ github.event_name }}
+          KIND_INPUT: ${{ inputs.kind }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            kind=$KIND_INPUT
+            want=$VERSION_INPUT
+          else
+            trailer() { git log -1 --format="%(trailers:key=$1,valueonly)" | tr -d '[:space:]'; }
+            release=$(trailer release)
+            pre=$(trailer pre-release)
+            want=$(trailer version)
+            if [ "$release" = true ] && [ "$pre" = true ]; then
+              echo "::error::HEAD carries both release: true and pre-release: true; keep one"
+              exit 1
+            elif [ "$release" = true ]; then
+              kind=release
+            elif [ "$pre" = true ]; then
+              kind="pre-release"
+            else
+              echo "HEAD carries no release: true or pre-release: true trailer: nothing to release"
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          version=$(scripts/release/version.sh "$kind" "$want")
+          prerelease=false
+          if [ "$kind" = pre-release ]; then prerelease=true; fi
+          echo "Cutting the $kind v$version from ${GITHUB_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "release=true"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+  desktop:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+  android:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/android-release.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+  # Runs only when every build passed, the Android smoke test too, so a tag always names a
+  # complete release. The release is drafted first and published once every file is on it; a
+  # draft makes no tag, so a re-run finishes a draft an earlier run left.
+  publish:
+    needs: [version, desktop, android]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: v${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - name: Fetch the builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "release-*"
+          merge-multiple: true
+          path: assets
+
+      - name: Create the tag and the GitHub Release
+        run: |
+          ls -l assets
+          if gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" > /dev/null 2>&1; then
+            echo "::error::the tag ${TAG} already exists; the train does not move a tag"
+            exit 1
+          fi
+          kind=(--prerelease=false --latest)
+          if [ "$PRERELEASE" = true ]; then kind=(--prerelease --latest=false); fi
+          if [ "$(gh release view "$TAG" --json isDraft -q .isDraft 2> /dev/null)" = true ]; then
+            gh release upload "$TAG" --clobber assets/*
+          else
+            gh release create "$TAG" --draft --target "${GITHUB_SHA}" --title "TheVault ${TAG}" \
+              --generate-notes "${kind[@]}" assets/*
+          fi
+          gh release edit "$TAG" --draft=false "${kind[@]}"
+          echo "published ${TAG} at ${GITHUB_SHA} (pre-release: ${PRERELEASE})" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  image:
+    needs: [version, publish]
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/image.yml
+    with:
+      version: ${{ needs.version.outputs.version }}

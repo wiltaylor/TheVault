@@ -53,6 +53,10 @@ class AppUpdateTest {
     private val apk = "PK\u0003\u0004 a pretend newer TheVault".toByteArray()
     private var builds = JSONArray()
 
+    /** The `server_version` the server's `GET /api/clients` sends, none when null. */
+    @Volatile
+    private var serverVersion: String? = null
+
     /** Answers the APK downloads when set, instead of sending [apk] whole. */
     @Volatile
     private var download: ((RecordedRequest) -> MockResponse)? = null
@@ -74,7 +78,7 @@ class AppUpdateTest {
                 return when {
                     path == "/api/clients" -> MockResponse()
                         .setHeader("content-type", "application/json")
-                        .setBody(JSONObject().put("clients", builds).put("enabled", true).toString())
+                        .setBody(JSONObject().put("clients", builds).put("enabled", true).put("server_version", serverVersion).toString())
                     path.startsWith("/api/clients/") -> {
                         ranges.add("${request.getHeader("Range") ?: "-"} ${request.getHeader("If-Range") ?: "-"}")
                         download?.invoke(request) ?: MockResponse().setBody(Buffer().write(apk))
@@ -345,6 +349,34 @@ class AppUpdateTest {
             UpdateSetupActivity::class.java.name,
             shadowOf(notice.contentIntent).savedIntent.component!!.className,
         )
+    }
+
+    @Test
+    fun aPreReleaseIsInstalledOnlyFromAServerThatRunsOne() {
+        publish("0.2.0-alpha.1")
+        for (server in listOf(null, "0.1.0")) {
+            serverVersion = server
+            val result = check()
+            assertEquals(AppUpdate.PRE_RELEASE, result.outputData.getString(AppUpdateWorker.STATUS))
+        }
+        assertTrue(sessions().isEmpty())
+        serverVersion = "0.2.0-alpha.1"
+        val result = check()
+        assertEquals(AppUpdateWorker.INSTALLING, result.outputData.getString(AppUpdateWorker.STATUS))
+        assertEquals(context.packageName, sessions().single().appPackageName)
+    }
+
+    @Test
+    fun aPreReleaseCountsOnlyForAPreReleaseServer() {
+        assertTrue(AppUpdate.mayTake("0.1.13", null))
+        assertTrue(AppUpdate.mayTake("0.1.13", "0.1.12"))
+        assertFalse(AppUpdate.mayTake("0.1.14-alpha.1", null))
+        assertFalse(AppUpdate.mayTake("0.1.14-alpha.1", "0.1.13"))
+        assertTrue(AppUpdate.mayTake("0.1.14-alpha.1", "0.1.13-alpha.1"))
+        assertFalse(AppUpdate.mayTake("garbage", "0.1.13-alpha.1"))
+        fun b(version: String) = ClientBuild("aarch64", version, "release", "x", 1, "TheVault_${version}_aarch64.apk", "/x")
+        val stable = AppUpdate.decide(listOf(b("0.1.14-alpha.1"), b("0.1.13")), listOf("arm64-v8a"), "0.1.12", false, "0.1.13")
+        assertEquals("0.1.13", (stable as UpdateDecision.Install).build.version)
     }
 
     @Test

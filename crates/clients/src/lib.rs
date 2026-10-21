@@ -171,7 +171,7 @@ fn is_cli_name(filename: &str) -> bool {
         return false;
     };
     let arch = arch.strip_suffix("-debug").unwrap_or(arch);
-    is_version(version)
+    is_version_or_pre_release(version)
         && !arch.is_empty()
         && arch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
@@ -196,12 +196,47 @@ pub fn arch_of(filename: &str) -> Option<&'static str> {
 }
 
 /// The version a build's file name names: the first `_`- or `-`-separated part that is three
-/// dot-separated numbers, such as `0.1.0` in `TheVault_0.1.0_aarch64.apk`.
+/// dot-separated numbers, such as `0.1.0` in `TheVault_0.1.0_aarch64.apk`, with the pre-release
+/// after it when a `-` joins one that starts with a letter and another `_` or `-` ends it, such
+/// as `0.1.13-alpha.1` in `TheVault_0.1.13-alpha.1_aarch64.apk` (ticket 139). The rpm's release
+/// number after the version, `-1` in `TheVault-0.1.0-1.x86_64.rpm`, starts with a digit and is
+/// no pre-release.
 pub fn version_of(filename: &str) -> Option<String> {
-    filename
-        .split(['_', '-'])
-        .find(|part| is_version(part))
-        .map(str::to_owned)
+    let mut start = 0;
+    for part in filename.split(['_', '-']) {
+        let end = start + part.len();
+        if is_version(part) {
+            let after = filename[end..].strip_prefix('-').and_then(|rest| {
+                let pre = rest.split(['_', '-']).next()?;
+                (pre.len() < rest.len() && is_pre_release(pre)).then_some(pre)
+            });
+            return Some(match after {
+                Some(pre) => format!("{part}-{pre}"),
+                None => part.to_owned(),
+            });
+        }
+        start = end + 1;
+    }
+    None
+}
+
+/// Whether `s` is a pre-release a file name may carry, such as `alpha.1`: dot-separated letters
+/// and digits, starting with a letter and holding a digit, and no architecture, so neither
+/// `linux` in `vault-0.1.0-linux-x86_64` nor `arm64` in `app-0.1.0-arm64-debug.apk` is one.
+fn is_pre_release(s: &str) -> bool {
+    s.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
+        && s.bytes().any(|b| b.is_ascii_digit())
+        && arch_of(s).is_none()
+        && s.split('.')
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+/// Whether `s` is a version with or without a pre-release, `0.1.13` or `0.1.13-alpha.1`.
+fn is_version_or_pre_release(s: &str) -> bool {
+    match s.split_once('-') {
+        Some((core, pre)) => is_version(core) && is_pre_release(pre),
+        None => is_version(s),
+    }
 }
 
 fn is_version(s: &str) -> bool {
@@ -284,12 +319,15 @@ pub fn latest<'a>(manifest: &'a Manifest, kind: Kind, arch: Option<&str>) -> Opt
 /// The AppImage the desktop app's updater should install, when there is one newer than
 /// `current`: a release build for `target` (`linux`) and `arch` (`x86_64`, `aarch64`) published
 /// with its updater signature. A build without a signature is never offered, since the updater
-/// would refuse it.
+/// would refuse it. A pre-release is offered only by a server that runs a pre-release itself,
+/// `server` being its version, so a stable server never moves its apps onto an alpha
+/// ([`may_take`], ticket 139).
 pub fn update_for<'a>(
     manifest: &'a Manifest,
     target: &str,
     arch: &str,
     current: &str,
+    server: &str,
 ) -> Option<&'a Entry> {
     if target != Kind::AppImage.platform() {
         return None;
@@ -299,8 +337,19 @@ pub fn update_for<'a>(
         .iter()
         .filter(|e| e.kind == Kind::AppImage.as_str() && e.arch == arch && e.build == "release")
         .filter(|e| e.signature.is_some())
-        .filter(|e| is_newer(&e.version, current))
+        .filter(|e| is_newer(&e.version, current) && may_take(&e.version, server))
         .max_by(|a, b| Version::parse(&a.version).cmp(&Version::parse(&b.version)))
+}
+
+/// Whether an app may update to version `candidate` from a server that runs version `server`: a
+/// release always, a pre-release only when the server runs a pre-release too (ticket 139). A
+/// candidate that does not parse never.
+pub fn may_take(candidate: &str, server: &str) -> bool {
+    match Version::parse(candidate) {
+        Some(c) if c.pre.is_empty() => true,
+        Some(_) => Version::parse(server).is_some_and(|s| !s.pre.is_empty()),
+        None => false,
+    }
 }
 
 /// Whether version `candidate` is newer than `current`, as semver orders them. A version that
@@ -642,6 +691,93 @@ mod tests {
     }
 
     #[test]
+    fn reads_a_pre_release_from_file_names() {
+        for (name, version, kind) in [
+            (
+                "TheVault_0.1.13-alpha.1_aarch64.apk",
+                "0.1.13-alpha.1",
+                Kind::Apk,
+            ),
+            (
+                "TheVault_0.1.13-alpha.1_amd64.AppImage",
+                "0.1.13-alpha.1",
+                Kind::AppImage,
+            ),
+            (
+                "TheVault_0.1.13-alpha.12_amd64.deb",
+                "0.1.13-alpha.12",
+                Kind::Deb,
+            ),
+            (
+                "TheVault-0.1.13-alpha.1-1.x86_64.rpm",
+                "0.1.13-alpha.1",
+                Kind::Rpm,
+            ),
+            (
+                "vault-0.1.13-alpha.1-linux-x86_64",
+                "0.1.13-alpha.1",
+                Kind::Binary,
+            ),
+            (
+                "vault-0.1.13-alpha.1-linux-aarch64",
+                "0.1.13-alpha.1",
+                Kind::Binary,
+            ),
+            ("TheVault-0.1.13-1.x86_64.rpm", "0.1.13", Kind::Rpm),
+        ] {
+            assert_eq!(version_of(name).as_deref(), Some(version), "{name}");
+            assert_eq!(kind_of(name), Some(kind), "{name}");
+        }
+        assert_eq!(
+            arch_of("vault-0.1.13-alpha.1-linux-aarch64"),
+            Some("aarch64")
+        );
+        assert_eq!(kind_of("vault-0.1.13-1-linux-x86_64"), None);
+        assert_eq!(
+            version_of("vault-0.3.0-linux-x86_64").as_deref(),
+            Some("0.3.0")
+        );
+        assert_eq!(
+            version_of("app-0.3.0-arm64-debug.apk").as_deref(),
+            Some("0.3.0")
+        );
+    }
+
+    #[test]
+    fn a_pre_release_appimage_is_offered_only_by_a_pre_release_server() {
+        let entry = |version: &str| Entry {
+            platform: "linux".into(),
+            kind: "appimage".into(),
+            arch: "x86_64".into(),
+            version: version.into(),
+            build: "release".into(),
+            size: 1,
+            sha256: "x".into(),
+            filename: format!("TheVault_{version}_amd64.AppImage"),
+            published: 0,
+            signature: Some("sig".into()),
+        };
+        let manifest = Manifest {
+            clients: vec![entry("0.1.13"), entry("0.1.14-alpha.1")],
+        };
+        let offer = |current, server| {
+            update_for(&manifest, "linux", "x86_64", current, server).map(|e| e.version.as_str())
+        };
+        // A stable server offers its release and never the alpha beside it.
+        assert_eq!(offer("0.1.12", "0.1.13"), Some("0.1.13"));
+        assert_eq!(offer("0.1.13", "0.1.13"), None);
+        // A pre-release server offers the alpha.
+        assert_eq!(offer("0.1.12", "0.1.14-alpha.1"), Some("0.1.14-alpha.1"));
+        assert_eq!(offer("0.1.13", "0.1.14-alpha.1"), Some("0.1.14-alpha.1"));
+        assert!(may_take("0.1.13", "0.1.12"));
+        assert!(may_take("0.1.13", "not a version"));
+        assert!(!may_take("0.1.13-alpha.1", "0.1.12"));
+        assert!(!may_take("0.1.13-alpha.1", ""));
+        assert!(may_take("0.1.13-alpha.2", "0.1.13-alpha.1"));
+        assert!(!may_take("garbage", "0.1.13-alpha.1"));
+    }
+
+    #[test]
     fn a_vault_cli_build_publishes_as_a_cli_binary() {
         assert_eq!(kind_of("vault-0.1.11-linux-x86_64"), Some(Kind::Binary));
         assert_eq!(kind_of("vault-0.1.11-linux-aarch64"), Some(Kind::Binary));
@@ -843,12 +979,12 @@ mod tests {
         let text = std::fs::read_to_string(clients.path().join(MANIFEST)).unwrap();
         assert_eq!(text.matches("\"signature\"").count(), 1, "{text}");
 
-        let version = |current| update_for(&manifest, "linux", "x86_64", current);
+        let version = |current| update_for(&manifest, "linux", "x86_64", current, "0.2.0");
         assert_eq!(version("0.1.0").unwrap().version, "0.2.0");
         assert!(version("0.2.0").is_none());
         assert!(version("0.3.0").is_none());
-        assert!(update_for(&manifest, "linux", "aarch64", "0.1.0").is_none());
-        assert!(update_for(&manifest, "windows", "x86_64", "0.1.0").is_none());
+        assert!(update_for(&manifest, "linux", "aarch64", "0.1.0", "0.2.0").is_none());
+        assert!(update_for(&manifest, "windows", "x86_64", "0.1.0", "0.2.0").is_none());
     }
 
     #[test]
@@ -867,7 +1003,7 @@ mod tests {
         };
         for e in [entry("release", None), entry("debug", Some("sig"))] {
             let manifest = Manifest { clients: vec![e] };
-            assert!(update_for(&manifest, "linux", "x86_64", "0.1.0").is_none());
+            assert!(update_for(&manifest, "linux", "x86_64", "0.1.0", "1.0.0").is_none());
         }
     }
 

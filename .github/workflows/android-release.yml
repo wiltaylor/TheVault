@@ -1,10 +1,14 @@
-# Builds the signed Android APK on a version tag and attaches it to the tag's GitHub Release (D10),
-# where adb or Obtainium picks it up. The APK builds in the dev container, as it does locally.
+# Builds the signed Android APK for the release train (release-train.yml, D10, ticket 139), whose
+# publish job puts it on the GitHub Release, where adb or Obtainium picks it up. It writes
+# `version` into the checkout first (scripts/release/stamp.sh), which sets the APK's versionName
+# and its versionCode (scripts/release/version-code.sh). The APK builds in the dev container, as
+# it does locally.
 #
-# Two jobs run side by side: build makes the aarch64 APK and keeps it as a workflow artifact, and
-# smoke (android-smoke-reusable.yml) runs `just android-release-smoke` on the emulator against a
-# release-signed x86_64 build of the same commit. attach needs both, so a failed smoke attaches no
-# APK, this workflow fails, and image.yml, which waits for the APK on the release, publishes nothing.
+# Two jobs run side by side: build makes the aarch64 APK and keeps it as the workflow artifact
+# release-android, and smoke (android-smoke-reusable.yml) runs `just android-release-smoke` on the
+# emulator against a release-signed x86_64 build of the same commit and version. The train's
+# publish job needs this whole workflow, so a failed smoke publishes no release, no tag and no
+# image.
 #
 # The keystore never enters the repository. Store it as repository secrets:
 #   ANDROID_KEYSTORE_BASE64    the keystore file, base64-encoded
@@ -16,8 +20,21 @@
 name: android-release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      version:
+        description: The version to build, X.Y.Z or X.Y.Z-alpha.N
+        type: string
+        required: true
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: true
+      ANDROID_KEYSTORE_PASSWORD:
+        required: true
+      ANDROID_KEY_ALIAS:
+        required: true
+      ANDROID_KEY_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -28,13 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check the tag matches the app's version
-        run: |
-          version=$(jq -r .version apps/android/src-tauri/tauri.conf.json)
-          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
-            echo "tag ${GITHUB_REF_NAME} does not match tauri.conf.json version ${version}" >&2
-            exit 1
-          fi
+      - name: Write the version into the checkout
+        env:
+          VERSION: ${{ inputs.version }}
+        run: scripts/release/stamp.sh "$VERSION"
 
       # The dev image carries the Android SDK and NDK and needs more disk than the runner has free.
       - name: Free disk space
@@ -59,13 +73,29 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/release.jks"
 
-      - name: Keep the APK for the attach job
+      - name: Check the APK's version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          apk="target/android-release/TheVault_${VERSION}_aarch64.apk"
+          code=$(scripts/release/version-code.sh "$VERSION")
+          # shellcheck disable=SC2016
+          badging=$(./dev bash -c '"$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -n 1)" dump badging "$1"' _ "$apk")
+          badging=$(grep -m 1 '^package:' <<< "$badging")
+          echo "$badging"
+          grep -q "versionCode='$code' versionName='$VERSION'" <<< "$badging" || {
+            echo "::error::$apk is not versionCode $code, versionName $VERSION"
+            exit 1
+          }
+          mv target/android-release/SHA256SUMS target/android-release/SHA256SUMS-android
+
+      - name: Keep the APK for the train's publish job
         uses: actions/upload-artifact@v4
         with:
-          name: android-release
+          name: release-android
           path: |
             target/android-release/*.apk
-            target/android-release/SHA256SUMS
+            target/android-release/SHA256SUMS-android
           if-no-files-found: error
 
   smoke:
@@ -74,40 +104,9 @@ jobs:
     uses: ./.github/workflows/android-smoke-reusable.yml
     with:
       release-key: true
+      version: ${{ inputs.version }}
     secrets:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-
-  # Runs only when both the build and the smoke test passed.
-  attach:
-    needs: [build, smoke]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Fetch the APK
-        uses: actions/download-artifact@v4
-        with:
-          name: android-release
-          path: target/android-release
-
-      # release.yml creates the tag's release with the desktop files and fails when it already
-      # exists, so wait for it and add the APK to it. Create the release only when it has not
-      # appeared within 90 minutes.
-      - name: Attach the APK to the GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          cd target/android-release
-          mv SHA256SUMS SHA256SUMS-android
-          for _ in $(seq 180); do
-            gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1 && break
-            sleep 30
-          done
-          if ! gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" --verify-tag --title "TheVault ${GITHUB_REF_NAME}" --generate-notes
-          fi
-          gh release upload "${GITHUB_REF_NAME}" --clobber ./*.apk SHA256SUMS-android

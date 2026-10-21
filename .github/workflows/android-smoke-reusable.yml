@@ -1,7 +1,8 @@
 # The release smoke test on a GitHub-hosted runner, as one reusable job (D10): boots the headless
 # Android emulator with KVM and runs `just android-release-smoke` against an x86_64 release build.
-# android-release.yml calls it on every v* tag with release-key set, so the tested APK is signed
-# with the release key, and attaches the APK to the release only when this job passes.
+# android-release.yml calls it in every release train with release-key set, so the tested APK is
+# signed with the release key, and with the train's version, so it tests the version it ships;
+# the train publishes the release only when this job passes (docs/releasing.md).
 # android-smoke.yml calls it by hand. KVM on hosted Linux runners: GitHub Changelog, 2024-04-02,
 # "Hardware accelerated Android virtualization now available".
 #
@@ -17,6 +18,10 @@ on:
         description: Sign the tested APK with the release keystore from the secrets rather than the debug key
         type: boolean
         default: false
+      version:
+        description: The version to write into the checkout before building (scripts/release/stamp.sh); empty to build the checkout's own
+        type: string
+        default: ""
     secrets:
       ANDROID_KEYSTORE_BASE64:
         required: false
@@ -36,6 +41,12 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      - name: Write the version into the checkout
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: scripts/release/stamp.sh "$VERSION"
 
       # The dev image carries the Android SDK, NDK and emulator and needs more disk than the runner has free.
       - name: Free disk space

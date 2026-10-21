@@ -6,6 +6,9 @@
 
 pkgname=thevault-bin
 pkgver=0.1.0
+# The release's semver, which names its tag and deb; pkgver is the same for a release and pacman's
+# spelling of it for a pre-release, 0.1.13alpha1 for 0.1.13-alpha.1 (docs/releasing.md).
+_version=0.1.0
 pkgrel=1
 pkgdesc="TheVault's Linux desktop app: a self-hosted note vault that works offline and syncs"
 arch=('x86_64')
@@ -17,7 +20,7 @@ optdepends=('gnome-keyring: a Secret Service to keep the device token in'
 provides=('thevault')
 conflicts=('thevault')
 options=('!strip' '!debug')
-source=("${url}/releases/download/v${pkgver}/TheVault_${pkgver}_amd64.deb")
+source=("${url}/releases/download/v${_version}/TheVault_${_version}_amd64.deb")
 sha256sums=('SKIP')
 
 package() {

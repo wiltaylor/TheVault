@@ -1,66 +1,68 @@
-# Publishes the server image and the compose files for a version tag once the desktop and Android
-# builds are on its GitHub Release (D10): the image ghcr.io/wiltaylor/thevault, tagged <version>,
-# <major>.<minor> and latest, with the release's APK, AppImage and static vault CLI builds baked
-# in, and compose.yaml,
-# Caddyfile and env.example (deploy/.env.example; GitHub renames an asset with a leading dot)
-# attached to the release, where docs/install.md downloads them.
+# Publishes the server image and the compose files of a release once its desktop and Android
+# builds are on its GitHub Release (D10, ticket 139): the image ghcr.io/wiltaylor/thevault with
+# the release's APK, AppImage and static vault CLI builds baked in, and compose.yaml, Caddyfile
+# and env.example (deploy/.env.example; GitHub renames an asset with a leading dot) attached to
+# the release, where docs/install.md downloads them.
 #
-# A v* tag starts release.yml and android-release.yml. Each one's completion starts this workflow;
-# the run that finds both builds on the release publishes, the other stops. Run it by hand with a
-# tag to publish again. docker/release-image.sh does the build, check and push, and runs the same
-# way locally without --push. The package follows the repository's visibility, so it stays
-# private while the repository is.
+# A release is tagged <version>, <major>.<minor>, latest and edge; a pre-release, such as
+# 0.1.13-alpha.1, only <version> and edge, so latest and <major>.<minor> only ever name a release
+# (scripts/release/image-tags.sh).
+#
+# The release train (release-train.yml) calls it last, with the version it cut. Run it by hand
+# with a tag, such as v0.1.13, to publish an existing release's image again. Either way it writes
+# the version into the checkout (scripts/release/stamp.sh), so the server reports it, and
+# docker/release-image.sh does the build, check and push; that script runs the same way locally
+# without --push. The package follows the repository's visibility, so it stays private while the
+# repository is.
 
 name: image
 
 on:
-  workflow_run:
-    workflows: [release, android-release]
-    types: [completed]
+  workflow_call:
+    inputs:
+      version:
+        description: The version the release train cut, X.Y.Z or X.Y.Z-alpha.N
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       tag:
-        description: The release tag to publish, such as v0.2.0
+        description: The release tag to publish again, such as v0.1.13
         required: true
 
 permissions:
   contents: write
   packages: write
 
-# Both triggering workflows can finish together; publish one tag at a time.
+# One publish of a version at a time.
 concurrency:
-  group: image-${{ github.event.workflow_run.head_branch || inputs.tag }}
+  group: image-${{ inputs.version || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   image:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-24.04
     env:
-      TAG: ${{ github.event.workflow_run.head_branch || inputs.tag }}
+      # The train passes the version; a run by hand names the tag.
+      VERSION_INPUT: ${{ inputs.version }}
+      TAG_INPUT: ${{ inputs.tag }}
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ env.TAG }}
+          ref: ${{ inputs.version != '' && github.sha || format('refs/tags/{0}', inputs.tag) }}
 
-      - name: Check the tag matches the workspace version
+      - name: Write the version into the checkout
         run: |
-          version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)"/\1/p' Cargo.toml)
-          if [ "v${version}" != "${TAG}" ]; then
-            echo "tag ${TAG} does not match the workspace version ${version} in Cargo.toml" >&2
-            exit 1
-          fi
-          echo "VERSION=${version}" >> "$GITHUB_ENV"
+          if [ -n "$VERSION_INPUT" ]; then version=$VERSION_INPUT; else version=${TAG_INPUT#v}; fi
+          scripts/release/stamp.sh "$version"
+          {
+            echo "VERSION=$version"
+            echo "TAG=v$version"
+          } >> "$GITHUB_ENV"
 
-      # The run started by the first workflow to finish finds one build missing and stops; the
-      # second run publishes. compose.yaml is attached last, so a release that has it is done.
       - name: Check the builds are on the release
-        id: ready
         run: |
           names=$(gh release view "${TAG}" --json assets -q '.assets[].name' || true)
           missing=""
@@ -69,21 +71,11 @@ jobs:
             grep -qxF "$f" <<< "$names" || missing="$missing $f"
           done
           if [ -n "$missing" ]; then
-            if [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]; then
-              echo "release ${TAG} has no${missing}" >&2
-              exit 1
-            fi
-            echo "release ${TAG} has no${missing} yet; the other workflow's completion publishes the image"
-            echo "go=false" >> "$GITHUB_OUTPUT"
-          elif [ "${GITHUB_EVENT_NAME}" != workflow_dispatch ] && grep -qxF compose.yaml <<< "$names"; then
-            echo "release ${TAG} already has the compose files, so its image is published"
-            echo "go=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "::error::release ${TAG} has no${missing}"
+            exit 1
           fi
 
       - name: Download the builds from the release
-        if: steps.ready.outputs.go == 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/assets"
           gh release download "${TAG}" --dir "$RUNNER_TEMP/assets" \
@@ -99,15 +91,12 @@ jobs:
           ls -l "$RUNNER_TEMP/assets"
 
       - name: Log in to the GitHub container registry
-        if: steps.ready.outputs.go == 'true'
         run: docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin <<< "${GH_TOKEN}"
 
       - name: Build, check and push the image
-        if: steps.ready.outputs.go == 'true'
         run: docker/release-image.sh "$RUNNER_TEMP/assets" --push
 
       - name: Attach the compose files to the release
-        if: steps.ready.outputs.go == 'true'
         run: |
           cp deploy/.env.example "$RUNNER_TEMP/env.example"
           gh release upload "${TAG}" --clobber "$RUNNER_TEMP/env.example" deploy/Caddyfile

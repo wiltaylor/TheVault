@@ -199,12 +199,13 @@ To stay on one version, set `THEVAULT_VERSION` in `.env` to that version, such a
 
 ### How a release is published
 
-Each release is cut by pushing a `v<version>` tag, and GitHub Actions then publishes it in this order:
+A release is cut by a `release: true` or `pre-release: true` trailer on a commit pushed to `main`, and GitHub Actions then publishes it in this order ([docs/releasing.md](releasing.md)):
 
-1. `release.yml` builds the desktop AppImage, deb, rpm and AUR package and the static `vault` CLI for Linux `x86_64` and `aarch64`, and creates the tag's GitHub Release with them. At the same time `android-release.yml` builds the signed APK and attaches it to that release.
-2. When both have finished, `image.yml` downloads the APK, the AppImage and the two CLI builds from the release, checks them against its `SHA256SUMS` files, and builds the image with them baked in. It starts the image, checks that it serves all four, and pushes `ghcr.io/wiltaylor/thevault` tagged `<version>`, `<major>.<minor>` and `latest`. Then it attaches `compose.yaml`, `Caddyfile` and `env.example` to the release.
+1. `release.yml` builds the desktop AppImage, deb, rpm and AUR package and the static `vault` CLI for Linux `x86_64` and `aarch64`. At the same time `android-release.yml` builds the signed APK and runs the release smoke test on it.
+2. When both have passed, the train creates the tag and the GitHub Release with all of them.
+3. `image.yml` downloads the APK, the AppImage and the two CLI builds from the release, checks them against its `SHA256SUMS` files, and builds the image with them baked in. It starts the image, checks that it serves all four, and pushes `ghcr.io/wiltaylor/thevault`. A release is tagged `<version>`, `<major>.<minor>`, `latest` and `edge`, and a pre-release only `<version>` and `edge`. Then it attaches `compose.yaml`, `Caddyfile` and `env.example` to the release.
 
-So `docker compose pull` gets a new version only after its apps are on the release. The image carries the source, version, revision and licence as OCI labels: `docker image inspect ghcr.io/wiltaylor/thevault:latest` shows them. `just image-release <assets>` builds and checks the same image on your machine from a folder of the release's files, without pushing it.
+So `docker compose pull` gets a new version only after its apps are on the release, and `latest` never gets a pre-release. To follow the pre-releases, set `THEVAULT_VERSION` in `.env` to `edge`. The image carries the source, version, revision and licence as OCI labels: `docker image inspect ghcr.io/wiltaylor/thevault:latest` shows them. `just image-release <assets>` builds and checks the same image on your machine from a folder of the release's files, without pushing it.
 
 ## Restore a backup
 

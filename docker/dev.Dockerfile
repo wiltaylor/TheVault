@@ -120,3 +120,10 @@ RUN apt-get update \
  && chmod -R a+rX /usr/local/rustup \
  && CARGO_HOME=/usr/local/cargo cargo install --locked cargo-zigbuild --version "${CARGO_ZIGBUILD_VERSION}" \
  && rm -rf /usr/local/cargo/registry /usr/local/cargo/git
+
+# Pre-release Linux packages (ticket 139): `just desktop-release` rebuilds the rpm with rpmbuild
+# under a version rpm sorts before the release, 0.1.13~alpha.1 for 0.1.13-alpha.1. A layer of
+# its own, so adding it rebuilds nothing above.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends rpm \
+ && rm -rf /var/lib/apt/lists/*
