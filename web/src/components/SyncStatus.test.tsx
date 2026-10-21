@@ -64,6 +64,28 @@ describe("the sync popover's details", () => {
     expect(row("Waiting")).toBe("41 changes");
   });
 
+  it("names a note the server refused, with why, while the others synced", () => {
+    const { row } = details({
+      ...stuck,
+      queued: 1,
+      held: 0,
+      assets_waiting: 0,
+      stuck_assets: [],
+      refused_notes: [
+        { note_id: "01J00000000000000000000001", reason: "writing note 01J00000000000000000000001: the server answered 400" },
+      ],
+      last_ok_ms: NOW - 60_000,
+      last_error:
+        "1 note could not be sent to the server: note 01J00000000000000000000001: writing note 01J00000000000000000000001: the server answered 400. The others synced; it is tried again on later rounds.",
+    });
+    expect(row("Waiting")).toBe("1 change (1 refused by the server)");
+    expect(row("Not sent")).toBe(
+      "Note 01J00000000000000000000001: writing note 01J00000000000000000000001: the server answered 400",
+    );
+    expect(row("Last error")).toMatch(/^1 note could not be sent to the server: note 01J00000000000000000000001/);
+    expect(row("Last synced")).toBe("1 min ago");
+  });
+
   it("shows no error once a round did everything", () => {
     const { row } = details({
       state: "synced",

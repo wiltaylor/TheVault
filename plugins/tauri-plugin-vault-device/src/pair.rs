@@ -1,6 +1,8 @@
 //! Pairing with the home server (D2): `POST /api/devices/pair` with the vault password or the
-//! single-use code from a pairing QR code, which returns the device's id and its token. The
-//! Kotlin side keeps the token in the Android Keystore; the Rust core holds it only in memory.
+//! single-use code from a pairing QR code, which returns the device's id and its token, and the
+//! id of the vault the server holds, which the pairing record keeps so that joining another vault
+//! starts a fresh local vault (ticket 143). The Kotlin side keeps the token in the Android
+//! Keystore; the Rust core holds it only in memory.
 
 use std::time::Duration;
 
@@ -29,6 +31,9 @@ pub struct Paired {
     pub device_id: String,
     pub device_name: String,
     pub token: String,
+    /// The id of the vault the server holds; `None` from a server too old to say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_id: Option<String>,
 }
 
 /// `url` as a server base URL: trimmed, `http` or `https`, with no trailing `/`.
@@ -79,11 +84,23 @@ pub fn pair(url: &str, secret: &Secret, name: &str) -> anyhow::Result<Paired> {
             .map(str::to_owned)
             .ok_or_else(|| anyhow::anyhow!("the server's answer has no {k}"))
     };
+    let vault_id = match answer["vault_id"].as_str().filter(|v| !v.is_empty()) {
+        Some(v) => Some(v.to_owned()),
+        // A server from before pairing named the vault names it in its sync info, if at all.
+        None => client
+            .get(format!("{server_url}/api/sync/info"))
+            .send()
+            .ok()
+            .and_then(|r| r.json::<Value>().ok())
+            .and_then(|info| info["vault_id"].as_str().map(str::to_owned))
+            .filter(|v| !v.is_empty()),
+    };
     Ok(Paired {
         server_url,
         device_id: field("device_id")?,
         device_name: answer["device"]["name"].as_str().unwrap_or(name).to_owned(),
         token: field("token")?,
+        vault_id,
     })
 }
 

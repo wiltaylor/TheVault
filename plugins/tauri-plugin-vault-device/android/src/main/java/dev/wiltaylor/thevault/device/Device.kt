@@ -129,7 +129,27 @@ object Device {
         coreAssets(context),
         { selfNumbers(context, PhoneNumbers.forDevice(context)) },
         PrefsMap(context.getSharedPreferences(PHOTOS, Context.MODE_PRIVATE), ""),
+        vaultLinks(context),
     )
+
+    /**
+     * The contact links of the local vault's vault (ticket 143): its id from the core, and a
+     * person it holds, by the note's file.
+     */
+    fun vaultLinks(context: Context): ContactLinks {
+        val app = context.applicationContext
+        return ContactLinks(
+            vaultId = {
+                try {
+                    ensureCore(app)
+                    VaultCore.vaultId()
+                } catch (e: Exception) {
+                    null
+                }
+            },
+            personExists = { id -> java.io.File(Vault.dir(app), "notes/person/$id.wcl").isFile },
+        )
+    }
 
     /** This phone's own numbers, to leave out of a group MMS's recipients, when Android tells. */
     private fun selfNumbers(context: Context, numbers: PhoneNumbers): Set<String> = try {

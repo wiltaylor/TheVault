@@ -94,6 +94,7 @@ fn link(p: &Paired, cache_mb: u64) -> Link {
         device_id: p.device_id.clone(),
         device_name: p.device_name.clone(),
         cache_mb,
+        vault_id: p.vault_id.clone(),
     }
 }
 
@@ -227,7 +228,7 @@ fn a_share_made_offline_is_queued_then_reaches_the_server() {
 
     // Paired: one round pushes the assets and the note.
     let admin = Admin::start();
-    core.set_link(Some(link(&admin.pair("Pixel"), 64)));
+    core.set_link(Some(link(&admin.pair("Pixel"), 64))).unwrap();
     let report = core.sync_now().unwrap();
     assert_eq!(report.pushed, vec![id.clone()]);
     assert_eq!(core.status().unwrap()["pending"], 0);
@@ -265,7 +266,7 @@ fn a_write_kicks_the_foreground_loop() {
     let dir = TempDir::new().unwrap();
     let core = open(&dir);
     let admin = Admin::start();
-    core.set_link(Some(link(&admin.pair("Pixel"), 64)));
+    core.set_link(Some(link(&admin.pair("Pixel"), 64))).unwrap();
     let id = core
         .share(&Shared {
             text: "kick".into(),
@@ -295,7 +296,7 @@ fn in_front_a_server_change_is_pulled_at_once() {
     let dir = TempDir::new().unwrap();
     let core = open(&dir);
     let admin = Admin::start();
-    core.set_link(Some(link(&admin.pair("Pixel"), 64)));
+    core.set_link(Some(link(&admin.pair("Pixel"), 64))).unwrap();
     core.set_foreground(true);
     let wait = |what: &str, ok: &dyn Fn() -> bool| {
         let deadline = Instant::now() + ROUND;
@@ -321,7 +322,7 @@ fn in_front_a_server_change_is_pulled_at_once() {
         Some(json!({ "note": { "fields": { "title": "From the web" }, "blocks": [] } })),
     );
     let id = note["id"].as_str().unwrap().to_owned();
-    let writer = core.server().writer();
+    let writer = core.server().writer().clone();
     wait("the change is pulled by a round of its own", &|| {
         writer.read(&id).is_ok() && core.status().unwrap()["last_sync_ms"] != first
     });
@@ -343,7 +344,7 @@ fn background_captures_reach_the_server_in_one_round() {
     let core = open(&dir);
     let admin = Admin::start();
     let paired = admin.pair("Pixel");
-    core.set_link(Some(link(&paired, 64)));
+    core.set_link(Some(link(&paired, 64))).unwrap();
     let runtime = core
         .device(&paired.device_id, || Arc::new(NoPhone))
         .unwrap();
@@ -414,10 +415,10 @@ fn unpaired_sync_is_refused_and_assets_come_on_demand() {
     let admin = Admin::start();
     let asset = admin.upload("big.bin", &vec![7u8; 3 * 1024 * 1024]);
     // A 1 MiB cache: the asset no note opened recently names is not kept.
-    core.set_link(Some(link(&admin.pair("Pixel"), 1)));
+    core.set_link(Some(link(&admin.pair("Pixel"), 1))).unwrap();
     let report = core.sync_now().unwrap();
     assert_eq!(report.assets_fetched, 0);
-    let writer = core.server().writer();
+    let writer = core.server().writer().clone();
     assert!(writer.asset_info(&asset).is_err(), "not fetched ahead");
 
     assert!(core.fetch_asset(&asset).unwrap());
@@ -430,11 +431,17 @@ fn unpaired_sync_is_refused_and_assets_come_on_demand() {
     assert!(writer.asset_info(&asset).is_err());
 
     // A photo a contact is to hold is read through the core, fetched again when evicted.
-    let bytes = core.asset_bytes(&asset).unwrap().expect("fetched for its bytes");
+    let bytes = core
+        .asset_bytes(&asset)
+        .unwrap()
+        .expect("fetched for its bytes");
     assert_eq!(bytes, vec![7u8; 3 * 1024 * 1024]);
     let local = writer.put_asset("face.jpg", vec![1, 2, 3]).unwrap();
     assert_eq!(core.asset_bytes(&local.id).unwrap(), Some(vec![1, 2, 3]));
-    assert_eq!(core.asset_bytes("01J00000000000000000000000").unwrap(), None);
+    assert_eq!(
+        core.asset_bytes("01J00000000000000000000000").unwrap(),
+        None
+    );
 }
 
 /// A phone with nothing on it; the share handler never asks it anything.
@@ -572,7 +579,7 @@ fn with_no_share_handler_the_share_falls_back_to_a_fleeting_note() {
     // A device file that declares no `share_received` handler: the same fallback, once.
     let dir = TempDir::new().unwrap();
     let core = core::open(&vault_with_share_handler(&dir)).unwrap();
-    let writer = core.server().writer();
+    let writer = core.server().writer().clone();
     writer
         .put_script(
             "device_calls",
@@ -684,7 +691,7 @@ fn in_front_a_settings_change_applies_at_once_and_the_contacts_catch_up() {
     let core = open(&dir);
     let admin = Admin::start();
     let paired = admin.pair("Pixel");
-    core.set_link(Some(link(&paired, 64)));
+    core.set_link(Some(link(&paired, 64))).unwrap();
     let phone = Arc::new(ContactPhone {
         contact: json!({
             "contact_id": "c1",
@@ -732,7 +739,7 @@ fn in_front_a_settings_change_applies_at_once_and_the_contacts_catch_up() {
 
     // Renamed on the server while the device may not write contacts: pulled, not written.
     admin.rename(&person, "Zed Two");
-    let writer = core.server().writer();
+    let writer = core.server().writer().clone();
     let title = || {
         writer
             .read(&person)
@@ -791,7 +798,7 @@ fn every_round_takes_the_device_settings_first() {
     let core = open(&dir);
     let admin = Admin::start();
     let paired = admin.pair("Pixel");
-    core.set_link(Some(link(&paired, 64)));
+    core.set_link(Some(link(&paired, 64))).unwrap();
     let runtime = core
         .device(&paired.device_id, || Arc::new(NoPhone))
         .unwrap();
@@ -824,7 +831,7 @@ fn the_sync_status_follows_the_rounds() {
 
     let admin = Admin::start();
     let paired = link(&admin.pair("Pixel"), 64);
-    core.set_link(Some(paired.clone()));
+    core.set_link(Some(paired.clone())).unwrap();
     let out = status();
     assert_eq!(out["state"], "syncing", "{out}");
     assert_eq!(out["phase"], "starting", "{out}");
@@ -852,7 +859,8 @@ fn the_sync_status_follows_the_rounds() {
     core.set_link(Some(Link {
         server_url: dead,
         ..paired.clone()
-    }));
+    }))
+    .unwrap();
     assert!(core.sync_now().is_err());
     let out = status();
     assert_eq!(out["state"], "error", "{out}");
@@ -866,7 +874,7 @@ fn the_sync_status_follows_the_rounds() {
     assert_eq!(out["last_ok_ms"], ok_ms, "the last good round stays: {out}");
 
     // Back online, "Sync now" runs a round at once.
-    core.set_link(Some(paired));
+    core.set_link(Some(paired)).unwrap();
     assert!(core.server().request_sync());
     let deadline = Instant::now() + ROUND;
     loop {
@@ -897,7 +905,7 @@ fn a_device_event_that_fails_for_good_is_reported_once_to_the_bell() {
         Some(json!({ "source": failing })),
     );
     let paired = admin.pair("Pixel");
-    core.set_link(Some(link(&paired, 64)));
+    core.set_link(Some(link(&paired, 64))).unwrap();
     let runtime = core
         .device(&paired.device_id, || Arc::new(NoPhone))
         .unwrap();
@@ -948,7 +956,7 @@ fn the_capture_health_is_sent_with_the_settings_sync_when_it_changes() {
     let core = open(&dir);
     let admin = Admin::start();
     let paired = admin.pair("Pixel");
-    core.set_link(Some(link(&paired, 64)));
+    core.set_link(Some(link(&paired, 64))).unwrap();
     let health = |admin: &Admin| -> Value {
         let list = admin.send("GET", "/api/devices", None);
         list["devices"]
@@ -983,4 +991,153 @@ fn the_capture_health_is_sent_with_the_settings_sync_when_it_changes() {
     core.set_capture_health(json!({ "problems": [] })).unwrap();
     core.sync_now().unwrap();
     assert_eq!(health(&admin)["problems"], json!([]));
+}
+
+/// A fleeting note made on the home server; answers its id.
+fn server_note(admin: &Admin, title: &str) -> String {
+    let made = admin.send(
+        "POST",
+        "/api/notes?type=fleeting",
+        Some(json!({ "note": { "fields": { "title": title } } })),
+    );
+    made["id"].as_str().unwrap().to_owned()
+}
+
+fn has_note(core: &Core, id: &str) -> bool {
+    core.server().writer().read(id).is_ok()
+}
+
+fn previous_vaults(dir: &TempDir) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("vault.prev-"))
+        })
+        .collect()
+}
+
+/// Ticket 143: a device whose local vault came from server A, paired with server B, moves the old
+/// local vault aside and syncs B's vault fresh. Nothing of A's reaches B.
+#[test]
+fn pairing_with_another_vault_moves_the_local_vault_aside_and_syncs_the_new_one_fresh() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    core.device("unpaired", || Arc::new(NoPhone)).unwrap();
+    let a = Admin::start();
+    let from_a = server_note(&a, "Kept by vault A");
+    let paired_a = a.pair("Pixel");
+    let vault_a = paired_a.vault_id.clone().expect("pairing names the vault");
+    assert_eq!(core.set_link(Some(link(&paired_a, 64))).unwrap(), None);
+    core.sync_now().unwrap();
+    assert!(has_note(&core, &from_a));
+    assert_eq!(core.vault_id(), Some(vault_a.clone()));
+    // A change made offline, queued for vault A.
+    let offline = core
+        .share(&Shared {
+            text: "Written for vault A".into(),
+            ..Shared::default()
+        })
+        .unwrap()
+        .notes
+        .remove(0);
+    assert_eq!(core.status().unwrap()["pending"], 1);
+
+    let b = Admin::start();
+    let from_b = server_note(&b, "Kept by vault B");
+    let paired_b = b.pair("Pixel");
+    let vault_b = paired_b.vault_id.clone().unwrap();
+    assert_ne!(vault_a, vault_b);
+    let moved = core
+        .set_link(Some(link(&paired_b, 64)))
+        .unwrap()
+        .expect("the local vault moved aside");
+    assert_eq!(previous_vaults(&dir), vec![moved.clone()]);
+    assert!(
+        moved.join(".vault/state.db").is_file(),
+        "the old local vault is kept whole"
+    );
+    // The fresh local vault holds nothing of A's: no note, no queued change.
+    assert!(!has_note(&core, &from_a));
+    assert!(!has_note(&core, &offline));
+    let status = core.status().unwrap();
+    assert_eq!(status["pending"], 0, "{status}");
+    assert_eq!(status["vault_id"], vault_b.as_str(), "{status}");
+    let fresh = core.fresh_start();
+    assert_eq!(fresh["from_vault"], vault_a.as_str(), "{fresh}");
+    assert_eq!(fresh["to_vault"], vault_b.as_str(), "{fresh}");
+    assert_eq!(fresh["previous"], moved.display().to_string(), "{fresh}");
+    // The device runtime runs again, over the fresh vault.
+    assert_eq!(core.runtime().unwrap().device_id(), "unpaired");
+
+    let report = core.sync_now().unwrap();
+    assert!(report.pushed.is_empty(), "{:?}", report.pushed);
+    assert!(has_note(&core, &from_b));
+    assert!(!has_note(&core, &from_a));
+    let notes = b.send("GET", "/api/notes?type=fleeting", None);
+    let titles: Vec<&str> = notes["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| {
+            n["title"]
+                .as_str()
+                .or(n["fields"]["title"].as_str())
+                .unwrap_or("")
+        })
+        .collect();
+    assert_eq!(titles, ["Kept by vault B"], "{notes}");
+
+    // Opening the same pairing again changes nothing.
+    assert_eq!(core.set_link(Some(link(&paired_b, 64))).unwrap(), None);
+    assert!(has_note(&core, &from_b));
+}
+
+/// Ticket 143: a pairing made before vaults were named, whose server now holds another vault
+/// than the local vault recorded, starts fresh at the round's handshake and syncs the new vault.
+#[test]
+fn a_handshake_with_another_vault_starts_fresh_and_syncs_it() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let a = Admin::start();
+    let from_a = server_note(&a, "Vault A");
+    let mut old = link(&a.pair("Pixel"), 64);
+    old.vault_id = None;
+    core.set_link(Some(old)).unwrap();
+    core.sync_now().unwrap();
+    assert!(has_note(&core, &from_a));
+
+    let b = Admin::start();
+    let from_b = server_note(&b, "Vault B");
+    let mut other = link(&b.pair("Pixel"), 64);
+    other.vault_id = None;
+    assert_eq!(core.set_link(Some(other)).unwrap(), None);
+    core.sync_now().unwrap();
+    assert_eq!(previous_vaults(&dir).len(), 1);
+    assert!(has_note(&core, &from_b));
+    assert!(!has_note(&core, &from_a));
+    assert!(core.fresh_start()["to_vault"].is_string());
+}
+
+#[test]
+fn a_local_vault_moved_aside_is_removed_after_seven_days() {
+    let dir = TempDir::new().unwrap();
+    let vault = core::vault_dir(dir.path());
+    std::fs::create_dir_all(&vault).unwrap();
+    let day: i64 = 24 * 60 * 60 * 1000;
+    let now_ms: i64 = 100 * day;
+    let old = core::previous_dir(&vault, now_ms - 8 * day);
+    let recent = core::previous_dir(&vault, now_ms - day);
+    std::fs::create_dir_all(old.join(".vault")).unwrap();
+    std::fs::create_dir_all(&recent).unwrap();
+    let now = std::time::UNIX_EPOCH + Duration::from_millis(now_ms as u64);
+    assert_eq!(core::prune_previous(&vault, now), vec![old.clone()]);
+    assert!(!old.exists());
+    assert!(recent.exists());
+    assert!(vault.exists());
 }

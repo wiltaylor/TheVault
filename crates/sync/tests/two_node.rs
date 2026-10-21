@@ -804,3 +804,169 @@ fn a_type_with_attributes_the_device_does_not_know_still_syncs_and_takes_notes()
         "Fan"
     );
 }
+
+/// A pairing of a new device with `server`, for a device whose local vault already exists.
+fn remote_of(server: &TestServer, name: &str) -> Remote {
+    let out = Http::admin(server).post(
+        "/api/devices/pair",
+        json!({ "password": PASSWORD, "name": name, "platform": "android" }),
+        201,
+    );
+    Remote {
+        url: server.base_url(),
+        token: str(&out["token"]),
+        device_id: str(&out["device_id"]),
+        device_name: name.to_owned(),
+    }
+}
+
+/// The device's `state.db`, opened beside its embedded server, as a vault from before ticket 143
+/// is: one that never recorded which vault it is a copy of.
+fn forget_server_vault(device: &Device) {
+    let db = rusqlite::Connection::open(device._vault.path().join(".vault/state.db")).unwrap();
+    db.execute("DELETE FROM sync_meta WHERE key = 'server_vault'", [])
+        .unwrap();
+}
+
+#[test]
+fn a_change_based_on_a_version_the_server_never_had_is_pushed_as_a_create() {
+    let a = TestServer::start_seeded(seed);
+    let b = TestServer::start_seeded(seed);
+    let (id, _) = Http::admin(&a).create(memo("From vault A", "one", "", &["kept"]));
+    let mut phone = Device::pair(&a, "Pixel");
+    phone.sync();
+    // An offline edit, based on vault A's version.
+    phone.update(&id, memo("From vault A", "two", "", &["kept"]));
+    let queued = phone.embedded.queue().pending().unwrap();
+    assert_eq!(queued.len(), 1);
+    assert!(queued[0].base_version.is_some());
+
+    // The local vault, from before vault ids were recorded, now syncs with vault B, which never
+    // had the note, nor has it in its trash.
+    forget_server_vault(&phone);
+    phone.remote = remote_of(&b, "Pixel");
+    let report = phone.sync();
+    assert_eq!(report.pushed, vec![id.clone()], "{report:?}");
+    assert!(report.held.is_empty(), "{report:?}");
+    assert_eq!(report.problem(), None);
+    let on_b = Http::admin(&b).note(&id);
+    assert_eq!(
+        shape(&on_b),
+        (
+            "From vault A".to_owned(),
+            "two".to_owned(),
+            String::new(),
+            vec!["kept".to_owned()]
+        )
+    );
+    assert!(phone.embedded.queue().pending().unwrap().is_empty());
+    // The local copy now follows B's version.
+    assert_eq!(
+        phone
+            .embedded
+            .queue()
+            .synced(&id)
+            .unwrap()
+            .unwrap()
+            .server_version,
+        str(&on_b["version"])
+    );
+}
+
+#[test]
+fn a_note_the_server_refuses_is_held_back_while_the_others_push_and_the_round_completes() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Http::admin(&server);
+    let phone = Device::pair(&server, "Pixel");
+    phone.sync();
+    let refused = phone.call(
+        "POST",
+        "/api/notes?type=memo",
+        Some(json!({ "note": memo("Words in a", "not a number", "", &[]) })),
+        201,
+    );
+    let refused = str(&refused["id"]);
+    let fine = phone.call(
+        "POST",
+        "/api/notes?type=memo",
+        Some(json!({ "note": { "fields": { "title": "No a at all", "b": "b" } } })),
+        201,
+    );
+    let fine = str(&fine["id"]);
+    // Before the phone pushes, the server's memo type takes only numbers in `a`.
+    admin.send(
+        admin
+            .client
+            .put(server.url("/api/types/memo"))
+            .header("Content-Type", "text/plain")
+            .body(MEMO.replacen("kind = \"string\"", "kind = \"int\"", 1)),
+        200,
+    );
+
+    let report = phone.sync();
+    assert_eq!(report.pushed, vec![fine.clone()], "{report:?}");
+    assert_eq!(report.held.len(), 1, "{report:?}");
+    assert_eq!(report.held[0].note_id, refused);
+    assert_eq!(report.held[0].asset_id, None);
+    assert!(
+        report.held[0].reason.contains("400"),
+        "{}",
+        report.held[0].reason
+    );
+    let problem = report.problem().unwrap();
+    assert!(problem.contains(&refused), "{problem}");
+    assert!(problem.starts_with("1 note could not be sent"), "{problem}");
+    // The round went on: the pull ran and brought the new type, and the other note is there.
+    assert!(report.pulled > 0, "{report:?}");
+    assert_eq!(shape(&admin.note(&fine)).0, "No a at all");
+    admin.get(&format!("/api/notes/{refused}"), 404);
+    // The refused note waits in the queue, named with its reason, for a later round.
+    let queue = phone.embedded.queue();
+    assert_eq!(
+        queue
+            .pending()
+            .unwrap()
+            .iter()
+            .map(|p| p.note_id.clone())
+            .collect::<Vec<_>>(),
+        vec![refused.clone()]
+    );
+    let held = queue.held().unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].note_id, refused);
+    let report = phone.sync();
+    assert_eq!(report.held.len(), 1, "it is tried again: {report:?}");
+}
+
+#[test]
+fn a_device_whose_local_vault_came_from_another_vault_stops_before_pushing() {
+    let a = TestServer::start_seeded(seed);
+    let b = TestServer::start_seeded(seed);
+    let (id, _) = Http::admin(&a).create(memo("From vault A", "one", "", &[]));
+    let mut phone = Device::pair(&a, "Pixel");
+    phone.sync();
+    let a_vault = open_state(&a).vault_id().unwrap();
+    assert_eq!(
+        phone.embedded.queue().server_vault().unwrap(),
+        Some(a_vault.clone()),
+        "the first handshake records the vault"
+    );
+    phone.update(&id, memo("From vault A", "two", "", &[]));
+
+    phone.remote = remote_of(&b, "Pixel");
+    let b_vault = open_state(&b).vault_id().unwrap();
+    assert_eq!(
+        phone.engine(AssetPolicy::desktop()).server_vault().unwrap(),
+        Some(b_vault.clone())
+    );
+    match phone.engine(AssetPolicy::desktop()).sync() {
+        Err(Error::OtherVault { local, server }) => {
+            assert_eq!(local, a_vault);
+            assert_eq!(server, b_vault);
+        }
+        other => panic!("expected OtherVault, got {other:?}"),
+    }
+    assert_eq!(phone.embedded.queue().pending().unwrap().len(), 1);
+    Http::admin(&b).get(&format!("/api/notes/{id}"), 404);
+    assert!(Http::admin(&b).memos().is_empty());
+}

@@ -75,6 +75,17 @@ pub trait DeviceData: Send + Sync {
         let _ = request;
         Err("this device cannot import its history".into())
     }
+
+    /// Remove the links to `person` notes the phone's contacts hold for any vault but
+    /// `vault_id`, and those of an older app that name no vault and a person the local vault
+    /// does not have; adopt for `vault_id` the older ones whose person it has. Answers how many
+    /// links it removed. Not a `device` module function: the app calls it once after joining a
+    /// vault, when the device may write contacts (ticket 143). A device that keeps no links
+    /// removes none.
+    fn contacts_forget_links(&self, vault_id: &str) -> Result<u64, String> {
+        let _ = vault_id;
+        Ok(0)
+    }
 }
 
 /// The device's switches for what changes the phone or reaches other people (D23).

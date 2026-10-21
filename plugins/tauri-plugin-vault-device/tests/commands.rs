@@ -138,6 +138,7 @@ fn commands_run_only_when_declared_and_switched_on_and_every_result_is_reported(
         device_id: p.device_id,
         device_name: p.device_name,
         cache_mb: 64,
+        vault_id: None,
     };
     let settings = |s: Value| {
         admin(
@@ -318,6 +319,7 @@ fn import_history_from_settings_runs_on_the_phone_and_reports_its_result() {
         device_id: p.device_id,
         device_name: p.device_name,
         cache_mb: 64,
+        vault_id: None,
     };
     let dir = TempDir::new().unwrap();
     let local = Embedded::open(Config {

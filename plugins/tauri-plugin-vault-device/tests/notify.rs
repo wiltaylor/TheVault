@@ -44,6 +44,7 @@ fn paired(server: &TestServer) -> Link {
         device_id: p.device_id,
         device_name: p.device_name,
         cache_mb: 64,
+        vault_id: None,
     }
 }
 

@@ -133,8 +133,10 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_pair<'local>
     })
 }
 
-/// `VaultCore.link(link: String?)`: hand the core the pairing as JSON
-/// (`{server_url, token, device_id, device_name, cache_mb}`), or null when not paired.
+/// `VaultCore.link(link: String?): String?`: hand the core the pairing as JSON
+/// (`{server_url, token, device_id, device_name, cache_mb, vault_id}`), or null when not paired.
+/// A pairing with another vault than the local vault's moves the local vault aside and opens a
+/// fresh one (ticket 143): it answers the folder the old one moved to, otherwise null.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_link<'local>(
     mut env: JNIEnv<'local>,
@@ -146,9 +148,19 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_link<'local>
             Some(json) => Some(serde_json::from_str::<Link>(&json)?),
             None => None,
         };
-        core()?.set_link(link);
-        Ok(None)
+        let moved = core()?.set_link(link)?;
+        Ok(moved.map(|p| p.display().to_string()))
     })
+}
+
+/// `VaultCore.vaultId(): String?`: the id of the home server's vault the local vault is a copy
+/// of, or null before pairing or the first round says (ticket 143).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_vaultId<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    answer(&mut env, |_| Ok(core()?.vault_id()))
 }
 
 /// `VaultCore.kick()`: ask the foreground loop for a round once writes settle.
@@ -653,6 +665,11 @@ impl DeviceData for JniDeviceData {
 
     fn history(&self, request: &Json) -> Result<Json, String> {
         self.call("history", request.clone())
+    }
+
+    fn contacts_forget_links(&self, vault_id: &str) -> Result<u64, String> {
+        let answer = self.call("contacts_forget_links", json!({ "vault_id": vault_id }))?;
+        Ok(answer["removed"].as_u64().unwrap_or(0))
     }
 }
 

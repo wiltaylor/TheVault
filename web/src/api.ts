@@ -616,6 +616,20 @@ export interface AppInfo {
   platform?: string | null;
   /** `release` or `debug`. */
   build?: string | null;
+  /** The app's last fresh start: it joined another vault and moved its old local vault aside (ticket 143). */
+  fresh_start?: FreshStart | null;
+}
+
+/** A fresh start of an app's local vault, after it joined a different vault (ticket 143). */
+export interface FreshStart {
+  /** When, in milliseconds since the epoch. */
+  at_ms: number;
+  /** The folder on the device the old local vault was moved to. */
+  previous: string;
+  /** The vault the old local vault was a copy of, if it was known. */
+  from_vault: string | null;
+  /** The vault the device joined. */
+  to_vault: string;
 }
 
 /** Where an app's sync stands, from its embedded server's `GET /api/app/sync` (D19, D20, D27). */
@@ -637,6 +651,8 @@ export interface AppSync {
   queued: number;
   /** Of those, the notes held back until an asset they name reaches the server (ticket 141). */
   held?: number;
+  /** Of those, the notes the server refused in the last round, each with why; tried again later (ticket 143). */
+  refused_notes?: RefusedNote[];
   /** Assets that failed to reach the server and wait for a later round. */
   assets_waiting?: number;
   /** Those assets, each with why its last try failed. */
@@ -651,6 +667,12 @@ export interface AppSync {
   server: string | null;
   /** The version gate's warning while sync goes on: the server is newer than the app and the app cannot update to it (D27). */
   warning?: string | null;
+}
+
+/** A note an app could not send: the home server refused it (ticket 143). */
+export interface RefusedNote {
+  note_id: string;
+  reason: string;
 }
 
 /** An asset an app stored that has not reached the home server: its last upload failed (ticket 141). */

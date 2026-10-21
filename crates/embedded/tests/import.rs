@@ -37,6 +37,8 @@ struct Phone {
     denied: Mutex<Vec<&'static str>>,
     /// Every `history` request, in order.
     asked: Mutex<Vec<Json>>,
+    /// Every contact upsert, in order.
+    upserts: Mutex<Vec<Json>>,
 }
 
 impl Phone {
@@ -83,6 +85,7 @@ impl DeviceData for Phone {
         Err(format!("no contact {contact_id}"))
     }
     fn contacts_upsert(&self, contact: &Json) -> Result<Json, String> {
+        self.upserts.lock().unwrap().push(contact.clone());
         Ok(json!({ "contact_id": contact["contact_id"] }))
     }
     fn contacts_delete(&self, _: &str) -> Result<(), String> {
@@ -487,4 +490,80 @@ fn the_import_history_command_runs_only_when_enabled_and_reports_the_import() {
             .contains("android.permission.READ_SMS"),
         "{denied:?}"
     );
+}
+
+/// A contact as the phone's reader reports one whose link row belongs to another vault: as never
+/// linked, `person` and `synced` null (ticket 143).
+fn contact_from_another_vault(key: i64, at: i64, name: &str, phone: &str) -> Item {
+    Item {
+        key,
+        at,
+        event: "contact_changed",
+        data: json!({
+            "contact_id": format!("c{key}"),
+            "name": name,
+            "phones": [phone],
+            "phone_labels": ["mobile"],
+            "emails": [],
+            "email_labels": [],
+            "updated": "2026-10-02T09:30:00Z",
+            "person": null,
+            "synced": null,
+        }),
+    }
+}
+
+#[test]
+fn contacts_linked_to_another_vault_import_as_fresh_people_and_queue_only_creates() {
+    let d = Device::open();
+    d.runtime
+        .set_settings(&json!({ "contacts_write": true }))
+        .unwrap();
+    // The ids the contacts' link rows named in the vault the phone synced with before.
+    let old_ids = ["01M54NTRRY755C5BKDRZPEVDEC", "01M54NTRRY755C5BKDRZPEVDED"];
+    d.phone.hold(
+        "contacts",
+        contact_from_another_vault(1, OCT_1 + DAY, "Ada Lovelace", "+61400000011"),
+    );
+    d.phone.hold(
+        "contacts",
+        contact_from_another_vault(2, OCT_1 + 2 * DAY, "Grace Hopper", "+61400000012"),
+    );
+
+    let report = d.import(json!({ "kinds": ["contacts"] }));
+    assert!(report.done, "{report:?}");
+
+    let people = d.query("from person");
+    assert_eq!(people.len(), 2, "{people:?}");
+    let ids: Vec<String> = people
+        .iter()
+        .map(|p| p["id"].as_str().unwrap().to_owned())
+        .collect();
+    for id in &ids {
+        assert!(!old_ids.contains(&id.as_str()), "a fresh id: {id}");
+    }
+    // Every queued change is a create: nothing is based on a version this vault never had.
+    let queued = d.server.queue().pending().unwrap();
+    assert_eq!(queued.len(), 2, "{queued:?}");
+    for p in &queued {
+        assert_eq!(p.base_version, None, "{p:?}");
+        assert!(ids.contains(&p.note_id), "{p:?}");
+    }
+    // Each contact's link row is written again for the new person.
+    let upserts = d.phone.upserts.lock().unwrap().clone();
+    let mut linked: Vec<(String, String)> = upserts
+        .iter()
+        .map(|u| {
+            (
+                u["contact_id"].as_str().unwrap().to_owned(),
+                u["person"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    linked.sort();
+    linked.dedup();
+    assert_eq!(linked.len(), 2, "{upserts:?}");
+    for (_, person) in &linked {
+        assert!(ids.contains(person), "{linked:?}");
+    }
 }

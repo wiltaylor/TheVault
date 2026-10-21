@@ -94,6 +94,29 @@ fn pairing_by_password_gives_a_write_token_bound_to_the_device() {
     let (id, token) = pair_with_password(&server, "Pixel");
     assert!(token.starts_with("tv_"), "{token}");
 
+    // The answer names the vault, as `GET /api/sync/info` does, for the device's pairing record
+    // (ticket 143).
+    let again = expect(
+        pair(
+            &server,
+            json!({ "password": PASSWORD, "name": "Tablet", "platform": "android" }),
+        ),
+        201,
+    );
+    let info = send(Client::new().get(server.url("/api/sync/info")), 200);
+    assert!(
+        again["vault_id"].as_str().is_some_and(|v| !v.is_empty()),
+        "{again}"
+    );
+    assert_eq!(again["vault_id"], info["vault_id"]);
+    send(
+        admin.delete(server.url(&format!(
+            "/api/devices/{}",
+            again["device_id"].as_str().unwrap()
+        ))),
+        204,
+    );
+
     let list = send(admin.get(server.url("/api/devices")), 200);
     let devices = list["devices"].as_array().unwrap();
     assert_eq!(devices.len(), 1);

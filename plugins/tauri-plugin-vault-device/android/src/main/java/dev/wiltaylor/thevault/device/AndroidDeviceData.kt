@@ -33,6 +33,7 @@ class AndroidDeviceData(
             "contacts_get" -> capture.contacts.get(a.getString("contact_id"))
             "contacts_upsert" -> capture.contacts.upsert(a.getJSONObject("contact"))
             "contacts_delete" -> JSONObject().also { capture.contacts.delete(a.getString("contact_id")) }
+            "contacts_forget_links" -> JSONObject().put("removed", capture.contacts.forgetOtherVaults(a.getString("vault_id")))
             "sms_send" -> sendSms(a.getString("to"), a.getString("body"))
             "show_notification" -> JSONObject().also {
                 showNotification(a.optString("title"), a.optString("body"), a.optString("note"))

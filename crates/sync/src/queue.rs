@@ -14,10 +14,12 @@
 //!   it, and when the device last used it, for the asset policy (D19).
 //! - `sync_asset_failures`: each asset the device holds that failed to reach the server, why, how
 //!   many times in a row, and when the next round tries it again (ticket 141).
-//! - `sync_held`: each queued note the last round kept back because it names an asset that has
-//!   not reached the server yet, which the server would refuse it for.
+//! - `sync_held`: each queued note the last round kept back, because it names an asset that has
+//!   not reached the server yet, which the server would refuse it for, or because the server
+//!   refused the note itself (ticket 143). A note held for its own sake has an empty `asset_id`.
 //! - `sync_recent`: notes opened on the device, for the on-demand asset policy.
-//! - `sync_meta`: the change-feed cursor.
+//! - `sync_meta`: the change-feed cursor, the id of the vault on the home server the local vault
+//!   is a copy of, and the record of the last fresh start (ticket 143).
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -79,6 +81,15 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 /// The cursor key in `sync_meta`.
 const CURSOR: &str = "cursor";
 
+/// The `sync_meta` key of the home server vault's id, from its `GET /api/sync/info`.
+const SERVER_VAULT: &str = "server_vault";
+
+/// The `sync_meta` key of the last fresh start, as JSON.
+const FRESH_START: &str = "fresh_start";
+
+/// The `sync_meta` key of the vault whose contact links the phone was last cleaned up for.
+const LINKS_CLEANED: &str = "contact_links_cleaned";
+
 /// A local change waiting to reach the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pending {
@@ -126,11 +137,13 @@ pub struct AssetFailure {
     pub next_ms: i64,
 }
 
-/// A queued note kept back from the server until an asset it names gets there.
+/// A queued note kept back from the server: until an asset it names gets there, or because the
+/// server refused the note itself (ticket 143). Either way the rest of the queue goes on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Held {
     pub note_id: String,
-    pub asset_id: String,
+    /// The asset the note waits for; `None` when the server refused the note itself.
+    pub asset_id: Option<String>,
     pub reason: String,
 }
 
@@ -275,11 +288,67 @@ impl Queue {
     }
 
     pub fn set_cursor(&self, cursor: i64) -> Result<()> {
+        self.set_meta(CURSOR, &cursor.to_string())
+    }
+
+    fn meta(&self, key: &str) -> Result<Option<String>> {
+        self.conn()
+            .query_row("SELECT value FROM sync_meta WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()
+    }
+
+    fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn().execute(
             "INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?1, ?2)",
-            params![CURSOR, cursor.to_string()],
+            params![key, value],
         )?;
         Ok(())
+    }
+
+    /// The id of the home server's vault the local vault is a copy of, once a handshake or a
+    /// pairing recorded it. A local vault synced before ticket 143 has none.
+    pub fn server_vault(&self) -> Result<Option<String>> {
+        Ok(self.meta(SERVER_VAULT)?.filter(|v| !v.is_empty()))
+    }
+
+    pub fn set_server_vault(&self, vault_id: &str) -> Result<()> {
+        self.set_meta(SERVER_VAULT, vault_id)
+    }
+
+    /// Whether the local vault ever synced with a home server: a feed cursor past the start, or
+    /// a note the server answered for. Local writes alone, such as a share made before pairing,
+    /// are not: they belong to whichever vault the device joins first.
+    pub fn has_synced(&self) -> Result<bool> {
+        if self.cursor()? > 0 {
+            return Ok(true);
+        }
+        let n: i64 = self
+            .conn()
+            .query_row("SELECT COUNT(*) FROM sync_notes", [], |r| r.get(0))?;
+        Ok(n > 0)
+    }
+
+    /// The last fresh start of this local vault, as the app recorded it, `{ at_ms, previous,
+    /// from_vault, to_vault }`.
+    pub fn fresh_start(&self) -> Result<Option<serde_json::Value>> {
+        Ok(self
+            .meta(FRESH_START)?
+            .and_then(|v| serde_json::from_str(&v).ok()))
+    }
+
+    pub fn set_fresh_start(&self, record: &serde_json::Value) -> Result<()> {
+        self.set_meta(FRESH_START, &record.to_string())
+    }
+
+    /// The vault the phone's contact links were last cleaned up for.
+    pub fn links_cleaned(&self) -> Result<Option<String>> {
+        self.meta(LINKS_CLEANED)
+    }
+
+    pub fn set_links_cleaned(&self, vault_id: &str) -> Result<()> {
+        self.set_meta(LINKS_CLEANED, vault_id)
     }
 
     /// Every asset the engine knows of.
@@ -402,13 +471,13 @@ impl Queue {
         for h in held {
             tx.execute(
                 "INSERT OR REPLACE INTO sync_held (note_id, asset_id, reason) VALUES (?1, ?2, ?3)",
-                params![h.note_id, h.asset_id, h.reason],
+                params![h.note_id, h.asset_id.as_deref().unwrap_or(""), h.reason],
             )?;
         }
         tx.commit()
     }
 
-    /// The queued notes the last round held back, each with the asset it waits for.
+    /// The queued notes the last round held back, each with the asset it waits for, if any.
     pub fn held(&self) -> Result<Vec<Held>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -416,9 +485,10 @@ impl Queue {
              JOIN sync_queue q ON q.note_id = h.note_id ORDER BY q.seq",
         )?;
         let rows = stmt.query_map([], |r| {
+            let asset: String = r.get(1)?;
             Ok(Held {
                 note_id: r.get(0)?,
-                asset_id: r.get(1)?,
+                asset_id: (!asset.is_empty()).then_some(asset),
                 reason: r.get(2)?,
             })
         })?;

@@ -4,8 +4,9 @@
 //! Each app runs its own sync loop (the desktop's `sync_loop`, Android's core) and tells the
 //! embedded server where it stands through a [`SyncSource`]. The embedded server adds what it
 //! knows itself, the local writes waiting in the queue and the assets that failed to reach the
-//! server and the notes held back for them ([`Waiting`], ticket 141), and folds the two into one
-//! of three states the sidebar's sync icon shows: `synced`, `syncing` or `error`.
+//! server and the notes held back for them ([`Waiting`], ticket 141), and the notes the server
+//! refused, each with its reason (ticket 143), and folds the two into one of three states the
+//! sidebar's sync icon shows: `synced`, `syncing` or `error`.
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -132,11 +133,17 @@ impl SyncReport {
                 })
             })
             .collect();
+        let refused: Vec<Value> = waiting
+            .refused
+            .iter()
+            .map(|h| json!({ "note_id": h.note_id, "reason": h.reason }))
+            .collect();
         json!({
             "state": SyncState::of(self.phase, waiting.queued + waiting.stuck.len()),
             "phase": self.phase,
             "queued": waiting.queued,
             "held": waiting.held,
+            "refused_notes": refused,
             "assets_waiting": waiting.stuck.len(),
             "stuck_assets": stuck,
             "last_ok_ms": self.last_ok_ms,
@@ -155,6 +162,8 @@ pub struct Waiting {
     pub queued: usize,
     /// Of those, the notes held back for an asset that has not reached the server.
     pub held: usize,
+    /// Of those, the notes the server refused in the last round, each with the reason.
+    pub refused: Vec<sync::Held>,
     /// The assets that failed to reach the server, to be tried again.
     pub stuck: Vec<sync::AssetFailure>,
 }
@@ -162,9 +171,15 @@ pub struct Waiting {
 impl Waiting {
     /// What waits in `queue`.
     pub fn of(queue: &sync::Queue) -> Waiting {
+        let (refused, held): (Vec<sync::Held>, Vec<sync::Held>) = queue
+            .held()
+            .unwrap_or_default()
+            .into_iter()
+            .partition(|h| h.asset_id.is_none());
         Waiting {
             queued: queue.pending().map_or(0, |p| p.len()),
-            held: queue.held().map_or(0, |h| h.len()),
+            held: held.len(),
+            refused,
             stuck: queue.asset_failures().unwrap_or_default(),
         }
     }
@@ -213,6 +228,7 @@ mod tests {
         let waiting = Waiting {
             queued: 0,
             held: 0,
+            refused: Vec::new(),
             stuck: vec![sync::AssetFailure {
                 id: "01J00000000000000000000000".to_owned(),
                 filename: "video.mp4".to_owned(),
@@ -232,6 +248,36 @@ mod tests {
         assert_eq!(out["last_error"], "1 asset could not be sent", "{out}");
         assert_eq!(out["last_attempt_ms"], 1_000, "{out}");
         assert_eq!(out["last_ok_ms"], Value::Null, "{out}");
+    }
+
+    #[test]
+    fn a_note_the_server_refused_is_named_with_its_reason() {
+        let report = SyncReport {
+            phase: SyncPhase::Synced,
+            message: Some("1 note could not be sent to the server: note 01J".to_owned()),
+            last_ok_ms: Some(1_000),
+            last_attempt_ms: Some(1_000),
+            server: Some("https://home".to_owned()),
+            warning: None,
+        };
+        let waiting = Waiting {
+            queued: 1,
+            held: 0,
+            refused: vec![sync::Held {
+                note_id: "01J00000000000000000000001".to_owned(),
+                asset_id: None,
+                reason: "the server answered 400".to_owned(),
+            }],
+            stuck: Vec::new(),
+        };
+        let out = report.to_json(&waiting);
+        assert_eq!(out["state"], "syncing", "{out}");
+        assert_eq!(out["held"], 0, "{out}");
+        assert_eq!(
+            out["refused_notes"],
+            json!([{ "note_id": "01J00000000000000000000001", "reason": "the server answered 400" }])
+        );
+        assert!(out["last_error"].as_str().unwrap().contains("01J"), "{out}");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { For, Index, Show, createResource, createSignal } from "solid-js";
-import { type Device, type DeviceExclusion, type DeviceFileInfo, type PairCode, api } from "../api";
+import { type Device, type DeviceExclusion, type DeviceFileInfo, type FreshStart, type PairCode, api } from "../api";
 import { when } from "../admin/format";
 import { inAndroidApp } from "../deviceImport";
 import { appInfo } from "../inApp";
@@ -30,6 +30,22 @@ const EXCLUSION_KINDS: { kind: DeviceExclusion["kind"]; label: string }[] = [
 ];
 
 const PLATFORM_LABELS: Record<Device["platform"], string> = { linux: "Linux desktop", android: "Android" };
+
+/** How many days a local vault moved aside by a fresh start is kept on the device (ticket 143). */
+export const KEEP_PREVIOUS_DAYS = 7;
+
+/**
+ * What This device says after the app joined a different vault (ticket 143): it started a fresh
+ * local copy, and where the old one went and for how long.
+ */
+export function freshStartText(f: FreshStart, at: (ms: number) => string = (ms) => new Date(ms).toLocaleString()): string {
+  const folder = f.previous.split("/").pop() || f.previous;
+  return (
+    `This device joined a different vault on ${at(f.at_ms)}, so it started a fresh local copy and took this vault ` +
+    `from the server; nothing of the other vault was sent here. The local vault it had before was moved to ` +
+    `${folder} on the device, and is removed ${KEEP_PREVIOUS_DAYS} days after the move.`
+  );
+}
 
 /**
  * Paired desktop and Android apps (D2, D3). Each device has a name, switches for what its scripts
@@ -71,6 +87,13 @@ export function Devices() {
       <header class="note-header">
         <h1>Devices</h1>
       </header>
+      <Show when={inApp()?.fresh_start}>
+        {(f) => (
+          <p class="muted" role="note" data-testid="fresh-start">
+            {freshStartText(f())}
+          </p>
+        )}
+      </Show>
       <Show when={inAndroidApp()}>
         <ThisDevice />
       </Show>
