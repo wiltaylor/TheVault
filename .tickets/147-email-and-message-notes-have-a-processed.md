@@ -3,8 +3,8 @@ id: '147'
 title: Email and message notes have a processed checkbox, shown on their default and
   card templates, which sync never resets
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Email and message notes have a processed checkbox, shown on their default and card templates, which sync never resets
@@ -28,3 +28,15 @@ Acceptance criteria:
 - ./dev just check and ./dev just android-test pass.
 
 ## Worklog
+
+### 2026-10-21T22:15:27Z — wil
+
+Claimed.
+
+### 2026-10-21T22:28:20Z — wil
+
+Verified set to verified.
+
+### 2026-10-21T22:28:20Z — wil
+
+Status set to done.
