@@ -157,6 +157,8 @@ Gmail and Google Calendar sync need an OAuth client in your own Google Cloud pro
 - Home network or Tailscale on `http://`: create a **Desktop app** client. After you approve in Google, you paste the address from the browser back into TheVault.
 - Your own domain or a Cloudflare Tunnel on `https://`: create a **Web application** client with the redirect URI `https://<your-domain>/integrations/google/callback`. Google sends the browser straight back to TheVault.
 
+If Settings > Integrations shows `https://oauth2.googleapis.com/token: could not connect` for Gmail or Calendar, the container cannot look up names. Check the host's `/etc/resolv.conf`: when it names no `nameserver`, Docker has no DNS server to give the container. Uncomment the `dns:` line under the `thevault` service in `compose.yaml` and run `docker compose up -d`.
+
 ## Back up
 
 Run a backup whenever you want a copy of the vault:

@@ -11,6 +11,10 @@ services:
   thevault:
     image: ghcr.io/wiltaylor/thevault:${THEVAULT_VERSION:-latest}
     restart: unless-stopped
+    # Docker gives containers the DNS servers in the host's /etc/resolv.conf. When that file names
+    # none, as on some systemd-resolved hosts, Gmail and Calendar sync fail with "could not
+    # connect": uncomment these lines to give the container its own.
+    # dns: [1.1.1.1, 8.8.8.8]
     environment:
       # Only read when /data holds no vault yet: the first start creates one with this password.
       VAULT_PASSWORD: ${VAULT_PASSWORD:-}
