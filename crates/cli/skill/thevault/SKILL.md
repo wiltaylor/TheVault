@@ -407,6 +407,15 @@ vault get "$ID"
 
 Mark one processed by sending the whole note back with `processed = true` and the version you read, as in step 3. To turn one into another kind of note, `put` the new note (copy the title and body), then `vault delete` the fleeting note. Only process captures when the user asks you to.
 
+Emails and phone messages carry the same `processed` flag (bool, `false` by default), so the user can sort out what still needs doing. A note without the field counts as unprocessed, because a missing field is false in a query. List the unprocessed ones, newest first:
+
+```sh
+vault query 'from email where !processed sort sent desc'
+vault query 'from message where !processed sort sent desc'
+```
+
+When you have dealt with an email or a message for the user, such as by answering it, filing it or making a task from it, set `processed = true` on it the same way. The Gmail sync and the phone never reset it.
+
 ## 9. Notify the user
 
 `vault notify` puts a notification under the bell in the web app. Use it to tell the user that long work has finished, or that something needs them. Clicking it opens the note given with `--note`, or the app page given with `--link`, such as `/settings/scheduled/<task>`. It needs a `write` token.

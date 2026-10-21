@@ -85,6 +85,12 @@ field attachments {
   multiple = true
 }
 
+field processed {
+  kind    = "bool"
+  label   = "Processed"
+  default = false
+}
+
 field gmail_ref {
   kind        = "string"
   label       = "Gmail reference"
@@ -97,6 +103,7 @@ template default {
     columns {
       column {
         slot "from"
+        slot "processed"
         slot "to"
         slot "cc"
       }
@@ -116,6 +123,7 @@ template card {
   tab "Card" {
     slot "title"
     slot "from_raw"
+    slot "processed"
     slot "sent"
     slot "snippet"
   }

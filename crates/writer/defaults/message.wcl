@@ -71,6 +71,12 @@ field partial {
   default     = false
 }
 
+field processed {
+  kind    = "bool"
+  label   = "Processed"
+  default = false
+}
+
 field device_ref {
   kind        = "string"
   label       = "Device reference"
@@ -82,6 +88,7 @@ template default {
     columns {
       column {
         slot "from"
+        slot "processed"
         slot "to"
       }
       column {
@@ -106,5 +113,6 @@ template card {
     }
     slot "title"
     slot "sent"
+    slot "processed"
   }
 }

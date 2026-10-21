@@ -193,6 +193,7 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
             "body",
             "html",
             "attachments",
+            "processed",
             "gmail_ref"
         ]
     );
@@ -223,6 +224,11 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
     assert_eq!(field(email, "attachments")["multiple"], true);
     assert_eq!(field(email, "gmail_ref")["kind"], "string");
     assert_eq!(field(email, "gmail_ref")["hidden"], true);
+    assert_eq!(field(email, "processed")["kind"], "bool");
+    assert_eq!(field(email, "processed")["label"], "Processed");
+    assert_eq!(field(email, "processed")["default"], false);
+    assert_eq!(field(email, "processed")["required"], false);
+    assert_eq!(field(email, "processed")["computed"], false);
 
     let thread = find(&types, "email_thread");
     assert_eq!(field_names(thread), ["participants", "thread_ref"]);
@@ -282,6 +288,9 @@ fn the_google_templates_resolve_with_their_slots() {
     let types = api.types();
     let email = find(&types, "email");
     let page = template_items(email, "default");
+    // Processed sits beside the sender.
+    let from = page.iter().position(|s| s == "from").unwrap();
+    assert_eq!(page[from + 1], "processed", "{page:?}");
     for slot in [
         "from",
         "to",
@@ -299,7 +308,7 @@ fn the_google_templates_resolve_with_their_slots() {
     }
     assert_eq!(
         template_items(email, "card"),
-        ["title", "from_raw", "sent", "snippet"]
+        ["title", "from_raw", "processed", "sent", "snippet"]
     );
     let thread = find(&types, "email_thread");
     assert_eq!(

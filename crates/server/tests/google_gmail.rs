@@ -448,6 +448,40 @@ fn later_runs_create_nothing_new_update_labels_only_and_archive_deleted_mail() {
 }
 
 #[test]
+fn a_processed_email_stays_processed_when_its_gmail_labels_change() {
+    let google = FakeGoogle::start();
+    let work = google.add_label("Work");
+    google.add_message(mail("one", &["INBOX"], 1));
+    let gmail = Gmail::start(google, json!({ "gmail_labels": ["INBOX"] }));
+    gmail.run_ok();
+    let email = gmail.email("one");
+    assert_ne!(email["note"]["fields"]["processed"], true, "{email:#}");
+    let id = email["id"].as_str().unwrap();
+    let mut note = email["note"].clone();
+    note["fields"]["processed"] = json!(true);
+    expect(
+        gmail
+            .req("PUT", &format!("/api/notes/{id}"))
+            .json(&json!({ "note": note, "base_version": email["version"] }))
+            .send()
+            .unwrap(),
+        200,
+    );
+
+    // A label change rewrites the labels, and leaves processed as the user set it.
+    gmail.google.set_message_labels("one", &["INBOX", &work]);
+    gmail.run_ok();
+    let after = gmail.email("one");
+    assert_eq!(
+        strs(&after["note"]["fields"]["labels"]),
+        ["Work", "system/INBOX"]
+    );
+    assert_eq!(after["note"]["fields"]["processed"], true, "{after:#}");
+    assert_eq!(gmail.query("from email where !processed").len(), 0);
+    assert_eq!(gmail.query("from email where processed").len(), 1);
+}
+
+#[test]
 fn a_history_404_falls_back_to_a_full_list_without_duplicating() {
     let google = FakeGoogle::start();
     google.add_message(mail("one", &["INBOX"], 1));

@@ -267,6 +267,46 @@ fn sms_become_messages_in_a_conversation_linked_to_the_person_with_the_number() 
 }
 
 #[test]
+fn a_message_captured_again_stays_processed() {
+    let d = Device::open();
+    let first = sms(
+        "sms:5",
+        Some("+61400000001"),
+        "0400 000 001",
+        "t5",
+        "Call me",
+    );
+    d.send("sms_received", first.clone());
+    let m = d.query("from message where device_ref == \"sms:5\"");
+    let id = m[0]["id"].as_str().unwrap().to_owned();
+    assert_ne!(m[0]["fields"]["processed"], true, "{m:?}");
+    assert_eq!(d.query("from message where !processed").len(), 1);
+
+    // The user deals with it.
+    let note = Vault::get(&**d.writer(), &id).unwrap();
+    let mut doc = note["note"].clone();
+    doc["fields"]["processed"] = json!(true);
+    d.writer()
+        .update(
+            &id,
+            &Input::Json(doc),
+            note["version"].as_str(),
+            &Author::Session("test".into()),
+        )
+        .unwrap();
+    let version = Vault::get(&**d.writer(), &id).unwrap()["version"].clone();
+
+    // The phone sends the same message again, after a restart or a catch-up: no new note, and
+    // processed is not reset.
+    d.send("sms_received", first.clone());
+    d.send("sms_received", first);
+    assert_eq!(d.query("from message").len(), 1);
+    assert_eq!(d.fields(&id)["processed"], true);
+    assert_eq!(Vault::get(&**d.writer(), &id).unwrap()["version"], version);
+    assert!(d.query("from message where !processed").is_empty());
+}
+
+#[test]
 fn an_unknown_number_creates_no_person() {
     let d = Device::open();
     d.create(

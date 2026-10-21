@@ -13,9 +13,9 @@
 //!    and the `person` type the phone data types reference, gain every field the shipped default
 //!    declares and the vault's type lacks, as a planned schema change that edits no note. A field
 //!    the vault has is never removed, renamed or changed. The `default` template gains a slot for
-//!    an added field when the shipped `default` template has one, after the slot the shipped
-//!    template puts before it, else before the one it puts after it; no other template is
-//!    touched.
+//!    an added field when the shipped `default` template has one, at any depth (inside
+//!    `columns > column` too), after the slot the shipped template puts before it, else before
+//!    the one it puts after it; no other template, such as `card`, is touched.
 //! 3. **Missing device files, tasks and scripts.** Each file of [`SHIPPED_FILES`] the vault lacks
 //!    is written, the scripts before the device file or task that names them.
 //! 4. **Shipped file upgrades.** A file of [`SHIPPED_FILES`] whose content is still a version the
@@ -1213,15 +1213,16 @@ fn with_shipped_fields(
         ast.items.insert(at, Item::Block((*b).clone()));
     }
 
-    // Slots in the default template, for the added fields the shipped default template places.
-    let shipped_slots: Vec<(String, Item)> = shipped
+    // Slots in the default template, for the added fields the shipped default template places,
+    // at any depth: a slot inside `columns > column` counts as one of its tab's.
+    let mut shipped_slots: Vec<(String, Item)> = Vec::new();
+    if let Some(t) = shipped
         .items
         .iter()
-        .filter_map(|i| block(i, "template").filter(|b| label(b) == Some("default")))
-        .flat_map(|t| t.items.iter().filter_map(|i| block(i, "tab")))
-        .flat_map(|tab| tab.items.iter())
-        .filter_map(|i| block(i, "slot").and_then(|s| Some((label(s)?.to_owned(), i.clone()))))
-        .collect();
+        .find_map(|i| block(i, "template").filter(|b| label(b) == Some("default")))
+    {
+        collect_slots(&t.items, &mut shipped_slots);
+    }
     if let Some(template) = ast
         .items
         .iter_mut()
@@ -1234,50 +1235,13 @@ fn with_shipped_fields(
             let slot = shipped_slots[n].1.clone();
             // After the nearest slot the shipped template puts before it, else before the nearest
             // one it puts after it, else at the end of the first tab.
-            let mut placed = false;
-            for (before, _) in shipped_slots[..n].iter().rev() {
-                for tab in template
-                    .items
-                    .iter_mut()
-                    .filter_map(|i| block_mut(i, "tab"))
-                {
-                    if let Some(k) = tab
-                        .items
-                        .iter()
-                        .position(|i| block(i, "slot").and_then(label) == Some(before.as_str()))
-                    {
-                        tab.items.insert(k + 1, slot.clone());
-                        placed = true;
-                        break;
-                    }
-                }
-                if placed {
-                    break;
-                }
-            }
-            // Else before the nearest slot it puts after it.
-            if !placed {
-                for (after, _) in &shipped_slots[n + 1..] {
-                    for tab in template
-                        .items
-                        .iter_mut()
-                        .filter_map(|i| block_mut(i, "tab"))
-                    {
-                        if let Some(k) = tab
-                            .items
-                            .iter()
-                            .position(|i| block(i, "slot").and_then(label) == Some(after.as_str()))
-                        {
-                            tab.items.insert(k, slot.clone());
-                            placed = true;
-                            break;
-                        }
-                    }
-                    if placed {
-                        break;
-                    }
-                }
-            }
+            let placed = shipped_slots[..n]
+                .iter()
+                .rev()
+                .any(|(before, _)| insert_slot(&mut template.items, before, 1, &slot))
+                || shipped_slots[n + 1..]
+                    .iter()
+                    .any(|(after, _)| insert_slot(&mut template.items, after, 0, &slot));
             if !placed
                 && let Some(tab) = template.items.iter_mut().find_map(|i| block_mut(i, "tab"))
             {
@@ -1286,6 +1250,36 @@ fn with_shipped_fields(
         }
     }
     Ok(Some((store::to_canonical(&ast), added)))
+}
+
+/// Every slot in `items` and the blocks they hold, in document order, with its field name.
+fn collect_slots(items: &[Item], out: &mut Vec<(String, Item)>) {
+    for item in items {
+        let Item::Block(b) = item else { continue };
+        if b.kind == "slot" {
+            if let Some(field) = label(b) {
+                out.push((field.to_owned(), item.clone()));
+            }
+        } else {
+            collect_slots(&b.items, out);
+        }
+    }
+}
+
+/// Insert `slot` beside the first slot of `field` in `items` or the blocks they hold: right after
+/// it when `offset` is 1, right before it when 0. Whether it found the slot.
+fn insert_slot(items: &mut Vec<Item>, field: &str, offset: usize, slot: &Item) -> bool {
+    if let Some(k) = items
+        .iter()
+        .position(|i| block(i, "slot").and_then(label) == Some(field))
+    {
+        items.insert(k + offset, slot.clone());
+        return true;
+    }
+    items.iter_mut().any(|i| match i {
+        Item::Block(b) if b.kind != "slot" => insert_slot(&mut b.items, field, offset, slot),
+        _ => false,
+    })
 }
 
 #[cfg(test)]

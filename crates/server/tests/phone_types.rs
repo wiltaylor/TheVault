@@ -121,6 +121,7 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
             "body",
             "attachments",
             "partial",
+            "processed",
             "device_ref"
         ]
     );
@@ -143,6 +144,11 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
     assert_eq!(field(message, "attachments")["multiple"], true);
     assert_eq!(field(message, "partial")["kind"], "bool");
     assert_eq!(field(message, "device_ref")["kind"], "string");
+    assert_eq!(field(message, "processed")["kind"], "bool");
+    assert_eq!(field(message, "processed")["label"], "Processed");
+    assert_eq!(field(message, "processed")["default"], false);
+    assert_eq!(field(message, "processed")["required"], false);
+    assert_eq!(field(message, "processed")["computed"], false);
 
     let call = find(&types, "call");
     assert_eq!(call["builtin"], true);
@@ -365,4 +371,44 @@ fn a_message_shows_the_images_in_its_attachments() {
         items("default").iter().any(|i| i["slot"] == "attachments"),
         "the page keeps the attachments slot"
     );
+}
+
+#[test]
+fn a_message_can_be_ticked_processed_from_its_page_and_its_card() {
+    let api = Api::new(TestServer::start());
+    let types = api.types();
+    let message = find(&types, "message");
+    let template = |name: &str| -> Value {
+        message["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("no {name} template: {message}"))["tabs"][0]["items"]
+            .clone()
+    };
+    // On the page, beside the sender in the first column.
+    let page = template("default");
+    let columns = page
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["block"]["kind"] == "columns")
+        .unwrap();
+    let first: Vec<&str> = columns["block"]["blocks"][0]["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|b| b["kind"] == "slot")
+        .map(|b| b["labels"][0].as_str().unwrap())
+        .collect();
+    assert_eq!(first, ["from", "processed", "to"], "{page}");
+    let card = template("card");
+    let card: Vec<&str> = card
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|i| i["slot"].as_str())
+        .collect();
+    assert_eq!(card, ["title", "sent", "processed"]);
 }

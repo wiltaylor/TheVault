@@ -776,8 +776,11 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
         ]
     );
     assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 2);
+    // The message type 0.1.6 had gains only `processed`.
     assert!(
-        done.fields_added.iter().all(|(t, _)| t == "person"),
+        done.fields_added
+            .iter()
+            .all(|(t, f)| t == "person" || (t == "message" && f == "processed")),
         "{:?}",
         done.fields_added
     );
@@ -1335,4 +1338,136 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
     assert!(w.schema().type_def("google_sync").is_none());
     assert!(read(root, &note_path).is_none());
     assert_eq!(secret_json(&w, "google_gmail_state")["history_id"], "12345");
+}
+
+/// The `email` type as 0.1.13-alpha.4 shipped it, before `processed`.
+const EMAIL_0_1_13: &str = include_str!("fixtures/shipped/email_0_1_13.wcl");
+
+/// The `message` type as 0.1.13-alpha.4 shipped it, before `processed`.
+const MESSAGE_0_1_13: &str = include_str!("fixtures/shipped/message_0_1_13.wcl");
+
+/// The ids of the notes `text` matches, sorted.
+fn matched(w: &Writer, text: &str) -> Vec<String> {
+    let mut ids: Vec<String> = script_core::Vault::query(w, text, 1000)
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_owned())
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[test]
+fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    for (name, old) in [("email", EMAIL_0_1_13), ("message", MESSAGE_0_1_13)] {
+        let path = format!("types/{name}.wcl");
+        std::fs::write(root.join(&path), store::canonical(old, &path).unwrap()).unwrap();
+    }
+    let (email, message) = {
+        let w = open(root);
+        assert!(
+            w.schema()
+                .type_def("email")
+                .unwrap()
+                .field("processed")
+                .is_none()
+        );
+        let email = w
+            .create(
+                "email",
+                &writer::Input::Json(json!({ "fields": { "title": "Hello" } })),
+                &author(),
+            )
+            .unwrap()
+            .id;
+        let message = w
+            .create(
+                "message",
+                &writer::Input::Json(json!({ "fields": { "title": "Hi", "device_ref": "sms:1" } })),
+                &author(),
+            )
+            .unwrap()
+            .id;
+        (email, message)
+    };
+    let email_path = format!("notes/email/{email}.wcl");
+    let message_path = format!("notes/message/{message}.wcl");
+    let email_before = read(root, &email_path).unwrap();
+    let message_before = read(root, &message_path).unwrap();
+    assert!(!email_before.contains("processed"), "{email_before}");
+
+    let w = open(root);
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    let mut added = done.fields_added.clone();
+    added.sort();
+    assert_eq!(
+        added,
+        [
+            ("email".to_owned(), "processed".to_owned()),
+            ("message".to_owned(), "processed".to_owned())
+        ]
+    );
+    // The type is the shipped one but for the card, which the seeding leaves alone.
+    assert_eq!(
+        read(root, "types/email.wcl").unwrap(),
+        store::canonical(writer::DEFAULT_EMAIL_TYPE, "types/email.wcl")
+            .unwrap()
+            .replace(
+                "    slot \"from_raw\"\n    slot \"processed\"\n",
+                "    slot \"from_raw\"\n"
+            )
+    );
+    assert_eq!(
+        read(root, "types/message.wcl").unwrap(),
+        store::canonical(writer::DEFAULT_MESSAGE_TYPE, "types/message.wcl")
+            .unwrap()
+            .replace(
+                "    slot \"sent\"\n    slot \"processed\"\n",
+                "    slot \"sent\"\n"
+            )
+    );
+    for name in ["email", "message"] {
+        let schema = w.schema();
+        let field = schema.type_def(name).unwrap().field("processed").unwrap();
+        assert_eq!(field.label, "Processed", "{name}");
+    }
+    assert_eq!(read(root, &email_path).unwrap(), email_before);
+    assert_eq!(read(root, &message_path).unwrap(), message_before);
+    drop(w);
+
+    // A second start does nothing.
+    let gen_before = generation(root);
+    let w = open(root);
+    assert_eq!(
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap(),
+        Upgraded::default()
+    );
+    assert_eq!(generation(root), gen_before, "a second start made a commit");
+
+    // `!processed` matches the notes with no value as well as the false ones.
+    let make = |ty: &str, fields: serde_json::Value| {
+        w.create(
+            ty,
+            &writer::Input::Json(json!({ "fields": fields })),
+            &author(),
+        )
+        .unwrap()
+        .id
+    };
+    let email_false = make("email", json!({ "title": "Two", "processed": false }));
+    let email_true = make("email", json!({ "title": "Three", "processed": true }));
+    let message_false = make("message", json!({ "title": "Yo", "processed": false }));
+    let message_true = make("message", json!({ "title": "Done", "processed": true }));
+    let mut want = vec![email.clone(), email_false];
+    want.sort();
+    assert_eq!(matched(&w, "from email where !processed"), want);
+    assert_eq!(matched(&w, "from email where processed"), [email_true]);
+    let mut want = vec![message.clone(), message_false];
+    want.sort();
+    assert_eq!(matched(&w, "from message where !processed"), want);
+    assert_eq!(matched(&w, "from message where processed"), [message_true]);
 }
