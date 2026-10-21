@@ -635,14 +635,37 @@ export interface AppSync {
     | "error";
   /** Local changes waiting for the home server. */
   queued: number;
+  /** Of those, the notes held back until an asset they name reaches the server (ticket 141). */
+  held?: number;
+  /** Assets that failed to reach the server and wait for a later round. */
+  assets_waiting?: number;
+  /** Those assets, each with why its last try failed. */
+  stuck_assets?: StuckAsset[];
   /** When a round last succeeded, in milliseconds since the epoch. */
   last_ok_ms: number | null;
-  /** Why the last round failed, for the phases that need words. */
+  /** When the last round ended, succeeded or not. */
+  last_attempt_ms?: number | null;
+  /** Why the last round failed, or what a round that finished could not do, such as an asset that would not upload. */
   last_error: string | null;
   /** The home server's address, once paired. */
   server: string | null;
   /** The version gate's warning while sync goes on: the server is newer than the app and the app cannot update to it (D27). */
   warning?: string | null;
+}
+
+/** An asset an app stored that has not reached the home server: its last upload failed (ticket 141). */
+export interface StuckAsset {
+  id: string;
+  filename: string;
+  size: number;
+  /** Why the last try failed. */
+  error: string;
+  /** The tries that failed in a row. */
+  attempts: number;
+  /** When the last try failed, in milliseconds since the epoch. */
+  last_ms: number;
+  /** When a round tries it again. */
+  next_ms: number;
 }
 
 /** A device event that failed for good or was skipped, from the app's embedded server (ticket 88). */

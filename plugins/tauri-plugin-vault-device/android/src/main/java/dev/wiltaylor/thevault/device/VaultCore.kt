@@ -168,6 +168,14 @@ object VaultCore {
     external fun putAsset(filename: String, bytes: ByteArray): String
 
     /**
+     * Moves the file at [path] into the local vault as an asset called [filename], without
+     * reading it into memory, such as a large MMS part. The file is gone afterwards, stored or
+     * not. Answers `{ asset, filename, size }` as JSON.
+     */
+    @JvmStatic
+    external fun putAssetFile(path: String, filename: String): String
+
+    /**
      * The bytes of asset [id], fetched from the home server first when the device does not hold
      * them, or null when neither does. It may make a network request: never on the main thread.
      */

@@ -11,7 +11,13 @@
 //! 2. **Bases.** `PUT /api/devices/{id}/bases` with the base version of every queued change, so
 //!    the server keeps those versions through pruning and browser-save merging (D29).
 //! 3. **Assets the device stored** go up first with `PUT /api/assets/{id}`, under their own ids,
-//!    so the notes that name them validate on the server.
+//!    so the notes that name them validate on the server. Each streams from its file, and fails
+//!    only when no bytes move for a while ([`Timeouts::stall`]), however long it takes. An asset
+//!    that fails does not fail the round: it is recorded ([`AssetFailure`]) and tried again by
+//!    later rounds, waiting longer after each failure, and the queued notes that name it are held
+//!    back ([`Held`]) since the server refuses a note naming an asset it does not have. The other
+//!    notes go on. Only a server that cannot be reached at all, or refuses the token, fails the
+//!    round here (ticket 141).
 //! 4. **Push.** Each queued note, oldest first, goes through the normal notes API with its base in
 //!    `If-Match`: `PUT /api/notes/{id}`, a create under the note's own id (`If-None-Match: *`) for a
 //!    note the server never had, or `DELETE /api/notes/{id}` for a note the device deleted. On 409
@@ -58,8 +64,9 @@ use writer::{
 };
 
 use client::Home;
+pub use client::Timeouts;
 pub use merge::{Merged, merge};
-pub use queue::{KnownAsset, Pending, Queue, Synced};
+pub use queue::{AssetFailure, Held, KnownAsset, Pending, Queue, Synced};
 
 /// How many feed entries one pull request asks for.
 const PAGE: usize = 500;
@@ -144,6 +151,9 @@ pub enum Error {
     /// The server could not be reached, or the connection failed part way.
     #[error("cannot reach the server: {0}")]
     Http(String),
+    /// An asset upload or download broke or stalled part way.
+    #[error("{0}")]
+    Transfer(String),
     /// The server refused a request.
     #[error("{what}: the server answered {status}: {body}")]
     Server {
@@ -187,6 +197,58 @@ pub struct Report {
     pub assets_evicted: usize,
     /// Notifications made on the device that moved to the server.
     pub notifications_pushed: usize,
+    /// Assets the device stored that reached the server.
+    pub assets_sent: usize,
+    /// Assets that failed to reach the server in this round.
+    pub assets_failed: usize,
+    /// Every asset still waiting to reach the server after the round, because it failed in this
+    /// round or an earlier one.
+    pub stuck: Vec<AssetFailure>,
+    /// The queued notes held back because they name a stuck asset.
+    pub held: Vec<Held>,
+}
+
+/// `size` bytes in words, such as `800 KB` or `72.0 MB`.
+pub fn size_text(size: u64) -> String {
+    if size >= 1024 * 1024 {
+        format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{} KB", size.div_ceil(1024))
+    }
+}
+
+impl Report {
+    /// What went wrong in a round that otherwise finished: the assets that cannot reach the
+    /// server and the notes waiting for them. `None` when nothing did.
+    pub fn problem(&self) -> Option<String> {
+        let first = self.stuck.first()?;
+        let n = self.stuck.len();
+        let mut out = format!(
+            "{n} {} could not be sent to the server: {} ({}): {}",
+            if n == 1 { "asset" } else { "assets" },
+            first.filename,
+            size_text(first.size),
+            first.error,
+        );
+        if n > 1 {
+            out.push_str(&format!(" (and {} more)", n - 1));
+        }
+        out.push('.');
+        let held = self.held.len();
+        if held > 0 {
+            out.push_str(&format!(
+                " {held} {} for {}; the others synced.",
+                if held == 1 {
+                    "note waits"
+                } else {
+                    "notes wait"
+                },
+                if n == 1 { "it" } else { "them" },
+            ));
+        }
+        out.push_str(" It is tried again on later rounds.");
+        Some(out)
+    }
 }
 
 /// The sync engine of one device.
@@ -196,6 +258,37 @@ pub struct Engine {
     home: Home,
     supported: Supported,
     assets: AssetPolicy,
+}
+
+/// How long after its `attempts`-th failure in a row an asset waits to be tried again: `first`,
+/// doubling with each failure, at most an hour.
+fn retry_wait(first: std::time::Duration, attempts: u32) -> std::time::Duration {
+    first
+        .saturating_mul(1u32 << attempts.saturating_sub(1).min(16))
+        .min(std::time::Duration::from_secs(60 * 60))
+}
+
+/// The asset ids `doc` may name: every ULID string in its fields and blocks, at any depth.
+fn named_ids(doc: &Doc) -> Vec<String> {
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Str(s) if schema::is_ulid(s) => out.push(s.clone()),
+            Value::List(items) => items.iter().for_each(|i| walk(i, out)),
+            Value::Record(items) => items.iter().for_each(|(_, i)| walk(i, out)),
+            _ => {}
+        }
+    }
+    fn of(d: &Doc, out: &mut Vec<String>) {
+        for (_, v) in &d.fields {
+            walk(v, out);
+        }
+        for b in &d.blocks {
+            of(&b.body, out);
+        }
+    }
+    let mut out = Vec::new();
+    of(doc, &mut out);
+    out
 }
 
 /// A note as the server answered with it.
@@ -244,10 +337,17 @@ impl Engine {
         Ok(Engine {
             writer,
             queue,
-            home: Home::new(remote)?,
+            home: Home::new(remote, Timeouts::default())?,
             supported: Supported::default(),
             assets,
         })
+    }
+
+    /// Wait on the network as `timeouts` says rather than [`Timeouts::default`].
+    pub fn with_timeouts(mut self, timeouts: Timeouts) -> Result<Engine> {
+        let remote = self.home.remote().clone();
+        self.home = Home::new(remote, timeouts)?;
+        Ok(self)
     }
 
     /// Sync as a build that supports at most `supported`, such as an older app.
@@ -313,14 +413,22 @@ impl Engine {
         self.handshake_gated(gate)?;
         let mut report = Report::default();
         self.report_bases()?;
-        self.push_assets()?;
+        let missing = self.push_assets(&mut report)?;
+        let mut held = Vec::new();
         for p in self.queue.pending()? {
+            if let Some(h) = self.holds(&p, &missing)? {
+                held.push(h);
+                continue;
+            }
             self.push_one(&p, &mut report)?;
         }
+        self.queue.set_held(&held)?;
+        report.held = held;
         self.push_notifications(&mut report)?;
         self.pull(&mut report)?;
         self.sync_assets(&mut report)?;
         self.report_bases()?;
+        report.stuck = self.queue.asset_failures()?;
         Ok(report)
     }
 
@@ -748,9 +856,45 @@ impl Engine {
         Ok(())
     }
 
-    /// Step 3: send the assets the device stored and the server does not have.
-    fn push_assets(&self) -> Result<()> {
-        for asset in self.writer.assets()? {
+    /// Whether queued note `p` must wait, because it names an asset in `missing` that has not
+    /// reached the server, which would refuse the note for it.
+    fn holds(&self, p: &Pending, missing: &BTreeMap<String, AssetFailure>) -> Result<Option<Held>> {
+        if missing.is_empty() {
+            return Ok(None);
+        }
+        let note = match self.writer.read(&p.note_id) {
+            Ok(note) => note,
+            Err(writer::Error::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(named_ids(&note.doc).into_iter().find_map(|id| {
+            let f = missing.get(&id)?;
+            Some(Held {
+                note_id: p.note_id.clone(),
+                asset_id: id,
+                reason: format!(
+                    "waits for asset {} ({}), which has not reached the server: {}",
+                    f.filename,
+                    size_text(f.size),
+                    f.error
+                ),
+            })
+        }))
+    }
+
+    /// Step 3: send the assets the device stored and the server does not have. An asset that
+    /// fails is recorded and left for a later round, after a wait that doubles with each failure
+    /// in a row. Returns the assets still not on the server, failed now or waiting to be tried
+    /// again. The round fails only when the server cannot be reached or refuses the token.
+    fn push_assets(&self, report: &mut Report) -> Result<BTreeMap<String, AssetFailure>> {
+        let local = self.writer.assets()?;
+        for f in self.queue.asset_failures()? {
+            if !local.iter().any(|a| a.id == f.id) {
+                self.queue.clear_asset_failure(&f.id)?;
+            }
+        }
+        let mut missing = BTreeMap::new();
+        for asset in local {
             if self
                 .queue
                 .asset(&asset.id)?
@@ -758,14 +902,54 @@ impl Engine {
             {
                 continue;
             }
-            let (_, bytes) = self.writer.asset(&asset.id)?;
-            self.home
-                .put_asset(&asset.id, &asset.filename, bytes)?
-                .ok(&format!("sending asset {}", asset.id))?;
-            self.queue
-                .set_asset(&asset.id, &asset.filename, asset.size, true)?;
+            let before = self.queue.asset_failure(&asset.id)?;
+            if let Some(f) = &before
+                && f.next_ms > queue::now_ms()
+            {
+                missing.insert(asset.id.clone(), f.clone());
+                continue;
+            }
+            let path = self.writer.vault().root().join(asset.path());
+            let what = format!("sending asset {}", asset.id);
+            let error = match self.home.put_asset_file(&asset.id, &asset.filename, &path) {
+                Ok(answer) if answer.status.is_success() => None,
+                Ok(answer) if matches!(answer.status.as_u16(), 401 | 403) => {
+                    answer.ok(&what)?;
+                    None
+                }
+                Ok(answer) => Some(
+                    answer
+                        .ok(&what)
+                        .err()
+                        .map_or_else(String::new, |e| e.to_string()),
+                ),
+                Err(e @ Error::Transfer(_)) => Some(e.to_string()),
+                Err(e) => return Err(e),
+            };
+            let Some(error) = error else {
+                self.queue
+                    .set_asset(&asset.id, &asset.filename, asset.size, true)?;
+                self.queue.clear_asset_failure(&asset.id)?;
+                report.assets_sent += 1;
+                continue;
+            };
+            let attempts = before.map_or(1, |f| f.attempts.saturating_add(1));
+            let wait = retry_wait(self.home.timeouts().asset_retry, attempts);
+            let now = queue::now_ms();
+            let failure = AssetFailure {
+                id: asset.id.clone(),
+                filename: asset.filename.clone(),
+                size: asset.size,
+                error,
+                attempts,
+                last_ms: now,
+                next_ms: now + wait.as_millis() as i64,
+            };
+            self.queue.set_asset_failure(&failure)?;
+            report.assets_failed += 1;
+            missing.insert(asset.id, failure);
         }
-        Ok(())
+        Ok(missing)
     }
 
     /// Step 6: learn the server's assets, then fetch and evict under the policy.
@@ -785,6 +969,8 @@ impl Engine {
                 continue;
             };
             self.queue.set_asset(id, filename, size, true)?;
+            // The server has it after all, such as from an upload whose answer was lost.
+            self.queue.clear_asset_failure(id)?;
         }
         let known = self.queue.assets()?;
         match self.assets {
@@ -824,31 +1010,13 @@ impl Engine {
 
     /// The ids of the assets note `id` names, of those the engine knows of.
     fn assets_of(&self, id: &str) -> Result<Vec<String>> {
-        fn walk(v: &Value, out: &mut Vec<String>) {
-            match v {
-                Value::Str(s) if schema::is_ulid(s) => out.push(s.clone()),
-                Value::List(items) => items.iter().for_each(|i| walk(i, out)),
-                Value::Record(items) => items.iter().for_each(|(_, i)| walk(i, out)),
-                _ => {}
-            }
-        }
-        fn doc(d: &Doc, out: &mut Vec<String>) {
-            for (_, v) in &d.fields {
-                walk(v, out);
-            }
-            for b in &d.blocks {
-                doc(&b.body, out);
-            }
-        }
         let note = match self.writer.read(id) {
             Ok(note) => note,
             Err(writer::Error::NotFound(_)) => return Ok(Vec::new()),
             Err(e) => return Err(e.into()),
         };
-        let mut ids = Vec::new();
-        doc(&note.doc, &mut ids);
         let mut out = Vec::new();
-        for i in ids {
+        for i in named_ids(&note.doc) {
             if self.queue.asset(&i)?.is_some() && !out.contains(&i) {
                 out.push(i);
             }
@@ -888,8 +1056,10 @@ impl Engine {
             .queue
             .asset(id)?
             .ok_or_else(|| Error::Protocol(format!("asset {id} is not one the server listed")))?;
-        let bytes = self.home.asset(id)?;
-        self.writer.put_asset_with_id(id, &known.filename, bytes)?;
+        let incoming = self.writer.incoming_file()?;
+        self.home.download_asset(id, &incoming)?;
+        self.writer
+            .put_asset_file_with_id(id, &known.filename, &incoming)?;
         self.queue.touch_asset(id)?;
         Ok(())
     }
@@ -906,5 +1076,29 @@ impl Engine {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn a_failed_asset_waits_longer_after_each_failure_up_to_an_hour() {
+        let first = Duration::from_secs(30);
+        assert_eq!(retry_wait(first, 1), Duration::from_secs(30));
+        assert_eq!(retry_wait(first, 2), Duration::from_secs(60));
+        assert_eq!(retry_wait(first, 3), Duration::from_secs(120));
+        assert_eq!(retry_wait(first, 8), Duration::from_secs(60 * 60));
+        assert_eq!(retry_wait(first, 400), Duration::from_secs(60 * 60));
+        assert_eq!(retry_wait(Duration::ZERO, 5), Duration::ZERO);
+    }
+
+    #[test]
+    fn sizes_read_as_kb_or_mb() {
+        assert_eq!(size_text(10), "1 KB");
+        assert_eq!(size_text(800 * 1024), "800 KB");
+        assert_eq!(size_text(72 * 1024 * 1024), "72.0 MB");
     }
 }

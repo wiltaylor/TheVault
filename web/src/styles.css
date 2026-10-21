@@ -4002,6 +4002,16 @@ body.pin-dragging * {
   color: var(--danger);
 }
 
+.sync-details .sync-stuck ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sync-details .sync-stuck li + li {
+  margin-top: 0.25rem;
+}
+
 .sync-actions {
   display: flex;
   align-items: center;

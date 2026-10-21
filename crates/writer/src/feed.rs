@@ -38,7 +38,7 @@ fn synced_changes(files: &[Change]) -> Vec<(String, bool)> {
     files
         .iter()
         .map(|c| match c {
-            Change::Write { path, .. } => (path.clone(), true),
+            Change::Write { path, .. } | Change::Stage { path, .. } => (path.clone(), true),
             Change::Delete { path } => (path.clone(), false),
         })
         .filter(|(path, _)| synced_file(path).is_some())

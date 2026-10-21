@@ -5,6 +5,11 @@ import android.content.ContentUris
 import android.provider.Telephony.Mms
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.Locale
 
 /** Where captured files go: the local vault's assets. */
 fun interface AssetStore {
@@ -13,7 +18,63 @@ fun interface AssetStore {
 
     /** The bytes of [asset], such as a photo to write to a contact, or null when it is not to be had. */
     fun bytes(asset: String): ByteArray? = null
+
+    /**
+     * Store what [input] holds as [filename] when it is at most [cap] bytes. Returns `{ asset,
+     * filename, size }`, or `{ size }` alone when it is larger and nothing was stored. This
+     * default holds at most [cap] bytes in memory; the app's store streams to a file instead
+     * ([streamToFile], ticket 141).
+     */
+    fun putStream(filename: String, input: InputStream, cap: Long): JSONObject {
+        val out = ByteArrayOutputStream()
+        val size = copyCapped(input, out, cap)
+        return if (size > cap) JSONObject().put("size", size) else put(filename, out.toByteArray())
+    }
 }
+
+/**
+ * Copy [input] to [out] until more than [cap] bytes have come, then only count the rest, a block
+ * at a time. Returns how many bytes [input] held.
+ */
+fun copyCapped(input: InputStream, out: OutputStream, cap: Long): Long {
+    val buf = ByteArray(64 * 1024)
+    var total = 0L
+    while (true) {
+        val n = input.read(buf)
+        if (n < 0) return total
+        if (total + n <= cap) out.write(buf, 0, n)
+        total += n
+        if (total > cap) {
+            // Over the cap: nothing more is kept, the rest is only counted.
+            while (true) {
+                val skipped = input.read(buf)
+                if (skipped < 0) return total
+                total += skipped
+            }
+        }
+    }
+}
+
+/**
+ * Store what [input] holds through a file in [dir] rather than memory: when it is at most [cap]
+ * bytes, [store] gets the file, which it moves into the local vault (`VaultCore.putAssetFile`),
+ * and answers `{ asset, filename, size }`. Larger, the file is removed and the answer is `{ size }`.
+ */
+fun streamToFile(dir: File, input: InputStream, cap: Long, store: (File) -> JSONObject): JSONObject {
+    dir.mkdirs()
+    val file = File.createTempFile("part-", ".tmp", dir)
+    try {
+        val size = file.outputStream().use { copyCapped(input, it, cap) }
+        if (size > cap) return JSONObject().put("size", size)
+        return store(file)
+    } finally {
+        file.delete()
+    }
+}
+
+/** [size] bytes in words, as the Gmail import lists attachments too large to keep: `800 KB`, `72.0 MB`. */
+fun sizeText(size: Long): String =
+    if (size >= 1024L * 1024) String.format(Locale.ROOT, "%.1f MB", size / (1024.0 * 1024.0)) else "${(size + 1023) / 1024} KB"
 
 /**
  * Reads received MMS from the Telephony provider as `mms_received` payloads: `{ device_ref,
@@ -24,6 +85,10 @@ fun interface AssetStore {
  * [assets] and listed in `attachments`, named with the extension of its content type
  * ([FileNames.withExtension]), so an image part named `image000001` shows as an image. `to` lists the other recipients of a group message,
  * leaving out this phone's own numbers ([selfNumbers], E.164).
+ *
+ * A part is streamed into the store, never read whole into memory, and one larger than
+ * [maxAttachment] is not stored: the body lists it by name and size, as the Gmail import lists
+ * attachments too large to keep (ticket 141).
  */
 class MmsReader(
     private val resolver: ContentResolver,
@@ -31,6 +96,7 @@ class MmsReader(
     private val contacts: ContactLookup,
     private val assets: AssetStore,
     private val selfNumbers: () -> Set<String> = { emptySet() },
+    private val maxAttachment: Long = MAX_ATTACHMENT,
 ) {
     private val columns = arrayOf(Mms._ID, Mms.THREAD_ID, Mms.DATE, Mms.DATE_SENT, Mms.SUBJECT, Mms.MESSAGE_BOX)
 
@@ -86,6 +152,7 @@ class MmsReader(
 
         val body = StringBuilder()
         val attachments = JSONArray()
+        val skipped = mutableListOf<String>()
         resolver.rows(
             Mms.Part.CONTENT_URI,
             arrayOf(Mms.Part._ID, Mms.Part.CONTENT_TYPE, Mms.Part.NAME, Mms.Part.FILENAME, Mms.Part.CONTENT_LOCATION, Mms.Part.TEXT),
@@ -109,18 +176,26 @@ class MmsReader(
                         body.append(text)
                     }
                 }
-                else -> read(part.id)?.let { bytes ->
+                else -> {
                     val filename = FileNames.withExtension(part.filename ?: "part-${part.id}", part.mime)
-                    val stored = assets.put(filename, bytes)
-                    attachments.put(
-                        JSONObject()
-                            .put("asset", stored.getString("asset"))
-                            .put("filename", stored.optString("filename", filename))
-                            .put("mime", part.mime)
-                            .put("size", stored.optLong("size", bytes.size.toLong())),
-                    )
+                    val stored = open(part.id)?.use { assets.putStream(filename, it, maxAttachment) }
+                    when {
+                        stored == null -> Unit
+                        stored.has("asset") -> attachments.put(
+                            JSONObject()
+                                .put("asset", stored.getString("asset"))
+                                .put("filename", stored.optString("filename", filename))
+                                .put("mime", part.mime)
+                                .put("size", stored.optLong("size")),
+                        )
+                        else -> skipped += "$filename (${sizeText(stored.optLong("size"))})"
+                    }
                 }
             }
+        }
+        if (skipped.isNotEmpty()) {
+            if (body.isNotEmpty()) body.append('\n')
+            body.append("Attachments not stored, too large: ").append(skipped.joinToString(", "))
         }
 
         val data = JSONObject()
@@ -135,13 +210,18 @@ class MmsReader(
         return data
     }
 
-    private fun read(partId: Long): ByteArray? =
-        resolver.openInputStream(ContentUris.withAppendedId(Mms.Part.CONTENT_URI, partId))?.use { it.readBytes() }
+    private fun open(partId: Long): InputStream? =
+        resolver.openInputStream(ContentUris.withAppendedId(Mms.Part.CONTENT_URI, partId))
+
+    private fun read(partId: Long): ByteArray? = open(partId)?.use { it.readBytes() }
 
     private data class Part(val id: Long, val mime: String, val filename: String?, val text: String?)
 
     companion object {
         const val PREFIX = "mms:"
+
+        /** The largest part stored as an asset: 50 MB. */
+        const val MAX_ATTACHMENT: Long = 50L * 1024 * 1024
 
         /** PDU address types: from, to, cc and bcc. */
         private const val FROM = 137

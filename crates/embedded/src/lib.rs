@@ -36,7 +36,7 @@ mod home;
 mod sync_status;
 
 pub use home::{NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE, OFFLINE_MESSAGE};
-pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState};
+pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState, Waiting};
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock, Weak};
@@ -363,8 +363,7 @@ impl Embedded {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map_or_else(SyncReport::unpaired, |s| s.report());
-        let queued = self.queue().pending().map_or(0, |p| p.len());
-        report.to_json(queued)
+        report.to_json(&Waiting::of(self.queue()))
     }
 
     /// Ask the app's sync loop for a round now. `false` when the app gave no sync loop.

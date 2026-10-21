@@ -79,6 +79,104 @@ impl Writer {
         self.put_asset_as(id, filename, bytes)
     }
 
+    /// Store the file at `file` as asset `id`, as [`Writer::put_asset_with_id`] does, moving the
+    /// file into the vault rather than reading it into memory: an asset downloaded from the home
+    /// server into [`Writer::incoming_file`]. The file is gone afterwards, stored or not.
+    pub fn put_asset_file_with_id(
+        &self,
+        id: &str,
+        filename: &str,
+        file: &std::path::Path,
+    ) -> Result<Asset> {
+        if !schema::is_ulid(id) {
+            let _ = std::fs::remove_file(file);
+            return Err(Error::BadRequest(format!("{id:?} is not an asset id")));
+        }
+        if let Some(asset) = self.find_asset(id) {
+            let same = asset.filename == filename
+                && same_contents(&self.vault.root().join(asset.path()), file);
+            let _ = std::fs::remove_file(file);
+            return if same {
+                Ok(asset)
+            } else {
+                Err(Error::IdTaken(id.to_owned()))
+            };
+        }
+        self.put_asset_file_as(id, filename, file)
+    }
+
+    /// Store the file at `file` as a new asset called `filename`, moving it into the vault
+    /// rather than reading it into memory, such as a large part of a captured message. The file
+    /// is gone afterwards, stored or not.
+    pub fn put_asset_file(&self, filename: &str, file: &std::path::Path) -> Result<Asset> {
+        self.put_asset_file_as(&ulid::Ulid::new().to_string(), filename, file)
+    }
+
+    /// A fresh path for a file on its way into the vault, such as an asset being downloaded, on
+    /// the vault's own filesystem so that storing it is a rename. Nothing is created. Leftovers
+    /// older than a day, from a process that stopped part way, are removed.
+    pub fn incoming_file(&self) -> Result<std::path::PathBuf> {
+        let dir = self.vault.server_dir().join("incoming");
+        std::fs::create_dir_all(&dir).map_err(|source| {
+            Error::Store(store::Error::Io {
+                path: dir.clone(),
+                source,
+            })
+        })?;
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let old = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > day);
+            if old {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+        Ok(dir.join(format!("{}.part", ulid::Ulid::new())))
+    }
+
+    fn put_asset_file_as(&self, id: &str, filename: &str, file: &std::path::Path) -> Result<Asset> {
+        if let Err(e) = check_filename(filename) {
+            let _ = std::fs::remove_file(file);
+            return Err(e);
+        }
+        let size = std::fs::metadata(file)
+            .map_err(|source| {
+                Error::Store(store::Error::Io {
+                    path: file.to_owned(),
+                    source,
+                })
+            })?
+            .len();
+        let asset = {
+            let _w = self.write_lock();
+            let mut inner = self.lock();
+            let asset = Asset {
+                id: id.to_owned(),
+                filename: filename.to_owned(),
+                size,
+            };
+            let generation = self.commit(vec![Change::stage(asset.path(), file)])?;
+            inner.index.advance(generation)?;
+            asset
+        };
+        if index::is_pdf(filename) {
+            let extracted = if size <= index::MAX_PDF_BYTES as u64 {
+                match self.vault.read(&asset.path()) {
+                    Ok(bytes) => index::extract_pdf_text(bytes),
+                    Err(e) => index::Extracted::Failed(e.to_string()),
+                }
+            } else {
+                index::Extracted::Failed(format!("larger than {} bytes", index::MAX_PDF_BYTES))
+            };
+            let _ = self.lock().index.set_asset_text(&asset.id, &extracted);
+        }
+        Ok(asset)
+    }
+
     /// Remove asset `id`'s file and nothing else, leaving the notes that name it as they are. A
     /// device evicts an asset from its cache this way: the home server still holds it (D19).
     pub fn evict_asset(&self, id: &str) -> Result<()> {
@@ -312,6 +410,34 @@ impl Writer {
             }
         }
         Ok(out)
+    }
+}
+
+/// Whether files `a` and `b` hold the same bytes, read a block at a time.
+fn same_contents(a: &std::path::Path, b: &std::path::Path) -> bool {
+    use std::io::Read;
+    let (Ok(fa), Ok(fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let same_len = match (fa.metadata(), fb.metadata()) {
+        (Ok(ma), Ok(mb)) => ma.len() == mb.len(),
+        _ => false,
+    };
+    if !same_len {
+        return false;
+    }
+    let (mut ra, mut rb) = (std::io::BufReader::new(fa), std::io::BufReader::new(fb));
+    let (mut ba, mut bb) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+    loop {
+        let Ok(n) = ra.read(&mut ba) else {
+            return false;
+        };
+        if n == 0 {
+            return true;
+        }
+        if rb.read_exact(&mut bb[..n]).is_err() || ba[..n] != bb[..n] {
+            return false;
+        }
     }
 }
 

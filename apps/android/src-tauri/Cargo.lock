@@ -4533,12 +4533,14 @@ dependencies = [
 name = "sync"
 version = "0.1.12"
 dependencies = [
+ "futures-util",
  "reqwest 0.12.28",
  "rusqlite",
  "schema",
  "serde_json",
  "state",
  "thiserror 2.0.21",
+ "tokio",
  "vocab",
  "writer",
 ]

@@ -2,11 +2,11 @@
 // when synced, yellow while syncing or while changes wait, red when sync failed. Its name and
 // tooltip say the state in words; clicking it opens the details and a "Sync now" button.
 
-import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { AppSync } from "../api";
 import { appInfo } from "../inApp";
-import { lastSynced, needsAction, syncLabel } from "../sync/model";
+import { lastSynced, needsAction, showsError, stuckText, syncLabel, waitingText } from "../sync/model";
 import { followSync, syncNow, syncStatus } from "../sync/store";
 import { showToast } from "./Toasts";
 
@@ -131,6 +131,44 @@ function Button(props: { status: AppSync }) {
   );
 }
 
+/**
+ * The popover's details: when sync last worked (or "Never", and when it was last tried), what
+ * waits, the server, the assets that would not upload, and the last error whenever a round failed
+ * or did not do everything (ticket 141).
+ */
+export function SyncDetails(props: { status: AppSync; now: number }) {
+  const at = (ms: number | null | undefined) => (ms == null ? undefined : new Date(ms).toLocaleString());
+  const exact = () => at(props.status.last_ok_ms ?? props.status.last_attempt_ms);
+  return (
+    <dl class="sync-details">
+      <dt>Last synced</dt>
+      <dd title={exact()}>{lastSynced(props.status, props.now)}</dd>
+      <dt>Waiting</dt>
+      <dd>{waitingText(props.status)}</dd>
+      <dt>Server</dt>
+      <dd class="sync-server">{props.status.server ?? "Not paired"}</dd>
+      <Show when={props.status.stuck_assets?.length}>
+        <dt>Not sent</dt>
+        <dd class="sync-stuck">
+          <ul>
+            <For each={props.status.stuck_assets}>
+              {(a) => <li title={`Last tried ${at(a.last_ms)}`}>{stuckText(a, props.now)}</li>}
+            </For>
+          </ul>
+        </dd>
+      </Show>
+      <Show when={showsError(props.status) && props.status.last_error}>
+        {(message) => (
+          <>
+            <dt>Last error</dt>
+            <dd class="sync-error">{message()}</dd>
+          </>
+        )}
+      </Show>
+    </dl>
+  );
+}
+
 function Panel(props: { anchor: HTMLButtonElement; status: AppSync; now: number; label: string; close: () => void }) {
   let panel!: HTMLElement;
   const [place, setPlace] = createSignal({ bottom: 0, left: 0 });
@@ -174,8 +212,6 @@ function Panel(props: { anchor: HTMLButtonElement; status: AppSync; now: number;
     });
   });
 
-  const exact = () => (props.status.last_ok_ms === null ? undefined : new Date(props.status.last_ok_ms).toLocaleString());
-
   return (
     <section
       ref={panel}
@@ -195,22 +231,7 @@ function Panel(props: { anchor: HTMLButtonElement; status: AppSync; now: number;
         <Dot tone={props.status.state} />
         <span>{props.label}</span>
       </p>
-      <dl class="sync-details">
-        <dt>Last synced</dt>
-        <dd title={exact()}>{lastSynced(props.status, props.now)}</dd>
-        <dt>Waiting</dt>
-        <dd>{props.status.queued === 0 ? "Nothing" : `${props.status.queued} ${props.status.queued === 1 ? "change" : "changes"}`}</dd>
-        <dt>Server</dt>
-        <dd class="sync-server">{props.status.server ?? "Not paired"}</dd>
-        <Show when={props.status.state === "error" && props.status.last_error}>
-          {(message) => (
-            <>
-              <dt>Last error</dt>
-              <dd class="sync-error">{message()}</dd>
-            </>
-          )}
-        </Show>
-      </dl>
+      <SyncDetails status={props.status} now={props.now} />
       <div class="sync-actions">
         <Show when={props.status.phase === "update_required"}>
           <a href="/settings" class="sync-link" onClick={() => close(false)}>

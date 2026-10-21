@@ -99,22 +99,34 @@ object Device {
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /**
+     * The local vault's assets, through the core. A captured part streams to a file in the app's
+     * files folder, on the vault's filesystem, which the core moves into the vault (ticket 141).
+     */
+    fun coreAssets(context: Context): AssetStore = object : AssetStore {
+        override fun put(filename: String, bytes: ByteArray): JSONObject {
+            ensureCore(context)
+            return JSONObject(VaultCore.putAsset(filename, bytes))
+        }
+
+        override fun bytes(asset: String): ByteArray? {
+            ensureCore(context)
+            return VaultCore.assetBytes(asset)
+        }
+
+        override fun putStream(filename: String, input: java.io.InputStream, cap: Long): JSONObject {
+            ensureCore(context)
+            val dir = java.io.File(context.applicationContext.filesDir, "incoming")
+            return streamToFile(dir, input, cap) { file -> JSONObject(VaultCore.putAssetFile(file.path, filename)) }
+        }
+    }
+
     private fun production(context: Context): DeviceCapture = DeviceCapture(
         context.contentResolver,
         PhoneNumbers.forDevice(context),
         CoreSink(context),
         Cursors(context.getSharedPreferences(CURSORS, Context.MODE_PRIVATE)),
-        object : AssetStore {
-            override fun put(filename: String, bytes: ByteArray): JSONObject {
-                ensureCore(context)
-                return JSONObject(VaultCore.putAsset(filename, bytes))
-            }
-
-            override fun bytes(asset: String): ByteArray? {
-                ensureCore(context)
-                return VaultCore.assetBytes(asset)
-            }
-        },
+        coreAssets(context),
         { selfNumbers(context, PhoneNumbers.forDevice(context)) },
         PrefsMap(context.getSharedPreferences(PHOTOS, Context.MODE_PRIVATE), ""),
     )

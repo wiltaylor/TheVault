@@ -159,6 +159,8 @@ impl Link {
 #[derive(Debug, Clone)]
 struct Last {
     at_ms: i64,
+    /// Why the round failed, or what a round that finished could not do, such as an asset that
+    /// would not upload (ticket 141).
     error: Option<String>,
     /// What the error means for the user: offline, update required, revoked or another error;
     /// synced when the round succeeded.
@@ -344,7 +346,7 @@ impl Core {
                 Err(_) => last.as_ref().and_then(|l| l.ok_ms),
             };
             let (phase, error) = match &result {
-                Ok(_) => (SyncPhase::Synced, None),
+                Ok(report) => (SyncPhase::Synced, report.problem()),
                 Err(e) => {
                     let (phase, message) = SyncPhase::of_error(e);
                     (phase, Some(message))
@@ -358,6 +360,22 @@ impl Core {
             });
         }
         self.syncing.store(false, Ordering::SeqCst);
+        match &result {
+            Ok(r) => log::info!(
+                "sync round done: pushed {}, merged {}, conflicts {}, pulled {}, assets sent {}, \
+                 assets failed {}, assets waiting {}, notes held {}{}",
+                r.pushed.len(),
+                r.merged.len(),
+                r.conflicts.len(),
+                r.pulled,
+                r.assets_sent,
+                r.assets_failed,
+                r.stuck.len(),
+                r.held.len(),
+                r.problem().map_or_else(String::new, |p| format!(": {p}")),
+            ),
+            Err(e) => log::info!("sync round failed: {e}"),
+        }
         let report = result?;
         if let Err(e) = self.people_to_contacts() {
             log::warn!("person changes not queued for the phone: {e:#}");
@@ -533,6 +551,10 @@ impl Core {
     /// Ask the foreground loop for a round at once: the sync icon's "Sync now". Nothing happens
     /// while unpaired.
     pub fn sync_soon(self: &Arc<Self>) {
+        // Asked for by the user: a stuck asset is tried again now, not after its wait.
+        if let Err(e) = self.server.queue().retry_assets_now() {
+            log::warn!("the stuck assets were not set to retry: {e}");
+        }
         self.nudge(Duration::ZERO);
     }
 
@@ -550,6 +572,7 @@ impl Core {
         SyncReport {
             phase,
             message: last.as_ref().and_then(|l| l.error.clone()),
+            last_attempt_ms: last.as_ref().map(|l| l.at_ms.max(0) as u64),
             last_ok_ms: last.and_then(|l| l.ok_ms).map(|ms| ms.max(0) as u64),
             server: Some(link.server_url),
             warning: self.gate_warning(),
@@ -865,5 +888,20 @@ pub fn report_json(r: &Report) -> Value {
         "pulled": r.pulled,
         "assets_fetched": r.assets_fetched,
         "assets_evicted": r.assets_evicted,
+        "assets_sent": r.assets_sent,
+        "assets_failed": r.assets_failed,
+        "stuck": r.stuck.iter().map(|f| json!({
+            "id": f.id,
+            "filename": f.filename,
+            "size": f.size,
+            "error": f.error,
+            "attempts": f.attempts,
+        })).collect::<Vec<_>>(),
+        "held": r.held.iter().map(|h| json!({
+            "note_id": h.note_id,
+            "asset_id": h.asset_id,
+            "reason": h.reason,
+        })).collect::<Vec<_>>(),
+        "problem": r.problem(),
     })
 }

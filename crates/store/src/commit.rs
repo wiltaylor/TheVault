@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::ops::ControlFlow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +37,12 @@ const GENERATION_FILE: &str = "generation";
 pub enum Change {
     /// Create or replace a file. A `.wcl` file must be data-only and is stored in canonical form.
     Write { path: String, contents: Vec<u8> },
+    /// Create or replace a file with the contents of `file`, a file outside the vault, which the
+    /// commit moves into the journal rather than reading it into memory: a large asset received
+    /// over the network. A file on the vault's filesystem is renamed; another is copied, then
+    /// removed. Once the commit starts staging, `file` is gone, whether the commit succeeds or
+    /// not. A `.wcl` target is read and stored as a [`Change::Write`].
+    Stage { path: String, file: PathBuf },
     /// Remove a file. It must exist.
     Delete { path: String },
 }
@@ -53,9 +59,20 @@ impl Change {
         Change::Delete { path: path.into() }
     }
 
-    fn path(&self) -> &str {
+    /// [`Change::Stage`]: write `path` with the contents of `file`, moved into place.
+    pub fn stage(path: impl Into<String>, file: impl Into<PathBuf>) -> Change {
+        Change::Stage {
+            path: path.into(),
+            file: file.into(),
+        }
+    }
+
+    /// The vault path the change writes or removes.
+    pub fn path(&self) -> &str {
         match self {
-            Change::Write { path, .. } | Change::Delete { path } => path,
+            Change::Write { path, .. } | Change::Stage { path, .. } | Change::Delete { path } => {
+                path
+            }
         }
     }
 }
@@ -120,6 +137,11 @@ impl Vault {
                         write_synced(&txn.join(&name), &contents)?;
                         ops.push(Op::Write { path, staged: name });
                     }
+                    Change::Stage { path, file } => {
+                        let name = n.to_string();
+                        move_synced(&file, &txn.join(&name))?;
+                        ops.push(Op::Write { path, staged: name });
+                    }
                     Change::Delete { path } => ops.push(Op::Delete { path }),
                 }
                 if hook(CommitStep::Staged(n)).is_break() {
@@ -177,6 +199,17 @@ impl Vault {
                         String::from_utf8(contents).map_err(|_| Error::NotUtf8(path.clone()))?;
                     let contents = canonical(&text, &path)?.into_bytes();
                     Change::Write { path, contents }
+                }
+                Change::Stage { path, file } if path.ends_with(".wcl") => {
+                    let contents = std::fs::read(&file).map_err(io_err(&file))?;
+                    let text =
+                        String::from_utf8(contents).map_err(|_| Error::NotUtf8(path.clone()))?;
+                    let contents = canonical(&text, &path)?.into_bytes();
+                    let _ = std::fs::remove_file(&file);
+                    Change::Write { path, contents }
+                }
+                Change::Stage { file, .. } if !file.is_file() => {
+                    return Err(Error::NotFound(file.display().to_string()));
                 }
                 Change::Delete { path } if !real.is_file() => return Err(Error::NotFound(path)),
                 other => other,
@@ -298,6 +331,18 @@ fn write_synced(path: &Path, contents: &[u8]) -> Result<()> {
     let mut file = File::create(path).map_err(io_err(path))?;
     file.write_all(contents).map_err(io_err(path))?;
     file.sync_all().map_err(io_err(path))
+}
+
+/// Move `from` to `to` and sync it there: a rename on one filesystem, a copy and a remove across
+/// two.
+fn move_synced(from: &Path, to: &Path) -> Result<()> {
+    if std::fs::rename(from, to).is_err() {
+        std::fs::copy(from, to).map_err(io_err(to))?;
+        let _ = std::fs::remove_file(from);
+    }
+    File::open(to)
+        .and_then(|f| f.sync_all())
+        .map_err(io_err(to))
 }
 
 fn sync_dir(dir: &Path) -> Result<()> {

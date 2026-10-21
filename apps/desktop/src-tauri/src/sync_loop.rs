@@ -86,8 +86,10 @@ pub struct Status {
     pub message: Option<String>,
     /// Local changes waiting for the server.
     pub pending: usize,
-    /// When the last round finished, in milliseconds since the epoch.
+    /// When the last round succeeded, in milliseconds since the epoch.
     pub last_sync_ms: Option<u64>,
+    /// When the last round ended, succeeded or not.
+    pub last_attempt_ms: Option<u64>,
     /// The device name the setup page suggests.
     pub default_name: String,
     /// What the version gate warns about while sync goes on: the server is newer than the app
@@ -124,6 +126,7 @@ impl SyncLoop {
             message: None,
             pending: 0,
             last_sync_ms: None,
+            last_attempt_ms: None,
             default_name: crate::device::default_name(),
             warning: None,
         }));
@@ -189,6 +192,7 @@ impl embedded::SyncSource for Source {
             phase: s.phase,
             message: s.message.clone(),
             last_ok_ms: s.last_sync_ms,
+            last_attempt_ms: s.last_attempt_ms,
             server: s.server_url.clone(),
             warning: s.warning.clone(),
         }
@@ -322,7 +326,11 @@ impl Worker {
                     due = due.min(Instant::now() + AFTER_WRITE);
                     continue;
                 }
-                Ok(Trigger::Now) => due = Instant::now(),
+                Ok(Trigger::Now) => {
+                    // Asked for by the user: a stuck asset is tried again now (ticket 141).
+                    let _ = self.embedded.queue().retry_assets_now();
+                    due = Instant::now();
+                }
                 Ok(Trigger::ServerChanged(change)) => {
                     let news = change.is_none_or(|c| {
                         self.device.is_some() && sync::live::is_news(self.embedded.queue(), &c)
@@ -343,6 +351,7 @@ impl Worker {
                         s.phase = Phase::Starting;
                         s.message = None;
                         s.last_sync_ms = None;
+                        s.last_attempt_ms = None;
                     }
                     self.device = Some(device);
                     due = Instant::now();
@@ -358,6 +367,9 @@ impl Worker {
             let mut s = lock(&self.status);
             s.phase = outcome.phase;
             s.message = outcome.message;
+            if outcome.phase != Phase::Unpaired {
+                s.last_attempt_ms = Some(now_ms());
+            }
             if outcome.phase == Phase::Synced {
                 s.last_sync_ms = Some(now_ms());
             }
@@ -427,7 +439,8 @@ impl Worker {
         lock(&self.status).phase = Phase::Syncing;
         let engine = self.engine.as_ref().expect("the engine was just built");
         match engine.sync() {
-            Ok(_) => Outcome::new(Phase::Synced, None, INTERVAL),
+            // A round that finished with an asset stuck says so, and syncs again on the timer.
+            Ok(report) => Outcome::new(Phase::Synced, report.problem(), INTERVAL),
             Err(e) => Outcome::of_error(&e),
         }
     }

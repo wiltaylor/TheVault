@@ -12,6 +12,10 @@
 //!   whether the server deleted it.
 //! - `sync_assets`: every asset the server or the device holds, its size, whether the server has
 //!   it, and when the device last used it, for the asset policy (D19).
+//! - `sync_asset_failures`: each asset the device holds that failed to reach the server, why, how
+//!   many times in a row, and when the next round tries it again (ticket 141).
+//! - `sync_held`: each queued note the last round kept back because it names an asset that has
+//!   not reached the server yet, which the server would refuse it for.
 //! - `sync_recent`: notes opened on the device, for the on-demand asset policy.
 //! - `sync_meta`: the change-feed cursor.
 
@@ -47,6 +51,20 @@ CREATE TABLE IF NOT EXISTS sync_assets (
     size      INTEGER NOT NULL,
     on_server INTEGER NOT NULL,
     used_ms   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sync_asset_failures (
+    asset_id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    size     INTEGER NOT NULL,
+    error    TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    last_ms  INTEGER NOT NULL,
+    next_ms  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sync_held (
+    note_id  TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL,
+    reason   TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sync_recent (
     note_id   TEXT PRIMARY KEY,
@@ -92,6 +110,30 @@ pub struct KnownAsset {
     pub used_ms: i64,
 }
 
+/// An asset the device holds that has not reached the server: the last try failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetFailure {
+    pub id: String,
+    pub filename: String,
+    pub size: u64,
+    /// Why the last try failed.
+    pub error: String,
+    /// The tries that failed in a row.
+    pub attempts: u32,
+    /// When the last try failed, in milliseconds since the epoch.
+    pub last_ms: i64,
+    /// When the next round tries it again.
+    pub next_ms: i64,
+}
+
+/// A queued note kept back from the server until an asset it names gets there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Held {
+    pub note_id: String,
+    pub asset_id: String,
+    pub reason: String,
+}
+
 /// The device's sync state. Opened on the local `state.db`.
 pub struct Queue {
     conn: Mutex<Connection>,
@@ -99,7 +141,7 @@ pub struct Queue {
 
 pub type Result<T> = std::result::Result<T, rusqlite::Error>;
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)
@@ -295,6 +337,94 @@ impl Queue {
         Ok(())
     }
 
+    /// Record that asset `id` failed to reach the server with `error`, `attempts` times in a row,
+    /// to be tried again from `next_ms`.
+    pub fn set_asset_failure(&self, f: &AssetFailure) -> Result<()> {
+        self.conn().execute(
+            "INSERT OR REPLACE INTO sync_asset_failures
+                 (asset_id, filename, size, error, attempts, last_ms, next_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                f.id,
+                f.filename,
+                f.size as i64,
+                f.error,
+                f.attempts,
+                f.last_ms,
+                f.next_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Forget asset `id`'s failures: it reached the server, or is gone from the device.
+    pub fn clear_asset_failure(&self, id: &str) -> Result<()> {
+        self.conn()
+            .execute("DELETE FROM sync_asset_failures WHERE asset_id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Asset `id`'s last failure, if it has not reached the server since.
+    pub fn asset_failure(&self, id: &str) -> Result<Option<AssetFailure>> {
+        self.conn()
+            .query_row(
+                "SELECT asset_id, filename, size, error, attempts, last_ms, next_ms
+                 FROM sync_asset_failures WHERE asset_id = ?1",
+                [id],
+                failure_row,
+            )
+            .optional()
+    }
+
+    /// Every asset that failed to reach the server, the one failing longest first.
+    pub fn asset_failures(&self) -> Result<Vec<AssetFailure>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT asset_id, filename, size, error, attempts, last_ms, next_ms
+             FROM sync_asset_failures ORDER BY attempts DESC, asset_id",
+        )?;
+        let rows = stmt.query_map([], failure_row)?;
+        rows.collect()
+    }
+
+    /// Let the next round try every failed asset again at once: the "Sync now" button.
+    pub fn retry_assets_now(&self) -> Result<()> {
+        self.conn()
+            .execute("UPDATE sync_asset_failures SET next_ms = 0", [])?;
+        Ok(())
+    }
+
+    /// Replace the notes the last round held back.
+    pub fn set_held(&self, held: &[Held]) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM sync_held", [])?;
+        for h in held {
+            tx.execute(
+                "INSERT OR REPLACE INTO sync_held (note_id, asset_id, reason) VALUES (?1, ?2, ?3)",
+                params![h.note_id, h.asset_id, h.reason],
+            )?;
+        }
+        tx.commit()
+    }
+
+    /// The queued notes the last round held back, each with the asset it waits for.
+    pub fn held(&self) -> Result<Vec<Held>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT h.note_id, h.asset_id, h.reason FROM sync_held h
+             JOIN sync_queue q ON q.note_id = h.note_id ORDER BY q.seq",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Held {
+                note_id: r.get(0)?,
+                asset_id: r.get(1)?,
+                reason: r.get(2)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// Record that note `id` was opened on the device.
     pub fn opened(&self, id: &str) -> Result<()> {
         self.conn().execute(
@@ -330,6 +460,18 @@ fn asset_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<KnownAsset> {
         size: r.get::<_, i64>(2)? as u64,
         on_server: r.get(3)?,
         used_ms: r.get(4)?,
+    })
+}
+
+fn failure_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AssetFailure> {
+    Ok(AssetFailure {
+        id: r.get(0)?,
+        filename: r.get(1)?,
+        size: r.get::<_, i64>(2)? as u64,
+        error: r.get(3)?,
+        attempts: r.get(4)?,
+        last_ms: r.get(5)?,
+        next_ms: r.get(6)?,
     })
 }
 

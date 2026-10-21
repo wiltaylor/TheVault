@@ -451,6 +451,31 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_putAsset<'lo
     })
 }
 
+/// `VaultCore.putAssetFile(path: String, filename: String): String`: move the file at `path` into
+/// the local vault as an asset, without reading it into memory, such as a large MMS part (ticket
+/// 141). The file is gone afterwards. Answers `{ asset, filename, size }`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_putAssetFile<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    path: JString<'local>,
+    filename: JString<'local>,
+) -> jstring {
+    answer(&mut env, |env| {
+        let path = required(env, &path, "path")?;
+        let filename = required(env, &filename, "filename")?;
+        let asset = core()?
+            .server()
+            .writer()
+            .put_asset_file(&filename, Path::new(&path))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(Some(
+            json!({ "asset": asset.id, "filename": asset.filename, "size": asset.size })
+                .to_string(),
+        ))
+    })
+}
+
 /// `VaultCore.assetBytes(id: String): ByteArray?`: the bytes of asset `id`, fetched from the home
 /// server when the device does not hold them, such as the photo `device::contacts_upsert` writes
 /// to a phone contact. Null when neither holds it. It may make a network request.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppSync } from "../api";
-import { gateNotice, lastSynced, needsAction, syncLabel } from "./model";
+import { gateNotice, lastSynced, needsAction, showsError, syncLabel } from "./model";
 
 const NOW = Date.UTC(2026, 9, 17, 12, 0, 0);
 
@@ -72,8 +72,18 @@ describe("the sync icon's words", () => {
     expect(needsAction(status({}))).toBeNull();
   });
 
-  it("says never before the first good round", () => {
+  it("says never before the first good round, and when it last tried", () => {
     expect(lastSynced(status({ last_ok_ms: null }), NOW)).toBe("Never");
+    expect(lastSynced(status({ last_ok_ms: null, last_attempt_ms: NOW - 3 * 60_000 }), NOW)).toBe("Never (last tried 3 min ago)");
     expect(lastSynced(status({}), NOW)).toBe("2 min ago");
+  });
+
+  it("says a round that finished left assets behind", () => {
+    const partial = status({ state: "syncing", queued: 2, assets_waiting: 1, last_error: "1 asset could not be sent" });
+    expect(syncLabel(partial, NOW)).toBe("Sync incomplete: 1 asset not sent · 2 changes waiting");
+    expect(showsError(partial)).toBe(true);
+    expect(showsError(status({ state: "syncing", phase: "syncing", last_error: "cannot reach the server" }))).toBe(true);
+    expect(showsError(status({ state: "syncing", phase: "updating", last_error: "Updating TheVault" }))).toBe(false);
+    expect(showsError(status({}))).toBe(false);
   });
 });

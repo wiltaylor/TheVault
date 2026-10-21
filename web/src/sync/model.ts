@@ -3,13 +3,18 @@
 // failed or cannot run. The words go in the icon's accessible name and tooltip, so the state is
 // never shown by colour alone.
 
-import type { AppSync } from "../api";
+import type { AppSync, StuckAsset } from "../api";
+import { sizeText } from "../assetLibrary";
 import { relativeTime } from "../notifications/model";
 
 export type SyncTone = AppSync["state"];
 
 function changes(n: number): string {
   return `${n} ${n === 1 ? "change" : "changes"}`;
+}
+
+function assets(n: number): string {
+  return `${n} ${n === 1 ? "asset" : "assets"}`;
 }
 
 /** The icon's label: its accessible name and tooltip, such as "Synced 2 min ago". */
@@ -21,6 +26,7 @@ export function syncLabel(s: AppSync, now: number): string {
     case "syncing":
       return waiting ? `Syncing — ${waiting}` : "Syncing…";
     case "synced":
+      if (s.assets_waiting) return `Sync incomplete: ${assets(s.assets_waiting)} not sent${waiting ? ` · ${waiting}` : ""}`;
       if (waiting) return `Syncing — ${waiting}`;
       return s.last_ok_ms === null ? "Synced" : `Synced ${relativeTime(s.last_ok_ms, now)}`;
     case "offline":
@@ -60,7 +66,34 @@ export function gateNotice(s: AppSync): string | null {
   return s.warning ?? null;
 }
 
-/** "Last synced" in the popover: relative, or "Never" before the first good round. */
+/**
+ * "Last synced" in the popover: relative, or "Never" before the first good round, with when the
+ * last round was tried once one was.
+ */
 export function lastSynced(s: AppSync, now: number): string {
-  return s.last_ok_ms === null ? "Never" : relativeTime(s.last_ok_ms, now);
+  if (s.last_ok_ms !== null) return relativeTime(s.last_ok_ms, now);
+  return s.last_attempt_ms != null ? `Never (last tried ${relativeTime(s.last_attempt_ms, now)})` : "Never";
+}
+
+/** Whether the popover shows the last error: whenever a round failed or did not do everything, not only while red. */
+export function showsError(s: AppSync): boolean {
+  return !!s.last_error && s.phase !== "updating";
+}
+
+/** "Waiting" in the popover: the changes and assets that have not reached the server. */
+export function waitingText(s: AppSync): string {
+  const parts: string[] = [];
+  if (s.queued > 0) parts.push(changes(s.queued));
+  if (s.assets_waiting) parts.push(assets(s.assets_waiting));
+  if (parts.length === 0) return "Nothing";
+  const held = s.held ? ` (${s.held} held for ${s.assets_waiting === 1 ? "the asset" : "the assets"})` : "";
+  return parts.join(", ") + held;
+}
+
+/** A stuck asset in the popover: its name and size, why it failed, and when it is tried again. */
+export function stuckText(a: StuckAsset, now: number): string {
+  const wait = a.next_ms - now;
+  const next = wait <= 60_000 ? "next round" : `in ${Math.ceil(wait / 60_000)} min`;
+  const tries = a.attempts === 1 ? "1 try" : `${a.attempts} tries`;
+  return `${a.filename} (${sizeText(a.size)}): ${a.error}. Failed ${tries}; retrying ${next}.`;
 }
