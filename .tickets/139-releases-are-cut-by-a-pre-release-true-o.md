@@ -4,8 +4,8 @@ title: 'Releases are cut by a pre-release: true or release: true commit trailer 
   main, with proper pre-release versions for the image, Linux packages, Android versionCode
   and updaters'
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Releases are cut by a pre-release: true or release: true commit trailer on main, with proper pre-release versions for the image, Linux packages, Android versionCode and updaters
@@ -35,3 +35,19 @@ Acceptance criteria:
 - Updater tests for the pre-release rule.
 - ./dev just check and ./dev just android-test pass.
 - A real run is not part of this ticket: record the exact commit to push (an empty commit with the trailer) for the user's approval.
+
+### 2026-10-21T02:42:32Z — wil
+
+Claimed.
+
+### 2026-10-21T03:29:03Z — wil
+
+Done on ticket/139. New release-train.yml (push to main + workflow_dispatch kind/version) reads HEAD trailers release/pre-release/version, computes the version with scripts/release/version.sh, then calls release.yml and android-release.yml (now workflow_call only, with the smoke gate kept and stamped to the same version) in parallel, then publish (drafts the GitHub Release with every artifact, creates tag v<version> on the train's commit, marks alphas pre-release and --latest=false), then image.yml (workflow_call + dispatch by tag). Tag-push triggers and image.yml's workflow_run were dropped: they could not stay simple once the version is stamped in CI. scripts/release/stamp.sh writes the version into Cargo.toml, both app crates, three Cargo.lock files, both tauri.conf.json and bundle.android.versionCode; nothing committed to main. Evidence: actionlint (rhysd/actionlint) exit 0 on all workflows; shellcheck exit 0 on scripts/release/*.sh and docker/release-image.sh; ./dev just ci::release-test (now in just check) passes: v0.1.12 -> 0.1.13-alpha.1, then alpha.2, stable after alphas 0.1.13, version trailer overrides (0.2.0, 0.2.0-alpha.1), existing tag fails ('the tag v0.2.0 already exists'). versionCode = ((M*1000+m)*1000+p)*100 + N (alpha.N, 1..98) or 99: 0.1.13-alpha.1=101301, 0.1.13=101399, shipped 0.1.12 APK is versionCode 1012 (aapt2 dump badging), so both exceed it; android tauri.conf.json now carries 101299 for 0.1.12. Packages: Tauri cannot write an rpm for a semver pre-release (rpm crate rejects '-'), so desktop-release bundles the rpm as 0.1.13 with tauri bundle and scripts/release/linux-packages.sh rebuilds deb and rpm as 0.1.13~alpha.1 (dev image gains rpm); AUR pkgver 0.1.13alpha1 with _version for the URL. A stamped 0.1.13-alpha.1 desktop-release + aur-release built; deb installed in debian:bookworm as the-vault 0.1.13~alpha.1 and dpkg sorts it > 0.1.12, < 0.1.13; rpm installed in fedora as the-vault-0.1.13~alpha.1-1, same files/modes/Requires as Tauri's, rpm.vercmp -1 vs 0.1.13-1 and 1 vs 0.1.12-1; makepkg built thevault-bin 0.1.13alpha1-1 in archlinux, vercmp -1 vs 0.1.13-1. Image tags: release <v>, <M.m>, latest, edge; pre-release <v>, edge. Updaters: may_take rule (pre-release only from a pre-release server) in crates/sync gate (decide, apk_for), crates/clients update_for (server endpoint), GET /api/clients now sends server_version, desktop update.rs server offer, AppUpdate.kt decide; clients::version_of and CLI names now keep the pre-release (TheVault_0.1.13-alpha.1_aarch64.apk was read as 0.1.13 and vault-0.1.13-alpha.1-linux-x86_64 was not a CLI name). Tests added in each; ./dev just check exit 0; ./dev just android-test exit 0 (AppUpdateTest 17 tests, 0 failures); desktop clippy -D warnings clean and update:: tests 13 pass. Not run: a real train. First pre-release, for approval: git commit --allow-empty -m 'Pre-release 0.1.13-alpha.1' -m 'pre-release: true' && git push origin main (after ticket/139 is merged into main).
+
+### 2026-10-21T03:29:03Z — wil
+
+Verified set to verified.
+
+### 2026-10-21T03:29:14Z — wil
+
+Status set to done.
