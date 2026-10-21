@@ -1,45 +1,24 @@
-# Boots the headless Android emulator on a GitHub-hosted runner with KVM and runs the release
-# smoke test (`just android-release-smoke`) against an x86_64 release build signed with the debug
-# key. Started by hand while ticket 136 measures whether the emulator is fast and steady enough for
-# the release workflow. KVM on hosted Linux runners: GitHub Changelog, 2024-04-02, "Hardware
-# accelerated Android virtualization now available".
+# Runs the release smoke test (`just android-release-smoke`) on a GitHub-hosted runner by hand,
+# through the same reusable workflow android-release.yml gates every release on. By default the
+# x86_64 release build is signed with the debug key; set release-key to sign it with the release
+# keystore from the repository secrets, as a tag's run does.
 
 name: android-smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      release-key:
+        description: Sign the tested APK with the release keystore from the repository secrets
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   smoke:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-
-      # The dev image carries the Android SDK, NDK and emulator and needs more disk than the runner has free.
-      - name: Free disk space
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-
-      - name: Let the runner user open /dev/kvm
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls -l /dev/kvm
-
-      - name: Build the dev image
-        run: ./dev true
-
-      - name: Smoke-test the release APK on the emulator
-        run: ./dev just android-release-smoke
-
-      - name: Keep the emulator results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: emulator-release
-          path: .scratch/emulator-release
-          if-no-files-found: ignore
+    uses: ./.github/workflows/android-smoke-reusable.yml
+    with:
+      release-key: ${{ inputs.release-key }}
+    secrets: inherit

@@ -1,0 +1,87 @@
+# The release smoke test on a GitHub-hosted runner, as one reusable job (D10): boots the headless
+# Android emulator with KVM and runs `just android-release-smoke` against an x86_64 release build.
+# android-release.yml calls it on every v* tag with release-key set, so the tested APK is signed
+# with the release key, and attaches the APK to the release only when this job passes.
+# android-smoke.yml calls it by hand. KVM on hosted Linux runners: GitHub Changelog, 2024-04-02,
+# "Hardware accelerated Android virtualization now available".
+#
+# The aarch64 APK is not built here (THEVAULT_SMOKE_SKIP_AARCH64): android-release.yml builds it
+# in its own job, from the same commit, at the same time.
+
+name: android-smoke-reusable
+
+on:
+  workflow_call:
+    inputs:
+      release-key:
+        description: Sign the tested APK with the release keystore from the secrets rather than the debug key
+        type: boolean
+        default: false
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # The dev image carries the Android SDK, NDK and emulator and needs more disk than the runner has free.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Let the runner user open /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Write the keystore from the repository secrets
+        if: inputs.release-key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "release-key is set but the ANDROID_KEYSTORE_BASE64 secret is empty" >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Build the dev image
+        run: ./dev true
+
+      # With release-key, Gradle signs the x86_64 release build with the release key; without it,
+      # the recipe signs it with the debug key.
+      - name: Smoke-test the release APK on the emulator
+        env:
+          THEVAULT_SMOKE_SKIP_AARCH64: "1"
+          THEVAULT_ANDROID_KEYSTORE: ${{ inputs.release-key && format('{0}/release.jks', runner.temp) || '' }}
+          THEVAULT_ANDROID_KEYSTORE_PASSWORD: ${{ inputs.release-key && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          THEVAULT_ANDROID_KEY_ALIAS: ${{ inputs.release-key && secrets.ANDROID_KEY_ALIAS || '' }}
+          THEVAULT_ANDROID_KEY_PASSWORD: ${{ inputs.release-key && secrets.ANDROID_KEY_PASSWORD || '' }}
+        run: ./dev just android-release-smoke
+
+      - name: Remove the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Keep the emulator results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-release
+          path: .scratch/emulator-release
+          if-no-files-found: ignore

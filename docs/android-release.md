@@ -86,7 +86,7 @@ The release build differs from the debug build the other tests run: another pack
 The recipe:
 
 1. Builds the release APK for x86_64, the emulator's ABI, into `target/android-release-smoke/`. Gradle signs it with the release key when the keystore is set up; otherwise the recipe signs it with the debug key, so the test needs no release keystore.
-2. Builds the aarch64 release with `just android-release` from the same tree, when the release keystore is there.
+2. Builds the aarch64 release with `just android-release` from the same tree, when the release keystore is there. `THEVAULT_SMOKE_SKIP_AARCH64=1` skips this step, for a run where another job builds the aarch64 APK, as the release workflow does.
 3. Boots the headless emulator from a wiped data partition, installs the x86_64 APK and launches it. The test fails when the app's process dies or restarts within 20 s, when logcat holds a `FATAL EXCEPTION` of `dev.wiltaylor.thevault`, or when the onboarding screen ("Connect TheVault to your server") does not show.
 4. Runs checks 1, 2, 3, 7, 8, 11, 17 and 29 of [`android-manual-checks.md`](android-manual-checks.md) against a throwaway home server: first launch, a wrong and then the right password, a note from the server and an edit from the phone, the share target, a push notification and an SMS capture. A crash during the checks fails the test too.
 5. When everything passes, writes `target/android-release/SMOKE_PASSED`, which lists the sha256 of the tested x86_64 APK and of the aarch64 APK built beside it.
@@ -97,7 +97,7 @@ A release APK cannot be driven with Playwright, because Tauri turns WebView debu
 
 ### Publishing needs the smoke test
 
-`just publish-clients` publishes a release APK only when its sha256 is in `target/android-release/SMOKE_PASSED`. When it builds the release itself, it runs `just android-release-smoke` rather than `just android-release`. A release APK that has not passed is not published, nor is a debug APK in its place; the desktop builds are still published, and the recipe exits with an error. A later `just android-release` deletes `SMOKE_PASSED`, so a rebuilt APK must pass again.
+`just publish-clients` publishes a release APK only when its sha256 is in `target/android-release/SMOKE_PASSED`. When it builds the release itself, it runs `just android-release-smoke` rather than `just android-release`. A release APK that has not passed is not published, nor is a debug APK in its place; the desktop builds are still published, and the recipe exits with an error. A later `just android-release` deletes `SMOKE_PASSED`, so a rebuilt APK must pass again. This rule covers publishing from your machine, and still applies now that the release workflow runs the smoke test on GitHub: that run's result is not recorded in your `SMOKE_PASSED`.
 
 In an emergency, `just publish-clients <dir> <build> skip` publishes the release APK without the test, with a warning. Do not use it for a normal release.
 
@@ -116,11 +116,19 @@ Sync everything first: uninstalling deletes the phone's local vault.
 
 ## Publish a release
 
-`.github/workflows/android-release.yml` runs on a `v*` tag. It builds the APK with `just android-release` in the dev container, and attaches the APK and `SHA256SUMS-android` to the tag's GitHub Release. It waits for the desktop workflow, `release.yml`, to create that release, and creates it itself only when the desktop workflow has not done so within 90 minutes.
+`.github/workflows/android-release.yml` runs on a `v*` tag. It has three jobs:
+
+1. `build` builds the aarch64 APK with `just android-release` in the dev container and keeps it, with its `SHA256SUMS`, as a workflow artifact.
+2. `smoke` runs at the same time as `build`. It runs the [release smoke test](#the-release-smoke-test) on a GitHub-hosted runner with KVM, against an x86_64 release build of the same commit signed with the release key from the repository secrets. It keeps `.scratch/emulator-release/` as the `emulator-release` artifact, whether the test passed or failed. The steps live in `.github/workflows/android-smoke-reusable.yml`.
+3. `attach` runs only when both `build` and `smoke` passed. It attaches the APK and `SHA256SUMS-android` to the tag's GitHub Release. It waits for the desktop workflow, `release.yml`, to create that release, and creates it itself only when the desktop workflow has not done so within 90 minutes.
+
+When the smoke test fails, no APK is attached and the workflow fails, so `image.yml` publishes no image for the tag. Read the `emulator-release` artifact of the failed run, fix the app, and release a new version.
+
+To run the same smoke test on GitHub without a tag, start `android-smoke` from the Actions tab. It signs the tested APK with the debug key unless you tick `release-key`.
 
 The tag runs three workflows, in this order:
 
-1. `release.yml` (desktop, AUR and the static `vault` CLI builds) and `android-release.yml` (the APK) run side by side. The desktop workflow creates the release, and the Android one adds the APK to it.
+1. `release.yml` (desktop, AUR and the static `vault` CLI builds) and `android-release.yml` (the APK) run side by side. The desktop workflow creates the release, and the Android one adds the APK to it once the APK has passed the smoke test.
 2. `image.yml` starts each time one of them succeeds. The run that finds the APK, the AppImage and both CLI builds on the release builds the server image with them baked in, checks that it serves them, pushes `ghcr.io/wiltaylor/thevault` as `<version>`, `<major>.<minor>` and `latest`, and attaches `compose.yaml`, `Caddyfile` and `env.example` to the release. The other run stops. To publish the image again, run `image.yml` by hand from the Actions tab with the tag.
 
 The image workflow checks that the tag matches the workspace version in `Cargo.toml` and that both apps have that version, so set all three together. It uses the workflow's own `GITHUB_TOKEN` to push, and the package stays private while the repository is. `just image-release <assets>` runs the same build and check on your machine from a folder of the release's files, without pushing, as [docs/install.md](install.md#how-a-release-is-published) says.
@@ -137,7 +145,7 @@ Set these repository secrets once, under Settings > Secrets and variables > Acti
 To release:
 
 1. Set `version` in `apps/android/src-tauri/tauri.conf.json` to the new version. Each release needs a higher version, because Android refuses an update whose version code is lower than the installed one.
-2. Run `./dev just android-release-smoke` and fix anything it finds. Then run the checks in `docs/android-manual-checks.md` on a phone.
+2. Run the checks in `docs/android-manual-checks.md` on a phone. The release workflow runs the smoke test itself and publishes nothing when it fails, so running `./dev just android-release-smoke` before tagging is optional. It finds a problem before the tag rather than after, which saves a version number.
 3. Set the same `version` in `apps/desktop/src-tauri/tauri.conf.json` and in `[workspace.package]` of `Cargo.toml`.
 4. Tag the commit as `v<version>`, for example `v0.2.0`, and push the tag. Each workflow stops when the tag does not match the version.
 5. When `image.yml` has finished, check the release lists the APK, the AppImage, `compose.yaml`, `Caddyfile` and `env.example`, and that `docker pull ghcr.io/wiltaylor/thevault:<version>` works.

@@ -179,7 +179,7 @@ android-release: (require-tool "cargo-tauri") (require-tool "cargo-ndk") (requir
 	(cd target/android-release && sha256sum -- *.apk > SHA256SUMS)
 	echo "wrote $apk"
 
-# Build the release APK for x86_64 and run it on the headless emulator: it must start, stay up, onboard and pair, and pass checks 1, 2, 3, 7, 8, 11, 17 and 29; builds the aarch64 release too when the release keystore is there, and records both APKs' sha256 in target/android-release/SMOKE_PASSED, which publish-clients requires (docs/android-release.md)
+# Build the release APK for x86_64 and run it on the headless emulator: it must start, stay up, onboard and pair, and pass checks 1, 2, 3, 7, 8, 11, 17 and 29; builds the aarch64 release too when the release keystore is there (not with THEVAULT_SMOKE_SKIP_AARCH64=1), and records both APKs' sha256 in target/android-release/SMOKE_PASSED, which publish-clients requires (docs/android-release.md)
 [group('android')]
 android-release-smoke: (require-tool "cargo-tauri") (require-tool "cargo-ndk") (require-tool "emulator") (require-tool "adb") (require-tool "jq") (require-tool "cargo") web-build
 	#!/usr/bin/env bash
@@ -214,8 +214,11 @@ android-release-smoke: (require-tool "cargo-tauri") (require-tool "cargo-ndk") (
 	esac
 	"$build_tools/apksigner" verify --min-sdk-version 33 "$apk"
 	# The phone's APK, from the same tree, so the result below vouches for what is published.
+	# THEVAULT_SMOKE_SKIP_AARCH64=1 skips it where another job builds it, as android-release.yml does.
 	released=""
-	if [ -n "${THEVAULT_ANDROID_KEYSTORE:-}" ] && [ -f "$THEVAULT_ANDROID_KEYSTORE" ]; then
+	if [ "${THEVAULT_SMOKE_SKIP_AARCH64:-}" = 1 ]; then
+		echo "THEVAULT_SMOKE_SKIP_AARCH64=1: testing the x86_64 build alone; no aarch64 APK is built or vouched for" >&2
+	elif [ -n "${THEVAULT_ANDROID_KEYSTORE:-}" ] && [ -f "$THEVAULT_ANDROID_KEYSTORE" ]; then
 		just android-release
 		released=yes
 	else

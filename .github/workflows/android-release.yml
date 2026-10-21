@@ -1,6 +1,11 @@
 # Builds the signed Android APK on a version tag and attaches it to the tag's GitHub Release (D10),
 # where adb or Obtainium picks it up. The APK builds in the dev container, as it does locally.
 #
+# Two jobs run side by side: build makes the aarch64 APK and keeps it as a workflow artifact, and
+# smoke (android-smoke-reusable.yml) runs `just android-release-smoke` on the emulator against a
+# release-signed x86_64 build of the same commit. attach needs both, so a failed smoke attaches no
+# APK, this workflow fails, and image.yml, which waits for the APK on the release, publishes nothing.
+#
 # The keystore never enters the repository. Store it as repository secrets:
 #   ANDROID_KEYSTORE_BASE64    the keystore file, base64-encoded
 #   ANDROID_KEYSTORE_PASSWORD  its store password
@@ -15,10 +20,10 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  android:
+  build:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -54,12 +59,47 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/release.jks"
 
+      - name: Keep the APK for the attach job
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: |
+            target/android-release/*.apk
+            target/android-release/SHA256SUMS
+          if-no-files-found: error
+
+  smoke:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/android-smoke-reusable.yml
+    with:
+      release-key: true
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+  # Runs only when both the build and the smoke test passed.
+  attach:
+    needs: [build, smoke]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch the APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-release
+          path: target/android-release
+
       # release.yml creates the tag's release with the desktop files and fails when it already
       # exists, so wait for it and add the APK to it. Create the release only when it has not
       # appeared within 90 minutes.
       - name: Attach the APK to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           cd target/android-release
           mv SHA256SUMS SHA256SUMS-android
