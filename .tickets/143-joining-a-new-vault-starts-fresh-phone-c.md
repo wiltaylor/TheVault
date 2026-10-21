@@ -4,7 +4,7 @@ title: 'Joining a new vault starts fresh: phone contact links from another vault
   ignored, a change based on a version the server never had is pushed as new instead
   of stopping sync, and app backup is off'
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -32,3 +32,7 @@ Acceptance criteria:
 - ./dev just check and ./dev just android-test pass.
 
 ## Worklog
+
+### 2026-10-21T10:04:13Z — wil
+
+Claimed.
