@@ -323,7 +323,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 10);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 13);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
@@ -1162,4 +1162,233 @@ fn a_new_type_name_proposes_a_new_type() {
             .contains("awaits the user")
     );
     assert_eq!(api.type_wcl("book"), None);
+}
+
+impl Api {
+    /// The memo notes listed, archived ones included.
+    fn memos(&self) -> Vec<Value> {
+        let v: Value = self
+            .client
+            .get(self.server.url("/api/notes?type=memo&archived=include"))
+            .bearer_auth(self.token())
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        v["notes"].as_array().unwrap().clone()
+    }
+
+    fn post(&self, path: &str) -> Value {
+        let res = self
+            .client
+            .post(self.server.url(path))
+            .bearer_auth(self.token())
+            .send()
+            .unwrap();
+        assert!(res.status().is_success(), "{}", res.text().unwrap());
+        res.json().unwrap()
+    }
+}
+
+/// One proposal call, then an answer: the turn's events.
+fn propose_one(api: &Api, fake: &FakeAnthropic, tool: &str, input: Value) -> Vec<(String, Value)> {
+    fake.push(AnthropicMessage::new().tool_use("toolu_x", tool, input));
+    fake.push(AnthropicMessage::text("Done."));
+    api.chat(json!([user("Do it.")]))
+}
+
+/// The tool result the model got, as JSON, after checking its error flag.
+fn result_json(fake: &FakeAnthropic, is_error: bool) -> Value {
+    let result = tool_result_in(fake, 1);
+    assert_eq!(result["is_error"], is_error, "{result}");
+    serde_json::from_str(result["content"].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn propose_create_emits_a_create_proposal_and_writes_nothing() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let note = memo_doc("Reading list", "Dune");
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_create",
+        json!({ "type": "memo", "note": note.to_string() }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "proposal", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let p = last(&events, "proposal");
+    assert_eq!(p["op"], "create");
+    assert_eq!(p["id"], "toolu_x");
+    assert_eq!(p["type"], "memo");
+    assert_eq!(p["title"], "Reading list");
+    assert!(p["after"].to_string().contains("Dune"), "{p}");
+    let content = result_json(&fake, false);
+    assert!(
+        content["message"]
+            .as_str()
+            .unwrap()
+            .contains("awaits the user")
+    );
+    assert_eq!(api.memos(), Vec::<Value>::new());
+}
+
+#[test]
+fn an_invalid_create_returns_the_issues_and_proposes_nothing() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let mut note = memo_doc("Broken", "x");
+    note["fields"]["files"] = json!(42);
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_create",
+        json!({ "type": "memo", "note": note.to_string() }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    assert_eq!(last(&events, "tool_result")["is_error"], true);
+    let content = result_json(&fake, true);
+    assert!(content["details"]["error"].is_string(), "{content}");
+    assert!(
+        content["details"].to_string().contains("files"),
+        "{content}"
+    );
+    assert_eq!(api.memos(), Vec::<Value>::new());
+}
+
+#[test]
+fn propose_archive_emits_archive_and_unarchive_proposals_and_writes_nothing() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let (id, version) = api.memo("Old plan", "Done");
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_archive",
+        json!({ "id": id, "archived": true }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "proposal", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let p = last(&events, "proposal");
+    assert_eq!(p["op"], "archive");
+    assert_eq!(p["note_id"], id.as_str());
+    assert_eq!(p["title"], "Old plan");
+    assert_eq!(p["base_version"], version.as_str());
+    let content = result_json(&fake, false);
+    assert!(
+        content["message"]
+            .as_str()
+            .unwrap()
+            .contains("awaits the user")
+    );
+    assert_eq!(api.note(&id)["version"], version.as_str());
+
+    // Once archived, archiving again is an error and unarchiving is the proposal.
+    let archived = api.post(&format!("/api/notes/{id}/archive?base_version={version}"));
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_archive",
+        json!({ "id": id, "archived": true }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let content = result_json(&fake, true);
+    assert!(
+        content["error"]
+            .as_str()
+            .unwrap()
+            .contains("already archived"),
+        "{content}"
+    );
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_archive",
+        json!({ "id": id, "archived": false }),
+    );
+    let p = last(&events, "proposal");
+    assert_eq!(p["op"], "unarchive");
+    assert_eq!(p["base_version"], archived["version"]);
+    assert_eq!(api.note(&id)["version"], archived["version"]);
+}
+
+#[test]
+fn propose_delete_emits_a_delete_proposal_and_writes_nothing() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let (id, version) = api.memo("Scratch", "Throwaway");
+    let events = propose_one(&api, &fake, "propose_delete", json!({ "id": id }));
+    assert_eq!(
+        shape(&events),
+        ["tool", "proposal", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let p = last(&events, "proposal");
+    assert_eq!(p["op"], "delete");
+    assert_eq!(p["note_id"], id.as_str());
+    assert_eq!(p["title"], "Scratch");
+    assert_eq!(p["base_version"], version.as_str());
+    let content = result_json(&fake, false);
+    let message = content["message"].as_str().unwrap();
+    assert!(message.contains("awaits the user"), "{message}");
+    assert!(message.contains("trash"), "{message}");
+    assert_eq!(api.note(&id)["version"], version.as_str());
+    assert_eq!(api.memos().len(), 1);
+}
+
+#[test]
+fn deleting_a_missing_note_is_an_error() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_delete",
+        json!({ "id": "01JZZZZZZZZZZZZZZZZZZZZZZZ" }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    assert_eq!(last(&events, "tool_result")["is_error"], true);
+    result_json(&fake, true);
+}
+
+#[test]
+fn an_edit_proposal_says_it_is_an_update() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let (id, version) = api.memo("Groceries", "Milk");
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_edit",
+        json!({ "id": id, "base_version": version, "note": memo_doc("Groceries", "Eggs").to_string() }),
+    );
+    assert_eq!(last(&events, "proposal")["op"], "update");
 }

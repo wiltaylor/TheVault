@@ -3,19 +3,23 @@
 // conversation lives in this tab's memory (store.ts); New conversation forgets it.
 
 import { For, Match, Show, Switch, createSignal, onMount } from "solid-js";
-import { type AiModel, type AiProvider, type AiStatus, type Json, api, assetUrl } from "../api";
+import { type AiModel, type AiProvider, type AiStatus, type Json, type NoteDoc, api, assetUrl } from "../api";
 import { formatValue } from "../components/Render";
 import { blockLines, lineDiff } from "./diff";
 import { Markdown } from "./markdown";
 import { TypeProposalCard } from "./TypeProposalCard";
 import {
+  type NoteOp,
   type Part,
   type Proposal,
+  type ProposalOp,
+  applyAll,
   applyProposal,
   ask,
   chat,
   discardProposal,
   newConversation,
+  pending,
   providerLabel,
   setModel,
   setProvider,
@@ -40,6 +44,12 @@ export function stepLabel(name: string, input: Json): string {
       return "Read a file";
     case "propose_edit":
       return "Checked an edit";
+    case "propose_create":
+      return "Checked a new note";
+    case "propose_archive":
+      return o.archived === false ? "Checked an unarchive" : "Checked an archive";
+    case "propose_delete":
+      return "Checked a delete";
     case "list_types":
       return "Listed the types";
     case "get_type":
@@ -119,16 +129,70 @@ function BlockDiff(props: { before: Json; after: Json }) {
   );
 }
 
+/** A card's heading words, before the note's title, by what the proposal does (ai D20). */
+const HEADS: Record<NoteOp, string> = {
+  update: "Proposed edit to",
+  create: "Proposed new note",
+  archive: "Proposed archive of",
+  unarchive: "Proposed unarchive of",
+  delete: "Proposed delete of",
+};
+
+/** What an applied card says. */
+const APPLIED: Record<NoteOp, string> = {
+  update: "Applied.",
+  create: "Created.",
+  archive: "Archived.",
+  unarchive: "Unarchived.",
+  delete: "Moved to the trash.",
+};
+
+/** Fields the server sets itself, left out of a new note's card as the server leaves them out of a diff. */
+const SERVER_FIELDS = new Set(["created", "updated"]);
+
+/** A new note's changes for its card: every field and top-level block it sets, as additions. */
+export function createOps(after: NoteDoc | undefined): ProposalOp[] {
+  if (!after) return [];
+  const fields = Object.entries(after.fields ?? {})
+    .filter(([k, v]) => !SERVER_FIELDS.has(k) && v !== null && v !== "" && !(Array.isArray(v) && v.length === 0))
+    .map(([name, v]): ProposalOp => ({ op: "field", name, before: null, after: v }));
+  const blocks = (after.blocks ?? []).map(
+    (b): ProposalOp => ({ op: "block", name: [b.kind, ...(b.labels ?? [])].join(" "), before: null, after: b as unknown as Json }),
+  );
+  return [...fields, ...blocks];
+}
+
 function ProposalCard(props: { part: Extract<Part, { kind: "proposal" }>; turn: number; index: number }) {
   const p = (): Proposal => props.part.proposal;
-  const title = () => (typeof p().title === "string" && p().title ? (p().title as string) : p().note_id);
+  const noteId = () => {
+    const x = p();
+    return "note_id" in x ? x.note_id : undefined;
+  };
+  const title = () => (typeof p().title === "string" && p().title ? (p().title as string) : (noteId() ?? "Untitled"));
+  const ops = (): ProposalOp[] => {
+    const x = p();
+    if (x.op === "update") return x.ops;
+    if (x.op === "create") return createOps(x.after);
+    return [];
+  };
+  const link = () => noteId() ?? props.part.created;
+  const open = () => props.part.state === "open" || props.part.state === "failed" || props.part.state === "applying";
   return (
-    <section class="ai-proposal" aria-label={`Proposed edit to ${title()}`}>
+    <section class="ai-proposal" aria-label={`${HEADS[p().op]} ${title()}`}>
       <p class="ai-proposal-head">
-        Proposed edit to <a href={`/notes/${encodeURIComponent(p().note_id)}`}>{title()}</a>
+        {HEADS[p().op]}{" "}
+        <Show when={link()} fallback={<strong>{title()}</strong>}>
+          {(id) => <a href={`/notes/${encodeURIComponent(id())}`}>{title()}</a>}
+        </Show>
+        <Show when={p().op === "create" && "type" in p()}>
+          <span class="muted"> ({(p() as { type: string }).type})</span>
+        </Show>
       </p>
-      <ul class="ai-diff">
-        <For each={p().ops}>
+      <Show when={p().op === "delete"}>
+        <p class="muted">Applied, it moves the note to the trash, where you can restore it.</p>
+      </Show>
+      <ul class="ai-diff" hidden={ops().length === 0}>
+        <For each={ops()}>
           {(op) => (
             <li>
               <span class="ai-diff-name">{op.op === "field" ? op.name : op.name.replace(/^content /, "")}</span>
@@ -146,13 +210,13 @@ function ProposalCard(props: { part: Extract<Part, { kind: "proposal" }>; turn: 
           )}
         </For>
       </ul>
+      <Show when={props.part.error}>
+        <p role="alert" class="ai-error">
+          {props.part.error}
+        </p>
+      </Show>
       <Switch>
-        <Match when={props.part.state === "open" || props.part.state === "failed" || props.part.state === "applying"}>
-          <Show when={props.part.error}>
-            <p role="alert" class="ai-error">
-              {props.part.error}
-            </p>
-          </Show>
+        <Match when={open()}>
           <div class="ai-proposal-actions">
             <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void applyProposal(props.turn, props.index)}>
               Apply
@@ -162,9 +226,28 @@ function ProposalCard(props: { part: Extract<Part, { kind: "proposal" }>; turn: 
             </button>
           </div>
         </Match>
+        <Match when={props.part.state === "stale"}>
+          <div class="ai-proposal-actions">
+            <button type="button" onClick={() => discardProposal(props.turn, props.index)}>
+              Discard
+            </button>
+          </div>
+        </Match>
         <Match when={props.part.state === "applied"}>
           <p role="status" class="ai-applied">
-            Applied.
+            {APPLIED[p().op]}
+            <Show when={p().op === "create" && props.part.created}>
+              {(id) => (
+                <>
+                  {" "}
+                  <a href={`/notes/${encodeURIComponent(id())}`}>Open the new note</a>
+                </>
+              )}
+            </Show>
+            <Show when={p().op === "delete"}>
+              {" "}
+              <a href="/trash">Open the trash</a>
+            </Show>
           </p>
         </Match>
         <Match when={props.part.state === "discarded"}>
@@ -174,6 +257,36 @@ function ProposalCard(props: { part: Extract<Part, { kind: "proposal" }>; turn: 
         </Match>
       </Switch>
     </section>
+  );
+}
+
+/**
+ * Apply all (ai D20): shown while a turn has two or more proposals pending. It applies them in
+ * order and stops at the first that does not apply, whose card shows why.
+ */
+function ApplyAll(props: { turn: number; parts: Part[] }) {
+  const [busy, setBusy] = createSignal(false);
+  const count = () => props.parts.filter(pending).length;
+  return (
+    <Show when={count() >= 2 || busy()}>
+      <div class="ai-proposal-actions ai-apply-all">
+        <button
+          type="button"
+          class="primary"
+          disabled={busy() || props.parts.some((p) => p.kind !== "text" && p.kind !== "tool" && p.kind !== "notice" && p.state === "applying")}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await applyAll(props.turn);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Apply all ({count()})
+        </button>
+      </div>
+    </Show>
   );
 }
 
@@ -290,17 +403,20 @@ export function ChatPanel(props: { noteId: () => string }) {
           {(turn, t) => (
             <li class={`ai-turn ai-turn-${turn.role}`}>
               <Show when={turn.role === "user"} fallback={
-                <For each={turn.parts}>
-                  {(part, i) => (
-                    <Switch>
-                      <Match when={part.kind === "text" && part}>{(p) => <Markdown text={p().text} />}</Match>
-                      <Match when={part.kind === "tool" && part}>{(p) => <ToolStep part={p()} />}</Match>
-                      <Match when={part.kind === "proposal" && part}>{(p) => <ProposalCard part={p()} turn={t()} index={i()} />}</Match>
-                      <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
-                      <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>
-                    </Switch>
-                  )}
-                </For>
+                <>
+                  <For each={turn.parts}>
+                    {(part, i) => (
+                      <Switch>
+                        <Match when={part.kind === "text" && part}>{(p) => <Markdown text={p().text} />}</Match>
+                        <Match when={part.kind === "tool" && part}>{(p) => <ToolStep part={p()} />}</Match>
+                        <Match when={part.kind === "proposal" && part}>{(p) => <ProposalCard part={p()} turn={t()} index={i()} />}</Match>
+                        <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
+                        <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>
+                      </Switch>
+                    )}
+                  </For>
+                  <ApplyAll turn={t()} parts={turn.parts} />
+                </>
               }>
                 <p class="ai-question">{turn.text}</p>
               </Show>

@@ -5,7 +5,7 @@
 
 import { createRoot, createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { type Json, type NoteDoc, ApiError, type StreamEvent, api, streamEvents } from "../api";
+import { type Json, type Note, type NoteDoc, ApiError, type StreamEvent, api, isArchived, streamEvents } from "../api";
 import { appInfo } from "../inApp";
 import { reloadDefinitions } from "../session";
 
@@ -49,18 +49,26 @@ export interface ProposalOp {
   after: Json;
 }
 
-/** An edit the model proposed, checked by the server but not written (ai D14). */
-export interface Proposal {
-  id: string;
-  note_id: string;
-  title: Json;
-  base_version: string;
-  before: NoteDoc;
-  after: NoteDoc;
-  ops: ProposalOp[];
-}
+/** What a note proposal does (ai D20). A proposal without `op` is an `update`. */
+export type NoteOp = "update" | "create" | "archive" | "unarchive" | "delete";
 
-export type ProposalState = "open" | "applying" | "applied" | "discarded" | "failed";
+/** A note change the model proposed, checked by the server but not written (ai D14, D20). */
+export type Proposal =
+  | {
+      op: "update";
+      id: string;
+      note_id: string;
+      title: Json;
+      base_version: string;
+      before: NoteDoc;
+      after: NoteDoc;
+      ops: ProposalOp[];
+    }
+  | { op: "create"; id: string; type: string; title: Json; after: NoteDoc }
+  | { op: "archive" | "unarchive" | "delete"; id: string; note_id: string; title: Json; base_version: string };
+
+/** `stale`: the note changed since the proposal, so it cannot apply; only Discard is left. */
+export type ProposalState = "open" | "applying" | "applied" | "discarded" | "failed" | "stale";
 
 /** A type file the model proposed, checked by the server but not written (ai D18). */
 export interface TypeProposal {
@@ -75,8 +83,8 @@ export interface TypeProposal {
   issues: { at?: string; message: string; severity?: string }[];
 }
 
-/** As a note proposal's, plus `stale`: the type changed since the proposal, so it cannot apply. */
-export type TypeProposalState = ProposalState | "stale";
+/** As a note proposal's: `stale` when the type changed since the proposal. */
+export type TypeProposalState = ProposalState;
 
 /** What the card says when the type changed after the proposal (ai D18). */
 export const TYPE_CHANGED = "This type changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
@@ -84,7 +92,7 @@ export const TYPE_CHANGED = "This type changed since the proposal, so it was not
 export type Part =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string; asset?: AssetRef }
-  | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string }
+  | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
 
@@ -235,7 +243,7 @@ function onEvent(e: StreamEvent) {
       break;
     }
     case "proposal":
-      push({ kind: "proposal", proposal: d as unknown as Proposal, state: "open" });
+      push({ kind: "proposal", proposal: { ...d, op: typeof d.op === "string" ? d.op : "update" } as unknown as Proposal, state: "open" });
       break;
     case "type_proposal":
       push({ kind: "type_proposal", proposal: { ...(d as unknown as TypeProposal), issues: Array.isArray(d.issues) ? (d.issues as TypeProposal["issues"]) : [] }, state: "open" });
@@ -298,7 +306,7 @@ export async function ask(text: string, noteId?: string) {
   }
 }
 
-function setProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
+function setProposal(turn: number, part: number, patch: { state: ProposalState; error?: string; created?: string }) {
   state.setChat(
     "turns",
     turn,
@@ -308,26 +316,92 @@ function setProposal(turn: number, part: number, patch: { state: ProposalState; 
       if (p.kind !== "proposal") return;
       p.state = patch.state;
       p.error = patch.error;
+      if (patch.created) p.created = patch.created;
     }),
   );
 }
 
-/** Apply a proposal: write its note through the notes API at the version it was based on. */
+/** What a card says when the note changed after the proposal (ai D20). */
+export const NOTE_CHANGED = "The note changed after this was proposed, so it was not applied. Ask again for a fresh proposal.";
+
+/** Thrown inside an apply when the note is no longer as proposed: the card shows it, stale. */
+class Stale extends Error {}
+
+/** The note `id` as it is now, read again before an archive or delete is applied. */
+async function currentNote(id: string): Promise<Note> {
+  try {
+    return await api.note(id);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) throw new Stale("This note is no longer there, so nothing was applied.");
+    throw e;
+  }
+}
+
+/**
+ * Apply a note proposal through the notes API (ai D14, D20): an update at the version it was
+ * based on, a create, an archive or unarchive, or a delete, which moves the note to the trash.
+ * An archive or delete reads the note again first, and does nothing to a note whose archive
+ * state already changed or, for a delete, whose version moved past the proposal's.
+ */
 export async function applyProposal(turn: number, part: number) {
   const p = state.chat.turns[turn]?.parts[part];
   if (p?.kind !== "proposal" || (p.state !== "open" && p.state !== "failed")) return;
+  const proposal = p.proposal;
   setProposal(turn, part, { state: "applying" });
   try {
-    await api.updateNote(p.proposal.note_id, p.proposal.after, p.proposal.base_version);
+    switch (proposal.op) {
+      case "update":
+        await api.updateNote(proposal.note_id, proposal.after, proposal.base_version);
+        break;
+      case "create": {
+        const n = await api.createNote(proposal.type, proposal.after);
+        setProposal(turn, part, { state: "applied", created: n.id });
+        return;
+      }
+      case "archive":
+      case "unarchive": {
+        const n = await currentNote(proposal.note_id);
+        const want = proposal.op === "archive";
+        if (isArchived(n.note.fields) === want) {
+          throw new Stale(want ? "This note is already archived, so nothing was applied." : "This note is no longer archived, so nothing was applied.");
+        }
+        await (want ? api.archiveNote(proposal.note_id, n.version) : api.unarchiveNote(proposal.note_id, n.version));
+        break;
+      }
+      case "delete": {
+        const n = await currentNote(proposal.note_id);
+        if (n.version !== proposal.base_version) throw new Stale(NOTE_CHANGED);
+        await api.deleteNote(proposal.note_id, proposal.base_version);
+        break;
+      }
+    }
     setProposal(turn, part, { state: "applied" });
   } catch (e) {
-    const error =
-      e instanceof ApiError && e.isConflict
-        ? "The note changed after this was proposed, so it was not applied. Ask again for a fresh proposal."
-        : e instanceof Error
-          ? e.message
-          : String(e);
-    setProposal(turn, part, { state: "failed", error });
+    if (e instanceof Stale) setProposal(turn, part, { state: "stale", error: e.message });
+    else if (e instanceof ApiError && e.isConflict) setProposal(turn, part, { state: proposal.op === "update" ? "failed" : "stale", error: NOTE_CHANGED });
+    else setProposal(turn, part, { state: "failed", error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
+export function pending(p: Part): boolean {
+  return (p.kind === "proposal" || p.kind === "type_proposal") && (p.state === "open" || p.state === "failed");
+}
+
+/**
+ * Apply all: every pending proposal of the turn, in order, stopping at the first one that does
+ * not apply (ai D20). Its card shows why; the rest stay pending.
+ */
+export async function applyAll(turn: number) {
+  const parts = state.chat.turns[turn]?.parts ?? [];
+  const todo = parts.flatMap((p, i) => (pending(p) ? [i] : []));
+  for (const i of todo) {
+    const p = state.chat.turns[turn]?.parts[i];
+    if (!p || !pending(p)) continue;
+    if (p.kind === "proposal") await applyProposal(turn, i);
+    else await applyTypeProposal(turn, i);
+    const after = state.chat.turns[turn]?.parts[i];
+    if (!after || (after.kind !== "proposal" && after.kind !== "type_proposal") || after.state !== "applied") return;
   }
 }
 

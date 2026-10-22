@@ -6,15 +6,16 @@
 //! its body) join the system prompt, so "this note" resolves through `get_note`.
 //!
 //! The answer is a server-sent event stream. The server runs the tool loop, at most
-//! [`MAX_ROUNDS`] model calls per user turn, over read-only tools; `propose_edit` checks an edit
-//! with a dry-run batch and never writes it. Events:
+//! [`MAX_ROUNDS`] model calls per user turn, over read-only tools; `propose_edit`,
+//! `propose_create`, `propose_archive` and `propose_delete` check a change and never write it
+//! (ai D20). Events:
 //!
 //! | Event | Data |
 //! |---|---|
 //! | `text` | `{delta}`: answer text as it arrives |
 //! | `tool` | `{id, name, input}`: a tool the model called, before it runs |
 //! | `tool_result` | `{id, summary, is_error}`: `summary` holds the ids and titles returned (`notes`), never bodies, a `message` on an error, and for `read_asset` the `asset` read (id, filename, media type, size, kind), never its bytes |
-//! | `proposal` | `{id, note_id, title, base_version, before, after, ops}`: an edit for the user to apply |
+//! | `proposal` | a note change for the user to apply, by `op` (ai D14, D20): `update` `{id, op, note_id, title, base_version, before, after, ops}`; `create` `{id, op, type, title, after}`; `archive`, `unarchive` and `delete` `{id, op, note_id, title, base_version}` |
 //! | `type_proposal` | `{id, name, exists, before, after, issues}`: a type file's new WCL for the user to apply (ai D18) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
@@ -636,7 +637,7 @@ fn tool(name: &str, description: &str, properties: Value) -> ToolSpec {
     }
 }
 
-/// The chat's tools, all read-only (ai D14).
+/// The chat's tools: read-only ones, and proposals that write nothing (ai D14, D18, D20).
 pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
         tool(
@@ -689,6 +690,30 @@ pub fn tool_specs() -> Vec<ToolSpec> {
                 "name": { "type": "string", "description": "The type's name: an existing type to change, or a new name to create a type." },
                 "wcl": { "type": "string", "description": "The whole new type file as WCL text, with every field and template it keeps." },
             }),
+        ),
+        tool(
+            "propose_create",
+            "Propose a new note for the user to create. It is checked but never written: the user sees the new note and creates or discards it.",
+            json!({
+                "type": { "type": "string", "description": "The new note's type, such as `task`." },
+                "note": {
+                    "type": "string",
+                    "description": "The whole new note as JSON text, {\"fields\": {...}, \"blocks\": [...]}.",
+                },
+            }),
+        ),
+        tool(
+            "propose_archive",
+            "Propose archiving a note, or taking it out of the archive, for the user to apply. Nothing changes until the user applies it.",
+            json!({
+                "id": { "type": "string", "description": "The note's id." },
+                "archived": { "type": "boolean", "description": "true to archive the note, false to take it out of the archive." },
+            }),
+        ),
+        tool(
+            "propose_delete",
+            "Propose deleting a note for the user to apply. Applied, it moves the note to the trash, where the user can restore it. Nothing changes until the user applies it.",
+            json!({ "id": { "type": "string", "description": "The note's id." } }),
         ),
         tool(
             "propose_edit",
@@ -808,6 +833,9 @@ fn run_tool(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
                 .map_err(ToolOut::error)
         }),
         "propose_edit" => propose(w, author, &call.id, input),
+        "propose_create" => propose_create(w, author, &call.id, input),
+        "propose_archive" => propose_archive(w, &call.id, input),
+        "propose_delete" => propose_delete(w, author, &call.id, input),
         "list_types" => Ok(list_types(w)),
         "get_type" => get_type(w, input),
         "type_format" => Ok(type_format()),
@@ -821,13 +849,7 @@ fn run_tool(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
 fn propose(w: &Writer, author: &Author, call_id: &str, input: &Value) -> Result<ToolOut, ToolOut> {
     let id = str_arg(input, "id")?;
     let base = str_arg(input, "base_version")?;
-    let note: Value = match &input["note"] {
-        Value::String(s) => {
-            serde_json::from_str(s).map_err(|e| ToolOut::error(format!("note is not JSON: {e}")))?
-        }
-        v @ Value::Object(_) => v.clone(),
-        _ => return Err(ToolOut::error("note must be the whole note as JSON text")),
-    };
+    let note = note_arg(input)?;
     let current = w.read(id).map_err(|e| ToolOut::error(e.to_string()))?;
     let before = doc_to_json(&current.doc);
     let op = Op::Update {
@@ -851,13 +873,7 @@ fn propose(w: &Writer, author: &Author, call_id: &str, input: &Value) -> Result<
                  {current_version}. Read it again with get_note and propose against that version."
             )));
         }
-        Some(Err(e)) => {
-            let message = e.to_string();
-            let details = ApiError::from(e).body;
-            let mut out = ToolOut::error(message.clone());
-            out.content = json!({ "error": message, "details": details }).to_string();
-            return Err(out);
-        }
+        Some(Err(e)) => return Err(item_error(e)),
         None => return Err(ToolOut::error("the edit was not checked")),
     };
     let after = item
@@ -883,6 +899,7 @@ fn propose(w: &Writer, author: &Author, call_id: &str, input: &Value) -> Result<
     }
     let proposal = json!({
         "id": call_id,
+        "op": "update",
         "note_id": id,
         "title": title,
         "base_version": base,
@@ -902,6 +919,173 @@ fn propose(w: &Writer, author: &Author, call_id: &str, input: &Value) -> Result<
         summary,
         proposal: Some(("proposal", proposal)),
     })
+}
+
+/// The `note` argument: the whole note as JSON text, or as an object.
+fn note_arg(input: &Value) -> Result<Value, ToolOut> {
+    match &input["note"] {
+        Value::String(s) => {
+            serde_json::from_str(s).map_err(|e| ToolOut::error(format!("note is not JSON: {e}")))
+        }
+        v @ Value::Object(_) => Ok(v.clone()),
+        _ => Err(ToolOut::error("note must be the whole note as JSON text")),
+    }
+}
+
+/// A batch item's failure for the model: the message, and the API's error body with the
+/// validation issues.
+fn item_error(e: writer::Error) -> ToolOut {
+    let message = e.to_string();
+    let details = ApiError::from(e).body;
+    let mut out = ToolOut::error(message.clone());
+    out.content = json!({
+        "error": message,
+        "details": details,
+        "message": "Nothing was proposed. Fix the problem and propose it again.",
+    })
+    .to_string();
+    out
+}
+
+/// One operation as a dry-run batch: what it would do, or its error for the model.
+fn dry_run(w: &Writer, author: &Author, op: Op) -> Result<writer::Item, ToolOut> {
+    let report = w
+        .batch(vec![op], true, author)
+        .map_err(|e| ToolOut::error(e.to_string()))?;
+    if let Some(e) = report.error {
+        return Err(item_error(e));
+    }
+    match report.items.into_iter().next() {
+        Some(Ok(item)) => Ok(item),
+        Some(Err(e)) => Err(item_error(e)),
+        None => Err(ToolOut::error("the change was not checked")),
+    }
+}
+
+/// A note proposal's answer: the `proposal` event, and `content` telling the model it awaits
+/// the user.
+fn proposed(content: Value, summary: Value, proposal: Value) -> ToolOut {
+    ToolOut {
+        content: content.to_string(),
+        is_error: false,
+        summary,
+        proposal: Some(("proposal", proposal)),
+    }
+}
+
+/// `propose_create`: check a new note with a dry-run batch create and hand it to the user
+/// (ai D20).
+fn propose_create(
+    w: &Writer,
+    author: &Author,
+    call_id: &str,
+    input: &Value,
+) -> Result<ToolOut, ToolOut> {
+    let type_name = str_arg(input, "type")?;
+    let note = note_arg(input)?;
+    let op = Op::Create {
+        type_name: type_name.to_owned(),
+        input: Input::Json(note.clone()),
+    };
+    let item = dry_run(w, author, op)?;
+    let after = item
+        .wcl
+        .as_deref()
+        .and_then(|t| Input::Wcl(t.to_owned()).parse("note.wcl").ok())
+        .map(|d| doc_to_json(&d))
+        .unwrap_or(note);
+    let title = after["fields"]["title"].clone();
+    let proposal = json!({
+        "id": call_id,
+        "op": "create",
+        "type": type_name,
+        "title": title,
+        "after": after,
+    });
+    Ok(proposed(
+        json!({
+            "proposed": true,
+            "op": "create",
+            "type": type_name,
+            "message": "The new note is valid and is shown to the user as a proposal. It has not been created: it awaits the user, who creates or discards it.",
+        }),
+        json!({ "notes": [] }),
+        proposal,
+    ))
+}
+
+/// `propose_archive`: check the note exists and is not already in that state, and hand the
+/// archive or unarchive to the user (ai D20).
+fn propose_archive(w: &Writer, call_id: &str, input: &Value) -> Result<ToolOut, ToolOut> {
+    let id = str_arg(input, "id")?;
+    let archived = input["archived"]
+        .as_bool()
+        .ok_or_else(|| ToolOut::error("archived must be true or false"))?;
+    let note = w.read(id).map_err(|e| ToolOut::error(e.to_string()))?;
+    if writer::is_archived(&note.doc) == archived {
+        return Err(ToolOut::error(if archived {
+            format!("note {id} is already archived: there is nothing to apply")
+        } else {
+            format!("note {id} is not archived: there is nothing to apply")
+        }));
+    }
+    let title = doc_to_json(&note.doc)["fields"]["title"].clone();
+    let op = if archived { "archive" } else { "unarchive" };
+    let proposal = json!({
+        "id": call_id,
+        "op": op,
+        "note_id": id,
+        "title": title,
+        "base_version": note.version,
+    });
+    Ok(proposed(
+        json!({
+            "proposed": true,
+            "op": op,
+            "note_id": id,
+            "message": format!(
+                "The {op} is shown to the user as a proposal. It has not been done: it awaits \
+                 the user, who applies or discards it."
+            ),
+        }),
+        json!({ "notes": [{ "id": id, "title": title }] }),
+        proposal,
+    ))
+}
+
+/// `propose_delete`: check the note can be deleted with a dry-run batch delete, and hand the
+/// delete to the user (ai D20). Applied, it moves the note to the trash; nothing here purges.
+fn propose_delete(
+    w: &Writer,
+    author: &Author,
+    call_id: &str,
+    input: &Value,
+) -> Result<ToolOut, ToolOut> {
+    let id = str_arg(input, "id")?;
+    let note = w.read(id).map_err(|e| ToolOut::error(e.to_string()))?;
+    let op = Op::Delete {
+        id: id.to_owned(),
+        base: Some(note.version.clone()),
+    };
+    dry_run(w, author, op)?;
+    let title = doc_to_json(&note.doc)["fields"]["title"].clone();
+    let proposal = json!({
+        "id": call_id,
+        "op": "delete",
+        "note_id": id,
+        "title": title,
+        "base_version": note.version,
+    });
+    Ok(proposed(
+        json!({
+            "proposed": true,
+            "op": "delete",
+            "note_id": id,
+            "message": "The delete is shown to the user as a proposal. Nothing has been deleted: it awaits the user, who applies or discards it. Applied, the note moves to the trash, where the user can restore it.",
+        }),
+        json!({ "notes": [{ "id": id, "title": title }] }),
+        proposal,
+    ))
 }
 
 /// A type tool's answer: `content` for the model, and the type names for the summary.

@@ -8,7 +8,8 @@ import { activePane, expect, logIn, test } from "./fixtures";
 // The AI panel (ai D14, D16) against the fake Anthropic API, which the `ai_settings` secret's
 // endpoints point at: ask beside a note, watch the answer arrive, apply the edit the model
 // proposed, and see the note change; apply a proposed template change (ai D18) and see it on a
-// note of that type.
+// note of that type; apply a proposed delete and create (ai D20) and see the note in the trash and
+// the new note open.
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -107,6 +108,62 @@ test("the AI panel answers beside a note and an applied proposal changes the not
   const after = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { version: string; note: unknown };
   expect(after.version).not.toBe(note.version);
   expect(JSON.stringify(after.note)).toContain("Eggs");
+});
+
+test("a create and a delete proposed in the AI panel apply: the new note opens and the old one is in the trash", async ({ page, admin }) => {
+  for (const [name, value] of [
+    ["ai_anthropic_api_key", fake.api_key],
+    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
+  ]) {
+    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
+    expect(res.ok(), await res.text()).toBe(true);
+  }
+  const stamp = Date.now().toString(36);
+  const oldTitle = `Old list ${stamp}`;
+  const newTitle = `New list ${stamp}`;
+  const created = await admin.post("/api/notes?type=note", { data: { note: shopping(oldTitle, ["Bread"]) } });
+  expect(created.status(), await created.text()).toBe(201);
+  const old = (await created.json()) as { id: string; version: string };
+
+  // The model proposes a new list and deleting the old one, then answers.
+  const create = { type: "note", note: JSON.stringify(shopping(newTitle, ["Bread", "Butter"])) };
+  await tell(`push ${JSON.stringify({ tools: [{ id: "toolu_create", name: "propose_create", input: create }] })}`);
+  await tell(`push ${JSON.stringify({ tools: [{ id: "toolu_delete", name: "propose_delete", input: { id: old.id } }] })}`);
+  await tell(`push ${JSON.stringify({ text: "I proposed a new list and deleting the old one." })}`);
+
+  await logIn(page, `/notes/${old.id}`);
+  await expect(activePane(page)).toContainText("Bread");
+  await page.keyboard.press("Control+Shift+L");
+  const panel = page.getByRole("complementary", { name: "AI" });
+  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await panel.getByLabel("Ask AI").fill("Replace this list with a new one.");
+  await panel.getByLabel("Ask AI").press("Enter");
+
+  const conversation = panel.getByRole("list", { name: "Conversation" });
+  await expect(conversation).toContainText("I proposed a new list");
+  const createCard = panel.getByRole("region", { name: `Proposed new note ${newTitle}` });
+  const deleteCard = panel.getByRole("region", { name: `Proposed delete of ${oldTitle}` });
+  await expect(createCard).toContainText("Butter");
+  await expect(deleteCard).toContainText("moves the note to the trash");
+  await expect(panel.getByRole("button", { name: "Apply all (2)" })).toBeVisible();
+
+  // Proposing wrote nothing.
+  expect(((await (await admin.get(`/api/notes/${old.id}`)).json()) as { version: string }).version).toBe(old.version);
+
+  await deleteCard.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(deleteCard.getByText("Moved to the trash.")).toBeVisible();
+  expect((await admin.get(`/api/notes/${old.id}`)).status()).toBe(404);
+  const trash = (await (await admin.get("/api/trash")).json()) as { notes: { id: string }[] };
+  expect(trash.notes.map((n) => n.id)).toContain(old.id);
+
+  await createCard.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(createCard.getByText("Created.")).toBeVisible();
+  await createCard.getByRole("link", { name: "Open the new note" }).click();
+  await expect(page).toHaveURL(/\/notes\/[0-9A-Z]{26}$/);
+  await expect(activePane(page)).toContainText("Butter");
+  const id = new URL(page.url()).pathname.split("/").pop()!;
+  const made = (await (await admin.get(`/api/notes/${id}`)).json()) as { note: { fields: { title: string } } };
+  expect(made.note.fields.title).toBe(newTitle);
 });
 
 test("a type change proposed in the AI panel and applied shows on a note of that type", async ({ page, admin }) => {

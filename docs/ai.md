@@ -119,6 +119,9 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `read_asset` | Reads one attachment by asset id; see [Attachments](#attachments) |
 | `backlinks` | The notes that link to a note |
 | `propose_edit` | Checks an edit to one note and shows it to you; never writes |
+| `propose_create` | Checks a new note of a type and shows it to you; never writes |
+| `propose_archive` | Checks that a note exists and is not already archived (or, to unarchive, archived) and shows it to you; never writes |
+| `propose_delete` | Checks that a note exists and can be deleted and shows it to you; never writes. Applied, the note moves to the trash; the model cannot empty the trash |
 | `list_types` | Every type's name, label, plural, description, and whether it is built in |
 | `get_type` | Reads one type file's WCL, with its fields and templates |
 | `type_format` | The type-file sections of the vault format, so the model knows the vocabulary |
@@ -153,6 +156,16 @@ When you ask for a change, such as "add eggs to my shopping list", the model pro
 
 The model never writes a note itself.
 
+### Create, archive and delete notes
+
+The model also proposes new notes, archiving a note or taking it out of the archive, and deleting a note. Each card's heading names the operation: "Proposed new note", "Proposed archive of", "Proposed unarchive of" or "Proposed delete of", then the note's title.
+
+- A new note is checked as the create route would check it; a note that does not check goes back to the model with the issues. Its card shows the fields and text it sets. Apply creates it with `POST /api/notes` and the card then links to the new note.
+- Apply on an archive or unarchive reads the note again first. If it is already in that state, the card says so and writes nothing. Otherwise Apply calls `POST /api/notes/{id}/archive` or `/unarchive` at the version it read.
+- Apply on a delete reads the note again first. If its version moved past the one the model saw, the card says the note changed and deletes nothing. Otherwise Apply calls `DELETE /api/notes/{id}`, which moves the note to the trash, and the card links to the trash, where you can restore it. Nothing in the AI panel empties the trash.
+
+When an answer leaves two or more proposals waiting, of any kind, the panel shows Apply all under them. It applies them in the order they came and stops at the first that does not apply; that card says why, and the rest wait for you.
+
 ### Apply a type change
 
 When you ask to change a type, such as "add a due date to tasks" or "put the status on its own tab", the model reads the type and proposes a whole new type file. The server checks it as the type write would; WCL that does not check goes back to the model with the issues, and the model fixes it before you see anything. A new name proposes a new type. The card shows the type file's lines removed and added:
@@ -186,7 +199,7 @@ When the provider refuses a request, the answer stops where it was and the panel
 | `text` | `{ delta }`, the next piece of the answer |
 | `tool` | `{ id, name, input }`, a tool call about to run |
 | `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text |
-| `proposal` | `{ id, note_id, title, base_version, before, after, ops }`, an edit to apply with `PUT /api/notes/{note_id}` |
+| `proposal` | A note change, by `op`. `update`: `{ id, op, note_id, title, base_version, before, after, ops }`, an edit to apply with `PUT /api/notes/{note_id}`. `create`: `{ id, op, type, title, after }`, a note to create with `POST /api/notes?type={type}`. `archive` and `unarchive`: `{ id, op, note_id, title, base_version }`, applied with `POST /api/notes/{note_id}/archive` or `/unarchive`. `delete`: `{ id, op, note_id, title, base_version }`, applied with `DELETE /api/notes/{note_id}`. A proposal without `op` is an `update` |
 | `type_proposal` | `{ id, name, exists, before, after, issues }`: `before` is the type file as stored (null for a new type), `after` the checked type file in canonical form, `issues` the warnings the check found |
 | `usage` | `{ provider, model, input, output }` for one model call |
 | `refusal` | `{ provider, model, category, explanation, messages }`; the last event |
