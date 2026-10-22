@@ -4,7 +4,7 @@ title: Cache the dev container image between CI jobs and runs, so each job skips
   ~9 minute rebuild
 blocked_by: []
 status: done
-verified: unmet
+verified: verified
 ---
 
 # Cache the dev container image between CI jobs and runs, so each job skips the ~9 minute rebuild
@@ -36,3 +36,11 @@ Verified set to unmet.
 ### 2026-10-22T02:12:27Z — wil
 
 Status set to done.
+
+### 2026-10-22T03:38:19Z — wil
+
+Proven by release run 39715278523 (0.1.14-alpha.1): every job logged 'dev: pulled ghcr.io/wiltaylor/thevault-dev:0e7728f8d6af' in 99-131 s instead of building; desktop 19 min (was 26-31), android build 13 (was 19), smoke 21 (was 30-32).
+
+### 2026-10-22T03:38:19Z — wil
+
+Verified set to verified.
