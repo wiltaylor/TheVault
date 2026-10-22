@@ -16,6 +16,7 @@ thiserror.workspace = true
 writer.workspace = true
 
 [dev-dependencies]
+ai.workspace = true
 serde_json.workspace = true
 store.workspace = true
 tempfile.workspace = true

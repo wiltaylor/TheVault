@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ai.workspace = true
 base64.workspace = true
 rustix.workspace = true
 script-core.workspace = true

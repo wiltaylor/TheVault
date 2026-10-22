@@ -36,7 +36,7 @@ use writer::{
     Event, Hooks, Input, Migration, NoteChange, Saved, ScriptRole, Writer, doc_to_json, note_path,
 };
 
-use crate::{Host, Job, Kind, Limits, Vault, current_job};
+use crate::{Ai, Host, Job, Kind, Limits, Vault, current_job};
 
 /// The most handler runs one chain may hold (D9, D30).
 pub const MAX_DEPTH: usize = 8;
@@ -162,15 +162,38 @@ struct Shared {
 }
 
 impl Handlers {
+    /// The handlers of the home server, whose `after_*` handlers reach `ai` with the vault's
+    /// credentials (ai D13). Make it outside an async runtime: its HTTP clients block.
     pub fn new(limits: Limits) -> Handlers {
+        Handlers::with_ai(limits, true)
+    }
+
+    /// The handlers of a device's embedded server, where every `ai` call returns `Err` with kind
+    /// `unavailable` (ai D13).
+    pub fn on_device(limits: Limits) -> Handlers {
+        Handlers::with_ai(limits, false)
+    }
+
+    fn with_ai(limits: Limits, ai: bool) -> Handlers {
         let binding: Binding = Arc::new(OnceLock::new());
         let vault = Arc::new(HandlerVault {
             binding: binding.clone(),
         });
+        let after_ai = if ai {
+            Ai::bound(binding.clone())
+        } else {
+            Ai::unavailable()
+        };
         Handlers {
             shared: Arc::new(Shared {
-                before: Host::new(vault.clone(), MAX_DEPTH + 2, limits.clone()),
-                after: Host::new(vault, AFTER_WORKERS, limits),
+                // `before_*` handlers and migrations have no `ai` module.
+                before: Host::new(
+                    vault.clone(),
+                    MAX_DEPTH + 2,
+                    limits.clone(),
+                    Ai::unavailable(),
+                ),
+                after: Host::new(vault, AFTER_WORKERS, limits, after_ai),
                 binding,
                 active: Mutex::new(None),
                 wake: (Mutex::new(false), Condvar::new()),

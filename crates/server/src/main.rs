@@ -92,6 +92,7 @@ fn main() -> anyhow::Result<()> {
         writer.clone(),
         SCRIPT_WORKERS,
         script::Limits::default(),
+        script::Ai::of(&writer),
     ));
     let scheduler =
         Scheduler::new(writer.clone(), host, clock).context("loading the scheduled tasks")?;

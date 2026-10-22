@@ -41,7 +41,8 @@ pub fn from_dyn(v: DynValue) -> Json {
 /// What an entry function returned. `Err(message)` when it returned a `Result` holding an error.
 ///
 /// Unit is `null`; `bool`, `int`, `float` and `string` are themselves; `Option` is its value or
-/// `null`; lists, string-keyed maps and `Value`s convert element by element.
+/// `null`; lists, string-keyed maps, structs and `Value`s convert element by element. An error
+/// that is a struct with a string `message` field is that message.
 pub fn returned(v: Value, defs: &DefTable) -> Result<Result<Json, String>, String> {
     match &v {
         Value::Enum(e) if e.def == DEF_RESULT => {
@@ -51,6 +52,10 @@ pub fn returned(v: Value, defs: &DefTable) -> Result<Result<Json, String>, Strin
             } else if e.tag == TAG_ERR {
                 Ok(Err(match returned(inner, defs)? {
                     Ok(Json::String(s)) => s,
+                    // An error struct, such as `ai`'s `AiError`, reads as its message.
+                    Ok(Json::Object(o)) if o.get("message").is_some_and(Json::is_string) => {
+                        o["message"].as_str().unwrap_or_default().to_owned()
+                    }
                     Ok(other) => other.to_string(),
                     Err(s) => s,
                 }))
@@ -95,6 +100,19 @@ fn plain(v: Value, defs: &DefTable) -> Result<Json, String> {
                     wscript::core::value::Key::Char(c) => c.to_string(),
                 };
                 out.insert(key, plain(v.clone(), defs)?);
+            }
+            Json::Object(out)
+        }
+        // A struct a host function returned, such as `http`'s `Response`, is an object of its
+        // fields. An opaque handle has no JSON form.
+        Value::Struct(st) if defs.as_struct(st.def).is_some_and(|sd| !sd.opaque) => {
+            let names: Vec<String> = defs
+                .as_struct(st.def)
+                .map(|sd| sd.fields.iter().map(|(n, _)| n.clone()).collect())
+                .unwrap_or_default();
+            let mut out = serde_json::Map::new();
+            for (name, v) in names.into_iter().zip(st.fields.borrow().iter()) {
+                out.insert(name, plain(v.clone(), defs)?);
             }
             Json::Object(out)
         }

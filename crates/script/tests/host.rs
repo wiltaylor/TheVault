@@ -57,7 +57,12 @@ fn fixture_with(limits: Limits) -> Fixture {
     )
     .unwrap();
     let writer = Arc::new(Writer::open(vault, state).unwrap());
-    let host = Host::new(writer.clone() as Arc<dyn Vault>, 2, limits);
+    let host = Host::new(
+        writer.clone() as Arc<dyn Vault>,
+        2,
+        limits,
+        script::Ai::of(&writer),
+    );
     Fixture {
         _dir: dir,
         writer,

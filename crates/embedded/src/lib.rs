@@ -144,7 +144,7 @@ impl Embedded {
         let state =
             state::State::open(&state_path, config.secret_key).context("opening state.db")?;
         let queue = Arc::new(sync::Queue::open(&state_path).context("opening the sync queue")?);
-        let handlers = script::Handlers::new(script::Limits::default());
+        let handlers = script::Handlers::on_device(script::Limits::default());
         let bound = Arc::new(OnceLock::new());
         let writer = Arc::new(
             writer::Writer::open(vault, state)
@@ -161,10 +161,12 @@ impl Embedded {
             .context("bringing the vault's shipped defaults up to date")?;
         // Bound, never started: no queue thread runs.
         handlers.bind(&writer);
+        // A device holds no AI credentials: every `ai` call returns `unavailable` (ai D13).
         let host = Arc::new(script::Host::new(
             writer.clone(),
             SCRIPT_WORKERS,
             script::Limits::default(),
+            script::Ai::unavailable(),
         ));
         // Never started: no scheduler thread runs.
         let scheduler =

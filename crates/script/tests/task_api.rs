@@ -84,6 +84,7 @@ fn fixture() -> Fixture {
             timeout: Duration::from_secs(600),
             ..Limits::default()
         },
+        script::Ai::of(&writer),
     );
     Fixture {
         dir,

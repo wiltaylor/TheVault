@@ -8,6 +8,7 @@ Scripts are wscript files, `scripts/<name>.ws`. They run as type handlers (`docs
 |--------|---------------------------------|--------------------|-------------------|------------------------------|
 | `vault` | yes | yes | yes | yes |
 | `http` | no | yes | yes | no |
+| `ai` | no | yes | yes | no |
 | `secrets` | no | yes | yes | no |
 | `fs` | no | no | yes | no |
 | `device` | no | no | no | yes |
@@ -19,7 +20,7 @@ Each run has limits: 50 million instructions, a call depth of 256, a wall-clock 
 
 ## Conventions
 
-- Every function that can fail returns `Result[T, string]`. Use `?` to stop the run on an error, or `match` to handle it. A run whose entry function returns `Err(message)` is recorded as failed with that message.
+- Every function that can fail returns `Result[T, string]`, except the `ai` functions, whose error is an `AiError`. Use `?` to stop the run on an error, or `match` to handle it. A run whose entry function returns `Err(message)` is recorded as failed with that message, and one that returns `Err(e)` with an `AiError` is recorded as failed with `e.message`.
 - Notes travel as a `Value` in the JSON form of the notes API: `{ id, type, version, note }`, where `note` is `{ fields, blocks }`.
 - A `version` argument guards a change: the write is refused when the note has changed since that version. Where a function says so, an empty string `""` takes the note as it is now.
 - A scheduled script's changes are recorded in note history as made by `task <name>`. A handler's are recorded as made by `handler <script>`. Every change goes through the normal write path: it is validated, a history version is kept, and the note's handlers run.
@@ -286,6 +287,85 @@ The Google sync keeps its settings and state in secrets, never in notes (google-
 A missing `google_settings` means every default. In the two state objects, `last_run` is an RFC 3339 time, `last_error` the last run's error or null, and `notified_invalid_grant` is true once the run has told the user Google refused the sign-in; it goes back to false when a token refresh succeeds. `history_id` and `backfill_page` are Gmail's history id and back-fill page token. `listed` is what the last finished window listing covered, `{ mode, labels, window_days }` with `labels` the sorted Gmail label ids, or null before one: a run whose settings differ lists the window again besides reading history (all of it for a new mode or window, only the added labels otherwise, nothing when labels were only removed) and starts the back-fill over, and a run with nothing to list saves no `history_id`. `sync_tokens` holds each calendar's sync token by calendar id, and `window_end` is the date recurring events have occurrence notes up to. Disconnecting Google sets the cursors (`history_id`, `listed`, `backfill_page`, `sync_tokens`, `window_end`) back to null or empty.
 
 Each task writes only its own state secret, so the two never overwrite each other, and its task file's `secrets` list names exactly what it reads and writes. The write-back handler reads `google_settings` and writes nothing but notes.
+
+## `ai`
+
+`after_*` handlers and scheduled scripts only. Each call sends a prompt to a large language model with the credentials set up in Settings > AI: an Anthropic API key, an OpenAI API key, or a ChatGPT plan sign-in.
+
+| Function | Returns |
+|----------|---------|
+| `ai::complete(prompt: string, options: Map[string, string])` | `Result[Reply, AiError]`: the model's answer to one user message |
+| `ai::chat(messages: List[ChatMessage], options: Map[string, string])` | `Result[Reply, AiError]`: the model's next turn in a conversation. The messages are sent in order |
+
+`ChatMessage` is `{ role: string, text: string }`, where `role` is `user` or `assistant`. Build one as `ChatMessage { role: "user", text: "..." }`.
+
+`Reply` is `{ text: string, json: Value, provider: string, model: string, input_tokens: int, output_tokens: int, stop: string }`. `json` is the answer parsed as JSON when the call sets `schema`, and `Value::Null` otherwise. `stop` is `end_turn`, or `max_tokens` when the output cap cut the answer off.
+
+`AiError` is `{ kind: string, message: string, provider: string, model: string, category: string }`. A field the failure does not know is `""`. `kind` is one of these:
+
+| `kind` | Means |
+|--------|-------|
+| `not_configured` | No provider or model is chosen, or the provider has no key or sign-in |
+| `auth` | The provider refused the key or token, or the ChatGPT sign-in expired |
+| `rate_limit` | A rate or usage limit, a ChatGPT plan's limit included |
+| `refusal` | The model refused the request. `category`, such as `cyber`, says why when the provider names it |
+| `invalid` | A bad option, model or schema, or an answer that does not match `schema` |
+| `timeout` | The provider did not answer in time |
+| `unavailable` | The provider cannot be reached or is overloaded, or the call ran on a device |
+| `provider` | Any other failure the provider reported |
+
+Every option is a string, and `#{}` takes every default. An empty value counts as unset:
+
+| Option | Holds | When unset |
+|--------|-------|------------|
+| `provider` | `anthropic`, `openai` or `chatgpt` | The default provider of Settings > AI |
+| `model` | A model id the provider lists | The provider's default model in Settings > AI |
+| `system` | The system prompt | None |
+| `schema` | A JSON Schema object, as JSON text, that the answer must follow | Plain text |
+| `effort` | How hard the model thinks: `low`, `medium`, `high`, `xhigh` or `max` | The provider's default |
+| `max_tokens` | The most output tokens, a whole number such as `"500"` | The provider's default. A ChatGPT plan call never sends a cap |
+
+An unknown option is an `invalid` error, so a misspelt name is not ignored. A wscript string writes a literal brace as `{{` or `}}`; build a schema with `json::to_string` to avoid that, as the example does.
+
+Rules:
+
+- The module reads the credentials itself. The run lists no `ai_*` secret in `secrets` and no provider host in `allow_domains`, and no function returns a key or token.
+- A call blocks until the answer is complete. It ends at the run's time limit, like `http::get`: a call still waiting then ends the run as timed out. An `after_*` handler has the 30-second default limit, so put long generations in a scheduled script with a longer `timeout`, such as `timeout = "PT5M"`.
+- Every call adds one line to the run log, whether it succeeds or fails: `ai: provider=<p> model=<m> in=<input tokens> out=<output tokens> outcome=ok|refused|error:<kind> ms=<duration>`. The line never holds the prompt. When the call fails before a provider is chosen, `provider` and `model` are `-`.
+- A refusal is never retried or sent to another model. It returns `Err` with kind `refusal`.
+- The prompt, and any note content in it, goes to the provider.
+- A `before_*` handler or a migration has no `ai` module, so a script that uses it there does not compile.
+- On a paired phone or the desktop app's own server, every call returns `Err` with kind `unavailable`: AI calls run on the home server.
+
+```rust
+use ai
+use json
+use vault
+
+fn run() -> Result[int, string] {
+    let schema = json::to_string(Value::Map(#{
+        "type": Value::String("object"),
+        "properties": Value::Map(#{
+            "summary": Value::Map(#{ "type": Value::String("string") }),
+        }),
+        "required": Value::List([Value::String("summary")]),
+        "additionalProperties": Value::Bool(false),
+    }))
+    let rows = vault::query("from meeting sort updated desc limit 5")?
+    for row in rows {
+        let id = row.get("id").unwrap().as_string().unwrap()
+        let note = vault::get(id)?
+        let prompt = "Summarise this meeting note in one sentence:\n" + json::to_string(note)
+        let reply = match ai::complete(prompt, #{ "schema": schema, "max_tokens": "300" }) {
+            Ok(r) => r,
+            Err(e) => return Err(e.kind + ": " + e.message),
+        }
+        let summary = reply.json.get("summary").unwrap().as_string().unwrap()
+        vault::patch(id, Value::Map(#{ "summary": Value::String(summary) }), "")?
+    }
+    Ok(rows.len())
+}
+```
 
 ## `fs`
 

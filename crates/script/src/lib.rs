@@ -7,6 +7,7 @@
 //! |--------|---------------------------------|--------------------|-------|
 //! | `vault` | yes | yes | yes |
 //! | `http` | no | yes | yes |
+//! | `ai` | no | yes | yes |
 //! | `secrets` (read and write) | no | yes | yes |
 //! | `fs` | no | no | yes |
 //! | `value`, `json`, `math`, `regex` | yes | yes | yes |
@@ -22,8 +23,11 @@
 //! Changes go through `writer`, whose [`Vault`] implementation is the write path (D13, D30). HTTP
 //! calls reach only the hosts on the job's allowlist, or any host when it holds `"*"`, and never
 //! follow redirects (D10). A script reads only the secrets its job names, and cannot list them
-//! (D10). File access reaches only the job's directories, never the vault itself.
+//! (D10). File access reaches only the job's directories, never the vault itself. The `ai`
+//! module reads the AI credentials itself, so a script names neither them nor the providers'
+//! hosts, and can never read a key (ai D13).
 
+mod ai_module;
 mod fs;
 mod handlers;
 mod http;
@@ -35,6 +39,7 @@ use std::sync::Arc;
 use wscript::std_modules::DynValue;
 use wscript::{Fault, HostError, Module};
 
+pub use ai_module::{Ai, AiError, ChatMessage, Reply as AiReply};
 pub use handlers::{Handlers, MAX_DEPTH};
 pub use http::Response;
 pub use script_core::*;
@@ -43,14 +48,18 @@ pub use script_core::*;
 pub struct Host(script_core::Host);
 
 impl Host {
-    /// A host whose scripts reach `vault`, run on `workers` threads, bounded by `limits`.
-    pub fn new(vault: Arc<dyn Vault>, workers: usize, limits: Limits) -> Host {
+    /// A host whose scripts reach `vault`, run on `workers` threads, bounded by `limits`. Its
+    /// `ai` module reads its credentials through `ai`.
+    ///
+    /// Build it outside an async runtime: its HTTP clients block.
+    pub fn new(vault: Arc<dyn Vault>, workers: usize, limits: Limits, ai: Ai) -> Host {
         Host(script_core::Host::with_extensions(
             vault,
             workers,
             limits,
             &Server {
                 http: http::client(),
+                ai,
             },
         ))
     }
@@ -64,9 +73,11 @@ impl Deref for Host {
     }
 }
 
-/// The server's modules: `http` and `secrets` for `after_*` handlers and tasks, `fs` for tasks.
+/// The server's modules: `http`, `ai` and `secrets` for `after_*` handlers and tasks, `fs` for
+/// tasks.
 struct Server {
     http: reqwest::blocking::Client,
+    ai: Ai,
 }
 
 impl Extensions for Server {
@@ -96,6 +107,7 @@ impl Extensions for Server {
         let side_effects = || {
             vec![
                 http::module(self.http.clone()),
+                ai_module::module(self.ai.clone()),
                 secrets_module(vault.clone()),
             ]
         };
