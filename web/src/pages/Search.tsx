@@ -6,6 +6,7 @@ import { A, useLocation, useNavigate } from "@solidjs/router";
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { type ArchivedFilter, type FieldDef, type Row, type TypeDef, api, isArchived } from "../api";
 import { copyText } from "../blocks/CodeBlock";
+import { optionText } from "../options";
 import { ChipPicker, typeSuggestions } from "../components/ChipPicker";
 import { FieldInput, termOptions } from "../components/FieldInput";
 import { SearchIcon, TypeIcon } from "../components/Icon";
@@ -545,7 +546,7 @@ function ValueInputs(props: {
                       props.setValues((props.def.options ?? []).filter((x) => want.has(x)));
                     }}
                   />
-                  {o}
+                  {optionText(props.def, o)}
                 </label>
               )}
             </For>
@@ -559,7 +560,7 @@ function ValueInputs(props: {
             <For each={props.def.options ?? []}>
               {(o) => (
                 <option value={o} selected={v(0) === o}>
-                  {o}
+                  {optionText(props.def, o)}
                 </option>
               )}
             </For>

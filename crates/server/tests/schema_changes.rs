@@ -510,6 +510,18 @@ fn an_unknown_attribute_is_a_warning_that_put_and_the_type_list_show() {
         .find(|t| t["name"] == "gadget")
         .unwrap();
     assert_eq!(inspected["warnings"], warnings, "{inspected}");
+    // It also carries what was ignored, as WCL text, so the type editor can write it back.
+    assert_eq!(
+        inspected["extra"],
+        json!({ "shelf": "\"top\"" }),
+        "{inspected}"
+    );
+    assert_eq!(
+        inspected["fields"][0]["extra"],
+        json!({ "unit": "\"cm\"" }),
+        "{inspected}"
+    );
+    assert!(task_has_no_extra(&schema), "{schema}");
 
     // Notes of the type are written and checked against what the type does know.
     api.create_note("gadget", "title = \"Lamp\"\nsize = 30\n");
@@ -546,4 +558,44 @@ fn an_unknown_attribute_is_a_warning_that_put_and_the_type_list_show() {
         issues.iter().all(|i| i["severity"] == "error"),
         "a refused type lists its errors: {refused}"
     );
+}
+
+/// No type of `schema` but the gadget carries `extra`.
+fn task_has_no_extra(schema: &Value) -> bool {
+    schema["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["name"] != "gadget")
+        .all(|t| t.get("extra").is_none())
+}
+
+#[test]
+fn select_option_labels_reach_the_schema_and_type_list() {
+    let api = Api::start();
+    let source = "label = \"Trip\"\n\nfield mode {\n  kind          = \"select\"\n  options       = [\"car\", \"air\"]\n  option_labels = [\"By car\", \"\"]\n}\n\ntemplate default {\n  tab \"Main\" {\n    slot \"mode\"\n  }\n}\n";
+    let saved = expect(
+        api.put("/api/types/trip")
+            .json(&json!({ "wcl": source }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(saved["warnings"], json!([]), "{saved}");
+    for url in ["/api/schema", "/api/types"] {
+        let body = expect(api.get(url).send().unwrap(), 200);
+        let trip = body["types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "trip")
+            .unwrap();
+        assert_eq!(trip["fields"][0]["options"], json!(["car", "air"]), "{url}");
+        assert_eq!(
+            trip["fields"][0]["option_labels"],
+            json!(["By car", ""]),
+            "{url}"
+        );
+    }
+    api.create_note("trip", "title = \"Coast\"\nmode = \"car\"\n");
 }

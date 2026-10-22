@@ -107,7 +107,13 @@ fn field_json(f: &FieldDef) -> Value {
     }
     let extra = match &f.kind {
         FieldKind::DateRange { of } => json!({ "of": of.name() }),
-        FieldKind::Select { options } => json!({ "options": options }),
+        FieldKind::Select {
+            options,
+            option_labels,
+        } if !option_labels.is_empty() => {
+            json!({ "options": options, "option_labels": option_labels })
+        }
+        FieldKind::Select { options, .. } => json!({ "options": options }),
         // A list of terms reads as a multiple taxonomy field; `items` says how it was declared.
         FieldKind::Taxonomy { taxonomy } if f.term_list => {
             json!({ "taxonomy": taxonomy, "items": "taxonomy" })
@@ -151,7 +157,7 @@ fn template_json(t: &Template) -> Value {
                 .items
                 .iter()
                 .map(|item| match item {
-                    TabItem::Slot { field, label } => {
+                    TabItem::Slot { field, label, .. } => {
                         json!({ "slot": field, "label": label })
                     }
                     TabItem::Block(b) => json!({ "block": block_json(b) }),
@@ -343,5 +349,6 @@ pub(crate) fn plan_json(plan: &TypePlan, applied: bool) -> Value {
             .collect::<Vec<_>>(),
         "changes": changes,
         "flagged": plan.flagged,
+        "retemplated": plan.retemplated,
     })
 }

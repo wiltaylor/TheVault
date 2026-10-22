@@ -43,6 +43,7 @@ mod fleeting;
 pub mod google;
 mod note;
 mod notify;
+mod queryviews;
 mod refs;
 mod remote;
 mod script_vault;
@@ -81,7 +82,7 @@ pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
 pub use index::{Archived, AssetHow, AssetUse, Graph, GraphEdge, GraphNode};
 pub use note::{
-    ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, value_to_json,
+    ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, value_to_json, value_wcl,
 };
 pub use refs::Referrer;
 pub use remote::{REMOTE_AUTHOR, Remote};
@@ -702,6 +703,9 @@ impl Writer {
         let created = created_of(&doc);
         // A note archived when it was deleted comes back archived.
         let archived = note::is_archived(&doc);
+        // Its computed values are its own, written by handlers before it was deleted, so they
+        // come back with it.
+        let own = doc.clone();
         let mut change = self.prepare_put_as(
             &inner,
             id,
@@ -710,6 +714,7 @@ impl Writer {
             None,
             author,
             Some(archived),
+            Some(&own),
         )?;
         // The note existed before; it keeps the time it was first created.
         if let (Some(created), Some(doc)) = (created, change.doc.as_mut()) {
@@ -755,6 +760,7 @@ impl Writer {
             Some(&old),
             author,
             Some(archived),
+            None,
         )?;
         let check = || self.check_base(id, &type_name, &old, base);
         self.apply(inner, vec![change], &check, author).map(first)
@@ -781,6 +787,7 @@ impl Writer {
             Some(&old),
             author,
             Some(archived),
+            None,
         )?;
         self.stage(change, author)
     }
@@ -1080,11 +1087,13 @@ impl Writer {
         old: Option<&str>,
         author: &Author,
     ) -> Result<NoteChange> {
-        self.prepare_put_as(inner, id, type_name, doc, old, author, None)
+        self.prepare_put_as(inner, id, type_name, doc, old, author, None, None)
     }
 
     /// [`Writer::prepare_put`] that sets the note's archived state to `archived`, or keeps the
-    /// state the note has when `None`. A new note is not archived.
+    /// state the note has when `None`. A new note is not archived. `computed_from` is the note
+    /// whose computed values the write may keep, when not `old`: the note's own last content, for
+    /// a note restored from the trash.
     #[allow(clippy::too_many_arguments)]
     fn prepare_put_as(
         &self,
@@ -1095,6 +1104,7 @@ impl Writer {
         old: Option<&str>,
         author: &Author,
         archived: Option<bool>,
+        computed_from: Option<&Doc>,
     ) -> Result<NoteChange> {
         let ty = inner
             .schema
@@ -1110,7 +1120,7 @@ impl Writer {
             .and_then(created_of)
             .unwrap_or_else(|| now.clone());
         if !matches!(author, Author::Handler(_) | Author::Task(_)) {
-            let issues = computed_writes(ty, &doc, old_doc.as_ref());
+            let issues = computed_writes(ty, &doc, computed_from.or(old_doc.as_ref()));
             if !issues.is_empty() {
                 return Err(Error::Invalid(Invalid { file: path, issues }));
             }

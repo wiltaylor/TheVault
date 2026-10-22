@@ -49,16 +49,23 @@ field span {
   of    = "date"
 }
 
+field session {
+  kind  = "date_range"
+  label = "Session"
+  of    = "date_or_datetime"
+}
+
 field homepage {
   kind  = "url"
   label = "Homepage"
 }
 
 field priority {
-  kind    = "select"
-  label   = "Priority"
-  options = ["low", "medium", "high"]
-  default = "medium"
+  kind          = "select"
+  label         = "Priority"
+  options       = ["low", "medium", "high"]
+  option_labels = ["Low", "Medium", "High"]
+  default       = "medium"
 }
 
 field channels {
@@ -119,9 +126,22 @@ field related {
 }
 
 field aliases {
+  kind   = "list"
+  label  = "Aliases"
+  items  = "string"
+  labels = "alias_labels"
+}
+
+field alias_labels {
   kind  = "list"
-  label = "Aliases"
+  label = "Alias labels"
   items = "string"
+}
+
+field import_ref {
+  kind   = "string"
+  label  = "Import reference"
+  hidden = true
 }
 
 field extra {
@@ -149,8 +169,9 @@ field body {
 }
 
 field cover {
-  kind  = "asset"
-  label = "Cover"
+  kind   = "asset"
+  label  = "Cover"
+  accept = "image"
 }
 
 field attachments {
@@ -196,6 +217,7 @@ template default {
   }
 
   tab "Relations" {
+    when = "!done"
     slot "parent"
     slot "children"
     slot "related"

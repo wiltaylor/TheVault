@@ -23,6 +23,8 @@ import {
   isTermList,
   needsDefault,
   newField,
+  optionsText as writeOptions,
+  parseOptions,
   problems,
   renames,
   typeFromSchema,
@@ -48,7 +50,7 @@ export function errorText(e: unknown): string {
 /**
  * What this version ignored when it loaded the type file, such as an attribute of the type or a
  * field that only a newer release knows. The type still works, so these do not stop a save, but
- * they show, so a typo is seen. The editor saves what it knows, which leaves them out.
+ * they show, so a typo is seen. Saving keeps them in the file as they were.
  */
 export function TypeWarnings(props: { warnings: SchemaIssue[] }) {
   return (
@@ -56,7 +58,7 @@ export function TypeWarnings(props: { warnings: SchemaIssue[] }) {
       <section class="type-warnings" aria-label="Warnings">
         <p class="muted">
           This version ignores {props.warnings.length === 1 ? "this part" : "these parts"} of the type file. The type
-          still works. Saving here leaves {props.warnings.length === 1 ? "it" : "them"} out of the file.
+          still works. Saving here keeps {props.warnings.length === 1 ? "it" : "them"} in the file as {props.warnings.length === 1 ? "it is" : "they are"}.
         </p>
         <ul>
           <For each={props.warnings}>
@@ -334,7 +336,7 @@ export function TypeEditor() {
     const f = () => props.field;
     const key = f().key;
     const set = (fn: (x: FieldModel) => void) => editField(key, fn);
-    const [optionsText, setOptionsText] = createSignal(f().options.join("\n"));
+    const [optionsText, setOptionsText] = createSignal(writeOptions(f()));
     // A field added in this session opens with its settings showing.
     const [open, setOpen] = createSignal(f().original === null);
     const id = (part: string) => `f${key}-${part}`;
@@ -507,18 +509,18 @@ export function TypeEditor() {
                   onInput={(e) => set((x) => (x.description = e.currentTarget.value))}
                 />
                 <Show when={f().kind === "select"}>
-                  <label for={id("options")}>Options, one per line</label>
+                  <label for={id("options")}>Options, one per line, as value or value = Label</label>
                   <textarea
                     id={id("options")}
                     rows={3}
                     value={optionsText()}
                     onInput={(e) => {
                       setOptionsText(e.currentTarget.value);
-                      const opts = e.currentTarget.value
-                        .split("\n")
-                        .map((o) => o.trim())
-                        .filter(Boolean);
-                      set((x) => (x.options = opts));
+                      const parsed = parseOptions(e.currentTarget.value);
+                      set((x) => {
+                        x.options = parsed.options;
+                        x.option_labels = parsed.option_labels;
+                      });
                     }}
                   />
                 </Show>

@@ -1,0 +1,25 @@
+label   = "Newer"
+sort_by = "title"
+
+field rank {
+  kind      = "int"
+  label     = "Rank"
+  sparkline = true
+}
+
+template default {
+  density = "compact"
+
+  tab "Main" {
+    pinned = true
+    slot "title"
+    slot "rank" {
+      label = "Rank"
+      width = 2
+    }
+    paragraph {
+      text  = "Ranked {{rank}}."
+      align = "center"
+    }
+  }
+}

@@ -3,6 +3,10 @@
 # with `wcl check`, and against the data-only rule with data-only.mjs. Then
 # confirm both checks still reject the files in invalid/.
 #
+# A type file follows the readers' rule for attributes from newer releases:
+# an attribute its schema does not declare is a warning, not a failure
+# (tolerated.mjs), so tolerated/newer-type.wcl passes with warnings.
+#
 # Usage, from the repository root:
 #   ./dev docs/vault-format/check.sh
 #
@@ -36,8 +40,31 @@ check() {
   fi
 }
 
-for f in "$vault"/types/*.wcl; do
-  check "$f" "$schema/common.wcl" "$schema/type.wcl"
+# A type file: an attribute only a newer release knows is a warning.
+check_type() {
+  local file=$1
+  local rel=${file#"$here"/}
+  local combined=$tmp/$(basename "$file")
+  cat "$schema/common.wcl" "$schema/type.wcl" "$file" >"$combined"
+  local json out
+  # `wcl check` exits non-zero on any violation; tolerated.mjs decides.
+  json=$("$wcl" check --json "$combined" 2>/dev/null || true)
+  if out=$(printf '%s' "$json" | node "$here/tolerated.mjs"); then
+    if [ -n "$out" ]; then
+      echo "ok    wcl check   $rel (with warnings)"
+      printf '%s\n' "$out" | sed 's/^/        /'
+    else
+      echo "ok    wcl check   $rel"
+    fi
+    return 0
+  fi
+  echo "FAIL  wcl check   $rel (schema files: common.wcl type.wcl)"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  return 1
+}
+
+for f in "$vault"/types/*.wcl "$here"/tolerated/*.wcl; do
+  check_type "$f" || failed=1
 done
 for f in "$vault"/taxonomies/*.wcl; do
   check "$f" "$schema/taxonomy.wcl"
@@ -67,6 +94,12 @@ if "$wcl" check "$tmp/schema-violation.wcl" >/dev/null 2>&1; then
   failed=1
 else
   echo "ok    wcl check   invalid/schema-violation.wcl rejected"
+fi
+if check_type "$here/invalid/type-wrong-form.wcl" >/dev/null; then
+  echo "FAIL  wcl check   invalid/type-wrong-form.wcl was accepted"
+  failed=1
+else
+  echo "ok    wcl check   invalid/type-wrong-form.wcl rejected"
 fi
 if node "$here/data-only.mjs" "$here/invalid/expression.wcl" >/dev/null; then
   echo "FAIL  data-only   invalid/expression.wcl was accepted"

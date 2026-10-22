@@ -98,8 +98,11 @@ pub enum FieldKind {
         of: RangeOf,
     },
     Url,
+    /// `option_labels` is empty, or holds one label per option, index-aligned. An empty label
+    /// shows the option's value.
     Select {
         options: Vec<String>,
+        option_labels: Vec<String>,
     },
     Taxonomy {
         taxonomy: String,
@@ -236,6 +239,9 @@ pub struct FieldDef {
     pub labels: Option<String>,
     /// On an asset field: which assets it may hold.
     pub accept: Accept,
+    /// Attributes this version does not know, kept as written so an editor that rewrites the
+    /// field can keep them (see [`TypeDef::warnings`]).
+    pub extra: Vec<(String, Value)>,
 }
 
 /// The `accept` of an asset field.
@@ -284,6 +290,7 @@ pub(crate) fn title_field() -> FieldDef {
         default: None,
         labels: None,
         accept: Accept::Any,
+        extra: Vec::new(),
     }
 }
 
@@ -299,6 +306,22 @@ impl FieldDef {
             _ => None,
         }
     }
+
+    /// The text a select field shows for option `value`: its label, else the value itself.
+    pub fn option_text<'a>(&'a self, value: &'a str) -> &'a str {
+        match &self.kind {
+            FieldKind::Select {
+                options,
+                option_labels,
+            } => options
+                .iter()
+                .position(|o| o == value)
+                .and_then(|n| option_labels.get(n))
+                .filter(|l| !l.is_empty())
+                .map_or(value, String::as_str),
+            _ => value,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -306,6 +329,8 @@ pub struct Template {
     pub name: String,
     pub label: Option<String>,
     pub tabs: Vec<Tab>,
+    /// Attributes this version does not know, kept as written.
+    pub extra: Vec<(String, Value)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -315,14 +340,18 @@ pub struct Tab {
     /// note. `None` shows it for every note. The web client evaluates it as the note is edited.
     pub when: Option<String>,
     pub items: Vec<TabItem>,
+    /// Attributes this version does not know, kept as written.
+    pub extra: Vec<(String, Value)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabItem {
-    /// Places a field, or `title`. `label` overrides the field's label here.
+    /// Places a field, or `title`. `label` overrides the field's label here. `extra` holds the
+    /// attributes this version does not know, kept as written.
     Slot {
         field: String,
         label: Option<String>,
+        extra: Vec<(String, Value)>,
     },
     /// A fixed content block.
     Block(DocBlock),
@@ -351,6 +380,10 @@ pub struct TypeDef {
     pub handlers: Vec<Handler>,
     /// What this version ignores in the file, such as an attribute only a newer release knows.
     pub warnings: Vec<Issue>,
+    /// The type's own attributes this version does not know, kept as written. Each field,
+    /// template, tab and slot keeps its own, so an editor that rewrites the file from this
+    /// definition loses none of them.
+    pub extra: Vec<(String, Value)>,
 }
 
 impl TypeDef {
@@ -383,6 +416,7 @@ impl TypeDef {
             opt("colour", Form::Palette),
         ];
         c.attributes(doc, &items, &[], "type", "types");
+        let extra = unknown(doc, &items, &[]);
         c.only_blocks(doc, &["field", "template", "handler"], "type");
 
         let mut fields: Vec<FieldDef> = Vec::new();
@@ -443,6 +477,7 @@ impl TypeDef {
             templates,
             handlers,
             warnings,
+            extra,
         })
     }
 
@@ -466,6 +501,7 @@ impl TypeDef {
                 name: "card".to_owned(),
                 label: None,
                 tabs: default.tabs.iter().take(1).cloned().collect(),
+                extra: Vec::new(),
             }),
             _ => None,
         }
@@ -508,7 +544,10 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
     let kind_name = d.field("kind").and_then(Value::as_str).unwrap_or("");
     match kind_name {
         "date_range" => items.push(opt("of", Form::OneOf(&RangeOf::NAMES))),
-        "select" => items.push(req("options", Form::StrList)),
+        "select" => items.extend([
+            req("options", Form::StrList),
+            opt("option_labels", Form::StrList),
+        ]),
         "taxonomy" => items.push(req("taxonomy", Form::Str)),
         "reference" => items.extend([
             req("target", Form::Str),
@@ -578,7 +617,27 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
                     c.fail(&format!("{at}.options"), format!("lists {o:?} twice"));
                 }
             }
-            FieldKind::Select { options }
+            let option_labels: Vec<String> = match d.field("option_labels") {
+                Some(Value::List(l)) => l
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if d.field("option_labels").is_some() && option_labels.len() != options.len() {
+                c.fail(
+                    &format!("{at}.option_labels"),
+                    format!(
+                        "holds {} labels for {} options: give one label per option, in the same order",
+                        option_labels.len(),
+                        options.len()
+                    ),
+                );
+            }
+            FieldKind::Select {
+                options,
+                option_labels,
+            }
         }
         "taxonomy" | "list" if kind_name == "taxonomy" || term_list => {
             let taxonomy = s("taxonomy").unwrap_or_default();
@@ -651,6 +710,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         } else {
             Accept::Any
         },
+        extra: unknown(d, &items, &["default"]),
     };
     if let Some(v) = &def.default {
         let path = format!("{at}.default");
@@ -798,7 +858,8 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
         return None;
     }
     let d = &b.body;
-    c.attributes(d, &[opt("label", Form::Str)], &[], at, "templates");
+    let template_items = [opt("label", Form::Str)];
+    c.attributes(d, &template_items, &[], at, "templates");
     c.only_blocks(d, &["tab"], at);
     if d.blocks_of("tab").next().is_none() {
         c.fail(at, "needs at least one tab");
@@ -816,7 +877,8 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
                 continue;
             }
         };
-        c.attributes(&t.body, &[opt("when", Form::Str)], &[], &tab_at, "tabs");
+        let tab_items = [opt("when", Form::Str)];
+        c.attributes(&t.body, &tab_items, &[], &tab_at, "tabs");
         let when = string(&t.body, "when");
         if let Some(w) = &when {
             check_when(c, w, fields, &format!("{tab_at}.when"));
@@ -855,13 +917,19 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
                 );
             }
         }
-        tabs.push(Tab { title, when, items });
+        tabs.push(Tab {
+            title,
+            when,
+            items,
+            extra: unknown(&t.body, &tab_items, &[]),
+        });
     }
     c.template = false;
     Some(Template {
         name,
         label: string(d, "label"),
         tabs,
+        extra: unknown(d, &template_items, &[]),
     })
 }
 
@@ -965,11 +1033,13 @@ fn slot(
             format!("places {field:?} a second time in this template"),
         );
     }
-    c.attributes(&block.body, &[opt("label", Form::Str)], &[], at, "slots");
+    let slot_items = [opt("label", Form::Str)];
+    c.attributes(&block.body, &slot_items, &[], at, "slots");
     c.only_blocks(&block.body, &[], at);
     Some(TabItem::Slot {
         field: field.clone(),
         label: string(&block.body, "label"),
+        extra: unknown(&block.body, &slot_items, &[]),
     })
 }
 
@@ -1085,6 +1155,19 @@ fn handler(c: &mut Check, b: &DocBlock) -> Option<Handler> {
         script,
         event,
     })
+}
+
+/// The attributes of `doc` that neither `items` nor `also` name: what [`Check::attributes`] warns
+/// this version ignores, in file order, first occurrence only.
+fn unknown(doc: &Doc, items: &[crate::blocks::Item], also: &[&str]) -> Vec<(String, Value)> {
+    let mut seen = HashSet::new();
+    doc.fields
+        .iter()
+        .filter(|(n, _)| {
+            !items.iter().any(|i| i.name == n) && !also.contains(&n.as_str()) && seen.insert(n)
+        })
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn string(doc: &Doc, name: &str) -> Option<String> {

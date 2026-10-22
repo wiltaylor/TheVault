@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use schema::{FieldKind, Issue, NoteLookup, OnDelete, RangeOf, Relation, Schema, TypeDef};
+use schema::{FieldKind, Issue, NoteLookup, OnDelete, RangeOf, Relation, Schema, TypeDef, Value};
 
 const SPECIMEN_TYPE: &str = include_str!("../../../docs/vault-format/vault/types/specimen.wcl");
 const BOARD_TYPE: &str = include_str!("../../../docs/vault-format/vault/types/board.wcl");
@@ -42,7 +42,7 @@ fn text(issues: &[Issue]) -> Vec<String> {
 fn the_example_vault_is_valid() {
     let schema = example();
     let specimen = schema.type_def("specimen").unwrap();
-    assert_eq!(specimen.fields.len(), 26);
+    assert_eq!(specimen.fields.len(), 29);
     assert_eq!(specimen.plural, "Specimens");
     assert!(specimen.field("word_count").unwrap().computed);
     let parent = specimen.field("parent").unwrap().reference().unwrap();
@@ -1579,4 +1579,156 @@ fn the_newer_person_type_loads_on_a_reader_that_lacks_its_newest_attributes() {
         t.field("emails").unwrap().labels.as_deref(),
         Some("email_labels")
     );
+}
+
+#[test]
+fn select_options_take_labels_one_per_option_in_the_same_order() {
+    let source = tolerant_type(
+        "",
+        "  kind          = \"select\"\n  options       = [\"primary\", \"work@group.calendar.google.com\", \"plain\"]\n  option_labels = [\"Personal\", \"Work\", \"\"]",
+    );
+    let t = TypeDef::parse("a", &source).unwrap();
+    assert!(t.warnings.is_empty(), "{:?}", text(&t.warnings));
+    let f = t.field("f").unwrap();
+    assert_eq!(
+        f.kind,
+        FieldKind::Select {
+            options: vec![
+                "primary".into(),
+                "work@group.calendar.google.com".into(),
+                "plain".into()
+            ],
+            option_labels: vec!["Personal".into(), "Work".into(), "".into()],
+        }
+    );
+    assert_eq!(f.option_text("primary"), "Personal");
+    assert_eq!(f.option_text("work@group.calendar.google.com"), "Work");
+    assert_eq!(
+        f.option_text("plain"),
+        "plain",
+        "an empty label shows the value"
+    );
+    assert_eq!(f.option_text("gone"), "gone");
+
+    // A note still stores the value, never the label.
+    let schema = Schema::from_sources(&[("a", &source)], &[]).unwrap();
+    let none = lookup(&[]);
+    schema
+        .validate_note_source("a", "title = \"t\"\nf = \"primary\"\n", "n.wcl", &none)
+        .unwrap();
+    let err = schema
+        .validate_note_source("a", "title = \"t\"\nf = \"Personal\"\n", "n.wcl", &none)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("is not one of the options"),
+        "{err}"
+    );
+
+    // The plain list, with no labels, is read as before.
+    let plain = tolerant_type("", "  kind    = \"select\"\n  options = [\"a\", \"b\"]");
+    let t = TypeDef::parse("a", &plain).unwrap();
+    assert_eq!(
+        t.field("f").unwrap().kind,
+        FieldKind::Select {
+            options: vec!["a".into(), "b".into()],
+            option_labels: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn option_labels_must_match_the_options_one_for_one() {
+    let source = tolerant_type(
+        "",
+        "  kind          = \"select\"\n  options       = [\"a\", \"b\"]\n  option_labels = [\"A\"]",
+    );
+    let err = TypeDef::parse("a", &source).unwrap_err();
+    assert_eq!(
+        text(&err.issues),
+        [
+            "field f.option_labels: holds 1 labels for 2 options: give one label per option, in the same order"
+        ]
+    );
+    let source = tolerant_type(
+        "",
+        "  kind          = \"select\"\n  options       = [\"a\"]\n  option_labels = [1]",
+    );
+    assert!(TypeDef::parse("a", &source).is_err());
+}
+
+#[test]
+fn options_written_as_records_are_refused_so_labels_live_in_their_own_attribute() {
+    // Readers up to 0.1.12 check `options` as a list of strings, so labels in `options` itself
+    // would make them refuse the type; `option_labels` is an attribute they ignore with a warning.
+    let source = tolerant_type(
+        "",
+        "  kind    = \"select\"\n  options = [{ value: \"primary\", label: \"Personal\" }]",
+    );
+    let err = TypeDef::parse("a", &source).unwrap_err();
+    assert!(
+        text(&err.issues)
+            .iter()
+            .any(|i| i.starts_with("field f.options:")),
+        "{:?}",
+        text(&err.issues)
+    );
+}
+
+#[test]
+fn unknown_attributes_are_kept_on_the_definition_as_written() {
+    let source = "label = \"A\"\nsort_by = \"title\"\n\nfield f {\n  kind = \"int\"\n  sparkle = [1, 2.5, \"x\"]\n}\n\nfield g {\n  kind = \"list\"\n  items = \"int\"\n  labels = \"f\"\n}\n\ntemplate default {\n  density = \"compact\"\n  tab \"T\" {\n    pinned = true\n    slot \"title\"\n    slot \"f\" {\n      width = 2\n    }\n  }\n}\n";
+    let t = TypeDef::parse("a", source).unwrap();
+    assert_eq!(
+        t.extra,
+        [("sort_by".to_owned(), Value::Str("title".into()))]
+    );
+    assert_eq!(
+        t.field("f").unwrap().extra,
+        [(
+            "sparkle".to_owned(),
+            Value::List(vec![
+                Value::Int(1),
+                Value::Float(2.5),
+                Value::Str("x".into())
+            ])
+        )]
+    );
+    // An attribute of another kind is ignored on this one, so it is kept too.
+    assert_eq!(
+        t.field("g").unwrap().extra,
+        [("labels".to_owned(), Value::Str("f".into()))]
+    );
+    assert_eq!(t.field("g").unwrap().labels, None);
+    let tpl = t.template("default").unwrap();
+    assert_eq!(
+        tpl.extra,
+        [("density".to_owned(), Value::Str("compact".into()))]
+    );
+    let tab = &tpl.tabs[0];
+    assert_eq!(tab.extra, [("pinned".to_owned(), Value::Bool(true))]);
+    match &tab.items[1] {
+        schema::TabItem::Slot { field, extra, .. } => {
+            assert_eq!(field, "f");
+            assert_eq!(extra, &[("width".to_owned(), Value::Int(2))]);
+        }
+        other => panic!("{other:?}"),
+    }
+    // Known attributes are not repeated in `extra`.
+    let known =
+        TypeDef::parse("a", &tolerant_type("", "  kind = \"int\"\n  label = \"F\"")).unwrap();
+    assert!(known.extra.is_empty() && known.field("f").unwrap().extra.is_empty());
+}
+
+#[test]
+fn the_reference_type_from_a_newer_release_loads_with_one_warning_per_unknown_attribute() {
+    // docs/vault-format/check.sh passes this file with the same six warnings.
+    let source = include_str!("../../../docs/vault-format/tolerated/newer-type.wcl");
+    let t = TypeDef::parse("newer", source).unwrap();
+    assert_eq!(t.warnings.len(), 6, "{:?}", text(&t.warnings));
+    assert!(t.warnings.iter().all(Issue::is_warning));
+    assert_eq!(t.extra.len(), 1);
+    assert_eq!(t.field("rank").unwrap().extra.len(), 1);
+    // A known attribute with the wrong form is still an error.
+    let wrong = include_str!("../../../docs/vault-format/invalid/type-wrong-form.wcl");
+    assert!(TypeDef::parse("wrong", wrong).is_err());
 }

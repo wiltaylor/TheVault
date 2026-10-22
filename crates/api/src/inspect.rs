@@ -30,7 +30,7 @@ pub async fn schema(State(w): State<Arc<Writer>>) -> Result<Json<Value>, ApiErro
 }
 
 pub(crate) fn type_json(t: &TypeDef, builtin: bool) -> Value {
-    json!({
+    let mut out = json!({
         "name": t.name,
         "label": t.label,
         "plural": t.plural,
@@ -48,7 +48,22 @@ pub(crate) fn type_json(t: &TypeDef, builtin: bool) -> Value {
             "secrets": h.secrets,
         })).collect::<Vec<_>>(),
         "warnings": t.warnings.iter().map(crate::error::issue_json).collect::<Vec<_>>(),
-    })
+    });
+    with_extra(&mut out, &t.extra);
+    out
+}
+
+/// Add `extra` to `out` when there is any: each attribute this version does not know, by name,
+/// as WCL source text, so an editor that rewrites the definition can write it back as it was.
+pub(crate) fn with_extra(out: &mut Value, extra: &[(String, schema::Value)]) {
+    if extra.is_empty() {
+        return;
+    }
+    let map: Map<String, Value> = extra
+        .iter()
+        .map(|(n, v)| (n.clone(), json!(writer::value_wcl(v))))
+        .collect();
+    out["extra"] = Value::Object(map);
 }
 
 fn field_json(f: &FieldDef) -> Value {
@@ -69,8 +84,14 @@ fn field_json(f: &FieldDef) -> Value {
         FieldKind::DateRange { of } => {
             out.insert("of".into(), json!(of.name()));
         }
-        FieldKind::Select { options } => {
+        FieldKind::Select {
+            options,
+            option_labels,
+        } => {
             out.insert("options".into(), json!(options));
+            if !option_labels.is_empty() {
+                out.insert("option_labels".into(), json!(option_labels));
+            }
         }
         FieldKind::Taxonomy { taxonomy } => {
             out.insert("taxonomy".into(), json!(taxonomy));
@@ -118,7 +139,9 @@ fn field_json(f: &FieldDef) -> Value {
         }
         _ => {}
     }
-    Value::Object(out)
+    let mut out = Value::Object(out);
+    with_extra(&mut out, &f.extra);
+    out
 }
 
 fn scalar_name(s: schema::Scalar) -> &'static str {
@@ -135,14 +158,18 @@ fn scalar_name(s: schema::Scalar) -> &'static str {
 }
 
 pub(crate) fn template_json(t: &Template) -> Value {
-    json!({
+    let mut out = json!({
         "name": t.name,
         "label": t.label,
         "tabs": t.tabs.iter().map(|tab| {
             let mut out = json!({
                 "title": tab.title,
                 "items": tab.items.iter().map(|item| match item {
-                    TabItem::Slot { field, label } => json!({ "slot": field, "label": label }),
+                    TabItem::Slot { field, label, extra } => {
+                        let mut out = json!({ "slot": field, "label": label });
+                        with_extra(&mut out, extra);
+                        out
+                    }
                     TabItem::Block(b) => json!({ "block": block_to_json(b) }),
                 }).collect::<Vec<_>>(),
             });
@@ -150,9 +177,12 @@ pub(crate) fn template_json(t: &Template) -> Value {
             if let Some(w) = &tab.when {
                 out["when"] = json!(w);
             }
+            with_extra(&mut out, &tab.extra);
             out
         }).collect::<Vec<_>>(),
-    })
+    });
+    with_extra(&mut out, &t.extra);
+    out
 }
 
 pub(crate) fn taxonomy_json(t: &Taxonomy) -> Value {

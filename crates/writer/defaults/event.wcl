@@ -16,6 +16,13 @@ field calendar {
   description = "The id of the Google calendar the event is on, one of the Google sync note's calendars."
 }
 
+field calendar_name {
+  kind        = "string"
+  label       = "Calendar name"
+  description = "The name of the calendar, from your Google calendar list. The calendar sync fills it."
+  computed    = true
+}
+
 field location {
   kind  = "string"
   label = "Location"
@@ -113,6 +120,7 @@ template default {
       }
       column {
         slot "calendar"
+        slot "calendar_name"
         slot "status"
         slot "meet_url"
       }

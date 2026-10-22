@@ -41,6 +41,8 @@ export interface FieldDef {
   compound: boolean;
   default?: Json;
   options?: string[];
+  /** `select`: one label per option, index-aligned; an empty label shows the value. */
+  option_labels?: string[];
   /** `date_range`: whether the ends are dates or datetimes. */
   of?: "date" | "datetime" | "date_or_datetime";
   taxonomy?: string;
@@ -56,21 +58,27 @@ export interface FieldDef {
   labels?: string | null;
   /** `asset`: `"image"` when the field takes only images. */
   accept?: "any" | "image";
+  /** Attributes this version does not know, by name, as WCL source text; the editors write them back as they were. */
+  extra?: Record<string, string>;
 }
 
-export type TemplateItem = { slot: string; label: string | null } | { block: Block };
+export type TemplateItem = { slot: string; label: string | null; extra?: Record<string, string> } | { block: Block };
 
 export interface Tab {
   title: string;
   /** The condition, in a query's `where` syntax, under which the tab shows (src/when.ts). */
   when?: string | null;
   items: TemplateItem[];
+  /** Attributes this version does not know, by name, as WCL source text; the editors write them back as they were. */
+  extra?: Record<string, string>;
 }
 
 export interface Template {
   name: string;
   label: string | null;
   tabs: Tab[];
+  /** Attributes this version does not know, by name, as WCL source text; the editors write them back as they were. */
+  extra?: Record<string, string>;
 }
 
 export interface TypeDef {

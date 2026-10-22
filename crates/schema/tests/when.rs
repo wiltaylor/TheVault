@@ -170,7 +170,7 @@ fn unknown_attributes_inside_a_template_are_warnings_and_the_template_still_load
     assert_eq!(tab.items.len(), 3, "every item still loads");
     assert!(matches!(
         &tab.items[1],
-        schema::TabItem::Slot { field, label } if field == "due" && label.as_deref() == Some("Due on")
+        schema::TabItem::Slot { field, label, .. } if field == "due" && label.as_deref() == Some("Due on")
     ));
 }
 

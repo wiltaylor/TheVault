@@ -1,0 +1,12 @@
+label = "Wrong"
+
+field secret {
+  kind   = "string"
+  hidden = "yes"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+  }
+}

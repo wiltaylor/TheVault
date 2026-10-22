@@ -5,28 +5,33 @@
 @block("field", required_fields = ["kind"])
 type FieldDef {
   @inline(0) name: identifier
-  kind:        utf8
-  label:       utf8?
-  description: utf8?
-  required:    bool?
-  computed:    bool?
-  multiple:    bool?
+  kind:          utf8
+  label:         utf8?
+  description:   utf8?
+  required:      bool?
+  computed:      bool?
+  hidden:        bool?
+  multiple:      bool?
   @schemaless default: utf8?
-  options:     list<utf8>?
-  taxonomy:    utf8?
-  target:      utf8?
-  relation:    utf8?
-  inverse:     utf8?
-  on_delete:   utf8?
-  items:       utf8?
-  values:      utf8?
-  of:          utf8?
-  map:         utf8?
-  image:       utf8?
+  options:       list<utf8>?
+  option_labels: list<utf8>?
+  taxonomy:      utf8?
+  target:        utf8?
+  relation:      utf8?
+  inverse:       utf8?
+  on_delete:     utf8?
+  items:         utf8?
+  values:        utf8?
+  of:            utf8?
+  map:           utf8?
+  image:         utf8?
+  labels:        utf8?
+  accept:        utf8?
 }
 
 @block("tab") type Tab {
   @inline(0) title: utf8
+  when: utf8?
   @children("slot")       slots:       list<Slot>
   @children("heading")    headings:    list<Heading>
   @children("paragraph")  paragraphs:  list<Paragraph>

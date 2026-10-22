@@ -3,32 +3,35 @@
 # schemas"). Check a note with common.wcl, this file and the note together.
 
 @document type SpecimenNote {
-  title:       utf8
-  created:     utf8
-  updated:     utf8
-  archived:    bool?
-  subtitle:    utf8?
-  estimate:    i64
-  word_count:  i64?
-  score:       f64?
-  done:        bool?
-  due:         utf8?
-  starts_at:   utf8?
-  span:        DateRange?
-  homepage:    utf8?
-  priority:    utf8?
-  channels:    list<utf8>?
-  status:      utf8
-  topics:      list<utf8>?
-  board:       utf8?
-  parent:      utf8?
-  children:    list<utf8>?
-  related:     list<utf8>?
-  aliases:     list<utf8>?
-  place:       GeoPoint?
-  desk:        ImagePoint?
-  cover:       utf8?
-  attachments: list<utf8>?
+  title:        utf8
+  created:      utf8
+  updated:      utf8
+  archived:     bool?
+  subtitle:     utf8?
+  estimate:     i64
+  word_count:   i64?
+  score:        f64?
+  done:         bool?
+  due:          utf8?
+  starts_at:    utf8?
+  span:         DateRange?
+  session:      DateRange?
+  homepage:     utf8?
+  priority:     utf8?
+  channels:     list<utf8>?
+  status:       utf8
+  topics:       list<utf8>?
+  board:        utf8?
+  parent:       utf8?
+  children:     list<utf8>?
+  related:      list<utf8>?
+  aliases:      list<utf8>?
+  alias_labels: list<utf8>?
+  import_ref:   utf8?
+  place:        GeoPoint?
+  desk:         ImagePoint?
+  cover:        utf8?
+  attachments:  list<utf8>?
   @children("dict", max = 1)    dicts:    list<Dict>
   @children("content", max = 1) contents: list<Content>
   @children("ink", max = 1)     inks:     list<Ink>

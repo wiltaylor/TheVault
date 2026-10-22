@@ -14,6 +14,7 @@ import { ChipPicker, matches } from "./ChipPicker";
 import type { Suggestion } from "./Combobox";
 import { ImageField } from "./ImageField";
 import { LabelledList, labelled, labelledWrite } from "./LabelledList";
+import { optionChoices, optionText } from "../options";
 import { termPicker } from "./termPicker";
 
 export interface FieldInputProps {
@@ -627,11 +628,11 @@ export function FieldInput(props: FieldInputProps) {
       }
     >
       <Match when={f().kind === "select" && f().multiple}>
-        <Picker {...props} suggest={(text) => optionSuggestions((f().options ?? []).map((o) => ({ value: o, text: o })), text)} />
+        <Picker {...props} suggest={(text) => optionSuggestions(optionChoices(f()), text)} chipText={(v) => optionText(f(), v)} />
       </Match>
       <Match when={f().kind === "select"}>
         <Choice
-          options={(f().options ?? []).map((o) => ({ value: o, text: o }))}
+          options={optionChoices(f())}
           required={f().required}
           value={props.value}
           onChange={props.onChange}

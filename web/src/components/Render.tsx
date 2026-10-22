@@ -15,6 +15,7 @@ import { TypeIcon } from "./Icon";
 import { ImageThumb } from "./ImageField";
 import { Inline } from "./Inline";
 import { labelled, labelledText } from "./LabelledList";
+import { optionText } from "../options";
 
 /** A field value as plain text. Lists join with commas and records list their members. */
 export function formatValue(value: Json | undefined): string {
@@ -36,6 +37,11 @@ export function formatValue(value: Json | undefined): string {
 export function fieldText(f: FieldDef, value: Json | undefined, fields?: Record<string, Json | undefined>): string {
   if (f.kind === "list" && f.labels && Array.isArray(value)) {
     return labelledText(labelled(value, fields?.[f.labels]));
+  }
+  // A select shows each option's label, where it has one.
+  if (f.kind === "select" && f.option_labels?.length) {
+    const text = (v: Json) => (typeof v === "string" ? optionText(f, v) : formatValue(v));
+    return Array.isArray(value) ? value.map(text).join(", ") : value === undefined || value === null ? "" : text(value);
   }
   return formatValue(value);
 }

@@ -210,6 +210,18 @@ impl Writer {
             }
         }
         let text = store::to_canonical(&ast);
+        // A query view must name fields the types it reads have, as a slot must name one of the
+        // type's own. A template that does not parse is reported by the commit below.
+        if let Ok(ty) = schema::TypeDef::parse(type_name, &text)
+            && let Some(t) = ty.template(name)
+        {
+            let issues = schema::query_view_issues(&inner.schema, t, &format!("template {name}"));
+            if !issues.is_empty() {
+                return Err(Error::InvalidType(schema::SchemaError(vec![
+                    schema::Invalid { file: path, issues },
+                ])));
+            }
+        }
         let author = Author::Session(crate::ADOPTED_BY.to_owned());
         self.commit_definitions(inner, vec![(path, Some(text))], Vec::new(), &author)?;
         self.template(type_name, name)

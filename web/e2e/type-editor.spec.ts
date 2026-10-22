@@ -121,3 +121,32 @@ test("templates are Default and Card only, and a card template can have tabs", a
   });
   expect(other.status()).toBe(400);
 });
+
+test("saving keeps attributes this version does not know, and select options keep their labels", async ({ page, admin }) => {
+  const name = `newer_${token()}`;
+  await putType(
+    admin,
+    name,
+    `label = "Trip"\nshelf = "top"\n\nfield mode {\n  kind = "select"\n  options = ["car", "air"]\n  option_labels = ["By car", ""]\n  unit = "cm"\n}\n\ntemplate default {\n  tab "Main" {\n    pinned = true\n    slot "title"\n    slot "mode" {\n      width = 2\n    }\n  }\n}\n`,
+  );
+  await logIn(page, `/settings/types/${name}/edit`);
+  const warnings = page.getByRole("region", { name: "Warnings" });
+  await expect(warnings).toContainText("Saving here keeps them in the file as they are.");
+
+  const row = page.getByTestId("field-row-0");
+  await row.getByRole("button", { name: "Settings for mode" }).click();
+  const options = row.getByLabel("Options, one per line");
+  await expect(options).toHaveValue("car = By car\nair");
+  await options.fill("car = By car\nair = By air\nrail");
+  await row.getByLabel("Description").fill("How we go");
+
+  await page.getByRole("button", { name: "Preview changes" }).click();
+  await page.getByRole("button", { name: "Apply changes" }).click();
+  await expect.poll(() => typeFile(admin, name)).toContain("How we go");
+  const file = await typeFile(admin, name);
+  expect(file).toMatch(/^shelf\s+= "top"$/m);
+  expect(file).toMatch(/^\s+unit\s+= "cm"$/m);
+  expect(file).toMatch(/^\s+pinned = true$/m);
+  expect(file).toMatch(/^\s+width = 2$/m);
+  expect(file).toMatch(/^\s+option_labels = \["By car", "By air", ""\]$/m);
+});

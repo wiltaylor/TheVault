@@ -177,7 +177,7 @@ A reader tolerates an attribute of a type, or of a field, that it does not know.
 
 - The reader ignores the attribute. The type loads, and notes of the type are written and checked against what the reader knows.
 - The reader reports the attribute as a warning, `<path>: is not an attribute of <owner> in this version; it is ignored`. `GET /api/types` and `GET /api/schema` list each type's `warnings`, the JSON answer of `PUT /api/types/<name>` carries them, and the type editor shows them, so a misspelt attribute is seen. Each warning is `{ "at", "message", "severity": "warning" }`.
-- The file keeps the attribute. Saving the type from the type editor rewrites the file from what the editor knows, which leaves the attribute out.
+- The file keeps the attribute, and so does the type editor. The definition the reader builds holds each ignored attribute of the type, a field, a template, a tab or a slot, and `GET /api/schema` lists them as `extra`, an object from attribute name to the value as WCL source text, such as `"extra": { "unit": "\"cm\"" }`. Saving the type from the type editor writes each one back as it was, after the attributes the editor knows. One that the editor now writes itself, such as `labels` on a field that became a list of strings, is written once, with the editor's value. A fixed content block in a template is kept whole, so its attributes stay as they are.
 
 Everything else stays an error that refuses the type: a malformed value of an attribute the reader knows, such as `accept = "video"` or `required = "yes"`, a missing required attribute, a `kind` the reader does not know, an unknown block, inside a template or anywhere else, and an unknown handler item. A change that an older reader would misread rather than ignore still raises the format version (D27).
 
@@ -271,6 +271,7 @@ The fields of the Google sync types, as a new vault gets them. The Gmail and cal
 | | `thread_ref` | `string`, hidden | Gmail's thread id |
 | `event` | `when` | `date_range`, `of = "date_or_datetime"` | Dates for an all-day event, datetimes with their offsets for a timed one |
 | | `calendar` | `string` | The id of the Google calendar it is on, as the Google settings' `calendars` lists it, such as `primary` |
+| | `calendar_name` | `string`, computed | The calendar's name from the user's Google calendar list, which the calendar sync fills. `calendar` stays a string rather than a select with labelled options: a select's options are fixed in the type file, and a script cannot change a type to list the synced calendars |
 | | `location` | `string` | |
 | | `description` | `content` | |
 | | `attendees` | `reference` to `person`, `multiple` | The attendees that match a person |
@@ -624,12 +625,19 @@ A choice from a fixed list of strings defined on the field.
 | Item | Form | Meaning |
 |------|------|---------|
 | `options` | list of strings | Required. The allowed values, in display order |
+| `option_labels` | list of strings | Optional. The text the app shows for each option, index-aligned with `options`, so it holds exactly as many strings. An empty string shows the option's value. A note stores the value, never the label |
 
 ```wcl
 field priority {
   kind    = "select"
   options = ["low", "medium", "high"]
   default = "medium"
+}
+
+field calendar {
+  kind          = "select"
+  options       = ["primary", "team@group.calendar.google.com", "holidays"]
+  option_labels = ["Personal", "Team", ""]
 }
 
 field channels {
@@ -642,7 +650,10 @@ field channels {
 ```wcl
 priority = "high"
 channels = ["email", "chat"]
+calendar = "team@group.calendar.google.com"
 ```
+
+Labels are a separate list, not records inside `options`, for two reasons. A record key must be an identifier, and an option value such as a calendar id need not be one. And a reader before 0.1.13 checks `options` as a list of strings, so labels inside it would make that reader refuse the type, while it ignores `option_labels` with a warning, as it ignores any attribute it does not know (see [Attributes a reader does not know](#attributes-a-reader-does-not-know)). The type editor takes one option per line, as `value` or `value = Label`.
 
 ### `taxonomy`
 
@@ -1583,7 +1594,7 @@ Rules:
 - A control cannot clear a required field: the control keeps the value and says why.
 - A field bound by a control in the `default` template, or in the note's own content, counts as placed: the properties sidebar does not list it again. A control on a computed field places nothing.
 - In a canvas card, a control binds the note that holds the canvas. Where there is no such note, the control is shown disabled.
-- A field rename in a type change renames the `field` of every control bound to it, in templates and in notes. A control that names a removed field makes its note invalid, so the type change is refused until the control is removed.
+- A field rename in a type change renames the `field` of every control bound to it, in templates and in notes. A control that names a removed field makes its note invalid, so the type change is refused until the control is removed. A rename also follows into template query views: see [Field names in query views](#field-names-in-query-views).
 
 ```wcl
 columns {
@@ -1738,6 +1749,14 @@ query_view {
   }
 }
 ```
+
+### Field names in query views
+
+A query view in a template names fields in its query and in its views' `columns`, `group`, `date` and `location`.
+
+**Renames follow.** A field rename in a type change renames the field in the query views of the changed type's own templates, and in those of every other type's templates whose query reads the changed type (D6, D14). Where a query lists the type in `from`, the rename covers each bare name in `where`, the first name of each `sort`, `group by` and `select` path, and the first name of each view's `columns` entry and of its `group`, `date` and `location`. In the type's own templates it also covers `this.<field>`, since `this` is a note of the type there. `linked_from(<type>, <field>)` follows the rename of `<field>` wherever it appears. A name read through a reference, such as `project.status`, is a field of another type, and a closure parameter is not a field, so neither is renamed. A query over `from *` is left alone. The plan of the change lists the other types it rewrites as `retemplated`, and their type files change in the same commit as the type. A query view in a note's own content does not follow; it reports the unknown field when it runs.
+
+**Template put checks them.** `PUT /api/types/<type>/templates/<name>` (`vault template put`) refuses a template whose query view names a field that no type in its `from` has, as it refuses a slot of a field the type lacks. The check covers the names the rename covers, other than `this.<field>` and names read through a reference, and takes a field of any listed type, or a built-in field (`id`, `type`, `title`, `created`, `updated`, `archived`). A query over `*`, of a type that does not exist, or that does not parse is not checked. The error names the block and the field, such as `template card > tab "Card" > query_view#2: view "v" columns names `nonexistent`, which is not a field of invoice`.
 
 ### Archived notes in queries
 
@@ -2217,6 +2236,8 @@ A note's top-level fields depend on its type, so its `@document` is generated fr
 ```
 
 `check.sh` checks every file under `docs/vault-format/vault/` against its schema and against the data-only subset. It then confirms that both checks reject the files in `docs/vault-format/invalid/`. It exits non-zero on any failure.
+
+A type file is checked by the readers' rule for [attributes a reader does not know](#attributes-a-reader-does-not-know). WCL has no warning level, so `check.sh` runs `wcl check --json` and `tolerated.mjs` sorts the result: an attribute the schema does not declare on a type, field, template, tab, slot or fixed template block prints as a warning and passes, and every other violation fails, an unknown handler item among them. `docs/vault-format/tolerated/newer-type.wcl`, a type with an attribute from a newer release at each of those places, passes with six warnings, and `invalid/type-wrong-form.wcl`, a known attribute with a malformed value, fails.
 
 ### WCL behaviour this format works around
 

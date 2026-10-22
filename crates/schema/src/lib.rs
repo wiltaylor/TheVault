@@ -14,6 +14,7 @@ mod encoding;
 mod inline;
 pub mod migrate;
 mod note;
+mod queryviews;
 mod taxonomy;
 mod types;
 
@@ -35,6 +36,7 @@ pub use encoding::{
 };
 pub use inline::{MARKUP_ITEMS, Placeholder, markup_item, placeholder_at, placeholders};
 pub use note::{NoteLookup, NoteReport};
+pub use queryviews::{FieldRename, VIEW_FIELD_ITEMS, query_view_issues, reads_type};
 pub use taxonomy::{Taxonomy, Term};
 pub use types::{
     Accept, EVENTS, FieldDef, FieldKind, Handler, OnDelete, RESERVED_FIELDS, RangeOf, Reference,

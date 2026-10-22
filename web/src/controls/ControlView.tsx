@@ -9,6 +9,7 @@ import { termPicker } from "../components/termPicker";
 import { Combobox, type Suggestion } from "../components/Combobox";
 import { datetimeInput, datetimeValue, findNotes, knownLabels, termOptions } from "../components/FieldInput";
 import { LabelledList, labelled, labelledWrite } from "../components/LabelledList";
+import { optionChoices, optionText } from "../options";
 import { noteTitle } from "../editor/titles";
 import { TITLE_FIELD } from "../notes";
 import { taxonomyDef, typeDef } from "../session";
@@ -454,7 +455,7 @@ function SelectInput(props: Part) {
   const options = createMemo(() => {
     const f = props.field;
     if (f.kind === "taxonomy") return termOptions(taxonomyDef(f.taxonomy ?? "")?.terms ?? []);
-    return (f.options ?? []).map((o) => ({ value: o, text: o, depth: 0 }));
+    return optionChoices(f).map((o) => ({ ...o, depth: 0 }));
   });
   return (
     <select
@@ -497,7 +498,7 @@ function RadioInput(props: Part) {
               disabled={props.disabled}
               onChange={(e) => e.currentTarget.checked && props.commit(o)}
             />
-            <span>{o}</span>
+            <span>{optionText(props.field, o)}</span>
           </label>
         )}
       </For>
@@ -573,6 +574,7 @@ function ChipsInput(props: Part) {
   const f = () => props.field;
   const text = (v: string) => {
     if (f().kind === "reference") return titleOf(v);
+    if (f().kind === "select") return optionText(f(), v);
     return v;
   };
   // Values others hold in a list field, offered as suggestions; fetched once.
@@ -591,7 +593,7 @@ function ChipsInput(props: Part) {
   async function suggest(q: string): Promise<Suggestion[]> {
     switch (f().kind) {
       case "select":
-        return (f().options ?? []).filter((o) => matches(q, o)).map((o) => ({ value: o, text: o }));
+        return optionChoices(f()).filter((o) => matches(q, o.text, o.value));
       case "taxonomy":
         return terms.suggest(q);
       case "reference":

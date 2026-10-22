@@ -23,6 +23,11 @@ use regex
 // occurrence moves its notes to the trash. Once a day the window end moves forward and every
 // series with a note gets the new days' occurrences.
 //
+// Each run reads the user's calendar list once, so every note's `calendar_name` holds the name of
+// the calendar its `calendar` id names: Google's `summaryOverride` (the user's own name for it),
+// else its `summary`. `primary` names the calendar Google marks primary. A calendar list that
+// fails leaves each name as the note has it, and the sync goes on.
+//
 // Each note keeps the synced fields as Google last sent them in its hidden `snapshot`, and
 // Google's `etag`. A note the user changed since then merges field by field: a field changed only
 // in Google takes Google's value, one changed only in the vault keeps the vault's, and one changed
@@ -43,6 +48,8 @@ struct Sync {
     token: string,
     base: string,
     known: Map[string, Known],
+    // Calendar id to the calendar's name, from calendarList.list.
+    names: Map[string, string],
     people: Map[string, string],
     rules: Map[string, string],
     created: int,
@@ -220,6 +227,52 @@ fn failure(what: string, reply: Value) -> string {
 
 fn events_url(sync: Sync, calendar: string) -> string {
     sync.base + "/calendars/" + encode(calendar) + "/events"
+}
+
+// The name of every calendar on the user's calendar list, by id, with `primary` naming the primary
+// calendar too. Empty when Google refuses the list: the names are for show, so the sync goes on.
+fn calendar_names(sync: Sync) -> Map[string, string] {
+    let names: Map[string, string] = #{}
+    let page = ""
+    let first = true
+    while first || page != "" {
+        let url = sync.base + "/users/me/calendarList?maxResults=250"
+        if page != "" {
+            url = url + "&pageToken=" + encode(page)
+        }
+        first = false
+        let reply = match fetch(sync, url) {
+            Ok(r) => r,
+            Err(e) => {
+                vault::log("Could not read the calendar list, so calendar names stay as they are: " + e)
+                return #{}
+            }
+        }
+        if status_of(reply) != 200 {
+            vault::log(failure("calendarList.list", reply) + "; calendar names stay as they are.")
+            return #{}
+        }
+        let body = reply.get("body").unwrap()
+        for item in list_of(body, "items") {
+            let name = text_of(item, "summaryOverride")
+            if name == "" {
+                name = text_of(item, "summary")
+            }
+            let id = text_of(item, "id")
+            if id != "" && name != "" {
+                names[id] = name
+                let primary = match item.get("primary") {
+                    Some(Value::Bool(b)) => b,
+                    _ => false,
+                }
+                if primary {
+                    names["primary"] = name
+                }
+            }
+        }
+        page = text_of(body, "nextPageToken")
+    }
+    names
 }
 
 // Every page of events.list for `calendar`: `{ gone, items, next }`. `gone` is true when Google
@@ -491,6 +544,10 @@ fn body_for(sync: Sync, fields: Map[string, Value], blocks: List[Value], values:
         }
     }
     put(fields, "calendar", meta["calendar"])
+    // Without a name from the calendar list, the note keeps the one it has.
+    if meta["calendar_name"] != "" {
+        fields["calendar_name"] = Value::String(meta["calendar_name"]);
+    }
     put(fields, "series", meta["series"])
     put(fields, "google_ref", meta["google_ref"])
     put(fields, "etag", meta["etag"])
@@ -554,7 +611,11 @@ fn apply(sync: Sync, item: Value, calendar: string, series: string) -> Result[()
         return trash(sync, google_ref)
     }
     let google = synced(item)
-    let meta = #{ "calendar": calendar, "series": series, "google_ref": google_ref, "etag": text_of(item, "etag") }
+    let calendar_name = match sync.names.get(calendar) {
+        Some(n) => n,
+        None => "",
+    }
+    let meta = #{ "calendar": calendar, "calendar_name": calendar_name, "series": series, "google_ref": google_ref, "etag": text_of(item, "etag") }
     let Some(known) = sync.known.get(google_ref) else {
         let body = body_for(sync, #{}, [], google, google, meta, false)?
         let made = vault::create("event", body)?
@@ -578,7 +639,8 @@ fn apply(sync: Sync, item: Value, calendar: string, series: string) -> Result[()
         !maps_differ(snapshot, google) &&
         text_of(Value::Map(fields), "etag") == meta["etag"] &&
         text_of(Value::Map(fields), "series") == series &&
-        text_of(Value::Map(fields), "calendar") == calendar
+        text_of(Value::Map(fields), "calendar") == calendar &&
+        (calendar_name == "" || text_of(Value::Map(fields), "calendar_name") == calendar_name)
     known.series = series
     known.calendar = calendar
     known.start = value(values, "start")
@@ -810,12 +872,14 @@ fn run() -> Result[string, string] {
         token: token,
         base: base,
         known: known_notes()?,
+        names: #{},
         people: #{},
         rules: #{},
         created: 0,
         changed: 0,
         trashed: 0,
     }
+    sync.names = calendar_names(sync)
     let calendars = strings(list_of(fields, "calendars"))
     if calendars.is_empty() {
         calendars = ["primary"]

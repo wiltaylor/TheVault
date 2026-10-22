@@ -96,6 +96,8 @@ export interface FieldModel {
   multiple: boolean;
   default?: Json;
   options: string[];
+  /** One label per option, index-aligned; "" shows the value. Empty when no option has one. */
+  option_labels: string[];
   taxonomy: string;
   target: string;
   relation: (typeof RELATIONS)[number];
@@ -110,21 +112,27 @@ export interface FieldModel {
   labels: string;
   /** An asset field: which assets it takes. */
   accept: "any" | "image";
+  /** Attributes this version does not model, by name, as WCL source text: written back as read. */
+  extra: Record<string, string>;
 }
 
-export type TemplateItemModel = { slot: string; label: string | null } | { block: Block };
+export type TemplateItemModel = { slot: string; label: string | null; extra?: Record<string, string> } | { block: Block };
 
 export interface TabModel {
   title: string;
   /** The tab's `when` condition, or none to show it for every note. */
   when?: string | null;
   items: TemplateItemModel[];
+  /** Attributes this version does not model, as WCL source text. */
+  extra?: Record<string, string>;
 }
 
 export interface TemplateModel {
   name: string;
   label: string | null;
   tabs: TabModel[];
+  /** Attributes this version does not model, as WCL source text. */
+  extra?: Record<string, string>;
 }
 
 export interface HandlerModel {
@@ -144,6 +152,8 @@ export interface TypeModel {
   fields: FieldModel[];
   templates: TemplateModel[];
   handlers: HandlerModel[];
+  /** The type's own attributes this version does not model, as WCL source text. */
+  extra: Record<string, string>;
 }
 
 /** A type as `GET /api/schema` describes it. */
@@ -159,6 +169,8 @@ export interface SchemaType {
   handlers?: HandlerModel[];
   /** What this version ignored in the type file, such as an attribute only a newer release knows. */
   warnings?: SchemaIssue[];
+  /** What it ignored of the type's own attributes, as WCL source text, kept to write back. */
+  extra?: Record<string, string>;
 }
 
 let nextKey = 1;
@@ -176,6 +188,7 @@ export function newField(name = "", kind: FieldKind = "string"): FieldModel {
     hidden: false,
     multiple: false,
     options: [],
+    option_labels: [],
     taxonomy: "",
     target: "",
     relation: "one_way",
@@ -188,6 +201,7 @@ export function newField(name = "", kind: FieldKind = "string"): FieldModel {
     image: "",
     labels: "",
     accept: "any",
+    extra: {},
   };
 }
 
@@ -205,6 +219,10 @@ function fieldFromSchema(f: Record<string, Json>): FieldModel {
   m.multiple = f.multiple === true;
   if (f.default !== undefined && f.default !== null) m.default = f.default;
   if (Array.isArray(f.options)) m.options = f.options.map(String);
+  if (Array.isArray(f.option_labels)) m.option_labels = f.option_labels.map(String);
+  if (f.extra && typeof f.extra === "object" && !Array.isArray(f.extra)) {
+    for (const [k, v] of Object.entries(f.extra)) if (typeof v === "string") m.extra[k] = v;
+  }
   m.taxonomy = str(f.taxonomy);
   m.target = str(f.target);
   if (f.relation) m.relation = f.relation as FieldModel["relation"];
@@ -238,6 +256,7 @@ export function typeFromSchema(t: SchemaType): TypeModel {
     fields: t.fields.map(fieldFromSchema),
     templates: structuredClone(t.templates),
     handlers: structuredClone(t.handlers ?? []),
+    extra: { ...(t.extra ?? {}) },
   };
 }
 
@@ -252,6 +271,7 @@ export function emptyType(): TypeModel {
     fields: [],
     templates: [{ name: "default", label: null, tabs: [{ title: "Main", items: [{ slot: "title", label: null }] }] }],
     handlers: [],
+    extra: {},
   };
 }
 
@@ -276,6 +296,7 @@ export function problems(m: TypeModel): string[] {
     if (f.required && f.computed) out.push(`${who}: a computed field cannot be required.`);
     if (f.required && f.hidden) out.push(`${who}: a hidden field cannot be required.`);
     if (f.kind === "select" && f.options.length === 0) out.push(`${who}: a select field needs options.`);
+    if (f.kind === "select" && new Set(f.options).size !== f.options.length) out.push(`${who}: an option is listed twice.`);
     if ((f.kind === "taxonomy" || isTermList(f)) && !f.taxonomy) out.push(`${who}: choose a taxonomy.`);
     if (f.kind === "reference") {
       if (!f.target) out.push(`${who}: choose a target type.`);
@@ -332,6 +353,10 @@ function fieldWcl(f: FieldModel, renamed: Record<string, string> = {}): string {
       break;
     case "select":
       out += wclField("options", f.options, i);
+      // Labels are written only when an option has one, one per option.
+      if (f.option_labels.some(Boolean)) {
+        out += wclField("option_labels", f.options.map((_, n) => f.option_labels[n] ?? ""), i);
+      }
       break;
     case "taxonomy":
       out += wclField("taxonomy", f.taxonomy, i);
@@ -359,21 +384,58 @@ function fieldWcl(f: FieldModel, renamed: Record<string, string> = {}): string {
       if (f.map === "image") out += wclField("image", f.image, i);
       break;
   }
-  return `${out}}\n`;
+  return `${out}${extraWcl(f.extra, out, i)}}\n`;
+}
+
+/**
+ * The attributes this version does not model, written back as they were read, after `written`:
+ * one the editor now writes itself, such as `labels` on a field that became a list of strings,
+ * is left out so it is not written twice.
+ */
+function extraWcl(extra: Record<string, string> | undefined, written: string, indent: string): string {
+  return Object.entries(extra ?? {})
+    .filter(([name]) => !new RegExp(`^${indent}${name} = `, "m").test(written))
+    .map(([name, text]) => `${indent}${name} = ${text}\n`)
+    .join("");
+}
+
+/** One option per line, as `value` or `value = Label`. */
+export function optionsText(f: Pick<FieldModel, "options" | "option_labels">): string {
+  return f.options.map((o, n) => (f.option_labels[n] ? `${o} = ${f.option_labels[n]}` : o)).join("\n");
+}
+
+/** The options and their labels from [`optionsText`]'s lines; a line without ` = ` has no label. */
+export function parseOptions(text: string): { options: string[]; option_labels: string[] } {
+  const options: string[] = [];
+  const option_labels: string[] = [];
+  for (const line of text.split("\n")) {
+    const at = line.indexOf(" = ");
+    const value = (at >= 0 ? line.slice(0, at) : line).trim();
+    if (!value) continue;
+    options.push(value);
+    option_labels.push(at >= 0 ? line.slice(at + 3).trim() : "");
+  }
+  return { options, option_labels: option_labels.some(Boolean) ? option_labels : [] };
 }
 
 /** One `template` block. */
 export function templateWcl(t: TemplateModel): string {
   const parts: string[] = [];
-  if (t.label) parts.push(wclField("label", t.label, "  "));
+  const head = t.label ? wclField("label", t.label, "  ") : "";
+  const own = head + extraWcl(t.extra, head, "  ");
+  if (own) parts.push(own);
   for (const tab of t.tabs) {
     const items = tab.items.map((item) => {
       if ("block" in item) return wclBlock(item.block, "    ");
       const head = `    slot ${wclString(item.slot)}`;
-      return item.label ? `${head} {\n${wclField("label", item.label, "      ")}    }\n` : `${head}\n`;
+      const label = item.label ? wclField("label", item.label, "      ") : "";
+      const body = label + extraWcl(item.extra, label, "      ");
+      return body ? `${head} {\n${body}    }\n` : `${head}\n`;
     });
     const when = tab.when?.trim();
-    if (when) items.unshift(wclField("when", when, "    "));
+    const attrs = when ? wclField("when", when, "    ") : "";
+    const tabOwn = attrs + extraWcl(tab.extra, attrs, "    ");
+    if (tabOwn) items.unshift(tabOwn);
     parts.push(`  tab ${wclString(tab.title)}${items.length ? ` {\n${items.join("")}  }` : ""}\n`);
   }
   return `template ${t.name} {\n${parts.join("\n")}}\n`;
@@ -478,6 +540,7 @@ export function typeWcl(m: TypeModel): string {
   if (m.description.trim()) head += wclField("description", m.description.trim());
   if (m.icon.trim()) head += wclField("icon", m.icon.trim());
   if (m.colour) head += wclField("colour", m.colour);
+  head += extraWcl(m.extra, head, "");
   const renamed = renames(m);
   const blocks = [...m.fields.map((f) => fieldWcl(f, renamed)), ...followFields(m).map(templateWcl), ...m.handlers.map(handlerWcl)];
   return [head, ...blocks].join("\n");

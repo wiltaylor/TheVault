@@ -233,7 +233,7 @@ fn check_single(f: &FieldDef, v: &Value, ctx: Option<&Context>, c: &mut Check, a
         FieldKind::Datetime => check_scalar(Scalar::Datetime, v, c, at),
         FieldKind::Url => check_scalar(Scalar::Url, v, c, at),
         FieldKind::DateRange { of } => date_range(*of, v, c, at),
-        FieldKind::Select { options } => match v {
+        FieldKind::Select { options, .. } => match v {
             Value::Str(s) if options.contains(s) => {}
             Value::Str(s) => c.fail(
                 at,

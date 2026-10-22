@@ -15,6 +15,8 @@ import {
   followFields,
   needsDefault,
   newField,
+  optionsText,
+  parseOptions,
   problems,
   renames,
   typeFromSchema,
@@ -85,6 +87,107 @@ const stored: SchemaType = {
 };
 
 describe("type model", () => {
+  it("writes select option labels index-aligned, and only when an option has one", () => {
+    const t: SchemaType = {
+      ...stored,
+      fields: [
+        {
+          name: "calendar",
+          kind: "select",
+          label: "calendar",
+          required: false,
+          computed: false,
+          multiple: false,
+          options: ["primary", "work@group.calendar.google.com", "other"],
+          option_labels: ["Personal", "Work", ""],
+        },
+      ],
+      templates: [{ name: "default", label: null, tabs: [{ title: "Main", items: [{ slot: "calendar", label: null }] }] }],
+      handlers: [],
+    };
+    const m = typeFromSchema(t);
+    expect(m.fields[0]!.option_labels).toEqual(["Personal", "Work", ""]);
+    expect(typeWcl(m)).toContain(
+      'options = ["primary", "work@group.calendar.google.com", "other"]\n  option_labels = ["Personal", "Work", ""]\n',
+    );
+    // The editor's text form: one option per line, `value = Label` where it has one.
+    expect(optionsText(m.fields[0]!)).toBe("primary = Personal\nwork@group.calendar.google.com = Work\nother");
+    expect(parseOptions("a = Alpha\n b \n\nc=d")).toEqual({ options: ["a", "b", "c=d"], option_labels: ["Alpha", "", ""] });
+    expect(parseOptions("a\nb")).toEqual({ options: ["a", "b"], option_labels: [] });
+    m.fields[0]!.option_labels = [];
+    expect(typeWcl(m)).not.toContain("option_labels");
+  });
+
+  it("keeps the attributes it does not model when it writes the type back (ticket 106)", () => {
+    const t: SchemaType = {
+      ...stored,
+      extra: { sort_by: '"title"' },
+      fields: [
+        {
+          name: "rank",
+          kind: "int",
+          label: "rank",
+          required: false,
+          computed: false,
+          multiple: false,
+          extra: { sparkline: "true", stops: '[1, 2.5, "x"]', labels: '"ranks"' },
+        },
+      ],
+      templates: [
+        {
+          name: "default",
+          label: null,
+          extra: { density: '"compact"' },
+          tabs: [
+            {
+              title: "Main",
+              when: "rank > 1",
+              extra: { pinned: "true" },
+              items: [
+                { slot: "title", label: null },
+                { slot: "rank", label: null, extra: { width: "2" } },
+              ],
+            },
+          ],
+        },
+      ],
+      handlers: [],
+    };
+    const m = typeFromSchema(t);
+    expect(typeWcl(m)).toBe(`label = "Task"
+plural = "Tasks"
+colour = "blue"
+sort_by = "title"
+
+field rank {
+  kind = "int"
+  sparkline = true
+  stops = [1, 2.5, "x"]
+  labels = "ranks"
+}
+
+template default {
+  density = "compact"
+
+  tab "Main" {
+    when = "rank > 1"
+    pinned = true
+    slot "title"
+    slot "rank" {
+      width = 2
+    }
+  }
+}
+`);
+    // An attribute the editor now writes itself is not written twice.
+    m.fields[0]!.kind = "list";
+    m.fields[0]!.items = "string";
+    m.fields[0]!.labels = "other";
+    const wcl = typeWcl(m);
+    expect(wcl.match(/labels = /g)).toHaveLength(1);
+    expect(wcl).toContain('labels = "other"');
+  });
+
   it("writes a stored type back in the documented order", () => {
     expect(typeWcl(typeFromSchema(stored))).toBe(`label = "Task"
 plural = "Tasks"

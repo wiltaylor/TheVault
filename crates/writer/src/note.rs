@@ -333,6 +333,13 @@ fn round_points(points: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// One value as WCL source text, as a note or type file writes it: `"text"`, `3`, `[1, 2]`.
+pub fn value_wcl(v: &Value) -> String {
+    let mut out = String::new();
+    print_value(&mut out, v);
+    out
+}
+
 fn print_value(out: &mut String, v: &Value) {
     match v {
         Value::Str(s) => quote(out, s),

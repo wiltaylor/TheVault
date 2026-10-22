@@ -831,6 +831,16 @@ fn each_listed_calendar_syncs_with_its_own_token_and_names_itself_on_its_notes()
     let events = api.events();
     assert_eq!(events["mine"]["fields"]["calendar"], "primary");
     assert_eq!(events["ours"]["fields"]["calendar"], google);
+    // Each note names its calendar from the calendar list, the primary one by its own name
+    // (ticket 103).
+    assert_eq!(events["mine"]["fields"]["calendar_name"], "Primary");
+    assert_eq!(events["ours"]["fields"]["calendar_name"], "Team");
+    assert_eq!(
+        api.google
+            .requests_to("/calendar/v3/users/me/calendarList")
+            .len(),
+        1
+    );
     let state = api.state();
     let mut keys: Vec<&String> = state["sync_tokens"].as_object().unwrap().keys().collect();
     keys.sort();

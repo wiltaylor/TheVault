@@ -22,12 +22,14 @@ use std::collections::BTreeMap;
 
 use index::Update;
 use schema::{
-    Doc, FieldChanges, Invalid, Issue, NoteEdit, NoteReport, Schema, SchemaError, TypeDef, Value,
+    Doc, FieldChanges, FieldRename, Invalid, Issue, NoteEdit, NoteReport, Schema, SchemaError,
+    TypeDef, Value,
 };
 use sha2::{Digest, Sha256};
 use state::Author;
 use store::Change;
 
+use crate::queryviews;
 use crate::terms::{Growth, Match};
 use crate::{
     Error, Event, Inner, Input, Lookup, Result, Saved, Writer, note, note_path, time, type_path,
@@ -75,6 +77,9 @@ pub struct TypePlan {
     pub changes: Vec<PlannedNote>,
     /// Every note of the type that holds data the new type does not describe, in id order.
     pub flagged: Vec<String>,
+    /// Other types whose template query views read this type and follow its field renames, by
+    /// name. Their type files change in the same commit.
+    pub retemplated: Vec<String>,
 }
 
 /// One note a plan edits.
@@ -104,6 +109,8 @@ pub(crate) struct Worked {
     pub(crate) schema: Schema,
     /// The files of the open taxonomies the change adds terms to.
     pub(crate) taxonomies: Vec<Change>,
+    /// The type files of other types whose template query views follow the change's renames.
+    pub(crate) retemplated: Vec<Change>,
     /// Every note of the type: its id, the doc after the change, and whether the change edits it.
     notes: Vec<(String, Doc, bool)>,
 }
@@ -162,6 +169,7 @@ impl Writer {
             plan,
             schema,
             taxonomies,
+            retemplated,
             notes,
         } = worked;
         let ty = schema
@@ -176,6 +184,7 @@ impl Writer {
 
         let mut files = vec![Change::write(type_path(name), plan.wcl.as_bytes())];
         files.extend(taxonomies);
+        files.extend(retemplated);
         let mut staged = Vec::with_capacity(notes.len());
         for (id, doc, edited) in notes {
             let path = note_path(name, &id);
@@ -317,13 +326,41 @@ impl Writer {
             .ok_or_else(|| Error::UnknownType(name.to_owned()))?;
         let old_text = self.vault.read_text(&type_path(name))?;
         let (new, text) = parse_type(name, &change.wcl)?;
+        // A renamed field is renamed in the query views of the type's own templates, where
+        // `this` is a note of the type, and in those of other types' templates that read it.
+        let own = FieldRename {
+            type_name: name,
+            renames: &change.renames,
+            this_is_type: true,
+        };
+        let (new, text) = match queryviews::rename_in_templates(&text, &type_path(name), &own)? {
+            Some(renamed) => parse_type(name, &renamed)?,
+            None => (new, text),
+        };
         let rules = FieldChanges::new(old, &new, &change.renames)
             .map_err(|e| Error::InvalidType(SchemaError(vec![e])))?;
+        let others = FieldRename {
+            this_is_type: false,
+            ..own
+        };
+        let mut retemplated: Vec<(TypeDef, String)> = Vec::new();
+        if !change.renames.is_empty() {
+            for t in current.types().filter(|t| t.name != name) {
+                let path = type_path(&t.name);
+                let before = self.vault.read_text(&path)?;
+                if let Some(after) = queryviews::rename_in_templates(&before, &path, &others)? {
+                    retemplated.push(parse_type(&t.name, &after)?);
+                }
+            }
+            retemplated.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+        }
         let types = current
             .types()
             .map(|t| {
                 if t.name == name {
                     new.clone()
+                } else if let Some((r, _)) = retemplated.iter().find(|(r, _)| r.name == t.name) {
+                    r.clone()
                 } else {
                     t.clone()
                 }
@@ -354,6 +391,9 @@ impl Writer {
         }
         if let Some(m) = &change.migration {
             hasher.update(format!("migration\0{}\0{}\0", m.script, m.function).as_bytes());
+        }
+        for (t, text) in &retemplated {
+            hasher.update(format!("retemplated\0{}\0{text}\0", t.name).as_bytes());
         }
 
         let mut changes = Vec::new();
@@ -451,6 +491,10 @@ impl Writer {
             .unwrap_or_default();
         Ok(Worked {
             taxonomies,
+            retemplated: retemplated
+                .iter()
+                .map(|(t, text)| Change::write(type_path(&t.name), text.as_bytes()))
+                .collect(),
             plan: TypePlan {
                 type_name: name.to_owned(),
                 token,
@@ -460,6 +504,7 @@ impl Writer {
                 renamed: rules.renamed,
                 changes,
                 flagged,
+                retemplated: retemplated.into_iter().map(|(t, _)| t.name).collect(),
             },
             schema,
             notes,
