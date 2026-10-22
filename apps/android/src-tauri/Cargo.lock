@@ -4920,6 +4920,7 @@ version = "0.1.0"
 dependencies = [
  "android_logger",
  "anyhow",
+ "axum",
  "base64 0.22.1",
  "embedded",
  "jni",

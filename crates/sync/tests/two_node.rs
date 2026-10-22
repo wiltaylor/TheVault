@@ -48,9 +48,26 @@ template default {
 
 const TEMPLATE: &str = "\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n";
 
+/// A type whose notes link to each other, for the cycles of ticket 150.
+const LINKED: &str = r#"label = "Linked"
+
+field other {
+  kind   = "reference"
+  target = "linked"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "other"
+  }
+}
+"#;
+
 fn seed(vault: &Path) {
     std::fs::create_dir_all(vault.join("types")).unwrap();
     std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
+    std::fs::write(vault.join("types/linked.wcl"), LINKED).unwrap();
 }
 
 /// A client of the home server: the admin token, a browser session, or a device token.
@@ -969,4 +986,247 @@ fn a_device_whose_local_vault_came_from_another_vault_stops_before_pushing() {
     assert_eq!(phone.embedded.queue().pending().unwrap().len(), 1);
     Http::admin(&b).get(&format!("/api/notes/{id}"), 404);
     assert!(Http::admin(&b).memos().is_empty());
+}
+
+/// The phone's local vault, from `from`, now syncs with `to` as a pairing made before ticket 143
+/// left it: the first handshake with `to` recorded `to`'s vault id, so it never started fresh,
+/// and the notes it pulled from `from` were never queued. `adopted` says whether the adoption of
+/// those notes (ticket 150) has run already.
+fn joined_before_143(phone: &mut Device, to: &TestServer, adopted: bool) -> String {
+    let vault = open_state(to).vault_id().unwrap();
+    let db = rusqlite::Connection::open(phone._vault.path().join(".vault/state.db")).unwrap();
+    db.execute(
+        "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('server_vault', ?1)",
+        [&vault],
+    )
+    .unwrap();
+    db.execute("DELETE FROM sync_meta WHERE key = 'adopted_vault'", [])
+        .unwrap();
+    if adopted {
+        phone.embedded.queue().set_adopted(&vault).unwrap();
+    }
+    phone.remote = remote_of(to, "Pixel");
+    vault
+}
+
+/// Create a note of `type_name` with `fields` on the device, as its webview does; returns its id.
+fn local_note(phone: &Device, type_name: &str, fields: Value) -> String {
+    let made = phone.call(
+        "POST",
+        &format!("/api/notes?type={type_name}"),
+        Some(json!({ "note": { "fields": fields } })),
+        201,
+    );
+    str(&made["id"])
+}
+
+/// Ticket 150, the live bug: the phone holds a conversation pulled from an earlier vault that the
+/// server never had, and a message made since links to it. The server refuses the message for
+/// the missing conversation, so the conversation goes first and both arrive in one round.
+#[test]
+fn a_message_linking_a_conversation_only_the_device_holds_pushes_the_conversation_first() {
+    let a = TestServer::start_seeded(seed);
+    let b = TestServer::start_seeded(seed);
+    let conversation = str(&Http::admin(&a).post(
+        "/api/notes?type=conversation",
+        json!({ "note": { "fields": { "title": "Ada", "channel": "sms" } } }),
+        201,
+    )["id"]);
+    let mut phone = Device::pair(&a, "Pixel");
+    phone.sync();
+    joined_before_143(&mut phone, &b, true);
+    Http::admin(&b).get(&format!("/api/notes/{conversation}"), 404);
+
+    let message = local_note(
+        &phone,
+        "message",
+        json!({ "title": "Hi Ada", "conversation": conversation }),
+    );
+    let report = phone.sync();
+    assert_eq!(
+        report.pushed,
+        vec![conversation.clone(), message.clone()],
+        "{report:?}"
+    );
+    assert!(report.held.is_empty(), "{report:?}");
+    assert_eq!(report.problem(), None);
+    let admin = Http::admin(&b);
+    assert_eq!(admin.note(&conversation)["note"]["fields"]["title"], "Ada");
+    assert_eq!(
+        admin.note(&message)["note"]["fields"]["conversation"],
+        conversation.as_str()
+    );
+    assert!(phone.embedded.queue().pending().unwrap().is_empty());
+    // Nothing is sent twice.
+    let report = phone.sync();
+    assert!(report.pushed.is_empty(), "{report:?}");
+    assert_eq!(admin.history(&conversation).len(), 1);
+}
+
+/// Ticket 150: two notes made on the device that link to each other. Neither can be created
+/// first with its link, so one goes up without it, the other follows, then the first gets its
+/// link: both arrive, linked, and the local copies are not changed.
+#[test]
+fn a_cycle_of_two_notes_linking_each_other_both_arrive() {
+    let server = TestServer::start_seeded(seed);
+    let phone = Device::pair(&server, "Pixel");
+    phone.sync();
+    let first = local_note(&phone, "linked", json!({ "title": "First" }));
+    let second = local_note(
+        &phone,
+        "linked",
+        json!({ "title": "Second", "other": first }),
+    );
+    phone.update(
+        &first,
+        json!({ "fields": { "title": "First", "other": second } }),
+    );
+
+    let report = phone.sync();
+    assert!(report.held.is_empty(), "{report:?}");
+    let mut pushed = report.pushed.clone();
+    pushed.sort();
+    let mut both = vec![first.clone(), second.clone()];
+    both.sort();
+    assert_eq!(pushed, both, "{report:?}");
+    let admin = Http::admin(&server);
+    assert_eq!(
+        admin.note(&first)["note"]["fields"]["other"],
+        second.as_str()
+    );
+    assert_eq!(
+        admin.note(&second)["note"]["fields"]["other"],
+        first.as_str()
+    );
+    assert_eq!(
+        phone.note(&first)["note"]["fields"]["other"],
+        second.as_str()
+    );
+    assert_eq!(
+        phone.note(&second)["note"]["fields"]["other"],
+        first.as_str()
+    );
+    assert!(phone.embedded.queue().pending().unwrap().is_empty());
+    assert!(phone.sync().pushed.is_empty());
+}
+
+/// Ticket 150: a local vault from a pre-143 pairing holds notes pulled from an earlier vault that
+/// the server never had. Its first round queues each of them once, as a create, oldest first, and
+/// they arrive, archived and trashed ones as they were; a note the server already has is not
+/// sent again, and a second round queues nothing.
+#[test]
+fn a_pre_143_local_vault_adopts_its_local_only_notes_once() {
+    let a = TestServer::start_seeded(seed);
+    let b = TestServer::start_seeded(seed);
+    let on_a = Http::admin(&a);
+    let inbox = str(&on_a.post(
+        "/api/notes?type=fleeting",
+        json!({ "note": { "fields": { "title": "Only on the phone" } } }),
+        201,
+    )["id"]);
+    let (archived, v) = on_a.create(memo("Archived on A", "", "", &[]));
+    on_a.post(
+        &format!("/api/notes/{archived}/archive?base_version={v}"),
+        json!({}),
+        200,
+    );
+    assert_eq!(on_a.note(&archived)["note"]["fields"]["archived"], true);
+    let (trashed, v) = on_a.create(memo("Trashed on A", "", "", &[]));
+    // B already has a note the phone will hold too.
+    let shared = str(&Http::admin(&b).post(
+        "/api/notes?type=fleeting",
+        json!({ "note": { "fields": { "title": "On the server" } } }),
+        201,
+    )["id"]);
+
+    let mut phone = Device::pair(&a, "Pixel");
+    phone.sync();
+    // A deletes a note the phone holds: the phone's copy moves to its trash.
+    on_a.send(
+        on_a.client
+            .delete(format!("{}/api/notes/{trashed}", on_a.base))
+            .header("If-Match", format!("\"{v}\"")),
+        200,
+    );
+    phone.sync();
+    assert!(phone.embedded.writer().read(&inbox).is_ok());
+    assert!(phone.embedded.writer().read(&trashed).is_err());
+    assert!(phone.embedded.writer().state().in_trash(&trashed).unwrap());
+    // The phone joins B as a pre-143 pairing did, pulls B's note, and has not adopted yet.
+    let b_vault = joined_before_143(&mut phone, &b, true);
+    phone.embedded.queue().set_cursor(0).unwrap();
+    phone.sync();
+    assert!(phone.embedded.writer().read(&shared).is_ok());
+    joined_before_143(&mut phone, &b, false);
+    assert_eq!(phone.embedded.queue().adopted().unwrap(), None);
+
+    let report = phone.sync();
+    let mut expected = vec![inbox.clone(), archived.clone(), trashed.clone()];
+    expected.sort();
+    assert_eq!(report.adopted, expected, "oldest first: {report:?}");
+    let mut pushed = report.pushed.clone();
+    pushed.sort();
+    assert_eq!(pushed, expected, "{report:?}");
+    assert!(report.held.is_empty(), "{report:?}");
+    assert_eq!(phone.embedded.queue().adopted().unwrap(), Some(b_vault));
+    let on_b = Http::admin(&b);
+    assert_eq!(
+        on_b.note(&inbox)["note"]["fields"]["title"],
+        "Only on the phone"
+    );
+    assert_eq!(on_b.note(&archived)["note"]["fields"]["archived"], true);
+    on_b.get(&format!("/api/notes/{trashed}"), 404);
+    let trash = on_b.get("/api/trash", 200);
+    assert!(trash.to_string().contains(&trashed), "{trash}");
+    // The note B had is not sent again.
+    assert_eq!(on_b.history(&shared).len(), 1);
+    // The local notes are as they were.
+    assert_eq!(shape(&phone.note(&inbox)).0, "Only on the phone");
+    assert!(phone.embedded.writer().read(&trashed).is_err());
+
+    // A second round, or the button, queues nothing.
+    let report = phone.sync();
+    assert!(report.adopted.is_empty(), "{report:?}");
+    assert!(report.pushed.is_empty(), "{report:?}");
+    let engine = phone.engine(AssetPolicy::desktop());
+    assert!(engine.adopt().unwrap().queued.is_empty());
+}
+
+/// Ticket 150: Settings > Devices > This device's "Send this device's notes to the server" calls
+/// `POST /api/app/sync/adopt`, which queues every local note the server lacks and says how many.
+#[test]
+fn the_send_this_devices_notes_endpoint_queues_the_notes_the_server_lacks() {
+    let a = TestServer::start_seeded(seed);
+    let b = TestServer::start_seeded(seed);
+    let only = str(&Http::admin(&a).post(
+        "/api/notes?type=fleeting",
+        json!({ "note": { "fields": { "title": "Inbox" } } }),
+        201,
+    )["id"]);
+    let mut phone = Device::pair(&a, "Pixel");
+    // Unpaired, the endpoint cannot compare with a server.
+    let out = phone.call("POST", "/api/app/sync/adopt", None, 503);
+    assert_eq!(out["error"], "not_paired", "{out}");
+    phone.sync();
+    // Adopted already, as a device that synced only with B would be: only the button adopts.
+    joined_before_143(&mut phone, &b, true);
+    phone.embedded.set_remote(Some(phone.remote.clone()));
+
+    let out = phone.call("POST", "/api/app/sync/adopt", None, 200);
+    assert_eq!(out["queued"], 1, "{out}");
+    assert_eq!(out["notes"], json!([only.clone()]), "{out}");
+    let pending = phone.embedded.queue().pending().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].note_id, only);
+    assert_eq!(pending[0].base_version, None, "a create with no base");
+    // Asked again before a round, it queues nothing more.
+    let out = phone.call("POST", "/api/app/sync/adopt", None, 200);
+    assert_eq!(out["queued"], 0, "{out}");
+
+    let report = phone.sync();
+    assert_eq!(report.pushed, vec![only.clone()], "{report:?}");
+    assert_eq!(
+        Http::admin(&b).note(&only)["note"]["fields"]["title"],
+        "Inbox"
+    );
 }

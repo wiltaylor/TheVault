@@ -63,6 +63,9 @@ pub(crate) enum Route {
     AppSync,
     /// `POST /api/app/sync`: ask the app's sync loop for a round now.
     AppSyncNow,
+    /// `POST /api/app/sync/adopt`: queue the local notes the home server lacks, "Send this
+    /// device's notes to the server" (ticket 150).
+    AppSyncAdopt,
     /// `GET /api/app/device-events`: the device events that failed or were skipped, for
     /// "Capture problems".
     AppDeviceEvents,
@@ -101,6 +104,9 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         if *method == Method::POST {
             return Route::AppSyncNow;
         }
+    }
+    if path == "/api/app/sync/adopt" && *method == Method::POST {
+        return Route::AppSyncAdopt;
     }
     if path == "/api/app/device-events" && get {
         return Route::AppDeviceEvents;
@@ -565,6 +571,7 @@ mod tests {
         assert_eq!(route(&get, "/api/app"), Route::App);
         assert_eq!(route(&get, "/api/app/sync"), Route::AppSync);
         assert_eq!(route(&post, "/api/app/sync"), Route::AppSyncNow);
+        assert_eq!(route(&post, "/api/app/sync/adopt"), Route::AppSyncAdopt);
         assert_eq!(
             route(&get, "/api/app/device-events"),
             Route::AppDeviceEvents

@@ -11,6 +11,10 @@
 //!    the local vault; a server whose vault id differs from the recorded one is another vault, and
 //!    the round stops with [`Error::OtherVault`] before it pushes anything, for the app to start
 //!    a fresh local vault (ticket 143).
+//!    Once per vault, a local vault that synced before queues every local note the server's change
+//!    feed has never listed as a create with no base ([`Engine::adopt`]): notes pulled from an
+//!    earlier vault by a pairing made before vault ids were recorded, which the server never had
+//!    (ticket 150). It only ever adds queue rows.
 //! 2. **Bases.** `PUT /api/devices/{id}/bases` with the base version of every queued change, so
 //!    the server keeps those versions through pruning and browser-save merging (D29).
 //! 3. **Assets the device stored** go up first with `PUT /api/assets/{id}`, under their own ids,
@@ -30,9 +34,12 @@
 //!    and adds a notification that opens the copy. Either way the device takes the server's
 //!    result as its own. A change whose base the server never had, and that is not in the
 //!    server's trash either, is pushed as a create under the note's id with what the device
-//!    holds. A note the server still refuses (a 4xx other than the 409 merge) is held back with
-//!    the reason ([`Held`]) and the rest of the queue goes on: the round completes and the
-//!    report names it (ticket 143).
+//!    holds. A note refused because a note it links to does not exist on the server, when the
+//!    device holds that note, sends the linked note first, as a create, then itself again; two
+//!    notes that link to each other go up with one of them stripped of the link first, and that
+//!    one whole once the other is there (ticket 150). A note the server still refuses (a 4xx
+//!    other than the 409 merge) is held back with the reason ([`Held`]) and the rest of the queue
+//!    goes on: the round completes and the report names it (ticket 143).
 //!    Then the notifications made on the device, such as by a device script, move to the server
 //!    with `POST /api/notifications`: the app's bell shows the server's.
 //! 5. **Pull.** `GET /api/assets` first, so the round knows the files it will fetch and their
@@ -88,6 +95,19 @@ const PAGE: usize = 500;
 /// How many times one note is written back after merging before the round gives up on it: the
 /// server can change again between the merge and the write.
 const MERGE_ATTEMPTS: usize = 4;
+
+/// How many feed entries one page of the adoption's scan asks for: it reads the ids alone.
+const ADOPT_PAGE: usize = 1000;
+
+/// How many times one note is sent again after the notes it links to went first.
+const LINK_ATTEMPTS: usize = 3;
+
+/// How deep the notes a note links to are followed, each sent before the note linking to it.
+const MAX_CHAIN: usize = 32;
+
+/// How many times a round goes back over the queue for notes queued while it pushed, such as a
+/// note sent without its links to break a cycle, whose whole push follows.
+const PUSH_PASSES: usize = 8;
 
 /// The home server of a paired device, and who the device is (D2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,6 +247,87 @@ pub struct Report {
     pub stuck: Vec<AssetFailure>,
     /// The queued notes held back, because they name a stuck asset or the server refused them.
     pub held: Vec<Held>,
+    /// The local notes the server lacked that this round queued as creates, oldest first
+    /// ([`Engine::adopt`], ticket 150).
+    pub adopted: Vec<String>,
+}
+
+/// What [`Engine::adopt`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Adopted {
+    /// The local notes the server lacked, queued now as creates, oldest first.
+    pub queued: Vec<String>,
+    /// The local assets the server lacked, to be sent by the next round.
+    pub assets: usize,
+}
+
+/// The notes a refusal says do not exist on the server: a 400 `invalid` whose issues name each
+/// in `missing_note`, or, from a server older than ticket 150, say `note <id> does not exist`.
+fn missing_notes(e: &Error) -> Vec<String> {
+    let Error::Server {
+        status: 400, body, ..
+    } = e
+    else {
+        return Vec::new();
+    };
+    let Ok(body) = serde_json::from_str::<Json>(body) else {
+        return Vec::new();
+    };
+    if body.get("error").and_then(Json::as_str) != Some("invalid") {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for issue in body
+        .get("issues")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let named = issue
+            .get("missing_note")
+            .and_then(Json::as_str)
+            .or_else(|| {
+                issue
+                    .get("message")
+                    .and_then(Json::as_str)?
+                    .strip_prefix("note ")?
+                    .strip_suffix(" does not exist")
+            })
+            .filter(|id| schema::is_ulid(id));
+        if let Some(id) = named
+            && !out.iter().any(|o| o == id)
+        {
+            out.push(id.to_owned());
+        }
+    }
+    out
+}
+
+/// `doc` with every link to a note in `ids` left out: a field naming one, or that one item of a
+/// list, at any depth. What goes up first to break a cycle of links (ticket 150).
+fn without_links(doc: &Doc, ids: &[String]) -> Doc {
+    let named = |v: &Value| matches!(v, Value::Str(s) if ids.contains(s));
+    let mut out = doc.clone();
+    out.fields.retain(|(_, v)| !named(v));
+    for (_, v) in &mut out.fields {
+        if let Value::List(items) = v {
+            items.retain(|i| !named(i));
+        }
+    }
+    for b in &mut out.blocks {
+        b.body = without_links(&b.body, ids);
+    }
+    out
+}
+
+/// Where the push of a round stands.
+#[derive(Default)]
+struct Pushing {
+    /// The notes this round tried to push, from the queue or as a note another links to.
+    tried: HashSet<String>,
+    held: Vec<Held>,
+    /// The notes being pushed now, each waiting for the next to go first.
+    chain: Vec<String>,
 }
 
 /// Whether a failed push of one note is that note's own problem, which holds it back while the
@@ -522,27 +623,50 @@ impl Engine {
 
     /// A round after its handshake.
     fn round(&self) -> Result<Report> {
-        let mut report = Report::default();
+        let mut report = Report {
+            adopted: self.adopt_once()?,
+            ..Report::default()
+        };
         self.report_bases()?;
         let missing = self.push_assets(&mut report)?;
-        let mut held = Vec::new();
-        for p in self.queue.pending()? {
-            if let Some(h) = self.holds(&p, &missing)? {
-                held.push(h);
-                continue;
+        let mut st = Pushing::default();
+        for _ in 0..PUSH_PASSES {
+            let ids: Vec<String> = self
+                .queue
+                .pending_ids()?
+                .into_iter()
+                .filter(|id| !st.tried.contains(id))
+                .collect();
+            if ids.is_empty() {
+                break;
             }
-            match self.push_one(&p, &mut report) {
-                Ok(()) => {}
-                Err(e) if held_for(&e) => {
-                    held.push(Held {
-                        note_id: p.note_id.clone(),
+            self.progress.plan_notes(ids.len() as u64);
+            for id in ids {
+                self.progress.notes_applied(1);
+                // Pushed already, as a note another links to.
+                if st.tried.contains(&id) {
+                    continue;
+                }
+                let Some(p) = self.queue.pending_for(&id)? else {
+                    continue;
+                };
+                st.tried.insert(id.clone());
+                if let Some(h) = self.holds(&p, &missing)? {
+                    st.held.push(h);
+                    continue;
+                }
+                match self.push_linked(&p, &mut report, &mut st) {
+                    Ok(()) => {}
+                    Err(e) if held_for(&e) => st.held.push(Held {
+                        note_id: id,
                         asset_id: None,
                         reason: e.to_string(),
-                    });
+                    }),
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
             }
         }
+        let held = st.held;
         self.queue.set_held(&held)?;
         report.held = held;
         self.push_notifications(&mut report)?;
@@ -628,8 +752,228 @@ impl Engine {
         };
         match local {
             Some(note) => self.push_put(p, note, report),
+            None if p.adopted && p.base_version.is_none() => {
+                match self.writer.state().trash_entry(&p.note_id)? {
+                    Some(entry) => self.push_trashed(p, &entry, report),
+                    None => self.push_delete(p, report),
+                }
+            }
             None => self.push_delete(p, report),
         }
+    }
+
+    /// Push queued note `p`, sending first the notes the server says it links to and does not
+    /// have, when the device holds them, each as a create, then `p` again (ticket 150). A note
+    /// linking back to one already waiting in the chain goes up without that link first
+    /// ([`Engine::push_without_links`]).
+    fn push_linked(&self, p: &Pending, report: &mut Report, st: &mut Pushing) -> Result<()> {
+        st.chain.push(p.note_id.clone());
+        let out = self.push_linked_in_chain(p, report, st);
+        st.chain.pop();
+        out
+    }
+
+    fn push_linked_in_chain(
+        &self,
+        p: &Pending,
+        report: &mut Report,
+        st: &mut Pushing,
+    ) -> Result<()> {
+        let mut p = p.clone();
+        let mut attempt = 0;
+        loop {
+            let err = match self.push_one(&p, report) {
+                Ok(()) => return Ok(()),
+                Err(e) => e,
+            };
+            let missing = missing_notes(&err);
+            if missing.is_empty() || attempt == LINK_ATTEMPTS {
+                return Err(err);
+            }
+            attempt += 1;
+            let mut sent = false;
+            let mut cycle = false;
+            for id in missing {
+                if self.writer.read(&id).is_err() {
+                    // Not a note the device holds: the refusal stands.
+                    continue;
+                }
+                if st.chain.contains(&id) {
+                    cycle = true;
+                    continue;
+                }
+                if st.tried.contains(&id) || st.chain.len() >= MAX_CHAIN {
+                    continue;
+                }
+                st.tried.insert(id.clone());
+                let linked = self
+                    .queue
+                    .pending_for(&id)?
+                    .unwrap_or_else(|| Pending::create(&id));
+                match self.push_linked(&linked, report, st) {
+                    Ok(()) => sent = true,
+                    Err(e) if held_for(&e) => st.held.push(Held {
+                        note_id: id,
+                        asset_id: None,
+                        reason: e.to_string(),
+                    }),
+                    Err(e) => return Err(e),
+                }
+            }
+            if cycle {
+                return self.push_without_links(&p, st);
+            }
+            if !sent {
+                return Err(err);
+            }
+            // A note sent first may have been queued again ahead of this one.
+            if let Some(fresh) = self.queue.pending_for(&p.note_id)? {
+                p = fresh;
+            }
+        }
+    }
+
+    /// Break a cycle of links: create note `p` on the server without its links to the notes
+    /// waiting for it in the chain, so they can go up, and queue its whole push from that version
+    /// for later in the round. The local note is not changed.
+    fn push_without_links(&self, p: &Pending, st: &mut Pushing) -> Result<()> {
+        let id = &p.note_id;
+        let note = self.writer.read(id)?;
+        let stub = without_links(&note.doc, &st.chain);
+        let saved = self
+            .home
+            .put_note(
+                id,
+                &note.type_name,
+                &json!({ "note": doc_to_json(&stub) }),
+                None,
+            )?
+            .ok(&format!("writing note {id} without its links"))?;
+        let saved = ServerNote::from_json(&saved, id)?;
+        self.queue.requeue_from(id, &saved.version, &saved.wcl)?;
+        self.queue.set_synced(id, &saved.version, None, false)?;
+        st.tried.remove(id);
+        Ok(())
+    }
+
+    /// Push a note the server never had that the device holds in its trash: create it, then
+    /// delete it, so it lands in the server's trash as it is in the device's (ticket 150).
+    fn push_trashed(
+        &self,
+        p: &Pending,
+        entry: &state::TrashEntry,
+        report: &mut Report,
+    ) -> Result<()> {
+        let id = &p.note_id;
+        let answer =
+            self.home
+                .put_note(id, &entry.note_type, &json!({ "wcl": entry.content }), None)?;
+        if answer.status.as_u16() == 409 {
+            // The server has the note after all: nothing to send.
+            self.queue.dequeue(id)?;
+            return Ok(());
+        }
+        let made = ServerNote::from_json(&answer.ok(&format!("writing note {id}"))?, id)?;
+        let deleted = self.home.delete_note(id, &made.version)?;
+        let version = deleted.str("version").unwrap_or(&made.version).to_owned();
+        deleted.ok(&format!("deleting note {id}"))?;
+        self.queue.set_synced(id, &version, None, true)?;
+        self.queue.dequeue(id)?;
+        report.pushed.push(id.clone());
+        Ok(())
+    }
+
+    /// Step 1's adoption, once per vault: a local vault that synced before queues the local notes
+    /// the server lacks; one that never synced has none to queue and only records it.
+    fn adopt_once(&self) -> Result<Vec<String>> {
+        let Some(vault) = self.queue.server_vault()? else {
+            return Ok(Vec::new());
+        };
+        if self.queue.adopted()?.as_deref() == Some(vault.as_str()) {
+            return Ok(Vec::new());
+        }
+        let queued = if self.queue.has_synced()? {
+            self.adopt_local()?.queued
+        } else {
+            Vec::new()
+        };
+        self.queue.set_adopted(&vault)?;
+        Ok(queued)
+    }
+
+    /// Queue every note the device holds, live, archived or in its trash, that the server has
+    /// never had, as a create with no base, oldest first, for the next push (ticket 150). The
+    /// server's change feed lists every note it ever held, deleted ones too, so a note it has, or
+    /// had, is never sent again. The local assets the server does not list are marked to be sent
+    /// as well, since the notes naming them need them there. It only ever adds queue rows: no
+    /// local note changes. "Send this device's notes to the server" runs it at any time.
+    pub fn adopt(&self) -> Result<Adopted> {
+        self.handshake()?;
+        let adopted = self.adopt_local()?;
+        if let Some(vault) = self.queue.server_vault()? {
+            self.queue.set_adopted(&vault)?;
+        }
+        Ok(adopted)
+    }
+
+    fn adopt_local(&self) -> Result<Adopted> {
+        let mut server = HashSet::new();
+        let mut since = 0;
+        loop {
+            let page = self
+                .home
+                .get(&format!(
+                    "/api/sync/changes?since={since}&limit={ADOPT_PAGE}"
+                ))?
+                .ok("reading the change feed")?;
+            let changes = page
+                .get("changes")
+                .and_then(Json::as_array)
+                .ok_or_else(|| Error::Protocol(format!("the feed page has no changes: {page}")))?;
+            for c in changes {
+                if c.get("kind").and_then(Json::as_str) == Some("note")
+                    && let Some(id) = c.get("id").and_then(Json::as_str)
+                {
+                    server.insert(id.to_owned());
+                }
+            }
+            let next = page.get("next").and_then(Json::as_i64).unwrap_or(since);
+            let latest = page.get("latest").and_then(Json::as_i64).unwrap_or(next);
+            if changes.is_empty() || next >= latest || next <= since {
+                break;
+            }
+            since = next;
+        }
+        let mut local: Vec<String> = self.writer.read_index(|index, _| {
+            let conn = index.connection();
+            let mut stmt = conn.prepare("SELECT id FROM notes")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<String>>>()
+        })?;
+        local.extend(self.writer.trash()?.into_iter().map(|t| t.note_id));
+        local.retain(|id| !server.contains(id));
+        local.sort();
+        local.dedup();
+        let queued = self.queue.adopt(&local)?;
+
+        let listed = self.home.get("/api/assets")?.ok("listing the assets")?;
+        let on_server: HashSet<&str> = listed
+            .get("assets")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|a| a.get("id").and_then(Json::as_str))
+            .collect();
+        let mut assets = 0;
+        for a in self.writer.assets()? {
+            if !on_server.contains(a.id.as_str())
+                && self.queue.asset(&a.id)?.is_some_and(|k| k.on_server)
+            {
+                self.queue.set_asset(&a.id, &a.filename, a.size, false)?;
+                assets += 1;
+            }
+        }
+        Ok(Adopted { queued, assets })
     }
 
     /// Push a note the device deleted. A server that changed the note since keeps it: the change

@@ -1141,3 +1141,81 @@ fn a_local_vault_moved_aside_is_removed_after_seven_days() {
     assert!(recent.exists());
     assert!(vault.exists());
 }
+
+/// One request to the core's embedded server, as the webview sends it over IPC.
+fn app_call(core: &Core, method: &str, path: &str) -> (u16, Value) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let req = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let server = core.server();
+    rt.block_on(async {
+        let res = server.handle(req).await;
+        let status = res.status().as_u16();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    })
+}
+
+/// Ticket 150: "Send this device's notes to the server" in Settings > Devices > This device calls
+/// `POST /api/app/sync/adopt`. A note the phone holds that the server never had, and that no
+/// local write queued (as for a note pulled from an earlier vault), is queued as a create, once,
+/// and the next round sends it; a note the server has is not queued.
+#[test]
+fn send_this_devices_notes_queues_the_local_notes_the_server_lacks_once() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let (status, out) = app_call(&core, "POST", "/api/app/sync/adopt");
+    assert_eq!(
+        (status, out["error"].as_str()),
+        (503, Some("not_paired")),
+        "{out}"
+    );
+
+    let admin = Admin::start();
+    let on_server = server_note(&admin, "On the server");
+    core.set_link(Some(link(&admin.pair("Pixel"), 64))).unwrap();
+    core.sync_now().unwrap();
+    assert!(has_note(&core, &on_server));
+    // A note only the phone holds, written as a pull writes, so never queued: as a note pulled
+    // from an earlier vault is.
+    let only_here = "01M54QB0DV70S5SPH7H199H2Q9".to_owned();
+    core.server()
+        .writer()
+        .apply_remote(&writer::Remote::Put {
+            id: only_here.clone(),
+            type_name: "fleeting".to_owned(),
+            wcl: "title = \"Only on the phone\"\n".to_owned(),
+        })
+        .unwrap();
+    assert!(has_note(&core, &only_here));
+    let queue = core.server().queue().clone();
+    assert!(queue.pending().unwrap().is_empty());
+
+    let (status, out) = app_call(&core, "POST", "/api/app/sync/adopt");
+    assert_eq!(status, 200, "{out}");
+    assert_eq!(out["queued"], 1, "{out}");
+    assert_eq!(out["notes"], json!([only_here.clone()]), "{out}");
+    // The button asked for a round, which may be sending it already. The local note is as it
+    // was.
+    assert!(has_note(&core, &only_here));
+
+    let (_, again) = app_call(&core, "POST", "/api/app/sync/adopt");
+    assert_eq!(again["queued"], 0, "{again}");
+    core.sync_now().unwrap();
+    assert!(queue.pending().unwrap().is_empty());
+    admin.send("GET", &format!("/api/notes/{only_here}"), None);
+    let (_, after) = app_call(&core, "POST", "/api/app/sync/adopt");
+    assert_eq!(after["queued"], 0, "{after}");
+}

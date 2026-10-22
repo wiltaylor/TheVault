@@ -88,9 +88,10 @@ impl Stage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Progress {
     pub stage: Stage,
-    /// Feed entries (notes and definition files) pulled this round.
+    /// Queued notes pushed and feed entries (notes and definition files) pulled this round.
     pub notes_done: u64,
-    /// Feed entries this round pulls, as far as the server has said so far.
+    /// Queued notes this round pushes and feed entries it pulls, as far as the server has said
+    /// so far.
     pub notes_total: u64,
     /// Asset files fetched this round.
     pub files_done: u64,
@@ -282,7 +283,15 @@ impl SyncProgress {
         inner.sample(Instant::now(), false);
     }
 
-    /// `n` feed entries were applied.
+    /// The push sends `n` more queued notes, which count with the feed entries (ticket 150): a
+    /// round that adopts many local notes shows their push as it goes.
+    pub(crate) fn plan_notes(&self, n: u64) {
+        let mut inner = self.lock();
+        let p = &mut inner.progress;
+        p.notes_total = p.notes_total.max(p.notes_done + n);
+    }
+
+    /// `n` feed entries were applied, or queued notes pushed.
     pub(crate) fn notes_applied(&self, n: u64) {
         let mut inner = self.lock();
         let p = &mut inner.progress;

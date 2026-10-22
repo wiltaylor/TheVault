@@ -8,6 +8,7 @@ import { gateNotice } from "../sync/model";
 import { healthWarning } from "./CaptureHealth";
 import { CaptureProblemsBadge } from "./CaptureProblems";
 import { PhoneImport, ThisDevice } from "./DeviceImport";
+import { SendDeviceNotes } from "./SendDeviceNotes";
 import { errorText } from "./TypeEditor";
 
 /** The commands every device app implements (D22). A device's own `devices/<platform>.wcl` may add more. */
@@ -96,6 +97,13 @@ export function Devices() {
       </Show>
       <Show when={inAndroidApp()}>
         <ThisDevice />
+      </Show>
+      {/* The desktop app's This device holds only the send button; Android's has it beside the import. */}
+      <Show when={inApp() && !inAndroidApp()}>
+        <section class="field-card" aria-label="This device">
+          <h2>This device</h2>
+          <SendDeviceNotes />
+        </section>
       </Show>
       <ClientDownloads />
       <h2>Paired devices</h2>

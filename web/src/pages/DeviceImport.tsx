@@ -17,6 +17,7 @@ import {
 } from "../deviceImport";
 import { CaptureProblems, CaptureProblemsBadge } from "./CaptureProblems";
 import { CaptureHealth } from "./CaptureHealth";
+import { SendDeviceNotes } from "./SendDeviceNotes";
 import { errorText } from "./TypeEditor";
 
 /** The command that asks a phone to import its history (D22). */
@@ -250,6 +251,7 @@ export function ThisDevice() {
           {error()}
         </p>
       </Show>
+      <SendDeviceNotes />
       <CaptureHealth />
       <CaptureProblems />
     </section>

@@ -736,6 +736,15 @@ export interface CaptureProblem {
   who: string | null;
 }
 
+/** `POST /api/app/sync/adopt`: the local notes queued for the server, oldest first, and whether a round was asked for. */
+export interface SentDeviceNotes {
+  queued: number;
+  notes: string[];
+  /** Local assets the server lacked, marked to be sent with them. */
+  assets: number;
+  syncing: boolean;
+}
+
 /** `GET /api/app/device-events`: whether a device runtime runs here, the failed count, and the list newest first. */
 export interface CaptureProblems {
   device: boolean;
@@ -1048,6 +1057,11 @@ export const api = {
   appSync: () => request<AppSync>("GET", "/api/app/sync"),
   /** In an app: run a sync round now. */
   appSyncNow: () => request<AppSync>("POST", "/api/app/sync"),
+  /**
+   * In an app: queue every note this device holds that the server never had, as a create, and ask
+   * for a round to send them ("Send this device's notes to the server", ticket 150).
+   */
+  sendDeviceNotes: () => request<SentDeviceNotes>("POST", "/api/app/sync/adopt"),
   /** In the Android app: the device events that failed or were skipped. */
   captureProblems: () => request<CaptureProblems>("GET", "/api/app/device-events"),
   /** In the Android app: give a failed device event three more tries, the first now. Answers it as it then stands. */

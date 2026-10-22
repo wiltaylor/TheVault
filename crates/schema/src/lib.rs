@@ -60,6 +60,9 @@ pub struct Issue {
     pub at: String,
     pub message: String,
     pub severity: Severity,
+    /// The id of the note the issue says does not exist, for a reference to a missing note. A
+    /// device that holds that note pushes it first (ticket 150).
+    pub missing_note: Option<String>,
 }
 
 impl Issue {
@@ -69,6 +72,15 @@ impl Issue {
             at: at.into(),
             message: message.into(),
             severity: Severity::Error,
+            missing_note: None,
+        }
+    }
+
+    /// An error for a reference to note `id`, which does not exist.
+    pub fn missing_note(at: impl Into<String>, id: &str) -> Issue {
+        Issue {
+            missing_note: Some(id.to_owned()),
+            ..Issue::new(at, format!("note {id} does not exist"))
         }
     }
 

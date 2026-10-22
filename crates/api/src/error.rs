@@ -233,9 +233,15 @@ pub fn in_use(w: &Writer, e: Error) -> ApiError {
 /// One schema issue as the API reports it: `{ "at", "message", "severity" }`, the severity
 /// `error` or `warning`.
 pub(crate) fn issue_json(i: &schema::Issue) -> Value {
-    json!({
+    let mut out = json!({
         "at": i.at,
         "message": i.message,
         "severity": if i.is_warning() { "warning" } else { "error" },
-    })
+    });
+    // A reference to a note that does not exist names it, so a device that holds the note can
+    // push it first (ticket 150).
+    if let Some(id) = &i.missing_note {
+        out["missing_note"] = json!(id);
+    }
+    out
 }

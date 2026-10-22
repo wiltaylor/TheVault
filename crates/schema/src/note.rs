@@ -263,7 +263,7 @@ fn check_single(f: &FieldDef, v: &Value, ctx: Option<&Context>, c: &mut Check, a
             Value::Str(id) if is_ulid(id) => {
                 let Some(ctx) = ctx else { return };
                 match ctx.lookup.note_type(id) {
-                    None => c.fail(at, format!("note {id} does not exist")),
+                    None => c.issues.push(Issue::missing_note(at, id)),
                     Some(t) => {
                         if let Some(target) = &r.target
                             && &t != target

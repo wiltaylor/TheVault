@@ -651,3 +651,30 @@ fn placeholder_links_round_trip_and_must_name_a_type() {
         "the placeholder link titled \"Fix the | pump ]]\" names type \"errand\", which does not exist"
     );
 }
+
+/// Ticket 150: a reference to a note that does not exist is a 400 whose issue names the note in
+/// `missing_note`, so a device that holds the note pushes it first.
+#[test]
+fn a_reference_to_a_missing_note_names_it_in_the_issue() {
+    let api = Api::start();
+    let missing = "01M54QB0DV70S5SPH7H199H2Q9";
+    let res = api
+        .post("/api/notes?type=message")
+        .json(&json!({ "note": { "fields": { "title": "Hello", "conversation": missing } } }))
+        .send()
+        .unwrap();
+    let err = expect(res, 400);
+    assert_eq!(err["error"], "invalid", "{err}");
+    let issue = &err["issues"][0];
+    assert_eq!(issue["at"], "conversation", "{err}");
+    assert_eq!(issue["missing_note"], missing, "{err}");
+    assert_eq!(issue["message"], format!("note {missing} does not exist"));
+    // Other issues name no note.
+    let res = api
+        .post("/api/notes?type=message")
+        .json(&json!({ "note": { "fields": { "title": "Hello", "conversation": "nope" } } }))
+        .send()
+        .unwrap();
+    let err = expect(res, 400);
+    assert!(err["issues"][0].get("missing_note").is_none(), "{err}");
+}

@@ -372,6 +372,49 @@ impl Embedded {
         }
     }
 
+    /// `POST /api/app/sync/adopt`, Settings > Devices > This device's "Send this device's notes
+    /// to the server": queue every local note the home server has never had as a create
+    /// ([`sync::Engine::adopt`]), then ask for a round, which pushes them. Answers `{ queued,
+    /// notes, assets, syncing }`: how many notes it queued, their ids oldest first, the local
+    /// assets marked to be sent, and whether a round was asked for. It never changes a local
+    /// note (ticket 150).
+    async fn adopt(&self) -> Response<Body> {
+        let Some(remote) = self.remote() else {
+            return Unavailable::NotPaired.response();
+        };
+        let (writer, queue) = (self.writer().clone(), self.queue().clone());
+        let adopted = tokio::task::spawn_blocking(move || {
+            sync::Engine::new(writer, queue, remote, sync::AssetPolicy::desktop())?.adopt()
+        })
+        .await;
+        match adopted {
+            Ok(Ok(a)) => {
+                let syncing = self.request_sync();
+                home::json_response(
+                    StatusCode::OK,
+                    &serde_json::json!({
+                        "queued": a.queued.len(),
+                        "notes": a.queued,
+                        "assets": a.assets,
+                        "syncing": syncing,
+                    }),
+                )
+            }
+            Ok(Err(e @ (sync::Error::Http(_) | sync::Error::Transfer(_)))) => {
+                home::error(StatusCode::SERVICE_UNAVAILABLE, "offline", &e.to_string())
+            }
+            Ok(Err(e @ sync::Error::OtherVault { .. })) => {
+                home::error(StatusCode::CONFLICT, "other_vault", &e.to_string())
+            }
+            Ok(Err(e)) => home::error(StatusCode::BAD_GATEWAY, "sync_failed", &e.to_string()),
+            Err(e) => home::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                &e.to_string(),
+            ),
+        }
+    }
+
     /// Where sync stands, as `GET /api/app/sync` answers it: the app's sync loop's report with the
     /// local writes waiting counted now and the progress of the round, if one runs.
     pub fn sync_status(&self) -> serde_json::Value {
@@ -465,6 +508,7 @@ impl Embedded {
                     Unavailable::NotPaired.response()
                 }
             }
+            Route::AppSyncAdopt => self.adopt().await,
             Route::AppDeviceEvents => self.device_events().await,
             Route::AppDeviceEvent { id, retry } => self.device_event(id, retry).await,
             Route::ServerVersion => home.server_version().await,

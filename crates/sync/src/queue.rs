@@ -7,6 +7,8 @@
 //! - `sync_queue`: one row per note changed locally and not yet on the server, in the order of
 //!   its first change, with the base it started from: the server version, and that version's WCL
 //!   text, which the three-way merge needs whatever the server has done with its own copy since.
+//!   `adopted` marks a local note the server never had, queued by the adoption of ticket 150
+//!   rather than by a local write.
 //! - `sync_notes`: per note, the server version the local copy matches, the local version that
 //!   holds it (so the base text of the next local change can be found in the local history), and
 //!   whether the server deleted it.
@@ -19,7 +21,8 @@
 //!   refused the note itself (ticket 143). A note held for its own sake has an empty `asset_id`.
 //! - `sync_recent`: notes opened on the device, for the on-demand asset policy.
 //! - `sync_meta`: the change-feed cursor, the id of the vault on the home server the local vault
-//!   is a copy of, and the record of the last fresh start (ticket 143).
+//!   is a copy of, the record of the last fresh start (ticket 143), and the vault the local notes
+//!   the server lacked were last adopted for (ticket 150).
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -90,6 +93,9 @@ const FRESH_START: &str = "fresh_start";
 /// The `sync_meta` key of the vault whose contact links the phone was last cleaned up for.
 const LINKS_CLEANED: &str = "contact_links_cleaned";
 
+/// The `sync_meta` key of the vault the local notes the server lacked were adopted for.
+const ADOPTED: &str = "adopted_vault";
+
 /// A local change waiting to reach the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pending {
@@ -100,6 +106,23 @@ pub struct Pending {
     pub base_wcl: Option<String>,
     /// The server had deleted the note when the change started: pushing it restores the note.
     pub base_deleted: bool,
+    /// A local note the server never had, queued by [`Queue::adopt`] rather than by a local
+    /// write. One in the local trash goes to the server's trash, where a local write's create
+    /// and delete before any sync sends nothing.
+    pub adopted: bool,
+}
+
+impl Pending {
+    /// A create of note `id`, which the server never had, with no base.
+    pub fn create(id: &str) -> Pending {
+        Pending {
+            note_id: id.to_owned(),
+            base_version: None,
+            base_wcl: None,
+            base_deleted: false,
+            adopted: false,
+        }
+    }
 }
 
 /// Where the local copy of a note stands against the server.
@@ -168,6 +191,17 @@ impl Queue {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "FULL")?;
         conn.execute_batch(TABLES)?;
+        let adopted: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM pragma_table_info('sync_queue') WHERE name = 'adopted')",
+            [],
+            |r| r.get(0),
+        )?;
+        if !adopted {
+            conn.execute(
+                "ALTER TABLE sync_queue ADD COLUMN adopted INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         Ok(Queue {
             conn: Mutex::new(conn),
         })
@@ -217,7 +251,8 @@ impl Queue {
     pub fn pending(&self) -> Result<Vec<Pending>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT note_id, base_version, base_wcl, base_deleted FROM sync_queue ORDER BY seq",
+            "SELECT note_id, base_version, base_wcl, base_deleted, adopted FROM sync_queue
+             ORDER BY seq",
         )?;
         let rows = stmt.query_map([], pending_row)?;
         rows.collect()
@@ -227,12 +262,62 @@ impl Queue {
     pub fn pending_for(&self, id: &str) -> Result<Option<Pending>> {
         self.conn()
             .query_row(
-                "SELECT note_id, base_version, base_wcl, base_deleted FROM sync_queue
+                "SELECT note_id, base_version, base_wcl, base_deleted, adopted FROM sync_queue
                  WHERE note_id = ?1",
                 [id],
                 pending_row,
             )
             .optional()
+    }
+
+    /// The ids of the queued notes, oldest first.
+    pub fn pending_ids(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT note_id FROM sync_queue ORDER BY seq")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// Queue each of `ids`, local notes the server never had, as a create with no base, in the
+    /// order given, after everything queued already (ticket 150). A note queued already keeps its
+    /// row. Answers the ids queued now. Only ever adds rows: nothing local changes.
+    pub fn adopt(&self, ids: &[String]) -> Result<Vec<String>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let mut queued = Vec::new();
+        for id in ids {
+            let added = tx.execute(
+                "INSERT OR IGNORE INTO sync_queue
+                     (note_id, base_version, base_wcl, base_deleted, queued_ms, adopted)
+                 VALUES (?1, NULL, NULL, 0, ?2, 1)",
+                params![id, now_ms()],
+            )?;
+            if added > 0 {
+                queued.push(id.clone());
+            }
+        }
+        tx.commit()?;
+        Ok(queued)
+    }
+
+    /// Queue note `id` again from server version `version`, whose text is `wcl`: the note went up
+    /// without some of its links, to break a cycle, and its whole push follows (ticket 150). A
+    /// note queued already keeps its place.
+    pub fn requeue_from(&self, id: &str, version: &str, wcl: &str) -> Result<()> {
+        let conn = self.conn();
+        let updated = conn.execute(
+            "UPDATE sync_queue SET base_version = ?2, base_wcl = ?3, base_deleted = 0, adopted = 0
+             WHERE note_id = ?1",
+            params![id, version, wcl],
+        )?;
+        if updated == 0 {
+            conn.execute(
+                "INSERT INTO sync_queue (note_id, base_version, base_wcl, base_deleted, queued_ms)
+                 VALUES (?1, ?2, ?3, 0, ?4)",
+                params![id, version, wcl, now_ms()],
+            )?;
+        }
+        Ok(())
     }
 
     /// Take note `id` out of the queue.
@@ -340,6 +425,16 @@ impl Queue {
 
     pub fn set_fresh_start(&self, record: &serde_json::Value) -> Result<()> {
         self.set_meta(FRESH_START, &record.to_string())
+    }
+
+    /// The vault the local notes the server lacked were adopted for, once a round or "Send this
+    /// device's notes to the server" ran the adoption (ticket 150).
+    pub fn adopted(&self) -> Result<Option<String>> {
+        self.meta(ADOPTED)
+    }
+
+    pub fn set_adopted(&self, vault_id: &str) -> Result<()> {
+        self.set_meta(ADOPTED, vault_id)
     }
 
     /// The vault the phone's contact links were last cleaned up for.
@@ -520,6 +615,7 @@ fn pending_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Pending> {
         base_version: r.get(1)?,
         base_wcl: r.get(2)?,
         base_deleted: r.get(3)?,
+        adopted: r.get(4)?,
     })
 }
 
