@@ -31,9 +31,9 @@ REPO = Path(__file__).resolve().parents[4]
 DEV = REPO / "dev"
 PASSWORD = "skillcheck-password"
 
-# The `vault` the agent runs. ./dev mounts only its working directory and passes no stdin, so the
-# wrapper runs it from the test's directory, which holds the workspace, the binaries and the vault,
-# feeds stdin through a file there, and copies in any file argument from outside it.
+# The `vault` the agent runs. ./dev mounts only its working directory, so the wrapper runs it from
+# the test's directory, which holds the workspace, the binaries and the vault, and copies in any
+# file argument from outside it. ./dev passes stdin through (ticket 122); a terminal reads as empty.
 WRAPPER = r'''#!{python}
 import os, shlex, shutil, subprocess, sys, tempfile
 ROOT = {root!r}
@@ -47,20 +47,16 @@ for arg in sys.argv[1:]:
         shutil.copy(path, copy)
         arg = copy
     args.append(arg)
-stdin = "/dev/null"
-if not sys.stdin.isatty():
-    fd, stdin = tempfile.mkstemp(dir=os.path.join(ROOT, "io"))
-    with os.fdopen(fd, "wb") as f:
-        f.write(sys.stdin.buffer.read())
 cwd = os.getcwd()
 env = " ".join(
     f"{{k}}={{shlex.quote(os.environ[k])}}" for k in ("VAULT_URL", "VAULT_TOKEN") if k in os.environ
 )
 script = (
     f"cd {{shlex.quote(cwd)}} 2>/dev/null || cd {{shlex.quote(ROOT)}}; "
-    f"exec env {{env}} {{shlex.quote(VAULT)}} {{' '.join(shlex.quote(a) for a in args)}} < {{shlex.quote(stdin)}}"
+    f"exec env {{env}} {{shlex.quote(VAULT)}} {{' '.join(shlex.quote(a) for a in args)}}"
 )
-sys.exit(subprocess.run([DEV, "sh", "-c", script], cwd=ROOT).returncode)
+stdin = subprocess.DEVNULL if sys.stdin.isatty() else None
+sys.exit(subprocess.run([DEV, "sh", "-c", script], cwd=ROOT, stdin=stdin).returncode)
 '''
 
 
