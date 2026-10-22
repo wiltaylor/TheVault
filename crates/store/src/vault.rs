@@ -80,9 +80,10 @@ impl Vault {
         })
     }
 
-    /// Read at most `len` bytes of a vault file, from byte `start`.
-    pub fn read_range(&self, path: &str, start: u64, len: u64) -> Result<Vec<u8>> {
-        use std::io::{Read, Seek, SeekFrom};
+    /// Open a vault file for reading, at byte `start`, so a large file can be read a piece at a
+    /// time rather than whole.
+    pub fn open_at(&self, path: &str, start: u64) -> Result<std::fs::File> {
+        use std::io::{Seek, SeekFrom};
         let full = self.resolve(path)?;
         let real = self.contain(&full)?;
         let fail = |e: std::io::Error| match e.kind() {
@@ -94,6 +95,17 @@ impl Vault {
         };
         let mut file = std::fs::File::open(&real).map_err(fail)?;
         file.seek(SeekFrom::Start(start)).map_err(fail)?;
+        Ok(file)
+    }
+
+    /// Read at most `len` bytes of a vault file, from byte `start`.
+    pub fn read_range(&self, path: &str, start: u64, len: u64) -> Result<Vec<u8>> {
+        use std::io::Read;
+        let file = self.open_at(path, start)?;
+        let fail = |e: std::io::Error| Error::Io {
+            path: self.root.join(path),
+            source: e,
+        };
         let mut out = Vec::new();
         file.take(len).read_to_end(&mut out).map_err(fail)?;
         Ok(out)

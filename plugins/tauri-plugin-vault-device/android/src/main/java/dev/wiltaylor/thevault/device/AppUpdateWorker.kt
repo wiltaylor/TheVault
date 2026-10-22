@@ -1,8 +1,12 @@
 package dev.wiltaylor.thevault.device
 
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.annotation.VisibleForTesting
@@ -17,25 +21,30 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 import org.json.JSONObject
 
 /**
  * The app updates itself from the paired home server (D27). The server hands out the APK it was
  * given with `just publish-clients` at the public `GET /api/clients`; this worker reads that list,
  * and when the APK for this phone is newer than the installed app and the same kind of build
- * ([AppUpdate.decide]), it downloads it into the cache folder, checks its SHA-256 against the
- * list, and hands it to [AppInstaller], which installs it with a PackageInstaller session.
+ * ([AppUpdate.decide]), it has Android's download service ([DownloadManager]) fetch it, checks
+ * its size and SHA-256 against the list, and hands it to [AppInstaller], which installs it with a
+ * PackageInstaller session.
  *
- * The download checks what it got against the list's `size` and the answer's `Content-Length`.
- * A short download is resumed with an HTTP `Range` request (`If-Range` names the SHA-256, so a
- * file replaced on the server starts over); one whose bytes are wrong starts over. After
- * [MAX_TRIES] tries it reports the SHA-256 and byte count it got.
+ * The download service, not this worker, holds the connection (ticket 140): it resumes a
+ * download the network cut, keeps going while the app's process is gone, and shows its progress
+ * in a notification. The download's id is kept in the `thevault-update` preferences, so the next
+ * run attaches to it rather than starting again: the worker waits up to [WAIT_MS] for it, saying
+ * how far it got under [STATUS] [DOWNLOADING], then asks WorkManager to run it again, and
+ * [UpdateDownloadReceiver] runs it as soon as the download ends. A download the service gives up
+ * on, or whose bytes are wrong, starts over; after [MAX_TRIES] downloads it reports the SHA-256
+ * and byte count it got.
  *
  * The version gate ([UpdateGate]) runs it too, when the home server is newer than the app and
  * sync waits for the update; every failure to update to a version counts against the gate.
@@ -68,47 +77,80 @@ class AppUpdateWorker(context: Context, params: WorkerParameters) : Worker(conte
             manifest.optString("server_version").ifEmpty { null },
         )
         val build = when (decision) {
-            is UpdateDecision.Skip -> return done(decision.reason, decision.message)
+            is UpdateDecision.Skip -> {
+                forget(context)
+                return done(decision.reason, decision.message)
+            }
             is UpdateDecision.Install -> decision.build
         }
         if (!context.packageManager.canRequestPackageInstalls()) {
             UpdateNotices.needsPermission(context, build.version)
             return done(NEEDS_PERMISSION, "Allow TheVault to install apps to update it to ${build.version}.", build.version)
         }
-        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
+        // Another run in this process (the gate's, a push's) is already updating: it finishes.
+        if (!running.tryLock()) return Result.retry()
+        try {
+            return update(context, server, build)
+        } finally {
+            running.unlock()
+        }
+    }
+
+    private fun update(context: Context, server: String, build: ClientBuild): Result {
+        // Left by the app before ticket 140, which downloaded into the cache folder itself.
+        File(context.cacheDir, "updates").listFiles()?.forEach { it.delete() }
+        val dir = context.getExternalFilesDir(UPDATES)?.apply { mkdirs() }
+            ?: return done(FAILED, "There is no storage for the download.", build.version)
         val apk = File(dir, build.filename)
-        when (val got = fetch("$server${build.path}", apk, build)) {
+        val downloads = downloads(context)
+        val got = fetch(context, downloads, "$server${build.path}", apk, build, WAIT_MS) { stopped() }
+        when (got) {
             is Fetched.Verified -> {}
+            is Fetched.Waiting -> {
+                progress(context, build.version, got.bytes, got.total)
+                return Result.retry()
+            }
             is Fetched.Wrong -> {
-                apk.delete()
                 val why = "the download did not match the server's: got ${got.size} bytes with SHA-256 ${got.sha256}, " +
                     "expected ${build.size} bytes with SHA-256 ${build.sha256}"
                 UpdateNotices.failed(applicationContext, build.version, why)
                 return done(SHA_MISMATCH, "After $MAX_TRIES tries ${why}; it was deleted.", build.version)
             }
             is Fetched.Failed -> {
-                apk.delete()
                 val why = "the download failed after $MAX_TRIES tries with ${got.size} bytes: ${got.error.message}"
                 UpdateNotices.failed(applicationContext, build.version, why)
                 return done(FAILED, "The download failed: ${got.error.message} (${got.size} bytes received).", build.version)
             }
         }
-        archiveProblem(context, apk, build)?.let {
-            apk.delete()
-            UpdateNotices.failed(applicationContext, build.version, it)
-            return done(REFUSED, it, build.version)
-        }
-        return try {
-            AppInstaller.install(context, apk, build.version)
-            done(INSTALLING, "Installing TheVault ${build.version}.")
-        } catch (e: Exception) {
-            Log.w(TAG, "installing ${build.filename}", e)
-            UpdateNotices.failed(context, build.version, e.message ?: "the installer refused it")
-            done(FAILED, "The installer refused it: ${e.message}", build.version)
+        try {
+            archiveProblem(context, apk, build)?.let {
+                UpdateNotices.failed(applicationContext, build.version, it)
+                return done(REFUSED, it, build.version)
+            }
+            return try {
+                AppInstaller.install(context, apk, build.version)
+                done(INSTALLING, "Installing TheVault ${build.version}.")
+            } catch (e: Exception) {
+                Log.w(TAG, "installing ${build.filename}", e)
+                UpdateNotices.failed(context, build.version, e.message ?: "the installer refused it")
+                done(FAILED, "The installer refused it: ${e.message}", build.version)
+            }
         } finally {
+            forget(context)
             apk.delete()
         }
+    }
+
+    private fun stopped() = isStopped
+
+    /** Says how far the download of [version] got, while it runs on. */
+    private fun progress(context: Context, version: String, bytes: Long, total: Long) {
+        val message = progressMessage(version, bytes, total)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(STATUS, DOWNLOADING)
+            .putString(MESSAGE, message)
+            .putLong(CHECKED, System.currentTimeMillis())
+            .apply()
     }
 
     /**
@@ -141,14 +183,45 @@ class AppUpdateWorker(context: Context, params: WorkerParameters) : Worker(conte
         const val INSTALLING = "installing"
         const val FAILED = "failed"
 
+        /** The download service is still fetching the APK; [MESSAGE] says how far it got. */
+        const val DOWNLOADING = "downloading"
+
         const val NOW = "thevault-update-now"
         const val DAILY = "thevault-update-daily"
         const val PREFS = "thevault-update"
         private const val TAG = "VaultUpdate"
         private const val MAX_ATTEMPTS = 3
 
-        /** How many times one check downloads the APK, resuming or starting over, before it gives up. */
+        /** How many times one update downloads the APK, starting over, before it gives up. */
         const val MAX_TRIES = 3
+
+        /** The folder of the app's external files the download service writes the APK into. */
+        private const val UPDATES = "updates"
+
+        /** The download's id, the SHA-256 it is for, and how many downloads of it were started. */
+        private const val DOWNLOAD_ID = "download_id"
+        private const val DOWNLOAD_SHA = "download_sha256"
+        private const val DOWNLOAD_TRIES = "download_tries"
+
+        /** How long one run waits for the download, inside WorkManager's ten minutes. */
+        @VisibleForTesting
+        @Volatile
+        var WAIT_MS = TimeUnit.MINUTES.toMillis(8)
+
+        /** How often a run asks the download service how the download stands. */
+        @VisibleForTesting
+        @Volatile
+        var POLL_MS = 2_000L
+
+        /** One update at a time in this process. */
+        private val running = ReentrantLock()
+
+        /** The download service; tests replace it. */
+        @VisibleForTesting
+        @Volatile
+        var downloadsOverride: Downloads? = null
+
+        internal fun downloads(context: Context): Downloads = downloadsOverride ?: SystemDownloads(context)
 
         /** The ABIs the phone runs, preferred first; tests replace them. */
         @VisibleForTesting
@@ -179,10 +252,39 @@ class AppUpdateWorker(context: Context, params: WorkerParameters) : Worker(conte
 
         private fun online() = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
-        /** Checks now, once the phone is online, as a push or the app opening asks. */
-        fun enqueue(context: Context) {
+        /**
+         * Checks now, once the phone is online, as a push or the app opening asks. [policy] is
+         * [ExistingWorkPolicy.KEEP] when a check already waiting or running will do.
+         */
+        fun enqueue(context: Context, policy: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE) {
             val request = OneTimeWorkRequestBuilder<AppUpdateWorker>().setConstraints(online()).build()
-            WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.REPLACE, request)
+            WorkManager.getInstance(context).enqueueUniqueWork(NOW, policy, request)
+        }
+
+        /** The id of the download the update waits for, or null. */
+        fun pendingDownload(context: Context): Long? {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            return if (prefs.contains(DOWNLOAD_ID)) prefs.getLong(DOWNLOAD_ID, -1) else null
+        }
+
+        /** Cancels the download the update waited for, if any, deleting what it wrote. */
+        internal fun forget(context: Context) {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            pendingDownload(context)?.let {
+                try {
+                    downloads(context).remove(it)
+                } catch (e: Exception) {
+                    Log.w(TAG, "removing download $it", e)
+                }
+            }
+            prefs.edit().remove(DOWNLOAD_ID).remove(DOWNLOAD_SHA).remove(DOWNLOAD_TRIES).commit()
+        }
+
+        /** What the update says while the download runs. */
+        fun progressMessage(version: String, bytes: Long, total: Long): String {
+            fun mb(n: Long) = "%.1f".format(java.util.Locale.ROOT, n / 1_000_000.0)
+            val of = if (total > 0) "${mb(bytes)} of ${mb(total)} MB" else "${mb(bytes)} MB"
+            return "Downloading TheVault $version: $of."
         }
 
         /** The daily check, keeping one already scheduled. */
@@ -227,6 +329,9 @@ class AppUpdateWorker(context: Context, params: WorkerParameters) : Worker(conte
             /** The file has the list's size and SHA-256. */
             object Verified : Fetched()
 
+            /** The download runs on: [bytes] of [total] (-1 when unknown) so far. */
+            data class Waiting(val bytes: Long, val total: Long) : Fetched()
+
             /** Every try ended with the wrong bytes; the last had [size] bytes and [sha256]. */
             data class Wrong(val sha256: String, val size: Long) : Fetched()
 
@@ -235,76 +340,98 @@ class AppUpdateWorker(context: Context, params: WorkerParameters) : Worker(conte
         }
 
         /**
-         * Downloads [build] from [url] into [to], up to [MAX_TRIES] times: a short download is
-         * resumed where it stopped, and one whose bytes are wrong starts over.
+         * Has [downloads] fetch [build] from [url] into [to], or attaches to the download an
+         * earlier run started for it, and waits up to [waitMs] for it to end, or until [stop].
+         * A download that fails, or whose bytes are wrong, starts over, until [MAX_TRIES] were
+         * started. Every outcome but [Fetched.Verified] and [Fetched.Waiting] forgets the
+         * download; [Fetched.Verified] leaves [to] for the installer, and the caller to
+         * [forget] it after.
          */
         @VisibleForTesting
-        fun fetch(url: String, to: File, build: ClientBuild): Fetched {
-            to.delete()
-            var wrong: Fetched.Wrong? = null
-            var error: Exception? = null
-            for (attempt in 1..MAX_TRIES) {
-                try {
-                    resume(url, to, build)
-                } catch (e: IOException) {
-                    // What arrived stays on disk for the next try to resume.
-                    Log.w(TAG, "downloading ${build.filename}, try $attempt", e)
-                    error = e
+        fun fetch(
+            context: Context,
+            downloads: Downloads,
+            url: String,
+            to: File,
+            build: ClientBuild,
+            waitMs: Long,
+            stop: () -> Boolean = { false },
+        ): Fetched {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            var id = pendingDownload(context)
+            if (id != null && prefs.getString(DOWNLOAD_SHA, null) != build.sha256) {
+                // A download of another build: the server has a newer one now.
+                forget(context)
+                id = null
+            }
+            if (id != null && downloads.query(id) == null) {
+                // The service no longer knows it (the user cancelled it): a try that failed.
+                Log.w(TAG, "download $id of ${build.filename} is gone")
+                id = null
+            }
+            fun start(tries: Int): Long {
+                to.parentFile?.listFiles()?.forEach { it.delete() }
+                val started = downloads.enqueue(url, to, "TheVault ${build.version}")
+                prefs.edit()
+                    .putLong(DOWNLOAD_ID, started)
+                    .putString(DOWNLOAD_SHA, build.sha256)
+                    .putInt(DOWNLOAD_TRIES, tries)
+                    .commit()
+                return started
+            }
+            if (id == null) {
+                val tries = if (prefs.getString(DOWNLOAD_SHA, null) == build.sha256) prefs.getInt(DOWNLOAD_TRIES, 0) else 0
+                if (tries >= MAX_TRIES) {
+                    forget(context)
+                    return Fetched.Failed(IOException("the download was cancelled"), 0)
+                }
+                id = start(tries + 1)
+            }
+            val deadline = System.currentTimeMillis() + waitMs
+            while (true) {
+                val tries = prefs.getInt(DOWNLOAD_TRIES, 1)
+                val d = downloads.query(id!!)
+                if (d != null && d.state == Download.State.RUNNING) {
+                    if (System.currentTimeMillis() >= deadline || stop()) return Fetched.Waiting(d.bytes, d.total)
+                    Thread.sleep(POLL_MS)
                     continue
                 }
-                // The server sent all it meant to: anything but the listed bytes is wrong.
-                val size = to.length()
-                val sha = sha256(to)
-                if (sha == build.sha256 && (build.size < 0 || size == build.size)) return Fetched.Verified
-                wrong = Fetched.Wrong(sha, size)
-                error = null
-                to.delete()
-            }
-            if (error == null && wrong != null) return wrong
-            val size = if (to.exists()) to.length() else 0L
-            return Fetched.Failed(error ?: IOException("the download failed"), size)
-        }
-
-        /**
-         * One try: asks for the bytes after those [to] holds, or for the whole file, and appends
-         * what arrives. Throws when the answer is shorter than its `Content-Length`.
-         */
-        private fun resume(url: String, to: File, build: ClientBuild) {
-            val have = if (to.exists()) to.length() else 0L
-            val conn = URL(url).openConnection() as HttpURLConnection
-            conn.connectTimeout = 15_000
-            conn.readTimeout = 60_000
-            if (have > 0) {
-                conn.setRequestProperty("Range", "bytes=$have-")
-                // The server's ETag is the SHA-256: a different file is sent whole.
-                conn.setRequestProperty("If-Range", "\"${build.sha256}\"")
-            }
-            try {
-                val append = when (val code = conn.responseCode) {
-                    206 -> true
-                    200 -> false
-                    416 -> if (build.size in 0..have) return else throw IOException("$url answered 416 at byte $have")
-                    else -> throw IOException("$url answered $code")
-                }
-                val expected = conn.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
-                var got = 0L
-                conn.inputStream.use { input ->
-                    FileOutputStream(to, append).use { out ->
-                        val buf = ByteArray(64 * 1024)
-                        while (true) {
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            out.write(buf, 0, n)
-                            got += n
-                        }
+                val retry: Fetched = when (d?.state) {
+                    Download.State.DONE -> {
+                        val size = if (to.exists()) to.length() else 0L
+                        val sha = if (to.exists()) sha256(to) else ""
+                        if (sha == build.sha256 && (build.size < 0 || size == build.size)) return Fetched.Verified
+                        Log.w(TAG, "download $id of ${build.filename}, try $tries: $size bytes with SHA-256 $sha")
+                        Fetched.Wrong(sha, size)
+                    }
+                    else -> {
+                        val why = d?.let { "the download service gave up (${reason(it.reason)})" } ?: "the download was cancelled"
+                        Log.w(TAG, "download $id of ${build.filename}, try $tries: $why")
+                        Fetched.Failed(IOException(why), d?.bytes ?: 0L)
                     }
                 }
-                if (expected >= 0 && got != expected) {
-                    throw IOException("got $got of the $expected bytes the server sent")
+                downloads.remove(id)
+                to.delete()
+                if (tries >= MAX_TRIES) {
+                    forget(context)
+                    return retry
                 }
-            } finally {
-                conn.disconnect()
+                id = start(tries + 1)
             }
+        }
+
+        /** Why the download service gave up, from its `COLUMN_REASON`. */
+        private fun reason(code: Int): String = when (code) {
+            DownloadManager.ERROR_CANNOT_RESUME -> "it cannot resume"
+            DownloadManager.ERROR_DEVICE_NOT_FOUND -> "no storage"
+            DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "the file already exists"
+            DownloadManager.ERROR_FILE_ERROR -> "a storage error"
+            DownloadManager.ERROR_HTTP_DATA_ERROR -> "the connection failed"
+            DownloadManager.ERROR_INSUFFICIENT_SPACE -> "not enough space"
+            DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "too many redirects"
+            DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "an unexpected answer"
+            in 100..599 -> "the server answered $code"
+            else -> "reason $code"
         }
 
         fun sha256(file: File): String {
@@ -337,6 +464,84 @@ class AppUpdateWorker(context: Context, params: WorkerParameters) : Worker(conte
                     "not newer than the installed $mine; TheVault never downgrades."
             }
             return null
+        }
+    }
+}
+
+/** How a download stands, as [Downloads] reports it. */
+data class Download(val state: State, val bytes: Long, val total: Long, val reason: Int = 0) {
+    enum class State { RUNNING, DONE, FAILED }
+}
+
+/** The download service as the update uses it: [SystemDownloads] on the phone, a fake in tests. */
+interface Downloads {
+    /** Starts downloading [url] into [to], titled [title] in its notification; answers its id. */
+    fun enqueue(url: String, to: File, title: String): Long
+
+    /** How download [id] stands, or null when the service knows none by that id. */
+    fun query(id: Long): Download?
+
+    /** Cancels download [id] and deletes what it wrote. */
+    fun remove(id: Long)
+}
+
+/**
+ * Android's [DownloadManager]: it resumes a download the network cut, survives the app's process,
+ * and shows its progress in a notification. It writes only into the app's external files.
+ */
+class SystemDownloads(private val context: Context) : Downloads {
+    private val manager: DownloadManager
+        get() = context.getSystemService(DownloadManager::class.java)
+
+    override fun enqueue(url: String, to: File, title: String): Long {
+        val request = DownloadManager.Request(Uri.parse(url))
+            .setDestinationUri(Uri.fromFile(to))
+            .setTitle(title)
+            .setDescription("Updating TheVault from your server")
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+            .setAllowedOverMetered(true)
+            .setAllowedOverRoaming(true)
+        return manager.enqueue(request)
+    }
+
+    override fun query(id: Long): Download? {
+        manager.query(DownloadManager.Query().setFilterById(id)).use { c ->
+            if (c == null || !c.moveToFirst()) return null
+            fun long(column: String): Long = c.getColumnIndex(column).takeIf { it >= 0 }?.let { c.getLong(it) } ?: -1L
+            fun int(column: String): Int = c.getColumnIndex(column).takeIf { it >= 0 }?.let { c.getInt(it) } ?: -1
+            val status = int(DownloadManager.COLUMN_STATUS)
+            val state = when (status) {
+                DownloadManager.STATUS_SUCCESSFUL -> Download.State.DONE
+                DownloadManager.STATUS_FAILED -> Download.State.FAILED
+                else -> Download.State.RUNNING
+            }
+            return Download(
+                state,
+                long(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR).coerceAtLeast(0),
+                long(DownloadManager.COLUMN_TOTAL_SIZE_BYTES),
+                int(DownloadManager.COLUMN_REASON),
+            )
+        }
+    }
+
+    override fun remove(id: Long) {
+        manager.remove(id)
+    }
+}
+
+/**
+ * The download service finished a download: when it is the update's, the update check runs now
+ * to verify and install it, unless one is already waiting or running.
+ */
+class UpdateDownloadReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+        val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+        if (id < 0 || id != AppUpdateWorker.pendingDownload(context)) return
+        try {
+            AppUpdateWorker.enqueue(context.applicationContext, ExistingWorkPolicy.KEEP)
+        } catch (e: IllegalStateException) {
+            Log.w("VaultUpdate", "no update check scheduled", e)
         }
     }
 }

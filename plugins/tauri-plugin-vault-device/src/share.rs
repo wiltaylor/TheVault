@@ -40,7 +40,7 @@ pub struct Shared {
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SharedFile {
-    /// The copy the share activity made. [`import`] removes it once it is stored.
+    /// The copy the share activity made. [`store`] moves it into the vault.
     pub path: PathBuf,
     /// The name the sharing app gave the file.
     pub filename: String,
@@ -252,15 +252,17 @@ pub fn title(shared: &Shared) -> String {
 
 /// Store each shared file as an asset of the local vault, named with the extension of its media
 /// type ([`with_extension`]), and answer them as the payload's
-/// `attachments`: `[{ asset, filename, mime, size }]`, in the order they were shared.
+/// `attachments`: `[{ asset, filename, mime, size }]`, in the order they were shared. Each copy
+/// is moved into the vault, never read into memory, so a large video costs no more than a photo
+/// (ticket 142).
 pub fn store(writer: &Writer, shared: &Shared) -> anyhow::Result<Vec<Value>> {
     let mut attachments = Vec::new();
     for file in &shared.files {
-        let bytes = std::fs::read(&file.path)
-            .map_err(|e| anyhow::anyhow!("reading shared file {}: {e}", file.path.display()))?;
         let mime = mime(file);
         let filename = with_extension(&safe_filename(&file.filename), &mime);
-        let asset = writer.put_asset(&filename, bytes)?;
+        let asset = writer
+            .put_asset_file(&filename, &file.path)
+            .map_err(|e| anyhow::anyhow!("storing shared file {}: {e}", file.path.display()))?;
         attachments.push(json!({
             "asset": asset.id,
             "filename": asset.filename,
@@ -449,6 +451,13 @@ mod tests {
         let stored = store(writer, &shared).unwrap();
         assert_eq!(stored[0]["filename"], "IMG_0001.png");
         assert_eq!(stored[0]["mime"], "image/png");
+        assert_eq!(stored[0]["size"], 4);
+        let id = stored[0]["asset"].as_str().unwrap();
+        assert_eq!(writer.asset(id).unwrap().1, b"\x89PNG");
+        assert!(
+            !shared.files[0].path.exists(),
+            "the copy is moved into the vault, not read"
+        );
     }
 
     #[test]

@@ -253,6 +253,14 @@ impl Writer {
         Ok((asset, bytes))
     }
 
+    /// Asset `id` and its file, open for reading at byte `start`: a large asset is served a
+    /// piece at a time rather than read whole.
+    pub fn asset_file(&self, id: &str, start: u64) -> Result<(Asset, std::fs::File)> {
+        let asset = self.find_asset(id).ok_or_else(|| missing(id))?;
+        let file = self.vault.open_at(&asset.path(), start)?;
+        Ok((asset, file))
+    }
+
     /// Asset `id`, without its bytes.
     pub fn asset_info(&self, id: &str) -> Result<Asset> {
         self.find_asset(id).ok_or_else(|| missing(id))

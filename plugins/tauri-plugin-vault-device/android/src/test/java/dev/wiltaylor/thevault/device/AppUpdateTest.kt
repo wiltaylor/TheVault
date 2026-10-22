@@ -1,10 +1,12 @@
 package dev.wiltaylor.thevault.device
 
+import android.app.DownloadManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInstaller
+import android.net.Uri
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Configuration
@@ -19,6 +21,7 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.Collections
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -29,6 +32,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -40,9 +44,14 @@ import org.robolectric.annotation.Config
 
 /**
  * S5, self-update (D27): a `clients.updated` push schedules the update check; the check reads the
- * paired server's `GET /api/clients`, downloads the newer APK for this phone, verifies its
- * SHA-256, and creates a PackageInstaller session that asks for no user action. It never
- * downgrades, refuses a download whose SHA-256 differs, and skips a build of the other kind.
+ * paired server's `GET /api/clients`, has the download service fetch the newer APK for this
+ * phone (ticket 140), verifies its SHA-256, and creates a PackageInstaller session that asks for
+ * no user action. It never downgrades, refuses a download whose SHA-256 differs, and skips a
+ * build of the other kind.
+ *
+ * The download service is [FakeDownloads], which fetches from the [MockWebServer] the way
+ * Android's does, as far as the update can tell; one test checks [SystemDownloads] against
+ * Robolectric's [DownloadManager].
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -63,6 +72,8 @@ class AppUpdateTest {
 
     /** Each download's `Range` and `If-Range` headers, `-` for none. */
     private val ranges: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+    private val downloads = FakeDownloads()
 
     @Before
     fun setUp() {
@@ -96,6 +107,8 @@ class AppUpdateTest {
                 .put("token", "t"),
         )
         AppUpdateWorker.abisOverride = listOf("arm64-v8a", "armeabi-v7a")
+        AppUpdateWorker.downloadsOverride = downloads
+        AppUpdateWorker.POLL_MS = 1
         AppInstaller.lastParams = null
         installed("0.1.0", debuggable = false)
         shadowOf(context.packageManager).setCanRequestPackageInstalls(true)
@@ -104,6 +117,9 @@ class AppUpdateTest {
     @After
     fun tearDown() {
         AppUpdateWorker.abisOverride = null
+        AppUpdateWorker.downloadsOverride = null
+        AppUpdateWorker.WAIT_MS = TimeUnit.MINUTES.toMillis(8)
+        AppUpdateWorker.POLL_MS = 2_000L
         server.shutdown()
     }
 
@@ -118,13 +134,19 @@ class AppUpdateTest {
 
     private fun sha(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
-    private fun publish(version: String, arch: String = "aarch64", build: String = "release", sha256: String = sha(apk)) {
+    private fun publish(
+        version: String,
+        arch: String = "aarch64",
+        build: String = "release",
+        sha256: String = sha(apk),
+        size: Int = apk.size,
+    ) {
         val suffix = if (build == "debug") "-debug" else ""
         val name = "TheVault_${version}_$arch$suffix.apk"
         builds.put(
             JSONObject()
                 .put("platform", "android").put("kind", "apk").put("arch", arch).put("version", version)
-                .put("build", build).put("size", apk.size).put("sha256", sha256).put("filename", name)
+                .put("build", build).put("size", size).put("sha256", sha256).put("filename", name)
                 .put("published", 1).put("path", "/api/clients/$name"),
         )
     }
@@ -134,7 +156,7 @@ class AppUpdateTest {
 
     private fun sessions() = context.packageManager.packageInstaller.allSessions
 
-    private fun updateDir() = File(context.cacheDir, "updates")
+    private fun updateDir() = context.getExternalFilesDir("updates")!!
 
     private fun notices() = shadowOf(context.getSystemService(NotificationManager::class.java)).allNotifications
 
@@ -176,6 +198,10 @@ class AppUpdateTest {
             .apply { isAccessible = true }.getInt(params)
         assertEquals(PackageInstaller.SessionParams.MODE_FULL_INSTALL, mode)
         assertTrue("the download is cleaned up", updateDir().listFiles().isNullOrEmpty())
+        assertEquals(listOf(server.url("/api/clients/TheVault_0.2.0_aarch64.apk").toString()), downloads.urls)
+        assertEquals("TheVault 0.2.0", downloads.jobsStarted.single().title)
+        assertEquals(downloads.started, downloads.removed)
+        assertNull(AppUpdateWorker.pendingDownload(context))
     }
 
     @Test
@@ -256,7 +282,7 @@ class AppUpdateTest {
     }
 
     @Test
-    fun aTruncatedDownloadIsResumedWithRangeAndThenVerifies() {
+    fun aDownloadTheServiceGivesUpOnStartsOverAndThenVerifies() {
         publish("0.2.0")
         val half = apk.size / 2
         var calls = 0
@@ -269,16 +295,14 @@ class AppUpdateTest {
                     .setHeader("Content-Length", apk.size)
                     .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_END)
             } else {
-                MockResponse()
-                    .setResponseCode(206)
-                    .setHeader("Content-Range", "bytes $half-${apk.size - 1}/${apk.size}")
-                    .setBody(Buffer().write(apk.copyOfRange(half, apk.size)))
+                MockResponse().setBody(Buffer().write(apk))
             }
         }
         val result = check()
         assertTrue("$result", result is ListenableWorker.Result.Success)
         assertEquals(AppUpdateWorker.INSTALLING, result.outputData.getString(AppUpdateWorker.STATUS))
-        assertEquals(listOf("- -", "bytes=$half- \"${sha(apk)}\""), ranges.toList())
+        assertEquals(2, downloads.started.size)
+        assertEquals(downloads.started, downloads.removed)
         assertEquals(1, sessions().size)
     }
 
@@ -290,7 +314,7 @@ class AppUpdateTest {
         val result = check()
         assertTrue("$result", result is ListenableWorker.Result.Failure)
         assertEquals(AppUpdateWorker.SHA_MISMATCH, result.outputData.getString(AppUpdateWorker.STATUS))
-        assertEquals("three tries, each from the start", listOf("- -", "- -", "- -"), ranges.toList())
+        assertEquals("three downloads, each from the start", listOf("- -", "- -", "- -"), ranges.toList())
         val message = result.outputData.getString(AppUpdateWorker.MESSAGE)!!
         assertTrue(message, message.contains(sha(wrong)))
         assertTrue(message, message.contains("got ${wrong.size} bytes"))
@@ -301,28 +325,121 @@ class AppUpdateTest {
         assertTrue(text, text.contains("${wrong.size} bytes"))
         assertTrue(sessions().isEmpty())
         assertTrue(updateDir().listFiles().isNullOrEmpty())
+        assertNull(AppUpdateWorker.pendingDownload(context))
     }
 
     @Test
-    fun aDownloadThatKeepsStoppingShortFailsWithTheBytesItGot() {
+    fun aDownloadThatKeepsFailingFailsWithTheBytesItGot() {
         publish("0.2.0")
-        download = { r ->
-            // The server sends at most four bytes at a time, and drops the connection.
-            val from = r.getHeader("Range")?.removePrefix("bytes=")?.removeSuffix("-")?.toInt() ?: 0
-            val part = apk.copyOfRange(from, minOf(apk.size, from + 4))
+        download = { _ ->
+            // The server sends four bytes and drops the connection, every time.
             MockResponse()
-                .setResponseCode(if (from == 0) 200 else 206)
-                .setBody(Buffer().write(part))
-                .setHeader("Content-Length", apk.size - from)
+                .setBody(Buffer().write(apk.copyOfRange(0, 4)))
+                .setHeader("Content-Length", apk.size)
                 .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_END)
         }
         val result = check()
         assertTrue("$result", result is ListenableWorker.Result.Failure)
         assertEquals(AppUpdateWorker.FAILED, result.outputData.getString(AppUpdateWorker.STATUS))
-        assertEquals(listOf("- -", "bytes=4- \"${sha(apk)}\"", "bytes=8- \"${sha(apk)}\""), ranges.toList())
+        assertEquals(AppUpdateWorker.MAX_TRIES, downloads.started.size)
         val message = result.outputData.getString(AppUpdateWorker.MESSAGE)!!
-        assertTrue(message, message.contains("12 bytes received"))
+        assertTrue(message, message.contains("4 bytes received"))
+        assertTrue(message, message.contains("the connection failed"))
         assertTrue(sessions().isEmpty())
+        assertEquals("the failure counts against the version gate", 1, UpdateGate.failures(context, "0.2.0"))
+        assertNull(AppUpdateWorker.pendingDownload(context))
+    }
+
+    @Test
+    fun aDownloadStillRunningIsReportedAndTheNextRunPicksItUp() {
+        publish("0.2.0")
+        AppUpdateWorker.WAIT_MS = 0
+        // The download service is still at it when the run stops waiting.
+        downloads.behave = { it.state = Download(Download.State.RUNNING, 23_400_000, 68_000_000) }
+        val first = check()
+        assertTrue("$first", first is ListenableWorker.Result.Retry)
+        assertEquals(AppUpdateWorker.DOWNLOADING, AppUpdateWorker.lastStatus(context)!!.first)
+        assertEquals("Downloading TheVault 0.2.0: 23.4 of 68.0 MB.", AppUpdateWorker.lastStatus(context)!!.second)
+        val id = AppUpdateWorker.pendingDownload(context)
+        assertNotNull(id)
+        assertEquals("a download still running is no failure", 0, UpdateGate.failures(context, "0.2.0"))
+        assertTrue(sessions().isEmpty())
+
+        // The app's process is gone and the service finishes on its own; the next run attaches.
+        downloads.fetchWhole(downloads.jobs[id]!!)
+        val second = check()
+        assertTrue("$second", second is ListenableWorker.Result.Success)
+        assertEquals(AppUpdateWorker.INSTALLING, second.outputData.getString(AppUpdateWorker.STATUS))
+        assertEquals("no second download", listOf(id), downloads.started)
+        assertEquals(1, sessions().size)
+        assertNull(AppUpdateWorker.pendingDownload(context))
+    }
+
+    @Test
+    fun aDownloadOfABuildNoLongerOfferedIsCancelled() {
+        publish("0.2.0")
+        AppUpdateWorker.WAIT_MS = 0
+        downloads.behave = { it.state = Download(Download.State.RUNNING, 1, 68_000_000) }
+        check()
+        val old = AppUpdateWorker.pendingDownload(context)!!
+        // 0.3.0 is other bytes than the 0.2.0 being downloaded.
+        val newer = "PK\u0003\u0004 a pretend 0.3.0".toByteArray()
+        builds = JSONArray()
+        publish("0.3.0", sha256 = sha(newer), size = newer.size)
+        download = { _ -> MockResponse().setBody(Buffer().write(newer)) }
+        downloads.behave = { downloads.fetchWhole(it) }
+        val result = check()
+        assertEquals(AppUpdateWorker.INSTALLING, result.outputData.getString(AppUpdateWorker.STATUS))
+        assertTrue(downloads.removed.contains(old))
+        assertEquals(2, downloads.started.size)
+    }
+
+    @Test
+    fun theFinishedDownloadRunsTheCheck() {
+        val wm = WorkManager.getInstance(context)
+        val done = { id: Long ->
+            UpdateDownloadReceiver().onReceive(
+                context,
+                Intent(DownloadManager.ACTION_DOWNLOAD_COMPLETE).putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, id),
+            )
+        }
+        done(7)
+        assertTrue("not the update's download", wm.getWorkInfosForUniqueWork(AppUpdateWorker.NOW).get().isEmpty())
+        publish("0.2.0")
+        AppUpdateWorker.WAIT_MS = 0
+        downloads.behave = { it.state = Download(Download.State.RUNNING, 1, 68_000_000) }
+        check()
+        done(AppUpdateWorker.pendingDownload(context)!!)
+        assertEquals(1, wm.getWorkInfosForUniqueWork(AppUpdateWorker.NOW).get().size)
+    }
+
+    @Test
+    fun theSystemDownloadServiceFetchesIntoTheAppsFilesWithANotification() {
+        val to = File(updateDir().apply { mkdirs() }, "TheVault_0.2.0_aarch64.apk")
+        val real = SystemDownloads(context)
+        val url = "http://vault.example/api/clients/TheVault_0.2.0_aarch64.apk"
+        val id = real.enqueue(url, to, "TheVault 0.2.0")
+        val dm = shadowOf(context.getSystemService(DownloadManager::class.java))
+        val request = shadowOf(dm.getRequest(id))
+        assertEquals(Uri.parse(url), request.uri)
+        assertEquals(Uri.fromFile(to), request.destination)
+        assertEquals("TheVault 0.2.0", request.title)
+        assertEquals(DownloadManager.Request.VISIBILITY_VISIBLE, request.notificationVisibility)
+        assertTrue(request.allowedOverMetered)
+        request.status = DownloadManager.STATUS_RUNNING
+        request.bytesSoFar = 10
+        request.totalSize = 100
+        assertEquals(Download.State.RUNNING, real.query(id)!!.state)
+        assertEquals(10L, real.query(id)!!.bytes)
+        assertEquals(100L, real.query(id)!!.total)
+        request.status = DownloadManager.STATUS_PAUSED
+        assertEquals("paused waiting for the network, it resumes", Download.State.RUNNING, real.query(id)!!.state)
+        request.status = DownloadManager.STATUS_SUCCESSFUL
+        assertEquals(Download.State.DONE, real.query(id)!!.state)
+        request.status = DownloadManager.STATUS_FAILED
+        assertEquals(Download.State.FAILED, real.query(id)!!.state)
+        real.remove(id)
+        assertNull(real.query(id))
     }
 
     @Test
