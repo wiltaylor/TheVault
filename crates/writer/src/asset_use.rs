@@ -157,7 +157,9 @@ impl Writer {
             if !path.starts_with("types/") {
                 continue;
             }
-            let text = self.vault.read_text(&path)?;
+            let Some(text) = self.read_listed(&path)? else {
+                continue;
+            };
             for id in ulids_in(&text) {
                 *types.entry(id.to_owned()).or_default() += 1;
             }

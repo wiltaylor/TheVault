@@ -409,11 +409,26 @@ impl Writer {
         files
     }
 
+    /// The text of `path`, one of [`Writer::definition_and_note_files`], or `None` when it has
+    /// gone since it was listed. A reader not holding the write lock (the usage of an asset, the
+    /// library) races every delete, so a file listed a moment ago may be gone by the time it is
+    /// read; it names nothing any more.
+    pub(crate) fn read_listed(&self, path: &str) -> Result<Option<String>> {
+        match self.vault.read_text(path) {
+            Ok(text) => Ok(Some(text)),
+            Err(store::Error::NotFound(_)) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// The vault paths of every note and type file whose text holds `needle`.
     pub(crate) fn files_naming(&self, needle: &str) -> Result<Vec<String>> {
         let mut out = Vec::new();
         for path in self.definition_and_note_files() {
-            if self.vault.read_text(&path)?.contains(needle) {
+            if self
+                .read_listed(&path)?
+                .is_some_and(|text| text.contains(needle))
+            {
                 out.push(path);
             }
         }

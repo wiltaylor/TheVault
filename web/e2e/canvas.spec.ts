@@ -123,6 +123,13 @@ async function viewOf(canvas: Locator) {
 }
 
 /** The accessible names of the buttons in `l`, in order. */
+/** Where `l` is on screen, once it is there: a caption the canvas is drawing anew has no box for a moment. */
+async function boxOf(l: Locator) {
+  let box: Awaited<ReturnType<Locator["boundingBox"]>> = null;
+  await expect.poll(async () => (box = await l.boundingBox())).not.toBeNull();
+  return box!;
+}
+
 async function buttonNames(l: Locator) {
   await expect(l).toBeVisible();
   return l.getByRole("button").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? e.textContent?.trim()));
@@ -469,7 +476,9 @@ test("a connection's colour, all four arrows and its caption change and save, an
   await input.press("Enter");
   const caption = canvas.getByTestId("canvas-edge-label");
   await expect(caption).toHaveText("depends on");
-  const lb = (await caption.boundingBox())!;
+  // The caption's span can be replaced just after it first shows (the edge re-renders with
+  // its label), and a box read in that moment is null: wait for one.
+  const lb = await boxOf(caption);
   expect(Math.abs(lb.x + lb.width / 2 - (view.x + 360))).toBeLessThan(3);
   expect(Math.abs(lb.y + lb.height / 2 - (view.y + 250))).toBeLessThan(3);
   expect(await caption.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe("rgba(0, 0, 0, 0)");
