@@ -3,8 +3,8 @@ id: '155'
 title: Chat system prompt as a setting in Settings > AI
 plan: ai
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Chat system prompt as a setting in Settings > AI
@@ -19,3 +19,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T20:39:12Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T20:39:12Z — wil
+
+Status set to done.
