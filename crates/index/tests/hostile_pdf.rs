@@ -61,3 +61,23 @@ fn a_pdf_neither_extractor_reads_fails_with_the_panic_as_its_reason() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn a_trailer_lopdf_refuses_is_read_after_rebuilding_the_xref_table() {
+    let pdf = hostile_pdf::trailer_lopdf_refuses();
+    let refused = lopdf::Document::load_mem(&pdf).expect_err("lopdf read the PDF");
+    assert!(
+        refused.to_string().contains("invalid file trailer"),
+        "{refused}"
+    );
+    assert!(pdf_extract::extract_text_from_mem(&pdf).is_err());
+    let Extracted::Recovered { text, reason } = extract_pdf_text(pdf) else {
+        panic!("not recovered");
+    };
+    assert!(text.contains("platypus ledger"), "{text:?}");
+    assert!(
+        reason.contains("invalid file trailer") && reason.contains("rebuilding"),
+        "{reason}"
+    );
+    assert!(!reason.contains('\n'), "{reason}");
+}
