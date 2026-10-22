@@ -4,8 +4,8 @@ title: 'AI provider crate: Anthropic Messages, OpenAI Responses (API key and Cha
   plan), SSE, models, credentials'
 plan: ai
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # AI provider crate: Anthropic Messages, OpenAI Responses (API key and ChatGPT plan), SSE, models, credentials
@@ -27,3 +27,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T15:21:47Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T15:21:47Z — wil
+
+Status set to done.
