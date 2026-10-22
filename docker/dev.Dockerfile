@@ -13,6 +13,21 @@ ARG ANDROID_PLATFORM=36
 ARG ANDROID_BUILD_TOOLS=36.0.0
 ARG ANDROID_NDK=27.2.12479018
 
+# Every download retries (ticket 138): two release runs failed on dl.google.com, one on a corrupt
+# system image zip and one on a curl HTTP/2 stream error. apt retries each fetch, curl downloads
+# to a file with --retry before anything unpacks it, and `retry` reruns a command that fetches
+# for itself (sdkmanager, the Playwright install) up to five times, 15 seconds apart.
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
+ && printf '%s\n' '#!/bin/sh' \
+      'n=1' \
+      'until "$@"; do' \
+      '  [ "$n" -ge 5 ] && { echo "retry: $* failed $n times" >&2; exit 1; }' \
+      '  echo "retry: $* failed (attempt $n), trying again in 15s" >&2' \
+      '  n=$((n + 1)); sleep 15' \
+      'done' > /usr/local/bin/retry \
+ && chmod a+rx /usr/local/bin/retry
+ARG CURL_RETRY="--retry 5 --retry-all-errors --retry-delay 5"
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git jq sqlite3 xz-utils unzip file pkg-config libssl-dev \
@@ -22,12 +37,16 @@ RUN apt-get update \
       openjdk-17-jdk-headless \
  && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
-      | tar -xJ -C /usr/local --strip-components=1 \
- && npm install -g pnpm@10
+RUN curl -fsSL $CURL_RETRY -o /tmp/node.tar.xz \
+      "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+ && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+ && rm /tmp/node.tar.xz \
+ && retry npm install -g pnpm@10
 
-RUN curl -fsSL "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-      | tar -xz -C /usr/local/bin just
+RUN curl -fsSL $CURL_RETRY -o /tmp/just.tar.gz \
+      "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+ && tar -xzf /tmp/just.tar.gz -C /usr/local/bin just \
+ && rm /tmp/just.tar.gz
 
 RUN rustup component add rustfmt clippy \
  && rustup target add aarch64-linux-android x86_64-linux-android \
@@ -49,13 +68,13 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
 ENV PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools
 
 RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
- && curl -fsSL -o /tmp/cmdline-tools.zip \
+ && curl -fsSL $CURL_RETRY -o /tmp/cmdline-tools.zip \
       "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS}_latest.zip" \
  && unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools" \
  && mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest" \
  && rm /tmp/cmdline-tools.zip \
  && yes | sdkmanager --licenses >/dev/null \
- && sdkmanager --install \
+ && retry sdkmanager --install \
       "platform-tools" \
       "platforms;android-${ANDROID_PLATFORM}" \
       "build-tools;${ANDROID_BUILD_TOOLS}" \
@@ -63,7 +82,7 @@ RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
  && chmod -R a+rwX "$ANDROID_HOME"
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
-RUN npx -y playwright@1.56.1 install --with-deps chromium \
+RUN retry npx -y playwright@1.56.1 install --with-deps chromium \
  && chmod -R a+rX /opt/playwright
 
 ENV CARGO_HOME=/cargo PNPM_HOME=/pnpm-store GRADLE_USER_HOME=/gradle
@@ -93,7 +112,7 @@ RUN apt-get update \
       libasound2 libgl1 libegl1 libxkbfile1 libxkbcommon0 libdrm2 libgbm1 libbsd0 libc++1 \
       qrencode netcat-openbsd \
  && rm -rf /var/lib/apt/lists/* \
- && sdkmanager --install "emulator" "${ANDROID_EMULATOR_IMAGE}" \
+ && retry sdkmanager --install "emulator" "${ANDROID_EMULATOR_IMAGE}" \
  && chmod -R a+rwX "$ANDROID_HOME"
 ENV PATH=${PATH}:${ANDROID_HOME}/emulator ANDROID_AVD_HOME=/avd
 # The AVD lives in the thevault-avd volume ./dev mounts here, so it survives between containers.
@@ -110,7 +129,7 @@ ARG CARGO_ZIGBUILD_VERSION=0.23.4
 RUN apt-get update \
  && apt-get install -y --no-install-recommends qemu-user \
  && rm -rf /var/lib/apt/lists/* \
- && curl -fsSL --retry 5 --retry-all-errors -o /tmp/zig.whl "${ZIG_WHEEL}" \
+ && curl -fsSL $CURL_RETRY -o /tmp/zig.whl "${ZIG_WHEEL}" \
  && echo "${ZIG_WHEEL_SHA256}  /tmp/zig.whl" | sha256sum -c - \
  && unzip -q /tmp/zig.whl 'ziglang/*' -d /opt \
  && rm /tmp/zig.whl \

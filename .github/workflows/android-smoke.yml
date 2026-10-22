@@ -15,9 +15,19 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
+  # Publishes the dev image for this commit's Dockerfile unless ghcr.io has it, so the smoke job
+  # pulls it rather than building it.
+  dev-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/dev-image.yml
+
   smoke:
+    needs: dev-image
     uses: ./.github/workflows/android-smoke-reusable.yml
     with:
       release-key: ${{ inputs.release-key }}

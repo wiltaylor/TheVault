@@ -20,7 +20,7 @@ The host has no Rust or Node toolchain for this project. Run every build, test, 
 ./dev just check
 ```
 
-`./dev` mounts the current directory at the same path, runs as your user, and shares cargo and pnpm caches between containers. Its `/tmp` is a RAM-backed tmpfs, so test vaults never wait on the shared disk; anything a test keeps must not rely on surviving the container. It uses host networking, and several workers run tests at the same time, so:
+`./dev` mounts the current directory at the same path, runs as your user, and shares cargo and pnpm caches between containers. It pulls the image for the current `docker/dev.Dockerfile` from `ghcr.io/wiltaylor/thevault-dev` before building it, passes stdin through, so `printf pw | ./dev vault init --password-stdin` works, and stops its container when it is stopped. Its `/tmp` is a RAM-backed tmpfs, so test vaults never wait on the shared disk; anything a test keeps must not rely on surviving the container. It uses host networking, and several workers run tests at the same time, so:
 
 - Every test server, fixture HTTP server and Playwright target binds port 0 and reads back the port it got. Never hard-code a port.
 - Every test vault lives in a fresh temporary directory. Never write into the repository or `$HOME` from a test.
