@@ -4,8 +4,8 @@ title: 'Empty the note trash: only a signed-in user can purge, never a token, sc
   or the AI'
 plan: ai
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Empty the note trash: only a signed-in user can purge, never a token, script or the AI
@@ -22,3 +22,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T21:14:15Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T21:14:15Z — wil
+
+Status set to done.
