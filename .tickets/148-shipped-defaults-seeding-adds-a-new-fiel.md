@@ -2,8 +2,8 @@
 id: '148'
 title: Shipped-defaults seeding adds a new field's slot to the card template too
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Shipped-defaults seeding adds a new field's slot to the card template too
@@ -15,3 +15,19 @@ Ticket 147 added processed to the email and message types with a slot on both th
 ### 2026-10-22T02:09:27Z — wil
 
 Status set to todo.
+
+### 2026-10-22T02:10:06Z — wil
+
+Claimed.
+
+### 2026-10-22T02:21:03Z — wil
+
+Done on ticket/148 (3a986d0), with 104. crates/writer/src/shipped.rs with_shipped_fields now places added-field slots in every vault template the shipped type also has (default and card), same placement rule; a vault type without a card gains none. Tests: the_oldest_starter test now expects the person card's photo slot; the 0.1.13 test expects processed on the email and message cards; new a_vault_card_template_gains_no_slot_when_the_vault_type_has_no_card. docs/vault-format.md step 2 updated. ./dev just check passes.
+
+### 2026-10-22T02:21:03Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T02:21:03Z — wil
+
+Status set to done.
