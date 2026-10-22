@@ -220,6 +220,8 @@ vault trash list
 vault trash restore "$ID"
 ```
 
+You can never empty the trash or delete a note from it forever. Only the signed-in user can, in the web app: every token, `admin` included, gets `"status": 403` and `"error": "human_only"`. Do not look for a way around it; tell the user when a note should be purged.
+
 Archiving keeps a note but takes it out of lists, queries and search. The note stays readable and editable by id, and links to it still work. Archive instead of deleting when the user wants a note out of the way rather than gone:
 
 ```sh

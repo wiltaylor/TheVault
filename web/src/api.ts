@@ -318,6 +318,14 @@ export interface TrashEntry {
   deleted_at: number;
 }
 
+/** What emptying the trash, or purging one note from it, removed (ai D21). */
+export interface TrashPurged {
+  /** The notes purged, with their history. */
+  purged: string[];
+  /** The assets only those notes used, now in the asset trash. */
+  assets_trashed: string[];
+}
+
 /** Why a script would not compile when the vault runs it in one role. */
 export interface ScriptProblem {
   role: "before_handler" | "after_handler" | "task" | "device";
@@ -1138,6 +1146,10 @@ export const api = {
     request<PinEntry>("POST", "/api/pins/move", { id, parent, index }),
   trash: async () => (await request<{ notes: TrashEntry[] }>("GET", "/api/trash")).notes,
   restoreFromTrash: (id: string) => request<Note>("POST", `/api/trash/${enc(id)}/restore`),
+  /** Purge every note in the trash with its history, for good. A signed-in session only (ai D21). */
+  emptyTrash: () => request<TrashPurged>("POST", "/api/trash/empty"),
+  /** Purge note `id` from the trash with its history, for good. A signed-in session only (ai D21). */
+  purgeFromTrash: (id: string) => request<TrashPurged>("DELETE", `/api/trash/${enc(id)}`),
   scripts: async () => (await request<{ scripts: string[] }>("GET", "/api/scripts")).scripts,
   script: (name: string) => request<Script>("GET", `/api/scripts/${enc(name)}`),
   /** Store a script as sent. The answer says why it would not compile, if it would not. */

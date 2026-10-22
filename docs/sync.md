@@ -89,6 +89,7 @@ The device token is never widened to `admin`. In the apps, Settings hides the Se
 | `/api/clients` and below | The server's clients folder | Forwarded, `Range` included |
 | `GET /api/version` | The home server's version | Answered from the home server's `GET /api/sync/info`, so an older server still says its version; offline or unpaired, 503 |
 | `/api/tokens`, `/api/secrets` and below | The server's `tokens` and `secrets` tables, which need `admin` even to read | Not forwarded: 403 `needs_web_app` at once |
+| `POST /api/trash/empty`, `DELETE /api/trash/{id}` | Purging the trash, which only the signed-in user may do; the server refuses every token, the device's among them, with 403 `human_only` (ai D21) | Not forwarded and not answered locally: 403 `needs_web_app` at once, since the embedded server cannot tell the user from the device token. The Trash page offers neither action in the apps |
 
 ### The history
 

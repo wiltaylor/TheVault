@@ -14,7 +14,7 @@ To ask about your notes without an agent, use the AI panel in the web app, which
 
 1. Open Settings > API tokens.
 2. Under Connect an AI agent, type a name for the agent, such as `claude`. The token it gets is `agent-<name>`.
-3. Choose a scope. `write` is selected, and lets the agent read, create, change and delete notes and assets. Choose `read` for an agent that only looks things up. Choose `admin` only on purpose: an admin agent can change types, scripts and tasks, and read secrets through scripts.
+3. Choose a scope. `write` is selected, and lets the agent read, create, change and delete notes and assets. A deleted note goes to the trash, and the agent can list the trash and restore from it, but no agent can empty the trash or delete a note forever, whatever its scope: only you can, signed in to the web app. Choose `read` for an agent that only looks things up. Choose `admin` only on purpose: an admin agent can change types, scripts and tasks, and read secrets through scripts.
 4. Select Create install command. The panel shows a command like this one:
 
    ```sh

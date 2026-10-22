@@ -117,6 +117,16 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Bring a note back from the trash",
     ),
     (
+        "POST",
+        "/api/trash/empty",
+        "Purge every note in the trash with its history; a signed-in session only, every token is a 403 human_only",
+    ),
+    (
+        "DELETE",
+        "/api/trash/{id}",
+        "Purge one note in the trash with its history; a signed-in session only, every token is a 403 human_only",
+    ),
+    (
         "GET",
         "/api/types",
         "Every type with its fields and templates",

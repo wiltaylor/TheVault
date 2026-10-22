@@ -508,6 +508,42 @@ pub async fn restore_from_trash(
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 
+/// Refuse a caller that is not a password-login session. [`crate::auth::authenticate`] refuses
+/// them first; this keeps the rule should the routes be reached another way (ai D21).
+fn human_only(author: &Author) -> Result<(), ApiError> {
+    match author {
+        Author::Session(_) => Ok(()),
+        _ => Err(crate::auth::human_only()),
+    }
+}
+
+fn purged_json(p: writer::Purged) -> Json<Value> {
+    let notes: Vec<&str> = p.notes.iter().map(|t| t.note_id.as_str()).collect();
+    let assets: Vec<&str> = p.assets.iter().map(|a| a.id.as_str()).collect();
+    Json(json!({ "purged": notes, "assets_trashed": assets }))
+}
+
+/// `POST /api/trash/empty`: purge every note in the trash, with its history, for good.
+pub async fn empty_trash(
+    State(w): Shared,
+    Caller(author): Caller,
+) -> Result<Json<Value>, ApiError> {
+    human_only(&author)?;
+    Ok(purged_json(blocking(w, |w| w.empty_trash()).await?))
+}
+
+/// `DELETE /api/trash/{id}`: purge one note in the trash, with its history, for good.
+pub async fn purge_from_trash(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    human_only(&author)?;
+    Ok(purged_json(
+        blocking(w, move |w| w.purge_from_trash(&id)).await?,
+    ))
+}
+
 /// `GET /api/daily/{date}`: the daily note for a day, given as `YYYY-MM-DD`. A day with no note is
 /// a 404; `POST` creates it.
 pub async fn daily(

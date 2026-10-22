@@ -320,6 +320,21 @@ impl State {
         Ok(())
     }
 
+    /// Removes note `note_id` from the trash for good, with its whole history and every device's
+    /// base of it (ai D21). The change feed keeps the note as deleted, so a device still learns
+    /// of the delete. Returns false, changing nothing, when the note is not in the trash.
+    pub fn purge_note(&self, note_id: &str) -> Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        if tx.execute("DELETE FROM trash WHERE note_id = ?1", [note_id])? == 0 {
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM versions WHERE note_id = ?1", [note_id])?;
+        tx.execute("DELETE FROM device_bases WHERE note_id = ?1", [note_id])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Takes a note out of the trash and returns its last content. The caller writes the
     /// file back and records a new version.
     pub fn restore_from_trash(&self, note_id: &str) -> Result<TrashEntry> {

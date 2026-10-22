@@ -81,7 +81,7 @@ fn run() -> Result[int, string] {
 | `vault::append_text(id: string, field: string, text: string, version: string)` | `Result[Value, string]`: append paragraphs to content field `field`, one per run of text between blank lines. Text is inline markup. `""` takes the current version |
 | `vault::append_blocks(id: string, field: string, blocks: Value, version: string)` | `Result[Value, string]`: append one content block, or a list of them, in their JSON form (`{ kind, fields, blocks }`) |
 | `vault::delete(id: string, version: string)` | `Result[Value, string]`: move the note to the trash |
-| `vault::restore(id: string)` | `Result[Value, string]`: take a note out of the trash |
+| `vault::restore(id: string)` | `Result[Value, string]`: take a note out of the trash. No function empties the trash or purges a note from it: only the signed-in user does that, in the web app (ai D21) |
 | `vault::archive(id: string)` | `Result[Value, string]`: archive the note as it is now. It stays readable and editable, but queries and searches leave it out unless they ask for archived notes |
 | `vault::unarchive(id: string)` | `Result[Value, string]`: take the note out of the archive |
 | `vault::daily(date: string)` | `Result[Value, string]`: the daily note for `YYYY-MM-DD`, created when there is none. `""` is today. The result has `created: bool` |

@@ -89,7 +89,7 @@ use serde_json::{Value, json};
 use writer::Writer;
 
 pub use apps::watch as watch_clients;
-pub use auth::{Caller, OWNER_SESSION, SESSION_COOKIE, required_scope};
+pub use auth::{Caller, OWNER_SESSION, SESSION_COOKIE, is_human_only, required_scope};
 pub use devices::DEFAULT_SKIP_PATTERN;
 pub use error::ApiError;
 pub use openapi::{ENDPOINTS, document as openapi_document};
@@ -230,6 +230,8 @@ fn build() -> Built {
         .delete("/api/notifications/{id}", notifications::delete)
         .get("/api/trash", notes::trash)
         .post("/api/trash/{id}/restore", notes::restore_from_trash)
+        .post("/api/trash/empty", notes::empty_trash)
+        .delete("/api/trash/{id}", notes::purge_from_trash)
         .get("/api/types", types::list)
         .get("/api/types/{name}", types::read)
         .put("/api/types/{name}", types::put)

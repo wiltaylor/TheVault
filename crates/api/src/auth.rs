@@ -112,6 +112,26 @@ fn is_device_command_result(path: &str) -> bool {
         })
 }
 
+/// Whether `method` on `path` purges notes from the trash, which only a password-login session
+/// may do: every API token, `admin` among them, is refused with 403 `human_only`, so no agent,
+/// script or AI can empty the trash (ai D21).
+pub fn is_human_only(method: &Method, path: &str) -> bool {
+    (*method == Method::POST && path == "/api/trash/empty")
+        || (*method == Method::DELETE
+            && path
+                .strip_prefix("/api/trash/")
+                .is_some_and(|id| !id.is_empty() && !id.contains('/')))
+}
+
+/// The answer to a caller other than the signed-in user on an [`is_human_only`] route.
+pub fn human_only() -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        "human_only",
+        "Only the signed-in user can empty the trash.",
+    )
+}
+
 /// Paths a GET or HEAD reads without credentials, with everything under them: the app builds,
 /// which a phone downloads before the app is installed or paired. They hold no vault data.
 const PUBLIC_READ_PATHS: [&str; 1] = ["/api/clients"];
@@ -281,6 +301,11 @@ pub async fn authenticate(
         Ok(g) => g,
         Err(e) => return e.into_response(),
     };
+    if is_human_only(req.method(), req.uri().path())
+        && !matches!(granted.author, Author::Session(_))
+    {
+        return human_only().into_response();
+    }
     if !granted.scope.allows(needed) {
         return ApiError::new(
             StatusCode::FORBIDDEN,
@@ -370,6 +395,8 @@ mod tests {
             (Method::PUT, "/api/notes/x", Some(Scope::Write)),
             (Method::DELETE, "/api/notes/x", Some(Scope::Write)),
             (Method::POST, "/api/trash/x/restore", Some(Scope::Write)),
+            (Method::POST, "/api/trash/empty", Some(Scope::Write)),
+            (Method::DELETE, "/api/trash/x", Some(Scope::Write)),
             (Method::GET, "/api/daily/2026-10-13", Some(Scope::Read)),
             (Method::POST, "/api/daily/2026-10-13", Some(Scope::Write)),
             (Method::GET, "/api/pins", Some(Scope::Read)),
@@ -503,6 +530,17 @@ mod tests {
         for (method, path, want) in cases {
             assert_eq!(required_scope(&method, path), want, "{method} {path}");
         }
+    }
+
+    #[test]
+    fn only_the_trash_purges_are_human_only() {
+        assert!(is_human_only(&Method::POST, "/api/trash/empty"));
+        assert!(is_human_only(&Method::DELETE, "/api/trash/x"));
+        assert!(!is_human_only(&Method::GET, "/api/trash"));
+        assert!(!is_human_only(&Method::GET, "/api/trash/empty"));
+        assert!(!is_human_only(&Method::POST, "/api/trash/x/restore"));
+        assert!(!is_human_only(&Method::DELETE, "/api/trash/x/restore"));
+        assert!(!is_human_only(&Method::DELETE, "/api/notes/x"));
     }
 
     #[test]

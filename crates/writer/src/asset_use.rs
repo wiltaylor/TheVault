@@ -71,7 +71,7 @@ pub struct TrashedAsset {
 }
 
 /// The ULIDs among the quoted strings of `text`.
-fn ulids_in(text: &str) -> HashSet<&str> {
+pub(crate) fn ulids_in(text: &str) -> HashSet<&str> {
     text.split('"').filter(|s| schema::is_ulid(s)).collect()
 }
 
@@ -190,6 +190,15 @@ impl Writer {
     /// deleted, or that would be.
     pub fn cleanup_assets(&self, only: Option<&[String]>, dry_run: bool) -> Result<Vec<Asset>> {
         let _w = self.write_lock();
+        self.cleanup_assets_locked(only, dry_run)
+    }
+
+    /// [`Writer::cleanup_assets`] for a caller already holding the write lock.
+    pub(crate) fn cleanup_assets_locked(
+        &self,
+        only: Option<&[String]>,
+        dry_run: bool,
+    ) -> Result<Vec<Asset>> {
         let mut named: HashSet<String> = HashSet::new();
         for path in self.definition_and_note_files() {
             let text = self.vault.read_text(&path)?;

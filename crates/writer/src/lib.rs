@@ -43,6 +43,7 @@ mod fleeting;
 pub mod google;
 mod note;
 mod notify;
+mod purge;
 mod queryviews;
 mod refs;
 mod remote;
@@ -84,6 +85,7 @@ pub use index::{Archived, AssetHow, AssetUse, Graph, GraphEdge, GraphNode, Store
 pub use note::{
     ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, value_to_json, value_wcl,
 };
+pub use purge::Purged;
 pub use refs::Referrer;
 pub use remote::{REMOTE_AUTHOR, Remote};
 pub use schema::NoteEdit;

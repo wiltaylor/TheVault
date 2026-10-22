@@ -125,7 +125,11 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     if path == "/api/version" && get {
         return Route::ServerVersion;
     }
-    if under(path, "/api/tokens")
+    // Emptying the trash is for the signed-in user only (ai D21). The embedded server answers
+    // every request as the owner, so it cannot tell the user from the device token, and the
+    // home server refuses the device token: it is done in the web app.
+    if api::is_human_only(method, path)
+        || under(path, "/api/tokens")
         || under(path, "/api/secrets")
         || under(path, "/api/integrations/ai")
         || under(path, "/api/ai")
@@ -580,6 +584,16 @@ mod tests {
         assert_eq!(route(&get, &format!("/api/notes/{id}")), Route::Local);
         assert_eq!(route(&get, "/api/pins"), Route::Local);
         assert_eq!(route(&get, "/api/trash"), Route::Local);
+        assert_eq!(
+            route(&post, &format!("/api/trash/{id}/restore")),
+            Route::Local
+        );
+        // Only the signed-in user empties the trash (ai D21).
+        assert_eq!(route(&post, "/api/trash/empty"), Route::NeedsWebApp);
+        assert_eq!(
+            route(&Method::DELETE, &format!("/api/trash/{id}")),
+            Route::NeedsWebApp
+        );
         assert_eq!(route(&get, "/api/app"), Route::App);
         assert_eq!(route(&get, "/api/app/sync"), Route::AppSync);
         assert_eq!(route(&post, "/api/app/sync"), Route::AppSyncNow);

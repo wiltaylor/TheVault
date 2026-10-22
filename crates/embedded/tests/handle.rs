@@ -210,6 +210,36 @@ async fn creates_reads_and_updates_notes_as_the_owner_with_no_session() {
 }
 
 #[tokio::test]
+async fn never_empties_the_trash_for_the_device() {
+    let d = device();
+    let note = d.create("article", json!({ "title": "Old draft" })).await;
+    let id = s(&note["id"]).to_owned();
+    let base = s(&note["version"]).to_owned();
+    d.json(
+        "DELETE",
+        &format!("/api/notes/{id}?base_version={base}"),
+        None,
+        200,
+    )
+    .await;
+
+    // Only the signed-in user empties the trash (ai D21): the app cannot tell the user from its
+    // device token, so both purges are left to the web app and nothing is purged.
+    let refused = d.json("POST", "/api/trash/empty", None, 403).await;
+    assert_eq!(refused["error"], "needs_web_app", "{refused}");
+    let refused = d
+        .json("DELETE", &format!("/api/trash/{id}"), None, 403)
+        .await;
+    assert_eq!(refused["error"], "needs_web_app", "{refused}");
+    let trash = d.get("/api/trash").await;
+    assert_eq!(trash["notes"][0]["id"], id.as_str(), "{trash}");
+
+    // Restoring stays local.
+    d.json("POST", &format!("/api/trash/{id}/restore"), None, 200)
+        .await;
+}
+
+#[tokio::test]
 async fn searches_the_local_index() {
     let d = device();
     let note = d

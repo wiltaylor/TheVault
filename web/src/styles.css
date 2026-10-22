@@ -9012,3 +9012,14 @@ button.toast-action {
     flex-wrap: wrap;
   }
 }
+
+/* The Trash page's confirm before emptying it or deleting a note forever (ai D21). */
+.trash-purge-dialog {
+  width: min(32rem, 100%);
+}
+
+.trash-purge-dialog .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}

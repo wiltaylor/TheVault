@@ -48,6 +48,8 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Restore an earlier version | `History.tsx` | `POST /api/notes/{id}/restore` | `vault restore <id> <version> --base <version>` | |
 | List the trash | `History.tsx` (`Trash`) | `GET /api/trash` | `vault trash list` | |
 | Restore from the trash | `History.tsx` (`Trash`) | `POST /api/trash/{id}/restore` | `vault trash restore <id>` | |
+| Empty the trash, after a confirm naming the count | `pages/Trash.tsx` (Empty trash), in a browser only | `POST /api/trash/empty` | none, see below | Explained: only the signed-in user purges (ai D21). Every API token, `admin` included, gets 403 `human_only`, so the CLI has no command |
+| Delete a note in the trash forever, after a confirm | `pages/Trash.tsx` (Delete forever), in a browser only | `DELETE /api/trash/{id}` | none, see below | Explained: as Empty the trash (ai D21) |
 | Open today's daily note, or another day's | `DailyNotes.tsx` | `POST /api/daily/{date}` (today), `GET /api/daily/{date}` (other days) | `vault daily open <date>`, `vault daily get <date>` | |
 | Create the daily note for another day | `DailyNotes.tsx` (Create note for this day) | `POST /api/daily/{date}` | `vault daily open <date>` | |
 | Capture a fleeting note (text, pasted, dropped or attached images) | `capture/CaptureModal.tsx` (+ button, sidebar Capture, Ctrl+Shift+K) | `POST /api/assets`, then `POST /api/notes?type=fleeting` | `vault asset upload <file>`, then `vault put --type fleeting` | |
@@ -209,6 +211,8 @@ The listing has 86 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/search` | `vault search` | Search and pickers | |
 | `GET /api/trash` | `vault trash list` | Trash | |
 | `POST /api/trash/{id}/restore` | `vault trash restore` | Trash | |
+| `POST /api/trash/empty` | none | Trash: Empty trash | Explained: a signed-in session only, every token gets 403 `human_only` (ai D21) |
+| `DELETE /api/trash/{id}` | none | Trash: Delete forever | Explained: a signed-in session only, every token gets 403 `human_only` (ai D21) |
 | `GET /api/daily/{date}` | `vault daily get` | Daily notes | |
 | `POST /api/daily/{date}` | `vault daily open` | Daily notes | |
 | `GET /api/pins` | `vault pin list` | Sidebar, Pinned | |
