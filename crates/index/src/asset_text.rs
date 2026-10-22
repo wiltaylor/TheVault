@@ -12,8 +12,9 @@
 //! Extraction runs on a thread of its own, capped at [`MAX_PDF_BYTES`] of input,
 //! [`EXTRACT_TIMEOUT`] of time and [`MAX_TEXT`] of output. pdf-extract reads the text first;
 //! when it fails or panics, which it does on some real PDFs, lopdf's more tolerant extractor
-//! reads what it can. A panic on that thread is caught and prints nothing: its message becomes
-//! the reason the caller logs. A thread that runs past its time cannot be stopped: it is left
+//! reads what it can. When both fail, as they do on a PDF whose cross-reference table lopdf
+//! refuses, the table is rebuilt from the objects in the file and both try again. A panic on
+//! that thread is caught and prints nothing: its message becomes the reason the caller logs. A thread that runs past its time cannot be stopped: it is left
 //! to finish, and while [`MAX_RUNNING`] are still running no new extraction starts.
 
 use std::cell::RefCell;
@@ -26,7 +27,7 @@ use std::time::Duration;
 
 use schema::{Doc, Value};
 
-use crate::{Result, io_err};
+use crate::{Result, io_err, pdf_repair};
 
 /// The largest PDF whose text is extracted, in bytes.
 pub const MAX_PDF_BYTES: usize = 50 * 1024 * 1024;
@@ -51,8 +52,9 @@ pub enum Extracted {
     /// The PDF's text, white space collapsed, at most [`MAX_TEXT`] bytes. It may be empty: a
     /// scanned PDF has no text.
     Text(String),
-    /// pdf-extract failed for `reason`, and the fallback extractor read `text`, tidied as for
-    /// [`Extracted::Text`] and never empty.
+    /// pdf-extract failed for `reason`, and the fallback extractor, or either extractor once
+    /// the PDF's xref table was rebuilt, read `text`, tidied as for [`Extracted::Text`] and
+    /// never empty.
     Recovered { text: String, reason: String },
     /// The file is too large, is not a PDF, could not be read by either extractor or ran past
     /// its time, for `reason`, one line. Kept as no text.
@@ -131,12 +133,20 @@ pub(crate) fn extract_with(
     let spawned = std::thread::Builder::new()
         .name(THREAD.to_owned())
         .spawn(move || {
-            let out = match guarded(extract, &bytes) {
-                Ok(text) => Extracted::Text(tidy(&text)),
-                Err(reason) => match guarded(fallback, &bytes).map(|t| tidy(&t)) {
-                    Ok(text) if !text.is_empty() => Extracted::Recovered { text, reason },
+            let out = match read(extract, fallback, &bytes) {
+                Extracted::Failed(reason) => match pdf_repair::rebuild_xref(&bytes)
+                    .map(|fixed| read(extract, fallback, &fixed))
+                {
+                    Some(Extracted::Text(text)) if text.is_empty() => Extracted::Text(text),
+                    Some(Extracted::Text(text) | Extracted::Recovered { text, .. }) => {
+                        Extracted::Recovered {
+                            text,
+                            reason: format!("{reason}; read after rebuilding its xref table"),
+                        }
+                    }
                     _ => Extracted::Failed(reason),
                 },
+                out => out,
             };
             RUNNING.fetch_sub(1, Ordering::SeqCst);
             let _ = tx.send(out);
@@ -148,6 +158,17 @@ pub(crate) fn extract_with(
     rx.recv_timeout(timeout).unwrap_or_else(|_| {
         Extracted::Failed(format!("ran past {} seconds", timeout.as_secs_f32()))
     })
+}
+
+/// The text `extract` reads from `bytes`, or what `fallback` reads when `extract` fails.
+fn read(extract: Extractor, fallback: Extractor, bytes: &[u8]) -> Extracted {
+    match guarded(extract, bytes) {
+        Ok(text) => Extracted::Text(tidy(&text)),
+        Err(reason) => match guarded(fallback, bytes).map(|t| tidy(&t)) {
+            Ok(text) if !text.is_empty() => Extracted::Recovered { text, reason },
+            _ => Extracted::Failed(reason),
+        },
+    }
 }
 
 thread_local! {

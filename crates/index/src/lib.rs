@@ -33,6 +33,7 @@
 
 mod asset_text;
 mod graph;
+mod pdf_repair;
 mod project;
 mod rebuild;
 mod search;

@@ -91,3 +91,49 @@ pub fn font_without_encoding() -> Vec<u8> {
 pub fn font_without_encoding_or_text() -> Vec<u8> {
     unmapped_font("\\001\\002\\003")
 }
+
+/// A PDF-1.3 shaped like a bank's statements: an Info dictionary, and a trailer with `/Size`,
+/// `/Root`, `/Info` and an `/ID` array over an xref table whose entries end in a bare newline,
+/// 19 bytes where the format wants 20. lopdf refuses it: "invalid file trailer". The page
+/// shows "platypus ledger".
+#[allow(
+    dead_code,
+    reason = "crates/writer's tests include this file and do not use it"
+)]
+pub fn trailer_lopdf_refuses() -> Vec<u8> {
+    let content = "BT /F1 12 Tf 72 720 Td (platypus ledger) Tj ET";
+    let objects = [
+        "<<\n/Type /Catalog\n/Pages 2 0 R\n>>".to_owned(),
+        "<<\n/Type /Pages\n/Kids [ 4 0 R ]\n/Count 1\n>>".to_owned(),
+        "<<\n/Producer (Statement Writer)\n/Title (Statement)\n>>".to_owned(),
+        "<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [ 0 0 612 792 ]\n\
+         /Resources << /Font << /F1 6 0 R >> >>\n/Contents 5 0 R\n>>"
+            .to_owned(),
+        stream(content),
+        "<<\n/Type /Font\n/BaseFont /Helvetica\n/Subtype /Type1\n/Encoding /StandardEncoding\n>>"
+            .to_owned(),
+    ];
+    let mut out = b"%PDF-1.3\n%\xb7\xbe\xad\xaa\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f\n", objects.len() + 1).as_bytes(),
+    );
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n\n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<<\n/Root 1 0 R\n/Info 3 0 R\n\
+             /ID [ <66DB7298A812EDF117AE5DA423C1C42B> <66DB7298A812EDF117AE5DA423C1C42B> ]\n\
+             /Size {}\n>>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
