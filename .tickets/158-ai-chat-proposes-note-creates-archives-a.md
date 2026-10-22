@@ -4,8 +4,8 @@ title: AI chat proposes note creates, archives and deletes as well as updates
 plan: ai
 blocked_by:
 - '156'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # AI chat proposes note creates, archives and deletes as well as updates
@@ -21,3 +21,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T21:21:23Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T21:21:23Z — wil
+
+Status set to done.
