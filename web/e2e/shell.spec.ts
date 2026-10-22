@@ -63,9 +63,9 @@ test("a note created through the API appears in its type list and opens with its
   await card.getByRole("link", { name: "Notes", exact: true }).click();
   await expect(page).toHaveURL(/\/types\/task$/);
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
-  // Other tests on the shared server add tasks all the time, and a type with more than
-  // MAX_LISTED notes lists none until a search narrows it. The list's own search box finds the
-  // note however many tasks there are (ticket 50).
+  // Other tests on the shared server add tasks all the time, and a type's list shows one page
+  // of them at a time. The list's own search box finds the note however many tasks there are
+  // (ticket 50).
   await page.getByRole("searchbox", { name: "Search tasks" }).fill(title.split(" ").at(-1)!);
   await expect(page.getByTestId("type-list-status")).toHaveText("1 match");
   const row = page.getByTestId("note-card").filter({ hasText: title });
@@ -198,11 +198,11 @@ test("the manifest and the service worker register", async ({ page, request }) =
   expect(cached.filter((u) => u.startsWith("/api"))).toEqual([]);
 });
 
-test(`a type of ${BULK_NOTES} notes lists none until a search finds one`, async ({ page }) => {
+test(`a type of ${BULK_NOTES} notes lists one page of them, and a search finds one`, async ({ page }) => {
   await logIn(page, "/types/bulk");
   await expect(page.getByRole("heading", { name: "Bulk notes" })).toBeVisible();
-  await expect(page.getByTestId("type-list-status")).toHaveText(`${BULK_NOTES.toLocaleString("en-US")} notes. Search to find one.`);
-  await expect(page.getByTestId("note-card")).toHaveCount(0);
+  await expect(page.getByTestId("type-list-status")).toHaveText(`1–50 of ${BULK_NOTES.toLocaleString("en-US")}`);
+  await expect(page.getByTestId("note-card")).toHaveCount(50);
   await page.getByRole("searchbox", { name: "Search bulk notes" }).fill(bulkTitle(BULK_NOTES).split(" ")[1]!);
   await expect(page.getByTestId("note-card").filter({ hasText: bulkTitle(BULK_NOTES) })).toBeVisible();
 });

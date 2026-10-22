@@ -152,8 +152,62 @@ export interface TypeModel {
   fields: FieldModel[];
   templates: TemplateModel[];
   handlers: HandlerModel[];
+  /** The type's list page settings: its `list_page` block (lists L1). */
+  listPage: ListPageModel;
   /** The type's own attributes this version does not model, as WCL source text. */
   extra: Record<string, string>;
+}
+
+/**
+ * A type's `list_page` block, each item `""` when the block leaves it out, so the default holds.
+ * The file has the block only when one item is set.
+ */
+export interface ListPageModel {
+  view: "" | "cards" | "list" | "details";
+  /** A field of the type, `title`, `created` or `updated`. */
+  sortField: string;
+  sortDir: "asc" | "desc";
+  /** A whole number from 10 to 500, as typed. */
+  pageSize: string;
+}
+
+/** The built-in note fields a list page may sort by. */
+export const LIST_SORT_BUILT_INS = ["title", "created", "updated"] as const;
+
+export function emptyListPage(): ListPageModel {
+  return { view: "", sortField: "", sortDir: "desc", pageSize: "" };
+}
+
+function listPageFromSchema(lp: SchemaType["list_page"]): ListPageModel {
+  const m = emptyListPage();
+  if (!lp) return m;
+  if (lp.view === "cards" || lp.view === "list" || lp.view === "details") m.view = lp.view;
+  const [field, dir] = (lp.sort ?? "").split(/\s+/);
+  if (field) {
+    m.sortField = field;
+    m.sortDir = dir === "desc" ? "desc" : "asc";
+  }
+  if (typeof lp.page_size === "number") m.pageSize = String(lp.page_size);
+  return m;
+}
+
+/** The field a list page sorts by, following a rename; `null` when the type no longer has it. */
+function listSortField(m: TypeModel): string | null {
+  const s = m.listPage.sortField;
+  if (!s || (LIST_SORT_BUILT_INS as readonly string[]).includes(s)) return s;
+  if (m.fields.some((f) => f.name === s)) return s;
+  return m.fields.find((f) => f.original === s)?.name ?? null;
+}
+
+function listPageWcl(m: TypeModel): string | null {
+  const lp = m.listPage;
+  const field = listSortField(m);
+  const i = "  ";
+  let out = "";
+  if (lp.view) out += wclField("view", lp.view, i);
+  if (field) out += wclField("sort", `${field} ${lp.sortDir}`, i);
+  if (lp.pageSize.trim()) out += wclField("page_size", Number(lp.pageSize), i);
+  return out ? `list_page {\n${out}}\n` : null;
 }
 
 /** A type as `GET /api/schema` describes it. */
@@ -167,6 +221,8 @@ export interface SchemaType {
   fields: Record<string, Json>[];
   templates: TemplateModel[];
   handlers?: HandlerModel[];
+  /** The `list_page` block, each item only when the block sets it. */
+  list_page?: { view?: string; sort?: string; page_size?: number };
   /** What this version ignored in the type file, such as an attribute only a newer release knows. */
   warnings?: SchemaIssue[];
   /** What it ignored of the type's own attributes, as WCL source text, kept to write back. */
@@ -256,6 +312,7 @@ export function typeFromSchema(t: SchemaType): TypeModel {
     fields: t.fields.map(fieldFromSchema),
     templates: structuredClone(t.templates),
     handlers: structuredClone(t.handlers ?? []),
+    listPage: listPageFromSchema(t.list_page),
     extra: { ...(t.extra ?? {}) },
   };
 }
@@ -271,6 +328,7 @@ export function emptyType(): TypeModel {
     fields: [],
     templates: [{ name: "default", label: null, tabs: [{ title: "Main", items: [{ slot: "title", label: null }] }] }],
     handlers: [],
+    listPage: emptyListPage(),
     extra: {},
   };
 }
@@ -319,6 +377,13 @@ export function problems(m: TypeModel): string[] {
       out.push(`${who}: only after_* handlers may reach hosts or read secrets.`);
     }
   });
+  if (m.listPage.sortField && listSortField(m) === null) {
+    out.push(`List page: it sorts by ${m.listPage.sortField}, which the type no longer has.`);
+  }
+  const size = m.listPage.pageSize.trim();
+  if (size && !(/^\d+$/.test(size) && Number(size) >= 10 && Number(size) <= 500)) {
+    out.push("List page: the page size must be a whole number from 10 to 500.");
+  }
   return out;
 }
 
@@ -543,6 +608,8 @@ export function typeWcl(m: TypeModel): string {
   head += extraWcl(m.extra, head, "");
   const renamed = renames(m);
   const blocks = [...m.fields.map((f) => fieldWcl(f, renamed)), ...followFields(m).map(templateWcl), ...m.handlers.map(handlerWcl)];
+  const listPage = listPageWcl(m);
+  if (listPage) blocks.push(listPage);
   return [head, ...blocks].join("\n");
 }
 

@@ -22,7 +22,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Load the session's types and taxonomies | `session.ts` | `GET /api/types`, `GET /api/taxonomies` | `vault type list`, `vault taxonomy list` (or `vault schema`) | |
 | Log out | `components/Shell.tsx` | `POST /api/logout` | none, see below | Explained: a CLI token has no session to end. `vault token revoke` ends a token |
 | Search (header box and results page, paged) | `pages/Search.tsx` | `GET /api/search` | `vault search <text> [--cursor] [--page-size] [--all]` | |
-| List the notes of a type (paged) | `pages/TypeList.tsx` | `POST /api/query` (`from <type> sort title asc select title`) | `vault query "from <type> sort title asc"` or `vault list --type <type>` | |
+| List the notes of a type, a page at a time, sorted by the type's `list_page` sort or a clicked column (lists L2, L3) | `pages/TypeList.tsx` | `POST /api/query` (`from <type> sort <field> <dir>`, `page_size`, `cursor`) | `vault query "from <type> sort sent desc" --page-size 50 --cursor <next>` or `vault list --type <type>` | |
 | Navigation, menu, home cards | `Shell.tsx`, `Home.tsx` | — | — | Client-side only |
 | Set the map tile URL | `pages/Settings.tsx` | none | none | Explained: a browser preference kept in `localStorage`, not vault data (D29) |
 

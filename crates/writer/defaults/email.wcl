@@ -128,3 +128,9 @@ template card {
     slot "snippet"
   }
 }
+
+list_page {
+  view      = "details"
+  sort      = "sent desc"
+  page_size = 50
+}

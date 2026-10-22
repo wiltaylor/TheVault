@@ -11,6 +11,8 @@ import {
   ITEM_KINDS,
   type FieldModel,
   type HandlerModel,
+  LIST_SORT_BUILT_INS,
+  type ListPageModel,
   MULTIPLE_KINDS,
   ON_DELETE,
   PALETTE,
@@ -178,6 +180,19 @@ export function TypeEditor() {
       },
     ),
   );
+
+  // What the list page may sort by: the built-in note fields, then the type's own that hold one
+  // value a page can order by, and the stored sort field even when it is no longer offered.
+  const listSortOptions = () => {
+    const builtIn = LIST_SORT_BUILT_INS.map((n) => ({ value: n, text: n[0]!.toUpperCase() + n.slice(1) }));
+    const own = model.fields
+      .filter((f) => isName(f.name) && !["content", "canvas", "ink", "location", "dict"].includes(f.kind))
+      .map((f) => ({ value: f.name, text: f.label ? `${f.label} (${f.name})` : f.name }));
+    const all = [...builtIn, ...own];
+    const s = model.listPage.sortField;
+    if (s && !all.some((o) => o.value === s)) all.push({ value: s, text: s });
+    return all;
+  };
 
   /** Change the model. Any preview is now out of date. */
   function edit(fn: (m: TypeModel) => void) {
@@ -880,6 +895,72 @@ export function TypeEditor() {
         >
           Add handler
         </button>
+
+        <h2>List page</h2>
+        <p class="muted">
+          How the type's page of notes shows them when nobody has chosen otherwise in their browser. Left on Default,
+          it shows cards, newest change first, 50 to a page.
+        </p>
+        <div class="form-grid" data-testid="list-page-settings">
+          <label for="list-page-view">View</label>
+          <select
+            id="list-page-view"
+            onChange={(e) => edit((m) => (m.listPage.view = e.currentTarget.value as ListPageModel["view"]))}
+          >
+            <For
+              each={[
+                ["", "Default (cards)"],
+                ["cards", "Cards"],
+                ["list", "List"],
+                ["details", "Details"],
+              ]}
+            >
+              {([value, text]) => (
+                <option value={value} selected={model.listPage.view === value}>
+                  {text}
+                </option>
+              )}
+            </For>
+          </select>
+          <label for="list-page-sort">Sort by</label>
+          <div class="list-page-sort">
+            <select id="list-page-sort" onChange={(e) => edit((m) => (m.listPage.sortField = e.currentTarget.value))}>
+              <option value="" selected={!model.listPage.sortField}>
+                Default (updated, newest first)
+              </option>
+              <For each={listSortOptions()}>
+                {(o) => (
+                  <option value={o.value} selected={model.listPage.sortField === o.value}>
+                    {o.text}
+                  </option>
+                )}
+              </For>
+            </select>
+            <select
+              aria-label="Sort direction"
+              disabled={!model.listPage.sortField}
+              onChange={(e) => edit((m) => (m.listPage.sortDir = e.currentTarget.value === "asc" ? "asc" : "desc"))}
+            >
+              <option value="asc" selected={model.listPage.sortDir === "asc"}>
+                Ascending
+              </option>
+              <option value="desc" selected={model.listPage.sortDir === "desc"}>
+                Descending
+              </option>
+            </select>
+          </div>
+          <label for="list-page-size">Page size</label>
+          <input
+            id="list-page-size"
+            type="number"
+            min="10"
+            max="500"
+            step="1"
+            placeholder="50"
+            value={model.listPage.pageSize}
+            onInput={(e) => edit((m) => (m.listPage.pageSize = e.currentTarget.value))}
+          />
+        </div>
 
         <Show when={!isNew()}>
           <h2>Migration</h2>

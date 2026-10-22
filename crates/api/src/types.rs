@@ -60,7 +60,7 @@ pub async fn list(State(w): Shared) -> Json<Value> {
 }
 
 pub(crate) fn type_json(t: &TypeDef, builtin: bool) -> Value {
-    json!({
+    let mut out = json!({
         "name": t.name,
         "label": t.label,
         "plural": t.plural,
@@ -71,7 +71,9 @@ pub(crate) fn type_json(t: &TypeDef, builtin: bool) -> Value {
         "fields": t.fields.iter().map(field_json).collect::<Vec<_>>(),
         "templates": t.templates.iter().map(template_json).collect::<Vec<_>>(),
         "warnings": t.warnings.iter().map(issue_json).collect::<Vec<_>>(),
-    })
+    });
+    crate::inspect::with_list_page(&mut out, t);
+    out
 }
 
 fn scalar_name(s: Scalar) -> &'static str {

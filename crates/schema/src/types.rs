@@ -366,6 +366,38 @@ pub struct Handler {
     pub secrets: Vec<String>,
 }
 
+/// The views a type's list page shows its notes in (lists L1, L4).
+pub const LIST_PAGE_VIEWS: [&str; 3] = ["cards", "list", "details"];
+
+/// The fewest and the most notes one page of a type's list page shows (lists L1, L2).
+pub const LIST_PAGE_SIZE_MIN: i64 = 10;
+pub const LIST_PAGE_SIZE_MAX: i64 = 500;
+
+/// The built-in note fields a list page may sort by, beside the type's own fields.
+const LIST_PAGE_SORT_BUILT_INS: [&str; 3] = ["title", "created", "updated"];
+
+/// A type's `list_page` block: how its list page (`/types/<type>`) shows its notes when the user
+/// has chosen nothing (lists L1). Each item is `None` when the block leaves it out; the reader
+/// of the settings applies the defaults: `cards`, `updated desc` and 50.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListPage {
+    /// `cards`, `list` or `details`.
+    pub view: Option<String>,
+    /// A field of the type, or `title`, `created` or `updated`, and whether it sorts descending.
+    pub sort: Option<(String, bool)>,
+    /// From [`LIST_PAGE_SIZE_MIN`] to [`LIST_PAGE_SIZE_MAX`].
+    pub page_size: Option<i64>,
+}
+
+impl ListPage {
+    /// The `sort` item as the file writes it, such as `sent desc`.
+    pub fn sort_text(&self) -> Option<String> {
+        self.sort
+            .as_ref()
+            .map(|(f, desc)| format!("{f} {}", if *desc { "desc" } else { "asc" }))
+    }
+}
+
 /// One type definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDef {
@@ -378,6 +410,8 @@ pub struct TypeDef {
     pub fields: Vec<FieldDef>,
     pub templates: Vec<Template>,
     pub handlers: Vec<Handler>,
+    /// The `list_page` block, when the file has one (lists L1).
+    pub list_page: Option<ListPage>,
     /// What this version ignores in the file, such as an attribute only a newer release knows.
     pub warnings: Vec<Issue>,
     /// The type's own attributes this version does not know, kept as written. Each field,
@@ -417,7 +451,7 @@ impl TypeDef {
         ];
         c.attributes(doc, &items, &[], "type", "types");
         let extra = unknown(doc, &items, &[]);
-        c.only_blocks(doc, &["field", "template", "handler"], "type");
+        c.only_blocks(doc, &["field", "template", "handler", "list_page"], "type");
 
         let mut fields: Vec<FieldDef> = Vec::new();
         for b in doc.blocks_of("field") {
@@ -458,6 +492,18 @@ impl TypeDef {
             .filter_map(|b| handler(&mut c, b))
             .collect();
 
+        let mut list_page = None;
+        for (k, b) in doc.blocks_of("list_page").enumerate() {
+            if k > 0 {
+                c.fail(
+                    "list_page",
+                    "is defined twice: a type has one list_page block",
+                );
+            } else {
+                list_page = Some(list_page_of(&mut c, b, &fields));
+            }
+        }
+
         // A type with an error is refused, and reports only its errors. Warnings leave it valid
         // and stay with the definition, so the type editor and `PUT /api/types` can show them.
         let (warnings, errors): (Vec<Issue>, Vec<Issue>) =
@@ -476,6 +522,7 @@ impl TypeDef {
             fields,
             templates,
             handlers,
+            list_page,
             warnings,
             extra,
         })
@@ -1107,6 +1154,55 @@ pub fn field_refs(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Check a `list_page` block: `view`, `sort` and `page_size`, each optional (lists L1).
+fn list_page_of(c: &mut Check, b: &DocBlock, fields: &[FieldDef]) -> ListPage {
+    let at = "list_page";
+    c.no_label(b, at);
+    let d = &b.body;
+    let items = [
+        opt("view", Form::OneOf(&LIST_PAGE_VIEWS)),
+        opt("sort", Form::Str),
+        opt(
+            "page_size",
+            Form::Int(LIST_PAGE_SIZE_MIN, LIST_PAGE_SIZE_MAX),
+        ),
+    ];
+    c.items(d, &items, &[], at);
+    c.only_blocks(d, &[], at);
+    let sort = string(d, "sort").and_then(|text| {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let (name, desc) = match words.as_slice() {
+            [name] => (*name, false),
+            [name, "asc"] => (*name, false),
+            [name, "desc"] => (*name, true),
+            _ => {
+                c.fail(
+                    &format!("{at}.sort"),
+                    format!("{text:?} must be a field name, then asc or desc, such as \"updated desc\""),
+                );
+                return None;
+            }
+        };
+        let known = LIST_PAGE_SORT_BUILT_INS.contains(&name) || fields.iter().any(|f| f.name == name);
+        if !known {
+            c.fail(
+                &format!("{at}.sort"),
+                format!("names {name:?}, which is not a field of the type, nor title, created or updated"),
+            );
+            return None;
+        }
+        Some((name.to_owned(), desc))
+    });
+    ListPage {
+        view: string(d, "view"),
+        sort,
+        page_size: d.field("page_size").and_then(|v| match v {
+            Value::Int(i) => Some(*i),
+            _ => None,
+        }),
+    }
 }
 
 fn handler(c: &mut Check, b: &DocBlock) -> Option<Handler> {

@@ -38,8 +38,9 @@ use store::Change;
 use wcl_lang::ast::{Block, Expr, Item, Source};
 
 use crate::builtin::{
-    BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, DEFAULT_EVENT_TYPE, DEFAULT_PERSON_TYPE, EVENT_TYPE,
-    PERSON_TYPE, TYPES_NEEDING_PERSON,
+    BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, DEFAULT_EMAIL_TYPE, DEFAULT_EVENT_TYPE,
+    DEFAULT_MESSAGE_TYPE, DEFAULT_PERSON_TYPE, EMAIL_TYPE, EVENT_TYPE, MESSAGE_TYPE, PERSON_TYPE,
+    TYPES_NEEDING_PERSON,
 };
 use crate::defs::taxonomy_path;
 use crate::types::{NativeMigration, TypeChange, rebuild_schema};
@@ -202,7 +203,82 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0004_remove_google_sync",
         run: remove_google_sync,
     },
+    UpgradeStep {
+        id: "0005_list_page_defaults",
+        run: list_page_defaults,
+    },
 ];
+
+/// Step `0005_list_page_defaults` (lists L5): the `email` and `message` types from before type
+/// list pages had settings have no `list_page` block, and the seeding only ever adds fields to a
+/// type the vault has. Each of the two that is the built-in and has no `list_page` block gains
+/// the shipped type's, after its last item, as one planned type change that edits no note.
+/// Everything else in the file stays as it is, so a type the user edited, such as one with a slot
+/// added to its card, keeps the edit. A type that has a `list_page` block, whatever it holds, is
+/// left alone, and so is a type of the user's holding the name. When the vault's type lacks the
+/// field the shipped `sort` names, the block goes in without its `sort`.
+fn list_page_defaults(w: &Writer) -> Result<()> {
+    for (name, source) in [
+        (EMAIL_TYPE, DEFAULT_EMAIL_TYPE),
+        (MESSAGE_TYPE, DEFAULT_MESSAGE_TYPE),
+    ] {
+        add_list_page(w, name, source)?;
+    }
+    Ok(())
+}
+
+/// Give vault type `name` the `list_page` block of its shipped default `source`, when it is the
+/// built-in and has none.
+fn add_list_page(w: &Writer, name: &str, source: &str) -> Result<()> {
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(name) else {
+        return Ok(());
+    };
+    if ty.list_page.is_some() {
+        return Ok(());
+    }
+    if !w.is_built_in_def(ty) {
+        eprintln!(
+            "step 0005_list_page_defaults skipped type {name:?}: a type of the user's holds the name"
+        );
+        return Ok(());
+    }
+    let path = type_path(name);
+    let shipped: Source = store::parse_data_only(source, &path)?;
+    let mut list_page = shipped
+        .items
+        .into_iter()
+        .find(|i| block(i, "list_page").is_some())
+        .expect("the shipped type has a list_page block");
+    if let Some(b) = block_mut(&mut list_page, "list_page") {
+        let lacks_sort_field = |i: &Item| {
+            matches!(i, Item::Field(f) if f.name == "sort"
+                && matches!(&f.expr, Expr::Utf8(s)
+                    if s.split_whitespace().next().is_some_and(|n| ty.field(n).is_none())))
+        };
+        b.items.retain(|i| !lacks_sort_field(i));
+    }
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    ast.items.push(list_page);
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
+    let plan = w.plan_type_change(name, &change)?;
+    if !plan.changes.is_empty() {
+        eprintln!(
+            "step 0005_list_page_defaults was not applied to type {name:?}: it would edit notes"
+        );
+        return Ok(());
+    }
+    w.apply_type_change(
+        name,
+        &change,
+        &plan.token,
+        &Author::Task(SERVER_AUTHOR.to_owned()),
+    )?;
+    Ok(())
+}
 
 /// The settings type of 0.1.7, which step `0004_remove_google_sync` removes.
 const GOOGLE_SYNC_TYPE: &str = "google_sync";

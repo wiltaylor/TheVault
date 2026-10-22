@@ -49,8 +49,28 @@ pub(crate) fn type_json(t: &TypeDef, builtin: bool) -> Value {
         })).collect::<Vec<_>>(),
         "warnings": t.warnings.iter().map(crate::error::issue_json).collect::<Vec<_>>(),
     });
+    with_list_page(&mut out, t);
     with_extra(&mut out, &t.extra);
     out
+}
+
+/// Add `list_page` to `out` when the type file has the block: each item the block holds, the
+/// sort as the file writes it, such as `"sent desc"` (lists L1). The client applies the defaults.
+pub(crate) fn with_list_page(out: &mut Value, t: &TypeDef) {
+    let Some(lp) = &t.list_page else {
+        return;
+    };
+    let mut m = Map::new();
+    if let Some(v) = &lp.view {
+        m.insert("view".into(), json!(v));
+    }
+    if let Some(s) = lp.sort_text() {
+        m.insert("sort".into(), json!(s));
+    }
+    if let Some(n) = lp.page_size {
+        m.insert("page_size".into(), json!(n));
+    }
+    out["list_page"] = Value::Object(m);
 }
 
 /// Add `extra` to `out` when there is any: each attribute this version does not know, by name,

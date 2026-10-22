@@ -94,6 +94,15 @@ export interface TypeDef {
   templates: Template[];
   /** What this version ignores in the type file, such as an attribute only a newer release knows. */
   warnings?: SchemaIssue[];
+  /** The type file's `list_page` block, each item only when the block sets it (lists L1). */
+  list_page?: ListPage;
+}
+
+/** How a type's list page shows its notes: `view`, `sort` as `"<field> asc|desc"`, `page_size`. */
+export interface ListPage {
+  view?: string;
+  sort?: string;
+  page_size?: number;
 }
 
 /** One schema issue: where in the file, and what. A warning leaves the file valid. */

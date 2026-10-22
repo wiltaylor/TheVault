@@ -139,7 +139,7 @@ A record must be written with every member. `schema` rejects a missing or extra 
 
 ## Type files
 
-`types/<type>.wcl` defines one type: its fields, its named templates, and the handlers that run on its notes. Fields are `field` blocks, templates are `template` blocks, and handlers are `handler` blocks.
+`types/<type>.wcl` defines one type: its fields, its named templates, the handlers that run on its notes, and how its list page shows them. Fields are `field` blocks, templates are `template` blocks, handlers are `handler` blocks, and the list page settings are one `list_page` block.
 
 | Item | Form | Required | Meaning |
 |------|------|----------|---------|
@@ -151,6 +151,7 @@ A record must be written with every member. `schema` rejects a missing or extra 
 | `field <name> { ... }` | block | no | One field. Order is display and canonical order |
 | `template <name> { ... }` | block | yes, `default` | One named template |
 | `handler "<event>" { ... }` | block | no | One handler. Handlers for one event run in file order |
+| `list_page { ... }` | block | no | At most one. How the type's list page shows its notes; see [List page settings](#list-page-settings) |
 
 ```wcl
 label       = "Board"
@@ -170,6 +171,30 @@ template default {
   }
 }
 ```
+
+### List page settings
+
+A type's list page (`/types/<type>`) shows its notes one page at a time, by the query API's cursor, with First, Previous and Next; no page loads more than the page size, so a big type never loads whole (D33; lists L2). The `list_page` block says how the page shows them for a user who has chosen nothing else in their browser (lists L1, L3). The name is `list_page` rather than `list` because `list` is already a field kind, a content block and a query view kind. A type file has at most one, with no label, after its other blocks. Every item is optional:
+
+| Item | Form | Default | Meaning |
+|------|------|---------|---------|
+| `view` | `cards`, `list` or `details` | `cards` | `cards` draws each note with the type's `card` template. `list` is a table of the card's fields and Updated. `details` shows each note expanded with the type's `default` template, its title linking to the note (lists L4) |
+| `sort` | string | `updated desc` | A field of the type, or `title`, `created` or `updated`, then `asc` or `desc`. Without a direction it is `asc`. The page's query sorts by it on the server, so every page follows it |
+| `page_size` | int, 10 to 500 | `50` | How many notes one page shows |
+
+```wcl
+list_page {
+  view      = "details"
+  sort      = "sent desc"
+  page_size = 50
+}
+```
+
+The schema refuses a `view` that is not one of the three, a `sort` that names no field of the type nor `title`, `created` or `updated`, or that ends in a word other than `asc` or `desc`, a `page_size` outside 10 to 500, any other item, a label, and a second `list_page` block. `GET /api/types` and `GET /api/schema` give each type that has the block a `list_page` object holding the items the block sets, the sort as written in canonical form, such as `{ "view": "details", "sort": "sent desc", "page_size": 50 }`.
+
+On the page, the user's choice of view, and of sort by clicking a List view header, is remembered per type in the browser and wins over the block. Reset to type default forgets both. A search narrows the same paged query, and a new search, archived toggle or sort starts again at page 1. The type editor (Settings > Types) edits the block in its List page section, and leaves it out of the file while every item is on Default.
+
+An app from before `list_page` refuses a type file holding it, as it refuses any block it does not know, so a release that ships one updates the apps before they sync (see [Releasing a format change](android-release.md#releasing-a-format-change)).
 
 ### Attributes a reader does not know
 
@@ -230,6 +255,16 @@ The fields of the phone data types, as a new vault gets them:
 | | `thread_ref` | `string` | The phone's id for the thread |
 
 A note with no `processed` value, such as one made before 0.1.13 added the field, counts as unprocessed: a missing field is false in a query, so `from email where !processed` and `from message where !processed` list the unprocessed ones, both those with `processed = false` and those without the field.
+
+The `email` and `message` types end with a [`list_page`](#list-page-settings) block, so their list pages open in the details view, newest `sent` first, 50 to a page (lists L5):
+
+```wcl
+list_page {
+  view      = "details"
+  sort      = "sent desc"
+  page_size = 50
+}
+```
 
 The `conversation` type's default template shows its messages, oldest first:
 
@@ -2175,6 +2210,7 @@ The app ships defaults into every vault: the built-in types (and the `person` ty
    | `0002_person_labels` | A `person` type whose `emails`, `phones` and `addresses` have no `labels`: each gains its `labels`, `photo` gains `accept = "image"` when every photo is an image, and the label lists' slots leave the `default` template (see [Built-in types](#built-in-types)). It edits no note |
    | `0003_event_google_handler` | An `event` type with no handler naming `google_event`, as main wrote it before the Google Calendar write-back: it gains the shipped type's three `handler` blocks, before its first template (see [Built-in types](#built-in-types)). The seeding below only adds fields, so it would not carry them. It edits no note. A user's own `event` type (see step 2) is skipped |
    | `0004_remove_google_sync` | The Google sync's settings move from the 0.1.7 `google_sync` note type into secrets (google-sync D21). Every `event` handler naming `google_event` gains the `google_settings` secret, as a planned type change that edits no note. When the vault has a `google_sync` note, the first one's settings, cursors and `account` move into `google_settings`, `google_gmail_state`, `google_calendar_state` and `google_account`, each key only where the secret does not hold it already; `calendar_sync_tokens` keys such as `c_me_40example_2ecom` become calendar ids such as `me@example.com`. Then every `google_sync` note is deleted for good, not to the trash, and the type is deleted. A vault with the type and no note just loses the type. A `google_sync` type without the 0.1.7 type's `gmail_history_id` field is the user's own: the step leaves it and its notes alone. Moving a note needs the secrets key: without it the step changes nothing more, keeps the type and the note, and runs again on the next start |
+   | `0005_list_page_defaults` | An `email` or `message` type with no `list_page` block, as every release before lists L5 shipped it: it gains the shipped type's block (details view, `sent desc`, 50 a page) after its last item, as one planned type change that edits no note (lists L5). The rest of the file stays as it is, so a type the user edited, such as one with a slot added to its card, keeps the edit; the seeding below only adds fields, so it would not carry the block. A type that has a `list_page` block, whatever it holds, is left alone, and so is a user's own type holding the name (see step 2). A type without the `sent` field gains the block without its `sort` |
 2. **Built-in taxonomies and types.** A built-in taxonomy the vault lacks is added whole, before the types that use it; one the vault has is never changed. A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` or `card` template places an added field, the vault's template of the same name gains that slot, after the nearest slot the shipped template puts before it, else before the nearest slot it puts after it, or at the end of its first tab. A vault type without that template gains none. Slots inside `columns` and `column` count, so a slot the shipped template puts after `from` in a column lands after `from` in the vault's column. Nothing else in either template changes: a vault from before 0.1.13 gains `processed` on `email` and `message` with its slot on their pages and on their cards, and an old starter vault's `person` card gains `photo` before the title. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
 
    A vault type that holds a built-in's name is the built-in only in one of two cases. Either `state.db` records that the server wrote it (the server records each built-in type it adds, in the shipped-file table under the type file's path, such as `types/event.wcl`), or it matches the built-in's identity: it declares the built-in's key field as a single string field. The key fields are `device_ref` for `message` and `call`, `thread_ref` for `conversation` and `email_thread`, `gmail_ref` for `email` and `google_ref` for `event`. Each is the field the phone or the Google sync captures a note once by, and every version the app shipped declares it. A type found by its identity is recorded on that start, so it stays the built-in whatever the user changes in it later. `dailynote` and `fleeting` are always the built-in. Any other type holding a built-in's name, such as an `event` type with unrelated fields made before `event` was a built-in, is the user's own: the server leaves it as it is, adds no shipped field to it, does not mark it built-in, lets it be deleted, and logs one line on each start saying it skipped the built-in because a type of the user's holds the name. Once the user deletes or renames it, the next start adds the built-in in its place.

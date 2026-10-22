@@ -429,6 +429,30 @@ handler "before_update" {
     const m = typeFromSchema(stored);
     expect(unplaced(m.templates[0]!, m.fields)).toEqual(["place"]);
   });
+
+  it("writes the list page settings it holds last, and no block when none is set (lists L1)", () => {
+    expect(typeWcl(typeFromSchema(stored))).not.toContain("list_page");
+    const m = typeFromSchema({ ...stored, list_page: { view: "details", sort: "estimate desc", page_size: 25 } });
+    expect(m.listPage).toEqual({ view: "details", sortField: "estimate", sortDir: "desc", pageSize: "25" });
+    expect(typeWcl(m).endsWith(`
+list_page {
+  view = "details"
+  sort = "estimate desc"
+  page_size = 25
+}
+`)).toBe(true);
+    // The sort follows a renamed field; a removed one is a problem.
+    m.fields[0]!.name = "hours";
+    expect(typeWcl(m)).toContain('sort = "hours desc"');
+    expect(problems(m)).toEqual([]);
+    m.fields.splice(0, 1);
+    expect(problems(m)).toEqual(["List page: it sorts by estimate, which the type no longer has."]);
+    m.listPage.sortField = "updated";
+    m.listPage.pageSize = "5";
+    expect(problems(m)).toEqual(["List page: the page size must be a whole number from 10 to 500."]);
+    m.listPage = { view: "", sortField: "", sortDir: "desc", pageSize: "" };
+    expect(typeWcl(m)).not.toContain("list_page");
+  });
 });
 
 describe("taxonomy model", () => {

@@ -39,8 +39,9 @@ pub use note::{NoteLookup, NoteReport};
 pub use queryviews::{FieldRename, VIEW_FIELD_ITEMS, query_view_issues, reads_type};
 pub use taxonomy::{Taxonomy, Term};
 pub use types::{
-    Accept, EVENTS, FieldDef, FieldKind, Handler, OnDelete, RESERVED_FIELDS, RangeOf, Reference,
-    Relation, Scalar, Tab, TabItem, Template, TypeDef, is_image_filename,
+    Accept, EVENTS, FieldDef, FieldKind, Handler, LIST_PAGE_SIZE_MAX, LIST_PAGE_SIZE_MIN,
+    LIST_PAGE_VIEWS, ListPage, OnDelete, RESERVED_FIELDS, RangeOf, Reference, Relation, Scalar,
+    Tab, TabItem, Template, TypeDef, is_image_filename,
 };
 
 /// How much an [`Issue`] matters. An error makes the file invalid. A warning does not: it reports

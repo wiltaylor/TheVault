@@ -80,10 +80,10 @@ test("a message's image attachment shows as a picture on its page and its card; 
   // Every attachment, the picture too, stays in the field's chips; only the picture is drawn.
   await expect(activePane(page).getByTestId("field-attachments").locator(".chip")).toHaveCount(2);
 
-  // The type page's card shows it too.
+  // The type page shows it too, in the details view the message type opens in (lists L5).
   await page.goto("/types/message");
   await activePane(page).getByRole("searchbox", { name: "Search messages" }).fill(tag);
-  const found = activePane(page).getByTestId("note-card").filter({ hasText: tag });
+  const found = activePane(page).getByTestId("type-detail").filter({ hasText: tag });
   await expect(found).toHaveCount(1);
   const cover = found.getByRole("img", { name: "Picture sent with the message" });
   await expect(cover).toHaveCount(1);

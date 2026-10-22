@@ -116,7 +116,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "0001_person_emails",
             "0002_person_labels",
             "0003_event_google_handler",
-            "0004_remove_google_sync"
+            "0004_remove_google_sync",
+            "0005_list_page_defaults"
         ]
     );
     let fields: Vec<&str> = done
@@ -454,7 +455,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
             "0001_person_emails",
             "0002_person_labels",
             "0003_event_google_handler",
-            "0004_remove_google_sync"
+            "0004_remove_google_sync",
+            "0005_list_page_defaults"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
@@ -630,7 +632,8 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
                 "0001_person_emails",
                 "0002_person_labels",
                 "0003_event_google_handler",
-                "0004_remove_google_sync"
+                "0004_remove_google_sync",
+                "0005_list_page_defaults"
             ],
             "{name}"
         );
@@ -761,17 +764,19 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
     let mut added = done.types_added.clone();
     added.sort();
     assert_eq!(added, GOOGLE_TYPES);
-    // Steps 0002 to 0004 are the ones 0.1.6 had not run; 0003 and 0004 find no event type yet. The seeding is then one commit, with no field
-    // added to a new type and no note edited.
+    // Steps 0002 to 0005 are the ones 0.1.6 had not run; 0003 and 0004 find no event type yet,
+    // and 0005 gives the message type 0.1.6 had its `list_page` block, in a commit of its own.
+    // The seeding is then one commit, with no field added to a new type and no note edited.
     assert_eq!(
         done.steps,
         [
             "0002_person_labels",
             "0003_event_google_handler",
-            "0004_remove_google_sync"
+            "0004_remove_google_sync",
+            "0005_list_page_defaults"
         ]
     );
-    assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 2);
+    assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 3);
     // The message type 0.1.6 had gains only `processed`.
     assert!(
         done.fields_added
@@ -1207,7 +1212,10 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
         .unwrap();
 
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
-    assert_eq!(done.steps, ["0004_remove_google_sync"]);
+    assert_eq!(
+        done.steps,
+        ["0004_remove_google_sync", "0005_list_page_defaults"]
+    );
 
     assert_eq!(
         secret_json(&w, "google_settings"),
@@ -1291,7 +1299,10 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_ke
     let w = open_with(root, None);
 
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
-    assert_eq!(done.steps, ["0004_remove_google_sync"]);
+    assert_eq!(
+        done.steps,
+        ["0004_remove_google_sync", "0005_list_page_defaults"]
+    );
     assert!(w.schema().type_def("google_sync").is_none());
     assert!(read(root, "types/google_sync.wcl").is_none());
     assert!(w.state().list_secrets().unwrap().is_empty());
@@ -1314,7 +1325,7 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
     {
         let w = open_with(root, None);
         let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
-        assert!(done.steps.is_empty(), "{:?}", done.steps);
+        assert_eq!(done.steps, ["0005_list_page_defaults"]);
         assert!(w.schema().type_def("google_sync").is_some());
         assert_eq!(read(root, &note_path).unwrap(), note);
         assert!(
@@ -1408,7 +1419,8 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
         ]
     );
     // The type is the shipped one, its card included: `processed` sits where the shipped card
-    // puts it.
+    // puts it. The `list_page` block comes with step `0005_list_page_defaults`, which this vault
+    // ran on its first start, before the old type files were written over the new ones.
     for name in ["email", "message"] {
         let path = format!("types/{name}.wcl");
         let source = if name == "email" {
@@ -1418,7 +1430,7 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
         };
         assert_eq!(
             read(root, &path).unwrap(),
-            store::canonical(source, &path).unwrap(),
+            without_list_page(&store::canonical(source, &path).unwrap()),
             "{name}"
         );
     }
@@ -1735,4 +1747,164 @@ fn a_google_sync_type_of_the_users_is_not_removed_by_step_0004() {
     assert!(w.schema().type_def("google_sync").is_some());
     assert_eq!(read(root, &note_path).unwrap(), note_before);
     assert!(w.state().list_secrets().unwrap().is_empty());
+}
+
+/// Type file `text`, canonical, without its `list_page` block, which the shipped files put last.
+fn without_list_page(text: &str) -> String {
+    match text.find("\nlist_page {") {
+        Some(at) => format!("{}\n", text[..at].trim_end()),
+        None => text.to_owned(),
+    }
+}
+
+/// The `list_page` block of canonical type file `text`, as the file writes it.
+fn list_page_block(text: &str) -> String {
+    let at = text.find("\nlist_page {").expect("a list_page block");
+    text[at..].trim().to_owned()
+}
+
+/// Run step `0005_list_page_defaults` again under a new id, as a vault that has not run it yet
+/// would on its next start.
+fn run_list_page_step(w: &Writer) -> Vec<String> {
+    let step = writer::UPGRADE_STEPS
+        .iter()
+        .find(|s| s.id == "0005_list_page_defaults")
+        .unwrap();
+    w.run_upgrade_steps(&[UpgradeStep {
+        id: "test_0005_list_page_defaults",
+        run: step.run,
+    }])
+    .unwrap()
+}
+
+#[test]
+fn a_new_vaults_email_and_message_types_open_in_details_by_sent_date_fifty_a_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let w = open(root);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let schema = w.schema();
+    for name in ["email", "message"] {
+        let lp = schema.type_def(name).unwrap().list_page.clone().unwrap();
+        assert_eq!(lp.view.as_deref(), Some("details"), "{name}");
+        assert_eq!(lp.sort, Some(("sent".to_owned(), true)), "{name}");
+        assert_eq!(lp.page_size, Some(50), "{name}");
+    }
+    // The other built-in types keep the defaults: no block.
+    assert!(schema.type_def("person").unwrap().list_page.is_none());
+}
+
+#[test]
+fn an_edited_email_or_message_type_gains_the_list_page_block_and_keeps_the_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    // As the user's vault has them: types from before `list_page`, each with a slot of the
+    // user's added to its card, after the card's last slot.
+    let mut edited = Vec::new();
+    for (name, last, slot) in [
+        ("email", "    slot \"snippet\"\n", "    slot \"labels\"\n"),
+        (
+            "message",
+            "    slot \"processed\"\n",
+            "    slot \"channel\"\n",
+        ),
+    ] {
+        let path = format!("types/{name}.wcl");
+        let old = without_list_page(&read(root, &path).unwrap());
+        let at = old.rfind(last).unwrap() + last.len();
+        let text = format!("{}{slot}{}", &old[..at], &old[at..]);
+        std::fs::write(root.join(&path), &text).unwrap();
+        edited.push((name, path, text));
+    }
+    let w = open(root);
+    let id = w
+        .create(
+            "email",
+            &writer::Input::Json(json!({ "fields": { "title": "Hello" } })),
+            &author(),
+        )
+        .unwrap()
+        .id;
+    let note_path = format!("notes/email/{id}.wcl");
+    let note_before = read(root, &note_path).unwrap();
+    assert!(w.schema().type_def("email").unwrap().list_page.is_none());
+
+    assert_eq!(run_list_page_step(&w), ["test_0005_list_page_defaults"]);
+
+    for (name, path, text) in &edited {
+        let source = if *name == "email" {
+            writer::DEFAULT_EMAIL_TYPE
+        } else {
+            writer::DEFAULT_MESSAGE_TYPE
+        };
+        let shipped = store::canonical(source, path).unwrap();
+        assert_eq!(
+            read(root, path).unwrap(),
+            format!("{text}\n{}\n", list_page_block(&shipped)),
+            "{name}"
+        );
+        let schema = w.schema();
+        let ty = schema.type_def(name).unwrap();
+        let lp = ty.list_page.clone().unwrap();
+        assert_eq!(lp.view.as_deref(), Some("details"), "{name}");
+        assert_eq!(lp.sort, Some(("sent".to_owned(), true)), "{name}");
+        assert_eq!(lp.page_size, Some(50), "{name}");
+        let card = ty.template("card").unwrap();
+        assert_eq!(
+            card.tabs[0].items.len(),
+            schema::TypeDef::parse(name, &shipped)
+                .unwrap()
+                .template("card")
+                .unwrap()
+                .tabs[0]
+                .items
+                .len()
+                + 1,
+            "{name}: the user's slot is kept"
+        );
+    }
+    assert_eq!(read(root, &note_path).unwrap(), note_before);
+
+    // The next start's seeding changes nothing more in either file.
+    let before: Vec<String> = edited
+        .iter()
+        .map(|(_, p, _)| read(root, p).unwrap())
+        .collect();
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let after: Vec<String> = edited
+        .iter()
+        .map(|(_, p, _)| read(root, p).unwrap())
+        .collect();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn a_type_that_already_has_a_list_page_block_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let path = "types/email.wcl";
+    let mine = format!(
+        "{}\nlist_page {{\n  view = \"list\"\n}}\n",
+        without_list_page(&read(root, path).unwrap())
+    );
+    std::fs::write(root.join(path), &mine).unwrap();
+    let w = open(root);
+    let before = generation(root);
+
+    run_list_page_step(&w);
+
+    assert_eq!(read(root, path).unwrap(), mine);
+    let lp = w
+        .schema()
+        .type_def("email")
+        .unwrap()
+        .list_page
+        .clone()
+        .unwrap();
+    assert_eq!(lp.view.as_deref(), Some("list"));
+    assert_eq!(lp.sort, None);
+    // The message type already had the shipped block, so the step made no commit at all.
+    assert_eq!(generation(root), before);
 }

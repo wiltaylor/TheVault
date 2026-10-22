@@ -116,3 +116,9 @@ template card {
     slot "processed"
   }
 }
+
+list_page {
+  view      = "details"
+  sort      = "sent desc"
+  page_size = 50
+}

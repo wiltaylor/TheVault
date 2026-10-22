@@ -40,6 +40,10 @@ template card {
     slot "pages"
   }
 }
+
+list_page {
+  sort = "title asc"
+}
 `;
 
 async function putType(admin: APIRequestContext, name: string, wcl: string) {
@@ -90,7 +94,7 @@ test("a type's notes show as cards by default, a remembered List view per type, 
   await expect(views.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
   await expect(cards).toHaveCount(0);
   const table = pane.getByTestId("note-table");
-  await expect(table.getByRole("columnheader")).toHaveText(["Title", "Author", "Pages", "Updated"]);
+  await expect(table.getByRole("columnheader")).toHaveText(["Title↑", "Author", "Pages", "Updated"]);
   const rows = pane.getByTestId("note-row");
   await expect(rows).toHaveCount(3);
   await table.getByRole("button", { name: "Pages" }).click();
@@ -133,31 +137,104 @@ test("a type's notes show as cards by default, a remembered List view per type, 
   await expect(page.getByLabel("Title", { exact: true })).toHaveText("Emma");
 });
 
-test("a type with more than 200 notes lists none until a search narrows it", async ({ page, admin }) => {
+test("a big type lists a page at a time, and a search narrows the same pages (lists L2)", async ({ page, admin }) => {
   const name = `many_${token()}`;
   await putType(admin, name, BOOK_TYPE.replace('"Books"', '"Many books"'));
   await seed(
     admin,
     name,
-    Array.from({ length: 201 }, (_, i) => ({ title: `Volume ${String(i).padStart(3, "0")}`, pages: i })),
+    Array.from({ length: 120 }, (_, i) => ({ title: `Volume ${String(i).padStart(3, "0")}`, pages: i })),
   );
 
   await logIn(page, `/types/${name}`);
   const pane = activePane(page);
-  await expect(pane.getByTestId("type-list-status")).toHaveText("201 notes. Search to find one.");
-  await expect(pane.getByTestId("note-card")).toHaveCount(0);
-  await expect(pane.getByTestId("note-row")).toHaveCount(0);
+  const status = pane.getByTestId("type-list-status");
+  const titles = pane.getByTestId("note-card").getByTestId("query-title");
+  const pager = pane.getByRole("navigation", { name: "Pages" });
+  await expect(status).toHaveText("1–50 of 120");
+  await expect(titles).toHaveCount(50);
+  await expect(titles.first()).toHaveText("Volume 000");
+  await expect(pager.getByRole("button", { name: "Previous" })).toBeDisabled();
 
+  await pager.getByRole("button", { name: "Next" }).click();
+  await expect(status).toHaveText("51–100 of 120");
+  await expect(titles.first()).toHaveText("Volume 050");
+  await pager.getByRole("button", { name: "Next" }).click();
+  await expect(status).toHaveText("101–120 of 120");
+  await expect(titles).toHaveCount(20);
+  await expect(pager.getByRole("button", { name: "Next" })).toBeDisabled();
+  await pager.getByRole("button", { name: "Previous" }).click();
+  await expect(status).toHaveText("51–100 of 120");
+  await pager.getByRole("button", { name: "First" }).click();
+  await expect(status).toHaveText("1–50 of 120");
+  await expect(titles.first()).toHaveText("Volume 000");
+
+  // A search starts again at page 1 and pages the same way.
+  await pager.getByRole("button", { name: "Next" }).click();
+  await expect(status).toHaveText("51–100 of 120");
   const search = pane.getByRole("searchbox", { name: "Search many books" });
   await search.fill("042");
-  await expect(pane.getByTestId("note-card").getByTestId("query-title")).toHaveText(["Volume 042"]);
-
-  // A search matching more than the most a list shows says so.
+  await expect(titles).toHaveText(["Volume 042"]);
+  await expect(status).toHaveText("1 match");
   await search.fill("Volume");
-  await expect(pane.getByTestId("type-list-status")).toContainText("Showing the first 200 of 201 matches");
-  await expect(pane.getByTestId("note-card")).toHaveCount(200);
+  await expect(status).toHaveText("1–50 of 120 matches");
+  await expect(titles).toHaveCount(50);
 
   await search.press("Escape");
-  await expect(pane.getByTestId("type-list-status")).toHaveText("201 notes. Search to find one.");
+  await expect(status).toHaveText("1–50 of 120");
+});
+
+test("the email type opens in the details view, newest sent first, 50 to a page (lists L5)", async ({ page, admin }) => {
+  const t = token();
+  // Sent dates after any other email in the shared vault, a second apart, newest first.
+  const base = Date.now() + 100 * 365 * 86_400_000;
+  const sent = (i: number) => new Date(base - i * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  // Created oldest first, so neither the creation order nor the titles give the sent order.
+  await seed(
+    admin,
+    "email",
+    Array.from({ length: 60 }, (_, k) => 59 - k).map((i) => ({
+      title: `Mail ${t} ${String((i * 37) % 60).padStart(2, "0")}`,
+      sent: sent(i),
+      snippet: `Snippet ${i}`,
+    })),
+  );
+  const title = (i: number) => `Mail ${t} ${String((i * 37) % 60).padStart(2, "0")}`;
+
+  await logIn(page, "/types/email");
+  const pane = activePane(page);
+  await expect(pane.getByRole("heading", { name: "Emails", level: 1 })).toBeVisible();
+  const views = pane.getByRole("group", { name: "View" });
+  await expect(views.getByRole("button", { name: "Details" })).toHaveAttribute("aria-pressed", "true");
+  const details = pane.getByTestId("type-detail");
+  await expect(details).toHaveCount(50);
   await expect(pane.getByTestId("note-card")).toHaveCount(0);
+  const titles = details.getByTestId("query-title");
+  await expect(titles.nth(0)).toHaveText(title(0));
+  await expect(titles.nth(1)).toHaveText(title(1));
+  await expect(titles.nth(49)).toHaveText(title(49));
+  // Each note shows its default template: the Email tab with its Sent field.
+  await expect(details.first()).toContainText("Sent");
+  await expect(pane.getByTestId("type-list-status")).toContainText(/^1–50 of /);
+
+  const pager = pane.getByRole("navigation", { name: "Pages" });
+  await pager.getByRole("button", { name: "Next" }).click();
+  await expect(pane.getByTestId("type-list-status")).toContainText(/^51–/);
+  await expect(titles.nth(0)).toHaveText(title(50));
+  await pager.getByRole("button", { name: "Previous" }).click();
+  await expect(titles.nth(0)).toHaveText(title(0));
+
+  // The List view sorts by Sent, newest first, until a header changes it.
+  await views.getByRole("button", { name: "List" }).click();
+  const table = pane.getByTestId("note-table");
+  await expect(table.getByRole("columnheader", { name: "Sent", exact: true })).toHaveAttribute("aria-sort", "descending");
+  await expect(pane.getByTestId("note-row").first()).toContainText(title(0));
+  await table.getByRole("button", { name: "Sent", exact: true }).click();
+  await expect(table.getByRole("columnheader", { name: "Sent", exact: true })).toHaveAttribute("aria-sort", "ascending");
+  await expect(pane.getByTestId("note-row").first()).not.toContainText(title(0));
+
+  // Reset to type default brings back the details view by sent date.
+  await pane.getByRole("button", { name: "Reset to type default" }).click();
+  await expect(views.getByRole("button", { name: "Details" })).toHaveAttribute("aria-pressed", "true");
+  await expect(titles.nth(0)).toHaveText(title(0));
 });

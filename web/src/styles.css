@@ -7817,6 +7817,29 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   margin: 1rem 0;
 }
 
+.type-list-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.type-list-statusbar .type-list-status {
+  margin: 0;
+}
+
+.type-details {
+  padding-bottom: 1rem;
+}
+
+.list-page-sort {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .type-note-grid {
   list-style: none;
   margin: 0;

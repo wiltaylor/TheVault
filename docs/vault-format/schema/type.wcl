@@ -1,4 +1,4 @@
-# Schema for types/<type>.wcl: a type's fields, templates and handlers.
+# Schema for types/<type>.wcl: a type's fields, templates, handlers and list page settings.
 # Check a type file with common.wcl, this file and the type file together.
 # See docs/vault-format.md.
 
@@ -65,6 +65,12 @@ type Handler {
   secrets:       list<utf8>?
 }
 
+@block("list_page") type ListPage {
+  view:                       utf8?
+  sort:                       utf8?
+  @min(10) @max(500) page_size: i64?
+}
+
 @document type TypeFile {
   label:       utf8
   plural:      utf8?
@@ -74,4 +80,5 @@ type Handler {
   @children("field")    fields:    list<FieldDef>
   @children("template", min = 1) templates: list<Template>
   @children("handler")  handlers:  list<Handler>
+  @children("list_page", max = 1) list_pages: list<ListPage>
 }
