@@ -3,7 +3,7 @@ id: '140'
 title: Android in-app update download keeps aborting (client resets the connection
   mid-download), so a phone gated on a newer server never updates
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -16,3 +16,7 @@ Seen 2026-10-21 on severus (vault.wil.dev, 0.1.12) behind Caddy on the LAN: the 
 ### 2026-10-22T01:46:56Z — wil
 
 Status set to todo.
+
+### 2026-10-22T01:47:29Z — wil
+
+Claimed.

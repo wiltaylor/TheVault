@@ -3,7 +3,7 @@ id: '142'
 title: Large assets are still held whole in memory on the server and in the Android
   share path
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -16,3 +16,7 @@ Found while fixing ticket 141. The device now streams asset uploads from disk an
 ### 2026-10-22T01:46:56Z — wil
 
 Status set to todo.
+
+### 2026-10-22T01:47:29Z — wil
+
+Claimed.

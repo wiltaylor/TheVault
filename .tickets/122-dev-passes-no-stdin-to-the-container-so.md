@@ -3,7 +3,7 @@ id: '122'
 title: ./dev passes no stdin to the container, so piping into a command run through
   it reads nothing
 blocked_by: []
-status: todo
+status: claimed
 verified: unknown
 ---
 
@@ -16,3 +16,7 @@ Found during ticket 118. `echo hello | ./dev cat` prints nothing: ./dev adds -i 
 ### 2026-10-22T01:46:56Z — wil
 
 Status set to todo.
+
+### 2026-10-22T01:47:15Z — wil
+
+Claimed.

@@ -4,11 +4,14 @@ title: docs/vault-format/schema/type.wcl (the structural schema check.sh uses) l
   the hidden, labels and accept field items and refuses unknown attributes, so it
   no longer matches the readers' rule from ticket 100
 blocked_by: []
-status: parked
+status: todo
 verified: unknown
-park_cause: needs-triage
 ---
 
 # docs/vault-format/schema/type.wcl (the structural schema check.sh uses) lacks the hidden, labels and accept field items and refuses unknown attributes, so it no longer matches the readers' rule from ticket 100
 
 ## Worklog
+
+### 2026-10-22T02:09:27Z — wil
+
+Status set to todo.
