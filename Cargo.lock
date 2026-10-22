@@ -550,6 +550,7 @@ dependencies = [
  "serde_json",
  "state",
  "store",
+ "sync",
  "tempfile",
  "testkit",
  "writer",

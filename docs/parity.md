@@ -295,6 +295,7 @@ The CLI adds no behaviour of its own except these, as SPEC.md allows (D25, D28, 
 | `vault reindex` | Rebuilds the index from the files and reports invalid files (D28) |
 | `vault backup [--include-key]` | Writes one archive of the vault files and `state.db` (D25, OQ-S2) |
 | `vault restore-backup` | Unpacks a backup into a new folder |
+| `vault version-compare` | Compares two versions in semver order, for the image's pre-upgrade backup (D25) |
 | `vault clients publish` | Copies app builds into a server's clients folder and rewrites its `manifest.json` (see `docs/clients.md`) |
 
 ## Gaps filed

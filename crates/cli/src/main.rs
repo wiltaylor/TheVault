@@ -317,6 +317,9 @@ enum Command {
         /// The folder to restore into. It must be missing or empty.
         dir: PathBuf,
     },
+    /// Compare two versions as semver does, a pre-release before its release: whether a is
+    /// older than, the same as, or newer than b.
+    VersionCompare { a: String, b: String },
 }
 
 #[derive(Args)]
@@ -759,6 +762,7 @@ fn run(cli: Cli) -> Result<Value, Fail> {
         Command::Reindex => local::reindex(vault),
         Command::Backup { out, include_key } => backup::backup(vault, &out, include_key),
         Command::RestoreBackup { archive, dir } => backup::restore(&archive, &dir),
+        Command::VersionCompare { a, b } => version_compare(&a, &b),
         Command::Clients(Clients::Publish {
             dir,
             version,
@@ -1122,7 +1126,8 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
         | Command::Passwd { .. }
         | Command::Reindex
         | Command::Backup { .. }
-        | Command::RestoreBackup { .. } => unreachable!("local commands are handled in run"),
+        | Command::RestoreBackup { .. }
+        | Command::VersionCompare { .. } => unreachable!("local commands are handled in run"),
     }
 }
 
@@ -1157,6 +1162,24 @@ fn publish_clients(
 const SKILL: &str = include_str!("../skill/thevault/SKILL.md");
 
 /// Every leaf command, as the words that name it, with its one-line description.
+/// `vault version-compare`: the image's entrypoint asks it whether the vault last ran an older
+/// version, so it backs up before an upgrade (D25, ticket 149).
+fn version_compare(a: &str, b: &str) -> Result<Value, Fail> {
+    use std::cmp::Ordering;
+    let order = sync::gate::compare(a, b).ok_or_else(|| {
+        Fail::new(
+            "version",
+            format!("{a:?} and {b:?} must both be versions such as 0.1.13 or 0.1.13-alpha.4"),
+        )
+    })?;
+    let order = match order {
+        Ordering::Less => "older",
+        Ordering::Equal => "same",
+        Ordering::Greater => "newer",
+    };
+    Ok(json!({ "a": a, "b": b, "order": order }))
+}
+
 fn commands() -> Value {
     fn walk(cmd: &clap::Command, prefix: &str, out: &mut Vec<Value>) {
         for sub in cmd.get_subcommands().filter(|c| c.get_name() != "help") {

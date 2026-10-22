@@ -433,6 +433,45 @@ fn a_restored_backup_serves_the_same_notes_and_history() {
 }
 
 #[test]
+fn backup_creates_the_folder_the_archive_goes_in() {
+    let vault = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let vault_dir = tmp_path(&dirs, "v");
+    vault.ok(&["init", &vault_dir, "--password-stdin"], "pw\n");
+    let archive = dirs.path().join("backups/nested/m.sqlar");
+    let made = vault.ok(
+        &["backup", archive.to_str().unwrap(), "--vault", &vault_dir],
+        "",
+    );
+    assert_eq!(made["archive"], archive.to_str().unwrap());
+    assert!(archive.is_file());
+    assert!(!archive.with_extension("partial").exists());
+}
+
+#[test]
+fn version_compare_sorts_a_pre_release_before_its_release() {
+    let vault = Vault::offline();
+    for (a, b, order) in [
+        ("0.1.13-alpha.4", "0.1.13", "older"),
+        ("0.1.13", "0.1.14-alpha.1", "older"),
+        ("0.1.13", "0.1.13-alpha.4", "newer"),
+        ("0.1.14", "0.1.13", "newer"),
+        ("0.1.13-alpha.2", "0.1.13-alpha.10", "older"),
+        ("0.1.13", "0.1.13", "same"),
+        ("v0.1.13+7", "0.1.13", "same"),
+    ] {
+        let out = vault.ok(&["version-compare", a, b], "");
+        assert_eq!(out, json!({ "a": a, "b": b, "order": order }), "{a} {b}");
+    }
+    let bad = vault.fails(&["version-compare", "not a version", "0.1.13"], "");
+    assert_eq!(bad["error"], "version");
+    assert_eq!(
+        vault.fails(&["version-compare", "0.1.13", "1.x"], "")["error"],
+        "version"
+    );
+}
+
+#[test]
 fn backup_with_include_key_carries_the_key_to_a_new_machine() {
     let here = Vault::offline();
     let dirs = TempDir::new().unwrap();
@@ -1268,6 +1307,7 @@ fn every_command_prints_json() {
     run("init", &[&dir, "--password-stdin"], "pw\n");
     run("passwd", &["--vault", &dir, "--password-stdin"], "pw2\n");
     run("reindex", &["--vault", &dir], "");
+    run("version-compare", &["0.1.13-alpha.4", "0.1.13"], "");
     let archive = tmp_path(&scratch, "local.backup");
     run("backup", &[&archive, "--vault", &dir], "");
     run(

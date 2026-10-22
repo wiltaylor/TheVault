@@ -19,6 +19,7 @@ rustix.workspace = true
 serde_json.workspace = true
 state.workspace = true
 store.workspace = true
+sync.workspace = true
 tempfile.workspace = true
 writer.workspace = true
 

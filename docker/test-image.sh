@@ -5,8 +5,8 @@
 #
 # Builds the image without clients, and with them when clients-dir (a folder `just
 # publish-clients` wrote, only read) is given, then checks the first-run refusal, a first run with
-# VAULT_PASSWORD, the backup before an upgrade, a vault made outside the container, and the client
-# downloads. Every container publishes to a port Docker picks on 127.0.0.1, every vault lives in a
+# VAULT_PASSWORD, the backup before an upgrade in semver order, a vault made outside the
+# container, and the client downloads. Every container publishes to a port Docker picks on 127.0.0.1, every vault lives in a
 # fresh temporary folder, and the containers and images it made are removed when it ends.
 # KEEP_IMAGES=1 keeps the images.
 set -euo pipefail
@@ -216,7 +216,39 @@ echo 99.0.0 > "$tmp/main/data/.vault/server-version"
 port=$(start newer "$image_plain" main)
 check "a vault from a newer version starts" wait_health "$port"
 check "a vault from a newer version gets no backup" test "$(backups main | wc -l)" -eq 5
+check "a vault from a newer version records $version (got $(cat "$tmp/main/data/.vault/server-version"))" \
+  test "$(cat "$tmp/main/data/.vault/server-version")" = "$version"
 stop newer
+
+# Versions compare as semver, a pre-release before its release (ticket 149): the image's version
+# is set by mounting a VERSION file over the one baked in.
+dirs semver
+# Start container $run-$1 on the semver set with the image reporting version $2, wait for it, stop it.
+semver_start() {
+  printf '%s\n' "$2" > "$tmp/semver/VERSION-$2"
+  local port
+  port=$(start "$1" "$image_plain" semver -v "$tmp/semver/VERSION-$2:/opt/thevault/VERSION:ro")
+  check "the $2 start answers" wait_health "$port"
+  stop "$1"
+  check "the $2 start records $2 (got $(cat "$tmp/semver/data/.vault/server-version"))" \
+    test "$(cat "$tmp/semver/data/.vault/server-version")" = "$2"
+}
+semver_backups() {
+  backups semver | wc -l
+}
+semver_start s-alpha 0.1.13-alpha.4
+check "a first run on 0.1.13-alpha.4 writes no backup" test "$(semver_backups)" -eq 0
+semver_start s-stable 0.1.13
+check "0.1.13-alpha.4 to 0.1.13 backs up" test "$(semver_backups)" -eq 1
+check "the backup is named 0.1.13-alpha.4-to-0.1.13-<time>.sqlar" \
+  sh -c "ls '$tmp/semver/data/backups' | grep -qE '^0\.1\.13-alpha\.4-to-0\.1\.13-[0-9]{8}T[0-9]{6}Z\.sqlar$'"
+semver_start s-next 0.1.14-alpha.1
+check "0.1.13 to 0.1.14-alpha.1 backs up" test "$(semver_backups)" -eq 2
+semver_start s-down 0.1.13
+check "0.1.14-alpha.1 to 0.1.13 is a downgrade and writes no backup" test "$(semver_backups)" -eq 2
+check "the downgrade is logged" sh -c "docker logs '$run-s-down' 2>&1 | grep -q 'newer than this image'"
+semver_start s-same 0.1.13
+check "the same version again writes no backup" test "$(semver_backups)" -eq 2
 
 # 5. A vault made by `vault init` outside the container, its key elsewhere, mounted in.
 dirs outside

@@ -4,9 +4,10 @@
 # 1. /data holding no vault: create one with `vault init`, the password from VAULT_PASSWORD_FILE
 #    or VAULT_PASSWORD, the secret key at VAULT_SECRET_KEY_FILE (OQ-S2, OQ-S3). Neither set is a
 #    one-line refusal. A vault made outside the container and mounted in is never re-created.
-# 2. The vault last ran with an older version than this image's, or with one not recorded: write
-#    `vault backup` to /data/backups/<old>-to-<new>-<time>.sqlar first, keeping the newest five.
-#    The backup leaves the secret key out, as `vault backup` does by default.
+# 2. The vault last ran with an older version than this image's, by semver order as `vault
+#    version-compare` gives it (a pre-release before its release), or with one not recorded:
+#    write `vault backup` to /data/backups/<old>-to-<new>-<time>.sqlar first, keeping the newest
+#    five. The backup leaves the secret key out, as `vault backup` does by default (D25).
 # 3. Record this image's version in /data/.vault/server-version and exec vault-server on
 #    0.0.0.0:8080, serving the web client and the clients folder VAULT_CLIENTS_DIR names.
 #
@@ -66,26 +67,39 @@ fi
 
 last=$(cat "$record" 2> /dev/null || true)
 if [ "$last" != "$version" ]; then
-  newest=$(printf '%s\n%s\n' "$last" "$version" | sort -V | tail -n 1)
-  if [ -n "$last" ] && [ "$newest" != "$version" ]; then
-    log "the vault last ran with $last, newer than this image's $version; starting without a backup"
-  else
-    mkdir -p "$backups"
-    out="$backups/${last:-unknown}-to-$version-$(date -u +%Y%m%dT%H%M%SZ).sqlar"
-    if ! result=$(vault --vault "$data" backup "$out"); then
-      log "the backup before upgrading from ${last:-an unrecorded version} to $version failed; not starting"
-      printf '%s\n' "$result" >&2
-      exit 1
-    fi
-    log "backed up the vault before upgrading from ${last:-an unrecorded version} to $version: $out"
-    # The newest $keep upgrade backups stay; names hold no spaces.
-    # shellcheck disable=SC2012
-    ls -1t "$backups"/*-to-*.sqlar | tail -n +$((keep + 1)) | while read -r old; do
-      rm -f "$old"
-      log "removed the old backup $old"
-    done
-    printf '%s\n' "$version" > "$record"
+  # Semver order, a pre-release before its release, so 0.1.13-alpha.4 to 0.1.13 is an upgrade
+  # (ticket 149). Empty when nothing was recorded or the record is not a version.
+  order=
+  if [ -n "$last" ]; then
+    order=$(vault version-compare "$last" "$version" 2> /dev/null |
+      sed -n 's/^ *"order": *"\([a-z]*\)".*/\1/p') || order=
   fi
+  case $order in
+    newer)
+      log "the vault last ran with $last, newer than this image's $version; starting without a backup"
+      ;;
+    same) ;;
+    *)
+      # Older, unrecorded, or a record that is not a version: back up first.
+      if [ "$order" = older ]; then from=$last; else from=unknown; fi
+      out="$backups/$from-to-$version-$(date -u +%Y%m%dT%H%M%SZ).sqlar"
+      if ! result=$(vault --vault "$data" backup "$out"); then
+        log "the backup before upgrading from ${last:-an unrecorded version} to $version failed; not starting"
+        printf '%s\n' "$result" >&2
+        exit 1
+      fi
+      log "backed up the vault before upgrading from ${last:-an unrecorded version} to $version: $out"
+      # The newest $keep upgrade backups stay; names hold no spaces.
+      # shellcheck disable=SC2012
+      ls -1t "$backups"/*-to-*.sqlar | tail -n +$((keep + 1)) | while read -r old; do
+        rm -f "$old"
+        log "removed the old backup $old"
+      done
+      ;;
+  esac
+  # Every start records this image's version, after a downgrade too, so the next upgrade is
+  # measured from the version that last ran.
+  printf '%s\n' "$version" > "$record"
 fi
 
 exec vault-server --vault "$data" --web /opt/thevault/web --listen 0.0.0.0:8080 "$@"

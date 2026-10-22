@@ -49,6 +49,11 @@ pub fn backup(vault: &Path, out: &Path, include_key: bool) -> Result<Value, Fail
         ));
     }
 
+    // The archive's folder may not exist yet, as /data/backups on a fresh container (ticket 133).
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(io(parent))?;
+    }
+
     let scratch = tempfile::tempdir().map_err(Fail::from_display("io"))?;
     let state_copy = scratch.path().join("state.db");
     state

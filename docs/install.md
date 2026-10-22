@@ -164,7 +164,7 @@ If Settings > Integrations shows `https://oauth2.googleapis.com/token: could not
 Run a backup whenever you want a copy of the vault:
 
 ```sh
-docker compose exec thevault sh -c 'mkdir -p /data/backups && vault backup /data/backups/manual-$(date -u +%Y%m%dT%H%M%SZ).sqlar'
+docker compose exec thevault sh -c 'vault backup /data/backups/manual-$(date -u +%Y%m%dT%H%M%SZ).sqlar'
 ```
 
 The backup holds every vault file and `state.db` in one SQLite archive. Copy it off the volume to keep it somewhere else:

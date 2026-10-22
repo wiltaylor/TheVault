@@ -194,7 +194,7 @@ check "vault passwd changes the password" test "$(login "$base" "$password2")" =
 check "the old password stops working" test "$(login "$base" "$password")" = 401
 
 # The documented backup, copied out of the volume.
-dc exec -T thevault sh -c 'mkdir -p /data/backups && vault backup /data/backups/manual.sqlar' > "$tmp/backup.json" 2>&1
+dc exec -T thevault vault backup /data/backups/manual.sqlar > "$tmp/backup.json" 2>&1
 check "vault backup writes /data/backups/manual.sqlar" dc exec -T thevault test -s /data/backups/manual.sqlar
 dc cp thevault:/data/backups/manual.sqlar "$tmp/manual.sqlar" > /dev/null 2>&1
 check "docker compose cp copies the backup out" test -s "$tmp/manual.sqlar"
