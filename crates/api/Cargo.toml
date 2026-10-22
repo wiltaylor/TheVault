@@ -18,11 +18,12 @@ regex = "1"
 reqwest = { workspace = true, features = ["json"] }
 scheduler.workspace = true
 schema.workspace = true
+script-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 state.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
 vocab.workspace = true
 writer.workspace = true
 

@@ -444,3 +444,8 @@ pub fn preselect(provider: Provider, models: &[Model]) -> Option<&Model> {
         _ => None,
     }
 }
+
+/// The chat panel's system prompt (ai D14): fixed, versioned text, so it stays the same from one
+/// request to the next and the providers' prompt caching applies. The open note, when there is
+/// one, is added after it.
+pub const CHAT_PROMPT: &str = include_str!("chat_prompt.md");

@@ -46,8 +46,9 @@ const WRITE_PATHS: [&str; 8] = [
 ];
 
 /// Paths whose POST only reads: running a query and converting between query text and the
-/// builder's model send the query in the body but change nothing.
-const READ_POST_PATHS: [&str; 1] = ["/api/query"];
+/// builder's model send the query in the body but change nothing, and an AI chat turn only reads
+/// notes, its edits being proposals the user applies through the write routes (ai D15).
+const READ_POST_PATHS: [&str; 2] = ["/api/query", "/api/ai/chat"];
 
 /// Paths that need `admin` even to read, because they disclose or hand out credentials.
 const ADMIN_PATHS: [&str; 3] = ["/api/tokens", "/api/secrets", "/api/integrations"];
@@ -497,6 +498,7 @@ mod tests {
                 Some(Scope::Admin),
             ),
             (Method::GET, "/api/ai/models", Some(Scope::Read)),
+            (Method::POST, "/api/ai/chat", Some(Scope::Read)),
         ];
         for (method, path, want) in cases {
             assert_eq!(required_scope(&method, path), want, "{method} {path}");

@@ -12,8 +12,8 @@ export const MAX_WIDTH = 560;
 export const LEFT_DEFAULT = 240;
 export const RIGHT_DEFAULT = 320;
 
-/** The right sidebar's panels, one shown at a time. */
-export const PANELS = ["properties", "history"] as const;
+/** The right sidebar's panels, one shown at a time. `ai` shows only in the web app (ai D16). */
+export const PANELS = ["properties", "history", "ai"] as const;
 export type Panel = (typeof PANELS)[number];
 
 export type Side = "left" | "right";

@@ -24,6 +24,9 @@
 //! `/api/agent-codes` and the script `GET /agent/install.sh` serves, the one route outside `/api`
 //! (D11, D32).
 //!
+//! The chat panel talks to the user's AI provider through `/api/ai/chat`, a stream of the
+//! answer with the server running read-only note tools (ai D14, D15).
+//!
 //! Settings > Integrations > Google signs in with the user's own OAuth client under
 //! `/api/integrations/google` (google-sync D1, D18).
 //!
@@ -49,6 +52,7 @@
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
 mod agents;
+mod ai_chat;
 mod ai_settings;
 mod apps;
 mod assets;
@@ -216,6 +220,7 @@ fn build() -> Built {
         .delete("/api/pins/folders/{id}", pins::delete_folder)
         .post("/api/pins/move", pins::move_entry)
         .get("/api/events", events::stream)
+        .post("/api/ai/chat", ai_chat::chat)
         .get("/api/notifications", notifications::list)
         .post("/api/notifications", notifications::create)
         .delete("/api/notifications", notifications::clear_read)

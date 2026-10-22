@@ -283,6 +283,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Server-sent events: notification.created|read|dismissed|cleared, note.changed, device.command, device.settings, clients.updated",
     ),
     (
+        "POST",
+        "/api/ai/chat",
+        "One AI chat turn as server-sent events (text, tool, tool_result, proposal, usage, refusal, error, done); the server runs read-only note tools and never writes",
+    ),
+    (
         "GET",
         "/api/notifications",
         "Notifications, newest first (?unread=true, ?limit=, ?cursor=), with the unread count",

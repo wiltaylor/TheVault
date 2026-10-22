@@ -1,5 +1,7 @@
 import { Navigate, useLocation } from "@solidjs/router";
 import { For, type JSX, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { ChatPanel } from "../ai/ChatPanel";
+import { webApp } from "../ai/store";
 import { CaptureModal } from "../capture/CaptureModal";
 import { CommandPalette } from "../palette/CommandPalette";
 import { trackRecents } from "../palette/recents";
@@ -15,6 +17,7 @@ import {
   MAX_WIDTH,
   MIN_WIDTH,
   type Panel,
+  focusPanel,
   leftDrawer,
   noteOf,
   resizeSidebar,
@@ -138,7 +141,18 @@ function HideRight() {
 const PANEL_TABS: { panel: Panel; label: string }[] = [
   { panel: "properties", label: "Properties" },
   { panel: "history", label: "History" },
+  { panel: "ai", label: "AI" },
 ];
+
+/** Reactive: the panels this page offers. The AI panel is the web app's alone (ai D16). */
+function panelTabs() {
+  return webApp() ? PANEL_TABS : PANEL_TABS.filter((t) => t.panel !== "ai");
+}
+
+/** Whether `e` is Ctrl/Cmd+Shift+L, which opens the AI panel. */
+export function isAiKey(e: KeyboardEvent): boolean {
+  return (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === "KeyL";
+}
 
 /**
  * The right sidebar: context for the active pane. The graph of its note's links sits at the top;
@@ -172,7 +186,11 @@ function RightSidebar(props: { shown: boolean }) {
 function NoteSidebar(props: { shown: boolean }) {
   const pane = () => activePane(workspace());
   const source = () => noteOf(pane());
-  const panel = () => sidebars().right.panel;
+  // The AI panel, remembered from the web app, falls back to Properties in the apps.
+  const panel = (): Panel => {
+    const p = sidebars().right.panel;
+    return p === "ai" && !webApp() ? "properties" : p;
+  };
   // The History panel starts again for each pane and note it follows.
   const historyOf = createMemo(() => {
     const s = source();
@@ -182,8 +200,9 @@ function NoteSidebar(props: { shown: boolean }) {
   function onTabKey(e: KeyboardEvent) {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
-    const i = PANEL_TABS.findIndex((t) => t.panel === panel());
-    const next = PANEL_TABS[(i + (e.key === "ArrowRight" ? 1 : PANEL_TABS.length - 1)) % PANEL_TABS.length]!;
+    const tabs = panelTabs();
+    const i = tabs.findIndex((t) => t.panel === panel());
+    const next = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length]!;
     setPanel(next.panel);
     document.getElementById(`${next.panel}-tab`)?.focus();
   }
@@ -231,7 +250,7 @@ function NoteSidebar(props: { shown: boolean }) {
       </Show>
       <div class="sidebar-head right-head">
         <div class="panel-tabs" role="tablist" aria-label="Panels" onKeyDown={onTabKey}>
-          <For each={PANEL_TABS}>
+          <For each={panelTabs()}>
             {(t) => (
               <button
                 type="button"
@@ -266,6 +285,13 @@ function NoteSidebar(props: { shown: boolean }) {
             <Show when={historyOf()} keyed fallback={<p class="muted">Open a note to see its history.</p>}>
               {(h) => <HistoryPanel pane={h.pane} source={h.source} />}
             </Show>
+          </Show>
+        </aside>
+      </Show>
+      <Show when={panel() === "ai"}>
+        <aside id="ai-panel" class="side-panel ai-side" aria-label="AI" tabindex={-1}>
+          <Show when={props.shown}>
+            <ChatPanel noteId={() => source()?.noteId() ?? ""} />
           </Show>
         </aside>
       </Show>
@@ -318,6 +344,14 @@ export function Shell() {
     };
     document.addEventListener("keydown", onCaptureKey);
     onCleanup(() => document.removeEventListener("keydown", onCaptureKey));
+    // Ctrl/Cmd+Shift+L opens the AI panel, in the web app (ai D16).
+    const onAiKey = (e: KeyboardEvent) => {
+      if (!isAiKey(e) || e.defaultPrevented || !webApp()) return;
+      e.preventDefault();
+      focusPanel("ai");
+    };
+    document.addEventListener("keydown", onAiKey);
+    onCleanup(() => document.removeEventListener("keydown", onAiKey));
     // Ctrl/Cmd+K opens the command palette from anywhere, and closes it again.
     const onPaletteKey = (e: KeyboardEvent) => {
       if (!isPaletteKey(e) || e.defaultPrevented || captureOpen()) return;

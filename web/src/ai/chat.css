@@ -1,0 +1,196 @@
+/* The right sidebar's AI panel. */
+
+.ai-side {
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 100%;
+}
+
+.ai-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.ai-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.ai-picker select {
+  max-width: 11rem;
+}
+
+.ai-empty {
+  margin: 0;
+  font-size: 0.9em;
+}
+
+.ai-turns {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-question {
+  margin: 0;
+  margin-left: 1.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  white-space: pre-wrap;
+}
+
+.ai-md p,
+.ai-md ul,
+.ai-md ol,
+.ai-md blockquote,
+.ai-md pre {
+  margin: 0 0 0.45rem;
+}
+
+.ai-md ul,
+.ai-md ol {
+  padding-left: 1.2rem;
+}
+
+.ai-md pre {
+  overflow: auto;
+  padding: 0.4rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+
+.ai-md-h {
+  font-weight: 600;
+}
+
+.ai-md-h1 {
+  font-size: 1.15em;
+}
+
+.ai-step {
+  margin: 0 0 0.35rem;
+  font-size: 0.88em;
+}
+
+.ai-step summary {
+  cursor: pointer;
+}
+
+.ai-step ul {
+  margin: 0.2rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.ai-step-error summary {
+  color: var(--danger);
+}
+
+.ai-proposal {
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 8px;
+}
+
+.ai-proposal-head {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+}
+
+.ai-diff {
+  margin: 0 0 0.4rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.88em;
+}
+
+.ai-diff-name {
+  display: block;
+  color: var(--muted);
+}
+
+.ai-diff del,
+.ai-diff-lines del {
+  display: block;
+  background: color-mix(in srgb, #ef4444 16%, transparent);
+  text-decoration: none;
+}
+
+.ai-diff ins,
+.ai-diff-lines ins {
+  display: block;
+  background: color-mix(in srgb, #22c55e 16%, transparent);
+  text-decoration: none;
+}
+
+.ai-diff-lines {
+  margin: 0.15rem 0;
+  white-space: pre-wrap;
+  font-size: 0.95em;
+}
+
+.ai-diff-lines .ai-same {
+  display: block;
+  color: var(--muted);
+}
+
+.ai-proposal-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.ai-applied {
+  margin: 0;
+  color: var(--accent);
+}
+
+.ai-notice {
+  margin: 0 0 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.88em;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+
+.ai-notice-refusal,
+.ai-notice-error,
+.ai-error {
+  color: var(--danger);
+}
+
+.ai-form {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-top: 0.4rem;
+  background: var(--panel);
+}
+
+.ai-form textarea {
+  width: 100%;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.ai-form button {
+  align-self: flex-end;
+}

@@ -912,6 +912,94 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   return parsed as T;
 }
 
+/** One server-sent event: its `event` name and its `data`, parsed as JSON. */
+export interface StreamEvent {
+  event: string;
+  data: unknown;
+}
+
+/**
+ * A reader of server-sent event frames from text arriving in chunks: `feed` takes the next chunk
+ * and returns the events it completed. Comments (heartbeats) are skipped.
+ */
+export function sseParser(): { feed: (chunk: string) => StreamEvent[] } {
+  let buffer = "";
+  return {
+    feed(chunk: string) {
+      buffer += chunk.replace(/\r\n?/g, "\n");
+      const out: StreamEvent[] = [];
+      let end: number;
+      while ((end = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        let event = "message";
+        const data: string[] = [];
+        for (const line of frame.split("\n")) {
+          if (line.startsWith(":")) continue;
+          const colon = line.indexOf(":");
+          const field = colon < 0 ? line : line.slice(0, colon);
+          const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+          if (field === "event") event = value;
+          else if (field === "data") data.push(value);
+        }
+        if (data.length === 0) continue;
+        const text = data.join("\n");
+        let parsed: unknown = text;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          // Not JSON: hand over the text.
+        }
+        out.push({ event, data: parsed });
+      }
+      return out;
+    },
+  };
+}
+
+/**
+ * POST `body` to `path` and hand each server-sent event of the answer to `onEvent` as it
+ * arrives, reading the body with a stream reader (EventSource cannot POST). Resolves when the
+ * stream ends; aborting `signal` stops it. An answer that is not a stream throws an ApiError.
+ */
+export async function streamEvents(
+  path: string,
+  body: unknown,
+  onEvent: (e: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => "");
+    let parsed: unknown = null;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      parsed = { message: text };
+    }
+    if (res.status === 401) onUnauthorized();
+    throw new ApiError(res.status, parsed && typeof parsed === "object" ? (parsed as ApiError["body"]) : {});
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const parser = sseParser();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      for (const e of parser.feed(decoder.decode(value, { stream: true }))) onEvent(e);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 const enc = encodeURIComponent;
 
 export const api = {

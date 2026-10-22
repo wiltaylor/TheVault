@@ -834,6 +834,10 @@ vault task run invoice_sync
 
 A script reads and writes only the secrets that its task, or its `after_*` handler, lists in `secrets`. `secrets::get(name)` returns the value, and `secrets::set(name, value)` replaces it, which suits state a task keeps between runs, such as a sync cursor. The task read the secret when the run's `outcome` is `succeeded`. Keep a secret's value out of logs, notifications and notes. `vault secret delete <name>` deletes one.
 
+## The user's AI panel
+
+The web app has an AI panel, where the user's own AI provider (Settings > AI) answers questions about the vault with read-only note tools and proposes edits that the user applies. An applied edit is an ordinary write by the user, so a note can change between your read and your write: send its `version` as usual, and on a 409 `conflict` read it again. Scripts reach the same providers through the `ai` module, `ai::complete` and `ai::chat`, in `after_*` handlers and tasks, without listing the AI secrets or hosts.
+
 ## Setting up a vault
 
 Only when the user asks for a new vault. `init --starter` adds Task, Project, Person and Note types, a Status taxonomy, an open Tags taxonomy for the Note type's `tags`, a few example notes, and a dashboard note. `reindex` rebuilds the search index from the files and lists every file that fails validation; stop the server first.

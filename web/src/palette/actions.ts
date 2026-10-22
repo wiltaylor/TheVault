@@ -4,7 +4,7 @@
 import type { TypeDef } from "../api";
 import type { ActiveNote } from "../archive";
 import { openCapture } from "../capture/store";
-import { toggleSidebar } from "../sidebars";
+import { focusPanel, toggleSidebar } from "../sidebars";
 import { typeNavLabel } from "../sidebarTypes";
 import { toggleTheme } from "../theme";
 import * as M from "../workspace/model";
@@ -27,7 +27,8 @@ export type Glyph =
   | "split-down"
   | "sidebar-left"
   | "sidebar-right"
-  | "theme";
+  | "theme"
+  | "ai";
 
 export type ActionIcon = { glyph: Glyph } | { type: string | null };
 
@@ -106,9 +107,10 @@ export function noteActions(note: ActiveNote | null): Action[] {
 
 /**
  * The actions that do not depend on the vault's types. `phone` drops what a phone cannot do;
- * `androidApp` adds what only the Android app can do, on the phone it runs on.
+ * `androidApp` adds what only the Android app can do, on the phone it runs on, and `webApp` what
+ * only the web app can: the AI panel (ai D16).
  */
-export function generalActions(opts: { phone: boolean; dark: boolean; androidApp?: boolean }): Action[] {
+export function generalActions(opts: { phone: boolean; dark: boolean; androidApp?: boolean; webApp?: boolean }): Action[] {
   const pane = () => M.activePane(workspace());
   const out: Action[] = [
     {
@@ -127,6 +129,17 @@ export function generalActions(opts: { phone: boolean; dark: boolean; androidApp
     { id: "archive", section: "Go to", label: "Go to Archive", keywords: ["Archived notes", "Unarchive"], icon: { glyph: "archive" }, href: "/archive" },
     { id: "assets", section: "Go to", label: "Go to Assets", keywords: ["Files", "Uploads", "Images"], icon: { glyph: "files" }, href: "/assets" },
   ];
+  if (opts.webApp) {
+    out.push({
+      id: "ai:ask",
+      section: "Go to",
+      label: "Ask AI",
+      keywords: ["AI chat", "Assistant", "Chat about notes", "Claude", "ChatGPT"],
+      icon: { glyph: "ai" },
+      shortcut: "Ctrl+Shift+L",
+      run: () => focusPanel("ai"),
+    });
+  }
   if (opts.androidApp) {
     out.push({
       id: "device:import",

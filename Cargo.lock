@@ -165,6 +165,7 @@ dependencies = [
  "reqwest",
  "scheduler",
  "schema",
+ "script-core",
  "serde",
  "serde_json",
  "sha2",
@@ -2539,6 +2540,7 @@ dependencies = [
 name = "server"
 version = "0.1.12"
 dependencies = [
+ "ai",
  "anyhow",
  "api",
  "axum",

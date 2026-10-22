@@ -2,6 +2,8 @@
 
 A coding agent with a shell, such as Claude Code or Codex, drives the vault through the `vault` CLI. One command, run on the agent's machine, installs the CLI, gives it a token, and puts the vault skill where the agent reads it. An agent without a shell cannot use this.
 
+To ask about your notes without an agent, use the AI panel in the web app, which calls your own AI provider with read-only note tools and shows each edit for you to apply. See [Chat panel](ai.md#chat-panel).
+
 ## Before you start
 
 - The server must hand out the `vault` CLI for the agent machine's architecture, `x86_64` or `aarch64`. Run `just cli-release` and `just publish-clients` to publish it. See [The vault CLI](clients.md#the-vault-cli).

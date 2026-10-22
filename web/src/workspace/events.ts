@@ -172,4 +172,5 @@ export const SHORTCUTS: [string, string][] = [
   ["Ctrl+click, middle-click", "Open a link in a new tab"],
   ["Ctrl+K", "Search or run a command"],
   ["Ctrl+Shift+K", "Capture a fleeting note"],
+  ["Ctrl+Shift+L", "Ask AI"],
 ];

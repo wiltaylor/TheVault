@@ -99,6 +99,60 @@ The error kinds are `not_configured`, `auth`, `rate_limit`, `refusal`, `invalid`
 
 A script's calls write the line to the run's log. The server's own calls, such as Test, write it to the server log. The prompt text never appears in it.
 
+## Chat panel
+
+The AI panel in the right sidebar answers questions about your notes and proposes edits to them. Open it with the AI tab, Ctrl+Shift+L (Cmd+Shift+L on a Mac), or Ask AI in the command palette (Ctrl+K). It uses the default provider and model from Settings > AI; the two menus at the top of the panel pick another for this conversation.
+
+The panel shows only in the web app. The desktop and Android apps talk to their own embedded server, which holds no AI credentials.
+
+### Ask a question
+
+Type a question and press Enter (Shift+Enter adds a line). The answer streams in as the model writes it. When a note is open beside the panel, the model knows its id, type and title, so "this note" means that note.
+
+To answer, the model calls note tools on the server. Each call shows as a step above the answer, such as “Searched for “roof””, with links to the notes it found or read. The answer links the notes it relies on; a click opens one in the active pane.
+
+| Tool | Does |
+|---|---|
+| `search_notes` | Full-text search, at most 20 notes |
+| `query_notes` | A query in the vault query language, at most 50 notes |
+| `get_note` | Reads one note, body included; each text over 40,000 characters is cut with a marker |
+| `backlinks` | The notes that link to a note |
+| `propose_edit` | Checks an edit to one note and shows it to you; never writes |
+
+A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 12 calls to the model; after that the panel says it stopped, and asking again goes on.
+
+Stop ends the answer at once: the server stops calling the model when the panel goes away. New conversation forgets the conversation. Conversations live in the browser tab only and are not saved in the vault.
+
+### Apply an edit
+
+When you ask for a change, such as "add eggs to my shopping list", the model proposes it. The panel shows a card with the changed fields and the lines of text removed and added:
+
+- Apply writes the change as you, at the version the model read. If the note changed since, Apply fails and says so; ask again for a fresh proposal.
+- Discard drops it. Nothing is written.
+
+The model never writes a note itself.
+
+### Refusals and errors
+
+When the provider refuses a request, the answer stops where it was and the panel shows which model refused and the category the provider gave, such as `cyber`. TheVault never retries a refusal with another model. Other failures show the error message, for example a rate limit.
+
+### The chat route
+
+`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal uses the notes write route, which needs `write`. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
+
+| Event | Data |
+|---|---|
+| `text` | `{ delta }`, the next piece of the answer |
+| `tool` | `{ id, name, input }`, a tool call about to run |
+| `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies |
+| `proposal` | `{ id, note_id, title, base_version, before, after, ops }`, an edit to apply with `PUT /api/notes/{note_id}` |
+| `usage` | `{ provider, model, input, output }` for one model call |
+| `refusal` | `{ provider, model, category, explanation, messages }`; the last event |
+| `error` | `{ kind, message, messages }`; the last event |
+| `done` | `{ stop, messages }`; the last event |
+
+`messages` holds the turn's new conversation items, including the provider's own record of each answer. Send them back unchanged, after the earlier ones, with the next question. Each call to the model writes a trail line to the server log.
+
 ## API
 
 Settings > AI uses these routes. Every route under `/api/integrations/ai` needs an `admin` token or the web app's session; `GET /api/ai/models` needs `read`.

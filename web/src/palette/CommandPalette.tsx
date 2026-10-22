@@ -16,6 +16,7 @@ import {
   TypeIcon,
   UnarchiveIcon,
 } from "../components/Icon";
+import { webApp } from "../ai/store";
 import { inAndroidApp } from "../deviceImport";
 import { knowTitle, noteArchived } from "../editor/titles";
 import { typeDef, types } from "../session";
@@ -99,7 +100,7 @@ export function CommandPalette() {
   });
   const actions = createMemo(() => [
     ...noteActions(activeNote()),
-    ...generalActions({ phone, dark: theme() === "dark", androidApp: inAndroidApp() }),
+    ...generalActions({ phone, dark: theme() === "dark", androidApp: inAndroidApp(), webApp: webApp() }),
     ...typeActions(types()),
   ]);
 
@@ -564,6 +565,12 @@ const GLYPHS: Partial<Record<Glyph, () => JSX.Element>> = {
   theme: () => (
     <Svg>
       <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z" />
+    </Svg>
+  ),
+  ai: () => (
+    <Svg>
+      <path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z" />
+      <path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z" />
     </Svg>
   ),
 };
