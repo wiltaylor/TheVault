@@ -4,8 +4,8 @@ title: 'The image''s pre-upgrade backup is skipped when moving from a pre-releas
   to its stable release: entrypoint.sh compares versions with sort -V, which ranks
   0.1.13-alpha.4 above 0.1.13'
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # The image's pre-upgrade backup is skipped when moving from a pre-release to its stable release: entrypoint.sh compares versions with sort -V, which ranks 0.1.13-alpha.4 above 0.1.13
@@ -17,3 +17,15 @@ Seen 2026-10-22 upgrading severus from 0.1.13-alpha.4 to 0.1.13: no backup was w
 ### 2026-10-22T01:46:56Z — wil
 
 Status set to todo.
+
+### 2026-10-22T01:47:21Z — wil
+
+Claimed.
+
+### 2026-10-22T02:04:44Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T02:04:44Z — wil
+
+Status set to done.
