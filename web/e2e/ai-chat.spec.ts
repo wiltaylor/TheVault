@@ -9,7 +9,8 @@ import { activePane, expect, logIn, test } from "./fixtures";
 // endpoints point at: ask beside a note, watch the answer arrive, apply the edit the model
 // proposed, and see the note change; apply a proposed template change (ai D18) and see it on a
 // note of that type; apply a proposed delete and create (ai D20) and see the note in the trash and
-// the new note open.
+// the new note open; and, with notes confirmation off (ai D22), see an edit land in the open note
+// without pressing Apply.
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -213,4 +214,51 @@ test("a type change proposed in the AI panel and applied shows on a note of that
   expect(((await (await admin.get(`/api/types/${type}`)).json()) as { wcl: string }).wcl).toContain("Reviewed weekly");
   await expect(activePane(page)).toContainText("Reviewed weekly");
   await expect(activePane(page)).toContainText("Plain text");
+});
+
+test("with notes confirmation off, an edit asked for in the AI panel shows in the open note without Apply", async ({ page, admin }) => {
+  for (const [name, value] of [
+    ["ai_anthropic_api_key", fake.api_key],
+    [
+      "ai_settings",
+      JSON.stringify({
+        default_provider: "anthropic",
+        models: { anthropic: "claude-opus-5" },
+        endpoints: { anthropic: fake.base_url },
+        confirm: { notes: false },
+      }),
+    ],
+  ]) {
+    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
+    expect(res.ok(), await res.text()).toBe(true);
+  }
+  const status = (await (await admin.get("/api/integrations/ai")).json()) as { confirm: Record<string, boolean> };
+  expect(status.confirm).toEqual({ notes: false, archive: true, delete: true, types: true });
+  const title = `Errands ${Date.now().toString(36)}`;
+  const created = await admin.post("/api/notes?type=note", { data: { note: shopping(title, ["Post office"]) } });
+  expect(created.status(), await created.text()).toBe(201);
+  const note = (await created.json()) as { id: string; version: string };
+
+  const edit = { id: note.id, base_version: note.version, note: JSON.stringify(shopping(title, ["Post office", "Pharmacy"])) };
+  await tell(`push ${JSON.stringify({ tools: [{ id: "toolu_auto", name: "propose_edit", input: edit }] })}`);
+  await tell(`push ${JSON.stringify({ text: "I added the pharmacy to your errands." })}`);
+
+  await logIn(page, `/notes/${note.id}`);
+  await expect(activePane(page)).toContainText("Post office");
+  await expect(activePane(page)).not.toContainText("Pharmacy");
+  await page.keyboard.press("Control+Shift+L");
+  const panel = page.getByRole("complementary", { name: "AI" });
+  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await panel.getByLabel("Ask AI").fill("Add the pharmacy to this list.");
+  await panel.getByLabel("Ask AI").press("Enter");
+
+  const conversation = panel.getByRole("list", { name: "Conversation" });
+  await expect(conversation).toContainText("I added the pharmacy");
+  const card = panel.getByRole("region", { name: `Edited ${title}` });
+  await expect(card.getByRole("link", { name: title })).toHaveAttribute("href", `/notes/${note.id}`);
+  await expect(panel.getByRole("button", { name: "Apply" })).toHaveCount(0);
+  await expect(activePane(page)).toContainText("Pharmacy");
+  const after = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { version: string; note: unknown };
+  expect(after.version).not.toBe(note.version);
+  expect(JSON.stringify(after.note)).toContain("Pharmacy");
 });

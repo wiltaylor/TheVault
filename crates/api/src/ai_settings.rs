@@ -3,12 +3,14 @@
 //!
 //! - `GET /api/integrations/ai` answers `{ secrets_key, default_provider, providers: { anthropic:
 //!   { configured, model }, openai: { configured, model }, chatgpt: { configured, account, model }
-//!   } }, system_prompt, default_system_prompt, system_prompt_custom }`: the chat system prompt
-//!   in use, the shipped one, and whether they differ (ai D17). No answer of these routes ever
+//!   } }, system_prompt, default_system_prompt, system_prompt_custom, confirm }`: the chat system
+//!   prompt in use, the shipped one, and whether they differ (ai D17), and `confirm: { notes,
+//!   archive, delete, types }` with every key filled (ai D22). No answer of these routes ever
 //!   holds a key or a token.
 //! - `PUT /api/integrations/ai/settings` takes `{ default_provider?, models?: { anthropic?,
-//!   openai?, chatgpt? }, system_prompt? }`; a field sent replaces the stored one, and an empty
-//!   string clears it, which for `system_prompt` means the default. A system prompt over
+//!   openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? } }`; a
+//!   field sent replaces the stored one, and an empty string clears it, which for
+//!   `system_prompt` means the default. A system prompt over
 //!   [`ai::SYSTEM_PROMPT_MAX`] characters is a 400. The `endpoints` test seam is kept.
 //! - `PUT /api/integrations/ai/{anthropic|openai}/key` takes `{ key }` and stores it in
 //!   `ai_<provider>_api_key`; an empty key deletes the secret.
@@ -156,6 +158,7 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
             "system_prompt": ai::CHAT_PROMPT,
             "default_system_prompt": ai::CHAT_PROMPT,
             "system_prompt_custom": false,
+            "confirm": ai::Confirm::default().to_json(),
         }));
     }
     let settings = Settings::load(s).map_err(api_error)?;
@@ -176,6 +179,7 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
         "system_prompt": settings.chat_prompt(),
         "default_system_prompt": ai::CHAT_PROMPT,
         "system_prompt_custom": settings.system_prompt_custom(),
+        "confirm": settings.confirm.to_json(),
     }))
 }
 
@@ -197,6 +201,22 @@ pub struct SettingsBody {
     models: Option<HashMap<String, Option<String>>>,
     #[serde(default)]
     system_prompt: Option<String>,
+    #[serde(default)]
+    confirm: Option<ConfirmBody>,
+}
+
+/// A partial `confirm`: each switch sent replaces the stored one (ai D22).
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmBody {
+    #[serde(default)]
+    notes: Option<bool>,
+    #[serde(default)]
+    archive: Option<bool>,
+    #[serde(default)]
+    delete: Option<bool>,
+    #[serde(default)]
+    types: Option<bool>,
 }
 
 /// `PUT /api/integrations/ai/settings`.
@@ -214,8 +234,22 @@ pub async fn put_settings(
         models.push((provider(&name)?, model.map(|m| m.trim().to_owned())));
     }
     let prompt = b.system_prompt;
+    let confirm = b.confirm;
     blocking(&a, move |s| {
         let mut settings = Settings::load(s).map_err(api_error)?;
+        if let Some(c) = confirm {
+            let to = &mut settings.confirm;
+            for (slot, value) in [
+                (&mut to.notes, c.notes),
+                (&mut to.archive, c.archive),
+                (&mut to.delete, c.delete),
+                (&mut to.types, c.types),
+            ] {
+                if let Some(v) = value {
+                    *slot = v;
+                }
+            }
+        }
         if let Some(p) = prompt {
             settings.set_system_prompt(&p).map_err(api_error)?;
         }

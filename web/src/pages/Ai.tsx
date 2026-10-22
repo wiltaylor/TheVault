@@ -1,5 +1,5 @@
 import { For, type JSX, Show, createEffect, createSignal, on } from "solid-js";
-import { type AiModel, type AiProvider, type AiStatus, type AiTestResult, api } from "../api";
+import { type AiConfirm, type AiModel, type AiProvider, type AiStatus, type AiTestResult, api } from "../api";
 import { Spinner } from "../components/SyncStatus";
 import { errorText } from "./TypeEditor";
 
@@ -7,7 +7,8 @@ import { errorText } from "./TypeEditor";
 // an API key, which the server stores and never answers back; the ChatGPT card signs in with
 // OpenAI's Sign in with ChatGPT, through the same paste-the-address step as Google's card. Each
 // card lists the provider's models live, saves the chosen default model, tests it, and can be
-// made the default provider. The section is web-app only: the desktop and Android apps talk to
+// made the default provider. Below them, the chat system prompt (ai D17) and the switches that
+// let the AI make some kinds of change without asking (ai D22). The section is web-app only: the desktop and Android apps talk to
 // their embedded server, which holds no AI credentials.
 
 /** Where a ChatGPT plan's usage is managed. */
@@ -527,6 +528,70 @@ export function SystemPromptCard(props: { status: AiStatus; onStatus: (s: AiStat
   );
 }
 
+/** The confirmation switches, in the card's order, with their labels (ai D22). */
+export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
+  { key: "notes", label: "Ask before creating and editing notes" },
+  { key: "archive", label: "Ask before archiving notes" },
+  { key: "delete", label: "Ask before moving notes to the trash" },
+  { key: "types", label: "Ask before changing types" },
+];
+
+/**
+ * Changes the AI makes (ai D22): one switch per kind of change. On, the panel shows the change
+ * for you to apply; off, the AI makes it itself when its caller's scope allows. Each switch
+ * saves at once.
+ */
+export function ConfirmCard(props: { status: AiStatus; onStatus: (s: AiStatus) => void }) {
+  const [error, setError] = createSignal<string | null>(null);
+  const [pending, setPending] = createSignal<keyof AiConfirm | null>(null);
+
+  async function toggle(key: keyof AiConfirm, box: HTMLInputElement) {
+    setError(null);
+    setPending(key);
+    try {
+      props.onStatus(await api.aiSaveSettings({ confirm: { [key]: box.checked } }));
+    } catch (e) {
+      setError(errorText(e));
+      box.checked = props.status.confirm[key];
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <Card
+      title="Changes the AI makes"
+      blurb="With a switch on, the AI panel shows each change of that kind for you to apply or discard. With it off, the AI makes the change itself and the panel says what it did."
+    >
+      <div class="admin-form ai-confirm">
+        <For each={CONFIRM_SWITCHES}>
+          {(s) => (
+            <label class="ai-confirm-switch">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={props.status.confirm[s.key]}
+                disabled={pending() !== null}
+                aria-busy={pending() === s.key ? "true" : undefined}
+                onChange={(e) => void toggle(s.key, e.currentTarget)}
+              />{" "}
+              {s.label}
+            </label>
+          )}
+        </For>
+        <p class="muted">
+          The AI never empties the trash: a note it deletes stays there until you restore it or empty the trash yourself.
+        </p>
+      </div>
+      <Show when={error()}>
+        <p class="error" role="alert">
+          {error()}
+        </p>
+      </Show>
+    </Card>
+  );
+}
+
 /** Settings > AI. */
 export function Ai() {
   const [status, setStatus] = createSignal<AiStatus | null>(null);
@@ -571,6 +636,7 @@ export function Ai() {
             />
             <ChatGptCard status={s()} onStatus={setStatus} />
             <SystemPromptCard status={s()} onStatus={setStatus} />
+            <ConfirmCard status={s()} onStatus={setStatus} />
           </>
         )}
       </Show>

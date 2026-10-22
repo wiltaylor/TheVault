@@ -1,11 +1,13 @@
 // The AI chat panel's conversation (ai D10, D14, D16): what the panel shows, and the neutral
 // transcript the server takes back each turn. It lives in this tab's memory only; nothing is
 // stored in the vault. A turn streams from POST /api/ai/chat, where the server runs the note
-// tools; edits come back as proposals the user applies through the notes API.
+// tools; edits come back as proposals the user applies through the notes API, or, for the kinds
+// Settings > AI lets go ahead without asking, as `applied` events for changes already made.
 
 import { createRoot, createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { type Json, type Note, type NoteDoc, ApiError, type StreamEvent, api, isArchived, streamEvents } from "../api";
+import { noteWritten } from "../changes";
 import { appInfo } from "../inApp";
 import { reloadDefinitions } from "../session";
 
@@ -89,8 +91,17 @@ export type TypeProposalState = ProposalState;
 /** What the card says when the type changed after the proposal (ai D18). */
 export const TYPE_CHANGED = "This type changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
 
+/**
+ * A change the AI made itself, its confirmation turned off in Settings > AI (ai D22): a note's,
+ * with its new version (for a delete, the version that went to the trash), or a type's.
+ */
+export type Applied =
+  | { id: string; op: NoteOp; note_id: string; title: Json; version: string }
+  | { id: string; op: "type_change" | "type_create"; type_name: string };
+
 export type Part =
   | { kind: "text"; text: string }
+  | { kind: "applied"; applied: Applied }
   | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string; asset?: AssetRef }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
@@ -248,6 +259,14 @@ function onEvent(e: StreamEvent) {
     case "type_proposal":
       push({ kind: "type_proposal", proposal: { ...(d as unknown as TypeProposal), issues: Array.isArray(d.issues) ? (d.issues as TypeProposal["issues"]) : [] }, state: "open" });
       break;
+    case "applied": {
+      const applied = d as unknown as Applied;
+      push({ kind: "applied", applied });
+      // Open views of the note or type take the change, as after a write of this client's own.
+      if (applied.op === "type_change" || applied.op === "type_create") void reloadDefinitions().catch(() => undefined);
+      else noteWritten();
+      break;
+    }
     case "refusal": {
       appendMessages(d);
       const s = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : null);

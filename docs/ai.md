@@ -118,14 +118,14 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `get_note` | Reads one note, body included, and lists the assets it references (id, file name, media type, size); each text over 40,000 characters is cut with a marker |
 | `read_asset` | Reads one attachment by asset id; see [Attachments](#attachments) |
 | `backlinks` | The notes that link to a note |
-| `propose_edit` | Checks an edit to one note and shows it to you; never writes |
-| `propose_create` | Checks a new note of a type and shows it to you; never writes |
-| `propose_archive` | Checks that a note exists and is not already archived (or, to unarchive, archived) and shows it to you; never writes |
-| `propose_delete` | Checks that a note exists and can be deleted and shows it to you; never writes. Applied, the note moves to the trash; the model cannot empty the trash |
+| `propose_edit` | Checks an edit to one note and shows it to you; writes it only when [confirmation is off](#changes-the-ai-makes) |
+| `propose_create` | Checks a new note of a type and shows it to you; creates it only when confirmation is off |
+| `propose_archive` | Checks that a note exists and is not already archived (or, to unarchive, archived) and shows it to you; does it only when confirmation is off |
+| `propose_delete` | Checks that a note exists and can be deleted and shows it to you; deletes it only when confirmation is off. Applied, the note moves to the trash; the model cannot empty the trash |
 | `list_types` | Every type's name, label, plural, description, and whether it is built in |
 | `get_type` | Reads one type file's WCL, with its fields and templates |
 | `type_format` | The type-file sections of the vault format, so the model knows the vocabulary |
-| `propose_type_change` | Checks a whole new type file, for an existing type or a new name, and shows it to you; never writes or deletes a type |
+| `propose_type_change` | Checks a whole new type file, for an existing type or a new name, and shows it to you; writes it only when confirmation is off; never deletes a type |
 
 A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 12 calls to the model; after that the panel says it stopped, and asking again goes on.
 
@@ -154,7 +154,7 @@ When you ask for a change, such as "add eggs to my shopping list", the model pro
 - Apply writes the change as you, at the version the model read. If the note changed since, Apply fails and says so; ask again for a fresh proposal.
 - Discard drops it. Nothing is written.
 
-The model never writes a note itself.
+The model writes a note itself only when you turn confirmation off; see [Changes the AI makes](#changes-the-ai-makes).
 
 ### Create, archive and delete notes
 
@@ -186,13 +186,36 @@ The server adds the open note's id, type and title after your prompt, so the edi
 
 Scripts do not use this prompt: a script's `ai` call passes its own `system`.
 
+### Changes the AI makes
+
+By default every change the model asks for waits for you as a proposal. The **Changes the AI makes** card in Settings > AI has four switches, all on by default:
+
+| Switch | Covers |
+|---|---|
+| Ask before creating and editing notes | `propose_edit` and `propose_create` |
+| Ask before archiving notes | `propose_archive`, archiving and unarchiving |
+| Ask before moving notes to the trash | `propose_delete` |
+| Ask before changing types | `propose_type_change`, changed and new types |
+
+Each switch saves when you change it. With a switch off, the tool makes that kind of change itself, right after checking it, through the same writes Apply uses:
+
+- An edit is written at the version the model read. If the note changed since, nothing is written and the model is told of the conflict, so it reads the note again.
+- A delete moves the note to the trash, where you can restore it. The AI never empties the trash or deletes a note for good, whatever the switches say.
+- A type change is planned and applied as one commit, as `POST /api/types/{name}/change` does; a new type is written as `PUT /api/types/{name}` does.
+
+A change that does not check, or that fails, writes nothing and goes back to the model as an error. The model is told the change was made, with the note's new version.
+
+The panel shows each change made this way as a short card, such as "Edited Shopping", "Created Reading list", "Archived Old plan", "Moved Scratch to the trash" or "Changed type task", linking to the note, the trash or the type. A note or type open in a pane shows the change at once, unless you have unsaved edits in it.
+
+The change is written as whoever asked: the signed-in user in the web app, or the token's name for an API caller. It is in the note's history under that name like any other write; the trail line is the same as for any chat call. The switches never widen a caller's rights: a caller whose scope cannot make the write still gets a proposal. Notes need `write`, types need `admin`, so a `read` token always gets proposals, and a `write` token gets proposals for type changes.
+
 ### Refusals and errors
 
 When the provider refuses a request, the answer stops where it was and the panel shows which model refused and the category the provider gave, such as `cyber`. TheVault never retries a refusal with another model. Other failures show the error message, for example a rate limit.
 
 ### The chat route
 
-`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal uses the notes write route, which needs `write`; applying a type proposal uses the type routes, which need `admin`. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
+`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal uses the notes write route, which needs `write`; applying a type proposal uses the type routes, which need `admin`. A change the chat makes itself, its confirmation off, needs the same scope from the chat's caller; without it the chat proposes instead. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
 
 | Event | Data |
 |---|---|
@@ -201,6 +224,7 @@ When the provider refuses a request, the answer stops where it was and the panel
 | `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text |
 | `proposal` | A note change, by `op`. `update`: `{ id, op, note_id, title, base_version, before, after, ops }`, an edit to apply with `PUT /api/notes/{note_id}`. `create`: `{ id, op, type, title, after }`, a note to create with `POST /api/notes?type={type}`. `archive` and `unarchive`: `{ id, op, note_id, title, base_version }`, applied with `POST /api/notes/{note_id}/archive` or `/unarchive`. `delete`: `{ id, op, note_id, title, base_version }`, applied with `DELETE /api/notes/{note_id}`. A proposal without `op` is an `update` |
 | `type_proposal` | `{ id, name, exists, before, after, issues }`: `before` is the type file as stored (null for a new type), `after` the checked type file in canonical form, `issues` the warnings the check found |
+| `applied` | A change the tool made itself, its confirmation off, sent in place of the proposal. For a note, `{ id, op, note_id, title, version }`, where `op` is `update`, `create`, `archive`, `unarchive` or `delete` and `version` is the note's new version (for a delete, the version that went to the trash). For a type, `{ id, op, type_name }`, where `op` is `type_change` or `type_create` |
 | `usage` | `{ provider, model, input, output }` for one model call |
 | `refusal` | `{ provider, model, category, explanation, messages }`; the last event |
 | `error` | `{ kind, message, messages }`; the last event |
@@ -214,8 +238,8 @@ Settings > AI uses these routes. Every route under `/api/integrations/ai` needs 
 
 | Method and path | Does |
 |---|---|
-| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, and the ChatGPT `account`; the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom` |
-| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt? }`; an empty string clears a value, and an empty `system_prompt` means the default. A `system_prompt` over 32,000 characters is a 400 |
+| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, and the ChatGPT `account`; the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types }`, with every switch filled |
+| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? } }`; an empty string clears a value, and an empty `system_prompt` means the default. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400 |
 | `PUT /api/integrations/ai/{anthropic\|openai}/key` | Stores `{ key }`; an empty key deletes it |
 | `POST /api/integrations/ai/{provider}/test` | Sends the test request to `{ model }` or the default model, and answers `{ ok, model, ms, text, error }` |
 | `POST /api/integrations/ai/chatgpt/start` | Answers `{ auth_url }`, the ChatGPT sign-in page |

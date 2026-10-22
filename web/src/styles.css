@@ -3132,6 +3132,12 @@ button.link {
   gap: 0.75rem;
 }
 
+.ai-card .ai-confirm-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .ai-test-ok {
   color: var(--ok, inherit);
 }

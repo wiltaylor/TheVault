@@ -462,6 +462,20 @@ export interface AiStatus {
   default_system_prompt: string;
   /** Whether `system_prompt` is the user's own. */
   system_prompt_custom: boolean;
+  /** Which kinds of chat change wait for the user; false lets the AI make them (ai D22). */
+  confirm: AiConfirm;
+}
+
+/** Settings > AI's confirmation switches (ai D22), every key filled. */
+export interface AiConfirm {
+  /** Creating and editing notes. */
+  notes: boolean;
+  /** Archiving and unarchiving notes. */
+  archive: boolean;
+  /** Moving notes to the trash; nothing empties it. */
+  delete: boolean;
+  /** Changing and creating types. */
+  types: boolean;
 }
 
 /** A model a provider offers now (ai D6). */
@@ -1193,13 +1207,15 @@ export const api = {
   /** Settings > AI: each provider's sign-in and default model (ai D7). */
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
   /**
-   * Save the default provider, default models and chat system prompt; an empty string clears one,
-   * which for the system prompt means the default.
+   * Save the default provider, default models, chat system prompt and confirmation switches; an
+   * empty string clears one, which for the system prompt means the default. `confirm` may be
+   * partial.
    */
   aiSaveSettings: (settings: {
     default_provider?: AiProvider | "";
     models?: Partial<Record<AiProvider, string>>;
     system_prompt?: string;
+    confirm?: Partial<AiConfirm>;
   }) =>
     request<AiStatus>("PUT", "/api/integrations/ai/settings", settings),
   /** Store an Anthropic or OpenAI API key; an empty key deletes it. */

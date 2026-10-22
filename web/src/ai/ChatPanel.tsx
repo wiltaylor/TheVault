@@ -9,6 +9,7 @@ import { blockLines, lineDiff } from "./diff";
 import { Markdown } from "./markdown";
 import { TypeProposalCard } from "./TypeProposalCard";
 import {
+  type Applied,
   type NoteOp,
   type Part,
   type Proposal,
@@ -260,6 +261,68 @@ function ProposalCard(props: { part: Extract<Part, { kind: "proposal" }>; turn: 
   );
 }
 
+/** An applied card's words before the note's title, by what the AI did (ai D22). */
+const DID: Record<NoteOp, string> = {
+  update: "Edited",
+  create: "Created",
+  archive: "Archived",
+  unarchive: "Unarchived",
+  delete: "Moved",
+};
+
+type AppliedNote = Extract<Applied, { note_id: string }>;
+
+/**
+ * A change the AI made itself, its confirmation off in Settings > AI (ai D22): what it did,
+ * linking to the note, the trash or the type.
+ */
+export function AppliedCard(props: { applied: Applied }) {
+  const a = () => props.applied;
+  const note = (): AppliedNote | undefined => {
+    const x = a();
+    return "note_id" in x ? x : undefined;
+  };
+  const typeName = () => {
+    const x = a();
+    return "type_name" in x ? x.type_name : "";
+  };
+  const title = (n: { title: Json; note_id: string }) => (typeof n.title === "string" && n.title ? n.title : n.note_id);
+  const label = () => {
+    const n = note();
+    if (!n) return `${a().op === "type_create" ? "Created" : "Changed"} type ${typeName()}`;
+    return n.op === "delete" ? `Moved ${title(n)} to the trash` : `${DID[n.op]} ${title(n)}`;
+  };
+  return (
+    <section class="ai-proposal ai-applied-card" aria-label={label()}>
+      <p class="ai-proposal-head" role="status">
+        <Show
+          when={note()}
+          fallback={
+            <>
+              {a().op === "type_create" ? "Created type " : "Changed type "}
+              <a href={`/types/${encodeURIComponent(typeName())}`}>{typeName()}</a>
+            </>
+          }
+        >
+          {(n) => (
+            <Show
+              when={n().op !== "delete"}
+              fallback={
+                <>
+                  Moved <strong>{title(n())}</strong> to the <a href="/trash">trash</a>, where you can restore it.
+                </>
+              }
+            >
+              {DID[n().op]} <a href={`/notes/${encodeURIComponent(n().note_id)}`}>{title(n())}</a>
+            </Show>
+          )}
+        </Show>
+      </p>
+      <p class="muted">Made without asking, as Settings &gt; AI allows.</p>
+    </section>
+  );
+}
+
 /**
  * Apply all (ai D20): shown while a turn has two or more proposals pending. It applies them in
  * order and stops at the first that does not apply, whose card shows why.
@@ -273,7 +336,7 @@ function ApplyAll(props: { turn: number; parts: Part[] }) {
         <button
           type="button"
           class="primary"
-          disabled={busy() || props.parts.some((p) => p.kind !== "text" && p.kind !== "tool" && p.kind !== "notice" && p.state === "applying")}
+          disabled={busy() || props.parts.some((p) => (p.kind === "proposal" || p.kind === "type_proposal") && p.state === "applying")}
           onClick={async () => {
             setBusy(true);
             try {
@@ -395,7 +458,7 @@ export function ChatPanel(props: { noteId: () => string }) {
       </div>
       <Show when={chat.turns.length === 0}>
         <p class="muted ai-empty">
-          Ask about your notes. Answers come from {providerLabel(chat.provider)}; the notes it reads are sent there. Edits are proposals you apply.
+          Ask about your notes. Answers come from {providerLabel(chat.provider)}; the notes it reads are sent there. Edits are proposals you apply, unless Settings &gt; AI lets them go ahead without asking.
         </p>
       </Show>
       <ol class="ai-turns" ref={list} aria-label="Conversation" aria-busy={chat.streaming}>
@@ -411,6 +474,7 @@ export function ChatPanel(props: { noteId: () => string }) {
                         <Match when={part.kind === "tool" && part}>{(p) => <ToolStep part={p()} />}</Match>
                         <Match when={part.kind === "proposal" && part}>{(p) => <ProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
+                        <Match when={part.kind === "applied" && part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
                         <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>
                       </Switch>
                     )}

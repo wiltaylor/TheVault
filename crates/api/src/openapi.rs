@@ -295,7 +295,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/chat",
-        "One AI chat turn as server-sent events (text, tool, tool_result, proposal, usage, refusal, error, done); the server runs read-only note tools and never writes",
+        "One AI chat turn as server-sent events (text, tool, tool_result, proposal, type_proposal, applied, usage, refusal, error, done); the tools propose changes, and make the kinds whose confirmation Settings > AI turned off when the caller's scope allows",
     ),
     (
         "GET",
@@ -546,7 +546,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "PUT",
         "/api/integrations/ai/settings",
-        "Save the default AI provider and each provider's default model",
+        "Save the default AI provider, each provider's default model, the chat system prompt and the confirmation switches",
     ),
     (
         "PUT",

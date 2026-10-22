@@ -47,6 +47,7 @@ function status(over: Partial<Record<"anthropic" | "openai" | "chatgpt", object>
     system_prompt: DEFAULT_PROMPT,
     default_system_prompt: DEFAULT_PROMPT,
     system_prompt_custom: false,
+    confirm: { notes: true, archive: true, delete: true, types: true },
   };
 }
 
@@ -300,6 +301,50 @@ describe("the Chat system prompt card", () => {
     fireEvent.click(button("Save"));
     expect((await prompt().findByRole("alert")).textContent).toContain("32000");
     expect(aiSaveSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Changes the AI makes card", () => {
+  const changes = () => card("Changes the AI makes");
+  const labels = [
+    "Ask before creating and editing notes",
+    "Ask before archiving notes",
+    "Ask before moving notes to the trash",
+    "Ask before changing types",
+  ];
+
+  it("shows the four switches on by default and says the trash is never emptied", async () => {
+    aiStatus.mockResolvedValue(status());
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Changes the AI makes" });
+    for (const name of labels) {
+      expect((changes().getByRole("switch", { name }) as HTMLInputElement).checked).toBe(true);
+    }
+    expect(changes().getByText(/never empties the trash/)).toBeTruthy();
+  });
+
+  it("saves one switch as a partial confirm and shows the answer", async () => {
+    aiStatus.mockResolvedValue(status());
+    const off = { ...status(), confirm: { notes: true, archive: true, delete: false, types: true } };
+    aiSaveSettings.mockResolvedValue(off);
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Changes the AI makes" });
+    const trash = changes().getByRole("switch", { name: "Ask before moving notes to the trash" }) as HTMLInputElement;
+    fireEvent.click(trash);
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ confirm: { delete: false } }));
+    await waitFor(() => expect(trash.checked).toBe(false));
+    expect((changes().getByRole("switch", { name: "Ask before creating and editing notes" }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("shows a failed save", async () => {
+    aiStatus.mockResolvedValue(status());
+    aiSaveSettings.mockRejectedValue(new Error("no secrets key"));
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Changes the AI makes" });
+    const types = changes().getByRole("switch", { name: "Ask before changing types" }) as HTMLInputElement;
+    fireEvent.click(types);
+    expect((await changes().findByRole("alert")).textContent).toContain("no secrets key");
+    expect(types.checked).toBe(true);
   });
 });
 

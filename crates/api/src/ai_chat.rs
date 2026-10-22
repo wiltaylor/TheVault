@@ -7,8 +7,12 @@
 //!
 //! The answer is a server-sent event stream. The server runs the tool loop, at most
 //! [`MAX_ROUNDS`] model calls per user turn, over read-only tools; `propose_edit`,
-//! `propose_create`, `propose_archive` and `propose_delete` check a change and never write it
-//! (ai D20). Events:
+//! `propose_create`, `propose_archive`, `propose_delete` and `propose_type_change` check a change
+//! and hand it to the user (ai D14, D18, D20). When Settings > AI turns a kind's confirmation off
+//! and the caller's scope allows the write (`write` for notes, `admin` for types), the tool makes
+//! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
+//! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
+//! the trash (ai D21). Events:
 //!
 //! | Event | Data |
 //! |---|---|
@@ -17,6 +21,7 @@
 //! | `tool_result` | `{id, summary, is_error}`: `summary` holds the ids and titles returned (`notes`), never bodies, a `message` on an error, and for `read_asset` the `asset` read (id, filename, media type, size, kind), never its bytes |
 //! | `proposal` | a note change for the user to apply, by `op` (ai D14, D20): `update` `{id, op, note_id, title, base_version, before, after, ops}`; `create` `{id, op, type, title, after}`; `archive`, `unarchive` and `delete` `{id, op, note_id, title, base_version}` |
 //! | `type_proposal` | `{id, name, exists, before, after, issues}`: a type file's new WCL for the user to apply (ai D18) |
+//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create` |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
 //! | `error` | `{kind, message, messages}`: the turn failed; ends the stream |
@@ -36,19 +41,20 @@ use ai::{
     AiError, Content, Credential, Credentials, ErrorKind, Event as AiEvent, Message, Outcome,
     Provider, ProviderState, Request, Role, Settings, Stop, ToolCall, ToolSpec, Usage,
 };
-use axum::Json;
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, HeaderName};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::{Extension, Json};
 use script_core::Vault;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use state::Author;
+use state::{Author, Scope};
 use tokio::sync::mpsc;
-use writer::{Input, Op, Writer, doc_to_json};
+use writer::{Input, Op, TypeChange, Writer, doc_to_json};
 
-use crate::auth::Caller;
+use crate::auth::{Caller, GrantedScope};
 use crate::events::HEARTBEAT;
 use crate::{ApiError, ai_assets};
 
@@ -92,6 +98,7 @@ fn http() -> &'static reqwest::Client {
 pub async fn chat(
     State(w): State<Arc<Writer>>,
     Caller(author): Caller,
+    Extension(GrantedScope(scope)): Extension<GrantedScope>,
     Json(body): Json<ChatBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let provider = match body.provider.as_deref().map(str::trim) {
@@ -107,6 +114,7 @@ pub async fn chat(
     let turn = Turn {
         writer: w,
         author,
+        scope,
         out: Out { tx },
         images: ai_assets::Images::default(),
     };
@@ -147,10 +155,50 @@ struct Setup {
     model: String,
     cred: Credential,
     system: String,
+    /// The changes the tools make themselves this turn.
+    direct: Direct,
+}
+
+/// The kinds of change the tools make themselves rather than propose (ai D22): those whose
+/// confirmation Settings > AI turned off and whose write the caller's scope allows. Lacking the
+/// scope, a tool proposes, whatever the switch says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Direct {
+    notes: bool,
+    archive: bool,
+    delete: bool,
+    types: bool,
+}
+
+impl Direct {
+    fn of(confirm: ai::Confirm, scope: Scope) -> Direct {
+        let write = scope.allows(Scope::Write);
+        Direct {
+            notes: !confirm.notes && write,
+            archive: !confirm.archive && write,
+            delete: !confirm.delete && write,
+            types: !confirm.types && scope.allows(Scope::Admin),
+        }
+    }
+
+    /// Whether the change in event `event` with data `p` is made rather than proposed.
+    fn covers(self, event: &str, p: &Value) -> bool {
+        match event {
+            "type_proposal" => self.types,
+            "proposal" => match p["op"].as_str().unwrap_or("update") {
+                "update" | "create" => self.notes,
+                "archive" | "unarchive" => self.archive,
+                "delete" => self.delete,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
 }
 
 fn setup(
     w: &Writer,
+    scope: Scope,
     provider: Option<Provider>,
     model: Option<String>,
     note_id: Option<String>,
@@ -185,6 +233,7 @@ fn setup(
         model,
         cred,
         system,
+        direct: Direct::of(settings.confirm, scope),
     })
 }
 
@@ -210,7 +259,8 @@ struct ToolOut {
     content: String,
     is_error: bool,
     summary: Value,
-    /// An event for the user to act on, sent before the result: its name and data.
+    /// An event sent before the result, its name and data: a proposal for the user to act on,
+    /// or the change the tool made (ai D22).
     proposal: Option<(&'static str, Value)>,
 }
 
@@ -229,6 +279,8 @@ impl ToolOut {
 struct Turn {
     writer: Arc<Writer>,
     author: Author,
+    /// The scope the caller's credentials grant, which bounds what the tools write (ai D22).
+    scope: Scope,
     out: Out,
     /// The images prepared this turn, by asset id (ai D19).
     images: ai_assets::Images,
@@ -243,8 +295,11 @@ impl Turn {
         note_id: Option<String>,
     ) {
         let w = self.writer.clone();
+        let scope = self.scope;
         let setup =
-            match tokio::task::spawn_blocking(move || setup(&w, provider, model, note_id)).await {
+            match tokio::task::spawn_blocking(move || setup(&w, scope, provider, model, note_id))
+                .await
+            {
                 Ok(Ok(s)) => s,
                 Ok(Err(e)) => {
                     self.failed(&e, &[]).await;
@@ -424,7 +479,8 @@ impl Turn {
                 let w = self.writer.clone();
                 let author = self.author.clone();
                 let call = c.clone();
-                let got = tokio::task::spawn_blocking(move || run_tool(&w, &author, &call))
+                let direct = setup.direct;
+                let got = tokio::task::spawn_blocking(move || run_tool(&w, &author, direct, &call))
                     .await
                     .unwrap_or_else(|e| ToolOut::error(e.to_string()));
                 if let Some((name, p)) = got.proposal
@@ -637,7 +693,8 @@ fn tool(name: &str, description: &str, properties: Value) -> ToolSpec {
     }
 }
 
-/// The chat's tools: read-only ones, and proposals that write nothing (ai D14, D18, D20).
+/// The chat's tools: read-only ones, and proposals that write nothing unless Settings > AI turned
+/// their confirmation off (ai D14, D18, D20, D22).
 pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
         tool(
@@ -685,7 +742,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "propose_type_change",
-            "Propose a type file for the user to apply: a change to an existing type, such as its fields or templates, or a new type under a new name. It is checked as the type write would check it but never written: the user sees a diff of the WCL and applies or discards it.",
+            "Propose a type file for the user to apply: a change to an existing type, such as its fields or templates, or a new type under a new name. It is checked as the type write would check it, and the user sees a diff of the WCL and applies or discards it. When the user lets type changes go ahead without asking, it is written at once and the result says applied.",
             json!({
                 "name": { "type": "string", "description": "The type's name: an existing type to change, or a new name to create a type." },
                 "wcl": { "type": "string", "description": "The whole new type file as WCL text, with every field and template it keeps." },
@@ -693,7 +750,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "propose_create",
-            "Propose a new note for the user to create. It is checked but never written: the user sees the new note and creates or discards it.",
+            "Propose a new note for the user to create. It is checked, and the user sees the new note and creates or discards it. When the user lets note changes go ahead without asking, it is created at once and the result says applied, with its id and version.",
             json!({
                 "type": { "type": "string", "description": "The new note's type, such as `task`." },
                 "note": {
@@ -704,7 +761,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "propose_archive",
-            "Propose archiving a note, or taking it out of the archive, for the user to apply. Nothing changes until the user applies it.",
+            "Propose archiving a note, or taking it out of the archive, for the user to apply. When the user lets archiving go ahead without asking, it is done at once and the result says applied.",
             json!({
                 "id": { "type": "string", "description": "The note's id." },
                 "archived": { "type": "boolean", "description": "true to archive the note, false to take it out of the archive." },
@@ -712,12 +769,12 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "propose_delete",
-            "Propose deleting a note for the user to apply. Applied, it moves the note to the trash, where the user can restore it. Nothing changes until the user applies it.",
+            "Propose deleting a note for the user to apply. Applied, it moves the note to the trash, where the user can restore it; nothing empties the trash. When the user lets deletes go ahead without asking, the note moves to the trash at once and the result says applied.",
             json!({ "id": { "type": "string", "description": "The note's id." } }),
         ),
         tool(
             "propose_edit",
-            "Propose a change to one note for the user to apply. It is checked but never written: the user sees a diff and applies or discards it.",
+            "Propose a change to one note for the user to apply. It is checked, and the user sees a diff and applies or discards it. When the user lets note changes go ahead without asking, it is written at once and the result says applied, with the new version.",
             json!({
                 "id": { "type": "string", "description": "The note's id." },
                 "base_version": { "type": "string", "description": "The version get_note returned." },
@@ -784,7 +841,197 @@ fn rows_out(rows: Vec<Value>, extra: Value) -> ToolOut {
 }
 
 /// Run one tool call. A call the model got wrong is answered as an error, not run (ai D5).
-fn run_tool(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
+/// A proposal whose confirmation is off is applied here, in place of being sent (ai D22).
+fn run_tool(w: &Writer, author: &Author, direct: Direct, call: &ToolCall) -> ToolOut {
+    let out = propose_or_read(w, author, call);
+    match &out.proposal {
+        Some((event, p)) if direct.covers(event, p) => {
+            let (event, p) = (*event, p.clone());
+            make(w, author, event, &p, out.summary)
+        }
+        _ => out,
+    }
+}
+
+/// Make the change a tool proposed, as the caller: the `applied` event, and a result telling the
+/// model it was made and its new version. A failure writes nothing and goes back to the model.
+fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> ToolOut {
+    let done = match apply_change(w, author, event, p) {
+        Ok(done) => done,
+        Err(ApplyError::Write(writer::Error::Conflict {
+            id,
+            current_version,
+            ..
+        })) => {
+            let base = p["base_version"].as_str().unwrap_or_default();
+            return conflict(&id, base, &current_version, "write it again");
+        }
+        Err(e) => {
+            let message = e.to_string();
+            let details = ApiError::from(e).body;
+            let mut out = ToolOut::error(message.clone());
+            out.content = json!({
+                "error": message,
+                "details": details,
+                "message": "Nothing was written. Fix the problem and try again.",
+            })
+            .to_string();
+            return out;
+        }
+    };
+    let op = done["op"].as_str().unwrap_or_default().to_owned();
+    let version = done["version"].as_str().unwrap_or_default().to_owned();
+    let name = done["type_name"].as_str().unwrap_or_default().to_owned();
+    let made = match op.as_str() {
+        "update" => format!("The edit was written to the note. Its new version is {version}."),
+        "create" => format!(
+            "The note was created with id {}. Its version is {version}.",
+            done["note_id"].as_str().unwrap_or_default()
+        ),
+        "archive" => format!("The note was archived. Its new version is {version}."),
+        "unarchive" => {
+            format!("The note was taken out of the archive. Its new version is {version}.")
+        }
+        "delete" => "The note was moved to the trash, where the user can restore it.".to_owned(),
+        "type_create" => format!("The type {name} was created."),
+        _ => format!("The type {name} was changed."),
+    };
+    let mut content = done.clone();
+    content["applied"] = json!(true);
+    content["message"] = json!(format!(
+        "{made} Settings > AI lets this kind of change go ahead without asking, so the user did \
+         not confirm it; it is done and recorded in the history."
+    ));
+    let mut applied = done;
+    applied["id"] = p["id"].clone();
+    if event == "proposal" {
+        applied["title"] = p["title"].clone();
+    }
+    ToolOut {
+        content: content.to_string(),
+        is_error: false,
+        summary,
+        proposal: Some(("applied", applied)),
+    }
+}
+
+/// Why [`apply_change`] wrote nothing.
+#[derive(Debug)]
+pub enum ApplyError {
+    /// The change is not one a chat proposes, or lacks a member it needs.
+    Invalid(String),
+    /// The type changed since the proposal.
+    Stale(String),
+    /// The write refused it: a conflict, a validation failure, a missing note.
+    Write(writer::Error),
+}
+
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApplyError::Invalid(m) | ApplyError::Stale(m) => f.write_str(m),
+            ApplyError::Write(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ApplyError {}
+
+impl From<writer::Error> for ApplyError {
+    fn from(e: writer::Error) -> ApplyError {
+        ApplyError::Write(e)
+    }
+}
+
+impl From<ApplyError> for ApiError {
+    fn from(e: ApplyError) -> ApiError {
+        match e {
+            ApplyError::Invalid(m) => ApiError::bad_request(m),
+            ApplyError::Stale(m) => ApiError::new(StatusCode::CONFLICT, "stale", m),
+            ApplyError::Write(e) => e.into(),
+        }
+    }
+}
+
+/// Apply a chat change as `author`, through the writer calls the panel's Apply reaches (ai D22).
+/// `event` is `proposal` or `type_proposal`, and `p` its data as the client receives it:
+///
+/// - `update`: the note `note_id` replaced by `after` at `base_version`;
+/// - `create`: a new note of `type` from `after`;
+/// - `archive` and `unarchive`: the note `note_id` at `base_version`;
+/// - `delete`: the note `note_id` at `base_version`, moved to the trash, never purged (ai D21);
+/// - a type proposal: `after` as the type `name`, when the type file is still `before`; a new
+///   type through the type write, a change planned and then applied as one commit.
+///
+/// Returns `{op, note_id, version}` for a note and `{op, type_name}` for a type (`type_create` or
+/// `type_change`). A failure writes nothing.
+pub fn apply_change(
+    w: &Writer,
+    author: &Author,
+    event: &str,
+    p: &Value,
+) -> Result<Value, ApplyError> {
+    let member = |name: &str| {
+        p[name]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ApplyError::Invalid(format!("the change has no {name}")))
+    };
+    if event == "type_proposal" {
+        let name = member("name")?;
+        let after = member("after")?;
+        let before = p["before"].as_str();
+        if w.read_type(name).ok().as_deref() != before {
+            return Err(ApplyError::Stale(format!(
+                "the type {name} changed since the proposal, so nothing was written"
+            )));
+        }
+        if before.is_none() {
+            w.put_type(name, after)?;
+            return Ok(json!({ "op": "type_create", "type_name": name }));
+        }
+        let change = TypeChange {
+            wcl: after.to_owned(),
+            ..TypeChange::default()
+        };
+        let plan = w.plan_type_change(name, &change)?;
+        w.apply_type_change(name, &change, &plan.token, author)?;
+        return Ok(json!({ "op": "type_change", "type_name": name }));
+    }
+    if event != "proposal" {
+        return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
+    }
+    let op = p["op"].as_str().unwrap_or("update");
+    let doc = || match &p["after"] {
+        v @ Value::Object(_) => Ok(Input::Json(v.clone())),
+        _ => Err(ApplyError::Invalid("the change has no after".into())),
+    };
+    let saved = match op {
+        "update" => w.update(
+            member("note_id")?,
+            &doc()?,
+            Some(member("base_version")?),
+            author,
+        )?,
+        "create" => w.create(member("type")?, &doc()?, author)?,
+        "archive" | "unarchive" => w.set_archived(
+            member("note_id")?,
+            op == "archive",
+            Some(member("base_version")?),
+            author,
+        )?,
+        "delete" => w.delete(member("note_id")?, Some(member("base_version")?), author)?,
+        other => {
+            return Err(ApplyError::Invalid(format!(
+                "{other:?} is not a note change"
+            )));
+        }
+    };
+    Ok(json!({ "op": op, "note_id": saved.id, "version": saved.version }))
+}
+
+/// A tool call's answer, a proposal not yet applied.
+fn propose_or_read(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
     if let Some(e) = &call.error {
         return ToolOut::error(e.clone());
     }
@@ -868,10 +1115,12 @@ fn propose(w: &Writer, author: &Author, call_id: &str, input: &Value) -> Result<
         Some(Err(writer::Error::Conflict {
             current_version, ..
         })) => {
-            return Err(ToolOut::error(format!(
-                "conflict: note {id} changed since version {base}; its current version is \
-                 {current_version}. Read it again with get_note and propose against that version."
-            )));
+            return Err(conflict(
+                id,
+                base,
+                &current_version,
+                "propose against that version",
+            ));
         }
         Some(Err(e)) => return Err(item_error(e)),
         None => return Err(ToolOut::error("the edit was not checked")),
@@ -919,6 +1168,14 @@ fn propose(w: &Writer, author: &Author, call_id: &str, input: &Value) -> Result<
         summary,
         proposal: Some(("proposal", proposal)),
     })
+}
+
+/// A note that changed since the version the model based its change on.
+fn conflict(id: &str, base: &str, current_version: &str, then: &str) -> ToolOut {
+    ToolOut::error(format!(
+        "conflict: note {id} changed since version {base}; its current version is \
+         {current_version}. Nothing was written. Read it again with get_note and {then}."
+    ))
 }
 
 /// The `note` argument: the whole note as JSON text, or as an object.

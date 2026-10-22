@@ -72,8 +72,8 @@ pub use credentials::{
 pub use error::{AiError, ErrorKind};
 pub use http::{blocking_client, client};
 pub use settings::{
-    ANTHROPIC_BASE, ANTHROPIC_DEFAULT_MODEL, CHATGPT_AUTH_BASE, Endpoints, Models, OPENAI_BASE,
-    SETTINGS, SYSTEM_PROMPT_MAX, Settings,
+    ANTHROPIC_BASE, ANTHROPIC_DEFAULT_MODEL, CHATGPT_AUTH_BASE, Confirm, Endpoints, Models,
+    OPENAI_BASE, SETTINGS, SYSTEM_PROMPT_MAX, Settings,
 };
 pub use trail::{Outcome, trail_for, trail_line};
 pub use types::{

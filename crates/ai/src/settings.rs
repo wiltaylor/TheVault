@@ -85,8 +85,64 @@ pub struct Settings {
     /// The chat panel's system prompt (ai D17). Absent or empty means [`crate::CHAT_PROMPT`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// Which kinds of chat change wait for the user (ai D22).
+    #[serde(default, skip_serializing_if = "Confirm::is_default")]
+    pub confirm: Confirm,
     #[serde(flatten)]
     pub other: Map<String, Value>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_yes(b: &bool) -> bool {
+    *b
+}
+
+/// Which kinds of change the chat proposes for the user to apply (`true`) rather than making
+/// itself (`false`) (ai D22). A key left out means `true`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Confirm {
+    /// `propose_edit` and `propose_create`.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub notes: bool,
+    /// Archiving and unarchiving.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub archive: bool,
+    /// `propose_delete`, which moves a note to the trash; nothing ever purges (ai D21).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub delete: bool,
+    /// `propose_type_change`.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub types: bool,
+}
+
+impl Default for Confirm {
+    fn default() -> Confirm {
+        Confirm {
+            notes: true,
+            archive: true,
+            delete: true,
+            types: true,
+        }
+    }
+}
+
+impl Confirm {
+    fn is_default(&self) -> bool {
+        *self == Confirm::default()
+    }
+
+    /// Every key filled, as `GET /api/integrations/ai` answers it.
+    pub fn to_json(self) -> Value {
+        serde_json::json!({
+            "notes": self.notes,
+            "archive": self.archive,
+            "delete": self.delete,
+            "types": self.types,
+        })
+    }
 }
 
 fn is_default(e: &Endpoints) -> bool {
@@ -191,5 +247,27 @@ pub(crate) fn state_error(e: state::Error) -> AiError {
             ErrorKind::Unavailable,
             format!("the AI settings cannot be read or written: {e}"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confirm_keys_left_out_mean_true_and_only_offs_are_stored() {
+        let s: Settings = serde_json::from_str(r#"{"confirm":{"delete":false}}"#).unwrap();
+        assert_eq!(
+            s.confirm,
+            Confirm {
+                delete: false,
+                ..Confirm::default()
+            }
+        );
+        let text = serde_json::to_string(&s).unwrap();
+        assert!(text.contains(r#""confirm":{"delete":false}"#), "{text}");
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.confirm, Confirm::default());
+        assert!(!serde_json::to_string(&s).unwrap().contains("confirm"));
     }
 }

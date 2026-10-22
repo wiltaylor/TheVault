@@ -1392,3 +1392,370 @@ fn an_edit_proposal_says_it_is_an_update() {
     );
     assert_eq!(last(&events, "proposal")["op"], "update");
 }
+
+impl Api {
+    /// `PUT /api/integrations/ai/settings` with a partial `confirm` (ai D22): its answer.
+    fn confirm(&self, confirm: Value) -> Value {
+        let res = self
+            .client
+            .put(self.server.url("/api/integrations/ai/settings"))
+            .bearer_auth(self.token())
+            .json(&json!({ "confirm": confirm }))
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        res.json().unwrap()
+    }
+
+    /// A new API token of `scope`, named `name`: its secret.
+    fn token_of(&self, name: &str, scope: &str) -> String {
+        let res = self
+            .client
+            .post(self.server.url("/api/tokens"))
+            .bearer_auth(self.token())
+            .json(&json!({ "name": name, "scope": scope }))
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let v: Value = res.json().unwrap();
+        v["secret"].as_str().unwrap().to_owned()
+    }
+
+    fn get(&self, path: &str) -> Value {
+        self.client
+            .get(self.server.url(path))
+            .bearer_auth(self.token())
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    }
+
+    /// One proposal call as `token`, then an answer: the turn's events.
+    fn propose_as(
+        &self,
+        token: &str,
+        fake: &FakeAnthropic,
+        tool: &str,
+        input: Value,
+    ) -> Vec<(String, Value)> {
+        fake.push(AnthropicMessage::new().tool_use("toolu_x", tool, input));
+        fake.push(AnthropicMessage::text("Done."));
+        let res = self.chat_as(token, json!({ "messages": [user("Do it.")] }));
+        read_events(res, |_| false)
+    }
+}
+
+const ALL_OFF: &str = r#"{"notes": false, "archive": false, "delete": false, "types": false}"#;
+
+#[test]
+fn confirm_defaults_to_on_and_takes_a_partial_change() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let status = api.get("/api/integrations/ai");
+    assert_eq!(
+        status["confirm"],
+        json!({ "notes": true, "archive": true, "delete": true, "types": true })
+    );
+    let status = api.confirm(json!({ "notes": false }));
+    assert_eq!(
+        status["confirm"],
+        json!({ "notes": false, "archive": true, "delete": true, "types": true })
+    );
+    let status = api.confirm(json!({ "delete": false }));
+    assert_eq!(
+        status["confirm"],
+        json!({ "notes": false, "archive": true, "delete": false, "types": true })
+    );
+    // The other settings are kept.
+    assert_eq!(status["default_provider"], "anthropic");
+    let res = api
+        .client
+        .put(api.server.url("/api/integrations/ai/settings"))
+        .bearer_auth(api.token())
+        .json(&json!({ "confirm": { "purge": false } }))
+        .send()
+        .unwrap();
+    assert_eq!(res.status().as_u16() / 100, 4);
+}
+
+#[test]
+fn with_notes_confirmation_off_edits_and_creates_are_written_as_the_caller() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(json!({ "notes": false }));
+    let agent = api.token_of("agent", "write");
+    let (id, version) = api.memo("Groceries", "Milk");
+    let events = api.propose_as(
+        &agent,
+        &fake,
+        "propose_edit",
+        json!({ "id": id, "base_version": version, "note": memo_doc("Groceries", "Milk and eggs").to_string() }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "applied", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let a = last(&events, "applied");
+    let note = api.note(&id);
+    assert!(note.to_string().contains("Milk and eggs"), "{note}");
+    assert_eq!(a["id"], "toolu_x");
+    assert_eq!(a["op"], "update");
+    assert_eq!(a["note_id"], id.as_str());
+    assert_eq!(a["title"], "Groceries");
+    assert_eq!(a["version"], note["version"]);
+    assert_ne!(a["version"], version.as_str());
+    let content = result_json(&fake, false);
+    assert_eq!(content["applied"], true);
+    assert_eq!(content["version"], note["version"]);
+    assert!(
+        content["message"]
+            .as_str()
+            .unwrap()
+            .contains(note["version"].as_str().unwrap()),
+        "{content}"
+    );
+    let history = api.get(&format!("/api/notes/{id}/history"));
+    let newest = history["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["current"] == true)
+        .unwrap();
+    assert_eq!(
+        newest["author"],
+        json!({ "kind": "token", "name": "agent" }),
+        "{history}"
+    );
+
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(json!({ "notes": false }));
+    let events = api.propose_as(
+        &agent,
+        &fake,
+        "propose_create",
+        json!({ "type": "memo", "note": memo_doc("Reading list", "Dune").to_string() }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "applied", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let a = last(&events, "applied");
+    assert_eq!(a["op"], "create");
+    assert_eq!(a["title"], "Reading list");
+    let created = api.note(a["note_id"].as_str().unwrap());
+    assert!(created.to_string().contains("Dune"), "{created}");
+    assert_eq!(a["version"], created["version"]);
+    let content = result_json(&fake, false);
+    assert_eq!(content["note_id"], a["note_id"]);
+    assert_eq!(api.memos().len(), 2);
+}
+
+#[test]
+fn with_notes_confirmation_off_a_version_conflict_writes_nothing() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(json!({ "notes": false }));
+    let (id, old) = api.memo("Plan", "One");
+    let res = api
+        .client
+        .put(api.server.url(&format!("/api/notes/{id}")))
+        .bearer_auth(api.token())
+        .json(&json!({ "note": memo_doc("Plan", "Two"), "base_version": old }))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let current: Value = res.json().unwrap();
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_edit",
+        json!({ "id": id, "base_version": old, "note": memo_doc("Plan", "Three").to_string() }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    assert_eq!(last(&events, "tool_result")["is_error"], true);
+    let result = tool_result_in(&fake, 1);
+    assert_eq!(result["is_error"], true);
+    let text = result["content"].as_str().unwrap();
+    assert!(text.contains("conflict"), "{text}");
+    assert!(text.contains("Nothing was written"), "{text}");
+    let note = api.note(&id);
+    assert_eq!(note["version"], current["version"]);
+    assert!(!note.to_string().contains("Three"));
+}
+
+#[test]
+fn with_archive_and_delete_confirmation_off_the_note_is_archived_then_trashed_never_purged() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(json!({ "archive": false, "delete": false }));
+    let (id, version) = api.memo("Scratch", "Throwaway");
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_archive",
+        json!({ "id": id, "archived": true }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "applied", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let a = last(&events, "applied");
+    assert_eq!(a["op"], "archive");
+    let note = api.note(&id);
+    assert_eq!(a["version"], note["version"]);
+    assert_ne!(note["version"], version.as_str());
+    assert_eq!(api.memos()[0]["archived"], true);
+
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(json!({ "archive": false, "delete": false }));
+    let events = propose_one(&api, &fake, "propose_delete", json!({ "id": id }));
+    assert_eq!(
+        shape(&events),
+        ["tool", "applied", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let a = last(&events, "applied");
+    assert_eq!(a["op"], "delete");
+    assert_eq!(a["note_id"], id.as_str());
+    assert_eq!(a["title"], "Scratch");
+    let content = result_json(&fake, false);
+    assert!(
+        content["message"].as_str().unwrap().contains("trash"),
+        "{content}"
+    );
+    assert_eq!(api.memos(), Vec::<Value>::new());
+    let trash = api.get("/api/trash");
+    let entries = trash["notes"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{trash}");
+    assert_eq!(entries[0]["id"], id.as_str());
+    // The trash entry stays restorable: its history is kept.
+    let restored = api.post(&format!("/api/trash/{id}/restore"));
+    assert_eq!(restored["id"], id.as_str());
+}
+
+#[test]
+fn with_types_confirmation_off_a_template_change_is_applied_through_the_planned_change() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(json!({ "types": false }));
+    let (id, _) = api.memo("Groceries", "Milk");
+    let changed = MEMO.replace("tab \"Main\"", "tab \"Details\"");
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": changed }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "applied", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let a = last(&events, "applied");
+    assert_eq!(a["op"], "type_change");
+    assert_eq!(a["type_name"], "memo");
+    assert!(
+        api.type_wcl("memo").unwrap().contains("tab \"Details\""),
+        "{a}"
+    );
+    assert!(api.note(&id).to_string().contains("Milk"));
+    let content = result_json(&fake, false);
+    assert_eq!(content["applied"], true);
+
+    // A new type is created through the type write.
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(json!({ "types": false }));
+    let book = MEMO.replace("\"Memo\"", "\"Book\"");
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_type_change",
+        json!({ "name": "book", "wcl": book }),
+    );
+    assert_eq!(last(&events, "applied")["op"], "type_create");
+    assert!(api.type_wcl("book").unwrap().contains("\"Book\""));
+}
+
+#[test]
+fn a_caller_without_the_scope_gets_proposals_whatever_the_switches_say() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(serde_json::from_str(ALL_OFF).unwrap());
+    let reader = api.token_of("reader", "read");
+    let (id, version) = api.memo("Groceries", "Milk");
+    let calls = [
+        (
+            "propose_edit",
+            json!({ "id": id, "base_version": version, "note": memo_doc("Groceries", "Eggs").to_string() }),
+            "proposal",
+        ),
+        (
+            "propose_create",
+            json!({ "type": "memo", "note": memo_doc("New", "x").to_string() }),
+            "proposal",
+        ),
+        (
+            "propose_archive",
+            json!({ "id": id, "archived": true }),
+            "proposal",
+        ),
+        ("propose_delete", json!({ "id": id }), "proposal"),
+        (
+            "propose_type_change",
+            json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
+            "type_proposal",
+        ),
+    ];
+    for (tool, input, event) in calls.clone() {
+        let fake = FakeAnthropic::start();
+        api.anthropic(&fake);
+        api.confirm(serde_json::from_str(ALL_OFF).unwrap());
+        let events = api.propose_as(&reader, &fake, tool, input);
+        assert_eq!(
+            shape(&events),
+            ["tool", event, "tool_result", "text", "done"],
+            "{tool}: {events:?}"
+        );
+        assert!(
+            result_json(&fake, false)["message"]
+                .as_str()
+                .unwrap()
+                .contains("awaits the user"),
+            "{tool}"
+        );
+    }
+    assert_eq!(api.note(&id)["version"], version.as_str());
+    assert_eq!(api.memos().len(), 1);
+    assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
+
+    // A write token makes note changes but still proposes type changes, which need admin.
+    let writer = api.token_of("writer", "write");
+    let (tool, input, _) = calls[4].clone();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(serde_json::from_str(ALL_OFF).unwrap());
+    let events = api.propose_as(&writer, &fake, tool, input);
+    assert_eq!(
+        shape(&events),
+        ["tool", "type_proposal", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
+}

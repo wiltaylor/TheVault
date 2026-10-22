@@ -46,8 +46,10 @@ const WRITE_PATHS: [&str; 8] = [
 ];
 
 /// Paths whose POST only reads: running a query and converting between query text and the
-/// builder's model send the query in the body but change nothing, and an AI chat turn only reads
-/// notes, its edits being proposals the user applies through the write routes (ai D15).
+/// builder's model send the query in the body but change nothing, and an AI chat turn reads
+/// notes, its edits being proposals the user applies through the write routes (ai D15); a change
+/// the chat makes itself, its confirmation turned off, needs the caller's own `write` or `admin`
+/// scope, which the chat's tools check (ai D22).
 const READ_POST_PATHS: [&str; 2] = ["/api/query", "/api/ai/chat"];
 
 /// Paths that need `admin` even to read, because they disclose or hand out credentials.
