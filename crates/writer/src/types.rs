@@ -226,9 +226,10 @@ impl Writer {
         Ok((plan, saved))
     }
 
-    /// Delete type `name`. A type that still has notes is not deleted.
+    /// Delete type `name`. A type that still has notes is not deleted, nor is a built-in type
+    /// ([`Writer::is_built_in`]); a user's own type holding a built-in's name is.
     pub fn delete_type(&self, name: &str) -> Result<()> {
-        if crate::is_built_in_type(name) {
+        if self.is_built_in(name) {
             return Err(Error::BuiltInType(name.to_owned()));
         }
         let _w = self.write_lock();

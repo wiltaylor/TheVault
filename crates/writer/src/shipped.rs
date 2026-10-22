@@ -12,10 +12,13 @@
 //!    is never changed once the vault has it. A type the vault lacks is added whole. A built-in type the vault has,
 //!    and the `person` type the phone data types reference, gain every field the shipped default
 //!    declares and the vault's type lacks, as a planned schema change that edits no note. A field
-//!    the vault has is never removed, renamed or changed. The `default` template gains a slot for
-//!    an added field when the shipped `default` template has one, at any depth (inside
-//!    `columns > column` too), after the slot the shipped template puts before it, else before
-//!    the one it puts after it; no other template, such as `card`, is touched.
+//!    the vault has is never removed, renamed or changed. Each of the vault's `default` and
+//!    `card` templates gains a slot for an added field when the shipped template of the same name
+//!    has one, at any depth (inside `columns > column` too), after the slot the shipped template
+//!    puts before it, else before the one it puts after it (ticket 148). A vault type holding a
+//!    built-in's name that is not the built-in ([`Writer::is_built_in`]), such as the user's own
+//!    `event`, is skipped with one line in the log, and a built-in type found by its identity
+//!    rather than by a record is recorded in `state.db` as the server's (ticket 104).
 //! 3. **Missing device files, tasks and scripts.** Each file of [`SHIPPED_FILES`] the vault lacks
 //!    is written, the scripts before the device file or task that names them.
 //! 4. **Shipped file upgrades.** A file of [`SHIPPED_FILES`] whose content is still a version the
@@ -203,6 +206,10 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
 /// The settings type of 0.1.7, which step `0004_remove_google_sync` removes.
 const GOOGLE_SYNC_TYPE: &str = "google_sync";
 
+/// A field the 0.1.7 `google_sync` type declares, by which step `0004_remove_google_sync` tells
+/// it from a type of the user's holding the name, which it leaves alone (ticket 104).
+const GOOGLE_SYNC_KEY: &str = "gmail_history_id";
+
 /// Step `0004_remove_google_sync` (google-sync D21): the Google sync's settings and state moved
 /// from the `google_sync` note type into secrets. The step:
 ///
@@ -213,9 +220,19 @@ const GOOGLE_SYNC_TYPE: &str = "google_sync";
 ///    already. Without the secrets key it changes nothing more and defers, to run again on the
 ///    next start;
 /// 3. deletes every `google_sync` note for good, not to the trash, then the type.
+///
+/// A `google_sync` type without the 0.1.7 type's `gmail_history_id` is the user's own: steps 2
+/// and 3 leave it and its notes alone.
 fn remove_google_sync(w: &Writer) -> Result<()> {
     event_handlers_read_settings(w)?;
-    if w.schema().type_def(GOOGLE_SYNC_TYPE).is_none() {
+    let Some(ty) = w.schema().type_def(GOOGLE_SYNC_TYPE).cloned() else {
+        return Ok(());
+    };
+    if ty.field(GOOGLE_SYNC_KEY).is_none() {
+        eprintln!(
+            "step 0004_remove_google_sync left type \"google_sync\" alone: a type of the user's \
+             holds the name"
+        );
         return Ok(());
     }
     let notes = w.note_ids(GOOGLE_SYNC_TYPE)?;
@@ -441,6 +458,12 @@ fn event_google_handler(w: &Writer) -> Result<()> {
         return Ok(());
     };
     if ty.handlers.iter().any(|h| h.script == EVENT_HANDLER_SCRIPT) {
+        return Ok(());
+    }
+    if !w.is_built_in_def(ty) {
+        eprintln!(
+            "step 0003_event_google_handler skipped type \"event\": a type of the user's holds the name"
+        );
         return Ok(());
     }
     let path = type_path(EVENT_TYPE);
@@ -809,6 +832,8 @@ pub struct Upgraded {
     pub taxonomies_added: Vec<String>,
     /// The types added whole.
     pub types_added: Vec<String>,
+    /// The built-in types skipped because a type of the user's holds the name.
+    pub types_skipped: Vec<String>,
     /// `(type, field)` of every field added to a type the vault had.
     pub fields_added: Vec<(String, String)>,
     /// The shipped files written because the vault lacked them.
@@ -982,6 +1007,8 @@ impl Writer {
 
         // Fields the shipped default declares that the vault's type lacks.
         let mut changed_types: Vec<(String, String)> = Vec::new();
+        // Built-in types found by their identity, with no record of the server writing them.
+        let mut adopted: Vec<&str> = Vec::new();
         let shipped_types = BUILT_IN_TYPES
             .into_iter()
             .chain([(PERSON_TYPE, DEFAULT_PERSON_TYPE)]);
@@ -992,6 +1019,19 @@ impl Writer {
             let Some(ty) = current.type_def(name) else {
                 continue;
             };
+            if name != PERSON_TYPE {
+                if !self.is_built_in_def(ty) {
+                    eprintln!(
+                        "the built-in type {name:?} was skipped: a type of the user's holds the \
+                         name, so it is left as it is and gains no shipped fields"
+                    );
+                    done.types_skipped.push(name.to_owned());
+                    continue;
+                }
+                if !self.was_seeded(name) {
+                    adopted.push(name);
+                }
+            }
             if name == PERSON_TYPE && upkeep == Upkeep::Device && awaits_person_emails(ty) {
                 continue;
             }
@@ -1098,6 +1138,17 @@ impl Writer {
             inner.index.advance(generation)?;
         }
 
+        // The built-in types the server wrote, or found by their identity, stay the built-in.
+        for (name, text) in &new_types {
+            if crate::builtin::is_built_in_type(name) {
+                self.record_seeded_type(name, text)?;
+            }
+        }
+        for name in adopted {
+            let text = self.vault.read_text(&type_path(name))?;
+            self.record_seeded_type(name, &text)?;
+        }
+
         for (file, _, hash, plan, record) in plans {
             match plan {
                 Plan::Current => {
@@ -1164,7 +1215,7 @@ fn block_mut<'a>(item: &'a mut Item, kind: &str) -> Option<&'a mut Block> {
 }
 
 /// The vault's type file `vault_text` with every field of `shipped` that type `ty` lacks, and
-/// slots for them in the `default` template, with the names of the added fields. `None` when
+/// slots for them in its `default` and `card` templates, with the names of the added fields. `None` when
 /// the type lacks none.
 fn with_shipped_fields(
     name: &str,
@@ -1216,21 +1267,22 @@ fn with_shipped_fields(
         ast.items.insert(at, Item::Block((*b).clone()));
     }
 
-    // Slots in the default template, for the added fields the shipped default template places,
-    // at any depth: a slot inside `columns > column` counts as one of its tab's.
-    let mut shipped_slots: Vec<(String, Item)> = Vec::new();
-    if let Some(t) = shipped
-        .items
-        .iter()
-        .find_map(|i| block(i, "template").filter(|b| label(b) == Some("default")))
-    {
-        collect_slots(&t.items, &mut shipped_slots);
-    }
-    if let Some(template) = ast
-        .items
-        .iter_mut()
-        .find_map(|i| block_mut(i, "template").filter(|b| label(b) == Some("default")))
-    {
+    // Slots in each vault template the shipped default also has, `default` and `card`, for the
+    // added fields the shipped template of that name places, at any depth: a slot inside
+    // `columns > column` counts as one of its tab's.
+    for shipped_template in shipped.items.iter().filter_map(|i| block(i, "template")) {
+        let Some(template_name) = label(shipped_template) else {
+            continue;
+        };
+        let mut shipped_slots: Vec<(String, Item)> = Vec::new();
+        collect_slots(&shipped_template.items, &mut shipped_slots);
+        let Some(template) = ast
+            .items
+            .iter_mut()
+            .find_map(|i| block_mut(i, "template").filter(|b| label(b) == Some(template_name)))
+        else {
+            continue;
+        };
         for field in &added {
             let Some(n) = shipped_slots.iter().position(|(f, _)| f == field) else {
                 continue;

@@ -364,3 +364,67 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type() {
         assert!(server.secret(name).is_none(), "{name}");
     }
 }
+
+/// A user's own `event` type, made before `event` was a built-in: unrelated fields, no
+/// `google_ref`.
+const USER_EVENT: &str = r#"label  = "Event"
+plural = "Events"
+
+field venue {
+  kind  = "string"
+  label = "Venue"
+}
+
+template default {
+  tab "Event" {
+    slot "title"
+    slot "venue"
+  }
+}
+"#;
+
+fn type_json(server: &TestServer, name: &str) -> Value {
+    get(server, "/api/types")["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == name)
+        .unwrap_or_else(|| panic!("no type {name}"))
+        .clone()
+}
+
+#[test]
+fn a_users_own_event_type_is_left_alone_can_be_deleted_and_then_becomes_the_built_in() {
+    let mut server = TestServer::start_seeded(|vault| {
+        std::fs::create_dir_all(vault.join("types")).unwrap();
+        std::fs::write(vault.join("types/event.wcl"), USER_EVENT).unwrap();
+    });
+    let before = read(&server, "types/event.wcl");
+    assert_eq!(field_names(&server, "event"), ["venue"]);
+    assert_eq!(type_json(&server, "event")["builtin"], false);
+    assert_eq!(type_json(&server, "call")["builtin"], true);
+
+    // A restart leaves it alone too.
+    server.restart();
+    assert_eq!(read(&server, "types/event.wcl"), before);
+
+    let res = Client::new()
+        .delete(server.url("/api/types/event"))
+        .header(AUTHORIZATION, format!("Bearer {}", server.admin_token()))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", res.text().unwrap());
+    assert!(!type_names(&server).iter().any(|t| t == "event"));
+
+    // The next start adds the built-in in its place.
+    server.restart();
+    let fields = field_names(&server, "event");
+    assert!(fields.iter().any(|f| f == "google_ref"), "{fields:?}");
+    assert_eq!(type_json(&server, "event")["builtin"], true);
+    let res = Client::new()
+        .delete(server.url("/api/types/event"))
+        .header(AUTHORIZATION, format!("Bearer {}", server.admin_token()))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+}
