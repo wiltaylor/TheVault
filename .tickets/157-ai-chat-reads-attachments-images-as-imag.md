@@ -3,8 +3,8 @@ id: '157'
 title: 'AI chat reads attachments: images as images, PDFs and text as text'
 plan: ai
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # AI chat reads attachments: images as images, PDFs and text as text
@@ -20,3 +20,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T20:51:07Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T20:51:07Z — wil
+
+Status set to done.
