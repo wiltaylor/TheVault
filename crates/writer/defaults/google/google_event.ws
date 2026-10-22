@@ -13,8 +13,10 @@ use regex
 // and this script's own write-back.
 //
 // - after_update: PATCH the event (or the one occurrence) with only the fields that differ from
-//   the snapshot and `If-Match: <etag>`. On 412, GET the event, merge field by field as the task
-//   does (D10), and PATCH once more. Then write Google's `etag` and the new `snapshot`.
+//   the snapshot and `If-Match: <etag>`. A changed attendee list is first merged with the
+//   entries Google holds, read with a GET, so each kept attendee keeps its response. On 412, GET
+//   the event, merge field by field as the task does (D10), and PATCH once more. Then write
+//   Google's `etag` and the new `snapshot`.
 // - after_create: a note with no `google_ref` is inserted into its `calendar`, or the settings'
 //   `default_calendar`. A note with one that the task just made is left alone. Any other,
 //   such as a note restored from the trash, is looked up: when Google no longer has the event it
@@ -319,9 +321,24 @@ fn synced(item: Value) -> Map[string, string] {
     }
 }
 
+// The attendee list to send for `addresses`, merged with `held`, the attendees Google holds: an
+// address Google already has keeps its whole entry, with its responseStatus, displayName and
+// optional and organizer flags; a new address is sent as `{ email }`; an address the note no
+// longer has is left out. Addresses compare ignoring case.
+fn attendees_for(addresses: List[string], held: List[Value]) -> List[Value] {
+    addresses.map(|a| {
+        let wanted = a.to_lower()
+        match held.find(|h| text_of(h, "email").to_lower() == wanted) {
+            Some(entry) => entry,
+            None => Value::Map(#{ "email": Value::String(a) }),
+        }
+    })
+}
+
 // The members of a Google event that set the groups `which` of `values`: the inverse of
-// `synced`.
-fn to_google(values: Map[string, string], which: List[List[string]]) -> Map[string, Value] {
+// `synced`. `held` is the attendee list Google holds, which a new attendee list keeps the
+// entries of.
+fn to_google(values: Map[string, string], which: List[List[string]], held: List[Value]) -> Map[string, Value] {
     let out: Map[string, Value] = #{}
     for group in which {
         let k = group[0]
@@ -347,7 +364,7 @@ fn to_google(values: Map[string, string], which: List[List[string]]) -> Map[stri
             out["description"] = Value::String(value(values, "description"))
         } else if k == "attendees" {
             let list = value(values, "attendees").split("\n").filter(|a| a != "")
-            out["attendees"] = Value::List(list.map(|a| Value::Map(#{ "email": Value::String(a) })))
+            out["attendees"] = Value::List(attendees_for(list, held))
         } else if k == "status" {
             let status = value(values, "status")
             if status != "" {
@@ -454,11 +471,8 @@ fn person_for(ctx: Ctx, address: string) -> Result[string, string] {
         return Ok(id)
     }
     let found = ""
-    for row in vault::query("from person where contains(emails, " + quoted(wanted) + ") limit 50")? {
-        let emails = strings(list_of(row.get("fields").unwrap_or(Value::Null), "emails"))
-        if found == "" && emails.any(|e| e.to_lower() == wanted) {
-            found = text_of(row, "id")
-        }
+    for row in vault::query("from person where has_ci(emails, " + quoted(wanted) + ") limit 1")? {
+        found = text_of(row, "id")
     }
     ctx.people[wanted] = found
     Ok(found)
@@ -595,7 +609,7 @@ fn calendar_of(ctx: Ctx, fields: Value) -> string {
 // Insert note `id` as a new event, and record its new `google_ref`.
 fn insert(ctx: Ctx, id: string, fields: Value, mine: Map[string, string]) -> Result[(), string] {
     let calendar = calendar_of(ctx, fields)
-    let body = to_google(mine, writable())
+    let body = to_google(mine, writable(), [])
     for k in ["summary", "location", "description"] {
         if body.get(k).is_some() && body[k].as_string().unwrap_or("") == "" {
             body.remove(k);
@@ -614,7 +628,20 @@ fn insert(ctx: Ctx, id: string, fields: Value, mine: Map[string, string]) -> Res
 fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], snapshot: Map[string, string], changed: List[List[string]]) -> Result[(), string] {
     let google_ref = text_of(fields, "google_ref")
     let url = event_url(ctx, calendar_of(ctx, fields), google_ref)
-    let reply = call(ctx, "PATCH", url, text_of(fields, "etag"), Value::Map(to_google(mine, changed)))?
+    // A new attendee list replaces Google's whole, so read the entries Google holds to keep them.
+    let held: List[Value] = []
+    if changed.any(|g| g[0] == "attendees") {
+        let current = call(ctx, "GET", url, "", Value::Null)?
+        if gone(current) {
+            vault::log("Google no longer has " + google_ref + ", so nothing is sent.")
+            return Ok(())
+        }
+        if status_of(current) != 200 {
+            return Err(failure("events.get of " + google_ref, current))
+        }
+        held = list_of(body_of(current), "attendees")
+    }
+    let reply = call(ctx, "PATCH", url, text_of(fields, "etag"), Value::Map(to_google(mine, changed, held)))?
     let status = status_of(reply)
     if status == 200 {
         return write_back(ctx, id, mine, body_of(reply), "", "", false)
@@ -641,7 +668,7 @@ fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], 
     let merged = merge(google, snapshot, mine, google_newer)
     let send = differing(merged, google, writable())
     if !send.is_empty() {
-        let again = call(ctx, "PATCH", url, text_of(event, "etag"), Value::Map(to_google(merged, send)))?
+        let again = call(ctx, "PATCH", url, text_of(event, "etag"), Value::Map(to_google(merged, send, list_of(event, "attendees"))))?
         if status_of(again) != 200 {
             return Err(failure("events.patch of " + google_ref + " after a merge", again))
         }

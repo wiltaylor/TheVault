@@ -25,10 +25,11 @@
 //! | `failures` | Vault file the last rebuild could not index, with its diagnostic |
 //! | `meta` | Fact about the index itself: `generation` |
 //!
-//! The connection also has two SQL functions for `query`: `vault_contains(text, part)`, true
-//! when `text` lowercased holds `part`, which the caller lowercases, and `vault_blank(text)`, true
-//! when `text` is empty or only white space. Both follow Rust's Unicode rules, as the note by
-//! note evaluator does.
+//! The connection also has three SQL functions for `query`: `vault_contains(text, part)`, true
+//! when `text` lowercased holds `part`, which the caller lowercases, `vault_same(text, lower)`,
+//! true when `text` lowercased is `lower`, for `has_ci()`, and `vault_blank(text)`, true when
+//! `text` is empty or only white space. All follow Rust's Unicode rules, as the note by note
+//! evaluator does.
 
 mod asset_text;
 mod graph;

@@ -362,8 +362,8 @@ test("screenshots of the panel with task, API and system notifications", async (
   await put("/api/scripts/backup", { source: 'fn run() -> Result[(), string] { Err("could not reach the backup server: connection refused") }\n' });
   await put("/api/tasks/backup", { wcl: 'label = "Nightly backup"\nschedule = "0 2 * * *"\nscript = "backup"\nretries = 0\n' });
   await notify(admin, { title: "Imported 12 invoices", body: "Two have no category yet.", note: note.id });
-  expect((await admin.post("/api/tasks/backup/run")).status()).toBe(200);
-  expect((await admin.post("/api/tasks/digest/run")).status()).toBe(200);
+  expect((await admin.post("/api/tasks/backup/run?wait=true")).status()).toBe(200);
+  expect((await admin.post("/api/tasks/digest/run?wait=true")).status()).toBe(200);
   const read = await notify(admin, { title: "Weekly review moved to Monday" });
   expect((await admin.post(`/api/notifications/${read.id}/read`)).status()).toBe(200);
 

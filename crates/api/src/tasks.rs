@@ -2,8 +2,9 @@
 //!
 //! - `PUT /api/tasks/{name}` takes the task file as WCL text, or JSON `{ "wcl": "..." }`. It is
 //!   checked against `docs/vault-format.md` "Task files", and the script it names must exist.
-//! - `POST /api/tasks/{name}/run` runs the task now, paused or not, and answers with the run once
-//!   it ends. A failure schedules retries as a scheduled run's does.
+//! - `POST /api/tasks/{name}/run` starts the task now, paused or not, and answers 202 with the
+//!   run as soon as it starts; `?wait=true` answers 200 with the run once it ends instead. A
+//!   failure schedules retries as a scheduled run's does.
 //! - `GET /api/cron?schedule=..&timezone=..&count=..` describes a cron schedule in words and lists
 //!   the next times it fires, so the editor previews exactly what the scheduler will do.
 //! - `PUT /api/secrets/{name}` takes `{ "value": "..." }`, or the value as a text body. No response
@@ -219,10 +220,31 @@ pub async fn run(
     }
 }
 
-/// `POST /api/tasks/{name}/run`: run the task now and answer with the run once it ends.
-pub async fn trigger(State(s): Tasks, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
-    let run = on_scheduler(s, move |s| s.trigger(&name)).await?;
-    Ok(Json(run_json(&run)))
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TriggerQuery {
+    #[serde(default)]
+    wait: bool,
+}
+
+/// `POST /api/tasks/{name}/run`: start the task now and answer 202 with the run, still
+/// `running`, as soon as it is recorded; `GET /api/tasks/{name}/runs/{id}` reads it as it goes.
+/// With `?wait=true`, answer 200 with the run once it ends.
+pub async fn trigger(
+    State(s): Tasks,
+    Path(name): Path<String>,
+    Query(q): Query<TriggerQuery>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if q.wait {
+        let run = on_scheduler(s, move |s| s.trigger(&name)).await?;
+        return Ok((StatusCode::OK, Json(run_json(&run))));
+    }
+    let run = tokio::task::spawn_blocking(move || s.trigger_in_background(&name))
+        .await
+        .map_err(|e| {
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+        })??;
+    Ok((StatusCode::ACCEPTED, Json(run_json(&run))))
 }
 
 #[derive(Deserialize)]

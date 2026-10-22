@@ -322,7 +322,8 @@ pub(crate) fn dump(conn: &Connection) -> Result<String> {
     Ok(out)
 }
 
-/// Register the SQL functions `query` uses: `vault_contains(text, part)` and `vault_blank(text)`.
+/// Register the SQL functions `query` uses: `vault_contains(text, part)`, `vault_same(text,
+/// lower)` and `vault_blank(text)`.
 /// A value that is not text is never blank and holds nothing.
 pub(crate) fn functions(conn: &Connection) -> Result<()> {
     use rusqlite::functions::FunctionFlags;
@@ -343,6 +344,15 @@ pub(crate) fn functions(conn: &Connection) -> Result<()> {
             &String::from_utf8_lossy(part),
         ))
     })?;
+    conn.create_scalar_function("vault_same", 2, flags, |ctx| {
+        let (ValueRef::Text(text), ValueRef::Text(lower)) = (ctx.get_raw(0), ctx.get_raw(1)) else {
+            return Ok(false);
+        };
+        Ok(same_folded(
+            &String::from_utf8_lossy(text),
+            &String::from_utf8_lossy(lower),
+        ))
+    })?;
     conn.create_scalar_function("vault_blank", 1, flags, |ctx| {
         Ok(match ctx.get_raw(0) {
             ValueRef::Text(t) => String::from_utf8_lossy(t).trim().is_empty(),
@@ -350,6 +360,19 @@ pub(crate) fn functions(conn: &Connection) -> Result<()> {
         })
     })?;
     Ok(())
+}
+
+/// Whether `text` lowercased is `lower`, which is already lowercase: what
+/// `text.to_lowercase() == lower` says, without a new string for ASCII text.
+pub(crate) fn same_folded(text: &str, lower: &str) -> bool {
+    if text.is_ascii() {
+        return text.len() == lower.len()
+            && text
+                .bytes()
+                .zip(lower.bytes())
+                .all(|(a, b)| a.to_ascii_lowercase() == b);
+    }
+    text.to_lowercase() == lower
 }
 
 /// Whether `text` lowercased holds `part`, which is already lowercase: what

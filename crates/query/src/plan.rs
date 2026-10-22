@@ -699,6 +699,8 @@ fn driver(filter: &Expr) -> Option<&Expr> {
             }
             Expr::Binary(BinOp::Eq, a, b) if field(a) || field(b) => 0,
             Expr::Call(f, args) if f == "has" && args.first().is_some_and(field) => 0,
+            // Every row of the field is read and compared ignoring case.
+            Expr::Call(f, args) if f == "has_ci" && args.first().is_some_and(field) => 4,
             Expr::Call(f, args) if f == "under" && args.first().is_some_and(field) => 1,
             Expr::Binary(BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, a, b)
                 if field(a) || field(b) =>
@@ -986,6 +988,25 @@ impl Planner<'_, '_> {
                 [Expr::Name(n), v] => self.compare(e, n, Cmp::Eq, v, true, neg),
                 _ => None,
             },
+            Expr::Call(f, args) if f == "has_ci" => {
+                let [Expr::Name(n), v] = args.as_slice() else {
+                    return None;
+                };
+                // A value that is not text compares as `has` compares it.
+                let Some(V::Str(text)) = self.value(v) else {
+                    return self.compare(e, n, Cmp::Eq, v, true, neg);
+                };
+                let (field, list) = match n.as_str() {
+                    "title" => ("title".to_owned(), false),
+                    _ => match self.col(n)? {
+                        Col::Field(field, Class::Text | Class::Tax(_), list) => (field, list),
+                        _ => return None,
+                    },
+                };
+                let p = self.bind(Sql::Text(text.to_lowercase()));
+                let cond = |t: &str| format!("vault_same({t}str, {p})");
+                Some(self.field_rows(e, &field, list, cond, neg))
+            }
             Expr::Call(f, args) if f == "under" => {
                 let [Expr::Name(n), term] = args.as_slice() else {
                     return None;

@@ -1202,6 +1202,10 @@ fn every_command_prints_json() {
     run("task list", &[], "");
     run("task get", &["tick"], "");
     let ran = run("task run", &["tick"], "");
+    // `task run` waits for the run to end unless told not to.
+    assert_eq!(ran["outcome"], "succeeded", "{ran}");
+    let started = run("task run", &["tick", "--no-wait"], "");
+    assert!(started["id"].is_i64(), "{started}");
     run("task history", &["tick", "--limit", "5"], "");
     run("task show-run", &["tick", &ran["id"].to_string()], "");
     run("task delete", &["tick"], "");

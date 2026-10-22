@@ -338,7 +338,7 @@ fn scripts_queue_only_declared_and_enabled_commands_and_devices_report_on_them()
     let (other, other_phone) = api.pair("Tablet");
 
     // Nothing is enabled yet, so even a declared command is refused.
-    let run = send(api.admin("POST", "/api/tasks/remind/run"), 200);
+    let run = send(api.admin("POST", "/api/tasks/remind/run?wait=true"), 200);
     assert_eq!(run["outcome"], "failed", "{run}");
     assert!(
         run["message"]
@@ -354,7 +354,7 @@ fn scripts_queue_only_declared_and_enabled_commands_and_devices_report_on_them()
             .json(&json!({ "settings": { "commands": ["send_sms", "show_notification"] } })),
         200,
     );
-    let run = send(api.admin("POST", "/api/tasks/remind/run"), 200);
+    let run = send(api.admin("POST", "/api/tasks/remind/run?wait=true"), 200);
     assert_eq!(run["outcome"], "succeeded", "{run}");
     let log = run["log"].as_str().unwrap();
     assert!(log.contains("queued pending"), "{log}");

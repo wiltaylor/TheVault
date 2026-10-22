@@ -444,6 +444,19 @@ fn table() -> Vec<(&'static str, Option<&'static str>, Vec<&'static str>, B)> {
             Model,
         ),
         (
+            "from task where has_ci(tags, \"CoDe\")",
+            None,
+            vec![T1, T3],
+            Text,
+        ),
+        ("from task where has(tags, \"CoDe\")", None, vec![], Model),
+        (
+            "from * where has_ci(title, \"ship THE importer\")",
+            None,
+            vec![T1],
+            Text,
+        ),
+        (
             "from task where under(status, \"Active\")",
             None,
             vec![T1, T3],
@@ -1284,6 +1297,16 @@ fn edge_queries() -> Vec<(&'static str, Option<&'static str>)> {
             None,
         ),
         ("from task where !contains(tags, \"co\")", None),
+        // has_ci() in SQL, and a value that is not text compared as has() compares it.
+        ("from task where has_ci(tags, \"URGENT\")", None),
+        ("from task where !has_ci(tags, \"Code\") sort title", None),
+        ("from * where has_ci(title, \"WRITE the docs\")", None),
+        (
+            "from task where has_ci(status, \"active/in progress\")",
+            None,
+        ),
+        ("from task where has_ci(estimate, 3)", None),
+        ("from task where has_ci(tags, \"cod\")", None),
         ("from * where contains(type, \"as\")", None),
         (
             "from task where contains(title, \"the\") || empty(due) sort due desc",
@@ -1535,6 +1558,7 @@ fn the_benchmarked_query_shapes_run_as_sql() {
         "from task where project == this && due < today() + days(7)",
         // contains(), empty(), date range ends and search with a filter or a sort.
         "from task where contains(title, \"ship\")",
+        "from task where has_ci(tags, \"CODE\")",
         "from task where contains(tags, \"od\") && !done sort due asc",
         "from * where contains(title, \"the\") && type == \"task\"",
         "from task where empty(estimate)",

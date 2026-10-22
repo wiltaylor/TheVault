@@ -496,7 +496,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/tasks/{name}/run",
-        "Run a task now and wait for the run to end",
+        "Start a task now: 202 with the running run, or with ?wait=true 200 once it ends",
     ),
     (
         "GET",

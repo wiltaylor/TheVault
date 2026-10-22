@@ -38,6 +38,7 @@ const FUNCTIONS: Record<string, number> = {
   now: 0,
   days: 1,
   has: 2,
+  has_ci: 2,
   under: 2,
   any: 2,
   all: 2,
@@ -769,12 +770,16 @@ function evaluate(e: Expr, note: WhenNote, clock: WhenClock): boolean {
         if (v.k === "int" || v.k === "float") return { k: "duration", v: v.v * 86_400 };
         throw new EvalError(`days() takes a number, found ${KIND[v.k]}`);
       }
-      case "has": {
+      case "has":
+      case "has_ci": {
         const list = ev(args[0]!);
         const item = ev(args[1]!);
+        // has_ci compares text ignoring case, and every other value as has does.
+        const same = (a: V, b: V) =>
+          f === "has_ci" && a.k === "str" && b.k === "str" ? a.v.toLowerCase() === b.v.toLowerCase() : equals(a, b);
         if (list.k === "null") return { k: "bool", v: false };
-        if (list.k === "list") return { k: "bool", v: list.v.some((i) => equals(i, item)) };
-        return { k: "bool", v: equals(list, item) };
+        if (list.k === "list") return { k: "bool", v: list.v.some((i) => same(i, item)) };
+        return { k: "bool", v: same(list, item) };
       }
       case "under": {
         const held = ev(args[0]!);

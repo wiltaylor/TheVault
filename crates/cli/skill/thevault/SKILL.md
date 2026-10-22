@@ -109,6 +109,7 @@ A query is a `from` clause followed by optional clauses in this order: `include 
 |----------|-----------|
 | `under(status, "Active")` | A taxonomy field holds that term or a term below it |
 | `has(tags, "x")` | A list field contains the value |
+| `has_ci(emails, "Ann@Example.com")` | As `has()`, but text compares ignoring case, so an address matches however it was stored |
 | `contains(title, "plan")` | A text field, or any item of a text list, holds the text, ignoring case |
 | `empty(due)` | A field has no value: missing, blank text or an empty list |
 | `today()`, `now()`, `days(n)` | Date arithmetic, as in `due < today() + days(7)` |
@@ -575,7 +576,7 @@ A template takes an optional `label` and one or more tabs.
 
 `tab "<title>" { ... }` is one tab of the page, in order. A template with one tab shows no tab bar, and a card shows only its first tab that shows for the note. A tab holds an optional `when`, then an ordered mix of slots and fixed blocks.
 
-`when = "<condition>"` shows the tab only for notes that meet the condition. The condition is a `where` clause of step 2's query language, on the note shown: its fields, `title`, `created`, `updated` and `archived`, `this` for the note itself, the operators, and `has()`, `under()`, `contains()`, `empty()`, `any()`, `all()`, `today()`, `now()` and `days()`. A missing field is false, as in a query. A condition that does not parse, names a field the type lacks, follows a reference with `.`, or calls `linked_from()` is refused with `invalid_type` at the tab, such as `template card > tab "Overdue".when`. The app evaluates the condition as the note is edited, so the tab appears or disappears before a save. When the open tab is hidden, the page moves to the first tab that shows; when no tab shows, the first tab shows. A vault that uses `when` needs the apps at 0.1.10 or later, since older apps refuse it.
+`when = "<condition>"` shows the tab only for notes that meet the condition. The condition is a `where` clause of step 2's query language, on the note shown: its fields, `title`, `created`, `updated` and `archived`, `this` for the note itself, the operators, and `has()`, `has_ci()`, `under()`, `contains()`, `empty()`, `any()`, `all()`, `today()`, `now()` and `days()`. A missing field is false, as in a query. A condition that does not parse, names a field the type lacks, follows a reference with `.`, or calls `linked_from()` is refused with `invalid_type` at the tab, such as `template card > tab "Overdue".when`. The app evaluates the condition as the note is edited, so the tab appears or disappears before a save. When the open tab is hidden, the page moves to the first tab that shows; when no tab shows, the first tab shows. A vault that uses `when` needs the apps at 0.1.10 or later, since older apps refuse it.
 
 A field still has one slot per template, so a second tab that shows the same field uses `{{field}}` text. This card shows an invoice unpaid for over 30 days with its own tab, and every other invoice with the plain one:
 
@@ -804,7 +805,7 @@ vault task history invoice_review --limit 5
 vault notifications --unread
 ```
 
-`task put` answers with `schedule_text`, such as `Mondays at 09:00 (Australia/Melbourne)`, and `next_run`: check that it says what the user asked for. `vault task run` runs the task now and prints the run when it ends. It exits 0 whatever the outcome, so read the run: the task works when `outcome` is `succeeded`. A failed run has `outcome` `failed` and the error in `message`, and `log` holds what the script logged either way. `vault task history <name>` lists the runs newest first, `vault task show-run <name> <id>` prints one, and `vault task get <name>` shows the task with its `latest_run`. `vault task delete <name>` deletes a task and keeps its runs.
+`task put` answers with `schedule_text`, such as `Mondays at 09:00 (Australia/Melbourne)`, and `next_run`: check that it says what the user asked for. `vault task run` runs the task now and prints the run when it ends; `--no-wait` prints it as soon as it starts, with `outcome` `running`, for `task show-run` to read later. It exits 0 whatever the outcome, so read the run: the task works when `outcome` is `succeeded`. A failed run has `outcome` `failed` and the error in `message`, and `log` holds what the script logged either way. `vault task history <name>` lists the runs newest first, `vault task show-run <name> <id>` prints one, and `vault task get <name>` shows the task with its `latest_run`. `vault task delete <name>` deletes a task and keeps its runs.
 
 ## 17. Secrets
 

@@ -597,7 +597,13 @@ enum Task {
     /// Delete a scheduled task. Its run history stays.
     Delete { name: String },
     /// Run a task now and wait for the run to end.
-    Run { name: String },
+    Run {
+        name: String,
+        /// Print the run as soon as it starts, still `running`, instead of waiting for it to
+        /// end. `task show-run` reads it later.
+        #[arg(long)]
+        no_wait: bool,
+    },
     /// A task's runs, newest first, with their logs.
     History {
         name: String,
@@ -1039,10 +1045,10 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
                 json!({ "wcl": read_text(file.as_deref())? }),
             ),
             Task::Delete { name } => api.delete(&["api", "tasks", &name]),
-            Task::Run { name } => api.call(
+            Task::Run { name, no_wait } => api.call(
                 Method::POST,
                 &["api", "tasks", &name, "run"],
-                &[],
+                &[("wait", (!no_wait).to_string())],
                 Body::None,
             ),
             Task::History { name, limit } => {

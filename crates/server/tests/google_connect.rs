@@ -742,13 +742,50 @@ fn the_status_reports_running_per_side_from_the_scheduler() {
 
     // A run started by hand shows as running until it ends.
     let client = api.client.clone();
-    let url = api.server.url("/api/tasks/google_gmail/run");
+    let url = api.server.url("/api/tasks/google_gmail/run?wait=true");
     let run = std::thread::spawn(move || client.post(url).send().unwrap().status());
     let status = api.wait_running("gmail", true);
     assert_eq!(status["calendar"]["running"], false, "{status:#}");
     assert_eq!(run.join().unwrap(), StatusCode::OK);
     let status = api.status();
     assert_eq!(status["gmail"]["running"], false, "{status:#}");
+
+    // Without `wait`, Run now answers 202 once the run starts, with the run still running, and
+    // the run is read by its id until it ends (ticket 115).
+    let res = api
+        .client
+        .post(api.server.url("/api/tasks/google_gmail/run"))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let started: Value = res.json().unwrap();
+    assert_eq!(started["outcome"], "running", "{started:#}");
+    assert_eq!(started["ended"], Value::Null, "{started:#}");
+    assert_eq!(started["task"], "google_gmail");
+    let status = api.status();
+    assert_eq!(status["gmail"]["running"], true, "{status:#}");
+    // A second Run now while it goes is refused.
+    let again = api
+        .client
+        .post(api.server.url("/api/tasks/google_gmail/run"))
+        .send()
+        .unwrap();
+    assert_eq!(again.status(), StatusCode::CONFLICT);
+    let url = api
+        .server
+        .url(&format!("/api/tasks/google_gmail/runs/{}", started["id"]));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let ended = loop {
+        let run = expect(api.client.get(url.clone()).send().unwrap(), StatusCode::OK);
+        if run["outcome"] != "running" {
+            break run;
+        }
+        assert!(Instant::now() < deadline, "the run never ended: {run:#}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(ended["outcome"], "succeeded", "{ended:#}");
+    assert!(ended["ended"].is_i64(), "{ended:#}");
+    api.wait_running("gmail", false);
 
     // With no task, the side is not running.
     expect(

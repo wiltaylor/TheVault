@@ -136,7 +136,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Open a task with its runs | `Tasks.tsx` | `GET /api/tasks/{name}`, `GET /api/tasks/{name}/runs?limit=` | `vault task get <name>`, `vault task history <name> --limit <n>` | |
 | Pick a task's script and secrets | `Tasks.tsx` | `GET /api/scripts`, `GET /api/secrets` | `vault script list`, `vault secret list` | |
 | Create, save or pause a task | `Tasks.tsx` | `PUT /api/tasks/{name}` | `vault task put <name> -f <file>` | |
-| Run a task now | `Tasks.tsx` | `POST /api/tasks/{name}/run` | `vault task run <name>` | |
+| Run a task now | `Tasks.tsx` | `POST /api/tasks/{name}/run`, then `GET /api/tasks/{name}/runs/{id}` until it ends | `vault task run <name>`, which waits with `?wait=true` unless `--no-wait` | |
 | Delete a task | `Tasks.tsx` | `DELETE /api/tasks/{name}` | `vault task delete <name>` | |
 | Read a run's log | `Tasks.tsx` | in the runs list | `vault task history <name>` or `vault task show-run <name> <id>` | |
 | List secrets | `pages/Access.tsx` | `GET /api/secrets` | `vault secret list` | |
@@ -279,7 +279,7 @@ The listing has 86 routes. `/api/test/clock` is left out of the listing on purpo
 | `DELETE /api/tasks/{name}` | `vault task delete` | Tasks | |
 | `GET /api/cron` | none | Scheduled editor, schedule preview | Gap: no CLI command (noticed while adding notifications; not filed) |
 | `GET /api/tasks/{name}/runs` | `vault task history` | Tasks | |
-| `GET /api/tasks/{name}/runs/{id}` | `vault task show-run` | not used | The runs list already carries each run's log |
+| `GET /api/tasks/{name}/runs/{id}` | `vault task show-run` | Tasks, Integrations | Run now reads the run it started until it ends |
 | `POST /api/tasks/{name}/run` | `vault task run` | Tasks | |
 
 ## 3. CLI commands without an API route

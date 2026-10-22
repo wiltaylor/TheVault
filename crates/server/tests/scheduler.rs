@@ -122,7 +122,9 @@ impl Api {
 
     fn trigger(&self, task: &str) -> Value {
         expect(
-            self.post(&format!("/api/tasks/{task}/run")).send().unwrap(),
+            self.post(&format!("/api/tasks/{task}/run?wait=true"))
+                .send()
+                .unwrap(),
             200,
         )
     }
@@ -449,7 +451,7 @@ fn task_files_are_checked_and_changing_tasks_needs_admin() {
         .unwrap();
     assert_eq!(res.status().as_u16(), 403);
     let res = writer
-        .post(api.server.url("/api/tasks/noop/run"))
+        .post(api.server.url("/api/tasks/noop/run?wait=true"))
         .send()
         .unwrap();
     assert_eq!(res.status().as_u16(), 403);

@@ -133,7 +133,7 @@ impl Api {
     /// Run the task now, then let every handler it set off finish.
     fn sync(&self) {
         let run = expect(
-            self.req("POST", "/api/tasks/google_calendar/run")
+            self.req("POST", "/api/tasks/google_calendar/run?wait=true")
                 .send()
                 .unwrap(),
             200,
@@ -442,6 +442,61 @@ fn a_412_merges_field_by_field_and_retries_once() {
     assert_eq!(note["note"]["fields"]["location"], "Room 4");
     assert_eq!(note["note"]["fields"]["title"], "Standup again");
     assert_in_step(&api, &note, "primary");
+}
+
+#[test]
+fn changing_the_attendees_keeps_googles_entry_for_each_address_it_keeps() {
+    let api = Api::start();
+    let ann =
+        json!({ "email": "ann@example.com", "displayName": "Ann", "responseStatus": "accepted" });
+    let bob =
+        json!({ "email": "bob@example.com", "optional": true, "responseStatus": "tentative" });
+    let me = json!({ "email": "me@example.com", "organizer": true, "self": true, "responseStatus": "accepted" });
+    let mut event = standup();
+    event["attendees"] = json!([ann.clone(), bob, me.clone()]);
+    api.google.put_event("primary", event);
+    api.sync();
+    let id = api.event_id("standup");
+    api.google.clear_requests();
+
+    // The vault drops Bob, adds Cy, and writes Ann's address in another case.
+    api.edit(
+        &id,
+        json!({ "attendees_raw": ["ANN@example.com", "me@example.com", "cy@example.com"] }),
+    );
+
+    let calls = api.google.requests_to(CALENDAR_PATH);
+    let methods: Vec<&str> = calls.iter().map(|r| r.method.as_str()).collect();
+    assert_eq!(methods, ["GET", "PATCH"], "{calls:?}");
+    let sent = json!([ann.clone(), me.clone(), { "email": "cy@example.com" }]);
+    assert_eq!(calls[1].json(), json!({ "attendees": sent }));
+    let event = api.google.event("primary", "standup").unwrap();
+    assert_eq!(event["attendees"], sent);
+    // The note takes Google's addresses and is in step, so the write-back sends nothing more.
+    let note = api.note(&id);
+    assert_eq!(
+        note["note"]["fields"]["attendees_raw"],
+        json!(["ann@example.com", "me@example.com", "cy@example.com"])
+    );
+    assert_in_step(&api, &note, "primary");
+
+    // After a 412 the merge keeps the entries of the event as Google now holds it.
+    let cy = json!({ "email": "cy@example.com", "responseStatus": "declined" });
+    api.google.change_event(
+        "primary",
+        "standup",
+        json!({ "attendees": [ann.clone(), me.clone(), cy.clone()], "updated": "2026-03-01T07:00:00.000Z" }),
+    );
+    api.google.clear_requests();
+    api.edit(
+        &id,
+        json!({ "attendees_raw": ["cy@example.com", "ann@example.com"] }),
+    );
+    let calls = api.google.requests_to(CALENDAR_PATH);
+    let methods: Vec<&str> = calls.iter().map(|r| r.method.as_str()).collect();
+    assert_eq!(methods, ["GET", "PATCH", "GET", "PATCH"], "{calls:?}");
+    assert_eq!(calls[3].json(), json!({ "attendees": [cy, ann] }));
+    assert_in_step(&api, &api.note(&id), "primary");
 }
 
 #[test]

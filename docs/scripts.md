@@ -535,7 +535,7 @@ The note fields map to the event as the sync's table above, inverted:
 | `when` of datetimes | `start.dateTime` and `end.dateTime` as the note holds them; `date` set to null |
 | `location` | `location` |
 | `description` | Its paragraphs joined with a line break |
-| `attendees_raw` | `attendees`, one `{ email }` each, in order |
+| `attendees_raw` | `attendees`, one entry per address, in order. Before a `PATCH` that changes them, the handler reads the event with a `GET` (or uses the one a 412 read), and an address Google already lists, compared ignoring case, keeps Google's whole entry: its `responseStatus`, `displayName`, and `optional` and `organizer` flags. A new address is sent as `{ email }`, and an address the note dropped is left out. An insert sends `{ email }` for each |
 | `status` | `status` |
 
 `organiser` and `meet_url` are Google's own and are never sent; the write-back takes Google's values for them.

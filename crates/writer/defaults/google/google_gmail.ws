@@ -466,17 +466,8 @@ fn person_of(ctx: Ctx, raw: string) -> Result[string, string] {
         Some(id) => return Ok(id),
         None => {},
     }
-    let row = first_row("from person where has(emails, " + quoted(address) + ") limit 1")?
-    let id = text_of(row, "id")
-    if id == "" {
-        let original = match regex::captures("<([^>]+)>", raw) {
-            Some(groups) => groups[1].trim(),
-            None => raw.trim(),
-        }
-        if original != address {
-            id = text_of(first_row("from person where has(emails, " + quoted(original) + ") limit 1")?, "id")
-        }
-    }
+    // An address matches ignoring case, however the person stores it.
+    let id = text_of(first_row("from person where has_ci(emails, " + quoted(address) + ") limit 1")?, "id")
     ctx.people[address] = id
     Ok(id)
 }

@@ -431,11 +431,8 @@ fn person_for(sync: Sync, address: string) -> Result[string, string] {
         return Ok(id)
     }
     let found = ""
-    for row in vault::query("from person where contains(emails, " + quoted(wanted) + ") limit 50")? {
-        let emails = strings(list_of(row.get("fields").unwrap_or(Value::Null), "emails"))
-        if found == "" && emails.any(|e| e.to_lower() == wanted) {
-            found = text_of(row, "id")
-        }
+    for row in vault::query("from person where has_ci(emails, " + quoted(wanted) + ") limit 1")? {
+        found = text_of(row, "id")
     }
     sync.people[wanted] = found
     Ok(found)

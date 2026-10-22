@@ -400,7 +400,9 @@ fn a_scheduled_script_notifies_with_its_task_as_the_source() {
         200,
     );
     let run = expect(
-        api.req("POST", "/api/tasks/digest/run").send().unwrap(),
+        api.req("POST", "/api/tasks/digest/run?wait=true")
+            .send()
+            .unwrap(),
         200,
     );
     assert_eq!(run["outcome"], "succeeded", "{run}");
@@ -421,7 +423,12 @@ fn a_scheduled_script_that_fails_for_good_notifies_once() {
             .unwrap(),
         200,
     );
-    let first = expect(api.req("POST", "/api/tasks/flaky/run").send().unwrap(), 200);
+    let first = expect(
+        api.req("POST", "/api/tasks/flaky/run?wait=true")
+            .send()
+            .unwrap(),
+        200,
+    );
     assert_eq!(first["outcome"], "failed");
     // A retry is waiting, so the user hears nothing yet.
     assert_eq!(api.list("")["items"], json!([]));
