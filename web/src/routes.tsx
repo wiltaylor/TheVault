@@ -8,6 +8,7 @@ import { AssetView } from "./pages/AssetView";
 import { DailyNotes } from "./pages/DailyNotes";
 import { Devices } from "./pages/Devices";
 import { Inbox } from "./pages/Inbox";
+import { Ai } from "./pages/Ai";
 import { GoogleCallback, Integrations } from "./pages/Integrations";
 import { NoteHistoryRedirect } from "./history/redirect";
 import { NewNote, NoteView } from "./pages/NoteView";
@@ -59,6 +60,7 @@ export function paneRoutes() {
         <Route path="/tokens" component={Tokens} />
         <Route path="/devices" component={Devices} />
         <Route path="/integrations" component={Integrations} />
+        <Route path="/ai" component={Ai} />
       </Route>
       <Route path="/integrations/google/callback" component={GoogleCallback} />
       <Route path="/trash" component={Trash} />

@@ -489,6 +489,14 @@ mod tests {
             (Method::GET, "/agent/install.sh", None),
             (Method::HEAD, "/agent/install.sh", None),
             (Method::POST, "/agent/install.sh", Some(Scope::Admin)),
+            // Settings > AI holds credentials; the model list is a read (ai D15).
+            (Method::GET, "/api/integrations/ai", Some(Scope::Admin)),
+            (
+                Method::PUT,
+                "/api/integrations/ai/openai/key",
+                Some(Scope::Admin),
+            ),
+            (Method::GET, "/api/ai/models", Some(Scope::Read)),
         ];
         for (method, path, want) in cases {
             assert_eq!(required_scope(&method, path), want, "{method} {path}");

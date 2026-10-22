@@ -11,13 +11,14 @@ const SECTIONS: [string, string][] = [
   ["/settings/tokens", "API tokens"],
   ["/settings/devices", "Devices"],
   ["/settings/integrations", "Integrations"],
+  ["/settings/ai", "AI"],
 ];
 
 /**
  * The sections the apps leave out: they hold credentials, which need `admin` on the home server,
  * and an app's device token never has it (D2). They are managed in the web app.
  */
-export const WEB_APP_ONLY = ["/settings/secrets", "/settings/tokens", "/settings/integrations"];
+export const WEB_APP_ONLY = ["/settings/secrets", "/settings/tokens", "/settings/integrations", "/settings/ai"];
 
 /** The settings area: tabs for each section above the section's own page. */
 export function SettingsLayout(props: ParentProps) {

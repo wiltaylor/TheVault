@@ -3089,6 +3089,44 @@ button.link {
   margin: 0;
 }
 
+/* Settings > AI: one card per provider (ai D6, D8). */
+.ai-card {
+  max-width: 48rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.ai-card h2 {
+  margin: 0.25rem 0;
+  font-size: 1.1rem;
+}
+
+.ai-card header p,
+.ai-card p {
+  margin: 0;
+}
+
+.ai-card > button {
+  align-self: flex-start;
+}
+
+.ai-card #chatgpt-pasted {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+}
+
+.ai-card .actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ai-test-ok {
+  color: var(--ok, inherit);
+}
+
 .device-head h2 {
   margin: 0.25rem 0;
   font-size: 1.1rem;

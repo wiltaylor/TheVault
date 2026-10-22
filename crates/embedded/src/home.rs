@@ -125,7 +125,11 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     if path == "/api/version" && get {
         return Route::ServerVersion;
     }
-    if under(path, "/api/tokens") || under(path, "/api/secrets") {
+    if under(path, "/api/tokens")
+        || under(path, "/api/secrets")
+        || under(path, "/api/integrations/ai")
+        || under(path, "/api/ai")
+    {
         return Route::NeedsWebApp;
     }
     if path == "/api/events" && get {
@@ -543,6 +547,14 @@ mod tests {
         assert_eq!(route(&get, "/api/events"), Route::Events);
         assert_eq!(route(&get, "/api/tokens"), Route::NeedsWebApp);
         assert_eq!(route(&Method::PUT, "/api/secrets/k"), Route::NeedsWebApp);
+        // The device holds no AI credentials (ai D16).
+        assert_eq!(route(&get, "/api/integrations/ai"), Route::NeedsWebApp);
+        assert_eq!(
+            route(&post, "/api/integrations/ai/chatgpt/start"),
+            Route::NeedsWebApp
+        );
+        assert_eq!(route(&get, "/api/ai/models"), Route::NeedsWebApp);
+        assert_eq!(route(&get, "/api/aim"), Route::Local);
         assert_eq!(route(&get, "/api/tasks"), Route::ForwardOrLocal);
         assert_eq!(route(&get, "/api/tasks/noop"), Route::Local);
         assert_eq!(route(&get, "/api/tasks/noop/runs"), Route::Forward);

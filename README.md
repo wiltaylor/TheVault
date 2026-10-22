@@ -12,6 +12,7 @@ A single-user, self-hosted note app: a Rust server, a SolidJS web client, deskto
 - [Connecting Gmail and Google Calendar](docs/google.md)
 - [Handing out the apps from your server](docs/clients.md)
 - [Connecting an AI agent](docs/agents.md)
+- [AI providers: Anthropic, OpenAI and ChatGPT](docs/ai.md)
 - [The Linux desktop app](docs/desktop.md)
 - [Releasing the Android app](docs/android-release.md)
 - [Releasing TheVault](docs/releasing.md)

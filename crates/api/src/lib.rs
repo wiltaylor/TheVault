@@ -27,6 +27,9 @@
 //! Settings > Integrations > Google signs in with the user's own OAuth client under
 //! `/api/integrations/google` (google-sync D1, D18).
 //!
+//! Settings > AI stores the provider keys and signs in with ChatGPT under
+//! `/api/integrations/ai`, and `/api/ai/models` lists a provider's models (ai D6, D8, D15).
+//!
 //! Scheduled tasks live under `/api/tasks`, with their run history and a route to run one now;
 //! the secrets they read are written, never read back, under `/api/secrets` (D10).
 //!
@@ -46,6 +49,7 @@
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
 mod agents;
+mod ai_settings;
 mod apps;
 mod assets;
 mod auth;
@@ -170,6 +174,8 @@ struct Built {
     apps: Routes<Arc<apps::Folder>>,
     /// The Google sign-in routes, which take the sign-ins started.
     google: Routes<Arc<google::Google>>,
+    /// The Settings > AI routes, which take the ChatGPT sign-ins started.
+    ai: Routes<Arc<ai_settings::Ai>>,
 }
 
 fn build() -> Built {
@@ -305,12 +311,31 @@ fn build() -> Built {
         .post("/api/integrations/google/start", google::start)
         .post("/api/integrations/google/finish", google::finish)
         .post("/api/integrations/google/disconnect", google::disconnect);
+    let ai = Routes::new()
+        .get("/api/integrations/ai", ai_settings::status)
+        .put("/api/integrations/ai/settings", ai_settings::put_settings)
+        .put("/api/integrations/ai/{provider}/key", ai_settings::put_key)
+        .post("/api/integrations/ai/{provider}/test", ai_settings::test)
+        .post(
+            "/api/integrations/ai/chatgpt/start",
+            ai_settings::chatgpt_start,
+        )
+        .post(
+            "/api/integrations/ai/chatgpt/finish",
+            ai_settings::chatgpt_finish,
+        )
+        .post(
+            "/api/integrations/ai/chatgpt/disconnect",
+            ai_settings::chatgpt_disconnect,
+        )
+        .get("/api/ai/models", ai_settings::models);
     Built {
         api,
         login,
         tasks,
         apps,
         google,
+        ai,
     }
 }
 
@@ -322,6 +347,7 @@ pub fn routes() -> Vec<(Method, &'static str)> {
         tasks,
         apps,
         google,
+        ai,
     } = build();
     api.seen
         .into_iter()
@@ -329,6 +355,7 @@ pub fn routes() -> Vec<(Method, &'static str)> {
         .chain(tasks.seen)
         .chain(apps.seen)
         .chain(google.seen)
+        .chain(ai.seen)
         .collect()
 }
 
@@ -367,7 +394,9 @@ fn assemble(
         tasks,
         apps,
         google,
+        ai,
     } = build();
+    let writer_for_ai = writer.clone();
     let mut app = api
         .router
         .with_state(writer)
@@ -378,6 +407,10 @@ fn assemble(
             google
                 .router
                 .with_state(Arc::new(google::Google::new(scheduler.clone()))),
+        )
+        .merge(
+            ai.router
+                .with_state(Arc::new(ai_settings::Ai::new(writer_for_ai))),
         );
     if let Some(clock) = test_clock {
         app = app.merge(

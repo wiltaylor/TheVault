@@ -523,6 +523,46 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/integrations/google/disconnect",
         "Delete the Google sign-in and account, pause the sync and clear its cursors",
     ),
+    (
+        "GET",
+        "/api/integrations/ai",
+        "Settings > AI: the default provider and each provider's sign-in and default model, never a key or token",
+    ),
+    (
+        "PUT",
+        "/api/integrations/ai/settings",
+        "Save the default AI provider and each provider's default model",
+    ),
+    (
+        "PUT",
+        "/api/integrations/ai/{provider}/key",
+        "Store the Anthropic or OpenAI API key; an empty key deletes it",
+    ),
+    (
+        "POST",
+        "/api/integrations/ai/{provider}/test",
+        "Send a short Reply with OK request to the provider's default model and report how it went",
+    ),
+    (
+        "POST",
+        "/api/integrations/ai/chatgpt/start",
+        "Start Sign in with ChatGPT: answer the authorize URL to open in the browser",
+    ),
+    (
+        "POST",
+        "/api/integrations/ai/chatgpt/finish",
+        "Finish Sign in with ChatGPT with the pasted callback address: check the ID token and store the plan's tokens",
+    ),
+    (
+        "POST",
+        "/api/integrations/ai/chatgpt/disconnect",
+        "Revoke and delete the ChatGPT sign-in",
+    ),
+    (
+        "GET",
+        "/api/ai/models",
+        "The models an AI provider offers now (?provider=), with its default model",
+    ),
 ];
 
 /// The OpenAPI document of [`ENDPOINTS`].

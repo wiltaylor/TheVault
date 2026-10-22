@@ -429,6 +429,50 @@ export interface GoogleStatus {
 /** How Google's consent page sends the browser back: to a loopback address to paste, or straight to this server. */
 export type GoogleRedirect = "loopback" | "direct";
 
+/** An AI provider (ai D1): an Anthropic key, an OpenAI key, or a ChatGPT plan. */
+export type AiProvider = "anthropic" | "openai" | "chatgpt";
+
+/** One provider in Settings > AI. Never a key or token (ai D7). */
+export interface AiProviderStatus {
+  /** Whether it has a key, or for ChatGPT a sign-in. */
+  configured: boolean;
+  /** The default model chosen for it. */
+  model: string | null;
+  /** The signed-in ChatGPT account, for `chatgpt`. */
+  account?: string | null;
+}
+
+/** Settings > AI, from `GET /api/integrations/ai`. */
+export interface AiStatus {
+  /** Whether the server can store secrets at all. */
+  secrets_key: boolean;
+  default_provider: AiProvider | null;
+  providers: Record<AiProvider, AiProviderStatus>;
+}
+
+/** A model a provider offers now (ai D6). */
+export interface AiModel {
+  id: string;
+  display_name: string | null;
+}
+
+/** A provider's live model list, with its default model or the preselected one. */
+export interface AiModels {
+  provider: AiProvider;
+  model: string | null;
+  models: AiModel[];
+}
+
+/** What the Test button got back. */
+export interface AiTestResult {
+  ok: boolean;
+  provider: AiProvider;
+  model: string | null;
+  ms: number;
+  text: string | null;
+  error: { kind: string; message: string } | null;
+}
+
 /** A secret's name and times. No response ever carries its value (D10). */
 export interface Secret {
   name: string;
@@ -1038,6 +1082,25 @@ export const api = {
   /** Save what the Google sync pulls. */
   googleSaveSettings: (settings: GoogleSettings) =>
     request<GoogleStatus>("PUT", "/api/integrations/google/settings", settings),
+  /** Settings > AI: each provider's sign-in and default model (ai D7). */
+  aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
+  /** Save the default provider and default models; an empty string clears one. */
+  aiSaveSettings: (settings: { default_provider?: AiProvider | ""; models?: Partial<Record<AiProvider, string>> }) =>
+    request<AiStatus>("PUT", "/api/integrations/ai/settings", settings),
+  /** Store an Anthropic or OpenAI API key; an empty key deletes it. */
+  aiPutKey: (provider: "anthropic" | "openai", key: string) =>
+    request<AiStatus>("PUT", `/api/integrations/ai/${provider}/key`, { key }),
+  /** Send a short test request to the provider's default model, or `model`. */
+  aiTest: (provider: AiProvider, model?: string) =>
+    request<AiTestResult>("POST", `/api/integrations/ai/${provider}/test`, model ? { model } : {}),
+  /** The models a provider offers now. */
+  aiModels: (provider: AiProvider) => request<AiModels>("GET", `/api/ai/models?provider=${enc(provider)}`),
+  /** Start Sign in with ChatGPT: the authorize page to open (ai D8). */
+  chatgptStart: () => request<{ auth_url: string }>("POST", "/api/integrations/ai/chatgpt/start"),
+  /** Finish Sign in with ChatGPT with the address the browser failed to load. */
+  chatgptFinish: (url: string) => request<AiStatus>("POST", "/api/integrations/ai/chatgpt/finish", { url }),
+  /** Revoke and forget the ChatGPT sign-in. */
+  chatgptDisconnect: () => request<AiStatus>("POST", "/api/integrations/ai/chatgpt/disconnect"),
   devices: async () => (await request<{ devices: Device[] }>("GET", "/api/devices")).devices,
   /** The app builds the server hands out. Public: it needs no session. */
   clients: () => request<{ clients: ClientBuild[]; enabled: boolean }>("GET", "/api/clients"),
