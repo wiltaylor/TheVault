@@ -4,8 +4,8 @@ title: A device pushes the notes its changes link to, and once adopts local note
   the server never had, so leftovers from an earlier vault upload instead of blocking
   435 messages; plus a Send this device's notes button
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # A device pushes the notes its changes link to, and once adopts local notes the server never had, so leftovers from an earlier vault upload instead of blocking 435 messages; plus a Send this device's notes button
@@ -28,3 +28,19 @@ Acceptance criteria:
 - Do not wipe or rewrite any local note; only queue creates.
 
 ## Worklog
+
+### 2026-10-22T13:40:30Z — wil
+
+Claimed.
+
+### 2026-10-22T14:04:35Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T14:04:36Z — wil
+
+Implemented on ticket/150 (971efa5). Tests: sync two_node (conversation pushed first, two-note cycle, pre-143 adoption once incl. archived/trashed, endpoint), server notes missing_note, plugin core endpoint test, web SendDeviceNotes test. ./dev just check and ./dev just android-test pass. Not yet confirmed on the user's phone.
+
+### 2026-10-22T14:04:36Z — wil
+
+Status set to done.
