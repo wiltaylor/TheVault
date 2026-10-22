@@ -54,6 +54,7 @@ const TYPES: TypeDef[] = [
     field("starts", "datetime"),
     field("span", "date_range"),
     field("window", "date_range", { of: "datetime" }),
+    field("when", "date_range", { of: "date_or_datetime" }),
     field("project", "reference", { target: "project" }),
     field("people", "reference", { target: "person", multiple: true }),
     field("tags", "list", { items: "string" }),
@@ -70,9 +71,24 @@ const UTC = () => 0;
 const PLUS11 = () => 11 * 60;
 const MINUS5 = () => -5 * 60;
 
-function cond(name: string, op: Op, values: string[] = [], offset = UTC): string | null {
+function cond(name: string, op: Op, values: string[] = [], offset = UTC, today = () => "2026-10-20"): string | null {
   const f: Filter = { section: "prop", owner: "task", field: name, op, values };
-  return filterCond(def(name), f, offset);
+  return filterCond(def(name), f, offset, today);
+}
+
+/**
+ * Whether `when = { start, end }` meets condition `c` as the query engine reads it: each end by
+ * its form, a date as its UTC midnight. Handles the comparisons, `&&`, `||` and parentheses the
+ * Search page writes.
+ */
+function holds(c: string, start: string, end: string): boolean {
+  const at = (v: string) => Date.parse(v.length === 10 ? `${v}T00:00:00Z` : v);
+  const js = c
+    .replace(/"([^"]*)"/g, (_, v: string) => String(at(v)))
+    .replace(/when\.start/g, String(at(start)))
+    .replace(/when\.end/g, String(at(end)));
+  expect(js).toMatch(/^[\d\s<>=!&|()]+$/);
+  return new Function(`return ${js};`)() as boolean;
 }
 
 describe("filter to condition", () => {
@@ -180,6 +196,43 @@ describe("filter to condition", () => {
       'window.start < "2026-10-15T00:00:00Z" && window.end >= "2026-10-14T00:00:00Z"',
     );
     expect(cond("window", "last", ["2"])).toBe("window.start <= now() && window.end >= now() - days(2)");
+  });
+
+  it("date or datetime range: dated values as their whole local days, timed ones by instant", () => {
+    const allDay = ["2026-10-20", "2026-10-20"] as const;
+    const twoDays = ["2026-10-20", "2026-10-21"] as const;
+    for (const offset of [UTC, PLUS11, MINUS5]) {
+      const on = (d: string, [s, e]: readonly [string, string]) => holds(cond("when", "on", [d], offset)!, s, e);
+      const when = (op: Op, vs: string[], [s, e]: readonly [string, string]) => holds(cond("when", op, vs, offset)!, s, e);
+      expect([on("2026-10-19", allDay), on("2026-10-20", allDay), on("2026-10-21", allDay)]).toEqual([false, true, false]);
+      expect([on("2026-10-19", twoDays), on("2026-10-21", twoDays), on("2026-10-22", twoDays)]).toEqual([false, true, false]);
+      expect([when("before", ["2026-10-20"], allDay), when("before", ["2026-10-21"], allDay)]).toEqual([false, true]);
+      expect([when("after", ["2026-10-19"], allDay), when("after", ["2026-10-20"], allDay)]).toEqual([true, false]);
+      expect(when("between", ["2026-10-21", "2026-10-25"], allDay)).toBe(false);
+      expect(when("between", ["2026-10-21", "2026-10-25"], twoDays)).toBe(true);
+      expect([when("last", ["1"], allDay), when("last", ["1"], ["2026-10-18", "2026-10-18"])]).toEqual([true, false]);
+    }
+    // 19:30 to 20:30 on the 20th in New York is 00:30 to 01:30 UTC on the 21st.
+    const evening = ["2026-10-20T19:30:00-05:00", "2026-10-20T20:30:00-05:00"] as const;
+    const onIn = (d: string, offset: () => number, [s, e]: readonly [string, string]) =>
+      holds(cond("when", "on", [d], offset)!, s, e);
+    expect([onIn("2026-10-20", MINUS5, evening), onIn("2026-10-21", MINUS5, evening)]).toEqual([true, false]);
+    expect(holds(cond("when", "before", ["2026-10-21"], MINUS5)!, ...evening)).toBe(true);
+    expect(holds(cond("when", "after", ["2026-10-20"], MINUS5)!, ...evening)).toBe(false);
+    // 08:00 on the 20th in Sydney is 21:00 UTC on the 19th.
+    const morning = ["2026-10-20T08:00:00+11:00", "2026-10-20T09:00:00+11:00"] as const;
+    expect([onIn("2026-10-19", PLUS11, morning), onIn("2026-10-20", PLUS11, morning)]).toEqual([false, true]);
+    expect(holds(cond("when", "after", ["2026-10-19"], PLUS11)!, ...morning)).toBe(true);
+    // The text: a bound at the local midnight, and west of UTC the UTC midnight a date sits on.
+    expect(cond("when", "on", ["2026-10-20"], PLUS11)).toBe(
+      'when.start < "2026-10-21T00:00:00+11:00" && when.end >= "2026-10-20T00:00:00+11:00"',
+    );
+    expect(cond("when", "on", ["2026-10-20"], MINUS5)).toBe(
+      'when.start < "2026-10-21T00:00:00-05:00" && when.start != "2026-10-21" && ' +
+        '(when.end >= "2026-10-20T00:00:00-05:00" || when.end == "2026-10-20")',
+    );
+    expect(cond("when", "last", ["0"])).toBeNull();
+    expect(cond("when", "between", ["2026-10-01"])).toBeNull();
   });
 
   it("created and updated are instants and offer no emptiness test", () => {
