@@ -1,0 +1,62 @@
+# Publishes the dev container image (docker/dev.Dockerfile) to ghcr.io/wiltaylor/thevault-dev
+# once per Dockerfile, tagged with the hash ./dev computes, so every job that runs ./dev pulls it
+# rather than spending about nine minutes building it (ticket 138). When the registry already has
+# the image for this commit's Dockerfile the job ends after one manifest lookup; otherwise it
+# builds the image and pushes it. The release train calls it before its desktop and android
+# jobs, and android-smoke.yml before its smoke job; run it by hand to warm the cache after
+# editing the Dockerfile.
+#
+# A package a workflow creates is linked to this repository, and GITHUB_TOKEN can write to it.
+# ./dev on a developer's machine pulls the same image; a job or machine that cannot pull it
+# builds it, as before.
+
+name: dev-image
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    # A train and a smoke run started on the same commit build the image once: the second waits,
+    # then finds it in the registry.
+    concurrency:
+      group: dev-image-${{ github.sha }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the GitHub container registry
+        run: docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin <<< "${GH_TOKEN}"
+
+      - name: Look for the image in the registry
+        id: look
+        run: |
+          image=$(./dev --print-image)
+          if docker manifest inspect "$image" > /dev/null 2>&1; then
+            echo "$image is in the registry; nothing to build" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$image is not in the registry; building and pushing it" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The dev image carries the Android SDK, NDK and emulator and needs more disk than the runner has free.
+      - name: Free disk space
+        if: steps.look.outputs.missing == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      # A failed push does not stop the train: each job then builds the image itself, as before.
+      - name: Build and push the image
+        if: steps.look.outputs.missing == 'true'
+        run: |
+          if ! ./dev --publish-image; then
+            echo "::warning::could not publish $(./dev --print-image); the jobs that need it build it themselves"
+          fi

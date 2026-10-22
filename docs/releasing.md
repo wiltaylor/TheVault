@@ -32,13 +32,14 @@ To cut a release without a trailer commit, start `release-train` by hand from th
 
 ## What the train does
 
-The train runs five jobs:
+The train runs six jobs:
 
 1. `version` reads the trailers of the head commit with `git log -1 --format='%(trailers:key=release,valueonly)'`, and the same for `pre-release` and `version`. It computes the version with `scripts/release/version.sh` and fails when that version's tag already exists, or when the commit carries both `release: true` and `pre-release: true`.
-2. `desktop` calls `.github/workflows/release.yml`, which builds the AppImage with its updater signature, the deb, the rpm, the AUR package and the static `vault` CLI builds.
-3. `android` calls `.github/workflows/android-release.yml` at the same time as `desktop`. It builds the signed aarch64 APK and checks its `versionName` and `versionCode`. Beside it, `android-smoke-reusable.yml` runs the [release smoke test](android-release.md#the-release-smoke-test) on an x86_64 build of the same commit and version.
-4. `publish` runs only when `desktop` and `android`, the smoke test included, have passed. It creates the tag `v<version>` on the train's commit and the GitHub Release with every file. A pre-release is marked as a pre-release.
-5. `image` calls `.github/workflows/image.yml`, which builds the server image with the release's APK, AppImage and CLI builds baked in, checks that it serves them, pushes it to `ghcr.io/wiltaylor/thevault`, and attaches the compose files to the release.
+2. `dev-image` calls `.github/workflows/dev-image.yml`. It pushes the dev container image to `ghcr.io/wiltaylor/thevault-dev:<hash>`, where `<hash>` is the one `./dev` tags its image with, unless the registry already has it. `desktop`, `android` and the smoke test then pull that image rather than spend about nine minutes building it. A job that cannot pull it builds it, as before. Run `dev-image` by hand from the Actions tab to publish the image after editing `docker/dev.Dockerfile`.
+3. `desktop` calls `.github/workflows/release.yml`, which builds the AppImage with its updater signature, the deb, the rpm, the AUR package and the static `vault` CLI builds.
+4. `android` calls `.github/workflows/android-release.yml` at the same time as `desktop`. It builds the signed aarch64 APK and checks its `versionName` and `versionCode`. Beside it, `android-smoke-reusable.yml` runs the [release smoke test](android-release.md#the-release-smoke-test) on an x86_64 build of the same commit and version.
+5. `publish` runs only when `desktop` and `android`, the smoke test included, have passed. It creates the tag `v<version>` on the train's commit and the GitHub Release with every file. A pre-release is marked as a pre-release.
+6. `image` calls `.github/workflows/image.yml`, which builds the server image with the release's APK, AppImage and CLI builds baked in, checks that it serves them, pushes it to `ghcr.io/wiltaylor/thevault`, and attaches the compose files to the release.
 
 Each job writes the version into its own checkout before it builds, with `scripts/release/stamp.sh`. That sets `version` in `[workspace.package]` of `Cargo.toml` and in both app crates, the versions of those crates in the three `Cargo.lock` files, `version` in both `tauri.conf.json` files, and the Android `bundle.android.versionCode`. Nothing is committed, so `main` keeps the version it has. `./dev just release-stamp <version>` does the same to your checkout, and `git checkout .` undoes it.
 

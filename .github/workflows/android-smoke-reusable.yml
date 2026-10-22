@@ -34,6 +34,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   smoke:
@@ -71,8 +72,14 @@ jobs:
           umask 077
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
 
-      - name: Build the dev image
-        run: ./dev true
+      # The dev image comes from ghcr.io (dev-image.yml, ticket 138); ./dev builds it only when the
+      # pull fails. The log shows the pull and how long it took.
+      - name: Pull the dev image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin <<< "${GH_TOKEN}"
+          ./dev true
 
       # With release-key, Gradle signs the x86_64 release build with the release key; without it,
       # the recipe signs it with the debug key.

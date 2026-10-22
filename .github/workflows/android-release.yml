@@ -38,6 +38,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   build:
@@ -53,6 +54,15 @@ jobs:
       # The dev image carries the Android SDK and NDK and needs more disk than the runner has free.
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      # The dev image comes from ghcr.io (dev-image.yml, ticket 138); ./dev builds it only when the
+      # pull fails. The log shows the pull and how long it took.
+      - name: Pull the dev image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin <<< "${GH_TOKEN}"
+          ./dev true
 
       - name: Write the keystore from the repository secrets
         env:
@@ -101,6 +111,7 @@ jobs:
   smoke:
     permissions:
       contents: read
+      packages: read
     uses: ./.github/workflows/android-smoke-reusable.yml
     with:
       release-key: true

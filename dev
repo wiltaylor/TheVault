@@ -1,24 +1,76 @@
 #!/usr/bin/env bash
 # Run a command inside the thevault-dev container, in the current directory.
 # Usage: ./dev cargo test    ./dev pnpm -C web test    ./dev just check
+#        ./dev --print-image     print the registry image name for this Dockerfile
+#        ./dev --publish-image   push this Dockerfile's image to the registry unless it is there
 #
 # The image tag is a hash of docker/dev.Dockerfile, so editing the Dockerfile
 # builds a new image on the next call, and checkouts with different Dockerfiles
-# each keep their own image.
+# each keep their own image. When the image is missing locally, ./dev pulls
+# ghcr.io/wiltaylor/thevault-dev:<hash> first and builds only when the registry
+# has no image for this hash (ticket 138). CI publishes each hash's image once
+# (.github/workflows/dev-image.yml); THEVAULT_DEV_PULL=0 skips the pull.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")" && pwd)
 dockerfile="$repo_root/docker/dev.Dockerfile"
 hash=$(sha256sum "$dockerfile" | cut -c1-12)
 image="thevault-dev:$hash"
+registry_image="${THEVAULT_DEV_REGISTRY:-ghcr.io/wiltaylor/thevault-dev}:$hash"
 workdir=$(pwd)
 
-if ! docker image inspect "$image" >/dev/null 2>&1; then
+build_image() {
+  echo "dev: building $image from docker/dev.Dockerfile" >&2
+  local start=$SECONDS
   docker build -t "$image" --label "thevault.dockerfile-hash=$hash" \
+    --label "org.opencontainers.image.source=https://github.com/wiltaylor/TheVault" \
     -f "$dockerfile" "$repo_root/docker" >&2
+  echo "dev: built $image in $((SECONDS - start))s" >&2
+}
+
+pull_image() {
+  [ "${THEVAULT_DEV_PULL:-1}" != 0 ] || return 1
+  echo "dev: pulling $registry_image" >&2
+  local start=$SECONDS
+  if docker pull "$registry_image" >&2; then
+    docker tag "$registry_image" "$image"
+    echo "dev: pulled $registry_image in $((SECONDS - start))s" >&2
+  else
+    echo "dev: the registry has no $registry_image (or it cannot be reached)" >&2
+    return 1
+  fi
+}
+
+# ./dev --print-image prints the registry image for this Dockerfile, for CI to check.
+if [ "${1:-}" = --print-image ]; then
+  echo "$registry_image"
+  exit 0
 fi
 
-tty_flags=()
+# ./dev --publish-image: make sure the registry has this hash's image, without pulling it when it
+# does. CI runs it once per release train (dev-image.yml), logged in to ghcr.io.
+if [ "${1:-}" = --publish-image ]; then
+  if docker manifest inspect "$registry_image" >/dev/null 2>&1; then
+    echo "dev: $registry_image is already in the registry" >&2
+    exit 0
+  fi
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    build_image
+  fi
+  docker tag "$image" "$registry_image"
+  start=$SECONDS
+  docker push "$registry_image" >&2
+  echo "dev: pushed $registry_image in $((SECONDS - start))s" >&2
+  exit 0
+fi
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  pull_image || build_image
+fi
+
+# stdin always reaches the container (-i), so `printf pw | ./dev vault init --password-stdin`
+# and `./dev cmd <<EOF` read it (ticket 122); a terminal also gets a TTY (-t).
+tty_flags=(-i)
 if [ -t 0 ] && [ -t 1 ]; then
   tty_flags=(-it)
 fi
@@ -78,7 +130,33 @@ done
 # /tmp is a tmpfs. Every test vault lives in a temporary folder, and the server fsyncs each write;
 # on the container's disk-backed /tmp, other workers' builds writing to the same disk stretched
 # those fsyncs to seconds and timed tests out (tickets 72, 74, 83). Test data needs no durability.
-exec docker run --rm "${tty_flags[@]}" "${keystore_flags[@]}" "${kvm_flags[@]}" \
+#
+# The container is named, so stopping ./dev stops it too (ticket 122): a SIGTERM, SIGINT or SIGHUP
+# to ./dev is passed on to the container, a second one removes it, and ./dev removes it on exit
+# should the docker client go first. --init puts tini at PID 1, which hands the signal to the
+# command, as PID 1 itself ignores signals it has no handler for. Only a SIGKILL to ./dev leaves
+# the container running; `docker ps --filter name=thevault-dev-` lists it.
+name="thevault-dev-$$-$RANDOM"
+signalled=""
+# shellcheck disable=SC2329 # invoked by the traps below
+forward() {
+  if [ -n "$signalled" ]; then
+    docker rm -f "$name" >/dev/null 2>&1 || true
+  else
+    signalled=$1
+    docker kill --signal "$1" "$name" >/dev/null 2>&1 || true
+  fi
+}
+trap 'forward TERM' TERM
+trap 'forward INT' INT
+trap 'forward HUP' HUP
+trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+
+# The client runs in the background so the traps run at once, since bash defers a trap until a
+# foreground command ends. Without job control bash gives a background command /dev/null for
+# stdin, so the script's stdin is handed over on fd 3.
+exec 3<&0
+docker run --rm --init --name "$name" "${tty_flags[@]}" "${keystore_flags[@]}" "${kvm_flags[@]}" \
   --tmpfs /tmp:exec,mode=1777 \
   --network host \
   --user "$(id -u):$(id -g)" \
@@ -91,4 +169,13 @@ exec docker run --rm "${tty_flags[@]}" "${keystore_flags[@]}" "${kvm_flags[@]}" 
   -v thevault-avd:/avd \
   -v "$workdir:$workdir" \
   -w "$workdir" \
-  "$image" "$@"
+  "$image" "$@" <&3 3<&- &
+client=$!
+exec 3<&-
+status=0
+while :; do
+  wait "$client" && status=0 || status=$?
+  # wait returns early, above 128, when a trapped signal arrives; the client may still be running.
+  kill -0 "$client" 2>/dev/null || break
+done
+exit "$status"
