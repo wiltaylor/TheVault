@@ -5,8 +5,8 @@ title: 'AI chat panel: streamed chat over note tools with edit proposals the use
 plan: ai
 blocked_by:
 - '151'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # AI chat panel: streamed chat over note tools with edit proposals the user applies
@@ -23,3 +23,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T16:04:18Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T16:04:18Z — wil
+
+Status set to done.
