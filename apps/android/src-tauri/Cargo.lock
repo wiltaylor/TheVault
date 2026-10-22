@@ -5068,6 +5068,7 @@ name = "testkit"
 version = "0.1.12"
 dependencies = [
  "base64 0.22.1",
+ "ring",
  "serde_json",
  "sha2",
  "state",

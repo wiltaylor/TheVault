@@ -1,6 +1,8 @@
 //! Seam S1: start `vault-server` on a fresh temporary vault and a random port. Seam S7's local
 //! stand-in HTTP server is [`StandIn`], and the fake Google APIs the Google sync calls are
-//! [`FakeGoogle`].
+//! [`FakeGoogle`]. The AI providers' fakes are [`FakeAnthropic`], [`FakeOpenAi`] (API key and
+//! ChatGPT plan) and [`FakeSiwc`] (the Sign in with ChatGPT server); point
+//! `ai_settings.endpoints` `anthropic`, `openai` and `chatgpt_auth` at their `base_url()`s.
 //!
 //! ```no_run
 //! let server = testkit::TestServer::start();
@@ -20,8 +22,20 @@
 //!
 //! A server gets 120 seconds to start. Set `TESTKIT_START_TIMEOUT_SECS` to change that.
 
+pub mod fake_anthropic;
 pub mod fake_google;
+mod fake_http;
+pub mod fake_openai;
+pub mod fake_siwc;
 mod standin;
+
+pub use fake_anthropic::{
+    AnthropicMessage, AnthropicReply, DEFAULT_ANTHROPIC_KEY, FakeAnthropic, FakeAnthropicBuilder,
+};
+pub use fake_openai::{
+    DEFAULT_OPENAI_KEY, Ending, FakeOpenAi, FakeOpenAiBuilder, OpenAiReply, OpenAiResponse,
+};
+pub use fake_siwc::{FakeSiwc, FakeSiwcBuilder};
 
 pub use fake_google::{
     CALENDAR_PATH, FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, TOKEN_PATH, USERINFO_PATH,

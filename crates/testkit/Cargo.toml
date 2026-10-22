@@ -7,6 +7,8 @@ publish.workspace = true
 
 [dependencies]
 base64.workspace = true
+# Signs the fake Sign in with ChatGPT server's ID tokens with a test RSA key.
+ring = "0.17"
 serde_json.workspace = true
 sha2.workspace = true
 state.workspace = true

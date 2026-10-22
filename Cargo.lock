@@ -62,6 +62,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai"
+version = "0.1.12"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "state",
+ "tempfile",
+ "testkit",
+ "tokio",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2914,6 +2931,7 @@ version = "0.1.12"
 dependencies = [
  "base64 0.22.1",
  "reqwest",
+ "ring",
  "serde_json",
  "sha2",
  "state",

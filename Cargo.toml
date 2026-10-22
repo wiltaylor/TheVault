@@ -45,6 +45,7 @@ script = { path = "crates/script" }
 script-core = { path = "crates/script-core" }
 vocab = { path = "crates/vocab" }
 scheduler = { path = "crates/scheduler" }
+ai = { path = "crates/ai" }
 api = { path = "crates/api" }
 clients = { path = "crates/clients" }
 embedded = { path = "crates/embedded" }

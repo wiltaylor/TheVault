@@ -1,0 +1,26 @@
+[package]
+name = "ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+# Verifies the RS256 ID tokens of Sign in with ChatGPT against the issuer's JWKS (ai D8).
+ring = "0.17"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+state.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+testkit.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true
