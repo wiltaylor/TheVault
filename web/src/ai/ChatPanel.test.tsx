@@ -15,27 +15,41 @@ const streamEvents = vi.fn(
     }),
 );
 const updateNote = vi.fn();
+const aiApply = vi.fn();
 const aiModels = vi.fn();
-const aiStatus = vi.fn();
+const aiProviders = vi.fn();
+const app = vi.fn();
+const aiTurnStart = vi.fn();
+const aiTurnPoll = vi.fn();
+const aiTurnStop = vi.fn();
+const appSync = vi.fn();
+const appSyncNow = vi.fn();
 
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, api: { ...real.api, updateNote, aiModels, aiStatus } };
+  return {
+    ...real,
+    streamEvents,
+    api: { ...real.api, updateNote, aiApply, aiModels, aiProviders, app, aiTurnStart, aiTurnPoll, aiTurnStop, appSync, appSyncNow },
+  };
 });
 
 const { ChatPanel } = await import("./ChatPanel");
-const { newConversation, transcriptNow } = await import("./store");
+const { newConversation, transcriptNow, forgetApp } = await import("./store");
+const { forgetAppInfo } = await import("../inApp");
+const { generalActions } = await import("../palette/actions");
+const { changes, onNoteChangedElsewhere } = await import("../changes");
 const { parseBlocks, parseInline } = await import("./markdown");
 const { blockLines, lineDiff } = await import("./diff");
 
 const STATUS = {
-  secrets_key: true,
   default_provider: "anthropic",
   providers: {
     anthropic: { configured: true, model: "claude-opus-5" },
     openai: { configured: false, model: null },
-    chatgpt: { configured: false, model: null, account: null },
+    chatgpt: { configured: false, model: null },
   },
+  confirm: { notes: true, archive: true, delete: true, types: true },
 };
 
 const MODELS = {
@@ -68,7 +82,8 @@ async function askIt(m: ReturnType<typeof render>, text = "What is on my list?")
 }
 
 beforeEach(() => {
-  aiStatus.mockResolvedValue(STATUS);
+  app.mockResolvedValue(null);
+  aiProviders.mockResolvedValue(STATUS);
   aiModels.mockResolvedValue(MODELS);
 });
 
@@ -77,6 +92,8 @@ afterEach(() => {
   live = null;
   cleanup();
   vi.clearAllMocks();
+  forgetAppInfo();
+  forgetApp();
 });
 
 describe("ChatPanel", () => {
@@ -131,8 +148,9 @@ describe("ChatPanel", () => {
     expect(m.getAllByRole("img")).toHaveLength(1);
   });
 
-  it("applies a proposal through the notes write API with its base version", async () => {
-    updateNote.mockResolvedValue({ id: "01JNOTE", version: "v2" });
+  it("applies a proposal on the server with POST /api/ai/apply, as the chat sent it", async () => {
+    aiApply.mockResolvedValue({ op: "update", note_id: "01JNOTE", version: "v2" });
+    const before = changes();
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await askIt(m);
     emit("proposal", PROPOSAL);
@@ -140,7 +158,11 @@ describe("ChatPanel", () => {
     expect(card).toHaveTextContent("Groceries and more");
     fireEvent.click(m.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(m.getByText("Applied.")).toBeInTheDocument());
-    expect(updateNote).toHaveBeenCalledWith("01JNOTE", PROPOSAL.after, "v1");
+    expect(aiApply).toHaveBeenCalledWith({ ...PROPOSAL, op: "update" });
+    expect(updateNote).not.toHaveBeenCalled();
+    // The web app asks for no sync round: the server's notes are its own.
+    await waitFor(() => expect(changes()).toBeGreaterThan(before));
+    expect(appSyncNow).not.toHaveBeenCalled();
   });
 
   it("discards a proposal without writing", async () => {
@@ -196,6 +218,126 @@ describe("ChatPanel", () => {
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await waitFor(() => expect(m.getByLabelText("Model")).toHaveValue("claude-opus-5"));
     expect((m.getByRole("option", { name: "OpenAI" }) as HTMLOptionElement).disabled).toBe(true);
+  });
+});
+
+/** A turn's events as the embedded server hands them to the webview, in two polls. */
+function polls(events: StreamEvent[]) {
+  const half = Math.ceil(events.length / 2);
+  aiTurnPoll
+    .mockResolvedValueOnce({ events: events.slice(0, half), next: half, done: false })
+    .mockResolvedValueOnce({ events: events.slice(half), next: events.length, done: true });
+}
+
+const APP = { app: true, paired: true, device_id: "d1", device_name: "Laptop", server_url: "https://home.example" };
+
+describe("ChatPanel in the desktop and Android apps", () => {
+  beforeEach(() => {
+    app.mockResolvedValue(APP);
+    aiTurnStart.mockResolvedValue("turn-1");
+    aiTurnStop.mockResolvedValue(undefined);
+  });
+
+  it("is offered in every client: Ask AI is in the palette", () => {
+    const ids = generalActions({ phone: false, dark: false, androidApp: true }).map((a) => a.id);
+    expect(ids).toContain("ai:ask");
+  });
+
+  it("runs a turn in the turns form, polling the embedded server for its events", async () => {
+    const answer = { role: "assistant", content: [{ type: "text", text: "Hello there." }] };
+    polls([
+      { event: "text", data: { delta: "Hello " } },
+      { event: "text", data: { delta: "there." } },
+      { event: "done", data: { stop: "end_turn", messages: [answer] } },
+    ]);
+    const m = render(() => <ChatPanel noteId={() => "01JOPEN"} />);
+    await waitFor(() => expect(m.getByLabelText("Model")).toHaveValue("claude-opus-5"));
+    fireEvent.input(m.getByLabelText("Ask AI"), { target: { value: "Hi" } });
+    fireEvent.click(m.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(m.getByRole("list", { name: "Conversation" })).toHaveTextContent("Hello there."));
+    await waitFor(() => expect(m.getByRole("button", { name: "Send" })).toBeInTheDocument());
+    expect(streamEvents).not.toHaveBeenCalled();
+    expect(aiTurnStart).toHaveBeenCalledWith(expect.objectContaining({ provider: "anthropic", note_id: "01JOPEN", messages: [expect.objectContaining({ role: "user" })] }));
+    expect(aiTurnPoll.mock.calls.map((c) => c.slice(0, 2))).toEqual([
+      ["turn-1", 0],
+      ["turn-1", 2],
+    ]);
+    expect(transcriptNow()[1]).toEqual(answer);
+    expect(aiProviders).toHaveBeenCalled();
+  });
+
+  it("stops the turn on the server", async () => {
+    aiTurnPoll.mockImplementation(
+      (_turn: string, _after: number, signal?: AbortSignal) =>
+        new Promise((_, reject) => signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))),
+    );
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    fireEvent.input(m.getByLabelText("Ask AI"), { target: { value: "Hi" } });
+    fireEvent.click(m.getByRole("button", { name: "Send" }));
+    fireEvent.click(await m.findByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(m.getByText("Stopped.")).toBeInTheDocument());
+    await waitFor(() => expect(aiTurnStop).toHaveBeenCalledWith("turn-1"));
+  });
+
+  it("says the chat needs the home server when it cannot be reached", async () => {
+    const { ApiError } = await import("../api");
+    const message = "The AI chat needs the home server, which is not reachable.";
+    aiTurnStart.mockRejectedValue(new ApiError(503, { error: "ai_needs_server", message }));
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    fireEvent.input(m.getByLabelText("Ask AI"), { target: { value: "Hi" } });
+    fireEvent.click(m.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(m.getByRole("alert")).toHaveTextContent(message));
+  });
+
+  it("shows Set up AI in the web app, linking to the home server, when nothing is configured", async () => {
+    aiProviders.mockResolvedValue({
+      ...STATUS,
+      default_provider: null,
+      providers: { anthropic: { configured: false, model: null }, openai: { configured: false, model: null }, chatgpt: { configured: false, model: null } },
+    });
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    const link = await m.findByRole("link", { name: "Set up AI in the web app" });
+    expect(link).toHaveAttribute("href", "https://home.example/settings/ai");
+    expect(m.queryByLabelText("Model")).toBeNull();
+  });
+
+  it("asks for a sync round after Apply, and refreshes open notes when it ends", async () => {
+    aiApply.mockResolvedValue({ op: "update", note_id: "01JNOTE", version: "v2" });
+    const asked = Date.now();
+    appSyncNow.mockResolvedValue({ state: "syncing", phase: "syncing", last_attempt_ms: asked - 1000 });
+    appSync
+      .mockResolvedValueOnce({ state: "syncing", phase: "syncing", last_attempt_ms: asked - 1000 })
+      .mockResolvedValue({ state: "synced", phase: "synced", last_attempt_ms: asked + 60_000 });
+    polls([{ event: "proposal", data: PROPOSAL }]);
+    const elsewhere = vi.fn();
+    const off = onNoteChangedElsewhere(elsewhere);
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    fireEvent.input(m.getByLabelText("Ask AI"), { target: { value: "Rename it." } });
+    fireEvent.click(m.getByRole("button", { name: "Send" }));
+    const card = await m.findByRole("region", { name: "Proposed edit to Groceries" });
+    fireEvent.click(card.querySelector("button.primary")!);
+    await waitFor(() => expect(m.getByText("Applied.")).toBeInTheDocument());
+    expect(aiApply).toHaveBeenCalledWith({ ...PROPOSAL, op: "update" });
+    expect(updateNote).not.toHaveBeenCalled();
+    await waitFor(() => expect(appSyncNow).toHaveBeenCalled());
+    await waitFor(() => expect(elsewhere).toHaveBeenCalledWith(null), { timeout: 3000 });
+    expect(appSync.mock.calls.length).toBeGreaterThanOrEqual(2);
+    off();
+  });
+
+  it("asks for a sync round after a change the AI made itself", async () => {
+    appSyncNow.mockResolvedValue({ state: "synced", phase: "synced", last_attempt_ms: Date.now() + 60_000 });
+    appSync.mockResolvedValue({ state: "synced", phase: "synced", last_attempt_ms: Date.now() + 60_000 });
+    polls([{ event: "applied", data: { id: "toolu_x", op: "update", note_id: "01JNOTE", title: "Groceries", version: "v2" } }]);
+    const elsewhere = vi.fn();
+    const off = onNoteChangedElsewhere(elsewhere);
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    fireEvent.input(m.getByLabelText("Ask AI"), { target: { value: "Rename it." } });
+    fireEvent.click(m.getByRole("button", { name: "Send" }));
+    await m.findByRole("region", { name: "Edited Groceries" });
+    await waitFor(() => expect(appSyncNow).toHaveBeenCalled());
+    await waitFor(() => expect(elsewhere).toHaveBeenCalledWith(null));
+    off();
   });
 });
 

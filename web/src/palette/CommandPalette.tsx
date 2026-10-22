@@ -16,7 +16,6 @@ import {
   TypeIcon,
   UnarchiveIcon,
 } from "../components/Icon";
-import { webApp } from "../ai/store";
 import { inAndroidApp } from "../deviceImport";
 import { knowTitle, noteArchived } from "../editor/titles";
 import { typeDef, types } from "../session";
@@ -100,7 +99,7 @@ export function CommandPalette() {
   });
   const actions = createMemo(() => [
     ...noteActions(activeNote()),
-    ...generalActions({ phone, dark: theme() === "dark", androidApp: inAndroidApp(), webApp: webApp() }),
+    ...generalActions({ phone, dark: theme() === "dark", androidApp: inAndroidApp() }),
     ...typeActions(types()),
   ]);
 

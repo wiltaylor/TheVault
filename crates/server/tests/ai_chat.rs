@@ -1759,3 +1759,406 @@ fn a_caller_without_the_scope_gets_proposals_whatever_the_switches_say() {
     );
     assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
 }
+
+// The turns form and the apply route (ai D23).
+
+impl Api {
+    /// `POST /api/ai/chat/turns` as `token`: the answer's status and body.
+    fn start_turn(&self, token: &str, body: Value) -> (StatusCode, Value) {
+        let res = self
+            .client
+            .post(self.server.url("/api/ai/chat/turns"))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .unwrap();
+        let status = res.status();
+        (status, res.json().unwrap_or(Value::Null))
+    }
+
+    /// A turn started as the admin: its id.
+    fn turn(&self, messages: Value) -> String {
+        let (status, v) = self.start_turn(&self.token(), json!({ "messages": messages }));
+        assert_eq!(status, StatusCode::CREATED, "{v}");
+        v["turn"].as_str().unwrap().to_owned()
+    }
+
+    fn turn_events(&self, token: &str, turn: &str) -> Response {
+        self.client
+            .get(
+                self.server
+                    .url(&format!("/api/ai/chat/turns/{turn}/events")),
+            )
+            .bearer_auth(token)
+            .send()
+            .unwrap()
+    }
+
+    fn stop_turn(&self, token: &str, turn: &str) -> StatusCode {
+        self.client
+            .delete(self.server.url(&format!("/api/ai/chat/turns/{turn}")))
+            .bearer_auth(token)
+            .send()
+            .unwrap()
+            .status()
+    }
+
+    /// `POST /api/ai/apply` as `token`: the status and body.
+    fn apply_as(&self, token: &str, change: &Value) -> (StatusCode, Value) {
+        let res = self
+            .client
+            .post(self.server.url("/api/ai/apply"))
+            .bearer_auth(token)
+            .json(change)
+            .send()
+            .unwrap();
+        let status = res.status();
+        (status, res.json().unwrap_or(Value::Null))
+    }
+}
+
+/// The round script both chat forms answer from: a search, then an answer.
+fn push_search_then_answer(fake: &FakeAnthropic) {
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_1",
+        "search_notes",
+        json!({ "text": "roof", "limit": 5 }),
+    ));
+    fake.push(AnthropicMessage::text("You chose slate."));
+}
+
+#[test]
+fn a_turn_started_with_post_turns_streams_the_same_events_as_post_chat() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.memo("Roof decision", "We chose slate tiles for the roof.");
+    let sent = json!([user("What did I decide about the roof?")]);
+
+    push_search_then_answer(&fake);
+    let posted = api.chat(sent.clone());
+
+    push_search_then_answer(&fake);
+    let reader = api.token_of("reader", "read");
+    let (status, v) = api.start_turn(&reader, json!({ "messages": sent }));
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    let turn = v["turn"].as_str().unwrap();
+    let res = api.turn_events(&reader, turn);
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/event-stream")
+    );
+    let streamed = read_events(res, |_| false);
+
+    assert_eq!(shape(&streamed), shape(&posted), "{streamed:?}");
+    assert_eq!(
+        shape(&streamed),
+        ["tool", "tool_result", "text", "done"],
+        "{streamed:?}"
+    );
+    assert_eq!(text_of(&streamed), text_of(&posted));
+    assert_eq!(
+        last(&streamed, "tool_result")["summary"],
+        last(&posted, "tool_result")["summary"]
+    );
+    assert_eq!(
+        last(&streamed, "done")["messages"],
+        last(&posted, "done")["messages"]
+    );
+    // The turn is over and forgotten.
+    assert_eq!(
+        api.turn_events(&reader, turn).status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[test]
+fn a_turn_is_read_only_by_its_caller_and_only_once() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    fake.push(AnthropicMessage::text(&"slow ".repeat(40)).delay(Duration::from_millis(20)));
+    let turn = api.turn(json!([user("Go")]));
+    let other = api.token_of("other", "read");
+    assert_eq!(
+        api.turn_events(&other, &turn).status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(api.stop_turn(&other, &turn), StatusCode::NOT_FOUND);
+    let first = api.turn_events(&api.token(), &turn);
+    assert_eq!(first.status(), StatusCode::OK);
+    let second = api.turn_events(&api.token(), &turn);
+    assert_eq!(second.status(), StatusCode::CONFLICT);
+    let events = read_events(first, |_| false);
+    assert_eq!(events.last().unwrap().0, "done", "{events:?}");
+}
+
+#[test]
+fn a_turn_nobody_reads_for_30_seconds_stops_and_asks_the_provider_no_more() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    // Round one's answer is longer than the turn holds unread, so the turn waits for its reader.
+    fake.push(AnthropicMessage::text(&"slow ".repeat(200)).tool_use(
+        "toolu_1",
+        "search_notes",
+        json!({ "text": "x", "limit": 1 }),
+    ));
+    fake.push(AnthropicMessage::text("never"));
+    let turn = api.turn(json!([user("Go")]));
+    std::thread::sleep(Duration::from_secs(33));
+    assert_eq!(
+        api.turn_events(&api.token(), &turn).status(),
+        StatusCode::NOT_FOUND
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(fake.message_requests().len(), 1);
+}
+
+#[test]
+fn delete_stops_a_turn_while_it_is_read() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    fake.push(
+        AnthropicMessage::text(&"slow ".repeat(60))
+            .tool_use(
+                "toolu_1",
+                "search_notes",
+                json!({ "text": "x", "limit": 1 }),
+            )
+            .delay(Duration::from_millis(20)),
+    );
+    fake.push(AnthropicMessage::text("never"));
+    let turn = api.turn(json!([user("Go")]));
+    let res = api.turn_events(&api.token(), &turn);
+    let started = std::time::Instant::now();
+    let mut stopped = false;
+    let events = read_events(res, |(n, _)| {
+        if n == "text" && !stopped {
+            stopped = true;
+            assert_eq!(api.stop_turn(&api.token(), &turn), StatusCode::NO_CONTENT);
+        }
+        false
+    });
+    // The stream ended soon after the stop, well before round one would have.
+    assert!(started.elapsed() < Duration::from_secs(4), "{events:?}");
+    assert!(!events.iter().any(|(n, _)| n == "done"), "{events:?}");
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(fake.message_requests().len(), 1);
+    assert_eq!(api.stop_turn(&api.token(), &turn), StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn a_fifth_running_turn_for_one_caller_is_refused() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    for _ in 0..6 {
+        fake.push(AnthropicMessage::text(&"slow ".repeat(200)));
+    }
+    let turns: Vec<String> = (0..4).map(|_| api.turn(json!([user("Go")]))).collect();
+    let (status, v) = api.start_turn(&api.token(), json!({ "messages": [user("Go")] }));
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
+    assert_eq!(v["error"], "too_many_turns");
+    // Another caller has turns of its own.
+    let other = api.token_of("other", "read");
+    let (status, _) = api.start_turn(&other, json!({ "messages": [user("Go")] }));
+    assert_eq!(status, StatusCode::CREATED);
+    // A stopped turn makes room.
+    assert_eq!(
+        api.stop_turn(&api.token(), &turns[0]),
+        StatusCode::NO_CONTENT
+    );
+    let (status, v) = api.start_turn(&api.token(), json!({ "messages": [user("Go")] }));
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+}
+
+#[test]
+fn get_providers_answers_a_read_token_with_no_key_token_or_account() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    let plan = FakeOpenAi::start();
+    api.chatgpt(&plan);
+    api.secret("ai_anthropic_api_key", fake.api_key());
+    api.secret(
+        "ai_settings",
+        &json!({
+            "default_provider": "anthropic",
+            "models": { "anthropic": MODEL, "chatgpt": PLAN_MODEL },
+            "endpoints": { "anthropic": fake.base_url(), "openai": plan.base_url() },
+        })
+        .to_string(),
+    );
+    let reader = api.token_of("reader", "read");
+    let res = api
+        .client
+        .get(api.server.url("/api/ai/providers"))
+        .bearer_auth(&reader)
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let text = res.text().unwrap();
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["default_provider"], "anthropic", "{v}");
+    assert_eq!(
+        v["providers"]["anthropic"],
+        json!({ "configured": true, "model": MODEL })
+    );
+    assert_eq!(
+        v["providers"]["chatgpt"],
+        json!({ "configured": true, "model": PLAN_MODEL })
+    );
+    assert_eq!(v["providers"]["openai"]["configured"], false);
+    assert_eq!(
+        v["confirm"],
+        json!({ "notes": true, "archive": true, "delete": true, "types": true })
+    );
+    for secret in [
+        fake.api_key(),
+        "plan-access-token",
+        "plan-refresh-token",
+        "me@example.com",
+        "oaiapp_test",
+        "account",
+        "system_prompt",
+    ] {
+        assert!(!text.contains(secret), "{secret} in {text}");
+    }
+    // Settings > AI itself stays admin-only.
+    let res = api
+        .client
+        .get(api.server.url("/api/integrations/ai"))
+        .bearer_auth(&reader)
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn apply_writes_each_note_proposal_at_its_base_version_as_the_caller() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let agent = api.token_of("agent", "write");
+    let (id, version) = api.memo("Groceries", "Milk");
+
+    // An edit, as the chat sent it.
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_edit",
+        json!({ "id": id, "base_version": version, "note": memo_doc("Groceries", "Milk and eggs").to_string() }),
+    );
+    let edit = last(&events, "proposal").clone();
+    let (status, done) = api.apply_as(&agent, &edit);
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["op"], "update");
+    assert_eq!(done["note_id"], id.as_str());
+    let note = api.note(&id);
+    assert_eq!(note["version"], done["version"]);
+    assert!(note.to_string().contains("Milk and eggs"));
+    let history = api.get(&format!("/api/notes/{id}/history"));
+    assert!(history.to_string().contains("agent"), "{history}");
+
+    // The same edit again is on a stale version: a conflict, and nothing is written.
+    let (status, err) = api.apply_as(&agent, &edit);
+    assert_eq!(status, StatusCode::CONFLICT, "{err}");
+    assert_eq!(err["error"], "conflict");
+    assert_eq!(api.note(&id)["version"], done["version"]);
+
+    // A create.
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_create",
+        json!({ "type": "memo", "note": memo_doc("Reading list", "Dune").to_string() }),
+    );
+    let (status, created) = api.apply_as(&agent, last(&events, "proposal"));
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["op"], "create");
+    let new_id = created["note_id"].as_str().unwrap();
+    assert!(api.note(new_id).to_string().contains("Dune"));
+
+    // An archive, then an unarchive, each at the version it was proposed on.
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_archive",
+        json!({ "id": new_id, "archived": true }),
+    );
+    let archive = last(&events, "proposal").clone();
+    let (status, archived) = api.apply_as(&agent, &archive);
+    assert_eq!(status, StatusCode::OK, "{archived}");
+    assert_eq!(archived["op"], "archive");
+    assert_eq!(api.note(new_id)["note"]["fields"]["archived"], true);
+    let (status, _) = api.apply_as(&agent, &archive);
+    assert_eq!(status, StatusCode::CONFLICT);
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_archive",
+        json!({ "id": new_id, "archived": false }),
+    );
+    let (status, unarchived) = api.apply_as(&agent, last(&events, "proposal"));
+    assert_eq!(status, StatusCode::OK, "{unarchived}");
+    assert_eq!(unarchived["op"], "unarchive");
+
+    // A delete on a stale version writes nothing; on the current one the note goes to the trash.
+    let events = propose_one(&api, &fake, "propose_delete", json!({ "id": id }));
+    let delete = last(&events, "proposal").clone();
+    let mut stale = delete.clone();
+    stale["base_version"] = json!(version);
+    let (status, _) = api.apply_as(&agent, &stale);
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(api.memos().len(), 2);
+    let (status, deleted) = api.apply_as(&agent, &delete);
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(deleted["op"], "delete");
+    let trash = api.get("/api/trash");
+    assert_eq!(trash["notes"][0]["id"], id.as_str(), "{trash}");
+
+    // A read token may chat but not apply.
+    let reader = api.token_of("reader", "read");
+    let (status, _) = api.apply_as(&reader, &archive);
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn apply_needs_admin_for_a_type_change_and_refuses_a_stale_one() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let changed = MEMO.replace("tab \"Main\"", "tab \"Details\"");
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": changed }),
+    );
+    let proposal = last(&events, "type_proposal").clone();
+
+    let writer = api.token_of("writer", "write");
+    let (status, err) = api.apply_as(&writer, &proposal);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
+    assert_eq!(err["error"], "needs_admin");
+    assert_eq!(err["message"], "Apply type changes in the web app.");
+    assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
+
+    let (status, done) = api.apply_as(&api.token(), &proposal);
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done, json!({ "op": "type_change", "type_name": "memo" }));
+    assert!(api.type_wcl("memo").unwrap().contains("tab \"Details\""));
+
+    // Its before is no longer the type file.
+    let (status, err) = api.apply_as(&api.token(), &proposal);
+    assert_eq!(status, StatusCode::CONFLICT, "{err}");
+    assert_eq!(err["error"], "stale");
+
+    // Something that is not a change is a 400.
+    let (status, _) = api.apply_as(&api.token(), &json!({ "op": "purge", "note_id": "x" }));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

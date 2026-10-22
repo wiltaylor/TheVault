@@ -18,12 +18,13 @@ const streamEvents = vi.fn(
     }),
 );
 const aiModels = vi.fn();
-const aiStatus = vi.fn();
+const aiProviders = vi.fn();
+const app = vi.fn(async () => null);
 const reloadDefinitions = vi.fn(async () => undefined);
 
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, api: { ...real.api, aiModels, aiStatus } };
+  return { ...real, streamEvents, api: { ...real.api, aiModels, aiProviders, app } };
 });
 vi.mock("../session", () => ({ reloadDefinitions }));
 
@@ -41,7 +42,7 @@ async function applied(m: ReturnType<typeof render>, data: Record<string, unknow
 }
 
 beforeEach(() => {
-  aiStatus.mockResolvedValue({ secrets_key: true, default_provider: "anthropic", providers: { anthropic: { configured: true, model: "m" } } });
+  aiProviders.mockResolvedValue({ default_provider: "anthropic", providers: { anthropic: { configured: true, model: "m" } } });
   aiModels.mockResolvedValue({ provider: "anthropic", model: "m", models: [{ id: "m", display_name: "M" }] });
 });
 
@@ -68,7 +69,7 @@ describe("applied cards", () => {
       const card = await m.findByRole("region", { name });
       expect(card).toHaveTextContent(words);
       expect(m.getByRole("link", { name: "Groceries" })).toHaveAttribute("href", "/notes/01JNOTE");
-      expect(changes()).toBeGreaterThan(before);
+      await waitFor(() => expect(changes()).toBeGreaterThan(before));
       expect(m.queryByRole("button", { name: "Apply" })).toBeNull();
     });
   }

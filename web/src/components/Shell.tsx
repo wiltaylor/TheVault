@@ -1,7 +1,6 @@
 import { Navigate, useLocation } from "@solidjs/router";
 import { For, type JSX, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { ChatPanel } from "../ai/ChatPanel";
-import { webApp } from "../ai/store";
 import { CaptureModal } from "../capture/CaptureModal";
 import { CommandPalette } from "../palette/CommandPalette";
 import { trackRecents } from "../palette/recents";
@@ -144,9 +143,9 @@ const PANEL_TABS: { panel: Panel; label: string }[] = [
   { panel: "ai", label: "AI" },
 ];
 
-/** Reactive: the panels this page offers. The AI panel is the web app's alone (ai D16). */
+/** The panels this page offers: the AI panel in the web app and the apps alike (ai D23). */
 function panelTabs() {
-  return webApp() ? PANEL_TABS : PANEL_TABS.filter((t) => t.panel !== "ai");
+  return PANEL_TABS;
 }
 
 /** Whether `e` is Ctrl/Cmd+Shift+L, which opens the AI panel. */
@@ -186,11 +185,7 @@ function RightSidebar(props: { shown: boolean }) {
 function NoteSidebar(props: { shown: boolean }) {
   const pane = () => activePane(workspace());
   const source = () => noteOf(pane());
-  // The AI panel, remembered from the web app, falls back to Properties in the apps.
-  const panel = (): Panel => {
-    const p = sidebars().right.panel;
-    return p === "ai" && !webApp() ? "properties" : p;
-  };
+  const panel = (): Panel => sidebars().right.panel;
   // The History panel starts again for each pane and note it follows.
   const historyOf = createMemo(() => {
     const s = source();
@@ -344,9 +339,9 @@ export function Shell() {
     };
     document.addEventListener("keydown", onCaptureKey);
     onCleanup(() => document.removeEventListener("keydown", onCaptureKey));
-    // Ctrl/Cmd+Shift+L opens the AI panel, in the web app (ai D16).
+    // Ctrl/Cmd+Shift+L opens the AI panel (ai D23).
     const onAiKey = (e: KeyboardEvent) => {
-      if (!isAiKey(e) || e.defaultPrevented || !webApp()) return;
+      if (!isAiKey(e) || e.defaultPrevented) return;
       e.preventDefault();
       focusPanel("ai");
     };

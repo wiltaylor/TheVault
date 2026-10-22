@@ -5,12 +5,13 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { activePane, expect, logIn, test } from "./fixtures";
 
-// The AI panel (ai D14, D16) against the fake Anthropic API, which the `ai_settings` secret's
+// The AI panel (ai D14, D23) against the fake Anthropic API, which the `ai_settings` secret's
 // endpoints point at: ask beside a note, watch the answer arrive, apply the edit the model
 // proposed, and see the note change; apply a proposed template change (ai D18) and see it on a
 // note of that type; apply a proposed delete and create (ai D20) and see the note in the trash and
 // the new note open; and, with notes confirmation off (ai D22), see an edit land in the open note
-// without pressing Apply.
+// without pressing Apply; and, in an app (ai D23), run a turn through the turns form and apply
+// on the home server, asking for a sync round.
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -261,4 +262,81 @@ test("with notes confirmation off, an edit asked for in the AI panel shows in th
   const after = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { version: string; note: unknown };
   expect(after.version).not.toBe(note.version);
   expect(JSON.stringify(after.note)).toContain("Pharmacy");
+});
+
+// In the desktop and Android apps (ai D23) the panel runs a turn in the turns form and polls the
+// embedded server for its events; Apply goes to the home server's POST /api/ai/apply and the app
+// asks for a sync round. The routes here stand in for the embedded server: `GET /api/app` says the
+// page runs in an app, `GET /api/app/ai/turns/{turn}` reads the turn's stream from the server,
+// and `/api/app/sync` records the round asked for.
+test("in an app, the AI panel runs a turn through the turns form and Apply asks for a sync", async ({ page, admin, baseURL }) => {
+  for (const [name, value] of [
+    ["ai_anthropic_api_key", fake.api_key],
+    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
+  ]) {
+    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
+    expect(res.ok(), await res.text()).toBe(true);
+  }
+  const title = `Chores ${Date.now().toString(36)}`;
+  const created = await admin.post("/api/notes?type=note", { data: { note: shopping(title, ["Dishes"]) } });
+  expect(created.status(), await created.text()).toBe(201);
+  const note = (await created.json()) as { id: string; version: string };
+  const edit = { id: note.id, base_version: note.version, note: JSON.stringify(shopping(title, ["Dishes", "Laundry"])) };
+  await tell(`push ${JSON.stringify({ tools: [{ id: "toolu_app", name: "propose_edit", input: edit }] })}`);
+  await tell(`push ${JSON.stringify({ text: "I proposed adding the laundry." })}`);
+
+  await page.route("**/api/app", (route) =>
+    route.fulfill({ json: { app: true, paired: true, device_id: "d1", device_name: "This laptop", server_url: baseURL } }),
+  );
+  const polled: string[] = [];
+  await page.route("**/api/app/ai/turns/**", async (route) => {
+    const url = new URL(route.request().url());
+    const turn = url.pathname.split("/").pop()!;
+    polled.push(turn);
+    const after = Number(url.searchParams.get("after") ?? "0");
+    const res = await route.fetch({ url: `${url.origin}/api/ai/chat/turns/${turn}/events`, method: "GET" });
+    const events = (await res.text())
+      .split("\n\n")
+      .map((frame) => {
+        const lines = frame.split("\n");
+        const event = lines.find((l) => l.startsWith("event:"))?.slice(6).trim();
+        const data = lines.find((l) => l.startsWith("data:"))?.slice(5).trim();
+        return event && data ? { event, data: JSON.parse(data) as unknown } : null;
+      })
+      .filter((e) => e !== null);
+    await route.fulfill({ json: { events: events.slice(after), next: events.length, done: true } });
+  });
+  let syncs = 0;
+  await page.route("**/api/app/sync", async (route) => {
+    if (route.request().method() === "POST") syncs++;
+    await route.fulfill({ json: { state: "synced", phase: "synced", queued: 0, last_attempt_ms: Date.now() + 60_000 } });
+  });
+  const chats: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && new URL(r.url()).pathname.startsWith("/api/ai/")) chats.push(new URL(r.url()).pathname);
+  });
+
+  await logIn(page, `/notes/${note.id}`);
+  await expect(activePane(page)).toContainText("Dishes");
+  await page.keyboard.press("Control+Shift+L");
+  await expect(page.getByRole("tab", { name: "AI" })).toHaveAttribute("aria-selected", "true");
+  const panel = page.getByRole("complementary", { name: "AI" });
+  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await panel.getByLabel("Ask AI").fill("Add the laundry.");
+  await panel.getByLabel("Ask AI").press("Enter");
+
+  const conversation = panel.getByRole("list", { name: "Conversation" });
+  await expect(conversation).toContainText("I proposed adding the laundry.");
+  expect(polled.length).toBeGreaterThan(0);
+  expect(chats).toContain("/api/ai/chat/turns");
+  expect(chats).not.toContain("/api/ai/chat");
+
+  const card = panel.getByRole("region", { name: `Proposed edit to ${title}` });
+  await card.getByRole("button", { name: "Apply" }).click();
+  await expect(card.getByText("Applied.")).toBeVisible();
+  expect(chats).toContain("/api/ai/apply");
+  await expect.poll(() => syncs).toBeGreaterThan(0);
+  const after = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { version: string; note: unknown };
+  expect(after.version).not.toBe(note.version);
+  expect(JSON.stringify(after.note)).toContain("Laundry");
 });

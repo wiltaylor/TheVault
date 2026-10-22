@@ -40,7 +40,9 @@ mod home;
 mod sync_status;
 
 pub use fresh::{FreshStart, LocalVault};
-pub use home::{NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE, OFFLINE_MESSAGE};
+pub use home::{
+    AI_NEEDS_SERVER_MESSAGE, NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE, OFFLINE_MESSAGE,
+};
 pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState, Waiting, progress_json};
 
 use std::path::PathBuf;
@@ -514,6 +516,19 @@ impl Embedded {
             Route::AppDeviceEvents => self.device_events().await,
             Route::AppDeviceEvent { id, retry } => self.device_event(id, retry).await,
             Route::ServerVersion => home.server_version().await,
+            Route::Ai => home.forward_ai(req).await,
+            Route::AppAiTurn { turn } => {
+                let after = req
+                    .uri()
+                    .query()
+                    .and_then(|q| {
+                        q.split('&')
+                            .find_map(|kv| kv.strip_prefix("after="))
+                            .and_then(|n| n.parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                home.poll_turn(&turn, after).await
+            }
             Route::NeedsWebApp => home::error(
                 StatusCode::FORBIDDEN,
                 "needs_web_app",

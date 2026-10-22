@@ -27,6 +27,9 @@
 //!   16-token "Reply with OK" request to it, else to the provider's default model, else to the
 //!   model [`ai::preselect`] picks from the live list, which it then saves as the default. It
 //!   answers 200 `{ ok, provider, model, ms, text, error: null | { kind, message } }`.
+//! - `GET /api/ai/providers` (scope `read`) answers `{ default_provider, providers: { <p>: {
+//!   configured, model } }, confirm }`, the chat panel's picker in every client (ai D23): no
+//!   account, no prompt, never a secret.
 //! - `GET /api/ai/models?provider=` (scope `read`) lists the provider's models live, with the
 //!   default model, or the preselected one when none is chosen.
 //!
@@ -56,9 +59,11 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The routes' state: the writer, whose state store holds the secrets, and the sign-ins started.
 pub struct Ai {
-    writer: Arc<Writer>,
+    pub(crate) writer: Arc<Writer>,
     pending: Mutex<HashMap<String, Pending>>,
     http: reqwest::Client,
+    /// The chat turns started through `POST /api/ai/chat/turns` (ai D23).
+    pub(crate) turns: crate::ai_turns::Turns,
 }
 
 impl Ai {
@@ -67,6 +72,7 @@ impl Ai {
             writer,
             pending: Mutex::default(),
             http: ai::client(),
+            turns: crate::ai_turns::Turns::default(),
         }
     }
 
@@ -185,6 +191,27 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
 
 async fn status_answer(a: &Arc<Ai>) -> Result<Json<Value>, ApiError> {
     blocking(a, status_of).await.map(Json)
+}
+
+/// `GET /api/ai/providers` (read): which providers are set up and their default models, the
+/// default provider and the confirmation switches, for the chat panel's picker in every client
+/// (ai D23). Unlike `GET /api/integrations/ai` it holds no account and no system prompt.
+pub async fn providers(State(a): Shared) -> Result<Json<Value>, ApiError> {
+    let status = blocking(&a, status_of).await?;
+    let mut providers = Map::new();
+    if let Some(all) = status["providers"].as_object() {
+        for (name, p) in all {
+            providers.insert(
+                name.clone(),
+                json!({ "configured": p["configured"], "model": p["model"] }),
+            );
+        }
+    }
+    Ok(Json(json!({
+        "default_provider": status["default_provider"],
+        "providers": providers,
+        "confirm": status["confirm"],
+    })))
 }
 
 /// `GET /api/integrations/ai`.

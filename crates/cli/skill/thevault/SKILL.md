@@ -838,7 +838,7 @@ A script reads and writes only the secrets that its task, or its `after_*` handl
 
 ## The user's AI panel
 
-The web app has an AI panel, where the user's own AI provider (Settings > AI) answers questions about the vault with read-only note tools and proposes edits that the user applies. An applied edit is an ordinary write by the user, so a note can change between your read and your write: send its `version` as usual, and on a 409 `conflict` read it again. Scripts reach the same providers through the `ai` module, `ai::complete` and `ai::chat`, in `after_*` handlers and tasks, without listing the AI secrets or hosts.
+The web app and the desktop and Android apps have an AI panel, where the user's own AI provider (Settings > AI) answers questions about the vault with read-only note tools and proposes edits that the user applies. An applied edit is an ordinary write by the user, so a note can change between your read and your write: send its `version` as usual, and on a 409 `conflict` read it again. Scripts reach the same providers through the `ai` module, `ai::complete` and `ai::chat`, in `after_*` handlers and tasks, without listing the AI secrets or hosts.
 
 ## Setting up a vault
 

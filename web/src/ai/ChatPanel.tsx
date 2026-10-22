@@ -1,9 +1,10 @@
-// The right sidebar's AI panel (ai D14, D16): ask about the vault, watch the answer stream, see
+// The right sidebar's AI panel (ai D14, D23): ask about the vault, watch the answer stream, see
 // which notes the model searched and read, and apply or discard the edits it proposes. The
-// conversation lives in this tab's memory (store.ts); New conversation forgets it.
+// conversation lives in this tab's memory (store.ts); New conversation forgets it. It shows in
+// the web app and in the desktop and Android apps, whose chat runs on the home server.
 
 import { For, Match, Show, Switch, createSignal, onMount } from "solid-js";
-import { type AiModel, type AiProvider, type AiStatus, type Json, type NoteDoc, api, assetUrl } from "../api";
+import { type AiModel, type AiProvider, type AiProviders, type Json, type NoteDoc, api, assetUrl } from "../api";
 import { formatValue } from "../components/Render";
 import { blockLines, lineDiff } from "./diff";
 import { Markdown } from "./markdown";
@@ -19,6 +20,7 @@ import {
   ask,
   chat,
   discardProposal,
+  inApp,
   newConversation,
   pending,
   providerLabel,
@@ -76,9 +78,11 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
     return `${props.part.notes.length} found`;
   };
   // The image a read_asset step read, from the asset's own URL: the stream never carries its bytes (ai D19).
+  // In an app an asset not on the device does not load: its file name is shown alone.
+  const [broken, setBroken] = createSignal(false);
   const image = () => {
     const a = props.part.asset;
-    return a && a.media_type.startsWith("image/") ? a : undefined;
+    return a && a.media_type.startsWith("image/") && !broken() ? a : undefined;
   };
   return (
     <details class="ai-step" classList={{ "ai-step-error": props.part.isError }}>
@@ -87,7 +91,7 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
         <Show when={image()}>
           {(a) => (
             <a class="ai-step-thumb" href={assetUrl(a().id)} target="_blank" rel="noopener">
-              <img src={assetUrl(a().id)} alt={a().filename} loading="lazy" />
+              <img src={assetUrl(a().id)} alt={a().filename} loading="lazy" onError={() => setBroken(true)} />
             </a>
           )}
         </Show>
@@ -367,12 +371,19 @@ function Notice(props: { part: Extract<Part, { kind: "notice" }> }) {
 /** The providers in the order Settings > AI shows them. */
 const PROVIDERS: AiProvider[] = ["anthropic", "openai", "chatgpt"];
 
+/** Where Settings > AI is: the home server's page in an app, this server's in the web app. */
+function settingsUrl(): string {
+  const server = inApp()?.server_url;
+  return server ? `${server.replace(/\/+$/, "")}/settings/ai` : "/settings/ai";
+}
+
 /**
- * The provider and model picker: the providers Settings > AI has set up, and each one's live
- * model list (ai D6), starting from the defaults chosen there.
+ * The provider and model picker: the providers Settings > AI has set up, from
+ * `GET /api/ai/providers` in every client (ai D23), and each one's live model list (ai D6),
+ * starting from the defaults chosen there.
  */
 function Picker() {
-  const [status, setStatus] = createSignal<AiStatus | null>(null);
+  const [status, setStatus] = createSignal<AiProviders | null>(null);
   const [models, setModels] = createSignal<AiModel[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const configured = () => PROVIDERS.filter((p) => status()?.providers[p]?.configured);
@@ -392,7 +403,7 @@ function Picker() {
   }
   onMount(async () => {
     try {
-      const s = await api.aiStatus();
+      const s = await api.aiProviders();
       setStatus(s);
       const ready = configured();
       const pick = [chat.provider, s.default_provider].find((p): p is AiProvider => !!p && ready.includes(p as AiProvider)) ?? ready[0];
@@ -404,9 +415,22 @@ function Picker() {
   return (
     <div class="ai-picker">
       <Show when={status() && configured().length === 0}>
-        <p class="muted">
-          No AI provider is set up. Add one in <a href="/settings/ai">Settings &gt; AI</a>.
-        </p>
+        <Show
+          when={inApp()}
+          fallback={
+            <p class="muted">
+              No AI provider is set up. Add one in <a href="/settings/ai">Settings &gt; AI</a>.
+            </p>
+          }
+        >
+          <p class="muted">
+            No AI provider is set up.{" "}
+            <a href={settingsUrl()} target="_blank" rel="noopener">
+              Set up AI in the web app
+            </a>
+            .
+          </p>
+        </Show>
       </Show>
       <Show when={configured().length > 0}>
         <select aria-label="Provider" value={chat.provider ?? ""} onChange={(e) => void loadModels(e.currentTarget.value as AiProvider)}>

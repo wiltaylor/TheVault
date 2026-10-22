@@ -1,15 +1,22 @@
-// The AI chat panel's conversation (ai D10, D14, D16): what the panel shows, and the neutral
+// The AI chat panel's conversation (ai D10, D14, D23): what the panel shows, and the neutral
 // transcript the server takes back each turn. It lives in this tab's memory only; nothing is
-// stored in the vault. A turn streams from POST /api/ai/chat, where the server runs the note
-// tools; edits come back as proposals the user applies through the notes API, or, for the kinds
-// Settings > AI lets go ahead without asking, as `applied` events for changes already made.
+// stored in the vault. The chat runs on the home server, which holds the credentials and runs
+// the note tools. In the web app a turn streams from POST /api/ai/chat. In the desktop and
+// Android apps, whose webviews get whole bodies from the embedded server, a turn starts with
+// POST /api/ai/chat/turns, which the embedded server forwards, and its events are polled from
+// the embedded server's GET /api/app/ai/turns/{turn}, which reads the turn's stream from the
+// home server. Edits come back as proposals the user applies with POST /api/ai/apply, on the
+// home server in every client, or, for the kinds Settings > AI lets go ahead without asking, as
+// `applied` events for changes already made. In an app such a change reaches the device's copy
+// with a sync round, which the panel asks for.
 
 import { createRoot, createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { type Json, type Note, type NoteDoc, ApiError, type StreamEvent, api, isArchived, streamEvents } from "../api";
-import { noteWritten } from "../changes";
+import { type AppInfo, type Json, type NoteDoc, ApiError, type StreamEvent, api, streamEvents } from "../api";
+import { noteChangedElsewhere, noteWritten } from "../changes";
 import { appInfo } from "../inApp";
 import { reloadDefinitions } from "../session";
+import { refreshSync } from "../sync/store";
 
 /** One piece of a transcript message, as the server's `ai::Content`. */
 export type Content =
@@ -140,8 +147,8 @@ export function refusalText(provider: string | null, model: string | null, categ
 
 const state = createRoot(() => {
   const [chat, setChat] = createStore<ChatState>({ turns: [], streaming: false, provider: null, model: null });
-  const [web, setWeb] = createSignal(false);
-  return { chat, setChat, web, setWeb };
+  const [app, setApp] = createSignal<AppInfo | null>(null);
+  return { chat, setChat, app, setApp };
 });
 
 export const chat = state.chat;
@@ -149,15 +156,24 @@ export const chat = state.chat;
 let asked = false;
 
 /**
- * Reactive: whether the page is the web app rather than the desktop or Android app, whose
- * embedded server has no AI credentials (ai D16). False until the answer is known.
+ * Reactive: the desktop or Android app the page runs in, or null in the web app and until the
+ * answer is known. The panel shows in both; in an app it uses the turns form (ai D23).
  */
-export function webApp(): boolean {
+export function inApp(): AppInfo | null {
   if (!asked) {
     asked = true;
-    void appInfo().then((a) => state.setWeb(a === null));
+    void appInfo().then(
+      (a) => state.setApp(a),
+      () => undefined,
+    );
   }
-  return state.web();
+  return state.app();
+}
+
+/** Test-only: ask again whether the page runs in an app. */
+export function forgetApp() {
+  asked = false;
+  state.setApp(null);
 }
 
 /** The transcript so far, sent with each turn. Append-only. */
@@ -263,8 +279,7 @@ function onEvent(e: StreamEvent) {
       const applied = d as unknown as Applied;
       push({ kind: "applied", applied });
       // Open views of the note or type take the change, as after a write of this client's own.
-      if (applied.op === "type_change" || applied.op === "type_create") void reloadDefinitions().catch(() => undefined);
-      else noteWritten();
+      void settle(applied.op === "type_change" || applied.op === "type_create" ? "type" : "note");
       break;
     }
     case "refusal": {
@@ -311,8 +326,10 @@ export async function ask(text: string, noteId?: string) {
     messages: transcript,
     ...(noteId ? { note_id: noteId } : {}),
   };
+  const each = (e: StreamEvent) => mine === generation && onEvent(e);
   try {
-    await streamEvents("/api/ai/chat", body, (e) => mine === generation && onEvent(e), ctl.signal);
+    if (await appInfo().catch(() => null)) await pollTurn(body, each, ctl.signal);
+    else await streamEvents("/api/ai/chat", body, each, ctl.signal);
   } catch (e) {
     if (mine !== generation) return;
     if (ctl.signal.aborted) push({ kind: "notice", notice: "stopped", text: "Stopped." });
@@ -323,6 +340,63 @@ export async function ask(text: string, noteId?: string) {
       state.setChat("streaming", false);
     }
   }
+}
+
+/**
+ * A turn in the turns form, as the apps run it (ai D23): started on the home server through the
+ * embedded server, its events polled from the embedded server until the turn ends. Aborting
+ * `signal` stops the turn on the home server.
+ */
+async function pollTurn(body: unknown, onEvent: (e: StreamEvent) => void, signal: AbortSignal) {
+  const turn = await api.aiTurnStart(body);
+  const stopTurn = () => void api.aiTurnStop(turn).catch(() => undefined);
+  if (signal.aborted) stopTurn();
+  signal.addEventListener("abort", stopTurn, { once: true });
+  let after = 0;
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const got = await api.aiTurnPoll(turn, after, signal);
+      signal.throwIfAborted();
+      for (const e of got.events) onEvent(e);
+      after = got.next;
+      if (got.done) return;
+    }
+  } finally {
+    signal.removeEventListener("abort", stopTurn);
+  }
+}
+
+/** How long the app waits for the sync round that brings a change made on the server. */
+export const SETTLE_MS = 20_000;
+/** How often the app asks whether that round is over. */
+export const SETTLE_POLL_MS = 500;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * After a change the AI made on the home server, through Apply or itself: open views of the note
+ * or type take it. In an app the change reaches the device's copy only by sync, so the app asks
+ * its embedded server for a round first and waits for it to end (ai D23).
+ */
+export async function settle(kind: "note" | "type") {
+  if (await appInfo().catch(() => null)) {
+    const asked = Date.now();
+    try {
+      await api.appSyncNow();
+      for (let waited = 0; waited < SETTLE_MS; waited += SETTLE_POLL_MS) {
+        const s = await api.appSync();
+        if (s.state !== "syncing" && (s.last_attempt_ms ?? 0) >= asked) break;
+        await sleep(SETTLE_POLL_MS);
+      }
+    } catch {
+      // The sync icon shows why; the change arrives with a later round.
+    }
+    void refreshSync();
+    if (kind === "note") noteChangedElsewhere(null);
+  }
+  if (kind === "type") await reloadDefinitions().catch(() => undefined);
+  else noteWritten();
 }
 
 function setProposal(turn: number, part: number, patch: { state: ProposalState; error?: string; created?: string }) {
@@ -340,27 +414,17 @@ function setProposal(turn: number, part: number, patch: { state: ProposalState; 
   );
 }
 
-/** What a card says when the note changed after the proposal (ai D20). */
-export const NOTE_CHANGED = "The note changed after this was proposed, so it was not applied. Ask again for a fresh proposal.";
+/** What a card says when the note changed after the proposal (ai D20, D23). */
+export const NOTE_CHANGED = "This note changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
 
-/** Thrown inside an apply when the note is no longer as proposed: the card shows it, stale. */
-class Stale extends Error {}
-
-/** The note `id` as it is now, read again before an archive or delete is applied. */
-async function currentNote(id: string): Promise<Note> {
-  try {
-    return await api.note(id);
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) throw new Stale("This note is no longer there, so nothing was applied.");
-    throw e;
-  }
-}
+/** What a card says when the note the proposal names is gone. */
+export const NOTE_GONE = "This note is no longer there, so nothing was applied.";
 
 /**
- * Apply a note proposal through the notes API (ai D14, D20): an update at the version it was
- * based on, a create, an archive or unarchive, or a delete, which moves the note to the trash.
- * An archive or delete reads the note again first, and does nothing to a note whose archive
- * state already changed or, for a delete, whose version moved past the proposal's.
+ * Apply a note proposal with POST /api/ai/apply, on the home server, as the chat sent it (ai
+ * D23): an update, an archive or unarchive, or a delete, which moves the note to the trash, at
+ * the version it was proposed on, or a create. A note that changed since is a conflict and
+ * nothing is written.
  */
 export async function applyProposal(turn: number, part: number) {
   const p = state.chat.turns[turn]?.parts[part];
@@ -368,36 +432,13 @@ export async function applyProposal(turn: number, part: number) {
   const proposal = p.proposal;
   setProposal(turn, part, { state: "applying" });
   try {
-    switch (proposal.op) {
-      case "update":
-        await api.updateNote(proposal.note_id, proposal.after, proposal.base_version);
-        break;
-      case "create": {
-        const n = await api.createNote(proposal.type, proposal.after);
-        setProposal(turn, part, { state: "applied", created: n.id });
-        return;
-      }
-      case "archive":
-      case "unarchive": {
-        const n = await currentNote(proposal.note_id);
-        const want = proposal.op === "archive";
-        if (isArchived(n.note.fields) === want) {
-          throw new Stale(want ? "This note is already archived, so nothing was applied." : "This note is no longer archived, so nothing was applied.");
-        }
-        await (want ? api.archiveNote(proposal.note_id, n.version) : api.unarchiveNote(proposal.note_id, n.version));
-        break;
-      }
-      case "delete": {
-        const n = await currentNote(proposal.note_id);
-        if (n.version !== proposal.base_version) throw new Stale(NOTE_CHANGED);
-        await api.deleteNote(proposal.note_id, proposal.base_version);
-        break;
-      }
-    }
-    setProposal(turn, part, { state: "applied" });
+    const done = await api.aiApply(proposal);
+    const created = proposal.op === "create" && "note_id" in done ? done.note_id : undefined;
+    setProposal(turn, part, { state: "applied", ...(created ? { created } : {}) });
+    await settle("note");
   } catch (e) {
-    if (e instanceof Stale) setProposal(turn, part, { state: "stale", error: e.message });
-    else if (e instanceof ApiError && e.isConflict) setProposal(turn, part, { state: proposal.op === "update" ? "failed" : "stale", error: NOTE_CHANGED });
+    if (e instanceof ApiError && e.isConflict) setProposal(turn, part, { state: "stale", error: NOTE_CHANGED });
+    else if (e instanceof ApiError && e.status === 404) setProposal(turn, part, { state: "stale", error: NOTE_GONE });
     else setProposal(turn, part, { state: "failed", error: e instanceof Error ? e.message : String(e) });
   }
 }
@@ -443,39 +484,19 @@ function setTypeProposal(turn: number, part: number, patch: { state: TypeProposa
   );
 }
 
-/** The type file `name` as stored now, or null when there is no such type. */
-async function currentType(name: string): Promise<string | null> {
-  try {
-    return (await api.readType(name)).wcl;
-  } catch (e) {
-    if (e instanceof ApiError && (e.status === 404 || e.body.error === "unknown_type")) return null;
-    throw e;
-  }
-}
-
 /**
- * Apply a type proposal through the type routes, as the type editor does: a new type with
- * `PUT /api/types/{name}`, a change planned and then applied with the plan's token. The type is
- * read again first; one that changed since the proposal is not applied (ai D18).
+ * Apply a type proposal with POST /api/ai/apply, on the home server (ai D18, D23): a new type, or
+ * a change planned and applied as one commit, when the type file is still the one proposed
+ * against. It needs admin: from an app, the server answers that it is done in the web app.
  */
 export async function applyTypeProposal(turn: number, part: number) {
   const p = state.chat.turns[turn]?.parts[part];
   if (p?.kind !== "type_proposal" || (p.state !== "open" && p.state !== "failed")) return;
-  const { name, before, after } = p.proposal;
   setTypeProposal(turn, part, { state: "applying" });
   try {
-    if ((await currentType(name)) !== (before ?? null)) {
-      setTypeProposal(turn, part, { state: "stale", error: TYPE_CHANGED });
-      return;
-    }
-    if (before === null || before === undefined) {
-      await api.putType(name, after);
-    } else {
-      const plan = await api.changeType(name, after, {});
-      await api.changeType(name, after, {}, plan.plan);
-    }
+    await api.aiApply(p.proposal);
     setTypeProposal(turn, part, { state: "applied" });
-    await reloadDefinitions().catch(() => undefined);
+    await settle("type");
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) setTypeProposal(turn, part, { state: "stale", error: TYPE_CHANGED });
     else setTypeProposal(turn, part, { state: "failed", error: e instanceof Error ? e.message : String(e) });

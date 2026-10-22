@@ -107,10 +107,10 @@ export function noteActions(note: ActiveNote | null): Action[] {
 
 /**
  * The actions that do not depend on the vault's types. `phone` drops what a phone cannot do;
- * `androidApp` adds what only the Android app can do, on the phone it runs on, and `webApp` what
- * only the web app can: the AI panel (ai D16).
+ * `androidApp` adds what only the Android app can do, on the phone it runs on. Ask AI is in every
+ * client (ai D23).
  */
-export function generalActions(opts: { phone: boolean; dark: boolean; androidApp?: boolean; webApp?: boolean }): Action[] {
+export function generalActions(opts: { phone: boolean; dark: boolean; androidApp?: boolean }): Action[] {
   const pane = () => M.activePane(workspace());
   const out: Action[] = [
     {
@@ -128,9 +128,7 @@ export function generalActions(opts: { phone: boolean; dark: boolean; androidApp
     { id: "trash", section: "Go to", label: "Go to Trash", keywords: ["Deleted notes", "Restore"], icon: { glyph: "trash" }, href: "/trash" },
     { id: "archive", section: "Go to", label: "Go to Archive", keywords: ["Archived notes", "Unarchive"], icon: { glyph: "archive" }, href: "/archive" },
     { id: "assets", section: "Go to", label: "Go to Assets", keywords: ["Files", "Uploads", "Images"], icon: { glyph: "files" }, href: "/assets" },
-  ];
-  if (opts.webApp) {
-    out.push({
+    {
       id: "ai:ask",
       section: "Go to",
       label: "Ask AI",
@@ -138,8 +136,8 @@ export function generalActions(opts: { phone: boolean; dark: boolean; androidApp
       icon: { glyph: "ai" },
       shortcut: "Ctrl+Shift+L",
       run: () => focusPanel("ai"),
-    });
-  }
+    },
+  ];
   if (opts.androidApp) {
     out.push({
       id: "device:import",

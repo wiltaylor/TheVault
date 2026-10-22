@@ -578,6 +578,31 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/ai/models",
         "The models an AI provider offers now (?provider=), with its default model",
     ),
+    (
+        "GET",
+        "/api/ai/providers",
+        "The AI providers set up and their default models, the default provider and the confirmation switches; never a key, token or account",
+    ),
+    (
+        "POST",
+        "/api/ai/chat/turns",
+        "Start an AI chat turn with the body POST /api/ai/chat takes: {turn}; at most 4 run per caller",
+    ),
+    (
+        "GET",
+        "/api/ai/chat/turns/{turn}/events",
+        "The turn's server-sent events, the same as POST /api/ai/chat sends; unread for 30 seconds, the turn stops",
+    ),
+    (
+        "DELETE",
+        "/api/ai/chat/turns/{turn}",
+        "Stop an AI chat turn",
+    ),
+    (
+        "POST",
+        "/api/ai/apply",
+        "Apply a proposal or type_proposal as the chat sent it, at its base version: {op, note_id, version} or {op, type_name}; a type change needs admin",
+    ),
 ];
 
 /// The OpenAPI document of [`ENDPOINTS`].

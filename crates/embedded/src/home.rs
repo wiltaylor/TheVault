@@ -11,10 +11,19 @@
 //! when the device is not paired, or the server no longer accepts its token, 503 with
 //! `error: "not_paired"`. A device token has `write` scope, never `admin` (D2), so what needs
 //! `admin` on the server answers 403 with `error: "needs_web_app"`: it is managed in the web app.
+//!
+//! The AI chat runs on the home server, which holds the credentials (ai D23): the chat, its turns,
+//! the model and provider lists and `POST /api/ai/apply` are forwarded, and the device never
+//! applies an AI change to its local copy; the change arrives with the next sync. Unpaired or
+//! offline, they answer 503 `ai_needs_server`. The webview cannot read a stream through the
+//! app's custom scheme, which answers whole bodies, so `GET /api/app/ai/turns/{turn}?after=<n>`
+//! reads the turn's event stream here, on the device, and hands the webview the events after
+//! the first `n` each time it asks (see [`Home::poll_turn`]).
 
+use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::{PoisonError, RwLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::http::{
@@ -24,6 +33,7 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use serde_json::{Value, json};
 use state::LiveEvent;
 use sync::Remote;
+use tokio::sync::Notify;
 
 /// How long a forwarded request waits to connect before the server counts as offline.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -39,6 +49,17 @@ pub const NOT_PAIRED_MESSAGE: &str = "Not paired";
 
 /// The message of a route the device token may not use (D2).
 pub const NEEDS_WEB_APP_MESSAGE: &str = "Manage this in the web app";
+
+/// The message of an AI route while the home server cannot be reached or the device is unpaired.
+pub const AI_NEEDS_SERVER_MESSAGE: &str =
+    "The AI chat needs the home server, which is not reachable.";
+
+/// How long a poll of a turn's events waits for one before answering with none.
+const POLL_WAIT: Duration = Duration::from_secs(2);
+
+/// How long a relayed turn waits for the webview to ask again before it lets the turn go, which
+/// stops it on the home server.
+const RELAY_IDLE: Duration = Duration::from_secs(30);
 
 /// Where one `/api` request is answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +95,12 @@ pub(crate) enum Route {
     /// `GET /api/version`: the home server's version, read from its `/api/sync/info`, which
     /// every home server answers.
     ServerVersion,
+    /// The AI chat, its turns, models and providers, and applying its changes: the home server's,
+    /// which holds the credentials (ai D23).
+    Ai,
+    /// `GET /api/app/ai/turns/{turn}`: the turn's events so far, for a webview that cannot read
+    /// a stream.
+    AppAiTurn { turn: String },
     /// Credentials that need `admin`, which a device token never has.
     NeedsWebApp,
 }
@@ -124,6 +151,18 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     }
     if path == "/api/version" && get {
         return Route::ServerVersion;
+    }
+    if get && let Some(turn) = path.strip_prefix("/api/app/ai/turns/").and_then(segment) {
+        return Route::AppAiTurn {
+            turn: turn.to_owned(),
+        };
+    }
+    if under(path, "/api/ai/chat")
+        || path == "/api/ai/models"
+        || path == "/api/ai/providers"
+        || path == "/api/ai/apply"
+    {
+        return Route::Ai;
     }
     // Emptying the trash is for the signed-in user only (ai D21). The embedded server answers
     // every request as the owner, so it cannot tell the user from the device token, and the
@@ -247,6 +286,34 @@ const DROPPED_RESPONSE: [&str; 5] = [
 pub(crate) struct Home {
     client: reqwest::Client,
     remote: RwLock<Option<Remote>>,
+    /// The chat turns whose events are read here for the webview, by turn id.
+    relays: Arc<Mutex<HashMap<String, Arc<Relay>>>>,
+}
+
+/// A chat turn's events as read from the home server, kept for the webview's polls.
+struct Relay {
+    state: Mutex<Relayed>,
+    /// Woken when an event arrives or the stream ends.
+    arrived: Notify,
+}
+
+#[derive(Default)]
+struct Relayed {
+    events: Vec<Value>,
+    done: bool,
+    /// When the webview last asked.
+    asked: Option<Instant>,
+}
+
+impl Relay {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Relayed> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether the webview has not asked for [`RELAY_IDLE`].
+    fn idle(&self) -> bool {
+        self.lock().asked.is_none_or(|t| t.elapsed() >= RELAY_IDLE)
+    }
 }
 
 impl Home {
@@ -257,6 +324,7 @@ impl Home {
         Ok(Home {
             client,
             remote: RwLock::new(None),
+            relays: Arc::default(),
         })
     }
 
@@ -328,6 +396,109 @@ impl Home {
         }
     }
 
+    /// An AI route answered by the home server, or 503 `ai_needs_server` when it cannot be
+    /// reached. Its answers pass unchanged, a 403 `needs_admin` among them.
+    pub async fn forward_ai(&self, req: Request<Body>) -> Response<Body> {
+        match self.send(req).await {
+            Ok(res) => pass(res),
+            Err(_) => ai_needs_server(),
+        }
+    }
+
+    /// `GET /api/app/ai/turns/{turn}?after=<n>`: `{ events: [{event, data}], next, done }`, the
+    /// turn's events after the first `n`, waiting up to [`POLL_WAIT`] for one. The first poll
+    /// opens the turn's event stream on the home server, and a task here reads it into a buffer;
+    /// a turn the webview stops asking about for [`RELAY_IDLE`] is let go, which closes the
+    /// stream and so stops the turn there. `done` says the stream ended: the last event is the
+    /// turn's `done`, `error` or `refusal`, or, when the stream broke, an `error` saying so.
+    pub async fn poll_turn(&self, turn: &str, after: usize) -> Response<Body> {
+        let existing = self
+            .relays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(turn)
+            .cloned();
+        let relay = match existing {
+            Some(r) => r,
+            None => match self.open_relay(turn).await {
+                Ok(r) => r,
+                Err(res) => return res,
+            },
+        };
+        relay.lock().asked = Some(Instant::now());
+        let deadline = tokio::time::Instant::now() + POLL_WAIT;
+        loop {
+            let arrived = relay.arrived.notified();
+            tokio::pin!(arrived);
+            arrived.as_mut().enable();
+            {
+                let st = relay.lock();
+                if st.events.len() > after || st.done {
+                    break;
+                }
+            }
+            if tokio::time::timeout_at(deadline, arrived).await.is_err() {
+                break;
+            }
+        }
+        let (events, next, done) = {
+            let mut st = relay.lock();
+            st.asked = Some(Instant::now());
+            let from = after.min(st.events.len());
+            (st.events[from..].to_vec(), st.events.len(), st.done)
+        };
+        if done {
+            self.relays
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(turn);
+        }
+        json_response(
+            StatusCode::OK,
+            &json!({ "events": events, "next": next, "done": done }),
+        )
+    }
+
+    /// Open `turn`'s event stream on the home server and start reading it into a relay.
+    async fn open_relay(&self, turn: &str) -> Result<Arc<Relay>, Response<Body>> {
+        let ask = Request::get(format!("/api/ai/chat/turns/{turn}/events"))
+            .header(header::ACCEPT, "text/event-stream")
+            .body(Body::empty())
+            .unwrap_or_default();
+        let res = match self.send(ask).await {
+            Ok(res) if res.status().is_success() => res,
+            Ok(res) => return Err(pass(res)),
+            Err(_) => return Err(ai_needs_server()),
+        };
+        let relay = Arc::new(Relay {
+            state: Mutex::new(Relayed {
+                asked: Some(Instant::now()),
+                ..Relayed::default()
+            }),
+            arrived: Notify::new(),
+        });
+        self.relays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(turn.to_owned(), relay.clone());
+        let reading = relay.clone();
+        let relays = self.relays.clone();
+        let turn = turn.to_owned();
+        tokio::spawn(async move {
+            relay_stream(res, &reading).await;
+            reading.lock().done = true;
+            reading.arrived.notify_waiters();
+            // A turn the webview left is let go; one it reads is, by its last poll.
+            if reading.idle() {
+                relays
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&turn);
+            }
+        });
+        Ok(relay)
+    }
+
     /// `GET /api/version`: `{ server_version }` from the home server's `GET /api/sync/info`, so a
     /// home server older than `/api/version` still says its version.
     pub async fn server_version(&self) -> Response<Body> {
@@ -390,6 +561,98 @@ impl Home {
     }
 }
 
+/// Read a turn's event stream into `relay` until it ends, or until the webview has not asked for
+/// [`RELAY_IDLE`], when dropping the stream stops the turn on the home server.
+async fn relay_stream(res: reqwest::Response, relay: &Relay) {
+    let mut body = res.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut ended = false;
+    loop {
+        if relay.idle() {
+            return;
+        }
+        let chunk = match tokio::time::timeout(Duration::from_secs(5), body.next()).await {
+            Err(_) => continue,
+            Ok(None | Some(Err(_))) => break,
+            Ok(Some(Ok(chunk))) => chunk,
+        };
+        buf.extend_from_slice(&chunk);
+        let frames = sse_frames(&mut buf);
+        if frames.is_empty() {
+            continue;
+        }
+        {
+            let mut st = relay.lock();
+            for f in frames {
+                ended |= matches!(f["event"].as_str(), Some("done" | "error" | "refusal"));
+                st.events.push(f);
+            }
+        }
+        relay.arrived.notify_waiters();
+    }
+    if !ended {
+        relay.lock().events.push(json!({
+            "event": "error",
+            "data": { "kind": "unavailable", "message": AI_NEEDS_SERVER_MESSAGE },
+        }));
+    }
+}
+
+/// Take every complete event off the front of `buf`, as `{event, data}` with `data` parsed as
+/// JSON. Comments, such as heartbeats, are left out.
+fn sse_frames(buf: &mut Vec<u8>) -> Vec<Value> {
+    let mut out = Vec::new();
+    while let Some(end) = buf.windows(2).position(|w| w == b"\n\n") {
+        let frame: Vec<u8> = buf.drain(..end + 2).collect();
+        let text = String::from_utf8_lossy(&frame[..end]);
+        let mut event = "message".to_owned();
+        let mut data: Vec<&str> = Vec::new();
+        for line in text.lines() {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            if line.starts_with(':') {
+                continue;
+            }
+            let (field, value) = line.split_once(':').unwrap_or((line, ""));
+            let value = value.strip_prefix(' ').unwrap_or(value);
+            match field {
+                "event" => event = value.to_owned(),
+                "data" => data.push(value),
+                _ => {}
+            }
+        }
+        if data.is_empty() {
+            continue;
+        }
+        let data = data.join("\n");
+        let data = serde_json::from_str(&data).unwrap_or(Value::String(data));
+        out.push(json!({ "event": event, "data": data }));
+    }
+    out
+}
+
+/// 503 `ai_needs_server`.
+pub(crate) fn ai_needs_server() -> Response<Body> {
+    error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "ai_needs_server",
+        AI_NEEDS_SERVER_MESSAGE,
+    )
+}
+
+/// The server's answer as it is: status, headers and streaming body.
+fn pass(res: reqwest::Response) -> Response<Body> {
+    let mut builder = Response::builder().status(res.status());
+    for (name, value) in res.headers() {
+        if !DROPPED_RESPONSE.contains(&name.as_str()) {
+            builder = builder.header(name, value);
+        }
+    }
+    let body = Body::from_stream(res.bytes_stream().map_err(std::io::Error::other));
+    builder
+        .body(body)
+        .unwrap_or_else(|_| Unavailable::Offline.response())
+}
+
 /// The server's answer as the webview gets it: its status, headers and streaming body, with a 403
 /// rewritten to say the web app manages it.
 pub(crate) async fn translate(res: reqwest::Response) -> Response<Body> {
@@ -401,16 +664,7 @@ pub(crate) async fn translate(res: reqwest::Response) -> Response<Body> {
         }
         return json_response(StatusCode::FORBIDDEN, &out);
     }
-    let mut builder = Response::builder().status(res.status());
-    for (name, value) in res.headers() {
-        if !DROPPED_RESPONSE.contains(&name.as_str()) {
-            builder = builder.header(name, value);
-        }
-    }
-    let body = Body::from_stream(res.bytes_stream().map_err(std::io::Error::other));
-    builder
-        .body(body)
-        .unwrap_or_else(|_| Unavailable::Offline.response())
+    pass(res)
 }
 
 /// The JSON body of a server answer, read whole.
@@ -551,13 +805,27 @@ mod tests {
         assert_eq!(route(&get, "/api/events"), Route::Events);
         assert_eq!(route(&get, "/api/tokens"), Route::NeedsWebApp);
         assert_eq!(route(&Method::PUT, "/api/secrets/k"), Route::NeedsWebApp);
-        // The device holds no AI credentials (ai D16).
+        // The device holds no AI credentials (ai D16): Settings > AI is the web app's, and the
+        // chat is the home server's (ai D23).
         assert_eq!(route(&get, "/api/integrations/ai"), Route::NeedsWebApp);
         assert_eq!(
             route(&post, "/api/integrations/ai/chatgpt/start"),
             Route::NeedsWebApp
         );
-        assert_eq!(route(&get, "/api/ai/models"), Route::NeedsWebApp);
+        assert_eq!(route(&get, "/api/ai/models"), Route::Ai);
+        assert_eq!(route(&get, "/api/ai/providers"), Route::Ai);
+        assert_eq!(route(&post, "/api/ai/chat"), Route::Ai);
+        assert_eq!(route(&post, "/api/ai/chat/turns"), Route::Ai);
+        assert_eq!(route(&get, "/api/ai/chat/turns/t/events"), Route::Ai);
+        assert_eq!(route(&Method::DELETE, "/api/ai/chat/turns/t"), Route::Ai);
+        assert_eq!(route(&post, "/api/ai/apply"), Route::Ai);
+        assert_eq!(route(&get, "/api/ai/other"), Route::NeedsWebApp);
+        assert_eq!(
+            route(&get, "/api/app/ai/turns/t"),
+            Route::AppAiTurn {
+                turn: "t".to_owned()
+            }
+        );
         assert_eq!(route(&get, "/api/aim"), Route::Local);
         assert_eq!(route(&get, "/api/tasks"), Route::ForwardOrLocal);
         assert_eq!(route(&get, "/api/tasks/noop"), Route::Local);
@@ -616,6 +884,17 @@ mod tests {
         assert_eq!(route(&post, "/api/app/device-events/x/retry"), Route::Local);
         assert_eq!(route(&get, "/api/version"), Route::ServerVersion);
         assert_eq!(route(&get, "/api/sync/info"), Route::Local);
+    }
+
+    #[test]
+    fn sse_frames_are_parsed_and_heartbeats_skipped() {
+        let mut buf = b": heartbeat\n\nevent: text\ndata: {\"delta\":\"a\"}\n\nevent: do".to_vec();
+        let frames = sse_frames(&mut buf);
+        assert_eq!(
+            frames,
+            vec![json!({ "event": "text", "data": { "delta": "a" } })]
+        );
+        assert_eq!(buf, b"event: do");
     }
 
     #[test]

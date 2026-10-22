@@ -16,7 +16,7 @@ The two API-key providers bill your API account per token. The ChatGPT provider 
 
 ## Settings > AI
 
-Settings > AI is in the web app only. The desktop and Android apps talk to their embedded server, which holds no AI credentials, so the section is absent there.
+Settings > AI is in the web app only. The desktop and Android apps pair with a device token, which cannot manage credentials, so the section is absent there; their AI panel uses the home server's settings.
 
 Each provider has a card with:
 
@@ -103,7 +103,7 @@ A script's calls write the line to the run's log. The server's own calls, such a
 
 The AI panel in the right sidebar answers questions about your notes and proposes edits to them. Open it with the AI tab, Ctrl+Shift+L (Cmd+Shift+L on a Mac), or Ask AI in the command palette (Ctrl+K). It uses the default provider and model from Settings > AI; the two menus at the top of the panel pick another for this conversation.
 
-The panel shows only in the web app. The desktop and Android apps talk to their own embedded server, which holds no AI credentials.
+The panel shows in the web app and in the desktop and Android apps. The chat always runs on the home server, which holds the credentials: an app's embedded server sends the panel's requests there with the device token, so an app needs to be paired and to reach its server. Offline or unpaired, the panel says "The AI chat needs the home server, which is not reachable." When no provider is set up, the app's panel says so and links to Settings > AI on the home server ("Set up AI in the web app"), since Settings > AI is in the web app only.
 
 ### Ask a question
 
@@ -129,7 +129,7 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 
 A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 12 calls to the model; after that the panel says it stopped, and asking again goes on.
 
-Stop ends the answer at once: the server stops calling the model when the panel goes away. New conversation forgets the conversation. Conversations live in the browser tab only and are not saved in the vault.
+Stop ends the answer at once: the server stops calling the model when the panel goes away. New conversation forgets the conversation. Conversations live in the browser tab, or the app's window, only and are not saved in the vault.
 
 ### Attachments
 
@@ -143,7 +143,7 @@ The model reads a note's attached files with `read_asset`, by the asset ids `get
 | `text/*` and JSON, which includes Markdown and CSV | The file's text, cut at 40,000 characters with a marker |
 | Anything else | The metadata: id, file name, media type and size |
 
-Images are sent to the provider, so whatever a picture shows leaves the server. One question sends at most 8 images; a further image read is refused, and the model is told the limit is reached. The step in the panel shows the image's thumbnail, loaded from the vault like any asset.
+Images are sent to the provider, so whatever a picture shows leaves the server. One question sends at most 8 images; a further image read is refused, and the model is told the limit is reached. The step in the panel shows the image's thumbnail, loaded from the vault like any asset; in an app it loads from the device's copy, and an asset not on the device shows its file name only.
 
 The conversation the browser holds names an image only by its asset id. The server loads the image from the vault, scaled the same way, every time it sends the conversation to the provider, so image bytes never go to the browser or back. An image deleted since the model read it is sent as the text "asset <id> no longer exists".
 
@@ -151,18 +151,20 @@ The conversation the browser holds names an image only by its asset id. The serv
 
 When you ask for a change, such as "add eggs to my shopping list", the model proposes it. The panel shows a card with the changed fields and the lines of text removed and added:
 
-- Apply writes the change as you, at the version the model read. If the note changed since, Apply fails and says so; ask again for a fresh proposal.
+- Apply writes the change as you, on the home server, at the version the model read. If the note changed since, the card says "This note changed since the proposal" and nothing is written; ask again for a fresh proposal.
 - Discard drops it. Nothing is written.
 
 The model writes a note itself only when you turn confirmation off; see [Changes the AI makes](#changes-the-ai-makes).
+
+Every client applies a proposal the same way: the panel sends it, as the chat sent it, to `POST /api/ai/apply`, and the home server writes it. In the desktop and Android apps the change is never written to the device's copy directly: after Apply, or after a change the AI made itself, the app asks for a sync round, and the open note or type shows the change once the round brings it.
 
 ### Create, archive and delete notes
 
 The model also proposes new notes, archiving a note or taking it out of the archive, and deleting a note. Each card's heading names the operation: "Proposed new note", "Proposed archive of", "Proposed unarchive of" or "Proposed delete of", then the note's title.
 
-- A new note is checked as the create route would check it; a note that does not check goes back to the model with the issues. Its card shows the fields and text it sets. Apply creates it with `POST /api/notes` and the card then links to the new note.
-- Apply on an archive or unarchive reads the note again first. If it is already in that state, the card says so and writes nothing. Otherwise Apply calls `POST /api/notes/{id}/archive` or `/unarchive` at the version it read.
-- Apply on a delete reads the note again first. If its version moved past the one the model saw, the card says the note changed and deletes nothing. Otherwise Apply calls `DELETE /api/notes/{id}`, which moves the note to the trash, and the card links to the trash, where you can restore it. Nothing in the AI panel empties the trash.
+- A new note is checked as the create route would check it; a note that does not check goes back to the model with the issues. Its card shows the fields and text it sets. Apply creates it and the card then links to the new note.
+- Apply on an archive or unarchive archives the note, or takes it out of the archive, at the version the model saw. If the note changed since, the card says so and writes nothing.
+- Apply on a delete moves the note to the trash at the version the model saw, and the card links to the trash, where you can restore it. If the note changed since, the card says so and deletes nothing. Nothing in the AI panel empties the trash.
 
 When an answer leaves two or more proposals waiting, of any kind, the panel shows Apply all under them. It applies them in the order they came and stops at the first that does not apply; that card says why, and the rest wait for you.
 
@@ -170,10 +172,10 @@ When an answer leaves two or more proposals waiting, of any kind, the panel show
 
 When you ask to change a type, such as "add a due date to tasks" or "put the status on its own tab", the model reads the type and proposes a whole new type file. The server checks it as the type write would; WCL that does not check goes back to the model with the issues, and the model fixes it before you see anything. A new name proposes a new type. The card shows the type file's lines removed and added:
 
-- Apply reads the type again first. If it changed since the proposal, the card says "This type changed since the proposal" and writes nothing; ask again for a fresh proposal. Otherwise Apply writes it through the type routes, as the type editor does: a new type with `PUT /api/types/{name}`, a change with `POST /api/types/{name}/change`, planned and then applied with the plan's token. Notes of the type are changed with it as that plan says.
+- Apply sends it to the home server, which checks the type file is still the one the proposal was made against. If it changed since, the card says "This type changed since the proposal" and nothing is written; ask again for a fresh proposal. Otherwise the server writes it as the type routes do: a new type as `PUT /api/types/{name}` does, a change as `POST /api/types/{name}/change` does, planned and then applied as one commit. Notes of the type are changed with it as that plan says.
 - Discard drops it. Nothing is written.
 
-Applying a type change needs an `admin` session, as the type editor does. Built-in types allow what the type routes allow for them.
+Applying a type change needs `admin`, as the type editor does. A device token has `write` only, so in the desktop and Android apps the card answers "Apply type changes in the web app." Built-in types allow what the type routes allow for them.
 
 ### The system prompt
 
@@ -215,14 +217,14 @@ When the provider refuses a request, the answer stops where it was and the panel
 
 ### The chat route
 
-`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal uses the notes write route, which needs `write`; applying a type proposal uses the type routes, which need `admin`. A change the chat makes itself, its confirmation off, needs the same scope from the chat's caller; without it the chat proposes instead. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
+`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal with `POST /api/ai/apply` needs `write`, and `admin` for a type proposal. A change the chat makes itself, its confirmation off, needs the same scope from the chat's caller; without it the chat proposes instead. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
 
 | Event | Data |
 |---|---|
 | `text` | `{ delta }`, the next piece of the answer |
 | `tool` | `{ id, name, input }`, a tool call about to run |
 | `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text |
-| `proposal` | A note change, by `op`. `update`: `{ id, op, note_id, title, base_version, before, after, ops }`, an edit to apply with `PUT /api/notes/{note_id}`. `create`: `{ id, op, type, title, after }`, a note to create with `POST /api/notes?type={type}`. `archive` and `unarchive`: `{ id, op, note_id, title, base_version }`, applied with `POST /api/notes/{note_id}/archive` or `/unarchive`. `delete`: `{ id, op, note_id, title, base_version }`, applied with `DELETE /api/notes/{note_id}`. A proposal without `op` is an `update` |
+| `proposal` | A note change, by `op`, to apply with `POST /api/ai/apply`. `update`: `{ id, op, note_id, title, base_version, before, after, ops }`, an edit. `create`: `{ id, op, type, title, after }`, a new note. `archive` and `unarchive`: `{ id, op, note_id, title, base_version }`. `delete`: `{ id, op, note_id, title, base_version }`, a move to the trash. A proposal without `op` is an `update` |
 | `type_proposal` | `{ id, name, exists, before, after, issues }`: `before` is the type file as stored (null for a new type), `after` the checked type file in canonical form, `issues` the warnings the check found |
 | `applied` | A change the tool made itself, its confirmation off, sent in place of the proposal. For a note, `{ id, op, note_id, title, version }`, where `op` is `update`, `create`, `archive`, `unarchive` or `delete` and `version` is the note's new version (for a delete, the version that went to the trash). For a type, `{ id, op, type_name }`, where `op` is `type_change` or `type_create` |
 | `usage` | `{ provider, model, input, output }` for one model call |
@@ -232,9 +234,32 @@ When the provider refuses a request, the answer stops where it was and the panel
 
 `messages` holds the turn's new conversation items, including the provider's own record of each answer. Send them back unchanged, after the earlier ones, with the next question. Each call to the model writes a trail line to the server log.
 
+### The turns form
+
+A client that cannot read a streamed answer to a POST, such as the Android app's webview, which gets whole bodies, runs a turn in two steps instead. Both forms run the turn the same way and send the same events.
+
+| Method and path | Does |
+|---|---|
+| `POST /api/ai/chat/turns` | Takes the body `POST /api/ai/chat` takes, starts the turn, and answers 201 `{ turn }`. At most 4 turns run at once per caller; one more is a 429 `too_many_turns` |
+| `GET /api/ai/chat/turns/{turn}/events` | Streams the turn's events, as `POST /api/ai/chat` would, with the heartbeat; usable with `EventSource`. A turn has one reader: a second one is a 409 `turn_read` |
+| `DELETE /api/ai/chat/turns/{turn}` | Stops the turn, 204 |
+
+All three need `read`, and a turn is its caller's: another caller's turn is a 404 `unknown_turn`, as is a turn that ended and was read, was stopped, or was never read. A turn nobody reads within 30 seconds stops, and so does a turn whose reader goes away, as a `POST /api/ai/chat` whose client goes away does. Turns are held in the server's memory.
+
+In the desktop and Android apps the embedded server forwards these routes to the home server with the device token. The webview cannot read a stream through the app's custom scheme either, so it polls the embedded server's `GET /api/app/ai/turns/{turn}?after=<n>`, which reads the turn's stream from the home server and answers `{ events: [{ event, data }], next, done }`: the events after the first `n`, waiting up to 2 seconds for one. The panel asks again with `after` set to `next` until `done`. A turn the panel stops asking about for 30 seconds is let go, which stops it on the home server.
+
+### Applying a change
+
+`POST /api/ai/apply` takes a `proposal` or `type_proposal` event's data, as the chat sent it, and applies it on the server as the caller, through the same code the chat uses when [confirmation is off](#changes-the-ai-makes). A type proposal is told apart by its WCL `after` text.
+
+- A note change is written at its `base_version`: an update, an archive or unarchive, or a delete, which moves the note to the trash. A create makes the note. It needs `write`. A note that changed since is a 409 `conflict`, and nothing is written.
+- A type change needs `admin`; without it the answer is 403 `needs_admin`, "Apply type changes in the web app." A type file that changed since the proposal is a 409 `stale`.
+- It answers `{ op, note_id, version }` for a note, with the note's new version (for a delete, the version that went to the trash), and `{ op, type_name }` for a type, where `op` is `type_change` or `type_create`.
+- Anything that is not a change the chat proposes is a 400.
+
 ## API
 
-Settings > AI uses these routes. Every route under `/api/integrations/ai` needs an `admin` token or the web app's session; `GET /api/ai/models` needs `read`.
+Settings > AI uses these routes. Every route under `/api/integrations/ai` needs an `admin` token or the web app's session; `GET /api/ai/models` and `GET /api/ai/providers` need `read`.
 
 | Method and path | Does |
 |---|---|
@@ -246,3 +271,4 @@ Settings > AI uses these routes. Every route under `/api/integrations/ai` needs 
 | `POST /api/integrations/ai/chatgpt/finish` | Takes `{ url }`, the pasted address, and stores the sign-in; a refused sign-in is a 400 with the reason |
 | `POST /api/integrations/ai/chatgpt/disconnect` | Revokes and deletes the ChatGPT sign-in |
 | `GET /api/ai/models?provider=` | The provider's models now, `{ provider, model, models: [{ id, display_name }] }`; without `provider`, the default one |
+| `GET /api/ai/providers` | The chat panel's picker in every client: `{ default_provider, providers: { anthropic, openai, chatgpt: { configured, model } }, confirm }`. It holds no account, no system prompt and never a key or token |

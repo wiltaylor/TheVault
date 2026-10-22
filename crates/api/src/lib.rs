@@ -25,7 +25,9 @@
 //! (D11, D32).
 //!
 //! The chat panel talks to the user's AI provider through `/api/ai/chat`, a stream of the
-//! answer with the server running read-only note tools (ai D14, D15).
+//! answer with the server running read-only note tools (ai D14, D15), or through the turns form
+//! under `/api/ai/chat/turns`, which the apps use; `/api/ai/apply` applies a proposed change and
+//! `/api/ai/providers` lists the providers set up (ai D23).
 //!
 //! Settings > Integrations > Google signs in with the user's own OAuth client under
 //! `/api/integrations/google` (google-sync D1, D18).
@@ -55,6 +57,7 @@ mod agents;
 mod ai_assets;
 mod ai_chat;
 mod ai_settings;
+mod ai_turns;
 mod apps;
 mod assets;
 mod auth;
@@ -336,7 +339,12 @@ fn build() -> Built {
             "/api/integrations/ai/chatgpt/disconnect",
             ai_settings::chatgpt_disconnect,
         )
-        .get("/api/ai/models", ai_settings::models);
+        .get("/api/ai/models", ai_settings::models)
+        .get("/api/ai/providers", ai_settings::providers)
+        .post("/api/ai/chat/turns", ai_turns::start)
+        .get("/api/ai/chat/turns/{turn}/events", ai_turns::events)
+        .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)
+        .post("/api/ai/apply", ai_turns::apply);
     Built {
         api,
         login,

@@ -2,9 +2,9 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../api";
 
-// The chat panel's type proposal card (ai D18): Apply writes through the type routes after
-// reading the type again, Discard writes nothing, and a type changed since the proposal is not
-// applied.
+// The chat panel's type proposal card (ai D18): Apply sends it to POST /api/ai/apply, which
+// applies it on the home server (ai D23), Discard writes nothing, a type changed since the
+// proposal is not applied, and without admin the card says to apply it in the web app.
 
 type OnEvent = (e: StreamEvent) => void;
 
@@ -17,16 +17,17 @@ const streamEvents = vi.fn(
       signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
     }),
 );
-const readType = vi.fn();
+const aiApply = vi.fn();
 const putType = vi.fn();
 const changeType = vi.fn();
 const aiModels = vi.fn();
-const aiStatus = vi.fn();
+const aiProviders = vi.fn();
+const app = vi.fn(async () => null);
 const reloadDefinitions = vi.fn(async () => undefined);
 
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, api: { ...real.api, readType, putType, changeType, aiModels, aiStatus } };
+  return { ...real, streamEvents, api: { ...real.api, aiApply, putType, changeType, aiModels, aiProviders, app } };
 });
 vi.mock("../session", () => ({ reloadDefinitions }));
 
@@ -50,7 +51,7 @@ async function propose(m: ReturnType<typeof render>, proposal: unknown) {
 }
 
 beforeEach(() => {
-  aiStatus.mockResolvedValue({ secrets_key: true, default_provider: "anthropic", providers: { anthropic: { configured: true, model: "m" } } });
+  aiProviders.mockResolvedValue({ default_provider: "anthropic", providers: { anthropic: { configured: true, model: "m" } } });
   aiModels.mockResolvedValue({ provider: "anthropic", model: "m", models: [{ id: "m", display_name: "M" }] });
 });
 
@@ -62,9 +63,8 @@ afterEach(() => {
 });
 
 describe("type proposals", () => {
-  it("shows the WCL diff and applies a change through the planned change route", async () => {
-    readType.mockResolvedValue({ name: "memo", wcl: BEFORE });
-    changeType.mockResolvedValueOnce({ plan: "token-1" }).mockResolvedValueOnce({ applied: true });
+  it("shows the WCL diff and applies a change on the server", async () => {
+    aiApply.mockResolvedValue({ op: "type_change", type_name: "memo" });
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await propose(m, CHANGE);
     const card = await m.findByRole("region", { name: "Proposed change to type memo" });
@@ -73,23 +73,21 @@ describe("type proposals", () => {
     expect(m.getByText("Checked a change to type memo")).toBeInTheDocument();
     fireEvent.click(m.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(m.getByText("Applied.")).toBeInTheDocument());
-    expect(readType).toHaveBeenCalledWith("memo");
-    expect(changeType).toHaveBeenNthCalledWith(1, "memo", AFTER, {});
-    expect(changeType).toHaveBeenNthCalledWith(2, "memo", AFTER, {}, "token-1");
+    expect(aiApply).toHaveBeenCalledWith(CHANGE);
+    expect(changeType).not.toHaveBeenCalled();
     expect(putType).not.toHaveBeenCalled();
     await waitFor(() => expect(reloadDefinitions).toHaveBeenCalled());
   });
 
-  it("creates a new type with the type write route", async () => {
-    readType.mockRejectedValue(new ApiError(400, { error: "unknown_type", message: "unknown type book" }));
-    putType.mockResolvedValue({ name: "book", wcl: AFTER });
+  it("creates a new type on the server", async () => {
+    aiApply.mockResolvedValue({ op: "type_create", type_name: "book" });
     const m = render(() => <ChatPanel noteId={() => ""} />);
-    await propose(m, { ...CHANGE, name: "book", exists: false, before: null });
+    const book = { ...CHANGE, name: "book", exists: false, before: null };
+    await propose(m, book);
     await m.findByRole("region", { name: "Proposed new type book" });
     fireEvent.click(m.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(m.getByText("Applied.")).toBeInTheDocument());
-    expect(putType).toHaveBeenCalledWith("book", AFTER);
-    expect(changeType).not.toHaveBeenCalled();
+    expect(aiApply).toHaveBeenCalledWith(book);
   });
 
   it("discards a type proposal without writing", async () => {
@@ -99,21 +97,27 @@ describe("type proposals", () => {
     fireEvent.click(m.getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(m.getByText("Discarded.")).toBeInTheDocument());
     expect(m.queryByRole("button", { name: "Apply" })).toBeNull();
-    expect(readType).not.toHaveBeenCalled();
-    expect(putType).not.toHaveBeenCalled();
-    expect(changeType).not.toHaveBeenCalled();
+    expect(aiApply).not.toHaveBeenCalled();
   });
 
   it("does not apply a type that changed since the proposal, and says so", async () => {
-    readType.mockResolvedValue({ name: "memo", wcl: BEFORE.replace("Memo", "Memos") });
+    aiApply.mockRejectedValue(new ApiError(409, { error: "stale", message: "the type memo changed since the proposal" }));
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await propose(m, CHANGE);
     await m.findByRole("region", { name: "Proposed change to type memo" });
     fireEvent.click(m.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(m.getByRole("alert")).toHaveTextContent("This type changed since the proposal"));
-    expect(changeType).not.toHaveBeenCalled();
-    expect(putType).not.toHaveBeenCalled();
     expect(m.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
+
+  it("says to apply a type change in the web app when the caller lacks admin", async () => {
+    aiApply.mockRejectedValue(new ApiError(403, { error: "needs_admin", message: "Apply type changes in the web app." }));
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await propose(m, CHANGE);
+    await m.findByRole("region", { name: "Proposed change to type memo" });
+    fireEvent.click(m.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(m.getByRole("alert")).toHaveTextContent("Apply type changes in the web app."));
+    expect(reloadDefinitions).not.toHaveBeenCalled();
   });
 
   it("folds long unchanged runs in the WCL diff", () => {

@@ -491,6 +491,27 @@ export interface AiModels {
   models: AiModel[];
 }
 
+/** The chat panel's picker, from `GET /api/ai/providers` (ai D23): no account, never a key. */
+export interface AiProviders {
+  default_provider: AiProvider | null;
+  providers: Record<AiProvider, { configured: boolean; model: string | null }>;
+  confirm: AiConfirm;
+}
+
+/** What `POST /api/ai/apply` did (ai D23): a note's change with its new version, or a type's. */
+export type AiApplied =
+  | { op: "update" | "create" | "archive" | "unarchive" | "delete"; note_id: string; version: string }
+  | { op: "type_change" | "type_create"; type_name: string };
+
+/** A poll of a chat turn's events through an app's embedded server (ai D23). */
+export interface AiTurnPoll {
+  events: StreamEvent[];
+  /** How many events the turn has sent so far: the next poll's `after`. */
+  next: number;
+  /** Whether the turn's stream ended. */
+  done: boolean;
+}
+
 /** What the Test button got back. */
 export interface AiTestResult {
   ok: boolean;
@@ -1224,6 +1245,20 @@ export const api = {
   /** Send a short test request to the provider's default model, or `model`. */
   aiTest: (provider: AiProvider, model?: string) =>
     request<AiTestResult>("POST", `/api/integrations/ai/${provider}/test`, model ? { model } : {}),
+  /** The providers set up, for the chat panel's picker in every client (ai D23). */
+  aiProviders: () => request<AiProviders>("GET", "/api/ai/providers"),
+  /**
+   * Apply a proposal or type proposal as the chat sent it, on the home server, at its base
+   * version (ai D23). A stale one is a 409; a type change without admin a 403 `needs_admin`.
+   */
+  aiApply: (proposal: unknown) => request<AiApplied>("POST", "/api/ai/apply", proposal),
+  /** Start a chat turn in the turns form: its id (ai D23). */
+  aiTurnStart: async (body: unknown) => (await request<{ turn: string }>("POST", "/api/ai/chat/turns", body)).turn,
+  /** In an app: the turn's events after the first `after`, waiting briefly for one. */
+  aiTurnPoll: (turn: string, after: number, signal?: AbortSignal) =>
+    request<AiTurnPoll>("GET", `/api/app/ai/turns/${enc(turn)}?after=${after}`, undefined, signal),
+  /** Stop a chat turn. */
+  aiTurnStop: (turn: string) => request<void>("DELETE", `/api/ai/chat/turns/${enc(turn)}`),
   /** The models a provider offers now. */
   aiModels: (provider: AiProvider) => request<AiModels>("GET", `/api/ai/models?provider=${enc(provider)}`),
   /** Start Sign in with ChatGPT: the authorize page to open (ai D8). */

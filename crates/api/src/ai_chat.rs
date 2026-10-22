@@ -31,9 +31,11 @@
 //! turn: assistant messages with their `provider_state`, and the user messages carrying tool
 //! results. They are never edited afterwards. A comment goes out every [`HEARTBEAT`]. When the
 //! client goes away the loop stops, and the provider call in flight is dropped, which closes its
-//! connection.
+//! connection. The turns form (`crate::ai_turns`, ai D23) runs its turns through the same
+//! [`start`], and `POST /api/ai/apply` applies a proposal with [`apply_change`].
 
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -51,7 +53,7 @@ use script_core::Vault;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use state::{Author, Scope};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use writer::{Input, Op, TypeChange, Writer, doc_to_json};
 
 use crate::auth::{Caller, GrantedScope};
@@ -101,6 +103,22 @@ pub async fn chat(
     Extension(GrantedScope(scope)): Extension<GrantedScope>,
     Json(body): Json<ChatBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // No one stops this form of turn but the client, by going away.
+    let (_, never) = watch::channel(false);
+    let (rx, _) = start(w, author, scope, body, never)?;
+    Ok(sse(receive(rx)))
+}
+
+/// Check `body` and start its turn, which sends its events to the receiver returned and stops
+/// when the receiver goes or `stop` turns true. The flag returned turns false when the turn is
+/// over. Both chat forms start their turns here.
+pub(crate) fn start(
+    w: Arc<Writer>,
+    author: Author,
+    scope: Scope,
+    body: ChatBody,
+    stop: watch::Receiver<bool>,
+) -> Result<(mpsc::Receiver<Event>, Arc<AtomicBool>), ApiError> {
     let provider = match body.provider.as_deref().map(str::trim) {
         Some(p) if !p.is_empty() => Some(p.parse::<Provider>().map_err(ApiError::bad_request)?),
         _ => None,
@@ -115,37 +133,81 @@ pub async fn chat(
         writer: w,
         author,
         scope,
-        out: Out { tx },
+        out: Out { tx, stop },
         images: ai_assets::Images::default(),
     };
-    tokio::spawn(turn.run(provider, body.model, body.messages, body.note_id));
-    let events = futures_util::stream::unfold(rx, |mut rx| async move {
-        let e = rx.recv().await?;
-        Some((Ok::<_, Infallible>(e), rx))
+    let running = Arc::new(AtomicBool::new(true));
+    let flag = running.clone();
+    tokio::spawn(async move {
+        turn.run(provider, body.model, body.messages, body.note_id)
+            .await;
+        flag.store(false, Ordering::SeqCst);
     });
+    Ok((rx, running))
+}
+
+/// The events of `rx` as a server-sent event answer, with a heartbeat every [`HEARTBEAT`].
+pub(crate) fn sse<S>(events: S) -> impl IntoResponse
+where
+    S: futures_util::Stream<Item = Result<Event, Infallible>> + Send + 'static,
+{
     let body = Sse::new(events).keep_alive(KeepAlive::new().interval(HEARTBEAT).text("heartbeat"));
-    Ok((
+    (
         [
             (CACHE_CONTROL, "no-cache"),
             (HeaderName::from_static("x-accel-buffering"), "no"),
         ],
         body,
-    ))
+    )
 }
 
-/// Where the events go. A send fails once the client has gone.
+/// The events a turn sends, in order, ending when it does.
+pub(crate) fn receive(
+    rx: mpsc::Receiver<Event>,
+) -> impl futures_util::Stream<Item = Result<Event, Infallible>> {
+    futures_util::stream::unfold(rx, |mut rx| async move {
+        let e = rx.recv().await?;
+        Some((Ok::<_, Infallible>(e), rx))
+    })
+}
+
+/// Where the events go. A send fails once the client has gone or the turn was stopped.
 struct Out {
     tx: mpsc::Sender<Event>,
+    /// Turns true when the turn is stopped (`DELETE /api/ai/chat/turns/{turn}`).
+    stop: watch::Receiver<bool>,
 }
 
 impl Out {
     async fn send(&self, name: &str, data: Value) -> bool {
+        if self.gone() {
+            return false;
+        }
         let e = Event::default().event(name).data(data.to_string());
-        self.tx.send(e).await.is_ok()
+        tokio::select! {
+            sent = self.tx.send(e) => sent.is_ok(),
+            _ = self.stopped() => false,
+        }
     }
 
     fn gone(&self) -> bool {
-        self.tx.is_closed()
+        self.tx.is_closed() || *self.stop.borrow()
+    }
+
+    /// Resolves once the turn is stopped. With no one left to stop it, never.
+    async fn stopped(&self) {
+        let mut stop = self.stop.clone();
+        if stop.wait_for(|s| *s).await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+
+    /// Resolves once the client has gone or the turn is stopped.
+    async fn closed(&self) {
+        tokio::select! {
+            _ = self.tx.closed() => {}
+            _ = self.stopped() => {}
+        }
     }
 }
 
@@ -334,7 +396,7 @@ impl Turn {
             };
             let began = Instant::now();
             let called = tokio::select! {
-                _ = self.out.tx.closed() => Called::Gone,
+                _ = self.out.closed() => Called::Gone,
                 c = self.call(&setup.cred, &req) => c,
             };
             let trail = |usage: Usage, outcome: Outcome| {

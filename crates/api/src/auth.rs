@@ -34,8 +34,9 @@ const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Paths whose non-read requests need `write`: notes and assets, batches and upserts of notes,
 /// and notifications (D11). Any other change needs `admin`, so a new endpoint is admin-only until it is listed here.
-const WRITE_PATHS: [&str; 8] = [
+const WRITE_PATHS: [&str; 9] = [
     "/api/notes",
+    "/api/ai/apply",
     "/api/notifications",
     "/api/daily",
     "/api/pins",
@@ -166,9 +167,11 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     if ADMIN_PATHS.iter().any(|p| under(p)) {
         return Some(Scope::Admin);
     }
+    // Stopping one of the caller's own chat turns changes nothing (ai D23).
     if matches!(*method, Method::GET | Method::HEAD)
         || path == "/api/logout"
         || (method == Method::POST && READ_POST_PATHS.iter().any(|p| under(p)))
+        || (method == Method::DELETE && under("/api/ai/chat/turns"))
     {
         return Some(Scope::Read);
     }
@@ -528,6 +531,17 @@ mod tests {
             ),
             (Method::GET, "/api/ai/models", Some(Scope::Read)),
             (Method::POST, "/api/ai/chat", Some(Scope::Read)),
+            // The turns form reads as the chat does; applying a change writes (ai D23).
+            (Method::GET, "/api/ai/providers", Some(Scope::Read)),
+            (Method::POST, "/api/ai/chat/turns", Some(Scope::Read)),
+            (
+                Method::GET,
+                "/api/ai/chat/turns/t/events",
+                Some(Scope::Read),
+            ),
+            (Method::DELETE, "/api/ai/chat/turns/t", Some(Scope::Read)),
+            (Method::DELETE, "/api/ai/chat", Some(Scope::Admin)),
+            (Method::POST, "/api/ai/apply", Some(Scope::Write)),
         ];
         for (method, path, want) in cases {
             assert_eq!(required_scope(&method, path), want, "{method} {path}");

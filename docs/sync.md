@@ -89,6 +89,9 @@ The device token is never widened to `admin`. In the apps, Settings hides the Se
 | `/api/clients` and below | The server's clients folder | Forwarded, `Range` included |
 | `GET /api/version` | The home server's version | Answered from the home server's `GET /api/sync/info`, so an older server still says its version; offline or unpaired, 503 |
 | `/api/tokens`, `/api/secrets` and below | The server's `tokens` and `secrets` tables, which need `admin` even to read | Not forwarded: 403 `needs_web_app` at once |
+| `/api/ai/chat` and below (the chat and its turns), `GET /api/ai/models`, `GET /api/ai/providers`, `POST /api/ai/apply` | The AI providers, whose credentials only the home server holds, and the changes the chat proposes (ai D23) | Forwarded, streaming, with the server's answers as they are, a 403 `needs_admin` for a type change among them. Offline or unpaired, 503 `ai_needs_server`: "The AI chat needs the home server, which is not reachable." An AI change is applied on the home server and reaches the device's copy with the next sync round, which the panel asks for |
+| `GET /api/app/ai/turns/{turn}?after=<n>` | A chat turn's event stream, read from the home server by the embedded server | Answered by the embedded server only: `{ events, next, done }`, the turn's events after the first `n`, so the webview, which gets whole bodies, can follow a turn as it streams (docs/ai.md, "The turns form") |
+| `/api/integrations/ai` and below | Settings > AI, which needs `admin` | Not forwarded: 403 `needs_web_app` at once |
 | `POST /api/trash/empty`, `DELETE /api/trash/{id}` | Purging the trash, which only the signed-in user may do; the server refuses every token, the device's among them, with 403 `human_only` (ai D21) | Not forwarded and not answered locally: 403 `needs_web_app` at once, since the embedded server cannot tell the user from the device token. The Trash page offers neither action in the apps |
 
 ### The history

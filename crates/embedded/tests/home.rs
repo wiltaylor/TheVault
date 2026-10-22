@@ -696,3 +696,244 @@ fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
     assert_eq!(out["phase"], "update_required", "{out}");
     assert_eq!(fake.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+// The AI chat is the home server's (ai D23): its routes are forwarded with the device token, the
+// webview reads a turn's events by polling the embedded server, and an AI change is applied on
+// the home server, reaching the device's copy with the next sync.
+
+impl Admin {
+    /// Set up the fake Anthropic provider on the home server.
+    fn anthropic(&self, fake: &testkit::FakeAnthropic) {
+        let settings = json!({
+            "default_provider": "anthropic",
+            "models": { "anthropic": "claude-opus-5" },
+            "endpoints": { "anthropic": fake.base_url() },
+        });
+        for (name, value) in [
+            ("ai_anthropic_api_key", fake.api_key().to_owned()),
+            ("ai_settings", settings.to_string()),
+        ] {
+            let res = self
+                .client
+                .put(format!("{}/api/secrets/{name}", self.base))
+                .bearer_auth(&self.token)
+                .json(&json!({ "value": value }))
+                .send()
+                .unwrap();
+            assert!(res.status().is_success(), "{}", res.text().unwrap());
+        }
+    }
+}
+
+fn ask(text: &str) -> Value {
+    json!({ "messages": [{ "role": "user", "content": [{ "type": "text", "text": text }] }] })
+}
+
+impl Device {
+    /// The events of a turn read through the embedded server's stream, to its end.
+    fn stream(&self, path: &str) -> String {
+        let res = self.runtime.block_on(
+            self.embedded
+                .handle(Request::get(path).body(Body::empty()).unwrap()),
+        );
+        assert_eq!(res.status(), 200);
+        assert!(
+            res.headers()[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with("text/event-stream")
+        );
+        let bytes = self.runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(30),
+                axum::body::to_bytes(res.into_body(), usize::MAX),
+            )
+            .await
+            .expect("the stream did not end")
+            .unwrap()
+        });
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// A turn's events polled as the webview polls them, until the relay says it is done.
+    fn poll(&self, turn: &str) -> Vec<Value> {
+        self.poll_on(turn, Vec::new())
+    }
+
+    /// [`Device::poll`] after the `events` already read.
+    fn poll_on(&self, turn: &str, mut events: Vec<Value>) -> Vec<Value> {
+        for _ in 0..30 {
+            let got = self.call(
+                "GET",
+                &format!("/api/app/ai/turns/{turn}?after={}", events.len()),
+                None,
+                200,
+            );
+            events.extend(got["events"].as_array().unwrap().iter().cloned());
+            assert_eq!(got["next"], events.len(), "{got}");
+            if got["done"] == true {
+                return events;
+            }
+        }
+        panic!("the turn never finished: {events:?}");
+    }
+}
+
+#[test]
+fn the_ai_routes_go_to_the_home_server_with_the_device_token_and_stream_through() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Admin::of(&server);
+    let fake = testkit::FakeAnthropic::start();
+    admin.anthropic(&fake);
+    let device = Device::pair(&server, "Laptop");
+
+    let providers = device.call("GET", "/api/ai/providers", None, 200);
+    assert_eq!(providers["default_provider"], "anthropic", "{providers}");
+    assert_eq!(providers["providers"]["anthropic"]["configured"], true);
+    // Settings > AI stays the web app's.
+    let refused = device.call("GET", "/api/integrations/ai", None, 403);
+    assert_eq!(refused["error"], "needs_web_app");
+
+    // A turn started through the device streams through it.
+    fake.push(testkit::AnthropicMessage::text("Hello from the server."));
+    let started = device.call("POST", "/api/ai/chat/turns", Some(ask("Hi")), 201);
+    let turn = started["turn"].as_str().unwrap().to_owned();
+    // The turn is the device token's: the admin cannot read it.
+    admin.call(
+        "GET",
+        &format!("/api/ai/chat/turns/{turn}/events"),
+        None,
+        404,
+    );
+    let stream = device.stream(&format!("/api/ai/chat/turns/{turn}/events"));
+    assert!(stream.contains("event: text"), "{stream}");
+    assert!(stream.contains("event: done"), "{stream}");
+    assert!(fake.message_requests()[0].json().to_string().contains("Hi"));
+
+    // The webview polls a turn's events through the embedded server.
+    fake.push(testkit::AnthropicMessage::text("Polled answer here."));
+    let started = device.call("POST", "/api/ai/chat/turns", Some(ask("Again")), 201);
+    let turn = started["turn"].as_str().unwrap().to_owned();
+    let events = device.poll(&turn);
+    let text: String = events
+        .iter()
+        .filter(|e| e["event"] == "text")
+        .map(|e| e["data"]["delta"].as_str().unwrap())
+        .collect();
+    assert_eq!(text, "Polled answer here.");
+    assert_eq!(events.last().unwrap()["event"], "done", "{events:?}");
+    // Read to the end, the turn is gone on both sides.
+    let gone = device.call(
+        "GET",
+        &format!("/api/app/ai/turns/{turn}?after=0"),
+        None,
+        404,
+    );
+    assert_eq!(gone["error"], "unknown_turn", "{gone}");
+
+    // Stopping a turn is forwarded too.
+    fake.push(
+        testkit::AnthropicMessage::text(&"slow ".repeat(60)).delay(Duration::from_millis(20)),
+    );
+    let started = device.call("POST", "/api/ai/chat/turns", Some(ask("Slow")), 201);
+    let turn = started["turn"].as_str().unwrap().to_owned();
+    let first = device.call(
+        "GET",
+        &format!("/api/app/ai/turns/{turn}?after=0"),
+        None,
+        200,
+    );
+    assert_eq!(first["done"], false, "{first}");
+    device.call("DELETE", &format!("/api/ai/chat/turns/{turn}"), None, 204);
+    let events = device.poll_on(&turn, first["events"].as_array().unwrap().clone());
+    assert!(
+        !events.iter().any(|e| e["event"] == "done"),
+        "a stopped turn does not finish: {events:?}"
+    );
+}
+
+#[test]
+fn an_ai_change_is_applied_on_the_home_server_and_reaches_the_device_by_sync() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Admin::of(&server);
+    let device = Device::pair(&server, "Laptop");
+    let created = admin.call(
+        "POST",
+        "/api/notes?type=memo",
+        Some(json!({ "note": { "fields": { "title": "Groceries" } } })),
+        201,
+    );
+    let id = created["id"].as_str().unwrap().to_owned();
+    device.sync();
+    let local = device.call("GET", &format!("/api/notes/{id}"), None, 200);
+
+    // The proposal as the chat sent it, at the server's version.
+    let proposal = json!({
+        "id": "toolu_e",
+        "op": "update",
+        "note_id": id,
+        "title": "Groceries",
+        "base_version": created["version"],
+        "before": { "fields": { "title": "Groceries" } },
+        "after": { "fields": { "title": "Groceries and eggs" } },
+        "ops": [],
+    });
+    let done = device.call("POST", "/api/ai/apply", Some(proposal.clone()), 200);
+    assert_eq!(done["op"], "update", "{done}");
+    let home = admin.call("GET", &format!("/api/notes/{id}"), None, 200);
+    assert_eq!(home["note"]["fields"]["title"], "Groceries and eggs");
+    assert_eq!(home["version"], done["version"]);
+
+    // Nothing was written locally: the device's copy waits for the sync.
+    let before = device.call("GET", &format!("/api/notes/{id}"), None, 200);
+    assert_eq!(before["version"], local["version"]);
+    assert_eq!(before["note"]["fields"]["title"], "Groceries");
+    assert!(device.embedded.queue().pending().unwrap().is_empty());
+    device.sync();
+    let after = device.call("GET", &format!("/api/notes/{id}"), None, 200);
+    assert_eq!(after["note"]["fields"]["title"], "Groceries and eggs");
+
+    // A stale proposal is the server's conflict, as it is.
+    let stale = device.call("POST", "/api/ai/apply", Some(proposal), 409);
+    assert_eq!(stale["error"], "conflict", "{stale}");
+    // A type change needs admin, which the device token never has.
+    let refused = device.call(
+        "POST",
+        "/api/ai/apply",
+        Some(json!({
+            "id": "toolu_t", "name": "memo", "exists": true,
+            "before": MEMO, "after": MEMO.replace("Main", "Details"), "issues": [],
+        })),
+        403,
+    );
+    assert_eq!(refused["error"], "needs_admin", "{refused}");
+    assert_eq!(refused["message"], "Apply type changes in the web app.");
+}
+
+#[test]
+fn offline_or_unpaired_the_ai_routes_say_the_chat_needs_the_server() {
+    let server = TestServer::start_seeded(seed);
+    let device = Device::pair(&server, "Laptop");
+    device.go_offline();
+    let check = |device: &Device| {
+        for (method, path, body) in [
+            ("GET", "/api/ai/providers", None),
+            ("GET", "/api/ai/models", None),
+            ("POST", "/api/ai/chat/turns", Some(ask("Hi"))),
+            ("POST", "/api/ai/chat", Some(ask("Hi"))),
+            ("POST", "/api/ai/apply", Some(json!({ "op": "create" }))),
+            ("GET", "/api/app/ai/turns/abc?after=0", None),
+        ] {
+            let out = device.call(method, path, body, 503);
+            assert_eq!(out["error"], "ai_needs_server", "{path}: {out}");
+            assert_eq!(
+                out["message"],
+                embedded::AI_NEEDS_SERVER_MESSAGE,
+                "{path}: {out}"
+            );
+        }
+    };
+    check(&device);
+    device.embedded.set_remote(None);
+    check(&device);
+}
