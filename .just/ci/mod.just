@@ -8,7 +8,7 @@ main:
 
 # Everything a change must pass before it can merge, the release scripts' tests too. Playwright runs separately in test-e2e
 [group('ci')]
-check: rust-fmt-check rust-lint rust-test web-typecheck web-test release-test
+check: rust-fmt-check rust-lint apps-fmt-check apps-lint rust-test web-typecheck web-test release-test
 
 # Check Rust formatting without changing files
 [group('ci')]
@@ -19,6 +19,24 @@ rust-fmt-check: (require-tool "cargo")
 [group('ci')]
 rust-lint: (require-tool "cargo")
 	cargo clippy --workspace --all-targets -- -D warnings
+
+# Check the formatting of the crates outside the main workspace: the Android app with tauri-plugin-vault-device, and the desktop app
+[group('ci')]
+apps-fmt-check: (app-fmt-check "apps/android/src-tauri") (app-fmt-check "apps/desktop/src-tauri")
+
+# Run clippy with warnings denied over the Android and desktop app workspaces on the host, and the Android one for target_os = "android" too (scripts/android-check.sh)
+[group('ci')]
+apps-lint: (app-lint "apps/android/src-tauri") (app-lint "apps/desktop/src-tauri") (require-tool "cargo-ndk")
+	scripts/android-check.sh
+
+[private]
+app-fmt-check dir: (require-tool "cargo")
+	cd {{dir}} && cargo fmt --all --check
+
+# Each app's Tauri context embeds web/dist, so clippy needs the web client built
+[private]
+app-lint dir: (require-tool "cargo") web-build
+	cd {{dir}} && cargo clippy --workspace --all-targets -- -D warnings
 
 # Run every Rust test
 [group('ci')]

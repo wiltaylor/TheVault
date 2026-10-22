@@ -21,12 +21,17 @@ check: ci::check
 
 # Format all code
 [group('check')]
-fmt: rust-fmt
+fmt: rust-fmt (app-fmt "apps/android/src-tauri") (app-fmt "apps/desktop/src-tauri")
 
 # Format the Rust workspace
 [group('rust')]
 rust-fmt: (require-tool "cargo")
 	cargo fmt --all
+
+# Format an app workspace outside the main one, with its own edition and rustfmt settings
+[private]
+app-fmt dir: (require-tool "cargo")
+	cd {{dir}} && cargo fmt --all
 
 # Run vault-server on a local vault folder
 [group('rust')]
@@ -44,11 +49,6 @@ bench notes='1000000' seed='42' samples='200': (require-tool "cargo")
 [group('web')]
 web-dev: web-deps-install
 	pnpm -C web dev
-
-# Build the web client into web/dist
-[group('web')]
-web-build: web-deps-install
-	pnpm -C web build
 
 # Run the Playwright tests against vault-server serving the built web client
 [group('web')]
@@ -155,9 +155,9 @@ android-emulator-checks: (require-tool "emulator") (require-tool "adb") (require
 	adb emu kill >/dev/null 2>&1 || true
 	exit $status
 
-# Lint the crates the Android app embeds for target_os = "android" (ticket 76)
+# Lint the crates the Android app embeds, the app and its plugin, for target_os = "android" (tickets 76, 114)
 [group('android')]
-android-check: (require-tool "cargo-ndk")
+android-check: (require-tool "cargo-ndk") web-build
 	scripts/android-check.sh
 
 # Build the signed release APK for aarch64 into target/android-release with its SHA256SUMS, signed with the keystore THEVAULT_ANDROID_KEYSTORE names, read from ~/.config/thevault/android/keystore.env when it is not set (D10)

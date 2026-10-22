@@ -148,8 +148,9 @@ fn commands_run_only_when_declared_and_switched_on_and_every_result_is_reported(
             Some(json!({ "settings": s })),
         );
     };
+    // The run ends before the answer, so the commands it queues are there (ticket 115).
     let remind = || {
-        let run = admin(&server, "POST", "/api/tasks/remind/run", None);
+        let run = admin(&server, "POST", "/api/tasks/remind/run?wait=true", None);
         assert_eq!(run["outcome"], "succeeded", "{run}");
     };
 
