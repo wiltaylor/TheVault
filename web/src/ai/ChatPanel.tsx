@@ -3,7 +3,7 @@
 // conversation lives in this tab's memory (store.ts); New conversation forgets it.
 
 import { For, Match, Show, Switch, createSignal, onMount } from "solid-js";
-import { type AiModel, type AiProvider, type AiStatus, type Json, api } from "../api";
+import { type AiModel, type AiProvider, type AiStatus, type Json, api, assetUrl } from "../api";
 import { formatValue } from "../components/Render";
 import { blockLines, lineDiff } from "./diff";
 import { Markdown } from "./markdown";
@@ -35,6 +35,8 @@ export function stepLabel(name: string, input: Json): string {
       return "Read a note";
     case "backlinks":
       return "Looked up backlinks";
+    case "read_asset":
+      return "Read a file";
     case "propose_edit":
       return "Checked an edit";
     default:
@@ -43,11 +45,28 @@ export function stepLabel(name: string, input: Json): string {
 }
 
 function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
-  const status = () => (!props.part.done ? "running" : props.part.isError ? "failed" : `${props.part.notes.length} found`);
+  const status = () => {
+    if (!props.part.done) return "running";
+    if (props.part.isError) return "failed";
+    if (props.part.asset) return props.part.asset.filename;
+    return `${props.part.notes.length} found`;
+  };
+  // The image a read_asset step read, from the asset's own URL: the stream never carries its bytes (ai D19).
+  const image = () => {
+    const a = props.part.asset;
+    return a && a.media_type.startsWith("image/") ? a : undefined;
+  };
   return (
     <details class="ai-step" classList={{ "ai-step-error": props.part.isError }}>
       <summary>
         <span>{stepLabel(props.part.name, props.part.input)}</span> <span class="muted">({status()})</span>
+        <Show when={image()}>
+          {(a) => (
+            <a class="ai-step-thumb" href={assetUrl(a().id)} target="_blank" rel="noopener">
+              <img src={assetUrl(a().id)} alt={a().filename} loading="lazy" />
+            </a>
+          )}
+        </Show>
       </summary>
       <Show when={props.part.message}>
         <p class="muted">{props.part.message}</p>

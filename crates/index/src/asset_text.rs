@@ -63,6 +63,17 @@ pub enum Extracted {
     Busy,
 }
 
+/// What the index holds of an asset's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoredText {
+    /// The text extracted, empty for a PDF with none, such as a scan.
+    Text(String),
+    /// The PDF was kept as unreadable, for the reason given.
+    Unreadable(String),
+    /// No text has been extracted: the asset is not a PDF, or its extraction has not run yet.
+    NotExtracted,
+}
+
 /// Whether an asset called `filename` is a PDF, by its extension.
 pub fn is_pdf(filename: &str) -> bool {
     filename
@@ -313,6 +324,21 @@ impl AssetTexts {
         let path = self.dir.join(format!("{id}.unreadable"));
         std::fs::write(&path, format!("{reason}\n")).map_err(io_err(&path))?;
         self.set(id, "")
+    }
+
+    /// Asset `id`'s stored text, or why it has none.
+    pub fn stored(&self, id: &str) -> StoredText {
+        if !self.known.contains_key(id) {
+            return StoredText::NotExtracted;
+        }
+        let unreadable = self.dir.join(format!("{id}.unreadable"));
+        if let Ok(reason) = std::fs::read_to_string(&unreadable) {
+            return StoredText::Unreadable(reason.trim().to_owned());
+        }
+        match std::fs::read_to_string(self.path(id)) {
+            Ok(text) => StoredText::Text(text),
+            Err(_) => StoredText::NotExtracted,
+        }
     }
 
     /// Whether asset `id`'s text holds `part`, which is already lowercase.

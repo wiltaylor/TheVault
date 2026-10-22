@@ -179,6 +179,11 @@ impl Writer {
         self.read_index(|index, _| index.asset_text_matches(id, &part))
     }
 
+    /// The text the index extracted from asset `id`, a PDF, or why it has none.
+    pub fn asset_text(&self, id: &str) -> index::StoredText {
+        self.read_index(|index, _| index.asset_text(id))
+    }
+
     /// Delete every asset nothing uses, or with `only`, those of them it names, all in one
     /// commit, into the asset trash. A note or type file whose text names an asset keeps it,
     /// even one the index does not hold. With `dry_run` nothing changes. Returns the assets

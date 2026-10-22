@@ -445,6 +445,7 @@ async fn tool_results_go_first_in_the_user_turn() {
                 id: "toolu_1".into(),
                 content: "{}".into(),
                 is_error: true,
+                parts: vec![],
             },
             Content::Notice {
                 kind: "cut_off".into(),

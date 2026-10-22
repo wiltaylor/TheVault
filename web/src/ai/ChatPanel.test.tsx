@@ -107,6 +107,30 @@ describe("ChatPanel", () => {
     expect(m.getByRole("link", { name: "Shopping list" })).toHaveAttribute("href", "/notes/01JA");
   });
 
+  it("shows a read_asset step's image as a thumbnail from the asset's URL", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await askIt(m);
+    emit("tool", { id: "t2", name: "read_asset", input: { id: "01JIMG" } });
+    emit("tool_result", {
+      id: "t2",
+      is_error: false,
+      summary: { notes: [], asset: { id: "01JIMG", filename: "roof.png", media_type: "image/png", size: 1200, kind: "image" } },
+    });
+    const img = await m.findByRole("img", { name: "roof.png" });
+    expect(img).toHaveAttribute("src", "/api/assets/01JIMG");
+    expect(m.getByText("Read a file")).toBeInTheDocument();
+    expect(m.getByText("(roof.png)")).toBeInTheDocument();
+    // A PDF step names the file and shows no image.
+    emit("tool", { id: "t3", name: "read_asset", input: { id: "01JPDF" } });
+    emit("tool_result", {
+      id: "t3",
+      is_error: false,
+      summary: { notes: [], asset: { id: "01JPDF", filename: "report.pdf", media_type: "application/pdf", size: 9000, kind: "pdf" } },
+    });
+    await waitFor(() => expect(m.getByText("(report.pdf)")).toBeInTheDocument());
+    expect(m.getAllByRole("img")).toHaveLength(1);
+  });
+
   it("applies a proposal through the notes write API with its base version", async () => {
     updateNote.mockResolvedValue({ id: "01JNOTE", version: "v2" });
     const m = render(() => <ChatPanel noteId={() => ""} />);

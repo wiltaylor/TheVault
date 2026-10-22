@@ -129,11 +129,16 @@ pub enum Content {
     },
     /// What a tool returned, in a user message, answering the [`Content::ToolCall`] with the
     /// same `id`.
+    ///
+    /// `parts` follow `content` (ai D19): an image the tool read, by its asset id, or a text
+    /// standing in for one. A transcript from before parts deserializes with none.
     ToolResult {
         id: String,
         content: String,
         #[serde(default)]
         is_error: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        parts: Vec<Part>,
     },
     /// Something the app tells the user, such as that an answer was cut off. Never sent to a
     /// provider.
@@ -147,6 +152,64 @@ impl Content {
     pub fn text(text: impl Into<String>) -> Content {
         Content::Text { text: text.into() }
     }
+
+    /// A tool result of text alone.
+    pub fn tool_result(
+        id: impl Into<String>,
+        content: impl Into<String>,
+        is_error: bool,
+    ) -> Content {
+        Content::ToolResult {
+            id: id.into(),
+            content: content.into(),
+            is_error,
+            parts: Vec::new(),
+        }
+    }
+}
+
+/// A piece of a [`Content::ToolResult`] beyond its text (ai D19). As JSON it is tagged by
+/// `type`: `text` or `image`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Part {
+    Text {
+        text: String,
+    },
+    /// An image asset, by reference. The transcript holds only the asset id and its media
+    /// type, so the bytes never travel to the browser. The server loads them into `data` each
+    /// time it builds a provider request; `data` is never serialized. An image whose `data` is
+    /// unset when the request is built goes to the provider as a text saying so.
+    Image {
+        asset_id: String,
+        media_type: String,
+        #[serde(skip)]
+        data: Option<ImageData>,
+    },
+}
+
+impl Part {
+    /// A reference to image asset `asset_id`, not yet loaded.
+    pub fn image(asset_id: impl Into<String>, media_type: impl Into<String>) -> Part {
+        Part::Image {
+            asset_id: asset_id.into(),
+            media_type: media_type.into(),
+            data: None,
+        }
+    }
+}
+
+/// An image as it is sent: its media type, which differs from the asset's when it was scaled
+/// down, and its bytes in standard base64 with no line breaks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageData {
+    pub media_type: String,
+    pub base64: String,
+}
+
+/// The text an image part with no loaded data is sent as.
+pub(crate) fn unloaded(asset_id: &str) -> String {
+    format!("[image asset {asset_id} was not loaded]")
 }
 
 /// The provider's own record of an assistant turn (ai D10): Anthropic's content blocks with

@@ -12,6 +12,7 @@ base64.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 clients.workspace = true
 futures-util.workspace = true
+image.workspace = true
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 query.workspace = true
 regex = "1"

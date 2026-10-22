@@ -72,7 +72,7 @@ The plan also restricts what a request can do. TheVault keeps to these rules: pl
 A call sends the provider the prompt and any text the caller includes:
 
 - A script sends what it passes to `ai::complete` or `ai::chat`, which can include note content.
-- The AI panel sends the conversation and the results of the note tools the model calls, such as the notes it searches and reads.
+- The AI panel sends the conversation and the results of the note tools the model calls, such as the notes it searches and reads, and the attachments it reads with `read_asset`: an image itself, a PDF's or text file's text.
 - The Test button sends only "Reply with OK."
 
 Nothing else from the vault is sent. Requests to OpenAI set `store: false`, so OpenAI keeps no stored response for later reuse. Each provider's own data policy applies to what it receives.
@@ -115,13 +115,30 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 |---|---|
 | `search_notes` | Full-text search, at most 20 notes |
 | `query_notes` | A query in the vault query language, at most 50 notes |
-| `get_note` | Reads one note, body included; each text over 40,000 characters is cut with a marker |
+| `get_note` | Reads one note, body included, and lists the assets it references (id, file name, media type, size); each text over 40,000 characters is cut with a marker |
+| `read_asset` | Reads one attachment by asset id; see [Attachments](#attachments) |
 | `backlinks` | The notes that link to a note |
 | `propose_edit` | Checks an edit to one note and shows it to you; never writes |
 
 A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 12 calls to the model; after that the panel says it stopped, and asking again goes on.
 
 Stop ends the answer at once: the server stops calling the model when the panel goes away. New conversation forgets the conversation. Conversations live in the browser tab only and are not saved in the vault.
+
+### Attachments
+
+The model reads a note's attached files with `read_asset`, by the asset ids `get_note` lists. What it gets depends on the file's media type, which comes from its file name:
+
+| Media type | The model gets |
+|---|---|
+| `image/png`, `image/jpeg`, `image/gif`, `image/webp` | The image itself, sent to the provider. An image over 3.75 MiB or with a long edge over 2,000 pixels is sent as a JPEG (quality 85) scaled to 1,568 pixels on its long edge |
+| Another image type, such as AVIF or SVG | The image converted the same way when the server can decode it; the server decodes only the four types above, so these get the metadata |
+| `application/pdf` | The text the index extracted from it, cut at 40,000 characters with a marker. A PDF kept as unreadable, or with no text layer, gets the metadata and a note saying why |
+| `text/*` and JSON, which includes Markdown and CSV | The file's text, cut at 40,000 characters with a marker |
+| Anything else | The metadata: id, file name, media type and size |
+
+Images are sent to the provider, so whatever a picture shows leaves the server. One question sends at most 8 images; a further image read is refused, and the model is told the limit is reached. The step in the panel shows the image's thumbnail, loaded from the vault like any asset.
+
+The conversation the browser holds names an image only by its asset id. The server loads the image from the vault, scaled the same way, every time it sends the conversation to the provider, so image bytes never go to the browser or back. An image deleted since the model read it is sent as the text "asset <id> no longer exists".
 
 ### Apply an edit
 
@@ -155,7 +172,7 @@ When the provider refuses a request, the answer stops where it was and the panel
 |---|---|
 | `text` | `{ delta }`, the next piece of the answer |
 | `tool` | `{ id, name, input }`, a tool call about to run |
-| `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies |
+| `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text |
 | `proposal` | `{ id, note_id, title, base_version, before, after, ops }`, an edit to apply with `PUT /api/notes/{note_id}` |
 | `usage` | `{ provider, model, input, output }` for one model call |
 | `refusal` | `{ provider, model, category, explanation, messages }`; the last event |

@@ -52,6 +52,7 @@
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
 mod agents;
+mod ai_assets;
 mod ai_chat;
 mod ai_settings;
 mod apps;

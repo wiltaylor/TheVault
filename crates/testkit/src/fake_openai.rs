@@ -30,6 +30,10 @@
 //! naming the parameter. `GET /v1/models` answers `{object, data: [{id}]}` to the API key and
 //! `{models: [{slug, display_name, visibility}]}` to a plan token.
 //!
+//! Images in a request (`image` blocks in Anthropic tool results, `input_image` items in OpenAI
+//! tool outputs and messages) are checked, base64 with no line breaks and a PNG, JPEG, GIF or
+//! WebP media type, else 400; `images()` gives each request's images decoded.
+//!
 //! It binds `127.0.0.1` on a free port. Every request is recorded, whatever it was answered.
 
 use std::collections::VecDeque;
@@ -40,6 +44,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::fake_http::{Answer, Listener, Streamed, frame, listen, lock, pieces};
+use crate::fake_images::{FakeImage, openai_images};
 use crate::standin::{Reply, Request};
 
 /// The API key the fake accepts unless [`FakeOpenAiBuilder::api_key`] says otherwise.
@@ -460,6 +465,14 @@ impl FakeOpenAi {
             .collect()
     }
 
+    /// The images each `POST /v1/responses` request carried, in request order (ai D19).
+    pub fn images(&self) -> Vec<Vec<FakeImage>> {
+        self.response_requests()
+            .iter()
+            .map(|r| openai_images(&r.json()).unwrap_or_default())
+            .collect()
+    }
+
     pub fn clear_requests(&self) {
         lock(&self.shared.requests).clear();
     }
@@ -532,6 +545,9 @@ fn responses(shared: &Shared, request: &Request, plan: bool) -> Answer {
         .to_owned();
     if model.is_empty() || body.get("input").is_none() {
         return error(400, "invalid_request", "model and input are required", None);
+    }
+    if let Err(e) = openai_images(&body) {
+        return error(400, "invalid_request", &e, Some("input"));
     }
     let reply = lock(&shared.replies)
         .pop_front()

@@ -25,6 +25,7 @@
 pub mod fake_anthropic;
 pub mod fake_google;
 mod fake_http;
+mod fake_images;
 pub mod fake_openai;
 pub mod fake_siwc;
 mod standin;
@@ -32,6 +33,7 @@ mod standin;
 pub use fake_anthropic::{
     AnthropicMessage, AnthropicReply, DEFAULT_ANTHROPIC_KEY, FakeAnthropic, FakeAnthropicBuilder,
 };
+pub use fake_images::FakeImage;
 pub use fake_openai::{
     DEFAULT_OPENAI_KEY, Ending, FakeOpenAi, FakeOpenAiBuilder, OpenAiReply, OpenAiResponse,
 };

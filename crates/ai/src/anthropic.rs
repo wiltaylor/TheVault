@@ -17,7 +17,9 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{AiError, ErrorKind, kind_of_code};
 use crate::turn::{Turn, parse_input};
-use crate::types::{Content, Event, Message, Model, Provider, ProviderState, Request, Role, Stop};
+use crate::types::{
+    Content, Event, Message, Model, Part, Provider, ProviderState, Request, Role, Stop, unloaded,
+};
 
 /// The API version every request names.
 pub const VERSION: &str = "2026-10-21";
@@ -130,8 +132,10 @@ fn user_content(m: &Message) -> Vec<Value> {
             id,
             content,
             is_error,
+            parts,
         } => Some(json!({
-            "type": "tool_result", "tool_use_id": id, "content": content, "is_error": is_error,
+            "type": "tool_result", "tool_use_id": id, "content": result_content(content, parts),
+            "is_error": is_error,
         })),
         _ => None,
     });
@@ -140,6 +144,33 @@ fn user_content(m: &Message) -> Vec<Value> {
         _ => None,
     });
     results.chain(texts).collect()
+}
+
+/// A tool result's `content`: the text alone, or with parts (ai D19), an array of blocks, the
+/// text first, each image an `image` block with a base64 source.
+fn result_content(content: &str, parts: &[Part]) -> Value {
+    if parts.is_empty() {
+        return json!(content);
+    }
+    let mut blocks = Vec::with_capacity(parts.len() + 1);
+    if !content.is_empty() {
+        blocks.push(json!({ "type": "text", "text": content }));
+    }
+    for p in parts {
+        blocks.push(match p {
+            Part::Text { text } => json!({ "type": "text", "text": text }),
+            Part::Image { data: Some(d), .. } => json!({
+                "type": "image",
+                "source": { "type": "base64", "media_type": d.media_type, "data": d.base64 },
+            }),
+            Part::Image {
+                asset_id,
+                data: None,
+                ..
+            } => json!({ "type": "text", "text": unloaded(asset_id) }),
+        });
+    }
+    Value::Array(blocks)
 }
 
 fn object_or_empty(v: &Value) -> Value {

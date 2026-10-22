@@ -77,8 +77,8 @@ pub use settings::{
 };
 pub use trail::{Outcome, trail_for, trail_line};
 pub use types::{
-    Content, Effort, Event, Message, Model, Provider, ProviderState, Reply, Request, Role, Stop,
-    ToolCall, ToolSpec, Usage,
+    Content, Effort, Event, ImageData, Message, Model, Part, Provider, ProviderState, Reply,
+    Request, Role, Stop, ToolCall, ToolSpec, Usage,
 };
 
 use http::Call;

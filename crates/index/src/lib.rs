@@ -45,7 +45,8 @@ use rusqlite::Connection;
 use schema::{Doc, NoteReport, Schema};
 
 pub use asset_text::{
-    EXTRACT_TIMEOUT, Extracted, MAX_PDF_BYTES, MAX_RUNNING, MAX_TEXT, extract_pdf_text, is_pdf,
+    EXTRACT_TIMEOUT, Extracted, MAX_PDF_BYTES, MAX_RUNNING, MAX_TEXT, StoredText, extract_pdf_text,
+    is_pdf,
 };
 pub use graph::{Graph, GraphEdge, GraphNode};
 pub use project::mentions;
@@ -254,6 +255,11 @@ impl Index {
     /// Whether the text extracted from asset `id` holds `lowercase_part`, which is lowercase.
     pub fn asset_text_matches(&self, id: &str, lowercase_part: &str) -> bool {
         self.assets.matches(id, lowercase_part)
+    }
+
+    /// The text extracted from asset `id`, as stored.
+    pub fn asset_text(&self, id: &str) -> StoredText {
+        self.assets.stored(id)
     }
 
     /// The SQLite connection, for `query` to read from.

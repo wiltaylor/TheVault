@@ -138,6 +138,7 @@ async fn a_function_call_is_a_checked_tool_call() {
             id: "call_1".into(),
             content: "no such note".into(),
             is_error: true,
+            parts: vec![],
         }]),
     ];
     ai::complete(&ai::client(), &env.cred(Provider::OpenAi), &next)

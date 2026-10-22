@@ -12,8 +12,21 @@ import { appInfo } from "../inApp";
 export type Content =
   | { type: "text"; text: string }
   | { type: "tool_call"; id: string; name: string; input: Json }
-  | { type: "tool_result"; id: string; content: string; is_error?: boolean }
+  | { type: "tool_result"; id: string; content: string; is_error?: boolean; parts?: ResultPart[] }
   | { type: "notice"; kind: string; text: string };
+
+/** A tool result's part beyond its text (ai D19): an image by asset id, never its bytes. */
+export type ResultPart = { type: "text"; text: string } | { type: "image"; asset_id: string; media_type: string };
+
+/** The asset a `read_asset` step read, from its `tool_result` summary. */
+export interface AssetRef {
+  id: string;
+  filename: string;
+  media_type: string;
+  size: number;
+  /** `image`, `pdf`, `text` or `metadata`: what the model got. */
+  kind: string;
+}
 
 /** One transcript message. `provider_state` is the provider's own record, sent back as it came. */
 export interface ChatMessage {
@@ -50,7 +63,7 @@ export type ProposalState = "open" | "applying" | "applied" | "discarded" | "fai
 
 export type Part =
   | { kind: "text"; text: string }
-  | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string }
+  | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string; asset?: AssetRef }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
 
@@ -183,7 +196,7 @@ function onEvent(e: StreamEvent) {
       const i = lastTurn();
       const at = state.chat.turns[i]?.parts.findIndex((p) => p.kind === "tool" && p.id === d.id) ?? -1;
       if (at < 0) break;
-      const summary = (d.summary ?? {}) as { notes?: NoteRef[]; message?: string };
+      const summary = (d.summary ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef };
       state.setChat(
         "turns",
         i,
@@ -195,6 +208,7 @@ function onEvent(e: StreamEvent) {
           p.isError = d.is_error === true;
           p.notes = (summary.notes ?? []).filter((n) => n && typeof n.id === "string").map((n) => ({ id: n.id, title: String(n.title ?? n.id) }));
           if (summary.message) p.message = summary.message;
+          if (summary.asset && typeof summary.asset.id === "string") p.asset = summary.asset;
         }),
       );
       break;

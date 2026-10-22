@@ -16,6 +16,11 @@ field body {
   kind = "content"
 }
 
+field files {
+  kind     = "asset"
+  multiple = true
+}
+
 template default {
   tab "Main" {
     slot "title"
@@ -318,7 +323,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 6);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
@@ -580,6 +585,300 @@ fn a_client_disconnect_stops_further_provider_requests() {
     // The response is dropped here, closing the connection, well before round one ends.
     std::thread::sleep(Duration::from_secs(4));
     assert_eq!(fake.message_requests().len(), 1);
+}
+
+impl Api {
+    fn upload(&self, name: &str, bytes: Vec<u8>) -> String {
+        let res = self
+            .client
+            .post(self.server.url(&format!("/api/assets?filename={name}")))
+            .bearer_auth(self.token())
+            .body(bytes)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let v: Value = res.json().unwrap();
+        v["id"].as_str().unwrap().to_owned()
+    }
+
+    /// A memo holding `files`.
+    fn memo_with(&self, title: &str, files: &[&str]) -> String {
+        let mut doc = memo_doc(title, "See the files.");
+        doc["fields"]["files"] = json!(files);
+        let res = self
+            .client
+            .post(self.server.url("/api/notes?type=memo"))
+            .bearer_auth(self.token())
+            .json(&json!({ "note": doc }))
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED, "{}", res.text().unwrap());
+        let v: Value = res.json().unwrap();
+        v["id"].as_str().unwrap().to_owned()
+    }
+}
+
+/// A PNG of one colour.
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_pixel(width, height, image::Rgb([30, 120, 200]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// The JSON a tool result sent the model, by its call id, from an Anthropic request body.
+fn anthropic_result(body: &Value, call: &str) -> Value {
+    for m in body["messages"].as_array().unwrap() {
+        for c in m["content"].as_array().unwrap() {
+            if c["type"] == "tool_result" && c["tool_use_id"] == call {
+                return c.clone();
+            }
+        }
+    }
+    panic!("no result for {call} in {body}");
+}
+
+/// The text of a tool result: its string content, or its first text block.
+fn result_text(result: &Value) -> Value {
+    let text = match &result["content"] {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks[0]["text"].as_str().unwrap().to_owned(),
+        other => panic!("{other}"),
+    };
+    serde_json::from_str(&text).unwrap()
+}
+
+#[test]
+fn read_asset_sends_an_image_to_the_provider_but_never_to_the_client() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let bytes = png(64, 48);
+    let asset = api.upload("photo.png", bytes.clone());
+    let note = api.memo_with("Holiday", &[&asset]);
+
+    fake.push(AnthropicMessage::new().tool_use("toolu_1", "get_note", json!({ "id": note })));
+    fake.push(AnthropicMessage::new().tool_use("toolu_2", "read_asset", json!({ "id": asset })));
+    fake.push(AnthropicMessage::text("A blue picture."));
+    let sent = json!([user("What is in the holiday photo?")]);
+    let events = api.chat(sent.clone());
+    assert_eq!(
+        shape(&events),
+        ["tool", "tool_result", "tool", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let requests = fake.message_requests();
+    // get_note lists the note's assets for read_asset.
+    let got = result_text(&anthropic_result(&requests[1].json(), "toolu_1"));
+    assert_eq!(got["assets"][0]["id"], asset.as_str(), "{got}");
+    assert_eq!(got["assets"][0]["media_type"], "image/png");
+    // The image went to the provider, as it is, in the tool result.
+    let images = fake.images();
+    assert_eq!(images[2].len(), 1, "{images:?}");
+    assert_eq!(images[2][0].tool_call_id, "toolu_2");
+    assert_eq!(images[2][0].media_type, "image/png");
+    assert_eq!(images[2][0].bytes, bytes);
+    // The client saw the asset's metadata, never its bytes.
+    let summary = &last(&events, "tool_result")["summary"];
+    assert_eq!(summary["asset"]["id"], asset.as_str());
+    assert_eq!(summary["asset"]["kind"], "image");
+    let stream = format!("{events:?}");
+    assert!(
+        !stream.contains(&b64(&bytes)),
+        "image bytes reached the client"
+    );
+    assert!(!stream.contains("base64"), "{stream}");
+    let done = last(&events, "done");
+    let parts = &done["messages"][3]["content"][0]["parts"];
+    assert_eq!(
+        parts,
+        &json!([{ "type": "image", "asset_id": asset, "media_type": "image/png" }])
+    );
+
+    // Replaying the turn sends the image again, loaded from the vault.
+    fake.push(AnthropicMessage::text("Still blue."));
+    let more = api.chat(next_history(&sent, done, "And now?"));
+    assert_eq!(shape(&more), ["text", "done"]);
+    let images = fake.images();
+    assert_eq!(images[3].len(), 1);
+    assert_eq!(images[3][0].bytes, bytes);
+}
+
+#[test]
+fn read_asset_sends_an_image_in_the_chatgpt_function_call_output() {
+    let api = Api::start();
+    let fake = FakeOpenAi::start();
+    api.chatgpt(&fake);
+    let bytes = png(20, 20);
+    let asset = api.upload("dot.png", bytes.clone());
+    fake.push(OpenAiResponse::new().function_call("call_1", "read_asset", json!({ "id": asset })));
+    fake.push(OpenAiResponse::text("A dot."));
+    let events = api.chat(json!([user("What is it?")]));
+    assert_eq!(shape(&events), ["tool", "tool_result", "text", "done"]);
+    let images = fake.images();
+    assert_eq!(images[1].len(), 1);
+    assert_eq!(images[1][0].tool_call_id, "call_1");
+    assert_eq!(images[1][0].bytes, bytes);
+}
+
+#[test]
+fn a_large_image_is_sent_as_a_jpeg_at_1568_pixels() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let asset = api.upload("wide.png", png(4000, 1000));
+    fake.push(AnthropicMessage::new().tool_use("toolu_1", "read_asset", json!({ "id": asset })));
+    fake.push(AnthropicMessage::text("Wide."));
+    api.chat(json!([user("Look.")]));
+    let images = fake.images();
+    let sent = &images[1][0];
+    assert_eq!(sent.media_type, "image/jpeg");
+    let img = image::load_from_memory(&sent.bytes).unwrap();
+    assert_eq!((img.width(), img.height()), (1568, 392));
+    let got = result_text(&anthropic_result(
+        &fake.message_requests()[1].json(),
+        "toolu_1",
+    ));
+    assert_eq!(got["sent_as"], "image/jpeg");
+}
+
+#[test]
+fn read_asset_returns_a_pdfs_text_and_metadata_for_other_files() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let pdf = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../index/tests/fixtures/three-pages.pdf"
+    ))
+    .unwrap();
+    let pdf = api.upload("report.pdf", pdf);
+    let broken = api.upload(
+        "broken.pdf",
+        b"%PDF-1.7\n1 0 obj << /Pages 9 0 R >>\n%%EOF".to_vec(),
+    );
+    let blob = api.upload("data.bin", vec![0, 1, 2, 3, 4]);
+    let notes = api.upload("notes.md", b"# Plan\n\nBuy slate.".to_vec());
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use("toolu_pdf", "read_asset", json!({ "id": pdf }))
+            .tool_use("toolu_bad", "read_asset", json!({ "id": broken }))
+            .tool_use("toolu_bin", "read_asset", json!({ "id": blob }))
+            .tool_use("toolu_md", "read_asset", json!({ "id": notes })),
+    );
+    fake.push(AnthropicMessage::text("Read them."));
+    let events = api.chat(json!([user("Read the files.")]));
+    assert_eq!(fake.images()[1].len(), 0);
+    let body = fake.message_requests()[1].json();
+
+    let got = result_text(&anthropic_result(&body, "toolu_pdf"));
+    assert!(got["text"].as_str().unwrap().contains("zephyrine"), "{got}");
+    let got = result_text(&anthropic_result(&body, "toolu_bad"));
+    assert!(got.get("text").is_none(), "{got}");
+    assert!(
+        got["note"].as_str().unwrap().contains("unreadable"),
+        "{got}"
+    );
+    let got = result_text(&anthropic_result(&body, "toolu_bin"));
+    assert_eq!(
+        (
+            &got["id"],
+            &got["filename"],
+            &got["media_type"],
+            &got["size"]
+        ),
+        (
+            &json!(blob),
+            &json!("data.bin"),
+            &json!("application/octet-stream"),
+            &json!(5)
+        )
+    );
+    assert!(got.get("text").is_none());
+    let got = result_text(&anthropic_result(&body, "toolu_md"));
+    assert_eq!(got["text"], "# Plan\n\nBuy slate.");
+    // Summaries carry metadata, never the text.
+    for (n, d) in &events {
+        if n == "tool_result" {
+            assert_eq!(d["is_error"], false, "{d}");
+            assert!(!d.to_string().contains("zephyrine"), "{d}");
+            assert!(!d.to_string().contains("slate"), "{d}");
+        }
+    }
+}
+
+#[test]
+fn the_ninth_image_in_a_turn_is_refused() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let assets: Vec<String> = (0..9)
+        .map(|n| api.upload(&format!("p{n}.png"), png(8 + n, 8)))
+        .collect();
+    let mut first = AnthropicMessage::new();
+    for (n, a) in assets.iter().take(5).enumerate() {
+        first = first.tool_use(&format!("toolu_{n}"), "read_asset", json!({ "id": a }));
+    }
+    let mut second = AnthropicMessage::new();
+    for (n, a) in assets.iter().enumerate().skip(5) {
+        second = second.tool_use(&format!("toolu_{n}"), "read_asset", json!({ "id": a }));
+    }
+    fake.push(first);
+    fake.push(second);
+    fake.push(AnthropicMessage::text("Eight of them."));
+    let events = api.chat(json!([user("Look at all of them.")]));
+    let results: Vec<&Value> = events
+        .iter()
+        .filter(|(n, _)| n == "tool_result")
+        .map(|(_, d)| d)
+        .collect();
+    assert_eq!(results.len(), 9);
+    assert!(results[..8].iter().all(|r| r["is_error"] == false));
+    assert_eq!(results[8]["is_error"], true);
+    let images = fake.images();
+    assert_eq!(images[1].len(), 5);
+    assert_eq!(images[2].len(), 8);
+    let refused = anthropic_result(&fake.message_requests()[2].json(), "toolu_8");
+    assert_eq!(refused["is_error"], true);
+    assert!(
+        refused["content"]
+            .as_str()
+            .unwrap()
+            .contains("limit of 8 images"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_deleted_asset_is_replayed_as_a_text_saying_so() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let asset = api.upload("gone.png", png(10, 10));
+    fake.push(AnthropicMessage::new().tool_use("toolu_1", "read_asset", json!({ "id": asset })));
+    fake.push(AnthropicMessage::text("Seen."));
+    let sent = json!([user("Look.")]);
+    let events = api.chat(sent.clone());
+    let res = api
+        .client
+        .delete(api.server.url(&format!("/api/assets/{asset}")))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap();
+    assert!(res.status().is_success(), "{}", res.text().unwrap());
+    fake.push(AnthropicMessage::text("It is gone."));
+    api.chat(next_history(&sent, last(&events, "done"), "Again?"));
+    assert_eq!(fake.images()[2].len(), 0);
+    let result = anthropic_result(&fake.message_requests()[2].json(), "toolu_1");
+    assert_eq!(
+        result["content"][1],
+        json!({ "type": "text", "text": format!("asset {asset} no longer exists") })
+    );
 }
 
 #[test]

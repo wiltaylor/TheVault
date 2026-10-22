@@ -28,6 +28,10 @@
 //! `fallbacks`, which TheVault never sends. `GET /v1/models` answers the configured models,
 //! paginated with `limit` and `after_id`, newest first as Anthropic lists them.
 //!
+//! Images in a request (`image` blocks in Anthropic tool results, `input_image` items in OpenAI
+//! tool outputs and messages) are checked, base64 with no line breaks and a PNG, JPEG, GIF or
+//! WebP media type, else 400; `images()` gives each request's images decoded.
+//!
 //! It binds `127.0.0.1` on a free port. Every request is recorded, whatever it was answered.
 
 use std::collections::VecDeque;
@@ -38,6 +42,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::fake_http::{Answer, Listener, Streamed, frame, listen, lock, pieces};
+use crate::fake_images::{FakeImage, anthropic_images};
 use crate::standin::{Reply, Request};
 
 /// The API key the fake accepts unless [`FakeAnthropicBuilder::api_key`] says otherwise.
@@ -429,6 +434,14 @@ impl FakeAnthropic {
             .collect()
     }
 
+    /// The images each `POST /v1/messages` request carried, in request order (ai D19).
+    pub fn images(&self) -> Vec<Vec<FakeImage>> {
+        self.message_requests()
+            .iter()
+            .map(|r| anthropic_images(&r.json()).unwrap_or_default())
+            .collect()
+    }
+
     pub fn clear_requests(&self) {
         lock(&self.shared.requests).clear();
     }
@@ -489,6 +502,9 @@ fn messages(shared: &Shared, request: &Request) -> Answer {
             "invalid_request_error",
             "model, max_tokens and messages are required",
         );
+    }
+    if let Err(e) = anthropic_images(&body) {
+        return error(400, "invalid_request_error", &e);
     }
     let reply = lock(&shared.replies)
         .pop_front()

@@ -10,6 +10,7 @@ Every note has a type, and the type lists the note's fields. Every note has a `t
 - `query_notes`: run a query in the vault query language (below). Returns at most 50 rows and the `total` that matched.
 - `get_note`: read one note by id: its `type`, `version` and the whole note as JSON. Rows from search and query never hold the body, so get a note to read what it says.
 - `backlinks`: the notes that link to a note, with the field or mention that links them.
+- `read_asset`: read an attached file by its asset id, from the `assets` list `get_note` returns. An image comes back as the image itself, a PDF or text file as its text, anything else as its name, type and size. At most 8 images per question.
 - `propose_edit`: propose a change to one note. Send its `id`, the `base_version` you read with `get_note`, and `note`, the whole new note as JSON text in the form above, every field and block it should keep included. The server checks the change but never writes it: the user sees the proposal as a diff and applies or discards it. Say in your answer that the change awaits them. A proposal refused for a conflict means the note changed since you read it: get it again and propose against the new version.
 
 ## The query language

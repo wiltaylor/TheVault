@@ -609,7 +609,7 @@ pub async fn delete(
 }
 
 /// The media type served for a file name. HTML is served as plain text.
-fn content_type(filename: &str) -> &'static str {
+pub(crate) fn content_type(filename: &str) -> &'static str {
     let ext = filename
         .rsplit_once('.')
         .map(|(_, e)| e.to_ascii_lowercase())

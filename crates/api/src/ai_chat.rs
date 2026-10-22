@@ -13,7 +13,7 @@
 //! |---|---|
 //! | `text` | `{delta}`: answer text as it arrives |
 //! | `tool` | `{id, name, input}`: a tool the model called, before it runs |
-//! | `tool_result` | `{id, summary, is_error}`: `summary` holds the ids and titles returned (`notes`), never bodies, and a `message` on an error |
+//! | `tool_result` | `{id, summary, is_error}`: `summary` holds the ids and titles returned (`notes`), never bodies, a `message` on an error, and for `read_asset` the `asset` read (id, filename, media type, size, kind), never its bytes |
 //! | `proposal` | `{id, note_id, title, base_version, before, after, ops}`: an edit for the user to apply |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
@@ -46,9 +46,9 @@ use state::Author;
 use tokio::sync::mpsc;
 use writer::{Input, Op, Writer, doc_to_json};
 
-use crate::ApiError;
 use crate::auth::Caller;
 use crate::events::HEARTBEAT;
+use crate::{ApiError, ai_assets};
 
 /// The most model calls one user turn makes (ai D14).
 pub const MAX_ROUNDS: usize = 12;
@@ -106,6 +106,7 @@ pub async fn chat(
         writer: w,
         author,
         out: Out { tx },
+        images: ai_assets::Images::default(),
     };
     tokio::spawn(turn.run(provider, body.model, body.messages, body.note_id));
     let events = futures_util::stream::unfold(rx, |mut rx| async move {
@@ -226,6 +227,8 @@ struct Turn {
     writer: Arc<Writer>,
     author: Author,
     out: Out,
+    /// The images prepared this turn, by asset id (ai D19).
+    images: ai_assets::Images,
 }
 
 impl Turn {
@@ -252,12 +255,15 @@ impl Turn {
             };
         let tools = tool_specs();
         let mut added: Vec<Message> = Vec::new();
+        // The images read_asset has sent this turn (ai D19).
+        let mut images_sent = 0usize;
         for round in 1..=MAX_ROUNDS {
             if self.out.gone() {
                 return;
             }
             let mut messages = history.clone();
             messages.extend(added.iter().cloned());
+            let messages = self.hydrate(messages).await;
             let req = Request {
                 provider: setup.provider,
                 model: setup.model.clone(),
@@ -357,12 +363,14 @@ impl Turn {
                 // its calls as not run, so the transcript stays whole, and stop.
                 let mut results: Vec<Content> = calls
                     .iter()
-                    .map(|c| Content::ToolResult {
-                        id: c.id.clone(),
-                        content: format!(
-                            "Not run: this question reached the limit of {MAX_ROUNDS} rounds of tool calls."
-                        ),
-                        is_error: true,
+                    .map(|c| {
+                        Content::tool_result(
+                            c.id.clone(),
+                            format!(
+                                "Not run: this question reached the limit of {MAX_ROUNDS} rounds of tool calls."
+                            ),
+                            true,
+                        )
                     })
                     .collect();
                 results.push(Content::Notice {
@@ -386,6 +394,29 @@ impl Turn {
                     .await
                 {
                     return;
+                }
+                if c.name == "read_asset" && c.error.is_none() {
+                    let read = self.read_asset(&c, images_sent).await;
+                    if !read.parts.is_empty() {
+                        images_sent += 1;
+                    }
+                    if !self
+                        .out
+                        .send(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": read.summary, "is_error": read.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::ToolResult {
+                        id: c.id,
+                        content: cut(&read.content, RESULT_LIMIT),
+                        is_error: read.is_error,
+                        parts: read.parts,
+                    });
+                    continue;
                 }
                 let w = self.writer.clone();
                 let author = self.author.clone();
@@ -412,10 +443,48 @@ impl Turn {
                     id: c.id,
                     content: cut(&got.content, RESULT_LIMIT),
                     is_error: got.is_error,
+                    parts: Vec::new(),
                 });
             }
             added.push(Message::tool_results(results));
         }
+    }
+
+    /// `messages` with every image part loaded from the vault, for a provider request (ai D19).
+    async fn hydrate(&self, mut messages: Vec<Message>) -> Vec<Message> {
+        let has_images = messages.iter().any(|m| {
+            m.content
+                .iter()
+                .any(|c| matches!(c, Content::ToolResult { parts, .. } if !parts.is_empty()))
+        });
+        if !has_images {
+            return messages;
+        }
+        let w = self.writer.clone();
+        let images = self.images.clone();
+        let unloaded = messages.clone();
+        tokio::task::spawn_blocking(move || {
+            ai_assets::hydrate(&w, &mut messages, &images);
+            messages
+        })
+        .await
+        .unwrap_or(unloaded)
+    }
+
+    /// `read_asset`, with the turn's image count (ai D19).
+    async fn read_asset(&self, call: &ToolCall, images_sent: usize) -> ai_assets::Read {
+        let w = self.writer.clone();
+        let images = self.images.clone();
+        let input = call.input.clone();
+        let may_send = images_sent < ai_assets::IMAGE_LIMIT;
+        tokio::task::spawn_blocking(move || ai_assets::read_asset(&w, &input, may_send, &images))
+            .await
+            .unwrap_or_else(|e| ai_assets::Read {
+                content: json!({ "error": e.to_string() }).to_string(),
+                is_error: true,
+                parts: Vec::new(),
+                summary: json!({ "notes": [], "message": e.to_string() }),
+            })
     }
 
     /// One model call, its text and usage streamed to the client as they arrive.
@@ -583,8 +652,13 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "get_note",
-            "Read one note by id: its type, its version and the whole note as JSON, body included.",
+            "Read one note by id: its type, its version and the whole note as JSON, body included, and `assets`, the files it references (id, filename, media_type, size) for read_asset.",
             json!({ "id": { "type": "string", "description": "The note's 26-character id." } }),
+        ),
+        tool(
+            "read_asset",
+            "Read an attached file by its asset id. An image (PNG, JPEG, GIF, WebP) comes back as the image itself, scaled down when large; a PDF or text file as its text, cut at 40000 characters; anything else as its id, filename, media type and size. At most 8 images per question.",
+            json!({ "id": { "type": "string", "description": "The asset's 26-character id." } }),
         ),
         tool(
             "backlinks",
@@ -690,6 +764,7 @@ fn run_tool(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
             Vault::get(w, id)
                 .map(|mut note| {
                     cut_strings(&mut note, BODY_LIMIT);
+                    note["assets"] = json!(ai_assets::note_assets(w, &note["note"]));
                     let summary = json!({ "notes": [{
                         "id": note["id"], "title": note["note"]["fields"]["title"],
                     }] });

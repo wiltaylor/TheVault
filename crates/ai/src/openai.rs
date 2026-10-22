@@ -20,7 +20,8 @@ use serde_json::{Map, Value, json};
 use crate::error::{AiError, ErrorKind, kind_of_code};
 use crate::turn::{Turn, parse_input};
 use crate::types::{
-    Content, Effort, Event, Message, Model, Provider, ProviderState, Request, Role, Stop,
+    Content, Effort, Event, Message, Model, Part, Provider, ProviderState, Request, Role, Stop,
+    unloaded,
 };
 
 /// The request body. `plan` applies the ChatGPT plan's rules.
@@ -86,12 +87,18 @@ fn user_items(m: &Message, items: &mut Vec<Value>) {
             id,
             content,
             is_error,
+            parts,
         } = c
         {
-            let output = if *is_error {
+            let text = if *is_error {
                 format!("Error: {content}")
             } else {
                 content.clone()
+            };
+            let output = if parts.is_empty() {
+                json!(text)
+            } else {
+                output_items(text, parts)
             };
             items.push(json!({ "type": "function_call_output", "call_id": id, "output": output }));
         }
@@ -109,6 +116,31 @@ fn user_items(m: &Message, items: &mut Vec<Value>) {
     if !texts.is_empty() {
         items.push(json!({ "type": "message", "role": "user", "content": texts }));
     }
+}
+
+/// A `function_call_output` whose result has parts (ai D19): an array of content items, the
+/// text first as `input_text`, each image an `input_image` with a base64 data URL. The
+/// Responses API takes images in a tool's output this way, so no extra user message is needed.
+fn output_items(text: String, parts: &[Part]) -> Value {
+    let mut out = Vec::with_capacity(parts.len() + 1);
+    if !text.is_empty() {
+        out.push(json!({ "type": "input_text", "text": text }));
+    }
+    for p in parts {
+        out.push(match p {
+            Part::Text { text } => json!({ "type": "input_text", "text": text }),
+            Part::Image { data: Some(d), .. } => json!({
+                "type": "input_image",
+                "image_url": format!("data:{};base64,{}", d.media_type, d.base64),
+            }),
+            Part::Image {
+                asset_id,
+                data: None,
+                ..
+            } => json!({ "type": "input_text", "text": unloaded(asset_id) }),
+        });
+    }
+    Value::Array(out)
 }
 
 fn assistant_items(req: &Request, m: &Message, items: &mut Vec<Value>) {

@@ -98,6 +98,19 @@
   padding-left: 1.2rem;
 }
 
+.ai-step-thumb {
+  display: block;
+  margin: 0.25rem 0 0 1rem;
+}
+
+.ai-step-thumb img {
+  display: block;
+  max-width: 8rem;
+  max-height: 6rem;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
 .ai-step-error summary {
   color: var(--danger);
 }
