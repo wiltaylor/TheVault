@@ -246,6 +246,12 @@ function FieldIssues(props: { issues: Issue[]; at: string; id?: string }) {
 }
 
 /**
+ * What the save of a task just created said, by task name, for the task's own page to show once
+ * it opens. The workspace's pane history carries no navigation state, so it waits here.
+ */
+const justCreated = new Map<string, string>();
+
+/**
  * Create or edit a scheduled script on one screen: its name, its schedule with the next runs
  * previewed by the server's own cron parser, the script's source, what it may reach, and its run
  * history. Secret values are set on the secrets page; a script only names the ones it reads.
@@ -340,6 +346,10 @@ export function ScheduledEditor() {
             setSavedSource(null);
           }
           setLoaded(true);
+          // A task just created says how its save went, as an edit's save does, once.
+          const saved = justCreated.get(n);
+          justCreated.delete(n);
+          if (saved) setStatus(saved);
         } catch (e) {
           setLoadError(e instanceof ApiError && e.status === 404 ? `Nothing is scheduled as ${n}.` : errorText(e));
         }
@@ -419,12 +429,19 @@ export function ScheduledEditor() {
         setProblems(s.problems);
       }
       const t = await api.putTask(n, taskWcl(m));
+      // Checked again now the task names the script. Before, a script nothing named yet, or
+      // only a device file named, was not checked as a task, so a script using the device
+      // module, which no task can load, showed as saved (ticket 92).
+      const checked = (await api.script(m.script)).problems;
+      const saved = checked.some((p) => p.role === "task") ? "Saved, but the script does not compile." : "Saved.";
       if (isNew()) {
+        justCreated.set(n, saved);
         navigate(`${BASE}/${n}`);
         return;
       }
+      setProblems(checked);
       setTask(t);
-      setStatus(taskProblemsOfScript().length ? "Saved, but the script does not compile." : "Saved.");
+      setStatus(saved);
     } catch (e) {
       if (e instanceof ApiError && Array.isArray(e.body.issues)) {
         setIssues(e.body.issues as Issue[]);

@@ -52,9 +52,7 @@ test("a note created through the API appears in its type list and opens with its
   page,
   admin,
 }) => {
-  // Sorts ahead of the letters, so the row is in the first screen of the virtualised list
-  // however many tasks other tests have made.
-  const title = unique("0 Tabbed");
+  const title = unique("Tabbed");
   const created = await createTask(admin, { title, status: "doing", estimate: 7 }, "Body text here");
 
   await logIn(page);
@@ -65,6 +63,11 @@ test("a note created through the API appears in its type list and opens with its
   await card.getByRole("link", { name: "Notes", exact: true }).click();
   await expect(page).toHaveURL(/\/types\/task$/);
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
+  // Other tests on the shared server add tasks all the time, and a type with more than
+  // MAX_LISTED notes lists none until a search narrows it. The list's own search box finds the
+  // note however many tasks there are (ticket 50).
+  await page.getByRole("searchbox", { name: "Search tasks" }).fill(title.split(" ").at(-1)!);
+  await expect(page.getByTestId("type-list-status")).toHaveText("1 match");
   const row = page.getByTestId("note-card").filter({ hasText: title });
   await expect(row).toBeVisible();
   await row.click();
