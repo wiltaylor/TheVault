@@ -544,7 +544,7 @@ async function queueCommand(name, payload) {
   const task = `emu_${name}`;
   await srv.put(`/api/scripts/${task}`, { source });
   await srv.put(`/api/tasks/${task}`, { wcl: `schedule = "0 0 1 1 *"\nscript = "${task}"\nretries = 0\n` });
-  const run = await srv.post(`/api/tasks/${task}/run`, {});
+  const run = await srv.post(`/api/tasks/${task}/run?wait=true`, {});
   const { commands } = await srv.get(`/api/devices/${dev.id}/commands`);
   const cmd = commands.filter((c) => c.name === name).sort((a, b) => b.created - a.created)[0];
   if (!cmd) throw new Error(`no ${name} command queued: run ${JSON.stringify(run).slice(0, 400)}`);

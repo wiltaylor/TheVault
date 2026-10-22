@@ -1,6 +1,6 @@
 import { A, useLocation, useNavigate } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
-import { type GoogleRedirect, type GoogleSettings, type GoogleSide, type GoogleStatus, api } from "../api";
+import { type GoogleRedirect, type GoogleSettings, type GoogleSide, type GoogleStatus, api, waitForRun } from "../api";
 import { ChipPicker } from "../components/ChipPicker";
 import { Spinner } from "../components/SyncStatus";
 import { errorText } from "./TypeEditor";
@@ -11,7 +11,9 @@ import { errorText } from "./TypeEditor";
 // browser straight back to /integrations/google/callback; on http, where Google accepts no
 // redirect but a loopback one, the user pastes the address the browser failed to load.
 // Every button shows a spinner while its request is in flight, and a side that is running shows
-// "Syncing…" while the card polls the status every few seconds (ticket 113).
+// "Syncing…" while the card polls the status every few seconds (ticket 113). Run now answers as
+// soon as the run starts; the card then reads the run until it ends and says how it went, while
+// its other buttons stay free (ticket 115).
 
 /** How often the card reads the status again while a side is running. */
 export const POLL_MS = 3000;
@@ -182,8 +184,13 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
   const [pending, setPending] = createSignal<Action | null>(null);
   const busy = () => pending() !== null;
   const doing = (a: Action) => pending() === a;
-  /** Whether `key`'s side is running: the server says so, or its Run now is in flight. */
-  const running = (key: (typeof SIDES)[number][0]) => !!status()?.[key].running || doing(`run:${key}`);
+  /** The sides whose Run now the card is waiting on. */
+  const [watching, setWatching] = createSignal<Partial<Record<(typeof SIDES)[number][0], boolean>>>({});
+  /** Whether `key`'s side is running: the server says so, or its Run now is in flight or going. */
+  const running = (key: (typeof SIDES)[number][0]) =>
+    !!status()?.[key].running || doing(`run:${key}`) || !!watching()[key];
+  let disposed = false;
+  onCleanup(() => (disposed = true));
 
   async function load() {
     try {
@@ -260,8 +267,20 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
 
   function runNow(key: (typeof SIDES)[number][0], label: string, task: string) {
     void act(`run:${key}`, async () => {
-      const run = await api.runTask(task);
-      setNotice(run.outcome === "failed" ? `${label} ran and failed: ${run.message ?? "see its run log"}` : `${label} ran.`);
+      const started = await api.runTask(task);
+      setWatching((w) => ({ ...w, [key]: true }));
+      void (async () => {
+        try {
+          const run = await waitForRun(started, (id) => api.taskRun(task, id), props.pollMs ?? POLL_MS, () => disposed);
+          if (disposed || run.outcome === "running") return;
+          setNotice(run.outcome === "failed" ? `${label} ran and failed: ${run.message ?? "see its run log"}` : `${label} ran.`);
+          await load();
+        } catch (e) {
+          setError(errorText(e));
+        } finally {
+          setWatching((w) => ({ ...w, [key]: false }));
+        }
+      })();
       await load();
     });
   }

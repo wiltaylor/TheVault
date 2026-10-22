@@ -781,22 +781,31 @@ impl Runner<'_> {
                 V::Float(x) => V::Duration(x * 86_400.0),
                 v => return Err(fail(format!("days() takes a number, found {}", v.kind()))),
             },
-            "has" => {
+            "has" | "has_ci" => {
                 let list = self.eval(&args[0], note, env)?;
                 let item = self.eval(&args[1], note, env)?;
+                // `has_ci` compares text ignoring case, and every other value as `has` does.
+                let same = |a: &V, b: &V| -> Eval<bool> {
+                    match (a, b) {
+                        (V::Str(a), V::Str(b)) if f == "has_ci" => {
+                            Ok(a.to_lowercase() == b.to_lowercase())
+                        }
+                        _ => value::equals(a, b),
+                    }
+                };
                 let found = match list {
                     V::Null => false,
                     V::List(items) => {
                         let mut found = false;
                         for i in &items {
-                            if value::equals(i, &item).map_err(fail)? {
+                            if same(i, &item).map_err(fail)? {
                                 found = true;
                                 break;
                             }
                         }
                         found
                     }
-                    one => value::equals(&one, &item).map_err(fail)?,
+                    one => same(&one, &item).map_err(fail)?,
                 };
                 V::Bool(found)
             }

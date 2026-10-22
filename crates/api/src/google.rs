@@ -422,7 +422,7 @@ pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<
             if s.set_paused(task, false)? {
                 match s.trigger_in_background(task) {
                     // A run already going is as good as this one.
-                    Ok(()) | Err(scheduler::Error::Running(_)) => {}
+                    Ok(_) | Err(scheduler::Error::Running(_)) => {}
                     Err(e) => eprintln!("google: starting {task}: {e}"),
                 }
             }

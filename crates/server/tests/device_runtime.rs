@@ -124,7 +124,8 @@ impl Home {
 
     fn remind(&self) {
         let run = send(
-            self.admin.post(self.server.url("/api/tasks/remind/run")),
+            self.admin
+                .post(self.server.url("/api/tasks/remind/run?wait=true")),
             200,
         );
         assert_eq!(run["outcome"], "succeeded", "{run}");

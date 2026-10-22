@@ -250,7 +250,7 @@ template default {
 }
 ```
 
-The fields of the Google sync types, as a new vault gets them. The Gmail and calendar syncs link a sender, recipient or attendee to the person whose `emails` holds the address, ignoring case, and create no person (google-sync D5):
+The fields of the Google sync types, as a new vault gets them. The Gmail and calendar syncs link a sender, recipient or attendee to the person whose `emails` holds the address, ignoring case, with the query `from person where has_ci(emails, "<address>")`, and create no person (google-sync D5):
 
 | Type | Field | Kind | Meaning |
 |------|-------|------|---------|
@@ -998,7 +998,7 @@ A tab with `when` shows only for a note that meets the condition (D14). The cond
 
 - The names are the type's fields and the built-ins `id`, `type`, `title`, `created`, `updated` and `archived`. `this` is the note shown, so `this.status` is `status`.
 - The operators are `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, the arithmetic operators, and parentheses, with the query language's literals and precedence.
-- The functions are `has()`, `under()`, `contains()`, `empty()`, `any()`, `all()`, `today()`, `now()` and `days()`. `linked_from()` reads other notes, so a condition refuses it.
+- The functions are `has()`, `has_ci()`, `under()`, `contains()`, `empty()`, `any()`, `all()`, `today()`, `now()` and `days()`. `linked_from()` reads other notes, so a condition refuses it. `has_ci(list, value)` is `has()` with text compared ignoring case, as `has_ci(emails, "Ann@Example.com")`; any other value compares as `has()` compares it.
 - `.` reads the `start` or `end` of a date range, and the members of a location or dict field. It does not follow a reference, since that reads another note.
 - A missing value behaves as in a query: it is false in a condition and never compares as less or greater than anything, so `!(due < today())` holds for a note with no `due`. A condition that fails to evaluate, such as `estimate == "3"` on an `int` field, is false.
 
@@ -1668,6 +1668,8 @@ A `query_view` block runs one query and shows its results through one or more sa
 | `view <name> { ... }` | block | At least one. `<name>` is unique within the block |
 
 In the query's `search "<text>"` clause every word must appear in the note's title or text, ignoring case. Earlier words match whole words, and the last word also matches as a prefix: `search "meet"` finds `meeting`. A trailing space, as in `search "meet "`, or a last word of one character, makes the last word whole. A prefix stands for at most the 50 most frequent words it starts.
+
+Beside the functions of PRD Appendix B, a `where` expression has `has_ci(list, value)`: `has()` with text compared ignoring case, so `from person where has_ci(emails, "Ann@Example.com")` finds a person who stored `ann@example.com`. A value that is not text compares as `has()` compares it.
 
 Each `view` holds a `kind` and the items that kind uses:
 

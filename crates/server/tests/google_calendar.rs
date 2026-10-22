@@ -126,7 +126,7 @@ impl Api {
     /// Run the task now and return the run.
     fn sync(&self) -> Value {
         let run = expect(
-            self.req("POST", "/api/tasks/google_calendar/run")
+            self.req("POST", "/api/tasks/google_calendar/run?wait=true")
                 .send()
                 .unwrap(),
             200,
@@ -866,7 +866,7 @@ fn a_gmail_run_and_a_calendar_run_each_change_only_their_own_state_and_write_no_
     );
     let gmail_run = || {
         let run = expect(
-            api.req("POST", "/api/tasks/google_gmail/run")
+            api.req("POST", "/api/tasks/google_gmail/run?wait=true")
                 .send()
                 .unwrap(),
             200,

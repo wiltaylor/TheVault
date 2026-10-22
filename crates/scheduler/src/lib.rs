@@ -289,25 +289,45 @@ impl Scheduler {
             .and_then(|r| self.writer.state().run(r.id)?.ok_or(Error::NoTask(r.task)))
     }
 
-    /// Start task `name` now, as [`Scheduler::trigger`] does, on its own thread, and return once
-    /// it is marked running: its status reports `running` from the moment this returns.
-    pub fn trigger_in_background(self: &Arc<Self>, name: &str) -> Result<()> {
+    /// Start task `name` now, as [`Scheduler::trigger`] does, on its own thread, and return its
+    /// run record, still `Running`, once the run is recorded and the task marked running: its
+    /// status reports `running` from the moment this returns, and the record's id reads the run
+    /// as it goes and once it ends.
+    pub fn trigger_in_background(self: &Arc<Self>, name: &str) -> Result<TaskRun> {
         let def = self.claim(name)?;
+        // No record or no thread, no run: let the task run again.
+        let release = |e: Error| {
+            if let Some(slot) = self.plan().slots.get_mut(name) {
+                slot.running = false;
+            }
+            e
+        };
+        let state = self.writer.state();
+        let id = state.start_run(name, 1).map_err(|e| release(e.into()))?;
+        let started = state
+            .run(id)
+            .map_err(Error::from)
+            .and_then(|r| r.ok_or(Error::State(state::Error::UnknownRun(id))));
+        let started = match started {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = state.finish_run(id, &RunOutcome::Failed(e.to_string()));
+                return Err(release(e));
+            }
+        };
         let s = self.clone();
-        thread::Builder::new()
+        let spawned = thread::Builder::new()
             .name(format!("task-{name}"))
-            .spawn(move || s.run(&def, 1))
-            .map(drop)
-            .map_err(|e| {
-                // No thread, no run: let the task run again.
-                if let Some(slot) = self.plan().slots.get_mut(name) {
-                    slot.running = false;
-                }
-                Error::Broken {
-                    name: name.to_owned(),
-                    message: format!("could not start a thread for it: {e}"),
-                }
-            })
+            .spawn(move || s.finish(&def, 1, Ok(id)));
+        if let Err(e) = spawned {
+            let message = format!("could not start a thread for it: {e}");
+            let _ = state.finish_run(id, &RunOutcome::Failed(message.clone()));
+            return Err(release(Error::Broken {
+                name: name.to_owned(),
+                message,
+            }));
+        }
+        Ok(started)
     }
 
     /// Mark task `name` running for a first attempt, dropping any waiting retry, and return it.
@@ -409,7 +429,18 @@ impl Scheduler {
     /// Run one attempt of a task already marked running, record it, and schedule a retry when it
     /// failed and has retries left. `None` only when `state.db` could not record the run.
     fn run(&self, def: &TaskDef, attempt: u32) -> Option<TaskRun> {
-        let record = self.attempt(def, attempt);
+        let id = self.writer.state().start_run(&def.name, attempt);
+        self.finish(def, attempt, id)
+    }
+
+    /// [`Scheduler::run`] for a run whose record `id` is already started.
+    fn finish(
+        &self,
+        def: &TaskDef,
+        attempt: u32,
+        id: state::Result<state::RunId>,
+    ) -> Option<TaskRun> {
+        let record = id.map_err(Error::from).and_then(|id| self.attempt(def, id));
         let failed = !matches!(
             record.as_ref().map(|r| &r.outcome),
             Ok(RunOutcome::Succeeded)
@@ -470,9 +501,9 @@ impl Scheduler {
         }
     }
 
-    fn attempt(&self, def: &TaskDef, attempt: u32) -> Result<TaskRun> {
+    /// Run the script of `def` for the started run record `id`, and record how it ended.
+    fn attempt(&self, def: &TaskDef, id: state::RunId) -> Result<TaskRun> {
         let state = self.writer.state();
-        let id = state.start_run(&def.name, attempt)?;
         let outcome = match self.writer.read_script(&def.script) {
             Ok(source) => {
                 let mut job = Job::new(Kind::Task, &def.script, &source, &def.function);

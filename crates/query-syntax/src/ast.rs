@@ -126,11 +126,12 @@ impl BinOp {
 pub const ARCHIVED: &str = "archived";
 
 /// The host functions queries add to wscript, with their argument counts.
-pub const FUNCTIONS: [(&str, usize); 10] = [
+pub const FUNCTIONS: [(&str, usize); 11] = [
     ("today", 0),
     ("now", 0),
     ("days", 1),
     ("has", 2),
+    ("has_ci", 2),
     ("under", 2),
     ("any", 2),
     ("all", 2),

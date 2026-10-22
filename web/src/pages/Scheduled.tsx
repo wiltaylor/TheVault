@@ -4,7 +4,7 @@
 import { A, useNavigate, useParams } from "@solidjs/router";
 import { For, Index, Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { ApiError, type CronPreview, type ScriptProblem, type Task, type TaskRun, api } from "../api";
+import { ApiError, type CronPreview, type ScriptProblem, type Task, type TaskRun, api, waitForRun } from "../api";
 import { when } from "../admin/format";
 import {
   type DirAccess,
@@ -90,12 +90,16 @@ export function ScheduledList() {
   const [tasks, { refetch }] = createResource(api.tasks);
   const [running, setRunning] = createSignal<string | null>(null);
   const [results, setResults] = createStore<Record<string, string>>({});
+  let disposed = false;
+  onCleanup(() => (disposed = true));
 
+  // Run now answers once the run starts; the page reads the run until it ends (ticket 115).
   async function runNow(name: string) {
     setRunning(name);
     setResults(name, "Running…");
     try {
-      const run = await api.runTask(name);
+      const run = await waitForRun(await api.runTask(name), (id) => api.taskRun(name, id), undefined, () => disposed);
+      if (run.outcome === "running") return;
       setResults(name, run.outcome === "failed" ? `Failed: ${run.message ?? "see its log"}` : "Succeeded");
       await refetch();
     } catch (e) {
@@ -370,6 +374,8 @@ export function ScheduledEditor() {
     }),
   );
   onCleanup(() => clearTimeout(previewTimer));
+  let disposed = false;
+  onCleanup(() => (disposed = true));
 
   const choice = () => presetOf(model.schedule);
   function choose(preset: Preset, time = choice().time, day = choice().day) {
@@ -431,12 +437,14 @@ export function ScheduledEditor() {
     }
   }
 
+  // Run now answers once the run starts; the page reads the run until it ends (ticket 115).
   async function runNow() {
     setBusy(true);
     setError(null);
     setStatus("Running…");
     try {
-      const run = await api.runTask(name());
+      const run = await waitForRun(await api.runTask(name()), (id) => api.taskRun(name(), id), undefined, () => disposed);
+      if (run.outcome === "running") return;
       setJustRan(run.id);
       await load(name());
       setStatus(run.outcome === "failed" ? `The run failed: ${run.message ?? "see its log"}` : "The run succeeded.");

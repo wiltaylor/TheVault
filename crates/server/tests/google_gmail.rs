@@ -114,7 +114,7 @@ paused        = true
     /// Run the task now, and return the run.
     fn run(&self) -> Value {
         expect(
-            self.req("POST", "/api/tasks/google_gmail/run")
+            self.req("POST", "/api/tasks/google_gmail/run?wait=true")
                 .send()
                 .unwrap(),
             200,
@@ -301,7 +301,7 @@ fn the_shipped_task_is_paused_and_a_vault_without_settings_ends_successfully() {
     assert_eq!(task["paused"], true, "{task:#}");
     let run = expect(
         client
-            .post(server.url("/api/tasks/google_gmail/run"))
+            .post(server.url("/api/tasks/google_gmail/run?wait=true"))
             .header(AUTHORIZATION, &auth)
             .send()
             .unwrap(),
@@ -664,7 +664,8 @@ fn threads_group_messages_and_senders_link_to_people_by_email() {
     );
     let sam = gmail.create(
         "person",
-        json!({ "title": "Sam", "emails": ["work@sam.example", "sam@example.com"] }),
+        // Stored in mixed case, unlike any address the messages give: matched ignoring case.
+        json!({ "title": "Sam", "emails": ["work@sam.example", "Sam@Example.COM"] }),
     );
     gmail.run_ok();
 

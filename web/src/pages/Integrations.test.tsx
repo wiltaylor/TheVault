@@ -8,10 +8,11 @@ const googleStart = vi.fn();
 const googleFinish = vi.fn();
 const googleDisconnect = vi.fn();
 const runTask = vi.fn();
+const taskRun = vi.fn();
 const googleSaveSettings = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, googleStatus, googleStart, googleFinish, googleDisconnect, googleSaveSettings, runTask },
+  return { ...real, api: { ...real.api, googleStatus, googleStart, googleFinish, googleDisconnect, googleSaveSettings, runTask, taskRun },
   };
 });
 
@@ -286,6 +287,23 @@ describe("GoogleCard feedback", () => {
     run.resolve({ outcome: "failed", message: "Google answered 500" });
     expect(await screen.findByText("Gmail ran and failed: Google answered 500")).toBeTruthy();
     await waitFor(() => expect(idle(screen.getByRole("button", { name: "Run Gmail now" }))).toBe(true));
+  });
+
+  it("polls a started run until it ends, with the other buttons free meanwhile", async () => {
+    googleStatus.mockResolvedValue(connected);
+    const started = { id: 7, task: "google_gmail", outcome: "running", message: null };
+    runTask.mockResolvedValue(started);
+    taskRun.mockResolvedValueOnce(started).mockResolvedValueOnce({ ...started, outcome: "failed", message: "Google answered 500" });
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} pollMs={10} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run Gmail now" }));
+    await waitFor(() => expect(runTask).toHaveBeenCalledWith("google_gmail"));
+    // The request has answered: Save is free while the run goes, and Gmail shows it syncing.
+    await waitFor(() => expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByRole("row", { name: /Gmail/ }).textContent).toContain("Syncing…");
+    expect(await screen.findByText("Gmail ran and failed: Google answered 500")).toBeTruthy();
+    expect(taskRun).toHaveBeenCalledWith("google_gmail", 7);
+    expect(taskRun).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByRole("row", { name: /Gmail/ }).textContent).not.toContain("Syncing…"));
   });
 
   it("spins Save while the settings are saving, and shows a refusal inline", async () => {

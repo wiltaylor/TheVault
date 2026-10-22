@@ -992,8 +992,13 @@ export const api = {
   deleteTask: (name: string) => request<unknown>("DELETE", `/api/tasks/${enc(name)}`),
   taskRuns: async (name: string, limit = 50) =>
     (await request<{ runs: TaskRun[] }>("GET", `/api/tasks/${enc(name)}/runs?limit=${limit}`)).runs,
-  /** Run a task now, paused or not. Answers once the run ends. */
+  /**
+   * Start a task now, paused or not. Answers as soon as the run starts, with the run still
+   * `running`; [`waitForRun`] reads it until it ends.
+   */
   runTask: (name: string) => request<TaskRun>("POST", `/api/tasks/${enc(name)}/run`),
+  /** One run of a task, with its whole log. */
+  taskRun: (name: string, id: number) => request<TaskRun>("GET", `/api/tasks/${enc(name)}/runs/${id}`),
   /** Describe a cron schedule and list the next `count` times it fires after now. */
   cron: (schedule: string, timezone: string, count = 5) =>
     request<CronPreview>(
@@ -1126,3 +1131,25 @@ export function assetUrl(id: string): string {
   return `/api/assets/${enc(id)}`;
 }
 
+
+/** How often [`waitForRun`] reads a run that is still going. */
+export const RUN_POLL_MS = 1000;
+
+/**
+ * Run `run` once it has ended, reading it again with `read` every `everyMs` while it is
+ * `running`. A run that already ended comes back as it is. When `stop` says so, the run comes
+ * back as last read, which may still be running.
+ */
+export async function waitForRun(
+  run: TaskRun,
+  read: (id: number) => Promise<TaskRun>,
+  everyMs = RUN_POLL_MS,
+  stop?: () => boolean,
+): Promise<TaskRun> {
+  while (run.outcome === "running" && !stop?.()) {
+    await new Promise((r) => setTimeout(r, everyMs));
+    if (stop?.()) break;
+    run = await read(run.id);
+  }
+  return run;
+}
