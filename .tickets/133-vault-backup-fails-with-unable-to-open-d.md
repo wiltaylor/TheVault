@@ -4,9 +4,8 @@ title: vault backup fails with 'unable to open database file' when the archive's
   does not exist, so 'vault backup /data/backups/x.sqlar' fails on a fresh container
   until an upgrade has made /data/backups
 blocked_by: []
-status: parked
+status: todo
 verified: unknown
-park_cause: needs-triage
 ---
 
 # vault backup fails with 'unable to open database file' when the archive's folder does not exist, so 'vault backup /data/backups/x.sqlar' fails on a fresh container until an upgrade has made /data/backups
@@ -14,3 +13,7 @@ park_cause: needs-triage
 Seen in ticket 128: in the image, on a vault with no /data/backups yet, 'vault backup /data/backups/m.sqlar' prints {"error":"archive","message":"unable to open database file: /data/backups/m.partial"}. docs/install.md works around it with 'mkdir -p /data/backups && vault backup ...'. Either create the parent folder in vault backup, or have the entrypoint create /data/backups on every start, then simplify the command in docs/install.md.
 
 ## Worklog
+
+### 2026-10-22T01:46:56Z — wil
+
+Status set to todo.
