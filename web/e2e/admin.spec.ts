@@ -179,8 +179,9 @@ test("a note is restored from its history and from the trash in the UI", async (
 test("a new token's secret is shown once and is gone after a reload", async ({ page, baseURL }) => {
   const name = `agent-${token()}`;
   await logIn(page, "/tokens");
-  await page.getByLabel("Name").fill(name);
-  await page.getByLabel("Scope").selectOption("write");
+  // Exact labels: the "Connect an AI agent" form on this page has "Agent name" and "Agent scope".
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByLabel("Scope", { exact: true }).selectOption("write");
   await page.getByRole("button", { name: "Create token" }).click();
   const shown = page.getByRole("region", { name: "New token secret" });
   await expect(shown).toBeVisible();
