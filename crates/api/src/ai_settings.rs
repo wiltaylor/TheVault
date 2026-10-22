@@ -3,10 +3,13 @@
 //!
 //! - `GET /api/integrations/ai` answers `{ secrets_key, default_provider, providers: { anthropic:
 //!   { configured, model }, openai: { configured, model }, chatgpt: { configured, account, model }
-//!   } }`. No answer of these routes ever holds a key or a token.
+//!   } }, system_prompt, default_system_prompt, system_prompt_custom }`: the chat system prompt
+//!   in use, the shipped one, and whether they differ (ai D17). No answer of these routes ever
+//!   holds a key or a token.
 //! - `PUT /api/integrations/ai/settings` takes `{ default_provider?, models?: { anthropic?,
-//!   openai?, chatgpt? } }`; a field sent replaces the stored one, and an empty string clears it.
-//!   The `endpoints` test seam is kept.
+//!   openai?, chatgpt? }, system_prompt? }`; a field sent replaces the stored one, and an empty
+//!   string clears it, which for `system_prompt` means the default. A system prompt over
+//!   [`ai::SYSTEM_PROMPT_MAX`] characters is a 400. The `endpoints` test seam is kept.
 //! - `PUT /api/integrations/ai/{anthropic|openai}/key` takes `{ key }` and stores it in
 //!   `ai_<provider>_api_key`; an empty key deletes the secret.
 //! - `POST /api/integrations/ai/chatgpt/start` builds the authorize URL of ai D8 and holds the
@@ -150,6 +153,9 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
                 "openai": off,
                 "chatgpt": { "configured": false, "account": null, "model": null },
             },
+            "system_prompt": ai::CHAT_PROMPT,
+            "default_system_prompt": ai::CHAT_PROMPT,
+            "system_prompt_custom": false,
         }));
     }
     let settings = Settings::load(s).map_err(api_error)?;
@@ -167,6 +173,9 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
         "secrets_key": true,
         "default_provider": settings.default_provider,
         "providers": providers,
+        "system_prompt": settings.chat_prompt(),
+        "default_system_prompt": ai::CHAT_PROMPT,
+        "system_prompt_custom": settings.system_prompt_custom(),
     }))
 }
 
@@ -186,6 +195,8 @@ pub struct SettingsBody {
     default_provider: Option<String>,
     #[serde(default)]
     models: Option<HashMap<String, Option<String>>>,
+    #[serde(default)]
+    system_prompt: Option<String>,
 }
 
 /// `PUT /api/integrations/ai/settings`.
@@ -202,8 +213,12 @@ pub async fn put_settings(
     for (name, model) in b.models.unwrap_or_default() {
         models.push((provider(&name)?, model.map(|m| m.trim().to_owned())));
     }
+    let prompt = b.system_prompt;
     blocking(&a, move |s| {
         let mut settings = Settings::load(s).map_err(api_error)?;
+        if let Some(p) = prompt {
+            settings.set_system_prompt(&p).map_err(api_error)?;
+        }
         if let Some(d) = default {
             settings.default_provider = d;
         }

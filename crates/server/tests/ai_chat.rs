@@ -590,3 +590,102 @@ fn an_unconfigured_provider_answers_an_error_event() {
     assert_eq!(name, "error", "{events:?}");
     assert_eq!(e["kind"], "not_configured");
 }
+
+impl Api {
+    fn put_settings(&self, body: Value) -> (StatusCode, Value) {
+        let res = self
+            .client
+            .put(self.server.url("/api/integrations/ai/settings"))
+            .bearer_auth(self.token())
+            .json(&body)
+            .send()
+            .unwrap();
+        (res.status(), res.json().unwrap())
+    }
+
+    fn ai_status(&self) -> Value {
+        self.client
+            .get(self.server.url("/api/integrations/ai"))
+            .bearer_auth(self.token())
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    }
+}
+
+#[test]
+fn the_system_prompt_setting_replaces_the_default_for_every_provider() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let (id, _) = api.memo("Roof decision", "Slate.");
+
+    // No setting: the shipped prompt, as it is.
+    let status = api.ai_status();
+    assert_eq!(status["system_prompt"], ai::CHAT_PROMPT);
+    assert_eq!(status["default_system_prompt"], ai::CHAT_PROMPT);
+    assert_eq!(status["system_prompt_custom"], false);
+    fake.push(AnthropicMessage::text("Hi."));
+    api.chat(json!([user("Hello")]));
+    assert_eq!(fake.message_requests()[0].json()["system"], ai::CHAT_PROMPT);
+
+    // A custom prompt, with the open note appended after it.
+    let custom = "You are terse. Answer in one line.";
+    let (code, status) = api.put_settings(json!({ "system_prompt": custom }));
+    assert_eq!(code, StatusCode::OK, "{status}");
+    assert_eq!(status["system_prompt"], custom);
+    assert_eq!(status["default_system_prompt"], ai::CHAT_PROMPT);
+    assert_eq!(status["system_prompt_custom"], true);
+    // Other settings are untouched by the prompt.
+    assert_eq!(status["default_provider"], "anthropic");
+    assert_eq!(status["providers"]["anthropic"]["model"], MODEL);
+    fake.push(AnthropicMessage::text("Hi."));
+    let res = api.chat_as(
+        &api.token(),
+        json!({ "messages": [user("Hello")], "note_id": id }),
+    );
+    read_events(res, |_| false);
+    let system = fake.message_requests()[1].json()["system"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let context = system
+        .strip_prefix(custom)
+        .expect("the custom prompt comes first");
+    assert!(context.contains("## The open note"), "{system}");
+    assert!(context.contains(&id), "{system}");
+    assert!(!system.contains(ai::CHAT_PROMPT));
+
+    // Over 32 000 characters is refused and the stored prompt stays.
+    let (code, err) = api.put_settings(json!({ "system_prompt": "x".repeat(32_001) }));
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{err}");
+    assert_eq!(api.ai_status()["system_prompt"], custom);
+    let (code, _) = api.put_settings(json!({ "system_prompt": "é".repeat(32_000) }));
+    assert_eq!(
+        code,
+        StatusCode::OK,
+        "the limit counts characters, not bytes"
+    );
+
+    // An empty prompt resets to the default.
+    let (code, status) = api.put_settings(json!({ "system_prompt": "" }));
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(status["system_prompt"], ai::CHAT_PROMPT);
+    assert_eq!(status["system_prompt_custom"], false);
+    fake.push(AnthropicMessage::text("Hi."));
+    api.chat(json!([user("Hello")]));
+    assert_eq!(fake.message_requests()[2].json()["system"], ai::CHAT_PROMPT);
+
+    // The OpenAI Responses form carries it as the instructions.
+    let openai = FakeOpenAi::start();
+    api.chatgpt(&openai);
+    api.put_settings(json!({ "system_prompt": custom }));
+    openai.push(OpenAiResponse::text("Hi."));
+    api.chat(json!([user("Hello")]));
+    let instructions = openai.response_requests()[0].json()["instructions"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(instructions.starts_with(custom), "{instructions}");
+}

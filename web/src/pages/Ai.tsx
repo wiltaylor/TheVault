@@ -425,6 +425,108 @@ export function ChatGptCard(props: { status: AiStatus; onStatus: (s: AiStatus) =
   );
 }
 
+/** The most characters a chat system prompt may have (ai D17); the server holds the same limit. */
+export const SYSTEM_PROMPT_MAX = 32_000;
+
+/**
+ * The chat panel's system prompt (ai D17): the text in use, editable, with Save and Reset to
+ * default. The open note's id, type and title are added after it by the server, and the tools
+ * reach the model through their definitions, so neither is part of this text.
+ */
+export function SystemPromptCard(props: { status: AiStatus; onStatus: (s: AiStatus) => void }) {
+  const [text, setText] = createSignal(props.status.system_prompt);
+  const [error, setError] = createSignal<string | null>(null);
+  const [notice, setNotice] = createSignal<string | null>(null);
+  const [pending, setPending] = createSignal<"save" | "reset" | null>(null);
+  // Follow the prompt in use whenever the server answers a new one.
+  createEffect(on(() => props.status.system_prompt, (p) => setText(p), { defer: true }));
+  const custom = () => props.status.system_prompt_custom;
+  const changed = () => text() !== props.status.system_prompt;
+  const length = () => [...text()].length;
+
+  async function act(what: "save" | "reset", value: string, done: string) {
+    setError(null);
+    setNotice(null);
+    setPending(what);
+    try {
+      props.onStatus(await api.aiSaveSettings({ system_prompt: value }));
+      setNotice(done);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  function save(ev: SubmitEvent) {
+    ev.preventDefault();
+    if (length() > SYSTEM_PROMPT_MAX) {
+      setError(`The prompt is ${length()} characters; the most it can be is ${SYSTEM_PROMPT_MAX}.`);
+      return;
+    }
+    // The default text saved as it is, or an empty box, means the default.
+    const value = text() === props.status.default_system_prompt ? "" : text();
+    void act("save", value, "Saved. The next chat message uses it.");
+  }
+
+  function reset() {
+    void act("reset", "", "Reset to the default prompt.");
+  }
+
+  return (
+    <Card
+      title="Chat system prompt"
+      blurb="What the AI panel tells the model before every conversation. The open note and the tool list are added for you."
+    >
+      <form class="admin-form" aria-label="Chat system prompt" onSubmit={save}>
+        <p class="muted" role="status">
+          {custom() ? "Customised" : "Default"}
+        </p>
+        <label for="ai-system-prompt">System prompt</label>
+        <textarea
+          id="ai-system-prompt"
+          class="ai-system-prompt"
+          rows={16}
+          spellcheck={false}
+          value={text()}
+          onInput={(e) => setText(e.currentTarget.value)}
+        />
+        <p class={length() > SYSTEM_PROMPT_MAX ? "error" : "muted"}>
+          {length()} of {SYSTEM_PROMPT_MAX} characters
+        </p>
+        <div class="actions">
+          <button
+            type="submit"
+            class="primary"
+            disabled={pending() !== null || !changed()}
+            aria-busy={pending() === "save" ? "true" : undefined}
+          >
+            <Busy on={pending() === "save"} />
+            Save
+          </button>
+          <button
+            type="button"
+            disabled={pending() !== null || !custom()}
+            aria-busy={pending() === "reset" ? "true" : undefined}
+            onClick={reset}
+          >
+            <Busy on={pending() === "reset"} />
+            Reset to default
+          </button>
+        </div>
+      </form>
+      <Show when={error()}>
+        <p class="error" role="alert">
+          {error()}
+        </p>
+      </Show>
+      <Show when={notice()}>
+        <p class="muted">{notice()}</p>
+      </Show>
+    </Card>
+  );
+}
+
 /** Settings > AI. */
 export function Ai() {
   const [status, setStatus] = createSignal<AiStatus | null>(null);
@@ -468,6 +570,7 @@ export function Ai() {
               onStatus={setStatus}
             />
             <ChatGptCard status={s()} onStatus={setStatus} />
+            <SystemPromptCard status={s()} onStatus={setStatus} />
           </>
         )}
       </Show>

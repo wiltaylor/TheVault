@@ -3117,6 +3117,15 @@ button.link {
   font-family: ui-monospace, monospace;
 }
 
+/* The chat system prompt (ai D17). */
+.ai-card .ai-system-prompt {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
 .ai-card .actions {
   display: flex;
   align-items: center;

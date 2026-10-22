@@ -156,7 +156,11 @@ fn setup(
     let settings = Settings::load(state)?;
     let (provider, model) = settings.pick(provider, model.as_deref())?;
     let cred = Credentials::resolve(state, provider)?;
-    let mut system = ai::CHAT_PROMPT.to_owned();
+    // The prompt in use (ai D17), the default or the user's own; the open note follows it.
+    let mut system = settings.chat_prompt().to_owned();
+    if !system.ends_with('\n') {
+        system.push('\n');
+    }
     if let Some(id) = note_id
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())

@@ -44,7 +44,17 @@ function status(over: Partial<Record<"anthropic" | "openai" | "chatgpt", object>
       openai: { configured: false, model: null, ...over.openai },
       chatgpt: { configured: false, model: null, account: null, ...over.chatgpt },
     },
+    system_prompt: DEFAULT_PROMPT,
+    default_system_prompt: DEFAULT_PROMPT,
+    system_prompt_custom: false,
   };
+}
+
+const DEFAULT_PROMPT = "You are the assistant inside TheVault.\n";
+
+/** A status whose chat system prompt is `prompt`, customised. */
+function withPrompt(prompt: string): AiStatus {
+  return { ...status(), system_prompt: prompt, system_prompt_custom: true };
 }
 
 const ANTHROPIC_MODELS = {
@@ -237,6 +247,59 @@ describe("Settings > AI", () => {
     expect(await card("ChatGPT").findByRole("button", { name: "Continue with ChatGPT" })).toBeTruthy();
     expect(screen.queryByText(/Using ChatGPT plan/)).toBeNull();
     confirm.mockRestore();
+  });
+});
+
+describe("the Chat system prompt card", () => {
+  const prompt = () => card("Chat system prompt");
+  const box = () => prompt().getByLabelText("System prompt") as HTMLTextAreaElement;
+  const button = (name: string) => prompt().getByRole("button", { name }) as HTMLButtonElement;
+
+  it("shows the default prompt in use, with Reset disabled", async () => {
+    aiStatus.mockResolvedValue(status());
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Chat system prompt" });
+    expect(box().value).toBe(DEFAULT_PROMPT);
+    expect(prompt().getByRole("status").textContent).toBe("Default");
+    expect(button("Reset to default").disabled).toBe(true);
+    expect(button("Save").disabled).toBe(true);
+  });
+
+  it("saves an edited prompt and shows it as customised", async () => {
+    aiStatus.mockResolvedValue(status());
+    aiSaveSettings.mockResolvedValue(withPrompt("Be terse."));
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Chat system prompt" });
+    fireEvent.input(box(), { target: { value: "Be terse." } });
+    fireEvent.click(button("Save"));
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ system_prompt: "Be terse." }));
+    await waitFor(() => expect(prompt().getByRole("status").textContent).toBe("Customised"));
+    expect(box().value).toBe("Be terse.");
+    expect(button("Reset to default").disabled).toBe(false);
+  });
+
+  it("resets a customised prompt to the default", async () => {
+    aiStatus.mockResolvedValue(withPrompt("Be terse."));
+    aiSaveSettings.mockResolvedValue(status());
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Chat system prompt" });
+    expect(box().value).toBe("Be terse.");
+    expect(prompt().getByRole("status").textContent).toBe("Customised");
+    fireEvent.click(button("Reset to default"));
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ system_prompt: "" }));
+    await waitFor(() => expect(box().value).toBe(DEFAULT_PROMPT));
+    expect(prompt().getByRole("status").textContent).toBe("Default");
+    expect(button("Reset to default").disabled).toBe(true);
+  });
+
+  it("refuses a prompt over the limit without sending it", async () => {
+    aiStatus.mockResolvedValue(status());
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Chat system prompt" });
+    fireEvent.input(box(), { target: { value: "x".repeat(32_001) } });
+    fireEvent.click(button("Save"));
+    expect((await prompt().findByRole("alert")).textContent).toContain("32000");
+    expect(aiSaveSettings).not.toHaveBeenCalled();
   });
 });
 

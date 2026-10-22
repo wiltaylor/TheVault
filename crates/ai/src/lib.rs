@@ -73,7 +73,7 @@ pub use error::{AiError, ErrorKind};
 pub use http::{blocking_client, client};
 pub use settings::{
     ANTHROPIC_BASE, ANTHROPIC_DEFAULT_MODEL, CHATGPT_AUTH_BASE, Endpoints, Models, OPENAI_BASE,
-    SETTINGS, Settings,
+    SETTINGS, SYSTEM_PROMPT_MAX, Settings,
 };
 pub use trail::{Outcome, trail_for, trail_line};
 pub use types::{
@@ -445,7 +445,8 @@ pub fn preselect(provider: Provider, models: &[Model]) -> Option<&Model> {
     }
 }
 
-/// The chat panel's system prompt (ai D14): fixed, versioned text, so it stays the same from one
-/// request to the next and the providers' prompt caching applies. The open note, when there is
-/// one, is added after it.
+/// The chat panel's default system prompt (ai D14): fixed, versioned text, so it stays the same
+/// from one request to the next and the providers' prompt caching applies. Settings > AI can
+/// replace it (ai D17, [`Settings::chat_prompt`]). The open note, when there is one, is added
+/// after whichever is in use.
 pub const CHAT_PROMPT: &str = include_str!("chat_prompt.md");

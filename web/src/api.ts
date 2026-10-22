@@ -448,6 +448,12 @@ export interface AiStatus {
   secrets_key: boolean;
   default_provider: AiProvider | null;
   providers: Record<AiProvider, AiProviderStatus>;
+  /** The chat panel's system prompt in use (ai D17). */
+  system_prompt: string;
+  /** The shipped system prompt, used when none is set. */
+  default_system_prompt: string;
+  /** Whether `system_prompt` is the user's own. */
+  system_prompt_custom: boolean;
 }
 
 /** A model a provider offers now (ai D6). */
@@ -1172,8 +1178,15 @@ export const api = {
     request<GoogleStatus>("PUT", "/api/integrations/google/settings", settings),
   /** Settings > AI: each provider's sign-in and default model (ai D7). */
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
-  /** Save the default provider and default models; an empty string clears one. */
-  aiSaveSettings: (settings: { default_provider?: AiProvider | ""; models?: Partial<Record<AiProvider, string>> }) =>
+  /**
+   * Save the default provider, default models and chat system prompt; an empty string clears one,
+   * which for the system prompt means the default.
+   */
+  aiSaveSettings: (settings: {
+    default_provider?: AiProvider | "";
+    models?: Partial<Record<AiProvider, string>>;
+    system_prompt?: string;
+  }) =>
     request<AiStatus>("PUT", "/api/integrations/ai/settings", settings),
   /** Store an Anthropic or OpenAI API key; an empty key deletes it. */
   aiPutKey: (provider: "anthropic" | "openai", key: string) =>

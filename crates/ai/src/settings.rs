@@ -70,6 +70,9 @@ fn base(set: Option<&str>, real: &str) -> String {
     }
 }
 
+/// The longest chat system prompt the settings take, in characters (ai D17).
+pub const SYSTEM_PROMPT_MAX: usize = 32_000;
+
 /// The `ai_settings` secret. Keys this build does not know are kept through a load and save.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -79,6 +82,9 @@ pub struct Settings {
     pub models: Models,
     #[serde(default, skip_serializing_if = "is_default")]
     pub endpoints: Endpoints,
+    /// The chat panel's system prompt (ai D17). Absent or empty means [`crate::CHAT_PROMPT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
     #[serde(flatten)]
     pub other: Map<String, Value>,
 }
@@ -100,6 +106,34 @@ impl Settings {
     pub fn save(&self, state: &state::State) -> Result<(), AiError> {
         let text = serde_json::to_string(self).map_err(|e| AiError::invalid(e.to_string()))?;
         state.set_secret(SETTINGS, &text).map_err(state_error)
+    }
+
+    /// Whether the chat system prompt is the user's own rather than the shipped default.
+    pub fn system_prompt_custom(&self) -> bool {
+        self.system_prompt
+            .as_deref()
+            .is_some_and(|p| !p.trim().is_empty())
+    }
+
+    /// The chat system prompt in use: the user's own, else [`crate::CHAT_PROMPT`] (ai D17).
+    pub fn chat_prompt(&self) -> &str {
+        match self.system_prompt.as_deref() {
+            Some(p) if !p.trim().is_empty() => p,
+            _ => crate::CHAT_PROMPT,
+        }
+    }
+
+    /// Set the chat system prompt; an empty one resets it to the default. Errors with `invalid`
+    /// over [`SYSTEM_PROMPT_MAX`] characters.
+    pub fn set_system_prompt(&mut self, prompt: &str) -> Result<(), AiError> {
+        let n = prompt.chars().count();
+        if n > SYSTEM_PROMPT_MAX {
+            return Err(AiError::invalid(format!(
+                "the system prompt is {n} characters; the most it can be is {SYSTEM_PROMPT_MAX}"
+            )));
+        }
+        self.system_prompt = Some(prompt.to_owned()).filter(|p| !p.trim().is_empty());
+        Ok(())
     }
 
     /// The default model chosen for `provider`.

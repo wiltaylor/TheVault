@@ -132,6 +132,17 @@ When you ask for a change, such as "add eggs to my shopping list", the model pro
 
 The model never writes a note itself.
 
+### The system prompt
+
+The **Chat system prompt** card in Settings > AI holds the instructions the panel sends the model before every conversation, for every provider. It shows the prompt in use and whether it is the **Default** or **Customised**:
+
+- Edit the text and select **Save**. The next question uses it. The prompt can be at most 32,000 characters.
+- **Reset to default** goes back to the prompt TheVault ships. It is disabled while the default is in use. Saving an empty prompt, or the default text unchanged, also resets it.
+
+The server adds the open note's id, type and title after your prompt, so the editable text never holds them. The tool list reaches the model through the tool definitions, so a custom prompt does not need to repeat it. The default prompt also summarises the query language and how to link notes; keep those parts if you want the model to go on doing both well.
+
+Scripts do not use this prompt: a script's `ai` call passes its own `system`.
+
 ### Refusals and errors
 
 When the provider refuses a request, the answer stops where it was and the panel shows which model refused and the category the provider gave, such as `cyber`. TheVault never retries a refusal with another model. Other failures show the error message, for example a rate limit.
@@ -159,8 +170,8 @@ Settings > AI uses these routes. Every route under `/api/integrations/ai` needs 
 
 | Method and path | Does |
 |---|---|
-| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, and the ChatGPT `account`; the `default_provider` |
-| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? } }`; an empty string clears a value |
+| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, and the ChatGPT `account`; the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom` |
+| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt? }`; an empty string clears a value, and an empty `system_prompt` means the default. A `system_prompt` over 32,000 characters is a 400 |
 | `PUT /api/integrations/ai/{anthropic\|openai}/key` | Stores `{ key }`; an empty key deletes it |
 | `POST /api/integrations/ai/{provider}/test` | Sends the test request to `{ model }` or the default model, and answers `{ ok, model, ms, text, error }` |
 | `POST /api/integrations/ai/chatgpt/start` | Answers `{ auth_url }`, the ChatGPT sign-in page |
