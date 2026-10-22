@@ -5,8 +5,8 @@ title: 'Settings > AI: provider keys, Continue with ChatGPT sign-in, model lists
 plan: ai
 blocked_by:
 - '151'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Settings > AI: provider keys, Continue with ChatGPT sign-in, model lists and Test
@@ -24,3 +24,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T15:37:34Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T15:37:34Z — wil
+
+Status set to done.
