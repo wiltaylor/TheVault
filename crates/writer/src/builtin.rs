@@ -3,7 +3,9 @@
 //! (google-sync D4, D15, D17), with the `gmail_label` taxonomy `email` uses
 //! (google-sync D14).
 //!
-//! A built-in type is added when a vault lacks it, can be customised, and cannot be deleted.
+//! A built-in type is added when a vault lacks it, can be customised, and cannot be deleted. A
+//! vault type holding a built-in's name is the built-in only when the server recorded writing it
+//! or it matches the built-in's identity: see [`Writer::is_built_in`].
 //! `dailynote` and `fleeting` keep the fields the app relies on: see [`crate::daily`] and
 //! [`crate::fleeting`].
 //!
@@ -11,7 +13,7 @@
 //! vault without a `person` type gets [`DEFAULT_PERSON_TYPE`] along with them, and can delete it
 //! once nothing references it.
 
-use schema::Schema;
+use schema::{Schema, TypeDef};
 
 use crate::{Result, Writer, daily, fleeting};
 
@@ -95,9 +97,52 @@ pub const TYPES_NEEDING_PERSON: [&str; 6] = [
 pub const BUILT_IN_TAXONOMIES: [(&str, &str); 1] =
     [(GMAIL_LABEL_TAXONOMY, DEFAULT_GMAIL_LABEL_TAXONOMY)];
 
-/// Whether `name` is a built-in type, which cannot be deleted.
+/// Whether `name` is the name of a built-in type. A vault type of that name is the built-in only
+/// when [`Writer::is_built_in`] says so: a user's own type may hold the name of a built-in that is
+/// newer than it.
 pub fn is_built_in_type(name: &str) -> bool {
     BUILT_IN_TYPES.iter().any(|(n, _)| *n == name)
+}
+
+/// The key field of each built-in type a sync or the phone writes, as `(type, field)`: the
+/// string field by which it captures each note once. Every version of the type the app has
+/// shipped declares it, and a type the user made for their own use has no reason to, so a vault
+/// type of the name that declares it as a string field is the built-in even with no record of
+/// the server having written it (ticket 104). `dailynote` and `fleeting` have no key: the app
+/// owns those names outright and [`check_built_in_types`] holds them to the fields it needs.
+pub const BUILT_IN_KEYS: [(&str, &str); 6] = [
+    (MESSAGE_TYPE, "device_ref"),
+    (CALL_TYPE, "device_ref"),
+    (CONVERSATION_TYPE, "thread_ref"),
+    (EMAIL_TYPE, "gmail_ref"),
+    (EMAIL_THREAD_TYPE, "thread_ref"),
+    (EVENT_TYPE, "google_ref"),
+];
+
+/// The key field of built-in type `name`, if it has one: see [`BUILT_IN_KEYS`].
+fn key_field(name: &str) -> Option<&'static str> {
+    BUILT_IN_KEYS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, k)| *k)
+}
+
+/// Whether vault type `ty` matches the identity of the built-in of its name: it holds a
+/// built-in's name, and declares that built-in's key field as a string field when it has one.
+pub fn matches_built_in(ty: &TypeDef) -> bool {
+    if !is_built_in_type(&ty.name) {
+        return false;
+    }
+    key_field(&ty.name).is_none_or(|key| {
+        ty.field(key)
+            .is_some_and(|f| f.kind == schema::FieldKind::String && !f.multiple)
+    })
+}
+
+/// The `state.db` shipped-file path under which the server records that it wrote type `name`:
+/// its type file's path, as for the other shipped files.
+pub(crate) fn seeded_record(name: &str) -> String {
+    crate::type_path(name)
 }
 
 /// Refuse a schema in which a built-in type has lost a field the app relies on.
@@ -127,7 +172,49 @@ impl Writer {
         if needs_person && self.lock().schema.type_def(PERSON_TYPE).is_none() {
             missing.push((PERSON_TYPE, DEFAULT_PERSON_TYPE));
         }
-        self.put_types(&missing)?;
+        let texts = self.put_types(&missing)?;
+        for ((name, _), text) in missing.iter().zip(&texts) {
+            if is_built_in_type(name) {
+                self.record_seeded_type(name, text)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the vault's type `name` is the built-in of that name, which cannot be deleted and
+    /// gains the fields its shipped default gains. It is when the name is a built-in's and the
+    /// server recorded writing the type into this vault (in `state.db`), or the type matches the
+    /// built-in's identity ([`matches_built_in`]). A vault without the type is given the
+    /// built-in on its next start, so the name alone answers then. A user's own type that merely
+    /// shares the name, such as an `event` type with unrelated fields made before `event` was a
+    /// built-in, is not: it is left alone and can be deleted.
+    pub fn is_built_in(&self, name: &str) -> bool {
+        if !is_built_in_type(name) {
+            return false;
+        }
+        let schema = self.schema();
+        match schema.type_def(name) {
+            None => true,
+            Some(ty) => self.is_built_in_def(ty),
+        }
+    }
+
+    /// [`Writer::is_built_in`] for vault type `ty`.
+    pub(crate) fn is_built_in_def(&self, ty: &TypeDef) -> bool {
+        is_built_in_type(&ty.name)
+            && (key_field(&ty.name).is_none() || matches_built_in(ty) || self.was_seeded(&ty.name))
+    }
+
+    /// Whether `state.db` records the server writing built-in type `name` into the vault.
+    pub(crate) fn was_seeded(&self, name: &str) -> bool {
+        matches!(self.state.shipped_file(&seeded_record(name)), Ok(Some(_)))
+    }
+
+    /// Record in `state.db` that the server wrote built-in type `name`, as `text`, into the vault,
+    /// so it stays the built-in whatever the user later changes in it.
+    pub(crate) fn record_seeded_type(&self, name: &str, text: &str) -> Result<()> {
+        self.state
+            .record_shipped(&seeded_record(name), &crate::shipped::content_hash(text))?;
         Ok(())
     }
 

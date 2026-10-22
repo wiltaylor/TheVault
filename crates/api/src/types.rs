@@ -52,10 +52,14 @@ pub async fn list(State(w): Shared) -> Json<Value> {
     let schema = w.schema();
     let mut types: Vec<&TypeDef> = schema.types().collect();
     types.sort_by(|a, b| a.name.cmp(&b.name));
-    Json(json!({ "types": types.into_iter().map(type_json).collect::<Vec<_>>() }))
+    let types: Vec<Value> = types
+        .into_iter()
+        .map(|t| type_json(t, w.is_built_in(&t.name)))
+        .collect();
+    Json(json!({ "types": types }))
 }
 
-fn type_json(t: &TypeDef) -> Value {
+fn type_json(t: &TypeDef, builtin: bool) -> Value {
     json!({
         "name": t.name,
         "label": t.label,
@@ -63,7 +67,7 @@ fn type_json(t: &TypeDef) -> Value {
         "description": t.description,
         "icon": t.icon,
         "colour": t.colour,
-        "builtin": writer::is_built_in_type(&t.name),
+        "builtin": builtin,
         "fields": t.fields.iter().map(field_json).collect::<Vec<_>>(),
         "templates": t.templates.iter().map(template_json).collect::<Vec<_>>(),
         "warnings": t.warnings.iter().map(issue_json).collect::<Vec<_>>(),

@@ -145,15 +145,11 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
         ]
     );
     // Laid out as the starter now writes it: organisation and homepage kept, the new fields
-    // in the shipped order, the card and the Work tab untouched, so the card has no photo.
+    // in the shipped order, the Work tab untouched, and the card's photo before its title, where
+    // the shipped card puts it.
     assert_eq!(
         w.read_type("person").unwrap(),
-        store::canonical(STARTER_PERSON, "types/person.wcl")
-            .unwrap()
-            .replace(
-                "  tab \"Card\" {\n    slot \"photo\"\n",
-                "  tab \"Card\" {\n"
-            )
+        store::canonical(STARTER_PERSON, "types/person.wcl").unwrap()
     );
     let mut added = done.types_added.clone();
     added.sort();
@@ -1411,25 +1407,21 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
             ("message".to_owned(), "processed".to_owned())
         ]
     );
-    // The type is the shipped one but for the card, which the seeding leaves alone.
-    assert_eq!(
-        read(root, "types/email.wcl").unwrap(),
-        store::canonical(writer::DEFAULT_EMAIL_TYPE, "types/email.wcl")
-            .unwrap()
-            .replace(
-                "    slot \"from_raw\"\n    slot \"processed\"\n",
-                "    slot \"from_raw\"\n"
-            )
-    );
-    assert_eq!(
-        read(root, "types/message.wcl").unwrap(),
-        store::canonical(writer::DEFAULT_MESSAGE_TYPE, "types/message.wcl")
-            .unwrap()
-            .replace(
-                "    slot \"sent\"\n    slot \"processed\"\n",
-                "    slot \"sent\"\n"
-            )
-    );
+    // The type is the shipped one, its card included: `processed` sits where the shipped card
+    // puts it.
+    for name in ["email", "message"] {
+        let path = format!("types/{name}.wcl");
+        let source = if name == "email" {
+            writer::DEFAULT_EMAIL_TYPE
+        } else {
+            writer::DEFAULT_MESSAGE_TYPE
+        };
+        assert_eq!(
+            read(root, &path).unwrap(),
+            store::canonical(source, &path).unwrap(),
+            "{name}"
+        );
+    }
     for name in ["email", "message"] {
         let schema = w.schema();
         let field = schema.type_def(name).unwrap().field("processed").unwrap();
@@ -1470,4 +1462,277 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
     want.sort();
     assert_eq!(matched(&w, "from message where !processed"), want);
     assert_eq!(matched(&w, "from message where processed"), [message_true]);
+}
+
+#[test]
+fn a_vault_card_template_gains_no_slot_when_the_vault_type_has_no_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let path = "types/email.wcl";
+    let old = store::canonical(EMAIL_0_1_13, path).unwrap();
+    let card = old
+        .find("\ntemplate card {")
+        .expect("the 0.1.13 email has a card");
+    std::fs::write(root.join(path), format!("{}\n", old[..card].trim_end())).unwrap();
+
+    let w = open(root);
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    assert_eq!(
+        done.fields_added,
+        [("email".to_owned(), "processed".to_owned())]
+    );
+    let schema = w.schema();
+    let email = schema.type_def("email").unwrap();
+    assert!(email.field("processed").is_some());
+    assert!(
+        !read(root, path).unwrap().contains("template card"),
+        "the seeding made a card the user removed"
+    );
+}
+
+/// A user's own `event` type, made before `event` was a built-in: unrelated fields, no
+/// `google_ref`.
+const USER_EVENT: &str = r#"label  = "Event"
+plural = "Events"
+
+field venue {
+  kind  = "string"
+  label = "Venue"
+}
+
+field starts {
+  kind  = "date"
+  label = "Starts"
+}
+
+template default {
+  tab "Event" {
+    slot "title"
+    slot "venue"
+    slot "starts"
+  }
+}
+"#;
+
+/// A user's own type with one unrelated field, to save under a built-in's name.
+const USER_TYPE: &str = r#"label = "Mine"
+
+field mood {
+  kind  = "string"
+  label = "Mood"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "mood"
+  }
+}
+"#;
+
+#[test]
+fn a_users_own_type_holding_a_built_in_name_is_left_alone_and_can_be_deleted() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/event.wcl"), USER_EVENT).unwrap();
+    for name in ["email", "email_thread", "message"] {
+        let path = format!("types/{name}.wcl");
+        std::fs::write(root.join(&path), USER_TYPE).unwrap();
+    }
+    let w = open(root);
+    let party = w
+        .create(
+            "event",
+            &writer::Input::Json(json!({ "fields": { "title": "Party", "venue": "Home" } })),
+            &author(),
+        )
+        .unwrap()
+        .id;
+    let texts: Vec<(String, String)> = ["event", "email", "email_thread", "message"]
+        .iter()
+        .map(|n| {
+            let path = format!("types/{n}.wcl");
+            (path.clone(), read(root, &path).unwrap())
+        })
+        .collect();
+    let note_path = format!("notes/event/{party}.wcl");
+    let note_before = read(root, &note_path).unwrap();
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    let mut skipped = done.types_skipped.clone();
+    skipped.sort();
+    assert_eq!(skipped, ["email", "email_thread", "event", "message"]);
+    assert!(
+        done.fields_added.iter().all(|(t, _)| t == "person"),
+        "{:?}",
+        done.fields_added
+    );
+    for (path, before) in &texts {
+        assert_eq!(&read(root, path).unwrap(), before, "{path} changed");
+    }
+    assert!(w.schema().type_def("event").unwrap().handlers.is_empty());
+    assert_eq!(read(root, &note_path).unwrap(), note_before);
+    for name in ["event", "email", "email_thread", "message"] {
+        assert!(!w.is_built_in(name), "{name}");
+        assert!(
+            w.state()
+                .shipped_file(&format!("types/{name}.wcl"))
+                .unwrap()
+                .is_none(),
+            "{name} recorded as seeded"
+        );
+    }
+    // The built-ins the vault lacked are the server's.
+    for name in ["call", "conversation", "dailynote", "fleeting"] {
+        assert!(w.is_built_in(name), "{name}");
+    }
+    assert!(matches!(
+        w.delete_type("call"),
+        Err(writer::Error::BuiltInType(_))
+    ));
+
+    // A second start commits nothing, and still skips them.
+    let before = generation(root);
+    let again = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert_eq!(generation(root), before, "a second start made a commit");
+    assert_eq!(again.types_skipped.len(), 4);
+    assert!(again.fields_added.is_empty());
+
+    // The user's types can be deleted once empty.
+    w.delete(&party, Some(&w.read(&party).unwrap().version), &author())
+        .unwrap();
+    w.state().purge_from_trash(&party).unwrap();
+    w.delete_type("event").unwrap();
+    assert!(w.schema().type_def("event").is_none());
+
+    // The next start adds the built-ins in their place, as the server's.
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let mut added = done.types_added.clone();
+    added.sort();
+    assert_eq!(added, ["event"]);
+    assert_eq!(
+        read(root, "types/event.wcl").unwrap(),
+        store::canonical(writer::DEFAULT_EVENT_TYPE, "types/event.wcl").unwrap()
+    );
+    assert!(w.is_built_in("event"));
+    assert!(w.state().shipped_file("types/event.wcl").unwrap().is_some());
+    let mut skipped = done.types_skipped.clone();
+    skipped.sort();
+    assert_eq!(skipped, ["email", "email_thread", "message"]);
+}
+
+#[test]
+fn a_type_the_server_seeded_stays_the_built_in_without_its_key_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    {
+        let w = open(root);
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+        for name in [
+            "event",
+            "email",
+            "email_thread",
+            "message",
+            "call",
+            "conversation",
+        ] {
+            assert!(
+                w.state()
+                    .shipped_file(&format!("types/{name}.wcl"))
+                    .unwrap()
+                    .is_some(),
+                "{name} not recorded as seeded"
+            );
+        }
+    }
+    // Without google_ref the type no longer matches the built-in's identity, but the server
+    // wrote it, so it is still the built-in and gains the field back.
+    let path = "types/event.wcl";
+    let text = read(root, path).unwrap();
+    let start = text.find("field google_ref {").unwrap();
+    let end = start + text[start..].find("}\n").unwrap() + 2;
+    std::fs::write(
+        root.join(path),
+        format!("{}{}", &text[..start], &text[end..]),
+    )
+    .unwrap();
+
+    let w = open(root);
+    assert!(w.is_built_in("event"));
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert!(done.types_skipped.is_empty(), "{:?}", done.types_skipped);
+    assert_eq!(
+        done.fields_added,
+        [("event".to_owned(), "google_ref".to_owned())]
+    );
+    assert!(matches!(
+        w.delete_type("event"),
+        Err(writer::Error::BuiltInType(_))
+    ));
+}
+
+#[test]
+fn an_unrecorded_type_with_the_built_ins_key_field_is_the_built_in_and_is_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    // As 0.1.7 left it: the server wrote event before it recorded the types it seeded.
+    vault_0_1_7(root, None, false);
+    let w = open_with(root, None);
+    assert!(w.state().shipped_file("types/event.wcl").unwrap().is_none());
+    assert!(w.is_built_in("event"));
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    assert!(done.types_skipped.is_empty(), "{:?}", done.types_skipped);
+    assert!(w.state().shipped_file("types/event.wcl").unwrap().is_some());
+    assert!(matches!(
+        w.delete_type("event"),
+        Err(writer::Error::BuiltInType(_))
+    ));
+}
+
+#[test]
+fn an_event_type_of_the_users_gains_no_google_handlers() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/event.wcl"), USER_EVENT).unwrap();
+    let w = open(root);
+    let before = read(root, "types/event.wcl").unwrap();
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    assert!(done.steps.iter().any(|s| s == "0003_event_google_handler"));
+    assert_eq!(read(root, "types/event.wcl").unwrap(), before);
+    assert!(w.schema().type_def("event").unwrap().handlers.is_empty());
+}
+
+#[test]
+fn a_google_sync_type_of_the_users_is_not_removed_by_step_0004() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/google_sync.wcl"), USER_TYPE).unwrap();
+    let w = open(root);
+    let id = w
+        .create(
+            "google_sync",
+            &writer::Input::Json(json!({ "fields": { "title": "Mine", "mood": "fine" } })),
+            &author(),
+        )
+        .unwrap()
+        .id;
+    let note_path = format!("notes/google_sync/{id}.wcl");
+    let note_before = read(root, &note_path).unwrap();
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    assert!(done.steps.iter().any(|s| s == "0004_remove_google_sync"));
+    assert!(w.schema().type_def("google_sync").is_some());
+    assert_eq!(read(root, &note_path).unwrap(), note_before);
+    assert!(w.state().list_secrets().unwrap().is_empty());
 }

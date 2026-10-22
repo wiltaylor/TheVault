@@ -13,14 +13,23 @@ use crate::{ApiError, blocking};
 
 /// `GET /api/schema`.
 pub async fn schema(State(w): State<Arc<Writer>>) -> Result<Json<Value>, ApiError> {
-    let schema = blocking(w, |w| Ok::<_, writer::Error>(w.schema())).await?;
+    let (schema, builtin) = blocking(w, |w| {
+        let schema = w.schema();
+        let builtin: Vec<bool> = schema.types().map(|t| w.is_built_in(&t.name)).collect();
+        Ok::<_, writer::Error>((schema, builtin))
+    })
+    .await?;
     Ok(Json(json!({
-        "types": schema.types().map(type_json).collect::<Vec<_>>(),
+        "types": schema
+            .types()
+            .zip(builtin)
+            .map(|(t, b)| type_json(t, b))
+            .collect::<Vec<_>>(),
         "taxonomies": schema.taxonomies().map(taxonomy_json).collect::<Vec<_>>(),
     })))
 }
 
-pub(crate) fn type_json(t: &TypeDef) -> Value {
+pub(crate) fn type_json(t: &TypeDef, builtin: bool) -> Value {
     json!({
         "name": t.name,
         "label": t.label,
@@ -28,7 +37,7 @@ pub(crate) fn type_json(t: &TypeDef) -> Value {
         "description": t.description,
         "icon": t.icon,
         "colour": t.colour,
-        "builtin": writer::is_built_in_type(&t.name),
+        "builtin": builtin,
         "fields": t.fields.iter().map(field_json).collect::<Vec<_>>(),
         "templates": t.templates.iter().map(template_json).collect::<Vec<_>>(),
         "handlers": t.handlers.iter().map(|h| json!({
