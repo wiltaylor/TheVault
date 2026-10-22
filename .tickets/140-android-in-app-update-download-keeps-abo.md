@@ -3,8 +3,8 @@ id: '140'
 title: Android in-app update download keeps aborting (client resets the connection
   mid-download), so a phone gated on a newer server never updates
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: unmet
 ---
 
 # Android in-app update download keeps aborting (client resets the connection mid-download), so a phone gated on a newer server never updates
@@ -20,3 +20,19 @@ Status set to todo.
 ### 2026-10-22T01:47:29Z — wil
 
 Claimed.
+
+### 2026-10-22T02:36:37Z — wil
+
+Implemented on ticket/140 (c16fdad): AppUpdateWorker hands the APK to DownloadManager (SystemDownloads) into getExternalFilesDir(updates), keeps the download id/sha/tries in thevault-update prefs, waits up to 8 min reporting status 'downloading' with 'Downloading TheVault X: n of m MB.', returns retry and reattaches next run; UpdateDownloadReceiver (DOWNLOAD_COMPLETE, SEND_DOWNLOAD_COMPLETED_INTENTS) enqueues the check. Size+SHA-256 checks, MAX_TRIES=3 downloads, SHA_MISMATCH/FAILED/REFUSED reporting, gate failure counting and PackageInstaller install unchanged. Robolectric: AppUpdateTest 21/21 (fake service + SystemDownloads against ShadowDownloadManager, running download picked up by the next run, pre-release server test still installs), UpdateGateTest 4/4; just check and just android-test pass.
+
+### 2026-10-22T02:36:37Z — wil
+
+Unmet: not checked on a real phone. Whether DownloadManager finishes the 68 MB APK behind Caddy on severus (SM-F976B, Android 17) where HttpURLConnection was reset is unproven; needs adb logcat on the phone against a server publishing a newer APK. Also unchecked on a device: DownloadManager's cleartext/TLS policy against the paired URL and the visible download notification.
+
+### 2026-10-22T02:36:37Z — wil
+
+Verified set to unmet.
+
+### 2026-10-22T02:36:37Z — wil
+
+Status set to done.

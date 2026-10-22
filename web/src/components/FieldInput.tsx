@@ -409,26 +409,61 @@ function DictInput(props: FieldInputProps & { kind: string }) {
   );
 }
 
-/** A record of two named parts, each a scalar of `kind`. Either part empty means no value. */
-function PairInput(props: FieldInputProps & { kind: string; parts: [string, string]; names: [string, string] }) {
+/** Whether a `date_or_datetime` range holds dates: its ends are ten-character dates, or it is empty. */
+export function rangeIsAllDay(range: Record<string, Json | undefined>): boolean {
+  const end = [range.start, range.end].find((v) => typeof v === "string");
+  return typeof end !== "string" || end.length === 10;
+}
+
+/**
+ * A `date_or_datetime` range's ends moved to dates (`allDay`) or to datetimes (google-sync D15).
+ * A datetime keeps its local date. A date becomes a time in the browser's zone: the start at the
+ * start of its day, the end at 23:59 on its day. An end already in the form is kept.
+ */
+export function switchAllDay(range: Record<string, Json | undefined>, allDay: boolean): Record<string, Json | undefined> {
+  const out: Record<string, Json | undefined> = { ...range };
+  for (const part of ["start", "end"] as const) {
+    const v = range[part];
+    if (typeof v !== "string") continue;
+    if (allDay) {
+      if (v.length !== 10) out[part] = datetimeInput(v).slice(0, 10) || undefined;
+    } else if (/^\d{4}-\d\d-\d\d$/.test(v)) {
+      out[part] = datetimeValue(`${v}T${part === "start" ? "00:00" : "23:59"}`, undefined);
+    }
+  }
+  return out;
+}
+
+/**
+ * A record of two named parts, each a scalar of `kind`. Either part empty means no value. With
+ * `allDayToggle`, for a `date_or_datetime` range, an All day box picks dates or datetimes for both.
+ */
+function PairInput(
+  props: FieldInputProps & { kind: string; parts: [string, string]; names: [string, string]; allDayToggle?: boolean },
+) {
   const rec = () =>
     props.value && typeof props.value === "object" && !Array.isArray(props.value) ? props.value : {};
   // A half-filled pair is kept here until both parts have a value.
   const [draft, setDraft] = createSignal<Record<string, Json | undefined>>({ ...rec() });
+  const [allDay, setAllDay] = createSignal(rangeIsAllDay(rec()));
+  const kind = () => (props.allDayToggle ? (allDay() ? "date" : "datetime") : props.kind);
   // A value written elsewhere (a calendar control on the same field) replaces the draft.
   let written: Json | undefined = props.value;
   createEffect(
     on(
       () => props.value,
       (v) => {
-        if (JSON.stringify(v ?? null) !== JSON.stringify(written ?? null)) setDraft({ ...rec() });
+        if (JSON.stringify(v ?? null) !== JSON.stringify(written ?? null)) {
+          // The inputs change type before they take the new text, which the old type would refuse.
+          if (v !== undefined && v !== null) setAllDay(rangeIsAllDay(rec()));
+          setDraft({ ...rec() });
+        }
         written = v;
       },
       { defer: true },
     ),
   );
-  function set(part: string, v: Json | undefined) {
-    const next = { ...draft(), [part]: v };
+  function write(next: Record<string, Json | undefined>) {
     setDraft(next);
     const [a, b] = props.parts;
     const va = next[a];
@@ -436,14 +471,28 @@ function PairInput(props: FieldInputProps & { kind: string; parts: [string, stri
     written = va === undefined || vb === undefined ? undefined : { [a]: va, [b]: vb };
     props.onChange(written);
   }
+  const set = (part: string, v: Json | undefined) => write({ ...draft(), [part]: v });
+  function toggle(on: boolean) {
+    setAllDay(on);
+    const next = switchAllDay(draft(), on);
+    // Nothing to convert: no value is written.
+    if (JSON.stringify(next) === JSON.stringify(draft())) setDraft(next);
+    else write(next);
+  }
   return (
     <div class="pair-input" role="group" aria-label={props.label} id={props.id}>
+      <Show when={props.allDayToggle}>
+        <label class="all-day">
+          <input type="checkbox" checked={allDay()} onChange={(e) => toggle(e.currentTarget.checked)} />
+          <span>All day</span>
+        </label>
+      </Show>
       <For each={[0, 1] as const}>
         {(n) => (
           <label>
             <span>{props.names[n]}</span>
             <ScalarInput
-              kind={props.kind}
+              kind={kind()}
               value={draft()[props.parts[n]]}
               label={props.names[n]}
               onChange={(v) => set(props.parts[n], v)}
@@ -680,7 +729,13 @@ export function FieldInput(props: FieldInputProps) {
         <DictInput {...props} kind={f().values ?? "string"} />
       </Match>
       <Match when={f().kind === "date_range"}>
-        <PairInput {...props} kind={f().of ?? "date"} parts={["start", "end"]} names={["Start", "End"]} />
+        <PairInput
+          {...props}
+          kind={f().of ?? "date"}
+          allDayToggle={f().of === "date_or_datetime"}
+          parts={["start", "end"]}
+          names={["Start", "End"]}
+        />
       </Match>
       <Match when={f().kind === "location"}>
         <LocationInput {...props} />

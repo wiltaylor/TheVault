@@ -216,6 +216,11 @@ impl TestServer {
         format!("{}{path}", self.base_url())
     }
 
+    /// The server process's id, for a test that watches its memory.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     /// The address the server is listening on.
     pub fn addr(&self) -> SocketAddr {
         self.addr

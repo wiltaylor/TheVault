@@ -108,3 +108,37 @@ test("old task links still open the scheduled section", async ({ page }) => {
   await page.goto("/tasks");
   await expect(page).toHaveURL(/\/settings\/scheduled$/);
 });
+
+// A task never runs with the device module, so a script that uses it shows as not compiling,
+// whether the task is new or already saved (ticket 92).
+const DEVICE_SCRIPT = `use device
+
+fn run() -> Result[string, string] {
+    Ok("done")
+}
+`;
+
+test("a new scheduled script that uses the device module shows why it does not compile", async ({ page }) => {
+  const name = `devnew_${token()}`;
+  await logIn(page, "/settings/scheduled/new");
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await replaceCode(page, DEVICE_SCRIPT);
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/settings/scheduled/${name}$`));
+  await expect(page.locator(".save-bar").getByRole("status")).toHaveText("Saved, but the script does not compile.");
+  await expect(page.getByRole("alert", { name: "Script problems" })).toContainText("device");
+});
+
+test("an existing scheduled script changed to use the device module shows why it does not compile", async ({ page }) => {
+  const name = `devold_${token()}`;
+  await logIn(page, "/settings/scheduled/new");
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/settings/scheduled/${name}$`));
+  await expect(page.getByRole("alert", { name: "Script problems" })).toHaveCount(0);
+
+  await replaceCode(page, DEVICE_SCRIPT);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.locator(".save-bar").getByRole("status")).toHaveText("Saved, but the script does not compile.");
+  await expect(page.getByRole("alert", { name: "Script problems" })).toContainText("device");
+});

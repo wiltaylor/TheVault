@@ -47,6 +47,8 @@ class UpdateGateTest {
             Configuration.Builder().setExecutor(SynchronousExecutor()).build(),
         )
         AppUpdateWorker.abisOverride = listOf("arm64-v8a")
+        AppUpdateWorker.downloadsOverride = FakeDownloads()
+        AppUpdateWorker.POLL_MS = 1
         installed("0.1.0")
         shadowOf(context.packageManager).setCanRequestPackageInstalls(true)
     }
@@ -54,6 +56,8 @@ class UpdateGateTest {
     @After
     fun tearDown() {
         AppUpdateWorker.abisOverride = null
+        AppUpdateWorker.downloadsOverride = null
+        AppUpdateWorker.POLL_MS = 2_000L
         homes.forEach { it.close() }
     }
 

@@ -113,6 +113,17 @@
             android:name=".UpdateInstallReceiver"
             android:exported="false" />
 
+        <!-- The update's APK finished downloading in the system download service (ticket 140);
+             only the download service may say so. -->
+        <receiver
+            android:name=".UpdateDownloadReceiver"
+            android:exported="true"
+            android:permission="android.permission.SEND_DOWNLOAD_COMPLETED_INTENTS">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".PackageReplacedReceiver"
             android:exported="false">

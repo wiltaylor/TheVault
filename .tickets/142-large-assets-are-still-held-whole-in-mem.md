@@ -3,8 +3,8 @@ id: '142'
 title: Large assets are still held whole in memory on the server and in the Android
   share path
 blocked_by: []
-status: claimed
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Large assets are still held whole in memory on the server and in the Android share path
@@ -20,3 +20,15 @@ Status set to todo.
 ### 2026-10-22T01:47:29Z — wil
 
 Claimed.
+
+### 2026-10-22T02:36:37Z — wil
+
+Implemented on ticket/140 (c16fdad): PUT/POST /api/assets stream the body to Writer::incoming_file (.vault/incoming) with a MAX_UPLOAD count (413 too_large) and commit with put_asset_file(_with_id); GET /api/assets/{id} whole and ranged now stream from the file (Writer::asset_file, Vault::open_at) with Content-Length; share::store moves each copy with Writer::put_asset_file (the Kotlin ShareImporter already streamed the content:// copy). Tests: crates/server/tests/asset_memory.rs, a 300 MB PUT and GET grow the server's VmHWM by under 64 MB (old code: 997912576 bytes, failed); plugins/.../tests/share_memory.rs, a 300 MB share grows the process by under 64 MB (old code failed). Decision: it matters, fixed for both. Not covered by a test: the 413 path over 512 MB.
+
+### 2026-10-22T02:36:37Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T02:36:37Z — wil
+
+Status set to done.

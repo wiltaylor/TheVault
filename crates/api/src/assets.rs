@@ -3,11 +3,15 @@
 //! `POST /api/assets?filename=<name>` takes the file's bytes as the body. A download is served
 //! with a sandboxing content security policy, so an uploaded HTML or SVG file cannot run script
 //! with the owner's session.
+//!
+//! Neither direction holds a whole file in memory (ticket 142): an upload streams into a file in
+//! `.vault/incoming` ([`Writer::incoming_file`]), which the commit then moves into place, and a
+//! download streams from the asset's file a block at a time.
 
 use std::sync::Arc;
 
 use axum::Json;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -32,16 +36,67 @@ fn asset_json(a: &Asset) -> Value {
     json!({ "id": a.id, "filename": a.filename, "size": a.size, "path": a.path() })
 }
 
+/// The size of the blocks a download is sent in.
+const BLOCK: usize = 64 * 1024;
+
+/// Write `body` into `file`, a block at a time, refusing one over [`MAX_UPLOAD`] bytes. The file
+/// is removed when the body does not arrive whole.
+async fn receive(body: Body, file: &std::path::Path) -> Result<(), ApiError> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    let fail = |e: std::io::Error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            format!("writing the upload: {e}"),
+        )
+    };
+    let result = async {
+        let mut out = tokio::fs::File::create(file).await.map_err(fail)?;
+        let mut stream = body.into_data_stream();
+        let mut received = 0usize;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk
+                .map_err(|e| ApiError::bad_request(format!("the upload stopped part way: {e}")))?;
+            received += chunk.len();
+            if received > MAX_UPLOAD {
+                return Err(ApiError::new(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "too_large",
+                    format!("an asset may be at most {MAX_UPLOAD} bytes"),
+                ));
+            }
+            out.write_all(&chunk).await.map_err(fail)?;
+        }
+        out.flush().await.map_err(fail)?;
+        Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(file).await;
+    }
+    result
+}
+
+/// Stream `body` into a fresh file in the vault's `.vault/incoming`, answering its path.
+async fn incoming(w: &Arc<Writer>, body: Body) -> Result<std::path::PathBuf, ApiError> {
+    let file = blocking(w.clone(), |w| w.incoming_file()).await?;
+    receive(body, &file).await?;
+    Ok(file)
+}
+
 /// `POST /api/assets?filename=<name>`.
 pub async fn upload(
     State(w): Shared,
     Query(q): Query<UploadQuery>,
-    body: Bytes,
+    body: Body,
 ) -> Result<Response, ApiError> {
     let filename = q
         .filename
         .ok_or_else(|| ApiError::bad_request("name the file with ?filename="))?;
-    let asset = blocking(w, move |w| w.put_asset(&filename, body.to_vec())).await?;
+    let file = incoming(&w, body).await?;
+    let asset = blocking(w, move |w| w.put_asset_file(&filename, &file)).await?;
     Ok((StatusCode::CREATED, Json(asset_json(&asset))).into_response())
 }
 
@@ -52,18 +107,15 @@ pub async fn put(
     State(w): Shared,
     Path(id): Path<String>,
     Query(q): Query<UploadQuery>,
-    body: Bytes,
+    body: Body,
 ) -> Result<Response, ApiError> {
     let filename = q
         .filename
         .ok_or_else(|| ApiError::bad_request("name the file with ?filename="))?;
-    let id2 = id.clone();
+    let file = incoming(&w, body).await?;
     let (existed, asset) = blocking(w, move |w| {
-        let existed = w.asset_info(&id2).is_ok();
-        Ok::<_, writer::Error>((
-            existed,
-            w.put_asset_with_id(&id2, &filename, body.to_vec())?,
-        ))
+        let existed = w.asset_info(&id).is_ok();
+        Ok::<_, writer::Error>((existed, w.put_asset_file_with_id(&id, &filename, &file)?))
     })
     .await?;
     let status = if existed {
@@ -72,6 +124,25 @@ pub async fn put(
         StatusCode::CREATED
     };
     Ok((status, Json(asset_json(&asset))).into_response())
+}
+
+/// A body of `len` bytes read from `file` a block at a time.
+fn file_body(file: std::fs::File, len: u64) -> Body {
+    use tokio::io::AsyncReadExt;
+
+    let file = tokio::fs::File::from_std(file).take(len);
+    let stream = futures_util::stream::unfold(file, |mut file| async move {
+        let mut buf = vec![0u8; BLOCK];
+        match file.read(&mut buf).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<_, std::io::Error>(Bytes::from(buf)), file))
+            }
+            Err(e) => Some((Err(e), file)),
+        }
+    });
+    Body::from_stream(stream)
 }
 
 /// The milliseconds since the Unix epoch in a ULID: when the asset was uploaded.
@@ -387,30 +458,38 @@ pub async fn download(
         .get(header::RANGE)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let (asset, part, bytes) = blocking(w, move |w| {
+    let (asset, part, file) = blocking(w, move |w| {
         let asset = w.asset_info(&id)?;
         let part = range
             .as_deref()
             .map_or(Part::Whole, |r| parse_range(r, asset.size));
-        let bytes = match part {
-            Part::Whole => w.asset(&id)?.1,
-            Part::Range(start, end) => w.asset_range(&id, start, end - start + 1)?.1,
-            Part::Unsatisfiable => Vec::new(),
+        let file = match part {
+            Part::Whole => Some(w.asset_file(&id, 0)?.1),
+            Part::Range(start, _) => Some(w.asset_file(&id, start)?.1),
+            Part::Unsatisfiable => None,
         };
-        Ok::<_, writer::Error>((asset, part, bytes))
+        Ok::<_, writer::Error>((asset, part, file))
     })
     .await?;
     let size = asset.size;
-    let mut res = match part {
-        Part::Whole => bytes.into_response(),
-        Part::Range(start, end) => {
-            let mut res = (StatusCode::PARTIAL_CONTENT, bytes).into_response();
+    let mut res = match (part, file) {
+        (Part::Whole, Some(file)) => {
+            let mut res = file_body(file, size).into_response();
+            res.headers_mut()
+                .insert(header::CONTENT_LENGTH, HeaderValue::from(size));
+            res
+        }
+        (Part::Range(start, end), Some(file)) => {
+            let len = end - start + 1;
+            let mut res = (StatusCode::PARTIAL_CONTENT, file_body(file, len)).into_response();
+            res.headers_mut()
+                .insert(header::CONTENT_LENGTH, HeaderValue::from(len));
             if let Ok(v) = HeaderValue::from_str(&format!("bytes {start}-{end}/{size}")) {
                 res.headers_mut().insert(header::CONTENT_RANGE, v);
             }
             res
         }
-        Part::Unsatisfiable => {
+        _ => {
             let mut res = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
             if let Ok(v) = HeaderValue::from_str(&format!("bytes */{size}")) {
                 res.headers_mut().insert(header::CONTENT_RANGE, v);

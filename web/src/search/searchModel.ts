@@ -336,6 +336,65 @@ function dateCond(subject: string, days: boolean, op: Op, v: string[], offset: O
   }
 }
 
+/** The day `n` days after `YYYY-MM-DD`, `n` negative for before. */
+export function addDays(d: string, n: number): string {
+  const [y, m, dd] = d.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m - 1, dd + n)).toISOString().slice(0, 10);
+}
+
+/** The browser's date today, `YYYY-MM-DD`. */
+export const browserToday = (): string => {
+  const t = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+};
+
+/**
+ * A condition on a `date_or_datetime` range, which holds two dates or two datetimes (google-sync
+ * D15): it overlaps the local days asked for, a dated range as the whole days it names and a timed
+ * one by its instants. The query reads a date as its UTC midnight, so each bound is the local
+ * midnight, which splits timed values correctly. East of UTC (and at UTC) no UTC midnight falls on
+ * the wrong side of it, so dates read correctly too. West of UTC one does, day `d`'s own, which a
+ * bound tests for by name; a timed end at exactly that instant reads as that date.
+ */
+function mixedRangeCond(f: string, op: Op, v: string[], offset: OffsetAt, today: () => string): string | null {
+  const [s, e] = [`${f}.start`, `${f}.end`];
+  // The range starts before local day `d`: a date before `d`, a time before its local midnight.
+  const startsBefore = (d: string) =>
+    offset(d) < 0 ? `${s} < ${midnight(d, offset)} && ${s} != ${lit(d)}` : `${s} < ${midnight(d, offset)}`;
+  // The range reaches local day `d`: a date on or after `d`, a time from its local midnight on.
+  const endsFrom = (d: string) =>
+    offset(d) < 0 ? `(${e} >= ${midnight(d, offset)} || ${e} == ${lit(d)})` : `${e} >= ${midnight(d, offset)}`;
+  const [a, b] = v;
+  let lo: string;
+  let hi: string;
+  if (op === "last") {
+    // By days, as a date field reads it: today and the n days before it.
+    const n = num(a);
+    if (n === null || !/^\d+$/.test(n) || n === "0") return null;
+    hi = today();
+    lo = addDays(hi, -Number(n));
+  } else {
+    if (!a || !DAY.test(a)) return null;
+    switch (op) {
+      case "before":
+        return startsBefore(a);
+      case "after":
+        return endsFrom(nextDay(a));
+      case "on":
+        [lo, hi] = [a, a];
+        break;
+      case "between":
+        if (!b || !DAY.test(b)) return null;
+        [lo, hi] = a <= b ? [a, b] : [b, a];
+        break;
+      default:
+        return null;
+    }
+  }
+  return `${startsBefore(nextDay(hi))} && ${endsFrom(lo)}`;
+}
+
 /** A date range condition: the range overlaps the days asked for. */
 function rangeCond(f: string, days: boolean, op: Op, v: string[], offset: OffsetAt): string | null {
   const [s, e] = [`${f}.start`, `${f}.end`];
@@ -379,7 +438,12 @@ function itemLit(items: string | undefined, v: string): string | null {
  * The condition one filter adds, or null while it is incomplete (a value not given yet). A field
  * that holds several values is tested with `has()` for equality and `any()` otherwise.
  */
-export function filterCond(def: FieldDef, filter: Filter, offset: OffsetAt = browserOffset): string | null {
+export function filterCond(
+  def: FieldDef,
+  filter: Filter,
+  offset: OffsetAt = browserOffset,
+  today: () => string = browserToday,
+): string | null {
   const f = filter.field;
   const v = filter.values;
   const one = v[0] ?? "";
@@ -426,7 +490,10 @@ export function filterCond(def: FieldDef, filter: Filter, offset: OffsetAt = bro
     case "after":
     case "between":
     case "last": {
-      if (def.kind === "date_range") return rangeCond(f, def.of !== "datetime", filter.op, v, offset);
+      if (def.kind === "date_range") {
+        if (def.of === "date_or_datetime") return mixedRangeCond(f, filter.op, v, offset, today);
+        return rangeCond(f, def.of !== "datetime", filter.op, v, offset);
+      }
       const days = def.kind === "date";
       if (many) {
         const c = dateCond("v", days, filter.op, v, offset);
@@ -458,14 +525,19 @@ export function effectiveSort(s: SearchState): { key: SortKey; dir: SortDir } {
  * a field of one type narrows the query to that type; filters on fields of several types each
  * test their own type.
  */
-export function toQuery(s: SearchState, types: TypeDef[], offset: OffsetAt = browserOffset): string {
+export function toQuery(
+  s: SearchState,
+  types: TypeDef[],
+  offset: OffsetAt = browserOffset,
+  today: () => string = browserToday,
+): string {
   const from = queryTypes(s);
   const conds: string[] = [];
   const guard = !s.types.length && from.length > 1;
   for (const filter of s.filters) {
     const def = fieldOf(types, filter.owner, s.types, filter.field);
     if (!def) continue;
-    const c = filterCond(def, filter, offset);
+    const c = filterCond(def, filter, offset, today);
     if (c === null) continue;
     conds.push(guard && filter.owner ? all([`type == ${lit(filter.owner)}`, c]) : c);
   }
