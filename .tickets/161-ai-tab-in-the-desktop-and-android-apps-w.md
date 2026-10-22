@@ -21,3 +21,7 @@ Acceptance criteria:
 - ./dev just check and ./dev just android-test pass.
 
 ## Worklog
+
+### 2026-10-22T21:24:36Z — wil
+
+Design change before work started (user, 2026-10-23): every AI change is applied on the home server through a new POST /api/ai/apply (write scope for note ops, admin for type ops, 403 needs_admin otherwise), shared with D22's auto-apply; the web panel's Apply and Apply all switch to it; the embedded server forwards it and never applies AI changes locally; after an apply or an applied event the app requests a sync round and refreshes the open view. This replaces the local-apply-with-sync-retry rule; SPEC-2 D23 is updated. Extra acceptance criteria: crates/server tests that /api/ai/apply applies each op with the version check, refuses a type op without admin with needs_admin, and refuses a stale base_version; a crates/embedded test that /api/ai/apply is forwarded and the local vault is untouched until sync; a web test that the app requests a sync after Apply.
