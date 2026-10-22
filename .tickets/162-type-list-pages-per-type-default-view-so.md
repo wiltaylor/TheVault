@@ -4,8 +4,8 @@ title: 'Type list pages: per-type default view, sort and page size; paging; a de
   view; email and message default to details by sent date'
 plan: lists
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Type list pages: per-type default view, sort and page size; paging; a details view; email and message default to details by sent date
@@ -22,3 +22,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T22:39:31Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T22:39:31Z — wil
+
+Status set to done.
