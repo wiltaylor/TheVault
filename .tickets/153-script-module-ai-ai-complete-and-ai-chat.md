@@ -5,8 +5,8 @@ title: 'Script module ai: ai::complete and ai::chat with JSON output and a run-l
 plan: ai
 blocked_by:
 - '151'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Script module ai: ai::complete and ai::chat with JSON output and a run-log trail
@@ -24,3 +24,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T15:49:41Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T15:49:41Z — wil
+
+Status set to done.
