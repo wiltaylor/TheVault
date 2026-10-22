@@ -15,6 +15,7 @@
 //! | `tool` | `{id, name, input}`: a tool the model called, before it runs |
 //! | `tool_result` | `{id, summary, is_error}`: `summary` holds the ids and titles returned (`notes`), never bodies, a `message` on an error, and for `read_asset` the `asset` read (id, filename, media type, size, kind), never its bytes |
 //! | `proposal` | `{id, note_id, title, base_version, before, after, ops}`: an edit for the user to apply |
+//! | `type_proposal` | `{id, name, exists, before, after, issues}`: a type file's new WCL for the user to apply (ai D18) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
 //! | `error` | `{kind, message, messages}`: the turn failed; ends the stream |
@@ -208,7 +209,8 @@ struct ToolOut {
     content: String,
     is_error: bool,
     summary: Value,
-    proposal: Option<Value>,
+    /// An event for the user to act on, sent before the result: its name and data.
+    proposal: Option<(&'static str, Value)>,
 }
 
 impl ToolOut {
@@ -424,8 +426,8 @@ impl Turn {
                 let got = tokio::task::spawn_blocking(move || run_tool(&w, &author, &call))
                     .await
                     .unwrap_or_else(|e| ToolOut::error(e.to_string()));
-                if let Some(p) = got.proposal
-                    && !self.out.send("proposal", p).await
+                if let Some((name, p)) = got.proposal
+                    && !self.out.send(name, p).await
                 {
                     return;
                 }
@@ -666,6 +668,29 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             json!({ "id": { "type": "string", "description": "The note's 26-character id." } }),
         ),
         tool(
+            "list_types",
+            "List every note type: its name, label, plural, description and whether it is built in.",
+            json!({}),
+        ),
+        tool(
+            "get_type",
+            "Read one type: its type file's WCL text as stored, and a parsed summary of its fields (with kinds) and its templates (with their tabs and slots).",
+            json!({ "name": { "type": "string", "description": "The type's name, such as `task`." } }),
+        ),
+        tool(
+            "type_format",
+            "The vocabulary of type files: their items, every field kind, templates, handlers and content blocks. Read it before proposing a type change.",
+            json!({}),
+        ),
+        tool(
+            "propose_type_change",
+            "Propose a type file for the user to apply: a change to an existing type, such as its fields or templates, or a new type under a new name. It is checked as the type write would check it but never written: the user sees a diff of the WCL and applies or discards it.",
+            json!({
+                "name": { "type": "string", "description": "The type's name: an existing type to change, or a new name to create a type." },
+                "wcl": { "type": "string", "description": "The whole new type file as WCL text, with every field and template it keeps." },
+            }),
+        ),
+        tool(
             "propose_edit",
             "Propose a change to one note for the user to apply. It is checked but never written: the user sees a diff and applies or discards it.",
             json!({
@@ -783,6 +808,10 @@ fn run_tool(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
                 .map_err(ToolOut::error)
         }),
         "propose_edit" => propose(w, author, &call.id, input),
+        "list_types" => Ok(list_types(w)),
+        "get_type" => get_type(w, input),
+        "type_format" => Ok(type_format()),
+        "propose_type_change" => propose_type(w, &call.id, input),
         other => Err(ToolOut::error(format!("there is no tool {other:?}"))),
     };
     result.unwrap_or_else(|e| e)
@@ -871,8 +900,152 @@ fn propose(w: &Writer, author: &Author, call_id: &str, input: &Value) -> Result<
         .to_string(),
         is_error: false,
         summary,
-        proposal: Some(proposal),
+        proposal: Some(("proposal", proposal)),
     })
+}
+
+/// A type tool's answer: `content` for the model, and the type names for the summary.
+fn type_out(content: Value, types: Vec<Value>, type_proposal: Option<Value>) -> ToolOut {
+    ToolOut {
+        content: content.to_string(),
+        is_error: false,
+        summary: json!({ "notes": [], "types": types }),
+        proposal: type_proposal.map(|p| ("type_proposal", p)),
+    }
+}
+
+/// `list_types`: every type's name, label, plural, description and whether it is built in.
+fn list_types(w: &Writer) -> ToolOut {
+    let schema = w.schema();
+    let mut types: Vec<&schema::TypeDef> = schema.types().collect();
+    types.sort_by(|a, b| a.name.cmp(&b.name));
+    let rows: Vec<Value> = types
+        .iter()
+        .map(|t| {
+            json!({
+                "name": t.name,
+                "label": t.label,
+                "plural": t.plural,
+                "description": t.description,
+                "builtin": w.is_built_in(&t.name),
+            })
+        })
+        .collect();
+    let names = types.iter().map(|t| json!(t.name)).collect();
+    type_out(json!({ "types": rows }), names, None)
+}
+
+/// `get_type`: the type file as stored, and its fields and templates as the types API lists them.
+fn get_type(w: &Writer, input: &Value) -> Result<ToolOut, ToolOut> {
+    let name = str_arg(input, "name")?;
+    let wcl = w
+        .read_type(name)
+        .map_err(|e| ToolOut::error(e.to_string()))?;
+    let schema = w.schema();
+    let summary = schema
+        .type_def(name)
+        .map(|t| crate::types::type_json(t, w.is_built_in(name)))
+        .unwrap_or(Value::Null);
+    Ok(type_out(
+        json!({ "name": name, "wcl": wcl, "summary": summary }),
+        vec![json!(name)],
+        None,
+    ))
+}
+
+/// The vault format document, embedded at build time.
+const VAULT_FORMAT: &str = include_str!("../../../docs/vault-format.md");
+
+/// The sections of `docs/vault-format.md` a type file is written from: type files to handlers,
+/// and the content blocks a template's tabs hold.
+pub fn type_format_text() -> &'static str {
+    static TEXT: OnceLock<String> = OnceLock::new();
+    TEXT.get_or_init(|| {
+        let section = |from: &str, to: &str| {
+            let start = VAULT_FORMAT.find(from).unwrap_or(VAULT_FORMAT.len());
+            let end = VAULT_FORMAT[start..]
+                .find(to)
+                .map_or(VAULT_FORMAT.len(), |e| start + e);
+            VAULT_FORMAT[start..end].trim().to_owned()
+        };
+        format!(
+            "{}\n\n{}\n",
+            section("\n## Type files\n", "\n## Note files\n"),
+            section("\n## Content blocks\n", "\n## Inline markup\n"),
+        )
+    })
+}
+
+/// `type_format`: the type-file vocabulary.
+fn type_format() -> ToolOut {
+    type_out(json!({ "format": type_format_text() }), Vec::new(), None)
+}
+
+/// `propose_type_change`: check the type file as the type write would, without writing it, and
+/// hand it to the user (ai D18). Invalid WCL goes back to the model with the issues.
+fn propose_type(w: &Writer, call_id: &str, input: &Value) -> Result<ToolOut, ToolOut> {
+    let name = str_arg(input, "name")?;
+    let wcl = input["wcl"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| ToolOut::error("wcl must be the whole type file as WCL text"))?;
+    let before = w.read_type(name).ok();
+    let check = w.check_type(name, wcl).map_err(|e| {
+        let message = e.to_string();
+        let details = ApiError::from(e).body;
+        let mut out = ToolOut::error(message.clone());
+        out.content = json!({
+            "error": message,
+            "issues": details,
+            "message": "The type was not proposed. Fix the issues and propose it again.",
+        })
+        .to_string();
+        out
+    })?;
+    let issues: Vec<Value> = check
+        .warnings
+        .iter()
+        .map(crate::error::issue_json)
+        .collect();
+    let names = vec![json!(name)];
+    if before.as_deref() == Some(check.wcl.as_str()) {
+        return Ok(type_out(
+            json!({
+                "proposed": false,
+                "message": "The proposed type file is the same as the current one: there is nothing to apply.",
+            }),
+            names,
+            None,
+        ));
+    }
+    let mut content = json!({
+        "proposed": true,
+        "name": name,
+        "exists": check.exists,
+        "warnings": issues,
+        "message": if check.exists {
+            "The type change is valid and is shown to the user as a proposal. It has not been written: it awaits the user, who applies or discards it."
+        } else {
+            "The new type is valid and is shown to the user as a proposal. It has not been created: it awaits the user, who applies or discards it."
+        },
+    });
+    if let Some(plan) = &check.plan {
+        content["plan"] = json!({
+            "added": plan.added,
+            "removed": plan.removed,
+            "notes_edited": plan.changes.len(),
+            "notes_flagged": plan.flagged.len(),
+        });
+    }
+    let proposal = json!({
+        "id": call_id,
+        "name": name,
+        "exists": check.exists,
+        "before": before,
+        "after": check.wcl,
+        "issues": issues,
+    });
+    Ok(type_out(content, names, Some(proposal)))
 }
 
 /// What a proposal changes: each field whose value differs, then each top-level block (matched
@@ -960,6 +1133,16 @@ mod tests {
         assert_eq!(ops.len(), 2, "{ops:?}");
         assert_eq!(ops[0]["name"], "title");
         assert_eq!(ops[1]["name"], "content body");
+    }
+
+    #[test]
+    fn type_format_holds_the_type_file_sections() {
+        let t = type_format_text();
+        assert!(t.starts_with("## Type files"), "{}", &t[..40]);
+        assert!(t.contains("## Templates"));
+        assert!(t.contains("## Content blocks"));
+        assert!(!t.contains("## Note files"));
+        assert!(t.len() < RESULT_LIMIT);
     }
 
     #[test]

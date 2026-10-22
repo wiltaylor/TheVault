@@ -28,6 +28,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock clippy.toml ./
 COPY crates crates
 COPY docs/vault-format docs/vault-format
+COPY docs/vault-format.md docs/vault-format.md
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/target \

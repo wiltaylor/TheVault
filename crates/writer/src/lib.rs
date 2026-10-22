@@ -93,6 +93,19 @@ pub use shipped::{
 };
 pub use types::{Flagged, Migration, PlannedNote, TypeChange, TypePlan};
 
+/// What [`Writer::check_type`] found: the type file as the write would store it.
+#[derive(Debug, Clone)]
+pub struct TypeCheck {
+    /// The canonical text of `types/<name>.wcl` after the write.
+    pub wcl: String,
+    /// Whether the type exists now, so the write changes it rather than creating it.
+    pub exists: bool,
+    /// What the write would ignore in the file, such as an attribute this version does not know.
+    pub warnings: Vec<Issue>,
+    /// For an existing type, the change as planned: the notes it edits and flags.
+    pub plan: Option<TypePlan>,
+}
+
 /// Errors from the write path.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -557,6 +570,21 @@ impl Writer {
     pub(crate) fn put_types(&self, sources: &[(&str, &str)]) -> Result<Vec<String>> {
         let _w = self.write_lock();
         let mut inner = self.lock();
+        let (changes, texts, schema) = self.checked_types(&inner, sources)?;
+        let generation = self.commit(changes)?;
+        inner.index.set_schema(&schema)?;
+        inner.index.advance(generation)?;
+        inner.schema = schema;
+        Ok(texts)
+    }
+
+    /// Everything [`Writer::put_types`] checks, without writing: the file changes, each canonical
+    /// text, and the schema the write would install. The caller holds the write lock.
+    fn checked_types(
+        &self,
+        inner: &Inner,
+        sources: &[(&str, &str)],
+    ) -> Result<(Vec<Change>, Vec<String>, Schema)> {
         let mut types = self.definitions("types")?;
         let mut changes = Vec::new();
         let mut texts = Vec::new();
@@ -569,7 +597,7 @@ impl Writer {
                 }])));
             }
             let text = store::canonical(source, &path)?;
-            if inner_has_type(&inner, name) {
+            if inner_has_type(inner, name) {
                 let has_notes = inner
                     .index
                     .connection()
@@ -592,11 +620,44 @@ impl Writer {
         let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
             .map_err(Error::InvalidType)?;
         builtin::check_built_in_types(&schema)?;
-        let generation = self.commit(changes)?;
-        inner.index.set_schema(&schema)?;
-        inner.index.advance(generation)?;
-        inner.schema = schema;
-        Ok(texts)
+        Ok((changes, texts, schema))
+    }
+
+    /// Check a write of type `name` from `source` without making it: a new type exactly as
+    /// [`Writer::put_type`] would create it, and an existing one as a planned change with no
+    /// renames, which is how a type that has notes changes (D6). The AI chat's
+    /// `propose_type_change` uses it (ai D18).
+    pub fn check_type(&self, name: &str, source: &str) -> Result<TypeCheck> {
+        let exists = self.lock().schema.type_def(name).is_some();
+        if exists {
+            let change = TypeChange {
+                wcl: source.to_owned(),
+                ..TypeChange::default()
+            };
+            let plan = self.plan_type_change(name, &change)?;
+            let warnings = TypeDef::parse(name, &plan.wcl)
+                .map(|t| t.warnings)
+                .unwrap_or_default();
+            return Ok(TypeCheck {
+                wcl: plan.wcl.clone(),
+                exists: true,
+                warnings,
+                plan: Some(plan),
+            });
+        }
+        let _w = self.write_lock();
+        let inner = self.lock();
+        let (_, mut texts, schema) = self.checked_types(&inner, &[(name, source)])?;
+        let warnings = schema
+            .type_def(name)
+            .map(|t| t.warnings.clone())
+            .unwrap_or_default();
+        Ok(TypeCheck {
+            wcl: texts.remove(0),
+            exists: false,
+            warnings,
+            plan: None,
+        })
     }
 
     /// The `(stem, text)` of every definition file in `dir`.

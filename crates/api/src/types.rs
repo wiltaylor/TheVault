@@ -59,7 +59,7 @@ pub async fn list(State(w): Shared) -> Json<Value> {
     Json(json!({ "types": types }))
 }
 
-fn type_json(t: &TypeDef, builtin: bool) -> Value {
+pub(crate) fn type_json(t: &TypeDef, builtin: bool) -> Value {
     json!({
         "name": t.name,
         "label": t.label,

@@ -1026,6 +1026,8 @@ export const api = {
   schema: () => request<{ types: SchemaType[]; taxonomies: Taxonomy[] }>("GET", "/api/schema"),
   /** Create a type, or replace one that has no notes. */
   putType: (name: string, wcl: string) => request<{ name: string; wcl: string }>("PUT", `/api/types/${enc(name)}`, { wcl }),
+  /** A type file as stored. A type that does not exist is an `ApiError` with `unknown_type`. */
+  readType: (name: string) => request<{ name: string; wcl: string }>("GET", `/api/types/${enc(name)}`),
   /** Plan a change to a type, or apply the plan whose token is `plan`. */
   changeType: (
     name: string,

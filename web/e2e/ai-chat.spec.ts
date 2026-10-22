@@ -7,7 +7,8 @@ import { activePane, expect, logIn, test } from "./fixtures";
 
 // The AI panel (ai D14, D16) against the fake Anthropic API, which the `ai_settings` secret's
 // endpoints point at: ask beside a note, watch the answer arrive, apply the edit the model
-// proposed, and see the note change.
+// proposed, and see the note change; apply a proposed template change (ai D18) and see it on a
+// note of that type.
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -106,4 +107,53 @@ test("the AI panel answers beside a note and an applied proposal changes the not
   const after = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { version: string; note: unknown };
   expect(after.version).not.toBe(note.version);
   expect(JSON.stringify(after.note)).toContain("Eggs");
+});
+
+test("a type change proposed in the AI panel and applied shows on a note of that type", async ({ page, admin }) => {
+  for (const [name, value] of [
+    ["ai_anthropic_api_key", fake.api_key],
+    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
+  ]) {
+    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
+    expect(res.ok(), await res.text()).toBe(true);
+  }
+  const type = `memo_${Date.now().toString(36)}`;
+  const wcl = `label = "Memo"\n\nfield body {\n  kind = "content"\n}\n\ntemplate default {\n  tab "Main" {\n    slot "title"\n    slot "body"\n  }\n}\n`;
+  const put = await admin.put(`/api/types/${type}`, { data: { wcl } });
+  expect(put.ok(), await put.text()).toBe(true);
+  const stored = ((await put.json()) as { wcl: string }).wcl;
+  const created = await admin.post(`/api/notes?type=${type}`, { data: { note: shopping("Weekly memo", ["Plain text"]) } });
+  expect(created.status(), await created.text()).toBe(201);
+  const note = (await created.json()) as { id: string };
+
+  // The model reads the type, proposes a fixed line at the top of its template, then answers.
+  const changed = stored.replace('slot "title"', 'paragraph {\n      text = "Reviewed weekly"\n    }\n    slot "title"');
+  await tell(`push ${JSON.stringify({ tools: [{ id: "toolu_type", name: "get_type", input: { name: type } }] })}`);
+  await tell(`push ${JSON.stringify({ tools: [{ id: "toolu_change", name: "propose_type_change", input: { name: type, wcl: changed } }] })}`);
+  await tell(`push ${JSON.stringify({ text: "I proposed a line at the top of the memo template. Apply it to save the change." })}`);
+
+  await logIn(page, `/notes/${note.id}`);
+  await expect(activePane(page)).toContainText("Plain text");
+  await expect(activePane(page)).not.toContainText("Reviewed weekly");
+  await page.keyboard.press("Control+Shift+L");
+  const panel = page.getByRole("complementary", { name: "AI" });
+  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await panel.getByLabel("Ask AI").fill("Add a Reviewed weekly line to this type's template.");
+  await panel.getByLabel("Ask AI").press("Enter");
+
+  const conversation = panel.getByRole("list", { name: "Conversation" });
+  await expect(conversation).toContainText("I proposed a line");
+  await expect(conversation).toContainText(`Read type ${type}`);
+  const card = panel.getByRole("region", { name: `Proposed change to type ${type}` });
+  await expect(card).toContainText("Reviewed weekly");
+  await expect(card.locator("ins")).toHaveCount(3);
+
+  // Proposing wrote nothing.
+  expect(((await (await admin.get(`/api/types/${type}`)).json()) as { wcl: string }).wcl).toBe(stored);
+
+  await card.getByRole("button", { name: "Apply" }).click();
+  await expect(card.getByText("Applied.")).toBeVisible();
+  expect(((await (await admin.get(`/api/types/${type}`)).json()) as { wcl: string }).wcl).toContain("Reviewed weekly");
+  await expect(activePane(page)).toContainText("Reviewed weekly");
+  await expect(activePane(page)).toContainText("Plain text");
 });

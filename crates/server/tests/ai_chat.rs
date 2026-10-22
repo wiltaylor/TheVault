@@ -323,7 +323,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 10);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
@@ -987,4 +987,179 @@ fn the_system_prompt_setting_replaces_the_default_for_every_provider() {
         .unwrap()
         .to_owned();
     assert!(instructions.starts_with(custom), "{instructions}");
+}
+
+impl Api {
+    /// `types/<name>.wcl` as the types API reads it, or `None` when there is no such type.
+    fn type_wcl(&self, name: &str) -> Option<String> {
+        let res = self
+            .client
+            .get(self.server.url(&format!("/api/types/{name}")))
+            .bearer_auth(self.token())
+            .send()
+            .unwrap();
+        if !res.status().is_success() {
+            return None;
+        }
+        let v: Value = res.json().unwrap();
+        Some(v["wcl"].as_str().unwrap().to_owned())
+    }
+}
+
+/// The tool result the model got back in request `request`: the last message's first item.
+fn tool_result_in(fake: &FakeAnthropic, request: usize) -> Value {
+    let r = fake.message_requests()[request].json();
+    let messages = r["messages"].as_array().unwrap();
+    messages.last().unwrap()["content"][0].clone()
+}
+
+#[test]
+fn type_tools_list_read_and_propose_a_template_change_without_writing() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.memo("Groceries", "Milk");
+    let before = api.type_wcl("memo").unwrap();
+    let changed = MEMO.replace("tab \"Main\"", "tab \"Details\"");
+    fake.push(AnthropicMessage::new().tool_use("toolu_l", "list_types", json!({})));
+    fake.push(AnthropicMessage::new().tool_use("toolu_g", "get_type", json!({ "name": "memo" })));
+    fake.push(AnthropicMessage::new().tool_use("toolu_f", "type_format", json!({})));
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_t",
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": changed }),
+    ));
+    fake.push(AnthropicMessage::text("I proposed renaming the tab."));
+    let events = api.chat(json!([user("Call the memo tab Details.")]));
+    assert_eq!(
+        shape(&events),
+        [
+            "tool",
+            "tool_result",
+            "tool",
+            "tool_result",
+            "tool",
+            "tool_result",
+            "tool",
+            "type_proposal",
+            "tool_result",
+            "text",
+            "done"
+        ],
+        "{events:?}"
+    );
+    for (n, d) in &events {
+        if n == "tool_result" {
+            assert_eq!(d["is_error"], false, "{d}");
+        }
+    }
+
+    // list_types names every type, built-in ones marked.
+    let listed: Value =
+        serde_json::from_str(tool_result_in(&fake, 1)["content"].as_str().unwrap()).unwrap();
+    let types = listed["types"].as_array().unwrap();
+    let memo = types.iter().find(|t| t["name"] == "memo").unwrap();
+    assert_eq!(memo["label"], "Memo");
+    assert_eq!(memo["builtin"], false);
+    assert!(types.iter().any(|t| t["builtin"] == true), "{listed}");
+
+    // get_type gives the stored WCL and a summary of fields and templates.
+    let got: Value =
+        serde_json::from_str(tool_result_in(&fake, 2)["content"].as_str().unwrap()).unwrap();
+    assert_eq!(got["wcl"], before.as_str());
+    assert_eq!(got["summary"]["fields"][0]["name"], "body");
+    assert_eq!(got["summary"]["fields"][0]["kind"], "content");
+    assert_eq!(got["summary"]["templates"][0]["tabs"][0]["title"], "Main");
+
+    // type_format is the type-file part of docs/vault-format.md.
+    let format = tool_result_in(&fake, 3)["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(format.contains("## Type files"), "{}", &format[..200]);
+    assert!(format.contains("## Templates"));
+
+    let p = last(&events, "type_proposal");
+    assert_eq!(p["id"], "toolu_t");
+    assert_eq!(p["name"], "memo");
+    assert_eq!(p["exists"], true);
+    assert_eq!(p["before"], before.as_str());
+    assert!(
+        p["after"].as_str().unwrap().contains("tab \"Details\""),
+        "{p}"
+    );
+    assert_eq!(p["issues"], json!([]));
+
+    // The model is told the change awaits the user, and nothing was written.
+    let result = tool_result_in(&fake, 4);
+    assert_eq!(result["is_error"], false);
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("awaits the user"),
+        "{result}"
+    );
+    assert_eq!(api.type_wcl("memo").unwrap(), before);
+}
+
+#[test]
+fn an_invalid_type_proposal_returns_the_issues_and_proposes_nothing() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let before = api.type_wcl("memo").unwrap();
+    let broken = MEMO.replace("kind = \"content\"", "kind = \"nope\"");
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_bad",
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": broken }),
+    ));
+    fake.push(AnthropicMessage::text("Let me fix that."));
+    let events = api.chat(json!([user("Change the memo type.")]));
+    assert_eq!(
+        shape(&events),
+        ["tool", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    assert_eq!(last(&events, "tool_result")["is_error"], true);
+    let result = tool_result_in(&fake, 1);
+    assert_eq!(result["is_error"], true);
+    let content: Value = serde_json::from_str(result["content"].as_str().unwrap()).unwrap();
+    assert_eq!(content["issues"]["error"], "invalid_type", "{content}");
+    assert!(content.to_string().contains("nope"), "{content}");
+    assert_eq!(api.type_wcl("memo").unwrap(), before);
+}
+
+#[test]
+fn a_new_type_name_proposes_a_new_type() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let book = MEMO.replace("\"Memo\"", "\"Book\"");
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_new",
+        "propose_type_change",
+        json!({ "name": "book", "wcl": book }),
+    ));
+    fake.push(AnthropicMessage::text("I proposed a book type."));
+    let events = api.chat(json!([user("Add a book type.")]));
+    assert_eq!(
+        shape(&events),
+        ["tool", "type_proposal", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let p = last(&events, "type_proposal");
+    assert_eq!(p["name"], "book");
+    assert_eq!(p["exists"], false);
+    assert_eq!(p["before"], Value::Null);
+    assert!(p["after"].as_str().unwrap().contains("\"Book\""), "{p}");
+    let result = tool_result_in(&fake, 1);
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("awaits the user")
+    );
+    assert_eq!(api.type_wcl("book"), None);
 }

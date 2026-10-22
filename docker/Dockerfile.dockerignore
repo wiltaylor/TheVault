@@ -6,6 +6,7 @@
 !clippy.toml
 !crates/
 !docs/vault-format/
+!docs/vault-format.md
 !web/
 !docker/entrypoint.sh
 !docker/healthcheck.sh

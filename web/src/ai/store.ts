@@ -7,6 +7,7 @@ import { createRoot, createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { type Json, type NoteDoc, ApiError, type StreamEvent, api, streamEvents } from "../api";
 import { appInfo } from "../inApp";
+import { reloadDefinitions } from "../session";
 
 /** One piece of a transcript message, as the server's `ai::Content`. */
 export type Content =
@@ -61,10 +62,30 @@ export interface Proposal {
 
 export type ProposalState = "open" | "applying" | "applied" | "discarded" | "failed";
 
+/** A type file the model proposed, checked by the server but not written (ai D18). */
+export interface TypeProposal {
+  id: string;
+  name: string;
+  /** Whether the type existed when proposed; a new name proposes a new type. */
+  exists: boolean;
+  /** The type file as stored when proposed; null for a new type. */
+  before: string | null;
+  after: string;
+  /** Warnings the check found, such as an attribute this version ignores. */
+  issues: { at?: string; message: string; severity?: string }[];
+}
+
+/** As a note proposal's, plus `stale`: the type changed since the proposal, so it cannot apply. */
+export type TypeProposalState = ProposalState | "stale";
+
+/** What the card says when the type changed after the proposal (ai D18). */
+export const TYPE_CHANGED = "This type changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
+
 export type Part =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string; asset?: AssetRef }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string }
+  | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
 
 export interface Turn {
@@ -216,6 +237,9 @@ function onEvent(e: StreamEvent) {
     case "proposal":
       push({ kind: "proposal", proposal: d as unknown as Proposal, state: "open" });
       break;
+    case "type_proposal":
+      push({ kind: "type_proposal", proposal: { ...(d as unknown as TypeProposal), issues: Array.isArray(d.issues) ? (d.issues as TypeProposal["issues"]) : [] }, state: "open" });
+      break;
     case "refusal": {
       appendMessages(d);
       const s = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : null);
@@ -310,4 +334,62 @@ export async function applyProposal(turn: number, part: number) {
 export function discardProposal(turn: number, part: number) {
   const p = state.chat.turns[turn]?.parts[part];
   if (p?.kind === "proposal" && p.state !== "applied" && p.state !== "applying") setProposal(turn, part, { state: "discarded" });
+}
+
+function setTypeProposal(turn: number, part: number, patch: { state: TypeProposalState; error?: string }) {
+  state.setChat(
+    "turns",
+    turn,
+    "parts",
+    part,
+    produce((p) => {
+      if (p.kind !== "type_proposal") return;
+      p.state = patch.state;
+      p.error = patch.error;
+    }),
+  );
+}
+
+/** The type file `name` as stored now, or null when there is no such type. */
+async function currentType(name: string): Promise<string | null> {
+  try {
+    return (await api.readType(name)).wcl;
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 404 || e.body.error === "unknown_type")) return null;
+    throw e;
+  }
+}
+
+/**
+ * Apply a type proposal through the type routes, as the type editor does: a new type with
+ * `PUT /api/types/{name}`, a change planned and then applied with the plan's token. The type is
+ * read again first; one that changed since the proposal is not applied (ai D18).
+ */
+export async function applyTypeProposal(turn: number, part: number) {
+  const p = state.chat.turns[turn]?.parts[part];
+  if (p?.kind !== "type_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+  const { name, before, after } = p.proposal;
+  setTypeProposal(turn, part, { state: "applying" });
+  try {
+    if ((await currentType(name)) !== (before ?? null)) {
+      setTypeProposal(turn, part, { state: "stale", error: TYPE_CHANGED });
+      return;
+    }
+    if (before === null || before === undefined) {
+      await api.putType(name, after);
+    } else {
+      const plan = await api.changeType(name, after, {});
+      await api.changeType(name, after, {}, plan.plan);
+    }
+    setTypeProposal(turn, part, { state: "applied" });
+    await reloadDefinitions().catch(() => undefined);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) setTypeProposal(turn, part, { state: "stale", error: TYPE_CHANGED });
+    else setTypeProposal(turn, part, { state: "failed", error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+export function discardTypeProposal(turn: number, part: number) {
+  const p = state.chat.turns[turn]?.parts[part];
+  if (p?.kind === "type_proposal" && p.state !== "applied" && p.state !== "applying") setTypeProposal(turn, part, { state: "discarded" });
 }

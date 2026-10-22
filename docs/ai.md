@@ -119,6 +119,10 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `read_asset` | Reads one attachment by asset id; see [Attachments](#attachments) |
 | `backlinks` | The notes that link to a note |
 | `propose_edit` | Checks an edit to one note and shows it to you; never writes |
+| `list_types` | Every type's name, label, plural, description, and whether it is built in |
+| `get_type` | Reads one type file's WCL, with its fields and templates |
+| `type_format` | The type-file sections of the vault format, so the model knows the vocabulary |
+| `propose_type_change` | Checks a whole new type file, for an existing type or a new name, and shows it to you; never writes or deletes a type |
 
 A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 12 calls to the model; after that the panel says it stopped, and asking again goes on.
 
@@ -149,6 +153,15 @@ When you ask for a change, such as "add eggs to my shopping list", the model pro
 
 The model never writes a note itself.
 
+### Apply a type change
+
+When you ask to change a type, such as "add a due date to tasks" or "put the status on its own tab", the model reads the type and proposes a whole new type file. The server checks it as the type write would; WCL that does not check goes back to the model with the issues, and the model fixes it before you see anything. A new name proposes a new type. The card shows the type file's lines removed and added:
+
+- Apply reads the type again first. If it changed since the proposal, the card says "This type changed since the proposal" and writes nothing; ask again for a fresh proposal. Otherwise Apply writes it through the type routes, as the type editor does: a new type with `PUT /api/types/{name}`, a change with `POST /api/types/{name}/change`, planned and then applied with the plan's token. Notes of the type are changed with it as that plan says.
+- Discard drops it. Nothing is written.
+
+Applying a type change needs an `admin` session, as the type editor does. Built-in types allow what the type routes allow for them.
+
 ### The system prompt
 
 The **Chat system prompt** card in Settings > AI holds the instructions the panel sends the model before every conversation, for every provider. It shows the prompt in use and whether it is the **Default** or **Customised**:
@@ -166,7 +179,7 @@ When the provider refuses a request, the answer stops where it was and the panel
 
 ### The chat route
 
-`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal uses the notes write route, which needs `write`. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
+`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal uses the notes write route, which needs `write`; applying a type proposal uses the type routes, which need `admin`. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
 
 | Event | Data |
 |---|---|
@@ -174,6 +187,7 @@ When the provider refuses a request, the answer stops where it was and the panel
 | `tool` | `{ id, name, input }`, a tool call about to run |
 | `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text |
 | `proposal` | `{ id, note_id, title, base_version, before, after, ops }`, an edit to apply with `PUT /api/notes/{note_id}` |
+| `type_proposal` | `{ id, name, exists, before, after, issues }`: `before` is the type file as stored (null for a new type), `after` the checked type file in canonical form, `issues` the warnings the check found |
 | `usage` | `{ provider, model, input, output }` for one model call |
 | `refusal` | `{ provider, model, category, explanation, messages }`; the last event |
 | `error` | `{ kind, message, messages }`; the last event |

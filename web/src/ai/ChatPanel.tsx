@@ -7,6 +7,7 @@ import { type AiModel, type AiProvider, type AiStatus, type Json, api, assetUrl 
 import { formatValue } from "../components/Render";
 import { blockLines, lineDiff } from "./diff";
 import { Markdown } from "./markdown";
+import { TypeProposalCard } from "./TypeProposalCard";
 import {
   type Part,
   type Proposal,
@@ -39,16 +40,28 @@ export function stepLabel(name: string, input: Json): string {
       return "Read a file";
     case "propose_edit":
       return "Checked an edit";
+    case "list_types":
+      return "Listed the types";
+    case "get_type":
+      return `Read type ${s("name")}`;
+    case "type_format":
+      return "Read the type file format";
+    case "propose_type_change":
+      return `Checked a change to type ${s("name")}`;
     default:
       return `Called ${name}`;
   }
 }
+
+/** The type tools (ai D18), whose steps return no notes. */
+const TYPE_TOOLS = new Set(["list_types", "get_type", "type_format", "propose_type_change"]);
 
 function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
   const status = () => {
     if (!props.part.done) return "running";
     if (props.part.isError) return "failed";
     if (props.part.asset) return props.part.asset.filename;
+    if (TYPE_TOOLS.has(props.part.name)) return "done";
     return `${props.part.notes.length} found`;
   };
   // The image a read_asset step read, from the asset's own URL: the stream never carries its bytes (ai D19).
@@ -283,6 +296,7 @@ export function ChatPanel(props: { noteId: () => string }) {
                       <Match when={part.kind === "text" && part}>{(p) => <Markdown text={p().text} />}</Match>
                       <Match when={part.kind === "tool" && part}>{(p) => <ToolStep part={p()} />}</Match>
                       <Match when={part.kind === "proposal" && part}>{(p) => <ProposalCard part={p()} turn={t()} index={i()} />}</Match>
+                      <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
                       <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>
                     </Switch>
                   )}
