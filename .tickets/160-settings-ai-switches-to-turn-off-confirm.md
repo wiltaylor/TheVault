@@ -4,8 +4,8 @@ title: Settings > AI switches to turn off confirmation per kind of AI change
 plan: ai
 blocked_by:
 - '158'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Settings > AI switches to turn off confirmation per kind of AI change
@@ -21,3 +21,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T21:46:58Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T21:46:58Z — wil
+
+Status set to done.
