@@ -3,8 +3,8 @@ id: '156'
 title: 'AI chat type tools: list, read and propose changes to types and their templates'
 plan: ai
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # AI chat type tools: list, read and propose changes to types and their templates
@@ -20,3 +20,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-22T20:57:56Z — wil
+
+Verified set to verified.
+
+### 2026-10-22T20:57:56Z — wil
+
+Status set to done.
