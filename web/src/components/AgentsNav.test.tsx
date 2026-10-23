@@ -43,7 +43,7 @@ function full(s: AgentSummary): Agent {
     permissions: {
       tools: null,
       types: null,
-      confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true },
+      confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
       web: { search: true, read: true, download: true },
     },
     triggers: [{ name: "nightly", kind: "schedule", schedule: "0 2 * * *", timezone: "UTC", prompt: "Tidy up." }],

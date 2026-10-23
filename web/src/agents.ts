@@ -224,6 +224,15 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
     ],
   },
   {
+    group: "Agents",
+    tools: [
+      ["list_agents", "List agents"],
+      ["get_agent", "Read an agent"],
+      ["propose_agent_change", "Create and change agents"],
+      ["propose_agent_delete", "Delete agents"],
+    ],
+  },
+  {
     group: "Assets",
     tools: [
       ["find_assets", "Find images and files"],
@@ -260,6 +269,7 @@ export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
   { key: "types", label: "Ask before changing types" },
   { key: "downloads", label: "Ask before downloading files into the vault" },
   { key: "taxonomies", label: "Ask before changing taxonomies" },
+  { key: "agents", label: "Ask before changing agents" },
 ];
 
 /** The internet switches, in order, with their labels (ai D28). */

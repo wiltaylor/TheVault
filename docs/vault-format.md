@@ -2171,7 +2171,7 @@ The `permissions` block holds the agent's own permissions (agents G4). Nothing i
 |------|------|---------|---------|
 | `tools` | list of tool names | every tool the server offers | The chat tools the agent may use, such as `"search_notes"` or `"propose_edit"`. The server refuses a name it has no tool for when the file is saved. `[]` allows none |
 | `types` | list of type names | every type | The note types the agent may read and change. Each must exist when the file is saved. `[]` allows none |
-| `confirm { ... }` | block | every switch `true` | The confirmation switches of ai D22: `notes`, `archive`, `delete`, `types`, `downloads` and `taxonomies`, each a bool. `true` means the agent proposes the change for the user to apply; `false` means it makes the change itself. A switch left out is `true` |
+| `confirm { ... }` | block | every switch `true` | The confirmation switches of ai D22: `notes`, `archive`, `delete`, `types`, `downloads`, `taxonomies` and `agents` (agent creates, changes and deletes, agents G20), each a bool. `true` means the agent proposes the change for the user to apply; `false` means it makes the change itself. A switch left out is `true` |
 | `web { ... }` | block | every switch `true` | The internet switches of ai D28: `search`, `read` and `download`, each a bool. A tool switched off is not offered. A switch left out is `true` |
 
 A `trigger` block is labelled with its name and holds a `prompt`, the first user message of each run (a string, not blank, at most 32000 characters), and one of a schedule, a note event or a mention, never two. The prompt is required, except in a mention trigger.

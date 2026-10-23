@@ -33,6 +33,30 @@ An agent's permissions are its own: nothing is inherited from Settings > AI.
 
 In a chat, the person or token running it still caps what the agent can change: an agent never writes more than its caller could.
 
+## Agents that manage agents
+
+An agent can read, create, change and delete other agents with four chat tools. They are ordinary tool names, so an agent has them only when its tools list allows them. An agent with no tools list, such as the Assistant, has them. On the agent screen's Permissions tab they are the "Agents" group.
+
+| Tool | What it does |
+|------|--------------|
+| `list_agents` | Every agent's name, label, description, provider, model, whether it is enabled and built in, and its trigger count |
+| `get_agent` | One agent's file as stored, the agent parsed, and the agent-file vocabulary |
+| `propose_agent_change` | Proposes a whole agent file: a change to an existing agent, or a new agent under a new name. The server checks it as `PUT /api/agents/{name}` would, without writing it |
+| `propose_agent_delete` | Proposes deleting an agent. Its threads stay. The Assistant cannot be deleted |
+
+The panel shows an agent proposal as a card with the WCL lines removed and added, and Apply and Discard. Apply checks the file is still the one the proposal was made against. If it changed since, the card says "This agent changed since the proposal" and nothing is written. Apply needs `admin`: from an app the server answers "Apply agent changes in the web app." Applied cards link to the agent's screen, and the sidebar's agent list refreshes.
+
+The confirmation switch is "Ask before changing agents" (`permissions.confirm.agents`, on by default). With it off, and with `admin`, the tool makes the change at once. An unattended run with the switch on is not offered `propose_agent_change` or `propose_agent_delete`.
+
+**No escalation.** An agent can never give another agent more than it has itself. A change is refused, with each problem named, when the agent it writes would have:
+
+- a tool the proposing agent does not have. An agent with no tools list has every tool, so an agent with a tools list cannot write an agent without one;
+- a note type outside the proposing agent's types. No types list means every type;
+- a confirmation switch off that is on for the proposing agent;
+- an Internet switch on that is off for the proposing agent.
+
+The whole new file is checked, not only what the change adds, so an agent with fewer permissions cannot edit a more powerful agent at all. An agent can never change or delete its own file: "An agent cannot change its own file." Deleting another agent needs only the tool and the switch. Each proposal records the agent that made it, and `POST /api/ai/apply` checks the change again against that agent as it is at the time of Apply, so an agent whose permissions were narrowed since cannot apply what it proposed before. Your own edits on the agent screen are never checked this way.
+
 ## Threads
 
 Every conversation with an agent is a note of the built-in type `agent_thread`, holding the agent's name, where it came from (`user`, `trigger:<name>` for a trigger run, or `mention` for a call from a note), when it was last active, the transcript and a readable copy of the conversation. The server writes the thread as each turn streams, so closing a tab loses nothing. Proposals and what became of them are kept in the thread, so a reopened thread shows its pending proposals with Apply and Discard. [Threads](ai.md#threads) describes them in full.
@@ -134,7 +158,7 @@ A trigger run has no one present to apply a proposal, so it is offered only:
 - the read tools the agent's permissions allow, and
 - the change tools whose confirmation switch is off for the agent.
 
-A change tool whose switch is on is left out of the run's tool list, so nothing is left pending. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types and taxonomies only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
+A change tool whose switch is on is left out of the run's tool list, so nothing is left pending. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types, taxonomies and agents only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
 
 ## No loops
 

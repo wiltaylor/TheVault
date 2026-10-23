@@ -221,6 +221,8 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
         "propose_type_change",
         "propose_taxonomy_change",
         "propose_taxonomy_delete",
+        "propose_agent_change",
+        "propose_agent_delete",
         "download_asset",
     ] {
         assert!(!tools.contains(&t.to_owned()), "{t} not in {tools:?}");

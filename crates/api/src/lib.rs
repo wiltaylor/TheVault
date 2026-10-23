@@ -60,6 +60,7 @@ mod agent_files;
 mod agent_runs;
 mod agent_threads;
 mod agents;
+mod ai_agents;
 mod ai_assets;
 mod ai_chat;
 mod ai_settings;

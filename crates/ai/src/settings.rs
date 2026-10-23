@@ -306,6 +306,9 @@ pub struct Confirm {
     /// `propose_taxonomy_change` and `propose_taxonomy_delete` (ai D31).
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub taxonomies: bool,
+    /// `propose_agent_change` and `propose_agent_delete` (agents G20).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub agents: bool,
 }
 
 impl Default for Confirm {
@@ -317,6 +320,7 @@ impl Default for Confirm {
             types: true,
             downloads: true,
             taxonomies: true,
+            agents: true,
         }
     }
 }
@@ -335,6 +339,7 @@ impl Confirm {
             "types": self.types,
             "downloads": self.downloads,
             "taxonomies": self.taxonomies,
+            "agents": self.agents,
         })
     }
 }

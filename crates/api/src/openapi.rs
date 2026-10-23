@@ -295,7 +295,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/chat",
-        "One AI chat turn as server-sent events (text, tool, tool_result, proposal, type_proposal, applied, usage, refusal, error, done); the tools propose changes, and make the kinds whose confirmation Settings > AI turned off when the caller's scope allows",
+        "One AI chat turn as server-sent events (text, tool, tool_result, proposal, type_proposal, taxonomy_proposal, agent_proposal, applied, usage, refusal, error, done); the tools propose changes, and make the kinds whose confirmation Settings > AI turned off when the caller's scope allows",
     ),
     (
         "GET",
@@ -671,7 +671,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/apply",
-        "Apply a proposal or type_proposal as the chat sent it, at its base version: {op, note_id, version} or {op, type_name}, or for a download {op, asset_id, filename}; a type change needs admin; with the proposal's agent it is authored by the agent, and with its thread the outcome is recorded there",
+        "Apply a proposal, type_proposal, taxonomy_proposal or agent_proposal as the chat sent it, at its base version: {op, note_id, version}, {op, type_name}, {op, taxonomy_name, notes} or {op, agent_name}, or for a download {op, asset_id, filename}; a type, taxonomy or agent change needs admin, and an agent change is checked again against the agent that proposed it; with the proposal's agent it is authored by the agent, and with its thread the outcome is recorded there",
     ),
     (
         "POST",

@@ -70,6 +70,10 @@ const TOOLS = [
   "taxonomy_format",
   "propose_taxonomy_change",
   "propose_taxonomy_delete",
+  "list_agents",
+  "get_agent",
+  "propose_agent_change",
+  "propose_agent_delete",
   "propose_create",
   "propose_archive",
   "propose_delete",
@@ -94,7 +98,7 @@ function triage(over: Partial<Agent> = {}): Agent {
     permissions: {
       tools: null,
       types: null,
-      confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true },
+      confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
       web: { search: true, read: true, download: true },
     },
     triggers: [{ name: "nightly", kind: "schedule", schedule: "0 2 * * *", timezone: "UTC", prompt: "Tidy up." }],
@@ -115,7 +119,7 @@ function status(): AiStatus {
     system_prompt: SHIPPED,
     default_system_prompt: SHIPPED,
     system_prompt_custom: false,
-    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true },
+    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
     web: { search: true, read: true, download: true },
   };
 }
@@ -343,7 +347,7 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByText(/they replace Settings > AI for this agent/)).toBeTruthy();
     const groups = p.getAllByRole("group").map((g) => g.querySelector(":scope > legend")?.textContent).filter(Boolean);
-    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Types", "Taxonomies", "Assets", "Internet"]);
+    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Types", "Taxonomies", "Agents", "Assets", "Internet"]);
     const web = p.getByRole("checkbox", { name: /Search the web/ });
     expect(web).toBeChecked();
     fireEvent.click(web);
@@ -365,6 +369,20 @@ describe("the Permissions tab", () => {
     await waitFor(() => expect((sent().permissions as { tools: unknown }).tools).toBeNull());
   });
 
+  it("lists the agent tools in an Agents group and saves Ask before changing agents", async () => {
+    await open();
+    const p = await tab("Permissions");
+    const group = p.getAllByRole("group").find((g) => g.querySelector(":scope > legend")?.textContent === "Agents")!;
+    const names = Array.from(group.querySelectorAll("label")).map((l) => l.textContent?.trim());
+    expect(names).toEqual(["List agents list_agents", "Read an agent get_agent", "Create and change agents propose_agent_change", "Delete agents propose_agent_delete"]);
+    const ask = p.getByRole("switch", { name: "Ask before changing agents" });
+    expect(ask).toBeChecked();
+    fireEvent.click(ask);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { confirm: Record<string, boolean> }).confirm.agents).toBe(false);
+  });
+
   it("saves the confirmation and internet switches and a chosen list of types", async () => {
     await open();
     const p = await tab("Permissions");
@@ -379,7 +397,7 @@ describe("the Permissions tab", () => {
     expect(sent().permissions).toEqual({
       tools: null,
       types: ["task"],
-      confirm: { notes: false, archive: true, delete: true, types: true, downloads: true, taxonomies: true },
+      confirm: { notes: false, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
       web: { search: true, read: false, download: true },
     });
   });

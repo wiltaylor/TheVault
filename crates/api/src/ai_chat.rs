@@ -13,9 +13,11 @@
 //! The answer is a server-sent event stream. The server runs the tool loop, at most
 //! [`MAX_ROUNDS`] model calls per user turn, over read-only tools; `propose_edit`,
 //! `propose_create`, `propose_archive`, `propose_delete`, `propose_type_change`,
-//! `propose_taxonomy_change` and `propose_taxonomy_delete` check a change and hand it to the user
-//! (ai D14, D18, D20, D31). When Settings > AI turns a kind's confirmation off and the caller's
-//! scope allows the write (`write` for notes, `admin` for types and taxonomies), the tool makes
+//! `propose_taxonomy_change`, `propose_taxonomy_delete`, `propose_agent_change` and
+//! `propose_agent_delete` check a change and hand it to the user (ai D14, D18, D20, D31, agents
+//! G20; an agent change is also checked against the turn's agent, `crate::ai_agents`). When
+//! Settings > AI turns a kind's confirmation off and the caller's scope allows the write (`write`
+//! for notes, `admin` for types, taxonomies and agents), the tool makes
 //! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
 //! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
 //! the trash (ai D21). With a Brave Search key stored, `web_search` searches the web
@@ -29,7 +31,8 @@
 //! | `proposal` | a note change for the user to apply, by `op` (ai D14, D20): `update` `{id, op, note_id, title, base_version, before, after, ops}`; `create` `{id, op, type, title, after}`; `archive`, `unarchive` and `delete` `{id, op, note_id, title, base_version}`; and a file to store, `download` `{id, op, url, filename, media_type, size}` (ai D27) |
 //! | `type_proposal` | `{id, name, exists, before, after, issues}`: a type file's new WCL for the user to apply (ai D18) |
 //! | `taxonomy_proposal` | a taxonomy change for the user to apply (ai D31), `kind` always `taxonomy`: `create` and `change` `{id, kind, op, name, exists, before, after, renames, issues, affected}`, `renames` a list of `{from, to}` term paths and `affected` the number of notes they rewrite; `delete` `{id, kind, op, name, before}` |
-//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
+//! | `agent_proposal` | an agent change for the user to apply (agents G20), `kind` always `agent` and `proposer` the agent that proposed it: `create` and `change` `{id, kind, op, name, label, exists, before, after, issues, proposer}`; `delete` `{id, kind, op, name, label, before, proposer}` |
+//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
 //! | `error` | `{kind, message, messages}`: the turn failed; ends the stream |
@@ -228,13 +231,15 @@ pub(crate) async fn run_unattended(
 }
 
 /// The scope an unattended run of `agent` has: `write` for notes, and `admin` when its
-/// permissions allow a type or taxonomy change (agents G12).
+/// permissions allow a type, taxonomy or agent change (agents G12, G20).
 pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
     let p = &agent.permissions;
     let admin = [
         "propose_type_change",
         "propose_taxonomy_change",
         "propose_taxonomy_delete",
+        "propose_agent_change",
+        "propose_agent_delete",
     ]
     .iter()
     .any(|t| p.allows_tool(t));
@@ -250,6 +255,7 @@ fn change_switch(name: &str) -> Option<&'static str> {
         "propose_delete" => "delete",
         "propose_type_change" => "types",
         "propose_taxonomy_change" | "propose_taxonomy_delete" => "taxonomies",
+        "propose_agent_change" | "propose_agent_delete" => "agents",
         "download_asset" => "downloads",
         _ => return None,
     })
@@ -588,6 +594,8 @@ struct Setup {
     tools: Option<Vec<String>>,
     /// The note types the agent's tools reach (agents G4, G7).
     limits: Limits,
+    /// The agent whose turn it is, which the agent tools check a change against (agents G20).
+    agent: Arc<Agent>,
 }
 
 /// The note types an agent's note tools reach (agents G4): those its `permissions.types` names,
@@ -655,6 +663,8 @@ struct Direct {
     downloads: bool,
     /// Taxonomy changes and deletes (ai D31).
     taxonomies: bool,
+    /// Agent creates, changes and deletes (agents G20).
+    agents: bool,
 }
 
 impl Direct {
@@ -667,6 +677,7 @@ impl Direct {
             types: !confirm.types && scope.allows(Scope::Admin),
             downloads: !confirm.downloads && write,
             taxonomies: !confirm.taxonomies && scope.allows(Scope::Admin),
+            agents: !confirm.agents && scope.allows(Scope::Admin),
         }
     }
 
@@ -679,6 +690,7 @@ impl Direct {
             "types" => self.types,
             "downloads" => self.downloads,
             "taxonomies" => self.taxonomies,
+            "agents" => self.agents,
             _ => false,
         }
     }
@@ -688,6 +700,7 @@ impl Direct {
         match event {
             "type_proposal" => self.types,
             "taxonomy_proposal" => self.taxonomies,
+            "agent_proposal" => self.agents,
             "proposal" => match p["op"].as_str().unwrap_or("update") {
                 "update" | "create" => self.notes,
                 "archive" | "unarchive" => self.archive,
@@ -710,6 +723,7 @@ fn confirm_of(agent: &Agent) -> ai::Confirm {
         types: c.types,
         downloads: c.downloads,
         taxonomies: c.taxonomies,
+        agents: c.agents,
     }
 }
 
@@ -783,6 +797,7 @@ fn setup(
         effort: agent.effort.as_deref().and_then(|e| e.parse().ok()),
         tools: agent.permissions.tools.clone(),
         limits: Limits::of(agent),
+        agent: Arc::new(agent.clone()),
     })
 }
 
@@ -877,7 +892,7 @@ impl Turn {
     async fn emit(&self, name: &'static str, mut data: Value) -> bool {
         let proposal = matches!(
             name,
-            "proposal" | "type_proposal" | "taxonomy_proposal" | "applied"
+            "proposal" | "type_proposal" | "taxonomy_proposal" | "agent_proposal" | "applied"
         );
         if proposal && let Some(a) = &self.agent_name {
             data["agent"] = json!(a);
@@ -1224,8 +1239,9 @@ impl Turn {
                 let call = c.clone();
                 let direct = setup.direct;
                 let limits = setup.limits.clone();
+                let agent = setup.agent.clone();
                 let got = tokio::task::spawn_blocking(move || {
-                    run_tool(&w, &author, direct, &limits, &call)
+                    run_tool(&w, &author, direct, &limits, &agent, &call)
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
@@ -1581,6 +1597,29 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             json!({ "name": { "type": "string", "description": "The taxonomy's name." } }),
         ),
         tool(
+            "list_agents",
+            "List every agent: its name, label, description, provider, model, whether it is enabled, whether it is built in, and how many triggers it has.",
+            json!({}),
+        ),
+        tool(
+            "get_agent",
+            "Read one agent: its agent file's WCL text as stored, the agent parsed (permissions and triggers included), and the vocabulary of agent files. Read it before proposing an agent change.",
+            json!({ "name": { "type": "string", "description": "The agent's name, such as `assistant`." } }),
+        ),
+        tool(
+            "propose_agent_change",
+            "Propose an agent file for the user to apply: a change to an existing agent, or a new agent under a new name. It is checked as the agent write would check it, and refused when it would give the agent a tool, a note type, a confirmation switch turned off or an Internet switch turned on that you do not have yourself; you cannot change your own file. The user sees a diff of the WCL and applies or discards it. When the user lets agent changes go ahead without asking, it is written at once and the result says applied.",
+            json!({
+                "name": { "type": "string", "description": "The agent's name: an existing agent to change, or a new name (lowercase letters, digits and underscores, starting with a letter) to create one." },
+                "wcl": { "type": "string", "description": "The whole new agent file as WCL text, with everything it keeps." },
+            }),
+        ),
+        tool(
+            "propose_agent_delete",
+            "Propose deleting an agent for the user to apply. Its threads stay. The built-in Assistant cannot be deleted, and you cannot delete yourself. When the user lets agent changes go ahead without asking, it is deleted at once and the result says applied.",
+            json!({ "name": { "type": "string", "description": "The agent's name." } }),
+        ),
+        tool(
             "propose_create",
             "Propose a new note for the user to create. It is checked, and the user sees the new note and creates or discards it. When the user lets note changes go ahead without asking, it is created at once and the result says applied, with its id and version.",
             json!({
@@ -1692,9 +1731,10 @@ fn run_tool(
     author: &Author,
     direct: Direct,
     limits: &Limits,
+    agent: &Agent,
     call: &ToolCall,
 ) -> ToolOut {
-    let out = propose_or_read(w, author, limits, call);
+    let out = propose_or_read(w, author, limits, agent, call);
     match &out.proposal {
         Some((event, p)) if direct.covers(event, p) => {
             let (event, p) = (*event, p.clone());
@@ -1756,6 +1796,14 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
                 ),
             }
         }
+        "agent_create" | "agent_change" | "agent_delete" => {
+            let name = done["agent_name"].as_str().unwrap_or_default();
+            match op.as_str() {
+                "agent_create" => format!("The agent {name} was created."),
+                "agent_delete" => format!("The agent {name} was deleted; its threads stay."),
+                _ => format!("The agent {name} was changed."),
+            }
+        }
         _ => format!("The type {name} was changed."),
     };
     let mut content = done.clone();
@@ -1788,12 +1836,17 @@ pub enum ApplyError {
     Write(writer::Error),
     /// A download got nothing (ai D27): the address rule, the size limit, the server.
     Fetch(ai::web::FetchError),
+    /// The proposing agent may not make the change (agents G20): it would give another agent
+    /// more than it has, or it is the agent's own file.
+    Refused(String),
 }
 
 impl std::fmt::Display for ApplyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApplyError::Invalid(m) | ApplyError::Stale(m) => f.write_str(m),
+            ApplyError::Invalid(m) | ApplyError::Stale(m) | ApplyError::Refused(m) => {
+                f.write_str(m)
+            }
             ApplyError::Write(e) => e.fmt(f),
             ApplyError::Fetch(e) => e.fmt(f),
         }
@@ -1813,6 +1866,7 @@ impl From<ApplyError> for ApiError {
         match e {
             ApplyError::Invalid(m) => ApiError::bad_request(m),
             ApplyError::Stale(m) => ApiError::new(StatusCode::CONFLICT, "stale", m),
+            ApplyError::Refused(m) => ApiError::new(StatusCode::FORBIDDEN, "not_permitted", m),
             ApplyError::Write(e) => e.into(),
             ApplyError::Fetch(e) => {
                 use ai::web::FetchError;
@@ -1842,6 +1896,9 @@ impl From<ApplyError> for ApiError {
 ///   type through the type write, a change planned and then applied as one commit;
 /// - a taxonomy proposal (ai D31): when the taxonomy file is still `before`, `after` as the
 ///   taxonomy `name` with its `renames`, or for `op` `delete` the taxonomy deleted.
+/// - an agent proposal (agents G20): when the agent file is still `before` and the change stays
+///   within its `proposer`'s permissions, `after` as the agent `name`, or for `op` `delete` the
+///   agent deleted.
 ///
 /// Returns `{op, note_id, version}` for a note, `{op, type_name}` for a type (`type_create` or
 /// `type_change`) and `{op, taxonomy_name, notes}` for a taxonomy (`taxonomy_create`,
@@ -1883,6 +1940,9 @@ pub fn apply_change(
     if event == "taxonomy_proposal" {
         return apply_taxonomy(w, author, p);
     }
+    if event == "agent_proposal" {
+        return crate::ai_agents::apply_agent(w, p);
+    }
     if event != "proposal" {
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
     }
@@ -1919,7 +1979,13 @@ pub fn apply_change(
 }
 
 /// A tool call's answer, a proposal not yet applied.
-fn propose_or_read(w: &Writer, author: &Author, limits: &Limits, call: &ToolCall) -> ToolOut {
+fn propose_or_read(
+    w: &Writer,
+    author: &Author,
+    limits: &Limits,
+    agent: &Agent,
+    call: &ToolCall,
+) -> ToolOut {
     if let Some(e) = &call.error {
         return ToolOut::error(e.clone());
     }
@@ -1999,6 +2065,10 @@ fn propose_or_read(w: &Writer, author: &Author, limits: &Limits, call: &ToolCall
         "taxonomy_format" => Ok(crate::ai_taxonomies::format()),
         "propose_taxonomy_change" => crate::ai_taxonomies::propose_change(w, &call.id, input),
         "propose_taxonomy_delete" => crate::ai_taxonomies::propose_delete(w, &call.id, input),
+        "list_agents" => crate::ai_agents::list(w),
+        "get_agent" => crate::ai_agents::get(w, input),
+        "propose_agent_change" => crate::ai_agents::propose_change(w, agent, &call.id, input),
+        "propose_agent_delete" => crate::ai_agents::propose_delete(w, agent, &call.id, input),
         other => Err(ToolOut::error(format!("there is no tool {other:?}"))),
     };
     result.unwrap_or_else(|e| e)

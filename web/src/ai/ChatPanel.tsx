@@ -16,6 +16,7 @@ import { formatValue } from "../components/Render";
 import { Spinner } from "../components/SyncStatus";
 import { activePane } from "../workspace/model";
 import { navigatePane, workspace } from "../workspace/store";
+import { AgentProposalCard } from "./AgentProposalCard";
 import { blockLines, lineDiff } from "./diff";
 import { DownloadCard } from "./DownloadCard";
 import { Markdown } from "./markdown";
@@ -86,6 +87,14 @@ export function stepLabel(name: string, input: Json): string {
       return `Checked a change to taxonomy ${s("name")}`;
     case "propose_taxonomy_delete":
       return `Checked a delete of taxonomy ${s("name")}`;
+    case "list_agents":
+      return "Listed the agents";
+    case "get_agent":
+      return `Read agent ${s("name")}`;
+    case "propose_agent_change":
+      return `Checked a change to agent ${s("name")}`;
+    case "propose_agent_delete":
+      return `Checked a delete of agent ${s("name")}`;
     case "web_search":
       return `Searched the web for “${s("query")}”`;
     case "fetch_url":
@@ -142,6 +151,14 @@ export function activeLabel(name: string, input: Json): string {
       return "Checking a taxonomy change";
     case "propose_taxonomy_delete":
       return "Checking a taxonomy delete";
+    case "list_agents":
+      return "Listing the agents";
+    case "get_agent":
+      return "Reading an agent";
+    case "propose_agent_change":
+      return "Checking an agent change";
+    case "propose_agent_delete":
+      return "Checking an agent delete";
     case "web_search":
       return "Searching the web";
     case "fetch_url":
@@ -153,7 +170,7 @@ export function activeLabel(name: string, input: Json): string {
   }
 }
 
-/** The type and taxonomy tools (ai D18, D31), whose steps return no notes. */
+/** The type, taxonomy and agent tools (ai D18, D31, agents G20), whose steps return no notes. */
 const TYPE_TOOLS = new Set([
   "list_types",
   "get_type",
@@ -164,6 +181,10 @@ const TYPE_TOOLS = new Set([
   "taxonomy_format",
   "propose_taxonomy_change",
   "propose_taxonomy_delete",
+  "list_agents",
+  "get_agent",
+  "propose_agent_change",
+  "propose_agent_delete",
 ]);
 
 /** The host of `url`, or `url` itself when it is not a URL. */
@@ -467,6 +488,15 @@ const TAXONOMY_DID: Record<AppliedTaxonomy["op"], string> = {
   taxonomy_delete: "Deleted taxonomy",
 };
 
+type AppliedAgent = Extract<Applied, { agent_name: string }>;
+
+/** What an applied agent change did (agents G20). */
+const AGENT_DID: Record<AppliedAgent["op"], string> = {
+  agent_change: "Changed agent",
+  agent_create: "Created agent",
+  agent_delete: "Deleted agent",
+};
+
 /**
  * A change the AI made itself, its confirmation off in Settings > AI (ai D22): what it did,
  * linking to the note, the trash or the type.
@@ -485,10 +515,16 @@ export function AppliedCard(props: { applied: Applied }) {
     const x = a();
     return "taxonomy_name" in x ? x : undefined;
   };
+  const agent = (): AppliedAgent | undefined => {
+    const x = a();
+    return "agent_name" in x ? x : undefined;
+  };
   const title = (n: { title: Json; note_id: string }) => (typeof n.title === "string" && n.title ? n.title : n.note_id);
   const label = () => {
     const n = note();
     const x = taxonomy();
+    const g = agent();
+    if (g) return `${AGENT_DID[g.op]} ${g.agent_name}`;
     if (x) return `${TAXONOMY_DID[x.op]} ${x.taxonomy_name}`;
     if (!n) return `${a().op === "type_create" ? "Created" : "Changed"} type ${typeName()}`;
     return n.op === "delete" ? `Moved ${title(n)} to the trash` : `${DID[n.op]} ${title(n)}`;
@@ -502,10 +538,24 @@ export function AppliedCard(props: { applied: Applied }) {
             <Show
               when={taxonomy()}
               fallback={
-                <>
-                  {a().op === "type_create" ? "Created type " : "Changed type "}
-                  <a href={`/types/${encodeURIComponent(typeName())}`}>{typeName()}</a>
-                </>
+                <Show
+                  when={agent()}
+                  fallback={
+                    <>
+                      {a().op === "type_create" ? "Created type " : "Changed type "}
+                      <a href={`/types/${encodeURIComponent(typeName())}`}>{typeName()}</a>
+                    </>
+                  }
+                >
+                  {(g) => (
+                    <>
+                      {AGENT_DID[g().op]}{" "}
+                      <Show when={g().op !== "agent_delete"} fallback={<strong>{g().agent_name}</strong>}>
+                        <a href={`/agents/${encodeURIComponent(g().agent_name)}`}>{g().agent_name}</a>
+                      </Show>
+                    </>
+                  )}
+                </Show>
               }
             >
               {(x) => (
@@ -807,6 +857,7 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                         <Match when={part.kind === "proposal" && part}>{(p) => <ProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "taxonomy_proposal" && part}>{(p) => <TaxonomyProposalCard part={p()} turn={t()} index={i()} />}</Match>
+                        <Match when={part.kind === "agent_proposal" && part}>{(p) => <AgentProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "applied" && part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
                         <Match when={part.kind === "download" && part}>{(p) => <DownloadCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>

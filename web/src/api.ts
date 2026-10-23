@@ -409,7 +409,7 @@ export interface AgentThreadSummary {
 
 /** A proposal of a thread and where it stands (agents G8). */
 export interface StoredProposal {
-  /** `proposal`, `type_proposal`, `taxonomy_proposal`, or `applied` for a change the agent made. */
+  /** `proposal`, `type_proposal`, `taxonomy_proposal`, `agent_proposal`, or `applied` for a change the agent made. */
   event: string;
   data: Record<string, unknown>;
   status: "pending" | "applied" | "discarded" | "failed" | "stale" | "made";
@@ -642,6 +642,8 @@ export interface AiConfirm {
   downloads: boolean;
   /** Changing, creating and deleting taxonomies (ai D31). */
   taxonomies: boolean;
+  /** Changing, creating and deleting agents (agents G20). */
+  agents: boolean;
 }
 
 /** A model a provider offers now (ai D6). */
@@ -671,6 +673,7 @@ export type AiApplied =
   | { op: "update" | "create" | "archive" | "unarchive" | "delete"; note_id: string; version: string }
   | { op: "type_change" | "type_create"; type_name: string }
   | { op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes: number }
+  | { op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string }
   | { op: "download"; asset_id: string; filename: string; media_type?: string; size?: number; url?: string };
 
 /** A poll of a chat turn's events through an app's embedded server (ai D23). */

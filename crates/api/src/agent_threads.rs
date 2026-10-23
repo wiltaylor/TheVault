@@ -73,7 +73,7 @@ pub struct Transcript {
 /// One proposal of a thread and its outcome (agents G8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stored {
-    /// `proposal`, `type_proposal`, `taxonomy_proposal`, or `applied` for a change the agent
+    /// `proposal`, `type_proposal`, `taxonomy_proposal`, `agent_proposal`, or `applied` for a change the agent
     /// made itself.
     pub event: String,
     /// The event's data as the client received it.
@@ -179,6 +179,11 @@ pub fn proposal_what(event: &str, d: &Value) -> String {
             _ if d["exists"] == true => format!("change to taxonomy {}", s("name")),
             _ => format!("new taxonomy {}", s("name")),
         },
+        "agent_proposal" => match d["op"].as_str() {
+            Some("delete") => format!("delete of agent {}", s("name")),
+            _ if d["exists"] == true => format!("change to agent {}", s("name")),
+            _ => format!("new agent {}", s("name")),
+        },
         _ => match d["op"].as_str().unwrap_or("update") {
             "update" => format!("edit of note {}", s("note_id")),
             "create" => format!("new {} note{}", s("type"), quoted(&d["title"])),
@@ -212,6 +217,11 @@ fn proposal_done(event: &str, d: &Value, done: &Value) -> String {
                 };
                 format!("changed taxonomy {}{moved}", s(d, "name"))
             }
+        },
+        "agent_proposal" => match d["op"].as_str() {
+            Some("delete") => format!("deleted agent {}", s(d, "name")),
+            _ if d["exists"] == true => format!("changed agent {}", s(d, "name")),
+            _ => format!("created agent {}", s(d, "name")),
         },
         _ => match d["op"].as_str().unwrap_or("update") {
             "create" => {
@@ -888,6 +898,40 @@ mod tests {
             ]
         );
         assert!(t.take_outcome_lines().is_empty());
+    }
+
+    #[test]
+    fn agent_outcome_lines_name_the_agent() {
+        let mut t = Transcript::default();
+        for (id, data, status) in [
+            (
+                "a",
+                json!({ "kind": "agent", "op": "change", "name": "clerk", "exists": true }),
+                Status::Applied,
+            ),
+            (
+                "b",
+                json!({ "kind": "agent", "op": "create", "name": "helper", "exists": false }),
+                Status::Discarded,
+            ),
+            (
+                "c",
+                json!({ "kind": "agent", "op": "delete", "name": "old" }),
+                Status::Applied,
+            ),
+        ] {
+            let mut data = data;
+            data["id"] = json!(id);
+            t.proposals.push(stored("agent_proposal", data, status));
+        }
+        assert_eq!(
+            t.take_outcome_lines(),
+            [
+                "[Applied by the user: changed agent clerk]",
+                "[Discarded by the user: new agent helper]",
+                "[Applied by the user: deleted agent old]"
+            ]
+        );
     }
 
     #[test]

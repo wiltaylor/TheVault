@@ -59,7 +59,7 @@ impl Api {
         // The chat's switches are the built-in Assistant's (agents G6).
         let mut all = json!({
             "notes": true, "archive": true, "delete": true,
-            "types": true, "downloads": true, "taxonomies": true,
+            "types": true, "downloads": true, "taxonomies": true, "agents": true,
         });
         for (k, v) in confirm.as_object().into_iter().flatten() {
             all[k] = v.clone();

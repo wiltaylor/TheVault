@@ -179,6 +179,10 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `taxonomy_format` | The taxonomy-file sections of the vault format, and the `taxonomy` field kind |
 | `propose_taxonomy_change` | Checks a whole new taxonomy file, for an existing taxonomy or a new name, with its term `renames`, and shows it to you; writes it only when confirmation is off. See [Apply a taxonomy change](#apply-a-taxonomy-change) |
 | `propose_taxonomy_delete` | Checks that a taxonomy exists and nothing uses it, and shows the delete to you; deletes it only when confirmation is off |
+| `list_agents` | Every agent's name, label, description, provider, model, whether it is enabled and built in, and its trigger count |
+| `get_agent` | Reads one agent file's WCL, with the agent parsed and the agent-file vocabulary |
+| `propose_agent_change` | Checks a whole new agent file, for an existing agent or a new name, and shows it to you; writes it only when confirmation is off. Refused when it would give the agent more than the proposing agent has. See [Agents that manage agents](ai-agents.md#agents-that-manage-agents) |
+| `propose_agent_delete` | Checks that an agent exists and is not the Assistant or the proposing agent, and shows the delete to you; deletes it only when confirmation is off |
 | `web_search` | Searches the web with Brave Search, 1 to 10 results; offered only with a Brave Search key. See [Web search](#web-search) |
 | `fetch_url` | Reads a web page or file for the model; never a change. See [Read pages and download files](#read-pages-and-download-files) |
 | `download_asset` | Downloads a file of any size into the vault as an asset; stores it only when [confirmation is off](#changes-the-ai-makes) |
@@ -317,7 +321,7 @@ Scripts do not use this prompt: a script's `ai` call passes its own `system`.
 
 ### Changes the AI makes
 
-By default every change the model asks for waits for you as a proposal. Each agent's Permissions tab has six confirmation switches, all on by default; the panel's are the Assistant's (agents G4, G6), and a vault from before agents moves the ones it had in Settings > AI there on its first start:
+By default every change the model asks for waits for you as a proposal. Each agent's Permissions tab has seven confirmation switches, all on by default; the panel's are the Assistant's (agents G4, G6), and a vault from before agents moves the ones it had in Settings > AI there on its first start:
 
 | Switch | Covers |
 |---|---|
@@ -327,6 +331,7 @@ By default every change the model asks for waits for you as a proposal. Each age
 | Ask before changing types | `propose_type_change`, changed and new types |
 | Ask before downloading files into the vault | `download_asset`; see [Read pages and download files](#read-pages-and-download-files) |
 | Ask before changing taxonomies | `propose_taxonomy_change` and `propose_taxonomy_delete`, changed, new and deleted taxonomies |
+| Ask before changing agents | `propose_agent_change` and `propose_agent_delete`, changed, new and deleted agents (see [Agents that manage agents](ai-agents.md#agents-that-manage-agents)) |
 
 Each switch saves when you change it. With a switch off, the tool makes that kind of change itself, right after checking it, through the same writes Apply uses:
 
@@ -334,6 +339,7 @@ Each switch saves when you change it. With a switch off, the tool makes that kin
 - A delete moves the note to the trash, where you can restore it. The AI never empties the trash or deletes a note for good, whatever the switches say.
 - A type change is planned and applied as one commit, as `POST /api/types/{name}/change` does; a new type is written as `PUT /api/types/{name}` does.
 - A taxonomy change is written with its renames as `PUT /api/taxonomies/{name}` does, and a delete as `DELETE /api/taxonomies/{name}` does.
+- An agent change is written as `PUT /api/agents/{name}` does, and a delete as `DELETE /api/agents/{name}` does, after checking it again against the proposing agent.
 
 ### Internet switches
 
@@ -349,9 +355,9 @@ With a switch off, the tool is left out of the tool list, so the model never see
 
 A change that does not check, or that fails, writes nothing and goes back to the model as an error. The model is told the change was made, with the note's new version.
 
-The panel shows each change made this way as a short card, such as "Edited Shopping", "Created Reading list", "Archived Old plan", "Moved Scratch to the trash", "Changed type task" or "Changed taxonomy status", linking to the note, the trash, the type or Settings > Taxonomies. A note or type open in a pane shows the change at once, unless you have unsaved edits in it.
+The panel shows each change made this way as a short card, such as "Edited Shopping", "Created Reading list", "Archived Old plan", "Moved Scratch to the trash", "Changed type task", "Changed taxonomy status" or "Changed agent clerk", linking to the note, the trash, the type, Settings > Taxonomies or the agent's screen. A note or type open in a pane shows the change at once, unless you have unsaved edits in it.
 
-The change is written as the agent when the request names one, else as whoever asked: the signed-in user in the web app, or the token's name for an API caller. It is in the note's history under that name like any other write; the trail line is the same as for any chat call. The switches never widen a caller's rights: a caller whose scope cannot make the write still gets a proposal. Notes need `write`, types and taxonomies need `admin`, so a `read` token always gets proposals, and a `write` token gets proposals for type and taxonomy changes.
+The change is written as the agent when the request names one, else as whoever asked: the signed-in user in the web app, or the token's name for an API caller. It is in the note's history under that name like any other write; the trail line is the same as for any chat call. The switches never widen a caller's rights: a caller whose scope cannot make the write still gets a proposal. Notes need `write`, types, taxonomies and agents need `admin`, so a `read` token always gets proposals, and a `write` token gets proposals for type, taxonomy and agent changes.
 
 ### Refusals and errors
 
@@ -415,8 +421,8 @@ Settings > AI uses these routes. Every route under `/api/integrations/ai` needs 
 
 | Method and path | Does |
 |---|---|
-| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`, and for OpenAI the `api` its calls use, `responses` or `chat_completions` (always `responses` without a URL); the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types, downloads, taxonomies }`, with every switch filled |
-| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types?, downloads?, taxonomies? }, urls?: { anthropic?, openai? }, openai_api? }`; an empty string clears a value, an empty `system_prompt` means the default, an empty URL the official API, and an empty `openai_api` the Responses API. Another `openai_api` than `responses` or `chat_completions` is a 400. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
+| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`, and for OpenAI the `api` its calls use, `responses` or `chat_completions` (always `responses` without a URL); the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types, downloads, taxonomies, agents }`, with every switch filled |
+| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types?, downloads?, taxonomies?, agents? }, urls?: { anthropic?, openai? }, openai_api? }`; an empty string clears a value, an empty `system_prompt` means the default, an empty URL the official API, and an empty `openai_api` the Responses API. Another `openai_api` than `responses` or `chat_completions` is a 400. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
 | `PUT /api/integrations/ai/{anthropic\|openai}/key` | Stores `{ key }`; an empty key deletes it |
 | `POST /api/integrations/ai/{provider}/test` | Sends the test request to `{ model }` or the default model, and answers `{ ok, model, ms, text, api, error }`. On OpenAI with a custom URL it detects and saves the API type as above, and `api` names the one the answer came over; otherwise `api` is null |
 | `POST /api/integrations/ai/chatgpt/start` | Answers `{ auth_url }`, the ChatGPT sign-in page |

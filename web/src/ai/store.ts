@@ -24,7 +24,7 @@
 
 import { createContext, createRoot, createSignal, untrack, useContext } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { ASSISTANT, agents, refreshAgents } from "../agents";
+import { ASSISTANT, agents, agentsChanged, refreshAgents } from "../agents";
 import {
   type AgentThread,
   type AiApplied,
@@ -161,6 +161,31 @@ export type TaxonomyProposal =
     }
   | { id: string; kind: "taxonomy"; op: "delete"; name: string; before: string };
 
+/**
+ * An agent change the model proposed, checked by the server against the agent write and against
+ * the proposing agent's own permissions, but not written (agents G20).
+ */
+export type AgentProposal =
+  | {
+      id: string;
+      kind: "agent";
+      op: "create" | "change";
+      name: string;
+      label?: string;
+      /** Whether the agent existed when proposed; a new name proposes a new agent. */
+      exists: boolean;
+      /** The agent file as stored when proposed; null for a new agent. */
+      before: string | null;
+      after: string;
+      issues: { at?: string; message: string; severity?: string }[];
+      /** The agent that proposed it, which the server checks the change against again. */
+      proposer?: string;
+    }
+  | { id: string; kind: "agent"; op: "delete"; name: string; label?: string; before: string; proposer?: string };
+
+/** What the card says when the agent changed after the proposal (agents G20). */
+export const AGENT_CHANGED = "This agent changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
+
 /** What the card says when the taxonomy changed after the proposal (ai D31). */
 export const TAXONOMY_CHANGED = "This taxonomy changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
 
@@ -180,7 +205,8 @@ export interface WebLink {
 export type Applied =
   | { id: string; op: NoteOp; note_id: string; title: Json; version: string }
   | { id: string; op: "type_change" | "type_create"; type_name: string }
-  | { id: string; op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes?: number };
+  | { id: string; op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes?: number }
+  | { id: string; op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string };
 
 /** A file the model asked to download into the vault as an asset (ai D27). */
 export interface DownloadProposal {
@@ -223,6 +249,7 @@ export type Part =
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
   | { kind: "taxonomy_proposal"; proposal: TaxonomyProposal; state: ProposalState; error?: string }
+  | { kind: "agent_proposal"; proposal: AgentProposal; state: ProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
 
 export interface Turn {
@@ -330,6 +357,18 @@ function taxonomyDone(p: TaxonomyProposal, done: AiApplied): string {
   return `changed taxonomy ${p.name}${notes ? `, its renames moving ${notes} ${notes === 1 ? "note" : "notes"}` : ""}`;
 }
 
+/** What an agent proposal is, for an outcome line (agents G20). */
+function agentWhat(p: AgentProposal): string {
+  if (p.op === "delete") return `delete of agent ${p.name}`;
+  return p.exists ? `change to agent ${p.name}` : `new agent ${p.name}`;
+}
+
+/** What an applied agent proposal did, for an outcome line. */
+function agentDone(p: AgentProposal): string {
+  if (p.op === "delete") return `deleted agent ${p.name}`;
+  return p.exists ? `changed agent ${p.name}` : `created agent ${p.name}`;
+}
+
 /** The notices the server put in the turn's new messages, such as a round limit or a cut-off. */
 function noticesOf(data: { messages?: unknown }): Part[] {
   if (!Array.isArray(data.messages)) return [];
@@ -409,7 +448,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * or type take it. In an app the change reaches the device's copy only by sync, so the app asks
  * its embedded server for a round first and waits for it to end (ai D23).
  */
-export async function settle(kind: "note" | "type" | "taxonomy") {
+export async function settle(kind: "note" | "type" | "taxonomy" | "agent") {
+  // An agent change shows in the sidebar's list and any open agent screen (agents G20).
+  if (kind === "agent") {
+    await agentsChanged().catch(() => undefined);
+    return;
+  }
   if (await appInfo().catch(() => null)) {
     const asked = Date.now();
     try {
@@ -438,7 +482,10 @@ export const NOTE_GONE = "This note is no longer there, so nothing was applied."
 
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
-  return (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "download") && (p.state === "open" || p.state === "failed");
+  return (
+    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "download") &&
+    (p.state === "open" || p.state === "failed")
+  );
 }
 
 /** Fill tool step `p` from its `tool_result` summary. */
@@ -478,6 +525,13 @@ function eventPart(event: string, d: Record<string, unknown>): Part | null {
               affected: typeof d.affected === "number" ? d.affected : 0,
             } as unknown as TaxonomyProposal);
       return { kind: "taxonomy_proposal", proposal: p, state: "open" };
+    }
+    case "agent_proposal": {
+      const p =
+        d.op === "delete"
+          ? (d as unknown as AgentProposal)
+          : ({ ...d, op: d.exists ? "change" : "create", issues: Array.isArray(d.issues) ? d.issues : [] } as unknown as AgentProposal);
+      return { kind: "agent_proposal", proposal: p, state: "open" };
     }
     case "applied": {
       if (d.op === "download") {
@@ -732,7 +786,8 @@ function createConversation(agent: string, id: string | null) {
       }
       case "proposal":
       case "type_proposal":
-      case "taxonomy_proposal": {
+      case "taxonomy_proposal":
+      case "agent_proposal": {
         // A re-read turn's proposal, applied or discarded meanwhile, shows as it stands.
         const stored = replay.get(String(d.id));
         push((stored && storedPart(stored)) || eventPart(e.event, d)!);
@@ -745,7 +800,15 @@ function createConversation(agent: string, id: string | null) {
         if (d.op === "download") break;
         const applied = d as unknown as Applied;
         // Open views of the note or type take the change, as after a write of this client's own.
-        void settle(applied.op === "type_change" || applied.op === "type_create" ? "type" : applied.op.startsWith("taxonomy_") ? "taxonomy" : "note");
+        void settle(
+          applied.op === "type_change" || applied.op === "type_create"
+            ? "type"
+            : applied.op.startsWith("taxonomy_")
+              ? "taxonomy"
+              : applied.op.startsWith("agent_")
+                ? "agent"
+                : "note",
+        );
         break;
       }
       case "refusal": {
@@ -1117,6 +1180,7 @@ function createConversation(agent: string, id: string | null) {
       if (p.kind === "proposal") await applyProposal(turn, i);
       else if (p.kind === "download") await applyDownload(turn, i);
       else if (p.kind === "taxonomy_proposal") await applyTaxonomyProposal(turn, i);
+      else if (p.kind === "agent_proposal") await applyAgentProposal(turn, i);
       else await applyTypeProposal(turn, i);
       const after = chat.turns[turn]?.parts[i];
       if (!after || !("state" in after) || after.state !== "applied") return;
@@ -1222,6 +1286,53 @@ function createConversation(agent: string, id: string | null) {
     discarded(p.proposal);
   }
 
+  function setAgentProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "agent_proposal") return;
+        p.state = patch.state;
+        p.error = patch.error;
+      }),
+    );
+  }
+
+  /**
+   * Apply an agent proposal with POST /api/ai/apply, on the home server (agents G20): the new
+   * agent file, or the delete. The server re-reads the file and writes nothing when it changed
+   * since the proposal (a 409), and checks the change again against the proposing agent. It
+   * needs admin: from an app, the server answers that it is done in the web app. The sidebar's
+   * agent list reads again after it.
+   */
+  async function applyAgentProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "agent_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+    setAgentProposal(turn, part, { state: "applying" });
+    try {
+      await api.aiApply(p.proposal);
+      setAgentProposal(turn, part, { state: "applied" });
+      record(p.proposal.id, `[Applied by the user: ${agentDone(p.proposal)}]`);
+      await settle("agent");
+      notify();
+    } catch (e) {
+      const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
+      const error = stale ? AGENT_CHANGED : e instanceof Error ? e.message : String(e);
+      setAgentProposal(turn, part, { state: stale ? "stale" : "failed", error });
+      record(p.proposal.id, `[Failed to apply: ${agentWhat(p.proposal)}: ${error}]`);
+    }
+  }
+
+  function discardAgentProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "agent_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setAgentProposal(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${agentWhat(p.proposal)}]`);
+    discarded(p.proposal);
+  }
+
     /** A view shows the conversation; `listener` hears of each change until it lets go. */
     function hold(listener?: () => void) {
       holders++;
@@ -1270,6 +1381,8 @@ function createConversation(agent: string, id: string | null) {
       discardTypeProposal,
       applyTaxonomyProposal,
       discardTaxonomyProposal,
+      applyAgentProposal,
+      discardAgentProposal,
     };
     return self;
   });
@@ -1453,6 +1566,8 @@ export function createChatSession(options: ChatOptions = {}) {
       discardTypeProposal: (turn: number, part: number) => current().discardTypeProposal(turn, part),
       applyTaxonomyProposal: (turn: number, part: number) => current().applyTaxonomyProposal(turn, part),
       discardTaxonomyProposal: (turn: number, part: number) => current().discardTaxonomyProposal(turn, part),
+      applyAgentProposal: (turn: number, part: number) => current().applyAgentProposal(turn, part),
+      discardAgentProposal: (turn: number, part: number) => current().discardAgentProposal(turn, part),
     };
   });
 }
@@ -1486,6 +1601,8 @@ export const applyTypeProposal = panel.applyTypeProposal;
 export const discardTypeProposal = panel.discardTypeProposal;
 export const applyTaxonomyProposal = panel.applyTaxonomyProposal;
 export const discardTaxonomyProposal = panel.discardTaxonomyProposal;
+export const applyAgentProposal = panel.applyAgentProposal;
+export const discardAgentProposal = panel.discardAgentProposal;
 
 /** The conversation the cards below act on: the panel's, unless a Chat tab provides its own. */
 export const ChatContext = createContext<ChatSession>(panel);

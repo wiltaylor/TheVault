@@ -10,6 +10,7 @@
   types:      bool?
   downloads:  bool?
   taxonomies: bool?
+  agents:     bool?
 }
 
 @block("web") type AgentWeb {
