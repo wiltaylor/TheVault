@@ -1,10 +1,11 @@
 // The actions the command palette offers: create a note of any type, capture, go to a page or a
 // type's notes, open a settings section, and act on the workspace's panes, tabs and sidebars.
 
-import type { TypeDef } from "../api";
+import { AGENT_ICON, agentLabel, setAgentsOpen, setCreatingAgent } from "../agents";
+import type { AgentSummary, TypeDef } from "../api";
 import type { ActiveNote } from "../archive";
 import { openCapture } from "../capture/store";
-import { focusPanel, toggleSidebar } from "../sidebars";
+import { focusPanel, setLeftDrawer, toggleSidebar } from "../sidebars";
 import { typeNavLabel } from "../sidebarTypes";
 import { toggleTheme } from "../theme";
 import * as M from "../workspace/model";
@@ -201,5 +202,40 @@ export function generalActions(opts: { phone: boolean; dark: boolean; androidApp
     run: toggleTheme,
   });
   for (const a of out) a.general = true;
+  return out;
+}
+
+/**
+ * "New agent", in the web app only, and "Open agent …" for each agent (agents G3). New agent
+ * opens the left sidebar's name box for it, in the drawer on a narrow screen.
+ */
+export function agentActions(list: readonly AgentSummary[], readOnly: boolean): Action[] {
+  const out: Action[] = [];
+  if (!readOnly) {
+    out.push({
+      id: "agent:new",
+      section: "Create",
+      label: "New agent",
+      keywords: ["Create agent", "Add agent", "AI agent"],
+      icon: { type: AGENT_ICON },
+      run: () => {
+        if (window.matchMedia?.("(max-width: 1024px)").matches) setLeftDrawer(true);
+        else toggleSidebar("left", true);
+        setAgentsOpen(true);
+        setCreatingAgent(true);
+      },
+    });
+  }
+  for (const a of list) {
+    const label = agentLabel(a);
+    out.push({
+      id: `agent:${a.name}`,
+      section: "Go to",
+      label: `Open agent ${label}`,
+      keywords: [label, a.name, `${label} agent`, "Agent"],
+      icon: { type: a.icon || AGENT_ICON },
+      href: `/agents/${encodeURIComponent(a.name)}`,
+    });
+  }
   return out;
 }

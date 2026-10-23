@@ -484,7 +484,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
         "/api/agents",
-        "Every agent's summary, the built-in Assistant first",
+        "Every agent's summary, the built-in Assistant first, and the tools an agent may name",
     ),
     (
         "GET",

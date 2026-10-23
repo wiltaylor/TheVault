@@ -22,7 +22,7 @@ function label(item: PinItem): string {
 }
 
 /** A one-line name field: Enter or leaving the field confirms, Escape cancels. */
-function NameInput(props: { value?: string; label: string; onDone: (name: string | null) => void }) {
+export function NameInput(props: { value?: string; label: string; onDone: (name: string | null) => void }) {
   let input!: HTMLInputElement;
   let done = false;
   const finish = (name: string | null) => {

@@ -54,11 +54,6 @@ function status(over: Partial<Record<"anthropic" | "openai" | "chatgpt", object>
 
 const DEFAULT_PROMPT = "You are the assistant inside TheVault.\n";
 
-/** A status whose chat system prompt is `prompt`, customised. */
-function withPrompt(prompt: string): AiStatus {
-  return { ...status(), system_prompt: prompt, system_prompt_custom: true };
-}
-
 const ANTHROPIC_MODELS = {
   provider: "anthropic",
   model: "claude-opus-5",
@@ -276,140 +271,21 @@ describe("Settings > AI", () => {
   });
 });
 
-describe("the Chat system prompt card", () => {
-  const prompt = () => card("Chat system prompt");
-  const box = () => prompt().getByLabelText("System prompt") as HTMLTextAreaElement;
-  const button = (name: string) => prompt().getByRole("button", { name }) as HTMLButtonElement;
-
-  it("shows the default prompt in use, with Reset disabled", async () => {
+describe("the chat settings moved to Assistant (agents G6)", () => {
+  it("links to Assistant's agent screen in place of the system prompt and switch cards", async () => {
     aiStatus.mockResolvedValue(status());
     render(() => <Ai />);
-    await screen.findByRole("region", { name: "Chat system prompt" });
-    expect(box().value).toBe(DEFAULT_PROMPT);
-    expect(prompt().getByRole("status").textContent).toBe("Default");
-    expect(button("Reset to default").disabled).toBe(true);
-    expect(button("Save").disabled).toBe(true);
-  });
-
-  it("saves an edited prompt and shows it as customised", async () => {
-    aiStatus.mockResolvedValue(status());
-    aiSaveSettings.mockResolvedValue(withPrompt("Be terse."));
-    render(() => <Ai />);
-    await screen.findByRole("region", { name: "Chat system prompt" });
-    fireEvent.input(box(), { target: { value: "Be terse." } });
-    fireEvent.click(button("Save"));
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ system_prompt: "Be terse." }));
-    await waitFor(() => expect(prompt().getByRole("status").textContent).toBe("Customised"));
-    expect(box().value).toBe("Be terse.");
-    expect(button("Reset to default").disabled).toBe(false);
-  });
-
-  it("resets a customised prompt to the default", async () => {
-    aiStatus.mockResolvedValue(withPrompt("Be terse."));
-    aiSaveSettings.mockResolvedValue(status());
-    render(() => <Ai />);
-    await screen.findByRole("region", { name: "Chat system prompt" });
-    expect(box().value).toBe("Be terse.");
-    expect(prompt().getByRole("status").textContent).toBe("Customised");
-    fireEvent.click(button("Reset to default"));
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ system_prompt: "" }));
-    await waitFor(() => expect(box().value).toBe(DEFAULT_PROMPT));
-    expect(prompt().getByRole("status").textContent).toBe("Default");
-    expect(button("Reset to default").disabled).toBe(true);
-  });
-
-  it("refuses a prompt over the limit without sending it", async () => {
-    aiStatus.mockResolvedValue(status());
-    render(() => <Ai />);
-    await screen.findByRole("region", { name: "Chat system prompt" });
-    fireEvent.input(box(), { target: { value: "x".repeat(32_001) } });
-    fireEvent.click(button("Save"));
-    expect((await prompt().findByRole("alert")).textContent).toContain("32000");
-    expect(aiSaveSettings).not.toHaveBeenCalled();
-  });
-});
-
-describe("the Changes the AI makes card", () => {
-  const changes = () => card("Changes the AI makes");
-  const labels = [
-    "Ask before creating and editing notes",
-    "Ask before archiving notes",
-    "Ask before moving notes to the trash",
-    "Ask before changing types",
-    "Ask before downloading files into the vault",
-    "Ask before changing taxonomies",
-  ];
-
-  it("shows the six switches on by default and says the trash is never emptied", async () => {
-    aiStatus.mockResolvedValue(status());
-    render(() => <Ai />);
-    await screen.findByRole("region", { name: "Changes the AI makes" });
-    for (const name of labels) {
-      expect((changes().getByRole("switch", { name }) as HTMLInputElement).checked).toBe(true);
-    }
-    expect(changes().getByText(/never empties the trash/)).toBeTruthy();
-  });
-
-  it("saves one switch as a partial confirm and shows the answer", async () => {
-    aiStatus.mockResolvedValue(status());
-    const off = { ...status(), confirm: { notes: true, archive: true, delete: false, types: true, downloads: true, taxonomies: true } };
-    aiSaveSettings.mockResolvedValue(off);
-    render(() => <Ai />);
-    await screen.findByRole("region", { name: "Changes the AI makes" });
-    const trash = changes().getByRole("switch", { name: "Ask before moving notes to the trash" }) as HTMLInputElement;
-    fireEvent.click(trash);
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ confirm: { delete: false } }));
-    await waitFor(() => expect(trash.checked).toBe(false));
-    expect((changes().getByRole("switch", { name: "Ask before creating and editing notes" }) as HTMLInputElement).checked).toBe(true);
-  });
-
-  it("saves the downloads switch (ai D27)", async () => {
-    aiStatus.mockResolvedValue(status());
-    aiSaveSettings.mockResolvedValue({ ...status(), confirm: { ...status().confirm, downloads: false } });
-    render(() => <Ai />);
-    await screen.findByRole("region", { name: "Changes the AI makes" });
-    const downloads = changes().getByRole("switch", { name: "Ask before downloading files into the vault" }) as HTMLInputElement;
-    fireEvent.click(downloads);
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ confirm: { downloads: false } }));
-    await waitFor(() => expect(downloads.checked).toBe(false));
-  });
-
-  it("saves the taxonomies switch (ai D31)", async () => {
-    aiStatus.mockResolvedValue(status());
-    aiSaveSettings.mockResolvedValue({ ...status(), confirm: { ...status().confirm, taxonomies: false } });
-    render(() => <Ai />);
-    await screen.findByRole("region", { name: "Changes the AI makes" });
-    const taxonomies = changes().getByRole("switch", { name: "Ask before changing taxonomies" }) as HTMLInputElement;
-    expect(taxonomies.checked).toBe(true);
-    fireEvent.click(taxonomies);
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ confirm: { taxonomies: false } }));
-    await waitFor(() => expect(taxonomies.checked).toBe(false));
-  });
-
-  it("shows the Internet switches on and saves one as a partial web (ai D28)", async () => {
-    aiStatus.mockResolvedValue(status());
-    aiSaveSettings.mockResolvedValue({ ...status(), web: { search: true, read: false, download: true } });
-    render(() => <Ai />);
-    await screen.findByRole("region", { name: "Changes the AI makes" });
-    for (const name of [/Let the AI search the web/, "Let the AI read web pages", "Let the AI download files into the vault"]) {
-      expect((changes().getByRole("switch", { name }) as HTMLInputElement).checked).toBe(true);
-    }
-    expect(changes().getByText(/Needs a Brave Search key/)).toBeTruthy();
-    const read = changes().getByRole("switch", { name: "Let the AI read web pages" }) as HTMLInputElement;
-    fireEvent.click(read);
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ web: { read: false } }));
-    await waitFor(() => expect(read.checked).toBe(false));
-  });
-
-  it("shows a failed save", async () => {
-    aiStatus.mockResolvedValue(status());
-    aiSaveSettings.mockRejectedValue(new Error("no secrets key"));
-    render(() => <Ai />);
-    await screen.findByRole("region", { name: "Changes the AI makes" });
-    const types = changes().getByRole("switch", { name: "Ask before changing types" }) as HTMLInputElement;
-    fireEvent.click(types);
-    expect((await changes().findByRole("alert")).textContent).toContain("no secrets key");
-    expect(types.checked).toBe(true);
+    await ready();
+    const link = screen.getByRole("link", { name: "Assistant agent" });
+    expect(link.getAttribute("href")).toBe("/agents/assistant");
+    expect(link.parentElement).toHaveTextContent("The chat panel's prompt and permissions are on the Assistant agent.");
+    expect(screen.queryByRole("region", { name: "Chat system prompt" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Changes the AI makes" })).toBeNull();
+    expect(screen.queryByLabelText("System prompt")).toBeNull();
+    expect(screen.queryByRole("switch")).toBeNull();
+    // Settings > AI keeps the providers.
+    expect(screen.getByRole("region", { name: "Anthropic" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "OpenAI" })).toBeTruthy();
   });
 });
 

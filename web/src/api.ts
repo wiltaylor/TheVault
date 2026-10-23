@@ -388,6 +388,62 @@ export interface Task {
   wcl?: string;
 }
 
+/** One line of `GET /api/agents` (agents G2). An agent whose file does not check has `error`. */
+export interface AgentSummary {
+  name: string;
+  label: string;
+  description?: string | null;
+  icon?: string | null;
+  provider?: AiProvider | null;
+  model?: string | null;
+  enabled?: boolean;
+  triggers?: number;
+  built_in: boolean;
+  error?: string;
+}
+
+export interface AgentList {
+  agents: AgentSummary[];
+  /** Every tool `permissions.tools` may name. */
+  tools: string[];
+}
+
+/** An agent's own permissions (agents G4). `null` tools or types means all of them. */
+export interface AgentPermissions {
+  tools: string[] | null;
+  types: string[] | null;
+  confirm: AiConfirm;
+  web: AiWeb;
+}
+
+/** An agent's trigger, as the routes answer it and take it back (agents G9, G10). */
+export type AgentTrigger =
+  | { name: string; kind: "schedule"; schedule: string; timezone: string; prompt: string }
+  | { name: string; kind: "event"; on: string[]; type: string[]; where: string | null; prompt: string };
+
+export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** An agent as `PUT /api/agents/{name}` takes it in its JSON form. */
+export interface AgentForm {
+  label: string;
+  description: string | null;
+  icon: string | null;
+  enabled: boolean;
+  provider: AiProvider | null;
+  model: string | null;
+  effort: AgentEffort | null;
+  system_prompt: string | null;
+  permissions: AgentPermissions;
+  triggers: AgentTrigger[];
+}
+
+/** An agent file, parsed, with its WCL (agents G1). */
+export interface Agent extends AgentForm {
+  name: string;
+  built_in: boolean;
+  wcl: string;
+}
+
 /** A cron schedule in words and the next times it fires, as the scheduler reads it. */
 export interface CronPreview {
   schedule: string;
@@ -1245,6 +1301,18 @@ export const api = {
   task: (name: string) => request<Task>("GET", `/api/tasks/${enc(name)}`),
   putTask: (name: string, wcl: string) => request<Task>("PUT", `/api/tasks/${enc(name)}`, { wcl }),
   deleteTask: (name: string) => request<unknown>("DELETE", `/api/tasks/${enc(name)}`),
+  /** Every agent's summary, Assistant first, and every tool an agent may be allowed (agents G2). */
+  agents: () => request<AgentList>("GET", "/api/agents"),
+  /** One agent: its parsed definition and its WCL. */
+  agent: (name: string) => request<Agent>("GET", `/api/agents/${enc(name)}`),
+  /**
+   * Create or replace an agent from the form (`Agent` without `wcl`) or from its WCL. A file that
+   * does not check is a 400 with its issues; disabling Assistant is a 400 `built_in`. Needs
+   * `admin`, so the apps answer 403 `needs_web_app`.
+   */
+  putAgent: (name: string, body: Partial<AgentForm> | { wcl: string }) => request<Agent>("PUT", `/api/agents/${enc(name)}`, body),
+  /** Delete an agent; its threads stay. Assistant is a 400 `built_in`. */
+  deleteAgent: (name: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}`),
   taskRuns: async (name: string, limit = 50) =>
     (await request<{ runs: TaskRun[] }>("GET", `/api/tasks/${enc(name)}/runs?limit=${limit}`)).runs,
   /**

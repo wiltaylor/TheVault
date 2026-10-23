@@ -118,6 +118,13 @@ fn the_vault_starts_with_the_assistant() {
             "built_in": true,
         }])
     );
+    let tools: Vec<&str> = list["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap())
+        .collect();
+    assert!(tools.contains(&"search_notes") && tools.contains(&"web_search"));
     let a = expect(
         api.admin("GET", "/api/agents/assistant").send().unwrap(),
         StatusCode::OK,

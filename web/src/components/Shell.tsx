@@ -42,6 +42,7 @@ import { PinnedTree } from "./PinnedTree";
 import { SyncStatusButton } from "./SyncStatus";
 import { Toasts } from "./Toasts";
 import { TypesNav } from "./TypesNav";
+import { AgentsNav } from "./AgentsNav";
 
 /** The sidebar's main links. Each opens in the active pane; a middle-click opens a background tab. */
 const NAV: { href: string; label: string; icon: () => JSX.Element; badge?: () => number | null }[] = [
@@ -504,6 +505,7 @@ export function Shell() {
           </nav>
           <PinnedTree onNavigate={() => setLeftDrawer(false)} />
           <TypesNav onNavigate={() => setLeftDrawer(false)} />
+          <AgentsNav onNavigate={() => setLeftDrawer(false)} />
           <div class="sidebar-footer">
             <button
               type="button"

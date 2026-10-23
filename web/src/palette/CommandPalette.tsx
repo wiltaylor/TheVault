@@ -24,7 +24,8 @@ import { openInBackground } from "../workspace/events";
 import * as M from "../workspace/model";
 import { scrollPaneTop } from "../workspace/pane";
 import { navigatePane, workspace } from "../workspace/store";
-import { type Action, type Glyph, generalActions, noteActions, typeActions } from "./actions";
+import { agents, agentsReadOnly } from "../agents";
+import { type Action, type Glyph, agentActions, generalActions, noteActions, typeActions } from "./actions";
 import {
   type NoteHit,
   type RankedNote,
@@ -101,6 +102,7 @@ export function CommandPalette() {
     ...noteActions(activeNote()),
     ...generalActions({ phone, dark: theme() === "dark", androidApp: inAndroidApp() }),
     ...typeActions(types()),
+    ...agentActions(agents(), agentsReadOnly()),
   ]);
 
   // The notes search: debounced, and a newer query cancels the one in flight.

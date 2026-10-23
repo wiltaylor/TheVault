@@ -1,6 +1,7 @@
 //! Agent files, `agents/<name>.wcl` (agents G1, G2, G4).
 //!
-//! - `GET /api/agents`: every agent's summary, the built-in Assistant first, then by name.
+//! - `GET /api/agents`: every agent's summary, the built-in Assistant first, then by name, and
+//!   `tools`, the name of every tool `permissions.tools` may name, for the agent screen.
 //! - `GET /api/agents/{name}`: the parsed agent and its WCL, or the WCL alone when `Accept` asks
 //!   for text.
 //! - `PUT /api/agents/{name}` (admin): the agent file as WCL text, JSON `{ "wcl": "..." }`, or the
@@ -140,7 +141,7 @@ pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
     let mut agents = blocking(w, |w| w.agents()).await?;
     agents.sort_by_key(|(name, _)| (name != schema::ASSISTANT_AGENT, name.clone()));
     let agents: Vec<Value> = agents.iter().map(|(n, a)| summary_json(n, a)).collect();
-    Ok(Json(json!({ "agents": agents })))
+    Ok(Json(json!({ "agents": agents, "tools": tool_names() })))
 }
 
 /// The response to a read or a write: the agent with its WCL.

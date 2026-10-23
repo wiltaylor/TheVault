@@ -1,7 +1,6 @@
 import { For, type JSX, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { ASSISTANT } from "../agents";
 import {
-  type AiConfirm,
-  type AiWeb,
   type AiModel,
   type AiProvider,
   type AiStatus,
@@ -18,9 +17,10 @@ import { errorText } from "./TypeEditor";
 // URL an API type, Responses or Chat Completions, which Test detects (ai D25); the ChatGPT card signs in with
 // OpenAI's Sign in with ChatGPT, through the same paste-the-address step as Google's card. Each
 // card lists the provider's models live, saves the chosen default model, tests it, and can be
-// made the default provider. Below them, the chat system prompt (ai D17) and the switches that
-// let the AI make some kinds of change without asking (ai D22). The section is web-app only: the desktop and Android apps talk to
-// their embedded server, which holds no AI credentials.
+// made the default provider. The chat's system prompt and the switches that let it make some kinds
+// of change without asking are the built-in Assistant agent's (agents G6), so a line links to its
+// agent screen. The section is web-app only: the desktop and Android apps talk to their embedded
+// server, which holds no AI credentials.
 
 /** Where a ChatGPT plan's usage is managed. */
 export const CHATGPT_USAGE_URL = "https://chatgpt.com/settings/usage";
@@ -53,7 +53,7 @@ export function testText(r: AiTestResult): string {
   return e ? `Failed (${e.kind}): ${e.message}` : "Failed";
 }
 
-function modelLabel(m: AiModel): string {
+export function modelLabel(m: AiModel): string {
   return m.display_name && m.display_name !== m.id ? `${m.display_name} (${m.id})` : m.id;
 }
 
@@ -571,217 +571,6 @@ export function ChatGptCard(props: { status: AiStatus; onStatus: (s: AiStatus) =
   );
 }
 
-/** The most characters a chat system prompt may have (ai D17); the server holds the same limit. */
-export const SYSTEM_PROMPT_MAX = 32_000;
-
-/**
- * The chat panel's system prompt (ai D17): the text in use, editable, with Save and Reset to
- * default. The open note's id, type and title are added after it by the server, and the tools
- * reach the model through their definitions, so neither is part of this text.
- */
-export function SystemPromptCard(props: { status: AiStatus; onStatus: (s: AiStatus) => void }) {
-  const [text, setText] = createSignal(props.status.system_prompt);
-  const [error, setError] = createSignal<string | null>(null);
-  const [notice, setNotice] = createSignal<string | null>(null);
-  const [pending, setPending] = createSignal<"save" | "reset" | null>(null);
-  // Follow the prompt in use whenever the server answers a new one.
-  createEffect(on(() => props.status.system_prompt, (p) => setText(p), { defer: true }));
-  const custom = () => props.status.system_prompt_custom;
-  const changed = () => text() !== props.status.system_prompt;
-  const length = () => [...text()].length;
-
-  async function act(what: "save" | "reset", value: string, done: string) {
-    setError(null);
-    setNotice(null);
-    setPending(what);
-    try {
-      props.onStatus(await api.aiSaveSettings({ system_prompt: value }));
-      setNotice(done);
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setPending(null);
-    }
-  }
-
-  function save(ev: SubmitEvent) {
-    ev.preventDefault();
-    if (length() > SYSTEM_PROMPT_MAX) {
-      setError(`The prompt is ${length()} characters; the most it can be is ${SYSTEM_PROMPT_MAX}.`);
-      return;
-    }
-    // The default text saved as it is, or an empty box, means the default.
-    const value = text() === props.status.default_system_prompt ? "" : text();
-    void act("save", value, "Saved. The next chat message uses it.");
-  }
-
-  function reset() {
-    void act("reset", "", "Reset to the default prompt.");
-  }
-
-  return (
-    <Card
-      title="Chat system prompt"
-      blurb="What the AI panel tells the model before every conversation. The open note and the tool list are added for you."
-    >
-      <form class="admin-form" aria-label="Chat system prompt" onSubmit={save}>
-        <p class="muted" role="status">
-          {custom() ? "Customised" : "Default"}
-        </p>
-        <label for="ai-system-prompt">System prompt</label>
-        <textarea
-          id="ai-system-prompt"
-          class="ai-system-prompt"
-          rows={16}
-          spellcheck={false}
-          value={text()}
-          onInput={(e) => setText(e.currentTarget.value)}
-        />
-        <p class={length() > SYSTEM_PROMPT_MAX ? "error" : "muted"}>
-          {length()} of {SYSTEM_PROMPT_MAX} characters
-        </p>
-        <div class="actions">
-          <button
-            type="submit"
-            class="primary"
-            disabled={pending() !== null || !changed()}
-            aria-busy={pending() === "save" ? "true" : undefined}
-          >
-            <Busy on={pending() === "save"} />
-            Save
-          </button>
-          <button
-            type="button"
-            disabled={pending() !== null || !custom()}
-            aria-busy={pending() === "reset" ? "true" : undefined}
-            onClick={reset}
-          >
-            <Busy on={pending() === "reset"} />
-            Reset to default
-          </button>
-        </div>
-      </form>
-      <Show when={error()}>
-        <p class="error" role="alert">
-          {error()}
-        </p>
-      </Show>
-      <Show when={notice()}>
-        <p class="muted">{notice()}</p>
-      </Show>
-    </Card>
-  );
-}
-
-/** The confirmation switches, in the card's order, with their labels (ai D22). */
-export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
-  { key: "notes", label: "Ask before creating and editing notes" },
-  { key: "archive", label: "Ask before archiving notes" },
-  { key: "delete", label: "Ask before moving notes to the trash" },
-  { key: "types", label: "Ask before changing types" },
-  { key: "downloads", label: "Ask before downloading files into the vault" },
-  { key: "taxonomies", label: "Ask before changing taxonomies" },
-];
-
-export const WEB_SWITCHES: { key: keyof AiWeb; label: string; note?: string }[] = [
-  { key: "search", label: "Let the AI search the web", note: "Needs a Brave Search key in Settings > Integrations." },
-  { key: "read", label: "Let the AI read web pages" },
-  { key: "download", label: "Let the AI download files into the vault" },
-];
-
-/**
- * Changes the AI makes (ai D22): one switch per kind of change. On, the panel shows the change
- * for you to apply; off, the AI makes it itself when its caller's scope allows. Each switch
- * saves at once.
- */
-export function ConfirmCard(props: { status: AiStatus; onStatus: (s: AiStatus) => void }) {
-  const [error, setError] = createSignal<string | null>(null);
-  const [pending, setPending] = createSignal<string | null>(null);
-
-  async function toggle(key: keyof AiConfirm, box: HTMLInputElement) {
-    setError(null);
-    setPending(`confirm.${key}`);
-    try {
-      props.onStatus(await api.aiSaveSettings({ confirm: { [key]: box.checked } }));
-    } catch (e) {
-      setError(errorText(e));
-      box.checked = props.status.confirm[key];
-    } finally {
-      setPending(null);
-    }
-  }
-
-  async function toggleWeb(key: keyof AiWeb, box: HTMLInputElement) {
-    setError(null);
-    setPending(`web.${key}`);
-    try {
-      props.onStatus(await api.aiSaveSettings({ web: { [key]: box.checked } }));
-    } catch (e) {
-      setError(errorText(e));
-      box.checked = props.status.web[key];
-    } finally {
-      setPending(null);
-    }
-  }
-
-  return (
-    <Card
-      title="Changes the AI makes"
-      blurb="With an Ask switch on, the AI panel shows each change of that kind for you to apply or discard. With it off, the AI makes the change itself and the panel says what it did. The Internet switches decide which web tools the AI has."
-    >
-      <div class="admin-form ai-confirm">
-        <For each={CONFIRM_SWITCHES}>
-          {(s) => (
-            <label class="ai-confirm-switch">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={props.status.confirm[s.key]}
-                disabled={pending() !== null}
-                aria-busy={pending() === `confirm.${s.key}` ? "true" : undefined}
-                onChange={(e) => void toggle(s.key, e.currentTarget)}
-              />{" "}
-              {s.label}
-            </label>
-          )}
-        </For>
-        <p class="muted">
-          The AI never empties the trash: a note it deletes stays there until you restore it or empty the trash yourself.
-        </p>
-        <h3>Internet</h3>
-        <For each={WEB_SWITCHES}>
-          {(s) => (
-            <label class="ai-confirm-switch">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={props.status.web[s.key]}
-                disabled={pending() !== null}
-                aria-busy={pending() === `web.${s.key}` ? "true" : undefined}
-                onChange={(e) => void toggleWeb(s.key, e.currentTarget)}
-              />{" "}
-              {s.label}
-              <Show when={s.note}>
-                {" "}
-                <span class="muted">{s.note}</span>
-              </Show>
-            </label>
-          )}
-        </For>
-        <p class="muted">
-          With a switch off, the AI is not given that tool at all. Downloads it is given still follow Ask before
-          downloading files into the vault.
-        </p>
-      </div>
-      <Show when={error()}>
-        <p class="error" role="alert">
-          {error()}
-        </p>
-      </Show>
-    </Card>
-  );
-}
-
 /** Settings > AI. */
 export function Ai() {
   const [status, setStatus] = createSignal<AiStatus | null>(null);
@@ -801,6 +590,10 @@ export function Ai() {
       <p class="muted">
         Scripts and the AI panel call these providers with your own credentials. The server keeps them encrypted and
         never shows them again.
+      </p>
+      <p class="ai-agent-link">
+        The chat panel's prompt and permissions are on the{" "}
+        <a href={`/agents/${ASSISTANT}`}>Assistant agent</a>.
       </p>
       <Show when={status()}>
         {(s) => (
@@ -825,8 +618,6 @@ export function Ai() {
               onStatus={setStatus}
             />
             <ChatGptCard status={s()} onStatus={setStatus} />
-            <SystemPromptCard status={s()} onStatus={setStatus} />
-            <ConfirmCard status={s()} onStatus={setStatus} />
           </>
         )}
       </Show>

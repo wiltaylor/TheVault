@@ -9052,3 +9052,184 @@ button.toast-action {
   justify-content: flex-end;
   gap: 0.5rem;
 }
+
+/* Agents in the left sidebar (agents G3): below Types, with a + and a ⋯ menu per agent */
+.agents-nav-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.agents-nav-heading .types-nav-toggle {
+  flex: 1;
+}
+
+.agents-nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar .agents-nav-list .pin-note {
+  padding-left: 1.45rem;
+}
+
+.agent-row.agent-disabled .pin-note {
+  opacity: 0.5;
+}
+
+.agent-row.agent-broken .pin-note .icon {
+  color: var(--danger);
+}
+
+/* The agent screen (agents G5) */
+.agent-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.agent-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.agent-badge {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.agent-badge-off {
+  background: var(--hover);
+  color: var(--muted);
+}
+
+.agent-readonly {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.4rem;
+  background: var(--hover);
+}
+
+.agent-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.75rem 0 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-tabs [role="tab"] {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.45rem 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.agent-tabs [role="tab"][aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.agent-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 52rem;
+}
+
+.agent-tab h2 {
+  margin: 0.75rem 0 0;
+  font-size: 1.05rem;
+}
+
+.agent-tab h3 {
+  margin: 0.5rem 0 0;
+  font-size: 0.95rem;
+}
+
+.agent-tab p {
+  margin: 0;
+}
+
+.agent-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  min-width: 0;
+}
+
+.agent-tab .ai-system-prompt {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+.agent-prompt-foot,
+.agent-tab .actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.agent-model-note {
+  font-size: 0.85rem;
+}
+
+.agent-tab .ai-confirm,
+.agent-types,
+.agent-type-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.agent-tab .ai-confirm-switch,
+.agent-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.agent-check code {
+  font-size: 0.75rem;
+}
+
+.agent-tool-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem;
+}
+
+.agent-tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.agent-tool-group legend {
+  padding: 0 0.25rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.ai-agent-link {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.4rem;
+  background: var(--hover);
+}

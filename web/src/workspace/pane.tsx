@@ -45,6 +45,7 @@ const NAMES: [RegExp, string][] = [
   [/^\/assets/, "Images and files"],
   [/^\/trash/, "Trash"],
   [/^\/archive/, "Archive"],
+  [/^\/agents\//, "Agent"],
 ];
 
 /** A name for the page at `url`, from the location alone. Reactive: note titles load. */
