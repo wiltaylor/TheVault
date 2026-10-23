@@ -16,8 +16,10 @@
 //! and the media type, and says the content is the page's, not the user's. Reading changes
 //! nothing, so it is never a proposal.
 //!
-//! `download_asset {url, filename}` stores a file of at most [`DOWNLOAD_LIMIT`] bytes. With
-//! `confirm.downloads` on, or for a caller without `write`, it probes the URL (HEAD, else a GET
+//! `download_asset {url, filename}` stores a file of any size. It is written to a file under
+//! `.vault/incoming` ([`Writer::incoming_file`]) as it arrives, never held in memory, and moved
+//! into the vault once whole; a download that fails part way stores nothing and leaves no file.
+//! With `confirm.downloads` on, or for a caller without `write`, it probes the URL (HEAD, else a GET
 //! of the first byte) and sends `proposal {id, op: "download", url, filename, media_type,
 //! size}`; `POST /api/ai/apply` then downloads and stores it through [`store_download`]. With
 //! the switch off it stores the file at once, through the same function, and sends `applied`.
@@ -25,9 +27,10 @@
 //! A fetched image is held in the turn's images under `web:<call id>`; the transcript holds that
 //! reference, never the bytes. A later question no longer has it and sends a text saying so.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use ai::web::{FetchError, Fetched, Fetcher, Over};
+use ai::web::{Fetched, Fetcher};
 use ai::{Part, ToolSpec};
 use reqwest::Url;
 use serde_json::{Value, json};
@@ -38,9 +41,6 @@ use crate::ai_chat::{ApplyError, tool};
 
 /// The most bytes `fetch_url` reads: 5 MiB.
 pub const PAGE_LIMIT: u64 = 5 * 1024 * 1024;
-
-/// The largest file `download_asset` stores: 25 MiB.
-pub const DOWNLOAD_LIMIT: u64 = 25 * 1024 * 1024;
 
 /// The most characters of text `fetch_url` returns.
 pub const TEXT_LIMIT: usize = ai_assets::TEXT_LIMIT;
@@ -58,7 +58,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "download_asset",
-            "Download a file from an http or https URL into the vault as an asset, at most 25 MB. Unless the user lets downloads go ahead without asking, the user sees a proposal and downloads or discards it; otherwise the file is stored at once and the result gives its asset id, which a note can then reference through propose_edit or propose_create.",
+            "Download a file from an http or https URL into the vault as an asset, of any size. Unless the user lets downloads go ahead without asking, the user sees a proposal and downloads or discards it; otherwise the file is stored at once and the result gives its asset id, which a note can then reference through propose_edit or propose_create.",
             json!({
                 "url": { "type": "string", "description": "The http or https URL of the file." },
                 "filename": {
@@ -126,13 +126,18 @@ fn cut(s: &str, limit: usize, partial: bool) -> String {
 
 /// The media type of `f`: the server's, else the one its URL's file name suggests.
 fn media_of(f: &Fetched) -> String {
-    match &f.media_type {
-        Some(t) if t != "application/octet-stream" => t.clone(),
+    media_from(&f.url, f.media_type.as_deref())
+}
+
+/// The media type of an answer from `url`: `served`, else the one the URL's file name suggests.
+fn media_from(url: &Url, served: Option<&str>) -> String {
+    match served {
+        Some(t) if t != "application/octet-stream" => t.to_owned(),
         _ => {
-            let name = last_segment(&f.url).unwrap_or_default();
+            let name = last_segment(url).unwrap_or_default();
             let guessed = ai_assets::media_type(&name);
             if guessed == "application/octet-stream" {
-                f.media_type.clone().unwrap_or(guessed)
+                served.map(str::to_owned).unwrap_or(guessed)
             } else {
                 guessed
             }
@@ -169,7 +174,7 @@ pub async fn fetch_url(
     let Some(url) = url_arg(input) else {
         return WebOut::error("", "url must be a non-empty string");
     };
-    let got = match f.get(url, PAGE_LIMIT, Over::Cut).await {
+    let got = match f.get(url, PAGE_LIMIT).await {
         Ok(g) => g,
         Err(e) => return WebOut::error(url, e.to_string()),
     };
@@ -347,16 +352,6 @@ pub async fn download_asset(
         Ok(p) => p,
         Err(e) => return WebOut::error(url, e.to_string()),
     };
-    if let Some(size) = probed.size.filter(|s| *s > DOWNLOAD_LIMIT) {
-        return WebOut::error(
-            url,
-            FetchError::TooLarge {
-                limit: DOWNLOAD_LIMIT,
-                size: Some(size),
-            }
-            .to_string(),
-        );
-    }
     let media = media_of(&probed);
     let filename = asset_filename(given, &probed.url, Some(&media));
     let proposal = json!({
@@ -399,20 +394,28 @@ fn web_summary(done: &Value) -> Value {
     })
 }
 
-/// Download `url` for storing: its bytes and the asset file name, `filename` else a name from
-/// the URL. A file over [`DOWNLOAD_LIMIT`] is refused, by its `Content-Length` or while
-/// reading.
+/// Download `url` to `file`, a fresh [`Writer::incoming_file`] path, for storing: the asset
+/// file name, `filename` else a name from the URL. The body is written to the file as it
+/// arrives, of any size; when the download fails the file is removed.
 async fn download(
     f: &Fetcher,
     url: &str,
     filename: Option<&str>,
-) -> Result<(String, Vec<u8>), ApplyError> {
-    let got = f
-        .get(url, DOWNLOAD_LIMIT, Over::Refuse)
-        .await
-        .map_err(ApplyError::Fetch)?;
-    let media = media_of(&got);
-    Ok((asset_filename(filename, &got.url, Some(&media)), got.body))
+    file: &Path,
+) -> Result<String, ApplyError> {
+    let got = f.download_to(url, file).await.map_err(ApplyError::Fetch)?;
+    let media = media_from(&got.url, got.media_type.as_deref());
+    Ok(asset_filename(filename, &got.url, Some(&media)))
+}
+
+/// Store the downloaded `file` as a new asset called `name`. The file is gone afterwards,
+/// stored or not.
+fn put_downloaded(w: &Writer, name: &str, file: &Path) -> Result<writer::Asset, ApplyError> {
+    let stored = w.put_asset_file(name, file);
+    if stored.is_err() {
+        let _ = std::fs::remove_file(file);
+    }
+    Ok(stored?)
 }
 
 /// What a download stored: `{op: "download", asset_id, filename, media_type, size, url}`.
@@ -428,17 +431,25 @@ fn stored(asset: &writer::Asset, url: &str) -> Value {
 }
 
 /// Download `url` and store it as a new asset, as `download_asset` does with its switch off.
-/// Nothing is stored when the download fails.
+/// Nothing is stored, and no file is left behind, when the download fails.
 pub async fn store_download(
     w: Arc<Writer>,
     f: &Fetcher,
     url: &str,
     filename: Option<&str>,
 ) -> Result<Value, ApplyError> {
-    let (name, body) = download(f, url, filename).await?;
-    let asset = tokio::task::spawn_blocking(move || w.put_asset(&name, body))
+    let w2 = w.clone();
+    let file: PathBuf = tokio::task::spawn_blocking(move || w2.incoming_file())
         .await
         .map_err(|e| ApplyError::Invalid(e.to_string()))??;
+    let name = download(f, url, filename, &file).await?;
+    let put = file.clone();
+    let asset = tokio::task::spawn_blocking(move || put_downloaded(&w, &name, &put))
+        .await
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&file);
+            ApplyError::Invalid(e.to_string())
+        })??;
     Ok(stored(&asset, url))
 }
 
@@ -456,8 +467,9 @@ pub fn apply_download(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
         .unwrap_or(false);
     let handle = tokio::runtime::Handle::try_current()
         .map_err(|_| ApplyError::Invalid("a download needs the server's runtime".into()))?;
-    let (name, body) = handle.block_on(download(fetcher(private), url, filename))?;
-    let asset = w.put_asset(&name, body)?;
+    let file = w.incoming_file()?;
+    let name = handle.block_on(download(fetcher(private), url, filename, &file))?;
+    let asset = put_downloaded(w, &name, &file)?;
     Ok(stored(&asset, url))
 }
 

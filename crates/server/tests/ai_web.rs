@@ -458,45 +458,94 @@ fn a_download_with_the_switch_off_is_stored_at_once() {
     assert_eq!(api.asset_bytes(id).len(), 300);
 }
 
+/// Whether `body` is the fake web's generated body of its length: one line over and over.
+fn is_generated(body: &[u8]) -> bool {
+    const LINE: &[u8] = b"The quick brown fox jumps over the lazy dog. 0123456789\n";
+    body.iter()
+        .enumerate()
+        .all(|(i, b)| *b == LINE[i % LINE.len()])
+}
+
+/// The files left in the vault's `.vault/incoming`, where downloads are written.
+fn incoming(api: &Api) -> Vec<String> {
+    std::fs::read_dir(api.server.vault_path().join(".vault/incoming"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
 #[test]
-fn a_download_over_25_mb_is_refused() {
+fn a_download_has_no_size_limit() {
     let api = Api::start();
     let web = FakeWeb::start();
-    let size = 26 * 1024 * 1024;
-    for (confirm, url) in [
-        // Proposed: the probe's size is too big.
-        (on(), web.url(&format!("/bytes?size={size}"))),
-        // Made at once: by Content-Length, and while reading a body with none.
-        (
-            json!({ "downloads": false }),
-            web.url(&format!("/bytes?size={size}")),
-        ),
-        (
-            json!({ "downloads": false }),
-            web.url(&format!("/bytes?size={size}&nolength=1")),
-        ),
-    ] {
-        let fake = FakeAnthropic::start();
-        api.anthropic(&fake, confirm, true);
-        let events = api.call(
-            &fake,
-            "download_asset",
-            json!({ "url": url, "filename": null }),
-        );
-        let r = result(&fake);
-        assert_eq!(r["is_error"], true, "{r}");
-        assert!(result_text(&r).contains("26214400"), "{r}");
-        assert_eq!(shape(&events), ["tool", "tool_result", "text", "done"]);
-    }
-    assert!(api.assets().is_empty());
+    // Larger than the 25 MiB the downloads were once limited to.
+    let size: u64 = 30 * 1024 * 1024;
 
-    // Apply refuses it the same way.
+    // Proposed, with its size, then applied.
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, on(), true);
+    let url = web.url(&format!("/bytes?size={size}&type=application/zip"));
+    let events = api.call(
+        &fake,
+        "download_asset",
+        json!({ "url": url, "filename": "big.zip" }),
+    );
+    let p = last(&events, "proposal").clone();
+    assert_eq!(p["size"], size, "{p}");
+    let (status, done) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["size"], size);
+    let body = api.asset_bytes(done["asset_id"].as_str().unwrap());
+    assert_eq!(body.len() as u64, size);
+    assert!(is_generated(&body));
+
+    // Made at once, from a body with no Content-Length.
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({ "downloads": false }), true);
+    let events = api.call(
+        &fake,
+        "download_asset",
+        json!({ "url": web.url(&format!("/bytes?size={size}&nolength=1")), "filename": "big.txt" }),
+    );
+    let a = last(&events, "applied");
+    assert_eq!(a["size"], size, "{a}");
+    let body = api.asset_bytes(a["asset_id"].as_str().unwrap());
+    assert_eq!(body.len() as u64, size);
+    assert!(is_generated(&body));
+    assert_eq!(api.assets().len(), 2);
+    assert!(incoming(&api).is_empty(), "{:?}", incoming(&api));
+}
+
+#[test]
+fn a_download_cut_off_part_way_stores_nothing_and_leaves_no_file() {
+    let api = Api::start();
+    let web = FakeWeb::start();
+    // The connection closes after 1 MiB of the 4 MiB it promised.
+    let url = web.url("/bytes?size=4194304&drop=1048576");
+
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({ "downloads": false }), true);
+    let events = api.call(
+        &fake,
+        "download_asset",
+        json!({ "url": url, "filename": "cut.bin" }),
+    );
+    let r = result(&fake);
+    assert_eq!(r["is_error"], true, "{r}");
+    assert_eq!(shape(&events), ["tool", "tool_result", "text", "done"]);
+    assert!(api.assets().is_empty());
+    assert!(incoming(&api).is_empty(), "{:?}", incoming(&api));
+
     let (status, body) = api.apply_as(
         &api.token(),
-        &json!({ "op": "download", "url": web.url(&format!("/bytes?size={size}")), "filename": "big.bin" }),
+        &json!({ "op": "download", "url": url, "filename": "cut.bin" }),
     );
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["error"], "fetch_failed", "{body}");
     assert!(api.assets().is_empty());
+    assert!(incoming(&api).is_empty(), "{:?}", incoming(&api));
 }
 
 #[test]

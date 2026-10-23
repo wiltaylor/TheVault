@@ -131,14 +131,14 @@ describe("download cards", () => {
   });
 
   it("shows a failed apply and keeps Apply for a retry, and Discard ends it", async () => {
-    aiApply.mockRejectedValue(new Error("the file is larger than the 26214400 bytes allowed"));
+    aiApply.mockRejectedValue(new Error("the address could not be fetched: connection closed before message completed"));
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await ask(m);
     live!.onEvent({ event: "proposal", data: { ...PROPOSAL, media_type: null, size: null } });
     const card = await m.findByRole("region", { name: "Proposed download of sunset.png" });
     expect(card).toHaveTextContent("size unknown");
     fireEvent.click(m.getByRole("button", { name: "Apply" }));
-    expect((await m.findByRole("alert")).textContent).toContain("26214400");
+    expect((await m.findByRole("alert")).textContent).toContain("connection closed");
     fireEvent.click(m.getByRole("button", { name: "Discard" }));
     expect(await m.findByText("Discarded.")).toBeTruthy();
     expect(m.queryByRole("button", { name: "Apply" })).toBeNull();

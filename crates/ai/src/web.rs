@@ -11,11 +11,15 @@
 //!   before the request is sent. The client uses no proxy, which would connect on its behalf.
 //! - Redirects are not followed by the client: [`Fetcher`] follows at most [`MAX_REDIRECTS`]
 //!   itself, checking each target as it checked the first URL.
-//! - The whole fetch, redirects and body included, has [`TIMEOUT`].
+//! - A fetch read into memory ([`Fetcher::get`], [`Fetcher::probe`]) has [`TIMEOUT`], redirects
+//!   and body included. A download to a file ([`Fetcher::download_to`]) has [`TIMEOUT`] until its
+//!   answer's headers arrive, then no limit on its length, only [`IDLE_TIMEOUT`] between two
+//!   pieces of its body.
 //!
 //! `ai_settings.fetch_private` (no UI) lifts the address rule: [`Fetcher::new`] with `private`.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,8 +30,12 @@ use reqwest::{Method, StatusCode, Url};
 /// The most redirects one fetch follows.
 pub const MAX_REDIRECTS: usize = 5;
 
-/// How long a whole fetch may take, redirects and body included.
+/// How long a whole fetch may take, redirects and body included; for a download, until its
+/// answer's headers arrive.
 pub const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a download may wait for the next piece of its body.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What a refusal by the address rule says, to the model and in the panel.
 pub const LOCAL_NETWORK: &str = "TheVault does not fetch addresses on the local network.";
@@ -125,10 +133,10 @@ pub enum FetchError {
     LocalNetwork,
     /// More than [`MAX_REDIRECTS`] redirects.
     TooManyRedirects,
-    /// The body is larger than the fetch allows: `size` when the server said it.
-    TooLarge { limit: u64, size: Option<u64> },
     /// The fetch took longer than its timeout.
     Timeout,
+    /// A download's body stopped arriving for longer than its idle timeout.
+    Stalled,
     /// The server answered an error status.
     Status(u16, String),
     /// The connection failed.
@@ -143,26 +151,17 @@ impl std::fmt::Display for FetchError {
             FetchError::TooManyRedirects => {
                 write!(f, "the address redirected more than {MAX_REDIRECTS} times")
             }
-            FetchError::TooLarge { limit, size } => match size {
-                Some(s) => write!(f, "the file is {s} bytes, more than the {limit} allowed"),
-                None => write!(f, "the file is larger than the {limit} bytes allowed"),
-            },
             FetchError::Timeout => write!(f, "the address took longer than {TIMEOUT:?} to answer"),
+            FetchError::Stalled => write!(
+                f,
+                "the download stopped: nothing arrived for {IDLE_TIMEOUT:?}"
+            ),
             FetchError::Status(code, reason) => write!(f, "the server answered {code} {reason}"),
         }
     }
 }
 
 impl std::error::Error for FetchError {}
-
-/// What to do with a body longer than the limit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Over {
-    /// Keep the first `limit` bytes and say it was cut.
-    Cut,
-    /// Refuse it with [`FetchError::TooLarge`], on `Content-Length` or while reading.
-    Refuse,
-}
 
 /// A fetched answer.
 #[derive(Debug, Clone)]
@@ -179,6 +178,44 @@ pub struct Fetched {
     pub cut: bool,
 }
 
+/// A body downloaded to a file by [`Fetcher::download_to`].
+#[derive(Debug, Clone)]
+pub struct Downloaded {
+    /// The URL after redirects.
+    pub url: Url,
+    /// The media type without parameters, lower case, when the server named one.
+    pub media_type: Option<String>,
+    /// The bytes written to the file.
+    pub size: u64,
+}
+
+/// A file being downloaded, removed when dropped unless [`Partial::keep`] was called: on an
+/// error, and when the download is cancelled part way.
+struct Partial(Option<PathBuf>);
+
+impl Partial {
+    fn keep(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Partial {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// An answer whose headers have arrived, its body not yet read.
+struct Opened {
+    url: Url,
+    method: Method,
+    media_type: Option<String>,
+    size: Option<u64>,
+    res: reqwest::Response,
+}
+
 /// The guarded HTTP client. Build one and keep it: it holds the connection pool.
 #[derive(Clone)]
 pub struct Fetcher {
@@ -186,22 +223,24 @@ pub struct Fetcher {
     private: bool,
     exempt: Arc<Vec<IpAddr>>,
     timeout: Duration,
+    idle: Duration,
 }
 
 impl Fetcher {
     /// A fetcher, with the address rule unless `private` (`ai_settings.fetch_private`).
     pub fn new(private: bool) -> Fetcher {
-        Fetcher::build(private, Vec::new(), TIMEOUT)
+        Fetcher::build(private, Vec::new(), TIMEOUT, IDLE_TIMEOUT)
     }
 
     /// A guarded fetcher that lets the addresses in `exempt` through, for tests that serve a
-    /// public stand-in from a loopback address and redirect from it to another.
+    /// public stand-in from a loopback address and redirect from it to another. `timeout` is
+    /// also its downloads' idle timeout.
     #[doc(hidden)]
     pub fn exempting(exempt: Vec<IpAddr>, timeout: Duration) -> Fetcher {
-        Fetcher::build(false, exempt, timeout)
+        Fetcher::build(false, exempt, timeout, timeout)
     }
 
-    fn build(private: bool, exempt: Vec<IpAddr>, timeout: Duration) -> Fetcher {
+    fn build(private: bool, exempt: Vec<IpAddr>, timeout: Duration, idle: Duration) -> Fetcher {
         let exempt = Arc::new(exempt);
         let mut b = reqwest::Client::builder()
             .user_agent(web_user_agent())
@@ -218,6 +257,7 @@ impl Fetcher {
             private,
             exempt,
             timeout,
+            idle,
         }
     }
 
@@ -265,11 +305,11 @@ impl Fetcher {
         Ok(())
     }
 
-    /// GET `url`, following redirects, reading at most `limit` bytes of the body.
-    pub async fn get(&self, url: &str, limit: u64, over: Over) -> Result<Fetched, FetchError> {
+    /// GET `url`, following redirects, reading at most `limit` bytes of the body: a longer body
+    /// is cut there, and [`Fetched::cut`] says so.
+    pub async fn get(&self, url: &str, limit: u64) -> Result<Fetched, FetchError> {
         let url = self.check(url)?;
-        self.timed(self.send(url, Method::GET, None, limit, over))
-            .await
+        self.timed(self.send(url, Method::GET, None, limit)).await
     }
 
     /// The final URL, media type and size of `url` without its body: a HEAD, or when the server
@@ -277,13 +317,13 @@ impl Fetcher {
     pub async fn probe(&self, url: &str) -> Result<Fetched, FetchError> {
         let url = self.check(url)?;
         let head = self
-            .timed(self.send(url.clone(), Method::HEAD, None, 0, Over::Cut))
+            .timed(self.send(url.clone(), Method::HEAD, None, 0))
             .await;
         match head {
             Ok(f) if f.size.is_some() => Ok(f),
             Err(FetchError::Status(..) | FetchError::Failed(_)) | Ok(_) => {
                 let mut f = self
-                    .timed(self.send(url, Method::GET, Some("bytes=0-0"), 1, Over::Cut))
+                    .timed(self.send(url, Method::GET, Some("bytes=0-0"), 1))
                     .await?;
                 f.body.clear();
                 f.cut = false;
@@ -291,6 +331,48 @@ impl Fetcher {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// GET `url`, following redirects, and write its body to a new file at `path` as it
+    /// arrives, of any length: none of it is held in memory. The answer's headers must arrive
+    /// within [`TIMEOUT`], and each piece of the body within [`IDLE_TIMEOUT`] of the last. On
+    /// any error, and when the future is dropped part way, the file is removed.
+    pub async fn download_to(&self, url: &str, path: &Path) -> Result<Downloaded, FetchError> {
+        use tokio::io::AsyncWriteExt;
+        let url = self.check(url)?;
+        let Opened {
+            url,
+            media_type,
+            mut res,
+            ..
+        } = tokio::time::timeout(self.timeout, self.open(url, Method::GET, None))
+            .await
+            .unwrap_or(Err(FetchError::Timeout))?;
+        let file_error =
+            |e: std::io::Error| FetchError::Failed(format!("the download could not be saved: {e}"));
+        let mut file = tokio::fs::File::create_new(path)
+            .await
+            .map_err(file_error)?;
+        let partial = Partial(Some(path.to_owned()));
+        let mut size = 0u64;
+        loop {
+            let chunk = tokio::time::timeout(self.idle, res.chunk())
+                .await
+                .map_err(|_| FetchError::Stalled)?
+                .map_err(send_error)?;
+            let Some(chunk) = chunk else { break };
+            file.write_all(&chunk).await.map_err(file_error)?;
+            size += chunk.len() as u64;
+        }
+        file.flush().await.map_err(file_error)?;
+        file.sync_all().await.map_err(file_error)?;
+        drop(file);
+        partial.keep();
+        Ok(Downloaded {
+            url,
+            media_type,
+            size,
+        })
     }
 
     async fn timed(
@@ -302,14 +384,13 @@ impl Fetcher {
             .unwrap_or(Err(FetchError::Timeout))
     }
 
-    async fn send(
+    /// Send `method` to `url`, following redirects, up to a successful answer's headers.
+    async fn open(
         &self,
         mut url: Url,
         method: Method,
         range: Option<&str>,
-        limit: u64,
-        over: Over,
-    ) -> Result<Fetched, FetchError> {
+    ) -> Result<Opened, FetchError> {
         let mut redirects = 0;
         let mut method = method;
         loop {
@@ -321,7 +402,7 @@ impl Fetcher {
             if let Some(r) = range {
                 req = req.header(RANGE, r);
             }
-            let mut res = req.send().await.map_err(send_error)?;
+            let res = req.send().await.map_err(send_error)?;
             let status = res.status();
             if status.is_redirection() && status != StatusCode::NOT_MODIFIED {
                 let Some(to) = res
@@ -376,38 +457,50 @@ impl Fetcher {
             } else {
                 length
             };
-            let mut fetched = Fetched {
+            return Ok(Opened {
                 url,
+                method,
                 media_type,
                 size,
-                body: Vec::new(),
-                cut: false,
-            };
-            if method == Method::HEAD {
-                return Ok(fetched);
-            }
-            if over == Over::Refuse
-                && let Some(s) = size.filter(|s| *s > limit)
-            {
-                return Err(FetchError::TooLarge {
-                    limit,
-                    size: Some(s),
-                });
-            }
-            while let Some(chunk) = res.chunk().await.map_err(send_error)? {
-                let room = limit.saturating_sub(fetched.body.len() as u64) as usize;
-                if chunk.len() > room {
-                    if over == Over::Refuse {
-                        return Err(FetchError::TooLarge { limit, size: None });
-                    }
-                    fetched.body.extend_from_slice(&chunk[..room]);
-                    fetched.cut = true;
-                    break;
-                }
-                fetched.body.extend_from_slice(&chunk);
-            }
+                res,
+            });
+        }
+    }
+
+    async fn send(
+        &self,
+        url: Url,
+        method: Method,
+        range: Option<&str>,
+        limit: u64,
+    ) -> Result<Fetched, FetchError> {
+        let Opened {
+            url,
+            method,
+            media_type,
+            size,
+            mut res,
+        } = self.open(url, method, range).await?;
+        let mut fetched = Fetched {
+            url,
+            media_type,
+            size,
+            body: Vec::new(),
+            cut: false,
+        };
+        if method == Method::HEAD {
             return Ok(fetched);
         }
+        while let Some(chunk) = res.chunk().await.map_err(send_error)? {
+            let room = limit.saturating_sub(fetched.body.len() as u64) as usize;
+            if chunk.len() > room {
+                fetched.body.extend_from_slice(&chunk[..room]);
+                fetched.cut = true;
+                break;
+            }
+            fetched.body.extend_from_slice(&chunk);
+        }
+        Ok(fetched)
     }
 }
 

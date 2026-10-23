@@ -181,7 +181,7 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `propose_taxonomy_delete` | Checks that a taxonomy exists and nothing uses it, and shows the delete to you; deletes it only when confirmation is off |
 | `web_search` | Searches the web with Brave Search, 1 to 10 results; offered only with a Brave Search key. See [Web search](#web-search) |
 | `fetch_url` | Reads a web page or file for the model; never a change. See [Read pages and download files](#read-pages-and-download-files) |
-| `download_asset` | Downloads a file into the vault as an asset, at most 25 MiB; stores it only when [confirmation is off](#changes-the-ai-makes) |
+| `download_asset` | Downloads a file of any size into the vault as an asset; stores it only when [confirmation is off](#changes-the-ai-makes) |
 
 A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 12 calls to the model; after that the panel says it stopped, and asking again goes on.
 
@@ -208,7 +208,7 @@ With a Brave Search API key stored in Settings > Integrations > Brave Search ([W
 - An image: the image itself, sent to the provider and scaled as [Attachments](#attachments) says, counting toward the 8 images per question. It is held for this question only; a later question gets a text saying it is gone, and the model can fetch it again.
 - Anything else: the final URL, media type and size.
 
-`download_asset { url, filename }` downloads a file of at most 25 MiB into the vault as an asset. A larger file is refused, by its `Content-Length` and while reading, and nothing is stored. The file name is `filename`, else the last part of the URL's path, else `download`; slashes, backslashes and control characters become `_`, a name without an extension takes one from the media type, and a name over 255 bytes is shortened, keeping its extension.
+`download_asset { url, filename }` downloads a file into the vault as an asset. There is no size limit: the server writes the file to `.vault/incoming` as it arrives, never holding it in memory, and moves it into `assets/` once it is whole. A download that fails part way, such as a dropped connection, stores nothing and leaves no file behind. The file name is `filename`, else the last part of the URL's path, else `download`; slashes, backslashes and control characters become `_`, a name without an extension takes one from the media type, and a name over 255 bytes is shortened, keeping its extension.
 
 - With **Ask before downloading files into the vault** on, the default, the server asks the address for its size and media type (a HEAD request, else a GET of the first byte) and the panel shows a card with the address, file name, type and size, and Apply and Discard. Apply sends it to `POST /api/ai/apply`, which downloads the file and stores it.
 - With the switch off, the file is stored at once and the panel shows "Downloaded <file name>", with a thumbnail for an image. A caller without `write` always gets the card.
@@ -219,7 +219,7 @@ Both tools fetch through one guarded client:
 - Only `http` and `https` addresses with a host, and no user name or password in the address.
 - **The local-network rule.** The server resolves the host once and refuses the fetch when any address it resolves to is loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16, fe80::/10), unique-local (fc00::/7), carrier-grade NAT (100.64/10), multicast, unspecified, broadcast or 0/8, or the IPv4-mapped IPv6 form of one of these. It connects to the addresses it checked, with no second lookup, and through no proxy. An address written as an IP in the URL is checked the same way. The model gets "TheVault does not fetch addresses on the local network."
 - Redirects are followed by the server itself, at most 5, and each target is checked as the first address was. A sixth is refused.
-- A fetch, redirects and body included, has 30 seconds. Requests say `User-Agent: TheVault/<version> (+https://github.com/wiltaylor/TheVault)`.
+- `fetch_url` has 30 seconds for the whole fetch, redirects and body included. A download has 30 seconds until the answer's headers arrive, then as long as it takes, provided some of the file arrives at least every 60 seconds; a download that stalls longer fails and stores nothing. Requests say `User-Agent: TheVault/<version> (+https://github.com/wiltaylor/TheVault)`.
 
 To let the tools reach servers on your own network, set `"fetch_private": true` in the `ai_settings` secret (`PUT /api/secrets/ai_settings` with the whole settings object). There is no switch for it in Settings > AI: it is an escape hatch, and it lets a page's text steer the model toward services on your network, so leave it off unless you need it.
 
@@ -400,7 +400,7 @@ In the desktop and Android apps the embedded server forwards these routes to the
 - A note change is written at its `base_version`: an update, an archive or unarchive, or a delete, which moves the note to the trash. A create makes the note. It needs `write`. A note that changed since is a 409 `conflict`, and nothing is written.
 - A type change needs `admin`; without it the answer is 403 `needs_admin`, "Apply type changes in the web app." A type file that changed since the proposal is a 409 `stale`.
 - A taxonomy change or delete needs `admin`; without it the answer is 403 `needs_admin`, "Apply taxonomy changes in the web app." A taxonomy file that changed since the proposal is a 409 `stale`. The write refuses as the taxonomy routes do: a dropped term notes hold is a 409 `term_in_use`, a taxonomy in use a 409 `taxonomy_in_use`, and nothing is written.
-- A download needs `write`. The server downloads `url` through the guarded client and stores it as a new asset called `filename`, answering `{ op: "download", asset_id, filename, media_type, size, url }`. An address the local-network rule refuses is a 403 `local_network`, a file over 25 MiB a 413 `too_large`, and a fetch that fails a 502 `fetch_failed`; nothing is stored.
+- A download needs `write`. The server downloads `url` through the guarded client and stores it as a new asset called `filename`, answering `{ op: "download", asset_id, filename, media_type, size, url }`. An address the local-network rule refuses is a 403 `local_network`, and a fetch that fails, part way included, a 502 `fetch_failed`; nothing is stored.
 - It answers `{ op, note_id, version }` for a note, with the note's new version (for a delete, the version that went to the trash), `{ op, type_name }` for a type, where `op` is `type_change` or `type_create`, and `{ op, taxonomy_name, notes }` for a taxonomy, where `op` is `taxonomy_change`, `taxonomy_create` or `taxonomy_delete` and `notes` is how many notes its renames rewrote.
 - With the proposal's `agent`, the change is written as that agent, and a note of a type outside its `permissions.types` is a 403 `not_permitted`. With its `thread`, the outcome, applied with the answer, or failed or stale with the reason, is recorded in the thread.
 - Anything that is not a change the chat proposes is a 400.

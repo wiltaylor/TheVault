@@ -1819,7 +1819,6 @@ impl From<ApplyError> for ApiError {
                 let (status, code) = match &e {
                     FetchError::LocalNetwork => (StatusCode::FORBIDDEN, "local_network"),
                     FetchError::BadUrl(_) => (StatusCode::BAD_REQUEST, "bad_request"),
-                    FetchError::TooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
                     _ => (StatusCode::BAD_GATEWAY, "fetch_failed"),
                 };
                 ApiError::new(status, code, e.to_string())

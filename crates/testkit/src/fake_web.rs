@@ -1,7 +1,8 @@
 //! A fake web server for the chat's `fetch_url` and `download_asset` tools (ai D27): a page, a
 //! redirect chain, generated files of any size, a slow answer, and routes a test adds, such as a
 //! PDF or an image. It answers HEAD with the headers alone and a `Range: bytes=0-0` GET with
-//! the first byte and the total size, as real servers do.
+//! the first byte and the total size, as real servers do. A generated body is written as it is
+//! made, never held whole, so a test can download a file of any size.
 //!
 //! Built-in routes:
 //!
@@ -10,7 +11,7 @@
 //! | `/page.html` | [`FAKE_PAGE`], `text/html` |
 //! | `/redirect/<n>` | a 302 to `/redirect/<n-1>`, and `/redirect/0` a 302 to `/page.html` |
 //! | `/to?url=<url>` | a 302 to `url` |
-//! | `/bytes?size=<n>&type=<media type>` | `n` bytes of text lines (default type `text/plain`); `&nolength=1` sends no `Content-Length`, `&name=<file>` a `Content-Disposition` |
+//! | `/bytes?size=<n>&type=<media type>` | `n` bytes of text lines (default type `text/plain`); `&nolength=1` sends no `Content-Length`, `&name=<file>` a `Content-Disposition`, `&drop=<m>` closes the connection after the first `m` bytes |
 //! | `/slow?ms=<n>` | the page after `n` milliseconds |
 //!
 //! Any route with `nohead=1` in its query answers HEAD with 405, so a client falls back to a
@@ -140,6 +141,8 @@ struct Answer {
     /// Send `Content-Length`.
     length: bool,
     delay: Duration,
+    /// Close the connection after this many bytes of the body.
+    drop_after: Option<u64>,
 }
 
 impl Answer {
@@ -150,6 +153,7 @@ impl Answer {
             body: Body::Whole(reply.body),
             length: true,
             delay: reply.delay,
+            drop_after: None,
         }
     }
 
@@ -205,6 +209,7 @@ fn route(r: &Request, shared: &Shared) -> Answer {
             body: Body::Generated(size),
             length: r.query("nolength").is_none(),
             delay: Duration::ZERO,
+            drop_after: r.query("drop").and_then(|s| s.parse().ok()),
         };
     }
     if path == "/slow" {
@@ -258,6 +263,7 @@ fn serve(conn: TcpStream, shared: &Shared) -> std::io::Result<()> {
     if request.method == "HEAD" {
         return out.flush();
     }
+    let sent = answer.drop_after.map_or(sent, |d| d.min(sent));
     match &answer.body {
         Body::Whole(b) => out.write_all(&b[..sent as usize])?,
         Body::Generated(_) => {
