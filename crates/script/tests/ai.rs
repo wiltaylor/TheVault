@@ -35,6 +35,7 @@ fn fixture() -> Fixture {
             openai: Some(f.openai.base_url()),
             chatgpt: None,
             chatgpt_auth: None,
+            openai_api: None,
         },
         ..Settings::default()
     }
@@ -275,6 +276,54 @@ fn run() -> Result[List[Reply], AiError] {
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(lines[0].starts_with("ai: provider=openai model=gpt-other in=10 out=3 outcome=ok"));
     assert!(lines[1].starts_with("ai: provider=anthropic model=claude-other "));
+}
+
+#[test]
+fn complete_works_over_chat_completions() {
+    let f = bare();
+    let zai = FakeOpenAi::builder().chat_completions().start();
+    Settings {
+        default_provider: Some(Provider::OpenAi),
+        models: Models {
+            openai: Some("glm-5.3-flash".into()),
+            ..Models::default()
+        },
+        endpoints: Endpoints {
+            openai: Some(zai.base_url()),
+            openai_api: Some(ai::OpenAiApi::ChatCompletions),
+            ..Endpoints::default()
+        },
+        ..Settings::default()
+    }
+    .save(f.writer.state())
+    .unwrap();
+    f.writer
+        .state()
+        .set_secret(ai::OPENAI_API_KEY, zai.api_key())
+        .unwrap();
+    zai.push(OpenAiResponse::text("The roof needs new tiles.").usage(21, 6));
+    let out = f.task(
+        "use ai\nfn run() -> Result[Reply, AiError] {\n    ai::complete(\"Summarise: the roof\", #{ \"system\": \"Be brief.\" })\n}\n",
+    );
+    let reply = ok(&out);
+    assert_eq!(reply["text"], json!("The roof needs new tiles."));
+    assert_eq!(reply["provider"], json!("openai"));
+    assert_eq!(reply["model"], json!("glm-5.3-flash"));
+    let sent = zai.requests();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].route(), "/v1/chat/completions");
+    let body = sent[0].json();
+    assert_eq!(
+        body["messages"][0],
+        json!({"role": "system", "content": "Be brief."})
+    );
+    assert!(body.get("temperature").is_none());
+    let lines = trail(&out);
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].starts_with("ai: provider=openai model=glm-5.3-flash in=21 out=6 outcome=ok"),
+        "{lines:?}"
+    );
 }
 
 #[test]

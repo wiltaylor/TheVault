@@ -1,11 +1,20 @@
 import { For, type JSX, Show, createEffect, createMemo, createSignal, on } from "solid-js";
-import { type AiConfirm, type AiModel, type AiProvider, type AiStatus, type AiTestResult, api } from "../api";
+import {
+  type AiConfirm,
+  type AiModel,
+  type AiProvider,
+  type AiStatus,
+  type AiTestResult,
+  type OpenAiApi,
+  api,
+} from "../api";
 import { Spinner } from "../components/SyncStatus";
 import { errorText } from "./TypeEditor";
 
 // Settings > AI (ai D6, D7, D8, D16): one card per provider. The Anthropic and OpenAI cards take
 // an API key, which the server stores and never answers back, and an API URL for another service
-// that speaks the same API, which makes the key optional (ai D24); the ChatGPT card signs in with
+// that speaks the same API, which makes the key optional (ai D24), and the OpenAI card with such a
+// URL an API type, Responses or Chat Completions, which Test detects (ai D25); the ChatGPT card signs in with
 // OpenAI's Sign in with ChatGPT, through the same paste-the-address step as Google's card. Each
 // card lists the provider's models live, saves the chosen default model, tests it, and can be
 // made the default provider. Below them, the chat system prompt (ai D17) and the switches that
@@ -27,9 +36,18 @@ function Busy(props: { on: boolean }) {
   );
 }
 
-/** How a Test went, in a line. */
+/** The OpenAI API types, as the API type select names them (ai D25). */
+export const OPENAI_APIS: Record<OpenAiApi, string> = {
+  responses: "Responses API",
+  chat_completions: "Chat Completions API",
+};
+
+/** How a Test went, in a line, naming the OpenAI API it went over when there is a choice. */
 export function testText(r: AiTestResult): string {
-  if (r.ok) return `OK from ${r.model ?? "the model"} in ${r.ms} ms`;
+  if (r.ok) {
+    const over = r.api ? ` (${OPENAI_APIS[r.api]})` : "";
+    return `OK from ${r.model ?? "the model"} in ${r.ms} ms${over}`;
+  }
   const e = r.error;
   return e ? `Failed (${e.kind}): ${e.message}` : "Failed";
 }
@@ -109,9 +127,11 @@ function ModelAndTest(props: {
   function test() {
     setResult(null);
     void act("test", async () => {
-      setResult(await api.aiTest(props.provider, chosen() || undefined));
-      // A Test with no model chosen saves the preselected one.
-      if (!p().model) props.onStatus(await api.aiStatus());
+      const r = await api.aiTest(props.provider, chosen() || undefined);
+      setResult(r);
+      // A Test with no model chosen saves the preselected one, and one that detected another
+      // API type saves that (ai D25).
+      if (!p().model || (r.api && r.api !== (p().api ?? "responses"))) props.onStatus(await api.aiStatus());
     });
   }
 
@@ -256,16 +276,22 @@ export function KeyCard(props: {
 }) {
   const p = () => props.status.providers[props.provider];
   const storedUrl = () => p().url ?? "";
+  const storedApi = (): OpenAiApi => p().api ?? "responses";
   const [key, setKey] = createSignal("");
   const [url, setUrl] = createSignal(storedUrl());
+  const [apiType, setApiType] = createSignal<OpenAiApi>(storedApi());
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
   const [pending, setPending] = createSignal<"save" | "remove" | null>(null);
   createEffect(on(storedUrl, (u) => setUrl(u), { defer: true }));
+  createEffect(on(storedApi, (a) => setApiType(a), { defer: true }));
+  // The API type is the OpenAI card's, and only with a custom URL (ai D25).
+  const typed = () => props.provider === "openai" && url().trim() !== "";
   // A custom API URL makes the provider configured with no key (ai D24), so `has_key` says.
   const set = () => p().has_key ?? p().configured;
   const urlChanged = () => url().trim() !== storedUrl();
-  const unsaved = () => urlChanged() || key().trim() !== "";
+  const apiChanged = () => typed() && apiType() !== storedApi();
+  const unsaved = () => urlChanged() || apiChanged() || key().trim() !== "";
   const id = (what: string) => `ai-${props.provider}-${what}`;
 
   async function act(what: "save" | "remove", f: () => Promise<string | null>) {
@@ -285,13 +311,20 @@ export function KeyCard(props: {
     ev.preventDefault();
     const k = key().trim();
     const u = url().trim();
-    if (!k && !urlChanged()) {
+    if (!k && !urlChanged() && !apiChanged()) {
       setError(set() || u ? "Nothing to save: paste a new key or change the API URL." : `Paste the ${props.label} API key first.`);
       return;
     }
     void act("save", async () => {
-      // The URL first: a key saved for a new service then belongs with it.
-      if (urlChanged()) props.onStatus(await api.aiSaveSettings({ urls: { [props.provider]: u } }));
+      // The URL and API type first: a key saved for a new service then belongs with it.
+      if (urlChanged() || apiChanged()) {
+        props.onStatus(
+          await api.aiSaveSettings({
+            ...(urlChanged() ? { urls: { [props.provider]: u } } : {}),
+            ...(apiChanged() ? { openai_api: apiType() } : {}),
+          }),
+        );
+      }
       if (k) {
         props.onStatus(await api.aiPutKey(props.provider, k));
         setKey("");
@@ -323,6 +356,12 @@ export function KeyCard(props: {
             value={url()}
             onInput={(e) => setUrl(e.currentTarget.value)}
           />
+          <Show when={typed()}>
+            <label for={id("api")}>API type</label>
+            <select id={id("api")} value={apiType()} onChange={(e) => setApiType(e.currentTarget.value as OpenAiApi)}>
+              <For each={Object.entries(OPENAI_APIS)}>{([value, label]) => <option value={value}>{label}</option>}</For>
+            </select>
+          </Show>
           <label for={id("key")}>API key</label>
           <input
             id={id("key")}
@@ -335,8 +374,10 @@ export function KeyCard(props: {
         </div>
         <p class="muted">
           Leave the URL empty for the official API. Another service must speak the{" "}
-          {props.provider === "anthropic" ? "Anthropic Messages API" : "OpenAI Responses API"}; with its own URL the
-          key is optional.
+          {props.provider === "anthropic"
+            ? "Anthropic Messages API"
+            : "OpenAI Responses API or Chat Completions API (Test finds which)"}
+          ; with its own URL the key is optional.
         </p>
         <Show when={set()}>
           <p class="muted">A key is set. Paste another to replace it.</p>

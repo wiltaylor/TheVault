@@ -46,6 +46,9 @@ pub fn blocking_client() -> reqwest::blocking::Client {
         .unwrap_or_else(|_| reqwest::blocking::Client::new())
 }
 
+/// How the error for a custom API URL that lacks the API begins (ai D24, D25).
+pub(crate) const UNSUPPORTED_API: &str = "This service does not support";
+
 /// One HTTP request to a provider, before it is sent.
 pub(crate) struct Call {
     pub get: bool,
@@ -123,14 +126,15 @@ impl Call {
             && !error::names_model(body)
             && let Some(api) = match self.path.as_str() {
                 "/v1/responses" => Some("the OpenAI Responses API (POST /v1/responses)"),
+                crate::chat::PATH => {
+                    Some("the OpenAI Chat Completions API (POST /v1/chat/completions)")
+                }
                 "/v1/messages" => Some("the Anthropic Messages API (POST /v1/messages)"),
                 _ => None,
             }
         {
-            return self.fail(
-                AiError::invalid(format!("This service does not support {api}."))
-                    .with_status(status),
-            );
+            return self
+                .fail(AiError::invalid(format!("{UNSUPPORTED_API} {api}.")).with_status(status));
         }
         self.fail(error::from_response(
             self.provider,

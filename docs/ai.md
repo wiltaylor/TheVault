@@ -9,7 +9,7 @@ This page covers the three providers, how to connect each in Settings > AI, what
 | Provider | What you need | Where requests go |
 |---|---|---|
 | Anthropic | An API key from the [Anthropic Console](https://console.anthropic.com/) | `https://api.anthropic.com/v1/messages`, or the card's API URL |
-| OpenAI | An API key from the [OpenAI Platform](https://platform.openai.com/api-keys) | `https://api.openai.com/v1/responses`, or the card's API URL |
+| OpenAI | An API key from the [OpenAI Platform](https://platform.openai.com/api-keys) | `https://api.openai.com/v1/responses`, or the card's API URL with its API type, Responses (`/responses`) or Chat Completions (`/chat/completions`) |
 | ChatGPT | A ChatGPT plan, signed in with OpenAI's Sign in with ChatGPT | `https://api.openai.com/v1/responses`, with the plan's access token |
 
 The two API-key providers bill your API account per token. The ChatGPT provider uses the allowance of your ChatGPT plan instead.
@@ -42,9 +42,10 @@ The server stores the key encrypted and never sends it back. The field then show
 The Anthropic and OpenAI cards each have an **API URL** field. Leave it empty for the official API; the placeholder shows the official URL. To call another service with that card's API:
 
 1. Type the service's API URL into the **API URL** field.
-2. If the service needs a key, paste it into **API key**. With an API URL of its own, the key is optional: a card with a URL and no key counts as connected, and its requests carry no key at all.
-3. Select **Save**. It saves the URL first, then the key. **Test** stays unavailable while the card holds an unsaved URL or key, because it uses the saved ones.
-3. Pick a model and select **Test**.
+2. On the OpenAI card, an **API type** select appears beside the URL: **Responses API** or **Chat Completions API**. Leave it on Responses API if you do not know; **Test** finds out (see below).
+3. If the service needs a key, paste it into **API key**. With an API URL of its own, the key is optional: a card with a URL and no key counts as connected, and its requests carry no key at all.
+4. Select **Save**. It saves the URL and API type first, then the key. **Test** stays unavailable while the card holds an unsaved URL, API type or key, because it uses the saved ones.
+5. Pick a model and select **Test**.
 
 How TheVault reads the URL:
 
@@ -57,10 +58,20 @@ A URL that breaks these rules is refused with the reason, and the stored URL sta
 
 The service must speak the card's API:
 
-- The OpenAI card needs the OpenAI Responses API, `POST /v1/responses`. Many services that call themselves OpenAI-compatible offer only the older Chat Completions API, and do not work here. TheVault names no service that does.
+- The OpenAI card needs the OpenAI Responses API, `POST /v1/responses`, or the Chat Completions API, `POST /v1/chat/completions`, as its **API type** says. Many services that call themselves OpenAI-compatible offer only Chat Completions. TheVault does not promise that any named service works.
 - The Anthropic card needs the Anthropic Messages API, `POST /v1/messages`.
 
-A service that answers 404 or 405 to that path fails with the error kind `invalid` and the message "This service does not support the OpenAI Responses API (POST /v1/responses)." or "This service does not support the Anthropic Messages API (POST /v1/messages)."
+A service that answers 404 or 405 to that path fails with the error kind `invalid` and the message "This service does not support the OpenAI Responses API (POST /v1/responses).", "This service does not support the OpenAI Chat Completions API (POST /v1/chat/completions)." or "This service does not support the Anthropic Messages API (POST /v1/messages)." The paths in these messages are written as under `/v1`; with a versioned root such as `/v4` the request went to `.../v4/chat/completions`.
+
+**Test** detects the OpenAI API type. With a custom URL, when the saved type's path answers 404 or 405, Test sends the same request to the other type's path. When that path answers, Test saves that API type on the card and says so: "OK from glm-5.3-flash in 412 ms (Chat Completions API)". Chats and scripts never probe: they use the saved type, and fail with the message above when the service lacks it. The official OpenAI API (no URL) and the ChatGPT plan always use the Responses API, whatever the select says.
+
+Over Chat Completions, everything works as over Responses, with these differences:
+
+- Tools are sent without `strict`, which many services reject, so the server checks each tool call's input against its schema itself, as it always does.
+- A JSON reply (a script's `schema` option) asks for `response_format` `json_schema`. A service that refuses that with a 400 is asked once more with `json_object` and the schema written into the system prompt. The reply is checked against the schema either way.
+- A tool message takes only text, so the images `read_asset` returns follow the tool messages in one user message, as `image_url` data URLs.
+- A service's reasoning text (`reasoning_content`) is not shown and not kept.
+- `finish_reason` `length` means the answer was cut off, and `content_filter` is a refusal with category `content_filter`.
 
 The card lists the service's models from its `GET /v1/models`. When that list fails or is empty, the **Model** field becomes a text box: type the model id the service expects, then press Enter or move to another field.
 
@@ -106,7 +117,7 @@ A call sends the provider the prompt and any text the caller includes:
 - The AI panel sends the conversation and the results of the note tools the model calls, such as the notes it searches and reads, and the attachments it reads with `read_asset`: an image itself, a PDF's or text file's text.
 - The Test button sends only "Reply with OK."
 
-Nothing else from the vault is sent. Requests to OpenAI set `store: false`, so OpenAI keeps no stored response for later reuse. Each provider's own data policy applies to what it receives.
+Nothing else from the vault is sent. Responses API requests set `store: false`, so OpenAI keeps no stored response for later reuse. Chat Completions requests, which go only to a custom API URL, carry no such field; the service's own policy decides what it keeps. Each provider's own data policy applies to what it receives.
 
 The keys and tokens are stored encrypted in the server's secrets store, under the names `ai_anthropic_api_key`, `ai_openai_api_key`, `ai_chatgpt` and `ai_settings`. No API response carries a key or token, and error messages are scrubbed of them. A script cannot read them either: the `ai` module reads them itself.
 
@@ -295,10 +306,10 @@ Settings > AI uses these routes. Every route under `/api/integrations/ai` needs 
 
 | Method and path | Does |
 |---|---|
-| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`; the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types }`, with every switch filled |
-| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? }, urls?: { anthropic?, openai? } }`; an empty string clears a value, an empty `system_prompt` means the default, and an empty URL the official API. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
+| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`, and for OpenAI the `api` its calls use, `responses` or `chat_completions` (always `responses` without a URL); the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types }`, with every switch filled |
+| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? }, urls?: { anthropic?, openai? }, openai_api? }`; an empty string clears a value, an empty `system_prompt` means the default, an empty URL the official API, and an empty `openai_api` the Responses API. Another `openai_api` than `responses` or `chat_completions` is a 400. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
 | `PUT /api/integrations/ai/{anthropic\|openai}/key` | Stores `{ key }`; an empty key deletes it |
-| `POST /api/integrations/ai/{provider}/test` | Sends the test request to `{ model }` or the default model, and answers `{ ok, model, ms, text, error }` |
+| `POST /api/integrations/ai/{provider}/test` | Sends the test request to `{ model }` or the default model, and answers `{ ok, model, ms, text, api, error }`. On OpenAI with a custom URL it detects and saves the API type as above, and `api` names the one the answer came over; otherwise `api` is null |
 | `POST /api/integrations/ai/chatgpt/start` | Answers `{ auth_url }`, the ChatGPT sign-in page |
 | `POST /api/integrations/ai/chatgpt/finish` | Takes `{ url }`, the pasted address, and stores the sign-in; a refused sign-in is a 400 with the reason |
 | `POST /api/integrations/ai/chatgpt/disconnect` | Revokes and deletes the ChatGPT sign-in |

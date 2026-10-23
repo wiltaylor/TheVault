@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The three credentials (ai D1). `anthropic` speaks the Messages API; `openai` and `chatgpt`
-/// speak the Responses API, with an API key and with a ChatGPT plan token.
+/// speak the Responses API, with an API key and with a ChatGPT plan token; `openai` with a custom
+/// API URL may speak Chat Completions instead (ai D25).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
@@ -265,7 +266,8 @@ impl Message {
 
 /// A tool the model may call. `input_schema` is a JSON Schema object. Both clients send tools
 /// as strict, so every object in it must say `additionalProperties: false` and list all its
-/// properties in `required` (Anthropic's and OpenAI's strict mode rules).
+/// properties in `required` (Anthropic's and OpenAI's strict mode rules). Chat Completions sends
+/// no `strict` (ai D25); every client checks each call's input against the schema itself.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolSpec {
     pub name: String,

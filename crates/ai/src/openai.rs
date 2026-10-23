@@ -148,6 +148,8 @@ fn assistant_items(req: &Request, m: &Message, items: &mut Vec<Value>) {
         && state.provider == req.provider
         && state.model == req.model
         && let Some(output) = state.output.as_array()
+        // Responses output items, not a Chat Completions message (ai D25).
+        && output.iter().all(|i| i.get("type").is_some())
     {
         for item in output {
             let mut item = item.clone();

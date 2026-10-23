@@ -70,13 +70,7 @@ pub(crate) fn anthropic_images(body: &Value) -> Result<Vec<FakeImage>, String> {
     Ok(out)
 }
 
-fn openai_item(i: &Value, call: &str, out: &mut Vec<FakeImage>) -> Result<(), String> {
-    if i["type"] != "input_image" {
-        return Ok(());
-    }
-    let url = i["image_url"]
-        .as_str()
-        .ok_or("input_image needs an image_url")?;
+fn data_url(url: &str, call: &str, out: &mut Vec<FakeImage>) -> Result<(), String> {
     let rest = url
         .strip_prefix("data:")
         .ok_or("this fake takes only data URLs")?;
@@ -85,6 +79,41 @@ fn openai_item(i: &Value, call: &str, out: &mut Vec<FakeImage>) -> Result<(), St
         .ok_or("the data URL must be base64")?;
     out.push(decode(media, data, call)?);
     Ok(())
+}
+
+fn openai_item(i: &Value, call: &str, out: &mut Vec<FakeImage>) -> Result<(), String> {
+    if i["type"] != "input_image" {
+        return Ok(());
+    }
+    let url = i["image_url"]
+        .as_str()
+        .ok_or("input_image needs an image_url")?;
+    data_url(url, call, out)
+}
+
+/// The images of a Chat Completions request body (ai D25): `image_url` parts of `user`
+/// messages. A `tool` message takes text only, so an array there is a 400.
+pub(crate) fn chat_images(body: &Value) -> Result<Vec<FakeImage>, String> {
+    let mut out = Vec::new();
+    for m in body["messages"].as_array().into_iter().flatten() {
+        match (&m["role"], &m["content"]) {
+            (r, Value::Array(_)) if r == "tool" => {
+                return Err("a tool message's content must be text".into());
+            }
+            (_, Value::Array(parts)) => {
+                for p in parts {
+                    if p["type"] == "image_url" {
+                        let url = p["image_url"]["url"]
+                            .as_str()
+                            .ok_or("image_url needs a url")?;
+                        data_url(url, "", &mut out)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 /// The images of a Responses request body.

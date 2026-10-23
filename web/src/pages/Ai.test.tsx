@@ -489,3 +489,92 @@ describe("Settings > AI API URLs (ai D24)", () => {
     expect(card("OpenAI").queryByRole("textbox", { name: "Model" })).toBeNull();
   });
 });
+
+describe("Settings > AI API type (ai D25)", () => {
+  const url = "https://api.z.ai/api/coding/paas/v4";
+  const MODELS = { provider: "openai", model: "glm-5.3-flash", models: [{ id: "glm-5.3-flash", display_name: null }] };
+
+  it("names the API a Test went over", () => {
+    expect(
+      testText({
+        ok: true,
+        provider: "openai",
+        model: "glm-5.3-flash",
+        ms: 30,
+        text: "OK",
+        api: "chat_completions",
+        error: null,
+      }),
+    ).toBe("OK from glm-5.3-flash in 30 ms (Chat Completions API)");
+    expect(
+      testText({ ok: true, provider: "openai", model: "gpt-6", ms: 9, text: "OK", api: null, error: null }),
+    ).toBe("OK from gpt-6 in 9 ms");
+  });
+
+  it("shows the select only with a custom URL on the OpenAI card, and saves it with the card", async () => {
+    aiStatus.mockResolvedValue(status({ openai: { configured: true, has_key: true, api: "responses" } }));
+    aiModels.mockResolvedValue(MODELS);
+    aiSaveSettings.mockResolvedValue(
+      status({ openai: { configured: true, has_key: true, url, api: "chat_completions" } }),
+    );
+    render(() => <Ai />);
+    await ready();
+
+    expect(card("OpenAI").queryByLabelText("API type")).toBeNull();
+    fireEvent.input(card("OpenAI").getByLabelText("API URL"), { target: { value: url } });
+    const select = card("OpenAI").getByLabelText("API type") as HTMLSelectElement;
+    expect([...select.options].map((o) => o.textContent)).toEqual(["Responses API", "Chat Completions API"]);
+    expect(select.value).toBe("responses");
+    fireEvent.change(select, { target: { value: "chat_completions" } });
+    fireEvent.input(card("Anthropic").getByLabelText("API URL"), { target: { value: "https://x.example" } });
+    expect(card("Anthropic").queryByLabelText("API type")).toBeNull();
+
+    fireEvent.click(card("OpenAI").getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(aiSaveSettings).toHaveBeenCalledWith({ urls: { openai: url }, openai_api: "chat_completions" }),
+    );
+    expect(aiSaveSettings).toHaveBeenCalledTimes(1);
+    expect(aiPutKey).not.toHaveBeenCalled();
+    expect(await card("OpenAI").findByText(`Saved. Calls go to ${url}.`)).toBeTruthy();
+    expect((card("OpenAI").getByLabelText("API type") as HTMLSelectElement).value).toBe("chat_completions");
+
+    // The type alone is a change to save, and holds Test until it is saved.
+    const test = card("OpenAI").getByRole("button", { name: "Test" }) as HTMLButtonElement;
+    expect(test.disabled).toBe(false);
+    fireEvent.change(card("OpenAI").getByLabelText("API type"), { target: { value: "responses" } });
+    expect(test.disabled).toBe(true);
+    fireEvent.click(card("OpenAI").getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenLastCalledWith({ openai_api: "responses" }));
+  });
+
+  it("shows the type a Test detected and the saved type after it", async () => {
+    aiStatus
+      .mockResolvedValueOnce(status({ openai: { configured: true, url, model: "glm-5.3-flash", api: "responses" } }))
+      .mockResolvedValue(status({ openai: { configured: true, url, model: "glm-5.3-flash", api: "chat_completions" } }));
+    aiModels.mockResolvedValue(MODELS);
+    aiTest.mockResolvedValue({
+      ok: true,
+      provider: "openai",
+      model: "glm-5.3-flash",
+      ms: 120,
+      text: "OK",
+      api: "chat_completions",
+      error: null,
+    });
+    render(() => <Ai />);
+    await ready();
+
+    expect((card("OpenAI").getByLabelText("API type") as HTMLSelectElement).value).toBe("responses");
+    await card("OpenAI").findByLabelText("Model");
+    fireEvent.click(card("OpenAI").getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(aiTest).toHaveBeenCalledWith("openai", "glm-5.3-flash"));
+    expect((await card("OpenAI").findByRole("status")).textContent).toBe(
+      "OK from glm-5.3-flash in 120 ms (Chat Completions API)",
+    );
+    await waitFor(() =>
+      expect((card("OpenAI").getByLabelText("API type") as HTMLSelectElement).value).toBe("chat_completions"),
+    );
+    expect(aiStatus).toHaveBeenCalledTimes(2);
+    expect((card("OpenAI").getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});

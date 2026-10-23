@@ -449,6 +449,9 @@ export type GoogleRedirect = "loopback" | "direct";
 /** An AI provider (ai D1): an Anthropic key, an OpenAI key, or a ChatGPT plan. */
 export type AiProvider = "anthropic" | "openai" | "chatgpt";
 
+/** The API an OpenAI-compatible service speaks (ai D25). */
+export type OpenAiApi = "responses" | "chat_completions";
+
 /** One provider in Settings > AI. Never a key or token (ai D7). */
 export interface AiProviderStatus {
   /** Whether it has a key or a custom API URL, or for ChatGPT a sign-in. */
@@ -461,6 +464,8 @@ export interface AiProviderStatus {
   url?: string | null;
   /** Whether an API key is stored, for `anthropic` and `openai`: with a custom URL it is optional. */
   has_key?: boolean;
+  /** For `openai`: the API its calls speak, always `responses` without a custom URL (ai D25). */
+  api?: OpenAiApi;
 }
 
 /** Settings > AI, from `GET /api/integrations/ai`. */
@@ -532,6 +537,8 @@ export interface AiTestResult {
   model: string | null;
   ms: number;
   text: string | null;
+  /** The OpenAI API the Test went over, which Test detects and saves (ai D25); null otherwise. */
+  api?: OpenAiApi | null;
   error: { kind: string; message: string } | null;
 }
 
@@ -1243,8 +1250,9 @@ export const api = {
   /**
    * Save the default provider, default models, chat system prompt, confirmation switches and
    * API URLs; an empty string clears one, which for the system prompt means the default and for
-   * a URL the official API (ai D24). `confirm` may be partial. A URL that is not http or https,
-   * or holds a user name or password, is a 400 `invalid_url`.
+   * a URL the official API (ai D24), and for `openai_api` Responses (ai D25). `confirm` may be
+   * partial. A URL that is not http or https, or holds a user name or password, is a 400
+   * `invalid_url`.
    */
   aiSaveSettings: (settings: {
     default_provider?: AiProvider | "";
@@ -1252,6 +1260,7 @@ export const api = {
     system_prompt?: string;
     confirm?: Partial<AiConfirm>;
     urls?: Partial<Record<"anthropic" | "openai", string>>;
+    openai_api?: OpenAiApi | "";
   }) =>
     request<AiStatus>("PUT", "/api/integrations/ai/settings", settings),
   /** Store an Anthropic or OpenAI API key; an empty key deletes it. */

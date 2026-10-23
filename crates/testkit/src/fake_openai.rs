@@ -35,6 +35,19 @@
 //! tool outputs and messages) are checked, base64 with no line breaks and a PNG, JPEG, GIF or
 //! WebP media type, else 400; `images()` gives each request's images decoded.
 //!
+//! Chat Completions mode ([`FakeOpenAiBuilder::chat_completions`], ai D25) answers
+//! `POST /v1/chat/completions` and 404s `/v1/responses`; the default is the reverse. The same
+//! queued [`OpenAiResponse`]s answer it, as a `chat.completion` or as `chat.completion.chunk`
+//! frames ending `data: [DONE]`: text in `delta.content` pieces, reasoning in
+//! `delta.reasoning_content`, a refusal in `delta.refusal`, each function call as a first chunk
+//! with its id and name and then its arguments in pieces, then the `finish_reason` (`stop`,
+//! `tool_calls`, `content_filter` for [`OpenAiResponse::incomplete`]`("content_filter")` and
+//! `length` for any other reason), then the usage chunk. A failed response is an `error` frame
+//! with no `[DONE]`. A request is refused with a 400 when it sends `temperature`, `top_p` or a
+//! tool's `strict`, when a `tool` message answers no call of the assistant message before it,
+//! and, with [`FakeOpenAiBuilder::reject_json_schema`], when `response_format` is
+//! `json_schema`.
+//!
 //! It binds `127.0.0.1` on a free port. Every request is recorded, whatever it was answered.
 
 use std::collections::VecDeque;
@@ -45,7 +58,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::fake_http::{Answer, Listener, Streamed, frame, listen, lock, pieces};
-use crate::fake_images::{FakeImage, openai_images};
+use crate::fake_images::{FakeImage, chat_images, openai_images};
 use crate::standin::{Reply, Request};
 
 /// The API key the fake accepts unless [`FakeOpenAiBuilder::api_key`] says otherwise.
@@ -339,6 +352,148 @@ impl OpenAiResponse {
     }
 }
 
+/// A Chat Completions frame: `data: <json>` with no event name.
+fn chat_frame(data: &Value) -> String {
+    format!("data: {data}\n\n")
+}
+
+impl OpenAiResponse {
+    /// The `finish_reason` of a Chat Completions answer.
+    fn finish_reason(&self) -> &'static str {
+        match &self.ending {
+            Ending::Incomplete(r) if r == "content_filter" => "content_filter",
+            Ending::Incomplete(_) => "length",
+            _ if self.output.iter().any(|i| i["type"] == "function_call") => "tool_calls",
+            _ => "stop",
+        }
+    }
+
+    fn chat_usage(&self) -> Value {
+        json!({ "prompt_tokens": self.input_tokens, "completion_tokens": self.output_tokens,
+                "total_tokens": self.input_tokens + self.output_tokens })
+    }
+
+    fn chat_error(&self) -> Option<Value> {
+        match &self.ending {
+            Ending::Failed(code, message) => Some(
+                json!({ "error": { "message": message, "type": "server_error", "code": code } }),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The `tool_calls` of the answer, with their ids.
+    fn chat_calls(&self) -> Vec<Value> {
+        self.output
+            .iter()
+            .filter(|i| i["type"] == "function_call")
+            .map(|i| {
+                json!({ "id": i["call_id"], "type": "function",
+                        "function": { "name": i["name"], "arguments": i["arguments"] } })
+            })
+            .collect()
+    }
+
+    /// The text and refusal of the message items.
+    fn chat_texts(&self) -> (String, Option<String>) {
+        let mut text = String::new();
+        let mut refusal: Option<String> = None;
+        for item in self.output.iter().filter(|i| i["type"] == "message") {
+            for part in item["content"].as_array().into_iter().flatten() {
+                match part["type"].as_str() {
+                    Some("refusal") => refusal
+                        .get_or_insert_with(String::new)
+                        .push_str(part["refusal"].as_str().unwrap_or_default()),
+                    _ => text.push_str(part["text"].as_str().unwrap_or_default()),
+                }
+            }
+        }
+        (text, refusal)
+    }
+
+    fn chat_whole(&self, model: &str, n: u64) -> Value {
+        let (text, refusal) = self.chat_texts();
+        let mut message = json!({
+            "role": "assistant",
+            "content": if text.is_empty() { Value::Null } else { json!(text) },
+            "refusal": refusal,
+        });
+        let calls = self.chat_calls();
+        if !calls.is_empty() {
+            message["tool_calls"] = Value::Array(calls);
+        }
+        json!({
+            "id": format!("chatcmpl-fake-{n}"), "object": "chat.completion", "created": 1_760_000_000,
+            "model": model,
+            "choices": [{ "index": 0, "message": message, "finish_reason": self.finish_reason() }],
+            "usage": self.chat_usage(),
+        })
+    }
+
+    fn chat_frames(&self, model: &str, n: u64) -> Vec<String> {
+        let id = format!("chatcmpl-fake-{n}");
+        let chunk = |delta: Value, finish: Value| {
+            chat_frame(&json!({
+                "id": id, "object": "chat.completion.chunk", "created": 1_760_000_000,
+                "model": model,
+                "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }],
+            }))
+        };
+        let mut f = vec![chunk(
+            json!({ "role": "assistant", "content": "" }),
+            Value::Null,
+        )];
+        let mut call_index = 0;
+        for item in &self.output {
+            match item["type"].as_str() {
+                Some("reasoning") => {
+                    let text = item["summary"][0]["text"].as_str().unwrap_or_default();
+                    for p in pieces(text, self.chunk) {
+                        f.push(chunk(json!({ "reasoning_content": p }), Value::Null));
+                    }
+                }
+                Some("message") => {
+                    for part in item["content"].as_array().into_iter().flatten() {
+                        let (key, text) = match part["type"].as_str() {
+                            Some("refusal") => ("refusal", &part["refusal"]),
+                            _ => ("content", &part["text"]),
+                        };
+                        for p in pieces(text.as_str().unwrap_or_default(), self.chunk) {
+                            f.push(chunk(json!({ key: p }), Value::Null));
+                        }
+                    }
+                }
+                Some("function_call") => {
+                    f.push(chunk(
+                        json!({ "tool_calls": [{ "index": call_index, "id": item["call_id"], "type": "function",
+                                                 "function": { "name": item["name"], "arguments": "" } }] }),
+                        Value::Null,
+                    ));
+                    for p in pieces(item["arguments"].as_str().unwrap_or_default(), self.chunk) {
+                        f.push(chunk(
+                            json!({ "tool_calls": [{ "index": call_index, "function": { "arguments": p } }] }),
+                            Value::Null,
+                        ));
+                    }
+                    call_index += 1;
+                }
+                _ => {}
+            }
+        }
+        if let Some(e) = self.chat_error() {
+            f.push(chat_frame(&e));
+            return f;
+        }
+        f.push(chunk(json!({}), json!(self.finish_reason())));
+        f.push(chat_frame(&json!({
+            "id": id, "object": "chat.completion.chunk", "created": 1_760_000_000, "model": model,
+            "choices": [], "usage": self.chat_usage(),
+        })));
+        f.push("data: [DONE]\n\n".to_owned());
+        f
+    }
+}
+
 /// How a [`FakeOpenAi`] starts.
 #[derive(Debug, Clone)]
 pub struct FakeOpenAiBuilder {
@@ -346,6 +501,8 @@ pub struct FakeOpenAiBuilder {
     models: Vec<String>,
     plan_models: Vec<(String, String, String)>,
     open: bool,
+    chat: bool,
+    reject_json_schema: bool,
 }
 
 impl Default for FakeOpenAiBuilder {
@@ -375,6 +532,8 @@ impl Default for FakeOpenAiBuilder {
                 ),
             ],
             open: false,
+            chat: false,
+            reject_json_schema: false,
         }
     }
 }
@@ -384,6 +543,20 @@ impl FakeOpenAiBuilder {
     /// with no key does (ai D24).
     pub fn open(mut self) -> Self {
         self.open = true;
+        self
+    }
+
+    /// Speak Chat Completions only (ai D25): answer `POST /v1/chat/completions` and 404
+    /// `/v1/responses`, as many OpenAI-compatible services do.
+    pub fn chat_completions(mut self) -> Self {
+        self.chat = true;
+        self
+    }
+
+    /// Answer a Chat Completions request whose `response_format` is `json_schema` with a 400,
+    /// as a service that knows only `json_object` does.
+    pub fn reject_json_schema(mut self) -> Self {
+        self.reject_json_schema = true;
         self
     }
 
@@ -475,11 +648,25 @@ impl FakeOpenAi {
             .collect()
     }
 
-    /// The images each `POST /v1/responses` request carried, in request order (ai D19).
+    /// The `POST /v1/chat/completions` requests received so far (ai D25), refused ones included.
+    pub fn chat_requests(&self) -> Vec<Request> {
+        self.requests()
+            .into_iter()
+            .filter(|r| r.method == "POST" && r.route() == "/v1/chat/completions")
+            .collect()
+    }
+
+    /// The images each `POST /v1/responses` or `/v1/chat/completions` request carried, in
+    /// request order (ai D19).
     pub fn images(&self) -> Vec<Vec<FakeImage>> {
-        self.response_requests()
+        self.requests()
             .iter()
-            .map(|r| openai_images(&r.json()).unwrap_or_default())
+            .filter(|r| r.method == "POST")
+            .filter_map(|r| match r.route() {
+                "/v1/responses" => Some(openai_images(&r.json()).unwrap_or_default()),
+                "/v1/chat/completions" => Some(chat_images(&r.json()).unwrap_or_default()),
+                _ => None,
+            })
             .collect()
     }
 
@@ -515,7 +702,8 @@ fn handle(shared: &Shared, request: &Request) -> Answer {
         }
     };
     match (request.method.as_str(), request.route()) {
-        ("POST", "/v1/responses") => responses(shared, request, plan),
+        ("POST", "/v1/responses") if !shared.config.chat => responses(shared, request, plan),
+        ("POST", "/v1/chat/completions") if shared.config.chat => chat(shared, request),
         ("GET", "/v1/models") => models(shared, plan),
         _ => error(404, "not_found", "Not found", None),
     }
@@ -581,6 +769,112 @@ fn responses(shared: &Shared, request: &Request, plan: bool) -> Answer {
                 })
             } else {
                 Answer::Whole(Reply::json(200, &r.whole(&model, n)))
+            }
+        }
+    }
+}
+
+/// Why a Chat Completions request is refused, as `(param, message)`.
+fn chat_breach(shared: &Shared, body: &Value) -> Option<(&'static str, String)> {
+    for p in ["temperature", "top_p", "top_k"] {
+        if body.get(p).is_some() {
+            return Some((p, format!("{p} is not supported")));
+        }
+    }
+    for t in body["tools"].as_array().into_iter().flatten() {
+        if t.get("strict").is_some() || t["function"].get("strict").is_some() {
+            return Some(("tools", "tools[].strict is not supported".to_owned()));
+        }
+        if t["type"] != "function" || !t["function"]["name"].is_string() {
+            return Some((
+                "tools",
+                "a tool must be {type: function, function: {name, ...}}".to_owned(),
+            ));
+        }
+    }
+    if shared.config.reject_json_schema && body["response_format"]["type"] == "json_schema" {
+        return Some((
+            "response_format",
+            "response_format.type json_schema is not supported".to_owned(),
+        ));
+    }
+    // Every tool message answers a call of the assistant message before the run of tool
+    // messages it is in.
+    let mut calls: Vec<String> = Vec::new();
+    let mut in_tools = false;
+    for m in body["messages"].as_array().into_iter().flatten() {
+        match m["role"].as_str() {
+            Some("tool") => {
+                let id = m["tool_call_id"].as_str().unwrap_or_default();
+                if !in_tools || !calls.iter().any(|c| c == id) {
+                    return Some((
+                        "messages",
+                        format!(
+                            "tool message {id:?} does not answer a call of the assistant message before it"
+                        ),
+                    ));
+                }
+                if !m["content"].is_string() {
+                    return Some(("messages", "a tool message's content must be text".into()));
+                }
+            }
+            Some("assistant") => {
+                calls = m["tool_calls"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| c["id"].as_str().map(str::to_owned))
+                    .collect();
+                in_tools = !calls.is_empty();
+            }
+            _ => in_tools = false,
+        }
+    }
+    None
+}
+
+fn chat(shared: &Shared, request: &Request) -> Answer {
+    let body = request.json();
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if model.is_empty() || !body["messages"].is_array() {
+        return error(
+            400,
+            "invalid_request",
+            "model and messages are required",
+            None,
+        );
+    }
+    if let Some((param, message)) = chat_breach(shared, &body) {
+        return error(400, "invalid_request", &message, Some(param));
+    }
+    if let Err(e) = chat_images(&body) {
+        return error(400, "invalid_request", &e, Some("messages"));
+    }
+    let reply = lock(&shared.replies)
+        .pop_front()
+        .unwrap_or_else(|| OpenAiResponse::text("OK").into());
+    let n = {
+        let mut n = lock(&shared.served);
+        *n += 1;
+        *n
+    };
+    match reply {
+        OpenAiReply::Http(r) => Answer::Whole(r),
+        OpenAiReply::Response(r) => {
+            if body.get("stream").and_then(Value::as_bool) == Some(true) {
+                Answer::Stream(Streamed {
+                    frames: r.chat_frames(&model, n),
+                    cut_after: r.cut_after,
+                    delay: r.delay,
+                })
+            } else if let Some(e) = r.chat_error() {
+                Answer::Whole(Reply::json(400, &e))
+            } else {
+                Answer::Whole(Reply::json(200, &r.chat_whole(&model, n)))
             }
         }
     }

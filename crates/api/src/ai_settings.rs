@@ -4,15 +4,18 @@
 //! - `GET /api/integrations/ai` answers `{ secrets_key, default_provider, providers: { anthropic:
 //!   { configured, model, url, has_key }, openai: { configured, model, url, has_key }, chatgpt: {
 //!   configured, account, model } } }, system_prompt, default_system_prompt, system_prompt_custom,
-//!   confirm }`: each API URL as stored, or null for the official API, and whether a key is
+//!   confirm }`, the OpenAI entry also with `api`, `responses` or `chat_completions`, the API its
+//!   calls speak (always `responses` without a custom URL, ai D25): each API URL as stored, or
+//!   null for the official API, and whether a key is
 //!   stored, which a custom URL makes optional (ai D24), the chat system prompt in
 //!   use, the shipped one, and whether they differ (ai D17), and `confirm: { notes, archive,
 //!   delete, types }` with every key filled (ai D22). A provider with a custom API URL counts as
 //!   configured without a key. No answer of these routes ever holds a key or a token.
 //! - `PUT /api/integrations/ai/settings` takes `{ default_provider?, models?: { anthropic?,
 //!   openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? }, urls?:
-//!   { anthropic?, openai? } }`; a field sent replaces the stored one, and an empty string clears
-//!   it, which for `system_prompt` means the default and for a URL the official API. A system
+//!   { anthropic?, openai? }, openai_api? }`; a field sent replaces the stored one, and an empty
+//!   string clears it, which for `system_prompt` means the default, for a URL the official API
+//!   and for `openai_api` (`responses` or `chat_completions`, else a 400) Responses. A system
 //!   prompt over [`ai::SYSTEM_PROMPT_MAX`] characters is a 400; a URL [`ai::check_url`] refuses
 //!   is a 400 `invalid_url`. The rest of `endpoints`, the test seam, is kept.
 //! - `PUT /api/integrations/ai/{anthropic|openai}/key` takes `{ key }` and stores it in
@@ -28,8 +31,12 @@
 //!   deletes `ai_chatgpt`.
 //! - `POST /api/integrations/ai/{provider}/test` takes an optional `{ model }` and sends the
 //!   16-token "Reply with OK" request to it, else to the provider's default model, else to the
-//!   model [`ai::preselect`] picks from the live list, which it then saves as the default. It
-//!   answers 200 `{ ok, provider, model, ms, text, error: null | { kind, message } }`.
+//!   model [`ai::preselect`] picks from the live list, which it then saves as the default. On
+//!   OpenAI with a custom API URL it detects the API (ai D25): when the saved one's path answers
+//!   404 or 405, it sends the same request on the other API's path, and when that path answers,
+//!   saves the other as `openai_api`. It answers 200 `{ ok, provider, model, ms, text, api,
+//!   error: null | { kind, message } }`, `api` being the OpenAI API the answer came over, or null
+//!   for the other providers and the official OpenAI API.
 //! - `GET /api/ai/providers` (scope `read`) answers `{ default_provider, providers: { <p>: {
 //!   configured, model } }, confirm }`, the chat panel's picker in every client (ai D23): no
 //!   account, no prompt, no API URL, never a secret.
@@ -185,6 +192,9 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
             entry["account"] = json!(auth.account.filter(|_| configured));
         } else {
             entry["url"] = json!(settings.endpoints.url(p));
+            if p == Provider::OpenAi {
+                entry["api"] = json!(settings.endpoints.openai_api().as_str());
+            }
             let key = s.get_secret(ai::key_secret(p))?;
             entry["has_key"] = json!(key.is_some_and(|k| !k.trim().is_empty()));
         }
@@ -244,6 +254,8 @@ pub struct SettingsBody {
     confirm: Option<ConfirmBody>,
     #[serde(default)]
     urls: Option<HashMap<String, Option<String>>>,
+    #[serde(default)]
+    openai_api: Option<String>,
 }
 
 /// A partial `confirm`: each switch sent replaces the stored one (ai D22).
@@ -284,6 +296,13 @@ pub async fn put_settings(
         };
         urls.push((p, url));
     }
+    let openai_api = match b.openai_api.as_deref().map(str::trim) {
+        None => None,
+        Some("") => Some(None),
+        Some(a) => Some(Some(
+            a.parse::<ai::OpenAiApi>().map_err(ApiError::bad_request)?,
+        )),
+    };
     let prompt = b.system_prompt;
     let confirm = b.confirm;
     blocking(&a, move |s| {
@@ -293,6 +312,9 @@ pub async fn put_settings(
                 .endpoints
                 .set_url(p, url.as_deref())
                 .map_err(url_error)?;
+        }
+        if let Some(api) = openai_api {
+            settings.endpoints.openai_api = api;
         }
         if let Some(c) = confirm {
             let to = &mut settings.confirm;
@@ -563,18 +585,23 @@ pub async fn test(
         serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(e.to_string()))?
     };
     let began = Instant::now();
-    let answer = |model: Option<&str>, result: Result<String, AiError>| {
-        let ms = began.elapsed().as_millis() as u64;
-        match result {
-            Ok(text) => json!({
-                "ok": true, "provider": p, "model": model, "ms": ms, "text": text, "error": null,
-            }),
-            Err(e) => json!({
-                "ok": false, "provider": p, "model": model, "ms": ms, "text": null,
-                "error": { "kind": e.kind.as_str(), "message": e.message },
-            }),
-        }
-    };
+    let answer_with =
+        move |model: Option<&str>, result: Result<String, AiError>, api: Option<ai::OpenAiApi>| {
+            let ms = began.elapsed().as_millis() as u64;
+            let api = api.map(ai::OpenAiApi::as_str);
+            match result {
+                Ok(text) => json!({
+                    "ok": true, "provider": p, "model": model, "ms": ms, "text": text, "api": api,
+                    "error": null,
+                }),
+                Err(e) => json!({
+                    "ok": false, "provider": p, "model": model, "ms": ms, "text": null, "api": api,
+                    "error": { "kind": e.kind.as_str(), "message": e.message },
+                }),
+            }
+        };
+    let answer =
+        |model: Option<&str>, result: Result<String, AiError>| answer_with(model, result, None);
     let (cred, settings) = match credential(&a, p).await? {
         Ok(c) => c,
         Err(e) => return Ok(Json(answer(None, Err(e)))),
@@ -611,8 +638,40 @@ pub async fn test(
         }
     };
     let req = ai::Request::test(p, model.clone());
-    let result = match tokio::time::timeout(TEST_TIMEOUT, ai::complete(&a.http, &cred, &req)).await
+    let mut result = test_call(&a, &cred, &req).await;
+    // Only OpenAI with a custom API URL has a choice of API (ai D25).
+    let mut api = (p == Provider::OpenAi && cred.custom_host.is_some()).then(|| cred.api());
+    if let Some(saved) = api
+        && result.as_ref().is_err_and(AiError::is_unsupported_api)
     {
+        let mut other = cred.clone();
+        other.openai_api = saved.other();
+        let second = test_call(&a, &other, &req).await;
+        // The other path answered, even with an error of its own: the service speaks it.
+        if !second.as_ref().is_err_and(AiError::is_unsupported_api) {
+            let found = saved.other();
+            blocking(&a, move |s| {
+                let mut settings = Settings::load(s).map_err(api_error)?;
+                settings.endpoints.openai_api = Some(found);
+                settings.save(s).map_err(api_error)
+            })
+            .await?;
+            api = Some(found);
+            result = second;
+        }
+    }
+    Ok(Json(answer_with(Some(&model), result.map(|r| r.text), api)))
+}
+
+/// One Test request, under [`TEST_TIMEOUT`], leaving its trail line.
+async fn test_call(
+    a: &Arc<Ai>,
+    cred: &ai::Credential,
+    req: &ai::Request,
+) -> Result<ai::Reply, AiError> {
+    let p = req.provider;
+    let began = Instant::now();
+    let result = match tokio::time::timeout(TEST_TIMEOUT, ai::complete(&a.http, cred, req)).await {
         Ok(r) => r,
         Err(_) => Err(AiError::new(
             ErrorKind::Timeout,
@@ -626,9 +685,9 @@ pub async fn test(
     let host = cred.custom_host.as_deref();
     eprintln!(
         "{}",
-        ai::trail_for(p, &model, &result, began.elapsed(), host)
+        ai::trail_for(p, &req.model, &result, began.elapsed(), host)
     );
-    Ok(Json(answer(Some(&model), result.map(|r| r.text))))
+    result
 }
 
 #[derive(Deserialize)]

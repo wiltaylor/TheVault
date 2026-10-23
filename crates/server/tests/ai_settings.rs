@@ -759,3 +759,91 @@ fn test_works_against_custom_urls_with_no_key() {
         "This service does not support the OpenAI Responses API (POST /v1/responses)."
     );
 }
+
+#[test]
+fn test_detects_chat_completions_saves_it_and_reports_it() {
+    let api = Api::start();
+    let zai = FakeOpenAi::builder().open().chat_completions().start();
+    let s = api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "openai": zai.base_url() } }),
+    );
+    assert_eq!(s["providers"]["openai"]["api"], "responses");
+
+    let t = api.post(
+        "/api/integrations/ai/openai/test",
+        json!({ "model": "glm-5.3-flash" }),
+        StatusCode::OK,
+    );
+    assert_eq!(t["ok"], true, "{t}");
+    assert_eq!(t["text"], "OK");
+    assert_eq!(t["api"], "chat_completions");
+    assert_eq!(zai.response_requests().len(), 1, "tried Responses first");
+    assert_eq!(zai.chat_requests().len(), 1);
+    assert_eq!(
+        api.server.secret_json("ai_settings")["endpoints"]["openai_api"],
+        "chat_completions"
+    );
+    assert_eq!(
+        api.get("/api/integrations/ai")["providers"]["openai"]["api"],
+        "chat_completions"
+    );
+
+    // Now saved, the next Test goes straight to Chat Completions.
+    let t = api.post(
+        "/api/integrations/ai/openai/test",
+        json!({ "model": "glm-5.3-flash" }),
+        StatusCode::OK,
+    );
+    assert_eq!(t["ok"], true, "{t}");
+    assert_eq!(t["api"], "chat_completions");
+    assert_eq!(zai.response_requests().len(), 1);
+    assert_eq!(zai.chat_requests().len(), 2);
+
+    // The reverse: a Responses service with Chat Completions saved.
+    let responses = FakeOpenAi::builder().open().start();
+    api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "openai": responses.base_url() } }),
+    );
+    let t = api.post(
+        "/api/integrations/ai/openai/test",
+        json!({ "model": "gpt-6" }),
+        StatusCode::OK,
+    );
+    assert_eq!(t["ok"], true, "{t}");
+    assert_eq!(t["api"], "responses");
+    assert_eq!(
+        api.server.secret_json("ai_settings")["endpoints"]["openai_api"],
+        "responses"
+    );
+
+    // The type is set by hand too; an unknown one is a 400 and empty means Responses.
+    let s = api.put(
+        "/api/integrations/ai/settings",
+        json!({ "openai_api": "chat_completions" }),
+    );
+    assert_eq!(s["providers"]["openai"]["api"], "chat_completions");
+    api.send(
+        api.client
+            .put(api.server.url("/api/integrations/ai/settings"))
+            .json(&json!({ "openai_api": "completions" })),
+        StatusCode::BAD_REQUEST,
+    );
+    let s = api.put("/api/integrations/ai/settings", json!({ "openai_api": "" }));
+    assert_eq!(s["providers"]["openai"]["api"], "responses");
+
+    // Without a custom URL the official API always uses Responses.
+    let s = api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "openai": "" }, "openai_api": "chat_completions" }),
+    );
+    assert_eq!(s["providers"]["openai"]["api"], "responses");
+    // Anthropic names no type.
+    let t = api.post(
+        "/api/integrations/ai/anthropic/test",
+        json!({ "model": "claude-opus-5" }),
+        StatusCode::OK,
+    );
+    assert_eq!(t["api"], Value::Null, "{t}");
+}

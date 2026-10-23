@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::error::{AiError, ErrorKind};
-use crate::settings::{Settings, state_error};
+use crate::settings::{OpenAiApi, Settings, state_error};
 use crate::siwc;
 use crate::types::Provider;
 
@@ -91,6 +91,9 @@ pub struct Credential {
     /// The host of a custom API URL, for the trail line and the compatibility errors (ai D24).
     /// `None` for the official API.
     pub custom_host: Option<String>,
+    /// The API an OpenAI call speaks (ai D25). Only an OpenAI credential with a custom API URL
+    /// uses Chat Completions: the official API and the ChatGPT plan always use Responses.
+    pub openai_api: OpenAiApi,
 }
 
 impl Credential {
@@ -101,7 +104,22 @@ impl Credential {
             secret,
             account: None,
             custom_host: None,
+            openai_api: OpenAiApi::Responses,
         }
+    }
+
+    /// The API this credential's calls speak: the stored type for OpenAI with a custom API URL,
+    /// else Responses (ai D25). Anthropic's answer is meaningless.
+    pub fn api(&self) -> OpenAiApi {
+        match (self.provider, &self.custom_host) {
+            (Provider::OpenAi, Some(_)) => self.openai_api,
+            _ => OpenAiApi::Responses,
+        }
+    }
+
+    /// Whether calls go to `/chat/completions` rather than `/responses` (ai D25).
+    pub fn chat_completions(&self) -> bool {
+        self.provider == Provider::OpenAi && self.api() == OpenAiApi::ChatCompletions
     }
 }
 
@@ -236,6 +254,9 @@ impl Credentials {
                 let mut cred =
                     Credential::new(provider, base, Secret::new(key.unwrap_or_default()));
                 cred.custom_host = settings.endpoints.custom_host(provider);
+                if provider == Provider::OpenAi {
+                    cred.openai_api = settings.endpoints.openai_api();
+                }
                 Ok(cred)
             }
             Provider::ChatGpt => {

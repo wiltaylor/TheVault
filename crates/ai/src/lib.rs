@@ -1,7 +1,8 @@
 //! Calls to large language models with the user's own credentials (the AI spec's `crates/ai`
 //! section, ai D1 to D12): an Anthropic Messages client, an OpenAI Responses client used with an
-//! API key and with a ChatGPT plan token, one incremental SSE parser under an async and a
-//! blocking transport, live model lists, and credentials from the encrypted secrets.
+//! API key and with a ChatGPT plan token, an OpenAI Chat Completions client for compatible
+//! services that lack the Responses API (ai D25), one incremental SSE parser under an async and
+//! a blocking transport, live model lists, and credentials from the encrypted secrets.
 //!
 //! A call goes like this:
 //!
@@ -45,10 +46,15 @@
 //! API URLs of Settings > AI (ai D24, checked by [`check_url`]), and the test seam, where the
 //! testkit fakes `FakeAnthropic`, `FakeOpenAi` and `FakeSiwc` stand in for the real hosts. With
 //! a custom API URL the key is optional: none sends no auth header. A 404 or 405 from a custom
-//! URL on `/v1/messages` or `/v1/responses` is an `invalid` error saying the service does not
-//! support that API.
+//! URL on `/v1/messages`, `/v1/responses` or `/v1/chat/completions` is an `invalid` error saying
+//! the service does not support that API ([`AiError::is_unsupported_api`]).
+//!
+//! An OpenAI credential with a custom API URL speaks the API `endpoints.openai_api` names
+//! ([`OpenAiApi`], ai D25): Responses by default, or Chat Completions. The official OpenAI API
+//! and the ChatGPT plan always use Responses. Calls never probe: Settings > AI's Test does.
 
 mod anthropic;
+mod chat;
 mod credentials;
 mod error;
 mod http;
@@ -78,7 +84,7 @@ pub use error::{AiError, ErrorKind};
 pub use http::{blocking_client, client};
 pub use settings::{
     ANTHROPIC_BASE, ANTHROPIC_DEFAULT_MODEL, CHATGPT_AUTH_BASE, Confirm, Endpoints, Models,
-    OPENAI_BASE, SETTINGS, SYSTEM_PROMPT_MAX, Settings, api_url, check_url,
+    OPENAI_BASE, OpenAiApi, SETTINGS, SYSTEM_PROMPT_MAX, Settings, api_url, check_url,
 };
 pub use trail::{Outcome, trail_for, trail_line};
 pub use types::{
@@ -109,6 +115,9 @@ fn inference_call(cred: &Credential, req: &Request, stream: bool) -> Result<Call
         Provider::Anthropic => {
             Call::new(cred, &req.model, "/v1/messages").post(anthropic::body(req, stream), stream)
         }
+        Provider::OpenAi if cred.chat_completions() => {
+            Call::new(cred, &req.model, chat::PATH).post(chat::body(req, stream, false), stream)
+        }
         Provider::OpenAi => Call::new(cred, &req.model, "/v1/responses")
             .post(openai::body(req, false, stream), stream),
         Provider::ChatGpt => {
@@ -117,10 +126,55 @@ fn inference_call(cred: &Credential, req: &Request, stream: bool) -> Result<Call
     })
 }
 
+/// The second try of a Chat Completions request with a schema that the service refused with a
+/// 400: `json_object` with the schema in the system text (ai D25). `None` when `e` is not that.
+fn json_object_call(cred: &Credential, req: &Request, stream: bool, e: &AiError) -> Option<Call> {
+    (cred.chat_completions() && req.schema.is_some() && e.status == Some(400)).then(|| {
+        Call::new(cred, &req.model, chat::PATH).post(chat::body(req, stream, true), stream)
+    })
+}
+
+/// Send the request (async), with the `json_object` second try when it applies. Returns the
+/// call that was answered.
+async fn send_request(
+    http: &reqwest::Client,
+    cred: &Credential,
+    req: &Request,
+    stream: bool,
+) -> Result<(reqwest::Response, Call), AiError> {
+    let call = inference_call(cred, req, stream)?;
+    match http::send(http, &call).await {
+        Ok(resp) => Ok((resp, call)),
+        Err(e) => match json_object_call(cred, req, stream, &e) {
+            Some(again) => Ok((http::send(http, &again).await?, again)),
+            None => Err(e),
+        },
+    }
+}
+
+/// [`send_request`], blocking.
+fn send_request_blocking(
+    http: &reqwest::blocking::Client,
+    cred: &Credential,
+    req: &Request,
+    stream: bool,
+    deadline: Option<Instant>,
+) -> Result<(reqwest::blocking::Response, Call), AiError> {
+    let call = inference_call(cred, req, stream)?;
+    match http::send_blocking(http, &call, deadline) {
+        Ok(resp) => Ok((resp, call)),
+        Err(e) => match json_object_call(cred, req, stream, &e) {
+            Some(again) => Ok((http::send_blocking(http, &again, deadline)?, again)),
+            None => Err(e),
+        },
+    }
+}
+
 /// The decoder of a provider's stream.
 enum Decoder {
     Anthropic(anthropic::StreamDecoder),
     OpenAi(openai::StreamDecoder),
+    Chat(chat::StreamDecoder),
 }
 
 /// Bytes in, events out: the parser and decoder both transports share.
@@ -133,11 +187,14 @@ struct Pump {
 }
 
 impl Pump {
-    fn new(req: &Request) -> Pump {
+    fn new(cred: &Credential, req: &Request) -> Pump {
         Pump {
             parser: SseParser::new(),
             decoder: match req.provider {
                 Provider::Anthropic => Decoder::Anthropic(anthropic::StreamDecoder::new(req)),
+                Provider::OpenAi if cred.chat_completions() => {
+                    Decoder::Chat(chat::StreamDecoder::new(req))
+                }
                 Provider::OpenAi | Provider::ChatGpt => {
                     Decoder::OpenAi(openai::StreamDecoder::new(req))
                 }
@@ -152,6 +209,7 @@ impl Pump {
         match &self.decoder {
             Decoder::Anthropic(d) => d.done,
             Decoder::OpenAi(d) => d.done,
+            Decoder::Chat(d) => d.done,
         }
     }
 
@@ -159,6 +217,7 @@ impl Pump {
         match &self.decoder {
             Decoder::Anthropic(d) => d.usage(),
             Decoder::OpenAi(d) => d.usage(),
+            Decoder::Chat(d) => d.usage(),
         }
     }
 
@@ -175,7 +234,10 @@ impl Pump {
 
     fn frame(&mut self, frame: &SseFrame) -> Result<(), AiError> {
         if frame.data.trim() == "[DONE]" {
-            return Ok(());
+            return match &mut self.decoder {
+                Decoder::Chat(d) => d.finish(&mut self.pending),
+                _ => Ok(()),
+            };
         }
         let data: Value = serde_json::from_str(&frame.data).map_err(|e| {
             AiError::new(
@@ -187,16 +249,27 @@ impl Pump {
         match &mut self.decoder {
             Decoder::Anthropic(d) => d.frame(&data, &mut self.pending),
             Decoder::OpenAi(d) => d.frame(&data, &mut self.pending),
+            Decoder::Chat(d) => d.frame(&data, &mut self.pending),
         }
     }
 
     /// The body ended: an error unless the turn did too.
     fn end(&mut self) {
         self.parser.finish();
+        // A Chat Completions service that ends the body after the finish_reason without
+        // `[DONE]` still ended the turn.
+        if let Decoder::Chat(d) = &mut self.decoder
+            && d.finished()
+            && self.failed.is_none()
+            && let Err(e) = d.finish(&mut self.pending)
+        {
+            self.failed = Some(e);
+        }
         if !self.done() && self.failed.is_none() {
             let last = match self.decoder {
                 Decoder::Anthropic(_) => "message_stop",
                 Decoder::OpenAi(_) => "response.completed",
+                Decoder::Chat(_) => "[DONE]",
             };
             self.failed = Some(
                 AiError::new(
@@ -277,12 +350,11 @@ pub async fn stream(
     cred: &Credential,
     req: &Request,
 ) -> Result<EventStream, AiError> {
-    let call = inference_call(cred, req, true)?;
-    let resp = http::send(http, &call).await?;
+    let (resp, call) = send_request(http, cred, req, true).await?;
     Ok(EventStream {
         resp: Some(resp),
         call,
-        pump: Pump::new(req),
+        pump: Pump::new(cred, req),
         over: false,
     })
 }
@@ -308,8 +380,7 @@ pub fn complete_blocking(
     if cred.provider == Provider::ChatGpt {
         return stream_blocking(http, cred, req, deadline, |_| {});
     }
-    let call = inference_call(cred, req, false)?;
-    let resp = http::send_blocking(http, &call, deadline)?;
+    let (resp, call) = send_request_blocking(http, cred, req, false, deadline)?;
     let text = resp.text().map_err(|e| http::body_error(&call, &e))?;
     let body: Value = serde_json::from_str(&text).map_err(|e| {
         call.fail(AiError::new(
@@ -319,6 +390,7 @@ pub fn complete_blocking(
     })?;
     let events = match cred.provider {
         Provider::Anthropic => anthropic::parse_message(req, &body),
+        Provider::OpenAi if cred.chat_completions() => chat::parse_completion(req, &body),
         _ => openai::parse_response(req, &body),
     }
     .map_err(|e| call.fail(e))?;
@@ -338,9 +410,8 @@ pub fn stream_blocking(
     deadline: Option<Instant>,
     mut on_event: impl FnMut(&Event),
 ) -> Result<Reply, AiError> {
-    let call = inference_call(cred, req, true)?;
-    let mut resp = http::send_blocking(http, &call, deadline)?;
-    let mut pump = Pump::new(req);
+    let (mut resp, call) = send_request_blocking(http, cred, req, true, deadline)?;
+    let mut pump = Pump::new(cred, req);
     let mut c = Collector::new(req);
     let mut buf = vec![0u8; 16 * 1024];
     loop {

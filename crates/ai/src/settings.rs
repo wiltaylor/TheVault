@@ -40,7 +40,7 @@ pub struct Models {
 ///
 /// `anthropic` and `openai` are the API URLs Settings > AI edits (ai D24); tests point them at
 /// the testkit fakes. The `anthropic` one takes `/v1/messages` and `/v1/models`, the `openai` one
-/// `/v1/responses` and `/v1/models`. A URL whose path ends in a version segment such as `/v1` or
+/// `/v1/responses` or `/v1/chat/completions` (as `openai_api` says, ai D25) and `/v1/models`. A URL whose path ends in a version segment such as `/v1` or
 /// `/v4` is the API root as it is; any other gets `/v1` appended (see [`api_url`]). `chatgpt` is the ChatGPT plan's base, a test seam that is not in
 /// the UI: the plan never follows `openai`. `chatgpt_auth` takes `/api/accounts/oauth/token` and
 /// `/.well-known/openid-configuration`.
@@ -54,6 +54,60 @@ pub struct Endpoints {
     pub chatgpt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chatgpt_auth: Option<String>,
+    /// The API the OpenAI card's custom URL speaks (ai D25). Absent means Responses. Read only
+    /// with a custom OpenAI URL: the official API and the ChatGPT plan always use Responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_api: Option<OpenAiApi>,
+}
+
+/// The API an OpenAI-compatible service speaks (ai D25): `responses` (`POST /v1/responses`) or
+/// `chat_completions` (`POST /v1/chat/completions`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiApi {
+    #[default]
+    Responses,
+    ChatCompletions,
+}
+
+impl OpenAiApi {
+    /// `responses` or `chat_completions`, as stored and as the routes answer it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OpenAiApi::Responses => "responses",
+            OpenAiApi::ChatCompletions => "chat_completions",
+        }
+    }
+
+    /// `Responses API` or `Chat Completions API`, as the user reads it.
+    pub fn label(self) -> &'static str {
+        match self {
+            OpenAiApi::Responses => "Responses API",
+            OpenAiApi::ChatCompletions => "Chat Completions API",
+        }
+    }
+
+    /// The other one, which Test tries when a service lacks this one.
+    pub fn other(self) -> OpenAiApi {
+        match self {
+            OpenAiApi::Responses => OpenAiApi::ChatCompletions,
+            OpenAiApi::ChatCompletions => OpenAiApi::Responses,
+        }
+    }
+}
+
+impl std::str::FromStr for OpenAiApi {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "responses" => Ok(OpenAiApi::Responses),
+            "chat_completions" => Ok(OpenAiApi::ChatCompletions),
+            other => Err(format!(
+                "unknown OpenAI API type {other:?}: expected responses or chat_completions"
+            )),
+        }
+    }
 }
 
 impl Endpoints {
@@ -111,6 +165,15 @@ impl Endpoints {
             None => None,
         };
         Ok(())
+    }
+
+    /// The API the OpenAI provider's calls speak (ai D25): the stored type with a custom OpenAI
+    /// URL, and always Responses without one.
+    pub fn openai_api(&self) -> OpenAiApi {
+        match self.url(Provider::OpenAi) {
+            Some(_) => self.openai_api.unwrap_or_default(),
+            None => OpenAiApi::Responses,
+        }
     }
 
     /// The base URL of the ChatGPT sign-in server.

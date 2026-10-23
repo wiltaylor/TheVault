@@ -35,6 +35,7 @@ impl Env {
                 openai: Some(openai.base_url()),
                 chatgpt: Some(openai.base_url()),
                 chatgpt_auth: Some(siwc.base_url()),
+                ..Endpoints::default()
             },
             ..Settings::default()
         };

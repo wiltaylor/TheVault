@@ -406,6 +406,78 @@ fn a_chatgpt_plan_turn_searches_reads_answers_and_replays_unedited() {
 }
 
 #[test]
+fn a_chat_completions_turn_searches_answers_and_replays_unedited() {
+    let api = Api::start();
+    let fake = FakeOpenAi::builder().chat_completions().start();
+    api.secret("ai_openai_api_key", fake.api_key());
+    api.secret(
+        "ai_settings",
+        &json!({
+            "default_provider": "openai",
+            "models": { "openai": "glm-5.3-flash" },
+            "endpoints": { "openai": fake.base_url(), "openai_api": "chat_completions" },
+        })
+        .to_string(),
+    );
+    api.memo("Boiler service", "The boiler was serviced in May.");
+
+    fake.push(
+        OpenAiResponse::new()
+            .function_call(
+                "call_1",
+                "search_notes",
+                json!({ "text": "boiler", "limit": 3 }),
+            )
+            .chunk(4),
+    );
+    fake.push(OpenAiResponse::text("It was serviced in May."));
+    let sent = json!([user("When was the boiler serviced?")]);
+    let events = api.chat(sent.clone());
+    assert_eq!(
+        shape(&events),
+        ["tool", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    assert_eq!(text_of(&events), "It was serviced in May.");
+    assert!(fake.response_requests().is_empty());
+    let requests = fake.chat_requests();
+    assert_eq!(requests.len(), 2);
+    let second = requests[1].json();
+    let messages = second["messages"].as_array().unwrap();
+    assert_eq!(messages[0]["role"], "system");
+    let call = messages
+        .iter()
+        .find(|m| m["role"] == "assistant")
+        .expect("the tool call is sent back");
+    assert_eq!(call["tool_calls"][0]["id"], "call_1");
+    assert_eq!(call["tool_calls"][0]["function"]["name"], "search_notes");
+    let result = messages
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .expect("the tool result");
+    assert_eq!(result["tool_call_id"], "call_1");
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("Boiler service"),
+        "{result}"
+    );
+    for t in second["tools"].as_array().unwrap() {
+        assert!(t["function"].get("strict").is_none(), "{t}");
+    }
+
+    // The next turn replays the history as it was sent.
+    let done = last(&events, "done");
+    fake.push(OpenAiResponse::text("Every year."));
+    let more = api.chat(next_history(&sent, done, "How often?"));
+    assert_eq!(shape(&more), ["text", "done"]);
+    let replay = fake.chat_requests()[2].json();
+    let after = replay["messages"].as_array().unwrap();
+    assert_eq!(&after[..messages.len()], messages.as_slice());
+}
+
+#[test]
 fn propose_edit_emits_a_proposal_and_writes_nothing() {
     let api = Api::start();
     let fake = FakeAnthropic::start();

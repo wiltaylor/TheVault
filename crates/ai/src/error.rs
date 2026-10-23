@@ -112,6 +112,14 @@ impl AiError {
         }
     }
 
+    /// Whether a custom API URL answered 404 or 405 on the API's path: the service does not
+    /// speak that API (ai D24). Settings > AI's Test then tries the other OpenAI API (ai D25).
+    pub fn is_unsupported_api(&self) -> bool {
+        self.kind == ErrorKind::Invalid
+            && matches!(self.status, Some(404 | 405))
+            && self.message.starts_with(crate::http::UNSUPPORTED_API)
+    }
+
     /// The same error, naming the provider and model it came from.
     pub fn on(mut self, provider: Provider, model: &str) -> AiError {
         self.provider = Some(provider);
