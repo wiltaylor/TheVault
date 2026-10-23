@@ -153,6 +153,7 @@ export function agentForm(a: Agent): AgentForm {
       types: a.permissions.types ?? null,
       confirm: { ...a.permissions.confirm },
       web: { ...a.permissions.web },
+      outbox: { send_without_review: a.permissions.outbox?.send_without_review ?? false },
     },
     triggers: a.triggers.map((t) => ({ ...t })),
   };
@@ -230,6 +231,14 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["get_agent", "Read an agent"],
       ["propose_agent_change", "Create and change agents"],
       ["propose_agent_delete", "Delete agents"],
+    ],
+  },
+  {
+    group: "Outbox",
+    tools: [
+      ["draft_email", "Draft emails"],
+      ["draft_sms", "Draft SMS messages"],
+      ["draft_event", "Draft calendar invites"],
     ],
   },
   {

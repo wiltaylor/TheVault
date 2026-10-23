@@ -1241,7 +1241,7 @@ impl Turn {
                 let limits = setup.limits.clone();
                 let agent = setup.agent.clone();
                 let got = tokio::task::spawn_blocking(move || {
-                    run_tool(&w, &author, direct, &limits, &agent, &call)
+                    run_tool(&w, &author, scope, direct, &limits, &agent, &call)
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
@@ -1608,7 +1608,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "propose_agent_change",
-            "Propose an agent file for the user to apply: a change to an existing agent, or a new agent under a new name. It is checked as the agent write would check it, and refused when it would give the agent a tool, a note type, a confirmation switch turned off or an Internet switch turned on that you do not have yourself; you cannot change your own file. The user sees a diff of the WCL and applies or discards it. When the user lets agent changes go ahead without asking, it is written at once and the result says applied.",
+            "Propose an agent file for the user to apply: a change to an existing agent, or a new agent under a new name. It is checked as the agent write would check it, and refused when it would give the agent a tool, a note type, a confirmation switch turned off, an Internet switch turned on or the Outbox switch send_without_review turned on that you do not have yourself; you cannot change your own file. The user sees a diff of the WCL and applies or discards it. When the user lets agent changes go ahead without asking, it is written at once and the result says applied.",
             json!({
                 "name": { "type": "string", "description": "The agent's name: an existing agent to change, or a new name (lowercase letters, digits and underscores, starting with a letter) to create one." },
                 "wcl": { "type": "string", "description": "The whole new agent file as WCL text, with everything it keeps." },
@@ -1657,6 +1657,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
     ]
     .into_iter()
+    .chain(crate::ai_outbox::tool_specs())
     .chain(crate::ai_web::tool_specs())
     .collect()
 }
@@ -1725,23 +1726,49 @@ fn rows_out(rows: Vec<Value>, extra: Value) -> ToolOut {
 }
 
 /// Run one tool call. A call the model got wrong is answered as an error, not run (ai D5).
-/// A proposal whose confirmation is off is applied here, in place of being sent (ai D22).
+/// A proposal whose confirmation is off is applied here, in place of being sent (ai D22). The
+/// Outbox tools draft at once, as the agent, with a caller that has `write` (outbox X9).
 fn run_tool(
     w: &Writer,
     author: &Author,
+    scope: Scope,
     direct: Direct,
     limits: &Limits,
     agent: &Agent,
     call: &ToolCall,
 ) -> ToolOut {
+    if call.error.is_none() && crate::ai_outbox::is_draft_tool(&call.name) {
+        return crate::ai_outbox::draft(w, scope, agent, limits, &call.name, &call.input);
+    }
     let out = propose_or_read(w, author, limits, agent, call);
     match &out.proposal {
         Some((event, p)) if direct.covers(event, p) => {
             let (event, p) = (*event, p.clone());
-            make(w, author, event, &p, out.summary)
+            // A change made without the user's Apply to an Outbox item is the agent's, whoever
+            // runs the turn, so the writer's review rules hold for it (outbox X2).
+            let author = if touches_outbox(w, event, &p) {
+                Author::Agent(agent.name.clone())
+            } else {
+                author.clone()
+            };
+            make(w, &author, event, &p, out.summary)
         }
         _ => out,
     }
+}
+
+/// Whether note proposal `p` creates or changes an Outbox item.
+fn touches_outbox(w: &Writer, event: &str, p: &Value) -> bool {
+    if event != "proposal" {
+        return false;
+    }
+    if p["type"] == writer::OUTBOX_TYPE {
+        return true;
+    }
+    p["note_id"]
+        .as_str()
+        .and_then(|id| w.read(id).ok())
+        .is_some_and(|n| n.type_name == writer::OUTBOX_TYPE)
 }
 
 /// Make the change a tool proposed, as the caller: the `applied` event, and a result telling the

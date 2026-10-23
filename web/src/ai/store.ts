@@ -79,6 +79,18 @@ export interface FoundAsset {
   filename: string;
 }
 
+/** The Outbox item a `draft_email`, `draft_sms` or `draft_event` step made (outbox X9). */
+export interface DraftRef {
+  note_id: string;
+  /** `email`, `sms` or `event`. */
+  kind: string;
+  /** `review`, or `approved` for an agent that sends without review. */
+  status: string;
+  title: string;
+  /** Who it goes to, by name where a person note named them. */
+  to: string[];
+}
+
 /** One transcript message. `provider_state` is the provider's own record, sent back as it came. */
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -245,6 +257,8 @@ export type Part =
       web?: WebRef;
       /** The assets a `find_assets` step found (ai D29). */
       assets?: FoundAsset[];
+      /** The Outbox item a draft step made (outbox X9). */
+      draft?: DraftRef;
     }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
@@ -490,7 +504,7 @@ export function pending(p: Part): boolean {
 
 /** Fill tool step `p` from its `tool_result` summary. */
 function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boolean) {
-  const summary = (raw ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef; assets?: FoundAsset[] };
+  const summary = (raw ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef; assets?: FoundAsset[]; draft?: DraftRef };
   p.done = true;
   p.isError = isError;
   p.notes = (summary.notes ?? []).filter((n) => n && typeof n.id === "string").map((n) => ({ id: n.id, title: String(n.title ?? n.id) }));
@@ -503,6 +517,15 @@ function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boo
   if (summary.web && typeof summary.web.url === "string") p.web = summary.web;
   if (Array.isArray(summary.assets))
     p.assets = summary.assets.filter((a) => a && typeof a.id === "string").map((a) => ({ id: a.id, filename: String(a.filename ?? a.id) }));
+  const d = summary.draft;
+  if (d && typeof d.note_id === "string")
+    p.draft = {
+      note_id: d.note_id,
+      kind: String(d.kind ?? ""),
+      status: String(d.status ?? ""),
+      title: String(d.title ?? ""),
+      to: Array.isArray(d.to) ? d.to.map(String) : [],
+    };
 }
 
 /** The card of a `proposal`, `type_proposal`, `taxonomy_proposal` or `applied` event, open. */

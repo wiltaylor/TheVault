@@ -46,7 +46,7 @@ vi.mock("../api", async (orig) => {
 });
 vi.mock("../inApp", () => ({ appInfo }));
 
-const { AgentScreen } = await import("./AgentScreen");
+const { AgentScreen, OUTBOX_WARNING } = await import("./AgentScreen");
 const { ApiError } = await import("../api");
 const { refreshAgents } = await import("../agents");
 const { reloadDefinitions } = await import("../session");
@@ -78,6 +78,9 @@ const TOOLS = [
   "propose_archive",
   "propose_delete",
   "propose_edit",
+  "draft_email",
+  "draft_sms",
+  "draft_event",
   "fetch_url",
   "download_asset",
   "web_search",
@@ -100,6 +103,7 @@ function triage(over: Partial<Agent> = {}): Agent {
       types: null,
       confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
       web: { search: true, read: true, download: true },
+      outbox: { send_without_review: false },
     },
     triggers: [{ name: "nightly", kind: "schedule", schedule: "0 2 * * *", timezone: "UTC", prompt: "Tidy up." }],
     wcl: 'label = "Inbox triage"\n',
@@ -347,7 +351,7 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByText(/they replace Settings > AI for this agent/)).toBeTruthy();
     const groups = p.getAllByRole("group").map((g) => g.querySelector(":scope > legend")?.textContent).filter(Boolean);
-    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Types", "Taxonomies", "Agents", "Assets", "Internet"]);
+    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Types", "Taxonomies", "Agents", "Outbox", "Assets", "Internet"]);
     const web = p.getByRole("checkbox", { name: /Search the web/ });
     expect(web).toBeChecked();
     fireEvent.click(web);
@@ -399,7 +403,32 @@ describe("the Permissions tab", () => {
       types: ["task"],
       confirm: { notes: false, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
       web: { search: true, read: false, download: true },
+      outbox: { send_without_review: false },
     });
+  });
+
+  it("lists the draft tools in an Outbox group and saves Send from the Outbox without review, with a warning", async () => {
+    await open();
+    const p = await tab("Permissions");
+    const group = p.getAllByRole("group").find((g) => g.querySelector(":scope > legend")?.textContent === "Outbox")!;
+    const names = Array.from(group.querySelectorAll("label")).map((l) => l.textContent?.trim());
+    expect(names).toEqual(["Draft emails draft_email", "Draft SMS messages draft_sms", "Draft calendar invites draft_event"]);
+    const bypass = p.getByRole("switch", { name: "Send from the Outbox without review" });
+    expect(bypass).not.toBeChecked();
+    expect(p.queryByText(OUTBOX_WARNING)).toBeNull();
+    fireEvent.click(bypass);
+    expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true });
+  });
+
+  it("shows the switch on for an agent that sends without review", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, outbox: { send_without_review: true } } }));
+    await open();
+    const p = await tab("Permissions");
+    expect(p.getByRole("switch", { name: "Send from the Outbox without review" })).toBeChecked();
+    expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
   });
 });
 

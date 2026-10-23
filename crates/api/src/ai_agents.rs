@@ -156,6 +156,14 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
             ));
         }
     }
+    // The Outbox bypass (outbox X11): only an agent that sends without review may give it.
+    for ((name, on), (_, mine)) in tp.outbox.switches().into_iter().zip(bp.outbox.switches()) {
+        if on && !mine {
+            problems.push(format!(
+                "it would turn on the Outbox switch {name}, which is off for this agent"
+            ));
+        }
+    }
     problems
 }
 
@@ -391,5 +399,16 @@ mod tests {
         assert!(p[1].contains("notes"));
         let threads = agent("permissions {\n  types = [\"agent_thread\"]\n}\n");
         assert_eq!(escalation(&all, &threads).len(), 1);
+    }
+
+    #[test]
+    fn escalation_refuses_the_outbox_bypass_the_proposer_lacks() {
+        let sender = agent("permissions {\n  outbox {\n    send_without_review = true\n  }\n}\n");
+        let all = agent("");
+        let p = escalation(&all, &sender);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("send_without_review"), "{p:?}");
+        assert!(escalation(&sender, &sender).is_empty());
+        assert!(escalation(&sender, &all).is_empty());
     }
 }

@@ -333,6 +333,10 @@ function SettingsTab(p: AgentTabProps) {
   );
 }
 
+/** What the Permissions tab warns of with Send from the Outbox without review on (outbox X9). */
+export const OUTBOX_WARNING =
+  "Emails, SMS messages and calendar invites this agent drafts are sent at once, in your name, without you seeing them first.";
+
 function PermissionsTab(p: AgentTabProps) {
   const perms = () => p.draft.permissions;
   const setPerms = (patch: Partial<AgentForm["permissions"]>) =>
@@ -418,6 +422,26 @@ function PermissionsTab(p: AgentTabProps) {
               </label>
             )}
           </For>
+        </div>
+        <h3>Outbox</h3>
+        <p class="muted">
+          What the agent drafts with the Outbox tools waits in the Outbox for you to review, approve and send.
+        </p>
+        <div class="ai-confirm">
+          <label class="ai-confirm-switch">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={perms().outbox?.send_without_review ?? false}
+              onChange={(e) => setPerms({ outbox: { send_without_review: e.currentTarget.checked } })}
+            />{" "}
+            Send from the Outbox without review
+          </label>
+          <Show when={perms().outbox?.send_without_review}>
+            <p class="agent-perm-note" role="note">
+              {OUTBOX_WARNING}
+            </p>
+          </Show>
         </div>
         <h2>Note types</h2>
         <div class="agent-types" role="radiogroup" aria-label="Note types">

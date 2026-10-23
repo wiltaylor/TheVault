@@ -461,6 +461,14 @@ export interface AgentPermissions {
   types: string[] | null;
   confirm: AiConfirm;
   web: AiWeb;
+  /** The Outbox switches (outbox X2, X9); absent from a server before the Outbox. */
+  outbox?: AgentOutbox;
+}
+
+/** An agent's Outbox switches (outbox X2). */
+export interface AgentOutbox {
+  /** The agent's drafts are approved at once and sent, without waiting in Review. */
+  send_without_review: boolean;
 }
 
 /**

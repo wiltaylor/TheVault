@@ -28,6 +28,7 @@ import {
   type Applied,
   ChatContext,
   type ChatSession,
+  type DraftRef,
   type NoteOp,
   type Part,
   type Proposal,
@@ -95,6 +96,12 @@ export function stepLabel(name: string, input: Json): string {
       return `Checked a change to agent ${s("name")}`;
     case "propose_agent_delete":
       return `Checked a delete of agent ${s("name")}`;
+    case "draft_email":
+      return "Drafted an email";
+    case "draft_sms":
+      return "Drafted an SMS";
+    case "draft_event":
+      return "Drafted a calendar invite";
     case "web_search":
       return `Searched the web for “${s("query")}”`;
     case "fetch_url":
@@ -159,6 +166,12 @@ export function activeLabel(name: string, input: Json): string {
       return "Checking an agent change";
     case "propose_agent_delete":
       return "Checking an agent delete";
+    case "draft_email":
+      return "Drafting an email";
+    case "draft_sms":
+      return "Drafting an SMS";
+    case "draft_event":
+      return "Drafting a calendar invite";
     case "web_search":
       return "Searching the web";
     case "fetch_url":
@@ -314,6 +327,30 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
         </ul>
       </Show>
     </details>
+  );
+}
+
+/** What a draft card says (outbox X9): what was drafted, for whom, and that it waits for review. */
+export function draftText(d: DraftRef): string {
+  const to = d.to.join(", ");
+  const what =
+    d.kind === "sms"
+      ? `an SMS to ${to}`
+      : d.kind === "event"
+        ? `a calendar invite “${d.title}”${to ? ` for ${to}` : ""}`
+        : `an email to ${to}`;
+  return d.status === "approved" ? `Drafted ${what}, sending without review` : `Drafted ${what} for review`;
+}
+
+/** The compact card of a draft step (outbox X9): what it drafted, linking to the Outbox item. */
+function DraftCard(props: { draft: DraftRef }) {
+  return (
+    <div class="ai-draft" role="group" aria-label="Outbox draft">
+      <span>{draftText(props.draft)}</span>{" "}
+      <a href={`/notes/${encodeURIComponent(props.draft.note_id)}`}>
+        {props.draft.status === "approved" ? "Open the item" : "Review it in the Outbox"}
+      </a>
+    </div>
   );
 }
 
@@ -853,7 +890,13 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                     {(part, i) => (
                       <Switch>
                         <Match when={part.kind === "text" && part}>{(p) => <Markdown text={p().text} />}</Match>
-                        <Match when={part.kind === "tool" && part}>{(p) => <ToolStep part={p()} />}</Match>
+                        <Match when={part.kind === "tool" && part}>
+                          {(p) => (
+                            <Show when={!p().isError && p().draft} fallback={<ToolStep part={p()} />}>
+                              {(d) => <DraftCard draft={d()} />}
+                            </Show>
+                          )}
+                        </Match>
                         <Match when={part.kind === "proposal" && part}>{(p) => <ProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "taxonomy_proposal" && part}>{(p) => <TaxonomyProposalCard part={p()} turn={t()} index={i()} />}</Match>

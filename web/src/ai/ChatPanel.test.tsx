@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../api";
 import { turnsOver } from "./fakeTurns";
@@ -124,6 +124,36 @@ describe("ChatPanel", () => {
     emit("tool_result", { id: "t1", is_error: false, summary: { notes: [{ id: "01JA", title: "Shopping list" }] } });
     await waitFor(() => expect(m.getByText("Searched for “list”")).toBeInTheDocument());
     expect(m.getByRole("link", { name: "Shopping list" })).toHaveAttribute("href", "/notes/01JA");
+  });
+
+  it("shows a draft step as a compact card linking to the Outbox item", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await askIt(m);
+    emit("tool", { id: "d1", name: "draft_email", input: { to: ["01JANN"] } });
+    emit("tool_result", {
+      id: "d1",
+      is_error: false,
+      summary: {
+        notes: [{ id: "01JITEM", title: "Lunch" }],
+        draft: { note_id: "01JITEM", kind: "email", status: "review", title: "Lunch", to: ["Ann Lee"] },
+      },
+    });
+    const card = await m.findByRole("group", { name: "Outbox draft" });
+    expect(card).toHaveTextContent("Drafted an email to Ann Lee for review");
+    expect(within(card).getByRole("link", { name: "Review it in the Outbox" })).toHaveAttribute("href", "/notes/01JITEM");
+    // An agent that sends without review says so; a failed draft stays a step.
+    emit("tool", { id: "d2", name: "draft_sms", input: {} });
+    emit("tool_result", {
+      id: "d2",
+      is_error: false,
+      summary: { notes: [], draft: { note_id: "01JSMS", kind: "sms", status: "approved", title: "SMS to Bob", to: ["Bob"] } },
+    });
+    await waitFor(() => expect(m.getAllByRole("group", { name: "Outbox draft" })).toHaveLength(2));
+    expect(m.getAllByRole("group", { name: "Outbox draft" })[1]).toHaveTextContent("Drafted an SMS to Bob, sending without review");
+    emit("tool", { id: "d3", name: "draft_event", input: {} });
+    emit("tool_result", { id: "d3", is_error: true, summary: { notes: [], message: "a new event needs a title" } });
+    await waitFor(() => expect(m.getByText("Drafted a calendar invite")).toBeInTheDocument());
+    expect(m.getAllByRole("group", { name: "Outbox draft" })).toHaveLength(2);
   });
 
   it("shows a web_search step with its results linking out", async () => {

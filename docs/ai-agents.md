@@ -30,6 +30,7 @@ An agent's permissions are its own: nothing is inherited from Settings > AI.
 - **Confirmation switches** (`permissions.confirm`): with a switch on, a change of that kind is a proposal you apply or discard; with it off, the agent makes the change itself. See [Changes the AI makes](ai.md#changes-the-ai-makes).
 - **Internet switches** (`permissions.web`): which web tools the agent is given at all. See [Internet switches](ai.md#internet-switches).
 - **Note types** (`permissions.types`): the types the agent may read and change. Search, query, backlinks and asset results leave out notes of other types, reading one is refused with "This agent may not read <type> notes.", and every change to one is refused.
+- **Outbox** (`permissions.outbox.send_without_review`, off by default): "Send from the Outbox without review". Off, what the agent drafts waits in the Outbox for you. On, its drafts are approved at once and sent. See [Drafting into the Outbox](#drafting-into-the-outbox).
 
 In a chat, the person or token running it still caps what the agent can change: an agent never writes more than its caller could.
 
@@ -53,9 +54,27 @@ The confirmation switch is "Ask before changing agents" (`permissions.confirm.ag
 - a tool the proposing agent does not have. An agent with no tools list has every tool, so an agent with a tools list cannot write an agent without one;
 - a note type outside the proposing agent's types. No types list means every type;
 - a confirmation switch off that is on for the proposing agent;
-- an Internet switch on that is off for the proposing agent.
+- an Internet switch on that is off for the proposing agent;
+- the Outbox switch `send_without_review` on when it is off for the proposing agent.
 
 The whole new file is checked, not only what the change adds, so an agent with fewer permissions cannot edit a more powerful agent at all. An agent can never change or delete its own file: "An agent cannot change its own file." Deleting another agent needs only the tool and the switch. Each proposal records the agent that made it, and `POST /api/ai/apply` checks the change again against that agent as it is at the time of Apply, so an agent whose permissions were narrowed since cannot apply what it proposed before. Your own edits on the agent screen are never checked this way.
+
+## Drafting into the Outbox
+
+An agent drafts emails, SMS messages and calendar invites with three chat tools. Each creates one Outbox item and answers its id and status. They are ordinary tool names, so an agent has them only when its tools list allows them; the Assistant has them. On the agent screen's Permissions tab they are the "Outbox" group.
+
+| Tool | What it drafts |
+|------|----------------|
+| `draft_email` | An email: `to`, `cc` and `bcc` (addresses or person note ids), `subject`, `body` as plain text, `attachments` (asset ids) and `in_reply_to` (the email note it answers, so it joins its thread) |
+| `draft_sms` | An SMS for the phone to send: `to` (a number or a person note id), `body` and `device` (empty for the vault's one Android device with SMS sending on) |
+| `draft_event` | A calendar invite: a new event, or with `event` a change to an existing event note. `title`, `when`, `location`, `attendees`, `description` and `calendar`; for a change an empty value keeps that part. Sent, Google emails the attendees |
+
+A person note id resolves to the person's first email address or phone number when the item is drafted; the agent must be allowed to read person notes. Items are written as the agent, the Assistant included, so the Outbox review rules hold:
+
+- an item is created in Review, and only an agent with "Send from the Outbox without review" on creates it approved, so it is sent at once;
+- an agent can change only its own items while they are in Draft or Review, and never approves, sends or rejects one, by these tools or by `propose_edit`. Its confirmation switches do not change this: with "Ask before creating and editing notes" off, an edit that approves an item is still refused.
+
+Drafting is not a change the chat asks you to apply, since the Outbox is the review, so the tools have no confirmation switch and unattended runs are offered them. They need a caller with `write`: a read-only token's chat gets an error. The chat shows each draft as a compact card, such as "Drafted an email to Ann Lee for review", linking to the item.
 
 ## Threads
 
@@ -155,8 +174,9 @@ Links that earlier versions wrote in place of a call, `[@Clerk](/agents/clerk/ch
 
 A trigger run has no one present to apply a proposal, so it is offered only:
 
-- the read tools the agent's permissions allow, and
-- the change tools whose confirmation switch is off for the agent.
+- the read tools the agent's permissions allow,
+- the change tools whose confirmation switch is off for the agent, and
+- the Outbox draft tools, since what they draft waits in the Outbox for review.
 
 A change tool whose switch is on is left out of the run's tool list, so nothing is left pending. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types, taxonomies and agents only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
 

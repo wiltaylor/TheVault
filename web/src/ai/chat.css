@@ -324,6 +324,16 @@
   font-size: 0.85em;
 }
 
+/* A draft step's compact card (outbox X9): what went into the Outbox, linking to it. */
+.ai-draft {
+  margin: 0 0 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  font-size: 0.88em;
+}
+
 .ai-notice {
   margin: 0 0 0.4rem;
   padding: 0.35rem 0.5rem;

@@ -512,7 +512,7 @@ pub fn title_of(question: &str) -> Option<String> {
 }
 
 /// `s` with every inline markup character escaped, so it reads as plain text (D41).
-fn plain(s: &str) -> String {
+pub(crate) fn plain(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if matches!(

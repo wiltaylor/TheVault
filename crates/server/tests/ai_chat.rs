@@ -323,7 +323,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 25);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 28);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
