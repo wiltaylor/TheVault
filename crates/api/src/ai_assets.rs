@@ -1,4 +1,4 @@
-//! The chat's `read_asset` tool and the images it sends (ai D19).
+//! The chat's `read_asset` tool and the images it sends (ai D19), and `find_assets` (ai D29).
 //!
 //! What a read returns depends on the asset's media type, which comes from its file name as a
 //! download's does:
@@ -95,6 +95,60 @@ fn cut(s: &str, limit: usize, size: u64, partial: bool) -> String {
     }
     let kept: String = s.chars().take(limit).collect();
     format!("{kept}\n[truncated at {limit} characters; the whole text is longer ({size} bytes)]")
+}
+
+/// The most assets `find_assets` returns, and how many it returns when the call says nothing.
+pub const FIND_LIMIT: usize = 50;
+pub const FIND_DEFAULT: usize = 20;
+
+/// `find_assets {text, limit}` (ai D29): the assets whose file name holds `text`, ignoring case,
+/// newest first, at most `limit` (1 to [`FIND_LIMIT`], [`FIND_DEFAULT`] when absent). Empty text
+/// lists the newest. Each is its id, file name, media type, size and when it was stored.
+pub fn find_assets(w: &Writer, input: &Value) -> Read {
+    let text = input["text"]
+        .as_str()
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    let limit = input["limit"]
+        .as_u64()
+        .map_or(FIND_DEFAULT, |n| usize::try_from(n).unwrap_or(FIND_LIMIT))
+        .clamp(1, FIND_LIMIT);
+    let all = match w.assets() {
+        Ok(a) => a,
+        Err(e) => return Read::error(e.to_string()),
+    };
+    let matched: Vec<_> = all
+        .iter()
+        .rev()
+        .filter(|a| text.is_empty() || a.filename.to_lowercase().contains(&text))
+        .collect();
+    let total = matched.len();
+    let assets: Vec<Value> = matched
+        .into_iter()
+        .take(limit)
+        .map(|a| {
+            let created = crate::assets::ulid_ms(&a.id)
+                .and_then(|ms| i64::try_from(ms).ok())
+                .and_then(chrono::DateTime::from_timestamp_millis)
+                .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+            json!({
+                "id": a.id, "filename": a.filename, "media_type": media_type(&a.filename),
+                "size": a.size, "created": created,
+            })
+        })
+        .collect();
+    let message = format!(
+        "{} of {total} asset{} found",
+        assets.len(),
+        if total == 1 { "" } else { "s" }
+    );
+    Read {
+        content: json!({ "assets": assets, "total": total }).to_string(),
+        is_error: false,
+        parts: Vec::new(),
+        summary: json!({ "notes": [], "assets": assets, "total": total, "message": message }),
+    }
 }
 
 /// `read_asset {id}`. `may_send_image` is false once the turn has sent [`IMAGE_LIMIT`] images.

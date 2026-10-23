@@ -46,6 +46,8 @@ export function stepLabel(name: string, input: Json): string {
       return "Looked up backlinks";
     case "read_asset":
       return "Read a file";
+    case "find_assets":
+      return s("text").trim() ? `Looked for files named “${s("text").trim()}”` : "Listed the newest files";
     case "propose_edit":
       return "Checked an edit";
     case "propose_create":
@@ -127,6 +129,7 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
     if (props.part.name in WEB_TOOLS) return "done";
     if (TYPE_TOOLS.has(props.part.name)) return "done";
     if (props.part.links) return `${props.part.links.length} found`;
+    if (props.part.assets) return `${props.part.assets.length} found`;
     return `${props.part.notes.length} found`;
   };
   // The image a read_asset step read, from the asset's own URL: the stream never carries its bytes (ai D19).
@@ -176,6 +179,19 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
             </a>
           </p>
         )}
+      </Show>
+      <Show when={props.part.assets?.length}>
+        <ul>
+          <For each={props.part.assets}>
+            {(a) => (
+              <li>
+                <a href={assetUrl(a.id)} target="_blank" rel="noopener">
+                  {a.filename}
+                </a>
+              </li>
+            )}
+          </For>
+        </ul>
       </Show>
       <Show when={props.part.notes.length}>
         <ul>
@@ -585,6 +601,15 @@ export function ChatPanel(props: { noteId: () => string }) {
                   <ApplyAll turn={t()} parts={turn.parts} />
                 </>
               }>
+                {/* What the user did with proposals since the last message, sent ahead of it (ai D29). */}
+                <Show when={turn.outcomes?.length}>
+                  <details class="ai-outcomes">
+                    <summary>Applied changes</summary>
+                    <ul>
+                      <For each={turn.outcomes}>{(line) => <li>{line}</li>}</For>
+                    </ul>
+                  </details>
+                </Show>
                 <p class="ai-question">{turn.text}</p>
               </Show>
             </li>

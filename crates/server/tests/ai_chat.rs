@@ -323,7 +323,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 15);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 16);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
@@ -2237,4 +2237,89 @@ fn apply_needs_admin_for_a_type_change_and_refuses_a_stale_one() {
     // Something that is not a change is a 400.
     let (status, _) = api.apply_as(&api.token(), &json!({ "op": "purge", "note_id": "x" }));
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[test]
+fn find_assets_matches_file_names_newest_first_and_keeps_to_its_limit() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let mut ids = Vec::new();
+    for name in [
+        "Elden-Ring-Cover.jpg",
+        "hades-ii.png",
+        "notes.md",
+        "elden-ring-map.png",
+    ] {
+        ids.push(api.upload(name, b"x".to_vec()));
+        // A new millisecond, so the ids sort in upload order.
+        std::thread::sleep(Duration::from_millis(3));
+    }
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use(
+                "toolu_match",
+                "find_assets",
+                json!({ "text": "ELDEN", "limit": 20 }),
+            )
+            .tool_use(
+                "toolu_all",
+                "find_assets",
+                json!({ "text": "", "limit": 20 }),
+            )
+            .tool_use(
+                "toolu_two",
+                "find_assets",
+                json!({ "text": " ", "limit": 2 }),
+            )
+            .tool_use(
+                "toolu_none",
+                "find_assets",
+                json!({ "text": "zzz", "limit": 0 }),
+            ),
+    );
+    fake.push(AnthropicMessage::text("Found them."));
+    let events = api.chat(json!([user("Find the Elden Ring pictures.")]));
+    assert_eq!(names(&events).last(), Some(&"done"), "{events:?}");
+    let body = fake.message_requests()[1].json();
+    let ids_of = |call: &str| -> Vec<String> {
+        let got = result_text(&anthropic_result(&body, call));
+        got["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // A match ignores case, newest first, each with its metadata.
+    assert_eq!(ids_of("toolu_match"), [ids[3].clone(), ids[0].clone()]);
+    let got = result_text(&anthropic_result(&body, "toolu_match"));
+    let first = &got["assets"][0];
+    assert_eq!(first["filename"], "elden-ring-map.png");
+    assert_eq!(first["media_type"], "image/png");
+    assert_eq!(first["size"], 1);
+    assert!(first["created"].as_str().unwrap().ends_with('Z'), "{first}");
+    assert_eq!(got["total"], 2);
+
+    // Empty text lists the newest; the limit keeps to it, and the total says how many matched.
+    let mut newest = ids.clone();
+    newest.reverse();
+    assert_eq!(ids_of("toolu_all"), newest);
+    assert_eq!(ids_of("toolu_two"), newest[..2].to_vec());
+    let got = result_text(&anthropic_result(&body, "toolu_two"));
+    assert_eq!(got["total"], 4);
+    assert_eq!(ids_of("toolu_none"), Vec::<String>::new());
+
+    // The step's summary names the assets, never their bytes.
+    let summary = events
+        .iter()
+        .find(|(n, d)| n == "tool_result" && d["id"] == "toolu_match")
+        .map(|(_, d)| d)
+        .unwrap();
+    assert_eq!(summary["is_error"], false);
+    assert_eq!(
+        summary["summary"]["assets"][1]["filename"],
+        "Elden-Ring-Cover.jpg"
+    );
 }

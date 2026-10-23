@@ -162,6 +162,7 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `query_notes` | A query in the vault query language, at most 50 notes |
 | `get_note` | Reads one note, body included, and lists the assets it references (id, file name, media type, size); each text over 40,000 characters is cut with a marker |
 | `read_asset` | Reads one attachment by asset id; see [Attachments](#attachments) |
+| `find_assets` | Finds stored files by name: those whose file name contains `text`, ignoring case, newest first, 1 to 50 (`limit`, 20 when absent); empty text lists the newest. Each is its `id`, `filename`, `media_type`, `size` and `created` time |
 | `backlinks` | The notes that link to a note |
 | `propose_edit` | Checks an edit to one note and shows it to you; writes it only when [confirmation is off](#changes-the-ai-makes) |
 | `propose_create` | Checks a new note of a type and shows it to you; creates it only when confirmation is off |
@@ -204,7 +205,7 @@ With a Brave Search API key stored in Settings > Integrations > Brave Search ([W
 
 - With **Ask before downloading files into the vault** on, the default, the server asks the address for its size and media type (a HEAD request, else a GET of the first byte) and the panel shows a card with the address, file name, type and size, and Apply and Discard. Apply sends it to `POST /api/ai/apply`, which downloads the file and stores it.
 - With the switch off, the file is stored at once and the panel shows "Downloaded <file name>", with a thumbnail for an image. A caller without `write` always gets the card.
-- The model is told the new asset's id, so a later `propose_edit` or `propose_create` can attach it to a note.
+- The model is told the new asset's id, so a later `propose_edit` or `propose_create` can attach it to a note: at once when the file was stored without asking, and with your next message when you applied the card (see [What the model learns you applied](#what-the-model-learns-you-applied)). `find_assets` finds it by name too.
 
 Both tools fetch through one guarded client:
 
@@ -251,6 +252,23 @@ The model also proposes new notes, archiving a note or taking it out of the arch
 - Apply on a delete moves the note to the trash at the version the model saw, and the card links to the trash, where you can restore it. If the note changed since, the card says so and deletes nothing. Nothing in the AI panel empties the trash.
 
 When an answer leaves two or more proposals waiting, of any kind, the panel shows Apply all under them. It applies them in the order they came and stops at the first that does not apply; that card says why, and the rest wait for you.
+
+### What the model learns you applied
+
+When you select Apply, Apply all or Discard on a card, the panel notes the outcome. Your next message starts with one line for each card acted on since the message before, ahead of your own words, for example:
+
+```text
+[Applied by the user: download of https://example.com/cover.jpg stored as asset 01J... (cover.jpg)]
+[Applied by the user: created note 01J... "Hades II", version v1]
+[Applied by the user: edit of note 01J... now at version v3]
+[Discarded by the user: download of https://example.com/map.png]
+[Failed to apply: edit of note 01J...: This note changed since the proposal, so it was not applied. Ask again for a fresh proposal.]
+```
+
+- The lines go as a separate text block at the start of the user message, so every provider sees them, and the conversation stays append-only.
+- The panel shows them above your message, collapsed, as **Applied changes**, not as your words.
+- Each card counts once: a card that failed and then applied sends only the applied line, and the lines are not sent again with the message after.
+- Other outcome words: `archive of note <id> now at version <v>`, `unarchive of note <id> ...`, `delete of note <id>: moved to the trash`, `change to type <name>` and `created type <name>`.
 
 ### Apply a type change
 
@@ -320,7 +338,7 @@ When the provider refuses a request, the answer stops where it was and the panel
 |---|---|
 | `text` | `{ delta }`, the next piece of the answer |
 | `tool` | `{ id, name, input }`, a tool call about to run |
-| `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text; for `fetch_url` and `download_asset`, `summary.web` is `{ url, host, media_type, size, kind }`, with a page's `title` or a download's `filename` (and `asset_id` once stored), never the content |
+| `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text; for `find_assets`, `summary.assets` is the `[{ id, filename, media_type, size, created }]` it returned and `summary.total` how many matched; for `fetch_url` and `download_asset`, `summary.web` is `{ url, host, media_type, size, kind }`, with a page's `title` or a download's `filename` (and `asset_id` once stored), never the content |
 | `proposal` | A note change, by `op`, to apply with `POST /api/ai/apply`. `update`: `{ id, op, note_id, title, base_version, before, after, ops }`, an edit. `create`: `{ id, op, type, title, after }`, a new note. `archive` and `unarchive`: `{ id, op, note_id, title, base_version }`. `delete`: `{ id, op, note_id, title, base_version }`, a move to the trash. `download`: `{ id, op, url, filename, media_type, size }`, a file to store as an asset (`media_type` and `size` may be null). A proposal without `op` is an `update` |
 | `type_proposal` | `{ id, name, exists, before, after, issues }`: `before` is the type file as stored (null for a new type), `after` the checked type file in canonical form, `issues` the warnings the check found |
 | `applied` | A change the tool made itself, its confirmation off, sent in place of the proposal. For a note, `{ id, op, note_id, title, version }`, where `op` is `update`, `create`, `archive`, `unarchive` or `delete` and `version` is the note's new version (for a delete, the version that went to the trash). For a type, `{ id, op, type_name }`, where `op` is `type_change` or `type_create`. For a download, `{ id, op, asset_id, filename, media_type, size, url }` |

@@ -12,7 +12,7 @@
 
 import { createRoot, createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { type AppInfo, type Json, type NoteDoc, ApiError, type StreamEvent, api, streamEvents } from "../api";
+import { type AiApplied, type AppInfo, type Json, type NoteDoc, ApiError, type StreamEvent, api, streamEvents } from "../api";
 import { noteChangedElsewhere, noteWritten } from "../changes";
 import { appInfo } from "../inApp";
 import { reloadDefinitions } from "../session";
@@ -46,6 +46,12 @@ export interface AssetRef {
   size: number;
   /** `image`, `pdf`, `text` or `metadata`: what the model got. */
   kind: string;
+}
+
+/** An asset a `find_assets` step found, from its `tool_result` summary (ai D29). */
+export interface FoundAsset {
+  id: string;
+  filename: string;
 }
 
 /** One transcript message. `provider_state` is the provider's own record, sent back as it came. */
@@ -145,7 +151,21 @@ export type Part =
   /** A download (ai D27): proposed and waiting, or stored, by Apply or by the AI itself (`auto`). */
   | { kind: "download"; proposal: DownloadProposal; state: ProposalState; error?: string; asset?: DownloadedAsset; auto?: boolean }
   | { kind: "applied"; applied: Applied }
-  | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef }
+  | {
+      kind: "tool";
+      id: string;
+      name: string;
+      input: Json;
+      done: boolean;
+      isError: boolean;
+      notes: NoteRef[];
+      message?: string;
+      asset?: AssetRef;
+      links?: WebLink[];
+      web?: WebRef;
+      /** The assets a `find_assets` step found (ai D29). */
+      assets?: FoundAsset[];
+    }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
@@ -154,6 +174,11 @@ export interface Turn {
   role: "user" | "assistant";
   /** A user turn's question. */
   text?: string;
+  /**
+   * A user turn's lines on the proposals applied or discarded since the message before (ai D29),
+   * sent ahead of the question and shown collapsed.
+   */
+  outcomes?: string[];
   /** An assistant turn's answer, tool steps, proposals and notices, in the order they came. */
   parts: Part[];
 }
@@ -223,6 +248,53 @@ export function transcriptNow(): readonly ChatMessage[] {
   return transcript;
 }
 
+/**
+ * What the user did with proposals since the last message (ai D29), one line each, by proposal
+ * id in the order they happened: a proposal acted on twice, failed then applied, keeps its last.
+ * The next message sends them ahead of the question, once.
+ */
+const outcomes = new Map<string, string>();
+
+function record(id: string, line: string) {
+  outcomes.delete(id);
+  outcomes.set(id, line);
+}
+
+/** Test-only: the outcome lines the next message sends. */
+export function outcomesNow(): string[] {
+  return [...outcomes.values()];
+}
+
+const quoted = (title: Json) => (typeof title === "string" && title ? ` "${title}"` : "");
+
+/** What a note proposal is, for an outcome line. */
+function proposalWhat(p: Proposal): string {
+  switch (p.op) {
+    case "update":
+      return `edit of note ${p.note_id}`;
+    case "create":
+      return `new ${p.type} note${quoted(p.title)}`;
+    default:
+      return `${p.op} of note ${p.note_id}`;
+  }
+}
+
+/** What an applied note proposal did, for an outcome line. */
+function proposalDone(p: Proposal, done: AiApplied): string {
+  const version = "version" in done && done.version ? done.version : "";
+  switch (p.op) {
+    case "create":
+      return `created note ${"note_id" in done ? done.note_id : ""}${quoted(p.title)}${version ? `, version ${version}` : ""}`;
+    case "delete":
+      return `delete of note ${p.note_id}: moved to the trash`;
+    default:
+      return `${proposalWhat(p)}${version ? ` now at version ${version}` : ""}`;
+  }
+}
+
+const typeWhat = (p: TypeProposal) => (p.exists ? `change to type ${p.name}` : `new type ${p.name}`);
+const downloadWhat = (p: DownloadProposal) => `download of ${p.url}`;
+
 export function setProvider(provider: string | null, model: string | null) {
   state.setChat({ provider, model });
 }
@@ -237,6 +309,7 @@ export function newConversation() {
   controller?.abort();
   controller = null;
   transcript = [];
+  outcomes.clear();
   state.setChat({ turns: [], streaming: false });
 }
 
@@ -288,7 +361,7 @@ function onEvent(e: StreamEvent) {
       const i = lastTurn();
       const at = state.chat.turns[i]?.parts.findIndex((p) => p.kind === "tool" && p.id === d.id) ?? -1;
       if (at < 0) break;
-      const summary = (d.summary ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef };
+      const summary = (d.summary ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef; assets?: FoundAsset[] };
       state.setChat(
         "turns",
         i,
@@ -306,6 +379,8 @@ function onEvent(e: StreamEvent) {
               .filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url))
               .map((l) => ({ url: l.url, title: String(l.title || l.url) }));
           if (summary.web && typeof summary.web.url === "string") p.web = summary.web;
+          if (Array.isArray(summary.assets))
+            p.assets = summary.assets.filter((a) => a && typeof a.id === "string").map((a) => ({ id: a.id, filename: String(a.filename ?? a.id) }));
         }),
       );
       break;
@@ -365,11 +440,17 @@ export async function ask(text: string, noteId?: string) {
   const question = text.trim();
   if (!question || state.chat.streaming) return;
   const mine = ++generation;
-  const user: ChatMessage = { role: "user", content: [{ type: "text", text: question }] };
+  // The proposals acted on since the last message go first, as plain text every provider reads
+  // (ai D29), and only once.
+  const lines = [...outcomes.values()];
+  outcomes.clear();
+  const content: Content[] = [{ type: "text", text: question }];
+  if (lines.length) content.unshift({ type: "text", text: lines.join("\n") });
+  const user: ChatMessage = { role: "user", content };
   transcript = [...transcript, user];
   state.setChat(
     produce((c) => {
-      c.turns.push({ role: "user", text: question, parts: [] });
+      c.turns.push({ role: "user", text: question, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
       c.turns.push({ role: "assistant", parts: [] });
       c.streaming = true;
     }),
@@ -491,11 +572,13 @@ export async function applyProposal(turn: number, part: number) {
     const done = await api.aiApply(proposal);
     const created = proposal.op === "create" && "note_id" in done ? done.note_id : undefined;
     setProposal(turn, part, { state: "applied", ...(created ? { created } : {}) });
+    record(proposal.id, `[Applied by the user: ${proposalDone(proposal, done)}]`);
     await settle("note");
   } catch (e) {
-    if (e instanceof ApiError && e.isConflict) setProposal(turn, part, { state: "stale", error: NOTE_CHANGED });
-    else if (e instanceof ApiError && e.status === 404) setProposal(turn, part, { state: "stale", error: NOTE_GONE });
-    else setProposal(turn, part, { state: "failed", error: e instanceof Error ? e.message : String(e) });
+    const stale = e instanceof ApiError && (e.isConflict || e.status === 404);
+    const error = e instanceof ApiError && e.isConflict ? NOTE_CHANGED : stale ? NOTE_GONE : e instanceof Error ? e.message : String(e);
+    setProposal(turn, part, { state: stale ? "stale" : "failed", error });
+    record(proposal.id, `[Failed to apply: ${proposalWhat(proposal)}: ${error}]`);
   }
 }
 
@@ -531,15 +614,21 @@ export async function applyDownload(turn: number, part: number) {
     const done = await api.aiApply(p.proposal);
     const asset = "asset_id" in done ? done : undefined;
     setDownload(turn, part, { state: "applied", ...(asset ? { asset } : {}) });
+    const stored = asset ? ` stored as asset ${asset.asset_id} (${asset.filename})` : "";
+    record(p.proposal.id, `[Applied by the user: ${downloadWhat(p.proposal)}${stored}]`);
     await settle("note");
   } catch (e) {
-    setDownload(turn, part, { state: "failed", error: e instanceof Error ? e.message : String(e) });
+    const error = e instanceof Error ? e.message : String(e);
+    setDownload(turn, part, { state: "failed", error });
+    record(p.proposal.id, `[Failed to apply: ${downloadWhat(p.proposal)}: ${error}]`);
   }
 }
 
 export function discardDownload(turn: number, part: number) {
   const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind === "download" && p.state !== "applied" && p.state !== "applying") setDownload(turn, part, { state: "discarded" });
+  if (p?.kind !== "download" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+  setDownload(turn, part, { state: "discarded" });
+  record(p.proposal.id, `[Discarded by the user: ${downloadWhat(p.proposal)}]`);
 }
 
 /**
@@ -562,7 +651,9 @@ export async function applyAll(turn: number) {
 
 export function discardProposal(turn: number, part: number) {
   const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind === "proposal" && p.state !== "applied" && p.state !== "applying") setProposal(turn, part, { state: "discarded" });
+  if (p?.kind !== "proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+  setProposal(turn, part, { state: "discarded" });
+  record(p.proposal.id, `[Discarded by the user: ${proposalWhat(p.proposal)}]`);
 }
 
 function setTypeProposal(turn: number, part: number, patch: { state: TypeProposalState; error?: string }) {
@@ -591,14 +682,19 @@ export async function applyTypeProposal(turn: number, part: number) {
   try {
     await api.aiApply(p.proposal);
     setTypeProposal(turn, part, { state: "applied" });
+    record(p.proposal.id, `[Applied by the user: ${p.proposal.exists ? typeWhat(p.proposal) : `created type ${p.proposal.name}`}]`);
     await settle("type");
   } catch (e) {
-    if (e instanceof ApiError && e.status === 409) setTypeProposal(turn, part, { state: "stale", error: TYPE_CHANGED });
-    else setTypeProposal(turn, part, { state: "failed", error: e instanceof Error ? e.message : String(e) });
+    const stale = e instanceof ApiError && e.status === 409;
+    const error = stale ? TYPE_CHANGED : e instanceof Error ? e.message : String(e);
+    setTypeProposal(turn, part, { state: stale ? "stale" : "failed", error });
+    record(p.proposal.id, `[Failed to apply: ${typeWhat(p.proposal)}: ${error}]`);
   }
 }
 
 export function discardTypeProposal(turn: number, part: number) {
   const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind === "type_proposal" && p.state !== "applied" && p.state !== "applying") setTypeProposal(turn, part, { state: "discarded" });
+  if (p?.kind !== "type_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+  setTypeProposal(turn, part, { state: "discarded" });
+  record(p.proposal.id, `[Discarded by the user: ${typeWhat(p.proposal)}]`);
 }

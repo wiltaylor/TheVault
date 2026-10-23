@@ -890,6 +890,14 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             json!({ "id": { "type": "string", "description": "The asset's 26-character id." } }),
         ),
         tool(
+            "find_assets",
+            "Find stored files (assets) by name: those whose file name contains `text`, ignoring case, newest first. Empty text lists the newest. Each is its id, filename, media_type, size and created time, for read_asset or for a note's asset field.",
+            json!({
+                "text": { "type": "string", "description": "Part of the file name; empty for the newest assets." },
+                "limit": { "type": "integer", "description": "How many assets to return, 1 to 50; 20 is usual." },
+            }),
+        ),
+        tool(
             "backlinks",
             "The notes that link to a note, with the field or mention that links them.",
             json!({ "id": { "type": "string", "description": "The note's 26-character id." } }),
@@ -1265,6 +1273,15 @@ fn propose_or_read(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
                 })
                 .map_err(ToolOut::error)
         }),
+        "find_assets" => {
+            let found = ai_assets::find_assets(w, input);
+            Ok(ToolOut {
+                content: found.content,
+                is_error: found.is_error,
+                summary: found.summary,
+                proposal: None,
+            })
+        }
         "backlinks" => str_arg(input, "id").and_then(|id| {
             Vault::backlinks(w, id)
                 .map(|rows| rows_out(rows, json!({})))

@@ -146,7 +146,7 @@ fn file_body(file: std::fs::File, len: u64) -> Body {
 }
 
 /// The milliseconds since the Unix epoch in a ULID: when the asset was uploaded.
-fn ulid_ms(id: &str) -> Option<u64> {
+pub(crate) fn ulid_ms(id: &str) -> Option<u64> {
     const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
     id.get(..10)?.bytes().try_fold(0u64, |acc, b| {
         let d = CROCKFORD

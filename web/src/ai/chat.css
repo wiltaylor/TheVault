@@ -56,6 +56,18 @@
   white-space: pre-wrap;
 }
 
+.ai-outcomes {
+  margin: 0 0 0.25rem 1.5rem;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.ai-outcomes ul {
+  margin: 0.2rem 0 0;
+  padding-left: 1.2rem;
+  overflow-wrap: anywhere;
+}
+
 .ai-md p,
 .ai-md ul,
 .ai-md ol,
