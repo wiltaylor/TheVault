@@ -27,13 +27,17 @@ const aiModels = vi.fn();
 const aiProviders = vi.fn();
 const agentsList = vi.fn();
 const app = vi.fn();
+const renameAgentThread = vi.fn();
+const deleteAgentThread = vi.fn();
+const archiveNote = vi.fn();
+const unarchiveNote = vi.fn();
 
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
   return {
     ...real,
     streamEvents,
-    api: { ...real.api, agentThreads, agentThread, agentThreadStart, aiApply, aiDiscard, aiModels, aiProviders, agents: agentsList, app },
+    api: { ...real.api, agentThreads, agentThread, agentThreadStart, aiApply, aiDiscard, aiModels, aiProviders, agents: agentsList, app, renameAgentThread, deleteAgentThread, archiveNote, unarchiveNote },
   };
 });
 vi.mock("../inApp", () => ({ appInfo: async () => null }));
@@ -102,6 +106,10 @@ beforeEach(() => {
   aiApply.mockResolvedValue({ op: "update", note_id: "01JNOTE", version: "v2" });
   aiDiscard.mockResolvedValue({ thread: "01JTHREAD", pending: 0 });
   agentsList.mockResolvedValue({ agents: [], tools: [] });
+  renameAgentThread.mockResolvedValue(thread({ title: "Shopping" }));
+  deleteAgentThread.mockResolvedValue({ id: "01JTHREAD", deleted: true });
+  archiveNote.mockResolvedValue({});
+  unarchiveNote.mockResolvedValue({});
 });
 
 afterEach(async () => {
@@ -124,7 +132,7 @@ describe("the Chat tab", () => {
   it("lists the agent's threads, newest first, with a badge on the one with pending proposals", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
     const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    await waitFor(() => expect(list.getAllByRole("button", { name: /Groceries|Roof/ })).toHaveLength(2));
+    await waitFor(() => expect(list.getAllByRole("button", { name: /^(Groceries|Roof)/ })).toHaveLength(2));
     expect(agentThreads).toHaveBeenCalledWith("triage");
     const items = list.getAllByRole("listitem");
     expect(items[0]).toHaveTextContent("Groceries");
@@ -164,7 +172,7 @@ describe("the Chat tab", () => {
   it("reopens a thread with its turns and its pending card, and records Apply in the thread", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
     const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /Groceries/ }));
+    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
     await waitFor(() => expect(agentThread).toHaveBeenCalledWith("triage", "01JTHREAD"));
     const convo = within(await screen.findByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
@@ -183,7 +191,7 @@ describe("the Chat tab", () => {
   it("records Discard in the thread", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
     const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /Groceries/ }));
+    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
     const convo = within(await screen.findByRole("list", { name: "Conversation" }));
     const card = within(await convo.findByRole("region", { name: /Proposed edit to Groceries/ }));
     fireEvent.click(card.getByRole("button", { name: "Discard" }));
@@ -195,11 +203,123 @@ describe("the Chat tab", () => {
     agentThread.mockResolvedValue(thread({ pending: 0, proposals: [{ event: "proposal", data: PROPOSAL, status: "discarded" }] }));
     render(() => <AgentChat agent="triage" label="Triage" />);
     const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /Groceries/ }));
+    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
     const convo = within(await screen.findByRole("list", { name: "Conversation" }));
     const card = within(await convo.findByRole("region", { name: /Proposed edit to Groceries/ }));
     expect(card.getByRole("status")).toHaveTextContent("Discarded.");
     expect(card.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
+});
+
+describe("thread actions", () => {
+  async function rows() {
+    const list = within(screen.getByRole("complementary", { name: "Threads" }));
+    await waitFor(() => expect(list.getAllByRole("listitem")).toHaveLength(2));
+    return list;
+  }
+
+  function openMenu(list: ReturnType<typeof within>, title: string) {
+    fireEvent.click(list.getByRole("button", { name: `Actions for ${title}` }));
+    return within(screen.getByRole("menu", { name: `Actions for ${title}` }));
+  }
+
+  it("renames a thread inline", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = await rows();
+    fireEvent.click(openMenu(list, "Groceries").getByRole("menuitem", { name: "Rename" }));
+    const input = list.getByLabelText("Thread title") as HTMLInputElement;
+    expect(input.value).toBe("Groceries");
+    const calls = agentThreads.mock.calls.length;
+    fireEvent.input(input, { target: { value: "Shopping" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(renameAgentThread).toHaveBeenCalledWith("triage", "01JTHREAD", "Shopping"));
+    await waitFor(() => expect(agentThreads.mock.calls.length).toBeGreaterThan(calls));
+    expect(list.queryByLabelText("Thread title")).toBeNull();
+  });
+
+  it("leaves the title as it was when renaming is given up", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = await rows();
+    fireEvent.click(openMenu(list, "Roof").getByRole("menuitem", { name: "Rename" }));
+    fireEvent.keyDown(list.getByLabelText("Thread title"), { key: "Escape" });
+    expect(list.queryByLabelText("Thread title")).toBeNull();
+    expect(renameAgentThread).not.toHaveBeenCalled();
+  });
+
+  it("archives a thread through the note route at its current version", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = await rows();
+    agentThreads.mockResolvedValue({ threads: [{ id: "01JOLDER", title: "Roof", pending: 0 }] });
+    fireEvent.click(openMenu(list, "Groceries").getByRole("menuitem", { name: "Archive" }));
+    await waitFor(() => expect(archiveNote).toHaveBeenCalledWith("01JTHREAD", "t1"));
+    await waitFor(() => expect(list.getAllByRole("listitem")).toHaveLength(1));
+    expect(list.queryByText("Groceries")).toBeNull();
+  });
+
+  it("opens a thread's menu on right-click", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = await rows();
+    fireEvent.contextMenu(list.getByRole("button", { name: /^Roof/ }));
+    expect(screen.getByRole("menu", { name: "Actions for Roof" })).toBeTruthy();
+  });
+
+  it("shows archived threads dimmed with Show archived, and unarchives one", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = await rows();
+    agentThreads.mockResolvedValue({
+      threads: [
+        { id: "01JTHREAD", title: "Groceries", pending: 0 },
+        { id: "01JOLDER", title: "Roof", pending: 0 },
+        { id: "01JFILED", title: "Gutters", pending: 0, archived: true },
+      ],
+    });
+    fireEvent.click(list.getByLabelText("Show archived"));
+    await waitFor(() => expect(agentThreads).toHaveBeenLastCalledWith("triage", true));
+    await waitFor(() => expect(list.getAllByRole("listitem")).toHaveLength(3));
+    const filed = list.getByRole("button", { name: /^Gutters/ });
+    expect(filed).toHaveTextContent("(archived)");
+    expect(filed.closest(".agent-thread-row")).toHaveClass("agent-thread-archived");
+    expect(list.getByRole("button", { name: /^Roof/ }).closest(".agent-thread-row")).not.toHaveClass("agent-thread-archived");
+    agentThread.mockResolvedValue(thread({ id: "01JFILED", version: "g3", archived: true }));
+    fireEvent.click(openMenu(list, "Gutters").getByRole("menuitem", { name: "Unarchive" }));
+    await waitFor(() => expect(unarchiveNote).toHaveBeenCalledWith("01JFILED", "g3"));
+    expect(archiveNote).not.toHaveBeenCalled();
+    // Off again, the list leaves archived threads out.
+    fireEvent.click(list.getByLabelText("Show archived"));
+    await waitFor(() => expect(agentThreads).toHaveBeenLastCalledWith("triage"));
+  });
+
+  it("deletes a thread after confirming, and the open one gives way to a new thread", async () => {
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = await rows();
+    fireEvent.click(list.getByRole("button", { name: /^Groceries/ }));
+    const convo = within(await screen.findByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
+    agentThreads.mockResolvedValue({ threads: [{ id: "01JOLDER", title: "Roof", pending: 0 }] });
+    fireEvent.click(openMenu(list, "Groceries").getByRole("menuitem", { name: "Delete" }));
+    expect(ask).toHaveBeenCalledWith(expect.stringContaining("trash"));
+    await waitFor(() => expect(deleteAgentThread).toHaveBeenCalledWith("triage", "01JTHREAD"));
+    await waitFor(() => expect(list.getAllByRole("listitem")).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByText("Tidy my list.")).toBeNull());
+    ask.mockRestore();
+  });
+
+  it("keeps a thread when Delete is not confirmed", async () => {
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = await rows();
+    fireEvent.click(openMenu(list, "Roof").getByRole("menuitem", { name: "Delete" }));
+    expect(deleteAgentThread).not.toHaveBeenCalled();
+    ask.mockRestore();
+  });
+
+  it("shows why an action failed", async () => {
+    archiveNote.mockRejectedValue(new Error("The note changed."));
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = await rows();
+    fireEvent.click(openMenu(list, "Roof").getByRole("menuitem", { name: "Archive" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("The note changed."));
   });
 });
 
@@ -255,6 +375,43 @@ describe("the AI panel's agent picker", () => {
     expect(agentThreadStart).toHaveBeenCalledWith("assistant");
     expect(live!.body).toMatchObject({ agent: "assistant", thread: "01JPANEL", messages: [{ role: "user" }] });
     expect(live!.body.messages).toHaveLength(1);
+  });
+
+  async function threadThen(state: "archived" | "deleted" | "open") {
+    await withAgents();
+    agentThreadStart.mockResolvedValue({ id: "01JPANEL", title: "New thread", agent: "assistant", version: "p1", pending: 0 });
+    render(() => <ChatPanel noteId={() => ""} />);
+    await send("Hello");
+    live!.onEvent({ event: "text", data: { delta: "Hi." } });
+    live!.onEvent({ event: "done", data: { stop: "end_turn", messages: [] } });
+    live!.end();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeTruthy());
+    live = null;
+    const { ApiError } = await import("../api");
+    if (state === "deleted") agentThread.mockRejectedValue(new ApiError(404, { error: "not_found", message: "there is no agent thread 01JPANEL" }));
+    else agentThread.mockResolvedValue(thread({ id: "01JPANEL", agent: "assistant", archived: state === "archived" }));
+    agentThreadStart.mockResolvedValue({ id: "01JFRESH", title: "New thread", agent: "assistant", version: "f1", pending: 0 });
+    await send("Again");
+    expect(agentThread).toHaveBeenCalledWith("assistant", "01JPANEL");
+  }
+
+  it("starts a new thread when its thread was archived elsewhere", async () => {
+    await threadThen("archived");
+    expect(live!.body).toMatchObject({ thread: "01JFRESH" });
+    expect(agentThreadStart).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Hello")).toBeNull();
+  });
+
+  it("starts a new thread when its thread was deleted elsewhere", async () => {
+    await threadThen("deleted");
+    expect(live!.body).toMatchObject({ thread: "01JFRESH" });
+    expect(agentThreadStart).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays on its thread while it is open", async () => {
+    await threadThen("open");
+    expect(live!.body).toMatchObject({ thread: "01JPANEL" });
+    expect(agentThreadStart).toHaveBeenCalledTimes(1);
   });
 
   it("runs the chosen agent, whose own model replaces the picker", async () => {

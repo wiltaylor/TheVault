@@ -299,11 +299,13 @@ async fn start_with(
         ..
     } = body;
     let writer = w.clone();
-    let prepared = tokio::task::spawn_blocking(move || prepare(&writer, agent, thread, messages))
-        .await
-        .map_err(|e| {
-            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
-        })??;
+    let by = author.clone();
+    let prepared =
+        tokio::task::spawn_blocking(move || prepare(&writer, &by, agent, thread, messages))
+            .await
+            .map_err(|e| {
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+            })??;
     let (tx, rx) = mpsc::channel::<Event>(64);
     let named = prepared.named;
     let turn = Turn {
@@ -366,6 +368,7 @@ pub(crate) fn turn_agent(w: &Writer, name: Option<&str>) -> Result<Agent, ApiErr
 /// loses nothing.
 fn prepare(
     w: &Writer,
+    author: &Author,
     agent: Option<String>,
     thread: Option<String>,
     messages: Vec<Message>,
@@ -395,6 +398,10 @@ fn prepare(
         )));
     }
     let busy = Busy::take(&thread.id)?;
+    // Sending in an archived thread takes it out of the archive (agents G15).
+    if thread.archived {
+        w.set_archived(&thread.id, false, Some(&thread.version), author)?;
+    }
     let mut transcript = thread.transcript.clone();
     let lines = transcript.take_outcome_lines();
     let mut new = messages;

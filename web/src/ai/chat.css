@@ -318,6 +318,37 @@
   font-size: 0.8rem;
 }
 
+/* A thread's row: the thread, and its ⋯ menu shown on hover or focus (agents G15). */
+.agent-thread-row {
+  position: relative;
+}
+
+.agent-thread-row .pin-name-input {
+  width: 100%;
+}
+
+.agent-thread-row .agent-thread-item {
+  padding-right: 2rem;
+}
+
+.agent-thread-row:hover .pin-more,
+.agent-thread-row:focus-within .pin-more,
+.agent-thread-row.menu-open .pin-more {
+  opacity: 1;
+}
+
+.agent-thread-archived .agent-thread-item {
+  opacity: 0.6;
+}
+
+.agent-threads-archived {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .agent-thread-badge {
   min-width: 1.4rem;
   padding: 0 0.35rem;

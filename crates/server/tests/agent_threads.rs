@@ -719,6 +719,79 @@ fn thread_routes_list_create_get_rename_and_delete() {
 }
 
 #[test]
+fn archived_threads_are_listed_only_when_asked_and_sending_in_one_unarchives_it() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("researcher", RESEARCHER);
+    let kept = api.thread("researcher");
+    let filed = api.thread("researcher");
+    let version = api.read_thread("researcher", &filed)["version"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Archiving is the ordinary note route, authored by the caller, not the agent.
+    api.send(
+        "POST",
+        &format!("/api/notes/{filed}/archive?base_version={version}"),
+        json!({}),
+    );
+    assert_eq!(
+        api.author(&filed),
+        json!({ "kind": "token", "name": "admin" })
+    );
+
+    let ids = |path: &str| -> Vec<(String, bool)> {
+        api.get(path)["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (
+                    t["id"].as_str().unwrap().to_owned(),
+                    t["archived"].as_bool().unwrap(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        ids("/api/agents/researcher/threads"),
+        [(kept.clone(), false)]
+    );
+    assert_eq!(
+        ids("/api/agents/researcher/threads?archived=false"),
+        [(kept.clone(), false)]
+    );
+    let all = ids("/api/agents/researcher/threads?archived=true");
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert!(all.contains(&(filed.clone(), true)), "{all:?}");
+    assert!(all.contains(&(kept.clone(), false)), "{all:?}");
+    let res = api.request_as(
+        &api.token(),
+        "GET",
+        "/api/agents/researcher/threads?archived=maybe",
+        None,
+    );
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // An archived thread still opens, and sending in it takes it out of the archive.
+    let t = api.read_thread("researcher", &filed);
+    assert_eq!(t["archived"], true);
+    std::thread::sleep(Duration::from_millis(1100));
+    fake.push(AnthropicMessage::text("Back again."));
+    let events = api.chat(json!({
+        "agent": "researcher",
+        "thread": filed,
+        "messages": [user("Pick this up again")],
+    }));
+    assert!(events.iter().any(|(n, _)| n == "done"), "{events:?}");
+    let t = api.read_thread("researcher", &filed);
+    assert_eq!(t["archived"], false);
+    assert_eq!(t["messages"].as_array().unwrap().len(), 2, "{t}");
+    let listed = ids("/api/agents/researcher/threads");
+    assert_eq!(listed[0], (filed.clone(), false), "{listed:?}");
+}
+
+#[test]
 fn a_disabled_agent_takes_no_turn() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);

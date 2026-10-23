@@ -397,6 +397,8 @@ export interface AgentThreadSummary {
   last_activity?: string | null;
   /** How many proposals wait for the user. */
   pending: number;
+  /** Whether the thread note is archived (agents G15). */
+  archived?: boolean;
 }
 
 /** A proposal of a thread and where it stands (agents G8). */
@@ -1366,8 +1368,9 @@ export const api = {
   deleteAgent: (name: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}`),
   /** The last runs of each of the agent's triggers, and the tools a trigger run is offered (agents G12). */
   agentRuns: (name: string) => request<AgentRuns>("GET", `/api/agents/${enc(name)}/runs`),
-  /** The agent's threads, newest activity first (agents G7). */
-  agentThreads: (name: string) => request<{ threads: AgentThreadSummary[] }>("GET", `/api/agents/${enc(name)}/threads`),
+  /** The agent's threads, newest activity first (agents G7); archived ones only with `archived` (agents G15). */
+  agentThreads: (name: string, archived = false) =>
+    request<{ threads: AgentThreadSummary[] }>("GET", `/api/agents/${enc(name)}/threads${archived ? "?archived=true" : ""}`),
   /** Start a thread with the agent. */
   agentThreadStart: (name: string, title?: string) =>
     request<AgentThread>("POST", `/api/agents/${enc(name)}/threads`, title ? { title } : {}),

@@ -509,7 +509,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
         "/api/agents/{name}/threads",
-        "The agent's threads, newest activity first: {threads: [{id, title, origin, last_activity, pending}]}",
+        "The agent's threads, newest activity first, leaving archived threads out unless ?archived=true: {threads: [{id, title, origin, last_activity, pending, archived}]}",
     ),
     (
         "POST",

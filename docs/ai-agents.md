@@ -39,6 +39,8 @@ Every conversation with an agent is a note of the built-in type `agent_thread`, 
 
 The note tools leave threads out unless the agent's `permissions.types` names `agent_thread`, so an agent does not read chats back as vault content. Deleting an agent keeps its threads.
 
+Each thread in the Chat tab has a ⋯ menu, also opened by a right-click, with Rename, Archive or Unarchive, and Delete. These are ordinary note changes, authored by you: Delete moves the thread note to the trash, where it can be restored. Archived threads are hidden from the list until **Show archived**, at its foot, lists them dimmed. An archived thread still opens, and sending a message in it takes it out of the archive. When the chat panel's thread is archived or deleted elsewhere, its next message starts a new thread.
+
 ## Triggers
 
 A `trigger` block runs the agent on its own. Each run starts a new thread, titled with the trigger's name and the local date and time, whose first message is the trigger's `prompt`.
@@ -123,7 +125,7 @@ The Triggers tab shows each trigger's last 20 runs, with a link to each run's th
 | `PUT /api/agents/{name}` | admin | Writes the agent from WCL, `{ wcl }`, or the JSON form `GET` answers |
 | `DELETE /api/agents/{name}` | admin | Deletes the agent file; its threads stay |
 | `GET /api/agents/{name}/runs` | read | `{ tools, triggers: [{ name, kind, runs }] }`: the tools a trigger run is offered, and each trigger's last 20 runs, newest first, each `{ id, thread, started, ended, outcome, message }` with times in milliseconds |
-| `GET /api/agents/{name}/threads` | read | The agent's threads, newest activity first |
+| `GET /api/agents/{name}/threads` | read | The agent's threads, newest activity first, each with `archived`; archived threads only with `?archived=true` |
 | `POST /api/agents/{name}/threads` | read | Starts a thread from `{ title? }` |
 | `GET /api/agents/{name}/threads/{id}` | read | A thread with its messages, steps and proposals |
 | `PATCH /api/agents/{name}/threads/{id}` | write | Renames a thread from `{ title }` |

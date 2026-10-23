@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use ai::{Content, Message, Role};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -281,6 +281,8 @@ pub struct Thread {
     pub agent: String,
     pub origin: String,
     pub last_activity: Option<String>,
+    /// Whether the thread note is archived (agents G15).
+    pub archived: bool,
     pub transcript: Transcript,
     /// The whole note in its JSON form, so a write keeps what it does not set.
     doc: Value,
@@ -319,6 +321,7 @@ impl Thread {
             agent: s("agent"),
             origin: s("origin"),
             last_activity: f["last_activity"].as_str().map(str::to_owned),
+            archived: writer::is_archived(&n.doc),
             transcript: Transcript::parse(f["transcript"].as_str().unwrap_or_default()),
             doc,
         })
@@ -342,6 +345,7 @@ impl Thread {
             "origin": self.origin,
             "last_activity": self.last_activity,
             "pending": self.transcript.pending(),
+            "archived": self.archived,
             "version": self.version,
         })
     }
@@ -655,8 +659,25 @@ impl Drop for Busy {
 
 type Shared = State<Arc<Writer>>;
 
-/// `GET /api/agents/{name}/threads`.
-pub async fn list(State(w): Shared, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+#[derive(Debug, Default, Deserialize)]
+pub struct ListQuery {
+    /// `true` lists archived threads as well; absent or `false` leaves them out (agents G15).
+    #[serde(default)]
+    archived: Option<bool>,
+}
+
+/// `GET /api/agents/{name}/threads`: the agent's threads, newest activity first, without the
+/// archived ones unless `?archived=true`.
+pub async fn list(
+    State(w): Shared,
+    Path(name): Path<String>,
+    Query(lq): Query<ListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let include = if lq.archived.unwrap_or(false) {
+        " include archived"
+    } else {
+        ""
+    };
     if !schema::is_name(&name) {
         return Err(ApiError::bad_request(format!(
             "{name:?} is not an agent name"
@@ -664,8 +685,8 @@ pub async fn list(State(w): Shared, Path(name): Path<String>) -> Result<Json<Val
     }
     let threads = blocking(w, move |w| {
         let q = format!(
-            "from {THREAD_TYPE} where agent == \"{name}\" sort last_activity desc \
-             select title, origin, last_activity, pending"
+            "from {THREAD_TYPE}{include} where agent == \"{name}\" sort last_activity desc \
+             select title, origin, last_activity, pending, archived"
         );
         let mut out = Vec::new();
         let mut cursor = None;
@@ -680,6 +701,7 @@ pub async fn list(State(w): Shared, Path(name): Path<String>) -> Result<Json<Val
                     "origin": f["origin"],
                     "last_activity": f["last_activity"],
                     "pending": f["pending"].as_u64().unwrap_or(0),
+                    "archived": f["archived"].as_bool().unwrap_or(false),
                 }));
             }
             match page["next"].as_str() {

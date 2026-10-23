@@ -748,11 +748,37 @@ export function createChatSession(options: ChatOptions = {}) {
     }
   }
 
+  /**
+   * Whether thread `id` can still carry the panel's next turn: false once it was archived or
+   * deleted elsewhere (agents G15). A thread that cannot be read for another reason is kept, and
+   * the turn says what went wrong.
+   */
+  async function stillOpen(id: string): Promise<boolean> {
+    try {
+      return (await api.agentThread(chat.agent, id)).archived !== true;
+    } catch (e) {
+      return !(e instanceof ApiError && e.status === 404);
+    }
+  }
+
   /** Ask `text`, beside the note `noteId` when one is open. */
   async function ask(text: string, noteId?: string) {
     const question = text.trim();
     if (!question || chat.streaming) return;
-    const mine = ++generation;
+    let mine = ++generation;
+    // The panel's thread, archived or deleted elsewhere, gives way to a new one (agents G15). A
+    // Chat tab keeps its thread: sending in an archived thread takes it out of the archive.
+    const current = chat.thread;
+    if (options.threads === "listed" && current) {
+      setChat("streaming", true);
+      const open = await stillOpen(current);
+      if (mine !== generation) return;
+      setChat("streaming", false);
+      if (!open) {
+        newConversation();
+        mine = generation;
+      }
+    }
     // The proposals acted on since the last message, shown ahead of the question (ai D29).
     const lines = [...outcomes.values()];
     outcomes.clear();
