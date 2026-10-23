@@ -261,6 +261,9 @@ pub struct Settings {
     /// Which kinds of chat change wait for the user (ai D22).
     #[serde(default, skip_serializing_if = "Confirm::is_default")]
     pub confirm: Confirm,
+    /// Which internet tools the chat is given (ai D28).
+    #[serde(default, skip_serializing_if = "Web::is_default")]
+    pub web: Web,
     /// Lifts the chat fetcher's address rule, so `fetch_url` and `download_asset` reach
     /// addresses on the local network (ai D27). An escape hatch with no UI; absent means false.
     #[serde(default, skip_serializing_if = "is_no")]
@@ -327,6 +330,47 @@ impl Confirm {
             "delete": self.delete,
             "types": self.types,
             "downloads": self.downloads,
+        })
+    }
+}
+
+/// Which internet tools the chat is given (ai D28): a tool switched off is left out of the tool
+/// list, so the model never sees it. A key left out means `true`. `search` still needs a Brave
+/// Search key, and `download` still follows [`Confirm::downloads`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Web {
+    /// `web_search` (ai D26).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub search: bool,
+    /// `fetch_url` (ai D27).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub read: bool,
+    /// `download_asset` (ai D27).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub download: bool,
+}
+
+impl Default for Web {
+    fn default() -> Web {
+        Web {
+            search: true,
+            read: true,
+            download: true,
+        }
+    }
+}
+
+impl Web {
+    fn is_default(&self) -> bool {
+        *self == Web::default()
+    }
+
+    /// Every key filled, as `GET /api/integrations/ai` answers it.
+    pub fn to_json(self) -> Value {
+        serde_json::json!({
+            "search": self.search,
+            "read": self.read,
+            "download": self.download,
         })
     }
 }

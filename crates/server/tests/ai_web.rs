@@ -537,3 +537,62 @@ fn the_downloads_switch_defaults_to_on_and_saves() {
         .unwrap();
     assert_eq!(p["confirm"]["downloads"], false);
 }
+
+/// The tool names the first request of the last turn offered the model.
+fn offered(fake: &FakeAnthropic) -> Vec<String> {
+    let reqs = fake.message_requests();
+    let first: Value = serde_json::from_slice(&reqs[reqs.len() - 2].body).unwrap();
+    first["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_internet_switches_leave_their_tools_out_and_refuse_a_call_to_them() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    let web = FakeWeb::start();
+    // On by default: both web tools are offered.
+    api.anthropic(&fake, on(), true);
+    api.call(&fake, "fetch_url", json!({ "url": web.url("/page.html") }));
+    let tools = offered(&fake);
+    assert!(tools.iter().any(|t| t == "fetch_url"), "{tools:?}");
+    assert!(tools.iter().any(|t| t == "download_asset"), "{tools:?}");
+
+    // Off through the settings route: left out, and a call naming one is refused unrun.
+    let res = api
+        .client
+        .put(api.server.url("/api/integrations/ai/settings"))
+        .bearer_auth(api.token())
+        .json(&json!({ "web": { "read": false, "download": false } }))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let status: Value = res.json().unwrap();
+    assert_eq!(
+        status["web"],
+        json!({ "search": true, "read": false, "download": false })
+    );
+
+    let before = web.requests().len();
+    api.call(&fake, "fetch_url", json!({ "url": web.url("/page.html") }));
+    let tools = offered(&fake);
+    assert!(
+        !tools
+            .iter()
+            .any(|t| t == "fetch_url" || t == "download_asset"),
+        "{tools:?}"
+    );
+    let reqs = fake.message_requests();
+    let last = reqs.last().unwrap().json();
+    let r = last["messages"].as_array().unwrap().last().unwrap()["content"][0].clone();
+    assert_eq!(r["is_error"], true, "{r}");
+    assert_eq!(
+        web.requests().len(),
+        before,
+        "a switched-off tool fetched nothing"
+    );
+}

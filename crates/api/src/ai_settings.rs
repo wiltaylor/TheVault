@@ -180,6 +180,7 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
             "default_system_prompt": ai::CHAT_PROMPT,
             "system_prompt_custom": false,
             "confirm": ai::Confirm::default().to_json(),
+            "web": ai::Web::default().to_json(),
         }));
     }
     let settings = Settings::load(s).map_err(api_error)?;
@@ -208,6 +209,7 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
         "default_system_prompt": ai::CHAT_PROMPT,
         "system_prompt_custom": settings.system_prompt_custom(),
         "confirm": settings.confirm.to_json(),
+        "web": settings.web.to_json(),
     }))
 }
 
@@ -253,6 +255,8 @@ pub struct SettingsBody {
     #[serde(default)]
     confirm: Option<ConfirmBody>,
     #[serde(default)]
+    web: Option<WebBody>,
+    #[serde(default)]
     urls: Option<HashMap<String, Option<String>>>,
     #[serde(default)]
     openai_api: Option<String>,
@@ -272,6 +276,18 @@ pub struct ConfirmBody {
     types: Option<bool>,
     #[serde(default)]
     downloads: Option<bool>,
+}
+
+/// A partial `web`: each internet tool switch sent replaces the stored one (ai D28).
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WebBody {
+    #[serde(default)]
+    search: Option<bool>,
+    #[serde(default)]
+    read: Option<bool>,
+    #[serde(default)]
+    download: Option<bool>,
 }
 
 /// `PUT /api/integrations/ai/settings`.
@@ -307,6 +323,7 @@ pub async fn put_settings(
     };
     let prompt = b.system_prompt;
     let confirm = b.confirm;
+    let web = b.web;
     blocking(&a, move |s| {
         let mut settings = Settings::load(s).map_err(api_error)?;
         for (p, url) in urls {
@@ -326,6 +343,18 @@ pub async fn put_settings(
                 (&mut to.delete, c.delete),
                 (&mut to.types, c.types),
                 (&mut to.downloads, c.downloads),
+            ] {
+                if let Some(v) = value {
+                    *slot = v;
+                }
+            }
+        }
+        if let Some(w) = web {
+            let to = &mut settings.web;
+            for (slot, value) in [
+                (&mut to.search, w.search),
+                (&mut to.read, w.read),
+                (&mut to.download, w.download),
             ] {
                 if let Some(v) = value {
                     *slot = v;

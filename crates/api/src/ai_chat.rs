@@ -224,6 +224,8 @@ struct Setup {
     web_search: Option<crate::brave::Search>,
     /// Whether the web tools may reach the local network (`ai_settings.fetch_private`, ai D27).
     fetch_private: bool,
+    /// Which internet tools Settings > AI allows (ai D28).
+    web: ai::Web,
 }
 
 /// The kinds of change the tools make themselves rather than propose (ai D22): those whose
@@ -307,6 +309,7 @@ fn setup(
         direct: Direct::of(settings.confirm, scope),
         web_search: crate::brave::Search::load(state),
         fetch_private: settings.fetch_private,
+        web: settings.web,
     })
 }
 
@@ -384,8 +387,8 @@ impl Turn {
                     return;
                 }
             };
-        let mut tools = tool_specs();
-        if setup.web_search.is_some() {
+        let mut tools = offered_tools(setup.web);
+        if setup.web.search && setup.web_search.is_some() {
             tools.push(crate::brave::tool_spec());
         }
         let mut added: Vec<Message> = Vec::new();
@@ -556,6 +559,7 @@ impl Turn {
                 // web_search (ai D26): only offered, and so only run, with a Brave key.
                 if c.name == "web_search"
                     && c.error.is_none()
+                    && setup.web.search
                     && let Some(search) = &setup.web_search
                 {
                     let got = crate::brave::web_search(search, &c.input).await;
@@ -577,7 +581,12 @@ impl Turn {
                     });
                     continue;
                 }
-                if matches!(c.name.as_str(), "fetch_url" | "download_asset") && c.error.is_none() {
+                let web_allowed = match c.name.as_str() {
+                    "fetch_url" => setup.web.read,
+                    "download_asset" => setup.web.download,
+                    _ => false,
+                };
+                if web_allowed && c.error.is_none() {
                     let got = self.web_tool(&c, &setup, images_sent).await;
                     if !got.parts.is_empty() {
                         images_sent += 1;
@@ -842,6 +851,19 @@ pub(crate) fn tool(name: &str, description: &str, properties: Value) -> ToolSpec
 
 /// The chat's tools: read-only ones, and proposals that write nothing unless Settings > AI turned
 /// their confirmation off (ai D14, D18, D20, D22), then the web tools (ai D27).
+/// The tools a turn offers: [`tool_specs`] without the internet tools Settings > AI switched
+/// off (ai D28). `web_search` is added apart, only with a Brave Search key.
+fn offered_tools(web: ai::Web) -> Vec<ToolSpec> {
+    tool_specs()
+        .into_iter()
+        .filter(|t| match t.name.as_str() {
+            "fetch_url" => web.read,
+            "download_asset" => web.download,
+            _ => true,
+        })
+        .collect()
+}
+
 pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
         tool(

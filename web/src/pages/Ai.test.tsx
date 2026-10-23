@@ -48,6 +48,7 @@ function status(over: Partial<Record<"anthropic" | "openai" | "chatgpt", object>
     default_system_prompt: DEFAULT_PROMPT,
     system_prompt_custom: false,
     confirm: { notes: true, archive: true, delete: true, types: true, downloads: true },
+    web: { search: true, read: true, download: true },
   };
 }
 
@@ -370,6 +371,21 @@ describe("the Changes the AI makes card", () => {
     fireEvent.click(downloads);
     await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ confirm: { downloads: false } }));
     await waitFor(() => expect(downloads.checked).toBe(false));
+  });
+
+  it("shows the Internet switches on and saves one as a partial web (ai D28)", async () => {
+    aiStatus.mockResolvedValue(status());
+    aiSaveSettings.mockResolvedValue({ ...status(), web: { search: true, read: false, download: true } });
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Changes the AI makes" });
+    for (const name of [/Let the AI search the web/, "Let the AI read web pages", "Let the AI download files into the vault"]) {
+      expect((changes().getByRole("switch", { name }) as HTMLInputElement).checked).toBe(true);
+    }
+    expect(changes().getByText(/Needs a Brave Search key/)).toBeTruthy();
+    const read = changes().getByRole("switch", { name: "Let the AI read web pages" }) as HTMLInputElement;
+    fireEvent.click(read);
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ web: { read: false } }));
+    await waitFor(() => expect(read.checked).toBe(false));
   });
 
   it("shows a failed save", async () => {

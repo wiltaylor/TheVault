@@ -290,6 +290,18 @@ Each switch saves when you change it. With a switch off, the tool makes that kin
 - A delete moves the note to the trash, where you can restore it. The AI never empties the trash or deletes a note for good, whatever the switches say.
 - A type change is planned and applied as one commit, as `POST /api/types/{name}/change` does; a new type is written as `PUT /api/types/{name}` does.
 
+### Internet switches
+
+The same card has an **Internet** group, which decides which web tools the AI is given at all. All three are on by default.
+
+| Switch | Tool |
+|---|---|
+| Let the AI search the web | `web_search`, which also needs a Brave Search key in Settings > Integrations |
+| Let the AI read web pages | `fetch_url` |
+| Let the AI download files into the vault | `download_asset`, which still follows Ask before downloading files into the vault |
+
+With a switch off, the tool is left out of the tool list, so the model never sees it, and a call naming it anyway is refused without fetching anything. `GET /api/integrations/ai` answers `web: { search, read, download }` and `PUT /api/integrations/ai/settings` takes a partial `web`.
+
 A change that does not check, or that fails, writes nothing and goes back to the model as an error. The model is told the change was made, with the note's new version.
 
 The panel shows each change made this way as a short card, such as "Edited Shopping", "Created Reading list", "Archived Old plan", "Moved Scratch to the trash" or "Changed type task", linking to the note, the trash or the type. A note or type open in a pane shows the change at once, unless you have unsaved edits in it.

@@ -1,6 +1,7 @@
 import { For, type JSX, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import {
   type AiConfirm,
+  type AiWeb,
   type AiModel,
   type AiProvider,
   type AiStatus,
@@ -681,6 +682,12 @@ export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
   { key: "downloads", label: "Ask before downloading files into the vault" },
 ];
 
+export const WEB_SWITCHES: { key: keyof AiWeb; label: string; note?: string }[] = [
+  { key: "search", label: "Let the AI search the web", note: "Needs a Brave Search key in Settings > Integrations." },
+  { key: "read", label: "Let the AI read web pages" },
+  { key: "download", label: "Let the AI download files into the vault" },
+];
+
 /**
  * Changes the AI makes (ai D22): one switch per kind of change. On, the panel shows the change
  * for you to apply; off, the AI makes it itself when its caller's scope allows. Each switch
@@ -688,11 +695,11 @@ export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
  */
 export function ConfirmCard(props: { status: AiStatus; onStatus: (s: AiStatus) => void }) {
   const [error, setError] = createSignal<string | null>(null);
-  const [pending, setPending] = createSignal<keyof AiConfirm | null>(null);
+  const [pending, setPending] = createSignal<string | null>(null);
 
   async function toggle(key: keyof AiConfirm, box: HTMLInputElement) {
     setError(null);
-    setPending(key);
+    setPending(`confirm.${key}`);
     try {
       props.onStatus(await api.aiSaveSettings({ confirm: { [key]: box.checked } }));
     } catch (e) {
@@ -703,10 +710,23 @@ export function ConfirmCard(props: { status: AiStatus; onStatus: (s: AiStatus) =
     }
   }
 
+  async function toggleWeb(key: keyof AiWeb, box: HTMLInputElement) {
+    setError(null);
+    setPending(`web.${key}`);
+    try {
+      props.onStatus(await api.aiSaveSettings({ web: { [key]: box.checked } }));
+    } catch (e) {
+      setError(errorText(e));
+      box.checked = props.status.web[key];
+    } finally {
+      setPending(null);
+    }
+  }
+
   return (
     <Card
       title="Changes the AI makes"
-      blurb="With a switch on, the AI panel shows each change of that kind for you to apply or discard. With it off, the AI makes the change itself and the panel says what it did."
+      blurb="With an Ask switch on, the AI panel shows each change of that kind for you to apply or discard. With it off, the AI makes the change itself and the panel says what it did. The Internet switches decide which web tools the AI has."
     >
       <div class="admin-form ai-confirm">
         <For each={CONFIRM_SWITCHES}>
@@ -717,7 +737,7 @@ export function ConfirmCard(props: { status: AiStatus; onStatus: (s: AiStatus) =
                 role="switch"
                 checked={props.status.confirm[s.key]}
                 disabled={pending() !== null}
-                aria-busy={pending() === s.key ? "true" : undefined}
+                aria-busy={pending() === `confirm.${s.key}` ? "true" : undefined}
                 onChange={(e) => void toggle(s.key, e.currentTarget)}
               />{" "}
               {s.label}
@@ -726,6 +746,30 @@ export function ConfirmCard(props: { status: AiStatus; onStatus: (s: AiStatus) =
         </For>
         <p class="muted">
           The AI never empties the trash: a note it deletes stays there until you restore it or empty the trash yourself.
+        </p>
+        <h3>Internet</h3>
+        <For each={WEB_SWITCHES}>
+          {(s) => (
+            <label class="ai-confirm-switch">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={props.status.web[s.key]}
+                disabled={pending() !== null}
+                aria-busy={pending() === `web.${s.key}` ? "true" : undefined}
+                onChange={(e) => void toggleWeb(s.key, e.currentTarget)}
+              />{" "}
+              {s.label}
+              <Show when={s.note}>
+                {" "}
+                <span class="muted">{s.note}</span>
+              </Show>
+            </label>
+          )}
+        </For>
+        <p class="muted">
+          With a switch off, the AI is not given that tool at all. Downloads it is given still follow Ask before
+          downloading files into the vault.
         </p>
       </div>
       <Show when={error()}>

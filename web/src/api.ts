@@ -482,6 +482,18 @@ export interface AiStatus {
   system_prompt_custom: boolean;
   /** Which kinds of chat change wait for the user; false lets the AI make them (ai D22). */
   confirm: AiConfirm;
+  /** Which internet tools the chat gets (ai D28). */
+  web: AiWeb;
+}
+
+/** Settings > AI's internet tool switches (ai D28), every key filled; true gives the chat the tool. */
+export interface AiWeb {
+  /** `web_search`, which also needs a Brave Search key. */
+  search: boolean;
+  /** `fetch_url`, reading web pages. */
+  read: boolean;
+  /** `download_asset`, downloading files into the vault. */
+  download: boolean;
 }
 
 /** Settings > AI's confirmation switches (ai D22), every key filled. */
@@ -1271,7 +1283,7 @@ export const api = {
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
   /**
    * Save the default provider, default models, chat system prompt, confirmation switches and
-   * API URLs; an empty string clears one, which for the system prompt means the default and for
+   * API URLs, and the internet tool switches (`web`, partial like `confirm`, ai D28); an empty string clears one, which for the system prompt means the default and for
    * a URL the official API (ai D24), and for `openai_api` Responses (ai D25). `confirm` may be
    * partial. A URL that is not http or https, or holds a user name or password, is a 400
    * `invalid_url`.
@@ -1281,6 +1293,7 @@ export const api = {
     models?: Partial<Record<AiProvider, string>>;
     system_prompt?: string;
     confirm?: Partial<AiConfirm>;
+    web?: Partial<AiWeb>;
     urls?: Partial<Record<"anthropic" | "openai", string>>;
     openai_api?: OpenAiApi | "";
   }) =>
