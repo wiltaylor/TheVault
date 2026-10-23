@@ -423,6 +423,21 @@ image-release assets image='ghcr.io/wiltaylor/thevault': (require-host-tool "doc
 image-test clients='': (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl") (require-host-tool "python3")
 	docker/test-image.sh "{{clients}}"
 
+# Build the browser box image (docker/browser.Dockerfile, browser B1) for linux/amd64; runs on the host, not through ./dev
+[group('docker')]
+browser-image-build tag='thevault-browser:local': (require-host-tool "docker")
+	docker build -f docker/browser.Dockerfile --platform linux/amd64 -t {{tag}} .
+
+# Build the browser box image and check it in a throwaway container on free ports: the token refusal, /health, commands as agent, the desktop and its Nerd Font, playwright-cli open --headed and a screenshot read back, a timeout; runs on the host
+[group('docker')]
+browser-image-test: (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl")
+	docker/test-browser-image.sh
+
+# Build and check the browser box release image as .github/workflows/browser-image.yml does, tagging ghcr.io/wiltaylor/thevault-browser (or image) as the server image is tagged, locally without pushing; runs on the host
+[group('docker')]
+browser-image-release image='ghcr.io/wiltaylor/thevault-browser': (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl")
+	IMAGE={{image}} docker/release-browser-image.sh
+
 # Check deploy/compose.yaml end to end on an image built from this checkout, in a throwaway compose project on free ports: config of each profile, the default profile's login, password change, backup and restore, the https profile on Caddy's internal CA, and cloudflared refusing a dummy token; runs on the host
 [group('docker')]
 compose-test: (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl")

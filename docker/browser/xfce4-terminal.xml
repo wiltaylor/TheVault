@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The browser box's xfce4-terminal defaults (browser B1): JetBrainsMonoNL Nerd Font Mono rather
+     than the system font. Settings changed on the desktop go to the agent's own ~/.config and win
+     over these. -->
+<channel name="xfce4-terminal" version="1.0">
+  <property name="font-name" type="string" value="JetBrainsMonoNL Nerd Font Mono 11"/>
+  <property name="font-use-system" type="bool" value="false"/>
+</channel>

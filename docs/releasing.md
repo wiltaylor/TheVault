@@ -2,7 +2,7 @@
 
 A release is cut by a commit trailer on `main`. When the commit at the head of a push to `main` carries `pre-release: true`, GitHub Actions builds and publishes a pre-release such as `0.1.13-alpha.1`. When it carries `release: true`, it publishes a release such as `0.1.13`. A push without either trailer publishes nothing.
 
-The workflow that does this is `.github/workflows/release-train.yml`. It builds the desktop packages, the static `vault` CLI, the Android APK and the server image from one commit, under one version, and publishes them together.
+The workflow that does this is `.github/workflows/release-train.yml`. It builds the desktop packages, the static `vault` CLI, the Android APK, the server image and the browser box image from one commit, under one version, and publishes them together.
 
 ## Cut a release
 
@@ -24,7 +24,7 @@ The workflow that does this is `.github/workflows/release-train.yml`. It builds 
    ```
 
    Git reads trailers from the last paragraph of the message, so put them together after a blank line.
-5. Watch the `release-train` run in the Actions tab. When it has finished, check that the GitHub Release lists the APK, the AppImage, the deb, the rpm, `thevault-bin-aur.tar.gz`, both `vault-<version>-linux-<arch>` builds, the `SHA256SUMS` files, `compose.yaml`, `Caddyfile` and `env.example`, and that `docker pull ghcr.io/wiltaylor/thevault:<version>` works.
+5. Watch the `release-train` run in the Actions tab. When it has finished, check that the GitHub Release lists the APK, the AppImage, the deb, the rpm, `thevault-bin-aur.tar.gz`, both `vault-<version>-linux-<arch>` builds, the `SHA256SUMS` files, `compose.yaml`, `Caddyfile` and `env.example`, and that `docker pull ghcr.io/wiltaylor/thevault:<version>` and `docker pull ghcr.io/wiltaylor/thevault-browser:<version>` work.
 
 The trailer can sit on any commit, not only an empty one. The train only reads the commit at the head of the push, so a trailer on an earlier commit of the same push does nothing.
 
@@ -32,7 +32,7 @@ To cut a release without a trailer commit, start `release-train` by hand from th
 
 ## What the train does
 
-The train runs six jobs:
+The train runs seven jobs:
 
 1. `version` reads the trailers of the head commit with `git log -1 --format='%(trailers:key=release,valueonly)'`, and the same for `pre-release` and `version`. It computes the version with `scripts/release/version.sh` and fails when that version's tag already exists, or when the commit carries both `release: true` and `pre-release: true`.
 2. `dev-image` calls `.github/workflows/dev-image.yml`. It pushes the dev container image to `ghcr.io/wiltaylor/thevault-dev:<hash>`, where `<hash>` is the one `./dev` tags its image with, unless the registry already has it. `desktop`, `android` and the smoke test then pull that image rather than spend about nine minutes building it. A job that cannot pull it builds it, as before. Run `dev-image` by hand from the Actions tab to publish the image after editing `docker/dev.Dockerfile`.
@@ -40,6 +40,7 @@ The train runs six jobs:
 4. `android` calls `.github/workflows/android-release.yml` at the same time as `desktop`. It builds the signed aarch64 APK and checks its `versionName` and `versionCode`. Beside it, `android-smoke-reusable.yml` runs the [release smoke test](android-release.md#the-release-smoke-test) on an x86_64 build of the same commit and version.
 5. `publish` runs only when `desktop` and `android`, the smoke test included, have passed. It creates the tag `v<version>` on the train's commit and the GitHub Release with every file. A pre-release is marked as a pre-release.
 6. `image` calls `.github/workflows/image.yml`, which builds the server image with the release's APK, AppImage and CLI builds baked in, checks that it serves them, pushes it to `ghcr.io/wiltaylor/thevault`, and attaches the compose files to the release.
+7. `browser-image` calls `.github/workflows/browser-image.yml` at the same time as `image`. `docker/release-browser-image.sh` builds the browser box image (`docker/browser.Dockerfile`, the desktop with `playwright-cli` that the compose file's `browser` profile runs), checks it with `docker/test-browser-image.sh`, and pushes it to `ghcr.io/wiltaylor/thevault-browser` with the same tags as the server image. `just browser-image-release` builds and checks it on your machine without pushing it.
 
 Each job writes the version into its own checkout before it builds, with `scripts/release/stamp.sh`. That sets `version` in `[workspace.package]` of `Cargo.toml` and in both app crates, the versions of those crates in the three `Cargo.lock` files, `version` in both `tauri.conf.json` files, and the Android `bundle.android.versionCode`. Nothing is committed, so `main` keeps the version it has. `./dev just release-stamp <version>` does the same to your checkout, and `git checkout .` undoes it.
 
@@ -73,7 +74,7 @@ Each package manager has its own rule for sorting a pre-release before its relea
 | rpm `Version` | `0.1.13~alpha.1` | `0.1.13` |
 | AUR `pkgver` | `0.1.13alpha1` | `0.1.13` |
 | Android `versionCode` | `101301` | `101399` |
-| Server image tags | `0.1.13-alpha.1`, `edge` | `0.1.13`, `0.1`, `latest`, `edge` |
+| Server and browser box image tags | `0.1.13-alpha.1`, `edge` | `0.1.13`, `0.1`, `latest`, `edge` |
 
 Tauri writes the semver into the deb, where dpkg reads `-alpha.1` as a Debian revision and sorts `0.1.13-alpha.1` after `0.1.13`. It cannot write the semver into an rpm at all, because an rpm version holds no `-`. For a pre-release, `just desktop-release` bundles the rpm as `0.1.13`, and `scripts/release/linux-packages.sh` rebuilds the deb and the rpm with the `~` version and names them by the semver. A release's packages are left as Tauri builds them.
 
@@ -100,12 +101,13 @@ A failed train publishes nothing until `publish` runs, and `publish` only runs w
 - When a build or the smoke test fails, fix the cause on `main` and cut a new release with a new trailer commit. If the failure was not in the code, such as a runner that ran out of disk, open the failed run and choose **Re-run failed jobs**. A re-run keeps the run's commit and version, because the `version` job does not run again.
 - When `publish` fails, re-run the failed jobs. `publish` drafts the release before it publishes it, and a draft makes no tag, so a re-run finishes the draft an earlier run left.
 - When `image` fails after `publish`, the release and its tag exist without the image and the compose files. Re-run the failed jobs, or start `image` by hand from the Actions tab with the tag, such as `v0.1.13`. A run by hand checks out the tag and writes the version from it.
+- When `browser-image` fails, re-run the failed jobs, or start `browser-image` by hand with the tag. The server image does not wait for it, but the compose file's `browser` profile pulls `thevault-browser` at the same version, so publish it before you announce the release.
 
 Don't choose **Re-run all jobs** after `publish` has succeeded. The `version` job then finds the tag and fails.
 
 ## Secrets
 
-The train uses the secrets the build workflows always used: `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for the AppImage's updater signature ([docs/desktop.md](desktop.md#releasing)), and `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` for the APK ([docs/android-release.md](android-release.md#publish-a-release)). It pushes the image with the run's own `GITHUB_TOKEN`.
+The train uses the secrets the build workflows always used: `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for the AppImage's updater signature ([docs/desktop.md](desktop.md#releasing)), and `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` for the APK ([docs/android-release.md](android-release.md#publish-a-release)). It pushes both images with the run's own `GITHUB_TOKEN`.
 
 ## Test the scripts
 

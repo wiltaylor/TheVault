@@ -1,0 +1,10 @@
+# The build context of docker/browser.Dockerfile is the repository root; send only what the image
+# builds from: the workspace (the exec service is one of its crates) and docker/browser/.
+*
+!Cargo.toml
+!Cargo.lock
+!clippy.toml
+!crates/
+!docker/browser/
+**/target/
+**/node_modules/

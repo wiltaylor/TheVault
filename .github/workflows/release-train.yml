@@ -13,7 +13,8 @@
 #   publish  creates the tag on this commit and the GitHub Release with every build, marked as a
 #            pre-release for an alpha, so releases/latest keeps naming the last release
 #   image    image.yml: the server image with the builds baked in, and the compose files
-# desktop and android run side by side, after dev-image. Each job writes the version into its checkout before it
+#   browser-image  browser-image.yml: the browser box image (browser B9)
+# desktop and android run side by side, after dev-image; image and browser-image after publish. Each job writes the version into its checkout before it
 # builds (scripts/release/stamp.sh); nothing is committed to main.
 #
 # Run it by hand (workflow_dispatch) to cut a release from main's HEAD without a trailer commit.
@@ -176,5 +177,15 @@ jobs:
       contents: write
       packages: write
     uses: ./.github/workflows/image.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  # The browser box image, beside the server image.
+  browser-image:
+    needs: [version, publish]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/browser-image.yml
     with:
       version: ${{ needs.version.outputs.version }}

@@ -387,6 +387,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "browser-agent"
+version = "0.1.12"
+dependencies = [
+ "axum",
+ "reqwest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

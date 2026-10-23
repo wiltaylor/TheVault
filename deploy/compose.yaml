@@ -4,6 +4,9 @@
 #   docker compose --profile https up -d        # your own domain, Caddy with automatic TLS
 #   docker compose --profile cloudflare up -d   # a Cloudflare Tunnel, no ports opened
 #
+# Add --profile browser to any of these for the browser box, a desktop agents drive a browser in;
+# it needs BROWSER_TOKEN in .env.
+#
 # docs/install.md walks through each one.
 name: thevault
 
@@ -19,6 +22,10 @@ services:
       # Only read when /data holds no vault yet: the first start creates one with this password.
       VAULT_PASSWORD: ${VAULT_PASSWORD:-}
       TZ: ${TZ:-UTC}
+      # The browser box's exec service, set only when .env has BROWSER_TOKEN (browser profile).
+      VAULT_BROWSER_URL: ${BROWSER_TOKEN:+http://browser:7700}
+      VAULT_BROWSER_TOKEN: ${BROWSER_TOKEN:-}
+    networks: [default, browser]
     volumes:
       # Named volumes unless .env names host folders.
       - ${THEVAULT_DATA:-data}:/data
@@ -67,8 +74,34 @@ services:
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
 
+  # The browser box (docs/install.md, "Browser box"): an XFCE desktop with playwright-cli and
+  # Chromium, which agents with the browser permission drive through its exec service on port
+  # 7700. It publishes no ports and shares a network only with thevault, which shows its desktop
+  # (noVNC on port 6080) to a logged-in user. It holds no vault data or secrets.
+  browser:
+    image: ghcr.io/wiltaylor/thevault-browser:${THEVAULT_VERSION:-latest}
+    profiles: [browser]
+    restart: unless-stopped
+    environment:
+      BROWSER_TOKEN: ${BROWSER_TOKEN:-}
+      TZ: ${TZ:-UTC}
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    shm_size: 1gb
+    mem_limit: ${BROWSER_MEMORY:-2g}
+    cpus: ${BROWSER_CPUS:-2}
+    volumes:
+      # Browser profiles, saved logins and the desktop's settings persist here.
+      - browser-home:/home/agent
+    networks: [browser]
+
+networks:
+  default:
+  # thevault and the browser box only. Not internal: the box needs the internet.
+  browser:
+
 volumes:
   data:
   config:
   caddy-data:
   caddy-config:
+  browser-home:

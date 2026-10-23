@@ -10,7 +10,8 @@
 #
 # - .env.example documents every variable compose.yaml reads, VAULT_PASSWORD first, and
 #   docs/install.md and .github/workflows/image.yml agree on the release file names;
-# - `docker compose config` renders the default, https and cloudflare profiles;
+# - `docker compose config` renders the default, https and cloudflare profiles, and the browser
+#   profile as browser B3 sets it out (its config only; `just browser-image-test` runs the box);
 # - the default profile comes up healthy on a free port, the login works, and the documented
 #   password change, backup and restore work;
 # - the https profile, with docker/compose-test/https.yaml switching Caddy to its internal CA and
@@ -39,7 +40,7 @@ dc() {
 }
 
 cleanup() {
-  dc -f "$tmp/https.yaml" --profile https --profile cloudflare \
+  dc -f "$tmp/https.yaml" --profile https --profile cloudflare --profile browser \
     down -v --remove-orphans --timeout 20 > /dev/null 2>&1 || true
   if [ -n "$tagged" ]; then docker rmi "$tag" > /dev/null 2>&1 || true; fi
   rm -rf "$tmp"
@@ -168,6 +169,46 @@ check "COMPOSE_PROFILES=https adds caddy without --profile (got $got)" test "$go
 # A plain .env with host folders renders those folders as bind mounts.
 got=$(THEVAULT_DATA=./data THEVAULT_CONFIG=./config dc config --format json | jq -r '[.services.thevault.volumes[].type] | join(",")')
 check "THEVAULT_DATA and THEVAULT_CONFIG switch to host folders (got $got)" test "$got" = bind,bind
+
+# The browser profile (browser B3), checked by its config only: `just browser-image-test` runs the
+# box itself. The token comes from the shell, so the test .env keeps it empty for the runs below.
+btoken="tok-$run-0123456789abcdef"
+bconfig() { BROWSER_TOKEN=$btoken dc --profile browser config --format json "$@"; }
+check "config renders --profile browser" sh -c "BROWSER_TOKEN=$btoken docker compose --project-directory '$tmp' -p '$run' -f '$tmp/compose.yaml' --profile browser config -q"
+got=$(BROWSER_TOKEN=$btoken dc --profile browser config --services | sort | tr '\n' ' ')
+check "--profile browser adds browser (got $got)" test "$got" = "browser thevault "
+got=$(COMPOSE_PROFILES=https,browser dc config --services | sort | tr '\n' ' ')
+check "COMPOSE_PROFILES=https,browser adds both (got $got)" test "$got" = "browser caddy thevault "
+bjson=$(bconfig)
+got=$(jq -r '.services.browser.image' <<< "$bjson")
+check "the browser image is pinned to THEVAULT_VERSION (got $got)" test "$got" = "ghcr.io/wiltaylor/thevault-browser:$run"
+got=$(jq -c '.services.browser.ports // []' <<< "$bjson")
+check "the browser box publishes no host ports (got $got)" test "$got" = "[]"
+got=$(jq -c '.services.browser.networks | keys' <<< "$bjson")
+check "the browser box is only on the browser network (got $got)" test "$got" = '["browser"]'
+got=$(jq -c '.services.thevault.networks | keys' <<< "$bjson")
+check "thevault is on the default and browser networks (got $got)" test "$got" = '["browser","default"]'
+got=$(jq -c '[.services | to_entries[] | select(.value.networks | has("browser")) | .key] | sort' <<< "$bjson")
+check "only thevault shares the browser network (got $got)" test "$got" = '["browser","thevault"]'
+got=$(jq -r '.networks.browser.internal // false' <<< "$bjson")
+check "the browser network reaches the internet (internal $got)" test "$got" = false
+got=$(jq -r '"\(.services.browser.shm_size) \(.services.browser.mem_limit) \(.services.browser.cpus)"' <<< "$bjson")
+check "the browser box gets 1 GB of shm, 2 GB of memory and 2 CPUs (got $got)" test "$got" = "1073741824 2147483648 2"
+got=$(BROWSER_MEMORY=4g BROWSER_CPUS=3 bconfig | jq -r '"\(.services.browser.mem_limit) \(.services.browser.cpus)"')
+check "BROWSER_MEMORY and BROWSER_CPUS override them (got $got)" test "$got" = "4294967296 3"
+got=$(jq -r '.services.browser.volumes[] | select(.target == "/home/agent") | "\(.type) \(.source)"' <<< "$bjson")
+check "/home/agent is the named volume browser-home (got $got)" test "$got" = "volume browser-home"
+got=$(jq -r '.services.browser.environment.BROWSER_TOKEN' <<< "$bjson")
+check "the browser box gets BROWSER_TOKEN" test "$got" = "$btoken"
+got=$(jq -r '"\(.services.thevault.environment.VAULT_BROWSER_URL) \(.services.thevault.environment.VAULT_BROWSER_TOKEN)"' <<< "$bjson")
+check "thevault gets VAULT_BROWSER_URL and VAULT_BROWSER_TOKEN (got $got)" test "$got" = "http://browser:7700 $btoken"
+got=$(dc config --format json | jq -r '.services.thevault.environment.VAULT_BROWSER_URL // ""')
+check "without BROWSER_TOKEN, VAULT_BROWSER_URL is empty (got '$got')" test -z "$got"
+for want in '--profile browser' 'openssl rand -hex 32' 'BROWSER_TOKEN' 'ghcr.io/wiltaylor/thevault-browser' \
+  'Browser box' 'private'; do
+  check "docs/install.md mentions $want" grep -qF -- "$want" docs/install.md
+done
+check "release-train.yml publishes the browser image" grep -qF 'uses: ./.github/workflows/browser-image.yml' .github/workflows/release-train.yml
 
 # 3. The default profile.
 echo "starting the default profile"

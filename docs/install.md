@@ -2,7 +2,7 @@
 
 This guide runs the TheVault server on one machine with Docker Compose. It covers the first start, how you reach the server, backups, upgrades, restoring and removing it.
 
-The server is one container, `thevault`. It keeps the vault in the `/data` volume and the vault's secret key in the `/config` volume. Two optional profiles add a front door: `https` adds Caddy for your own domain, and `cloudflare` adds a Cloudflare Tunnel.
+The server is one container, `thevault`. It keeps the vault in the `/data` volume and the vault's secret key in the `/config` volume. Two optional profiles add a front door: `https` adds Caddy for your own domain, and `cloudflare` adds a Cloudflare Tunnel. A third, `browser`, adds the [browser box](#browser-box), a desktop where agents drive a web browser.
 
 ## What you need
 
@@ -163,6 +163,71 @@ Gmail and Google Calendar sync need an OAuth client in your own Google Cloud pro
 
 If Settings > Integrations shows `https://oauth2.googleapis.com/token: could not connect` for Gmail or Calendar, the container cannot look up names. Check the host's `/etc/resolv.conf`: when it names no `nameserver`, Docker has no DNS server to give the container. Uncomment the `dns:` line under the `thevault` service in `compose.yaml` and run `docker compose up -d`.
 
+## Browser box
+
+The browser box is an optional second container, `browser`, from the image `ghcr.io/wiltaylor/thevault-browser`. It runs an XFCE desktop with Chromium and [`playwright-cli`](https://playwright.dev/agent-cli/introduction). An agent that has the **Browser automation** permission runs shell commands in the box and drives the browser with `playwright-cli`, while you watch the desktop from the web app. The permission is off for every agent until you turn it on.
+
+### Turn it on
+
+1. Make a token that the server and the box share:
+
+   ```sh
+   openssl rand -hex 32
+   ```
+
+2. In `.env`, set `BROWSER_TOKEN` to the token, and add `browser` to `COMPOSE_PROFILES`, such as `COMPOSE_PROFILES=browser` or `COMPOSE_PROFILES=https,browser`.
+3. Start it:
+
+   ```sh
+   docker compose up -d
+   ```
+
+   Without `COMPOSE_PROFILES`, name the profile on every command instead: `docker compose --profile browser up -d`.
+4. Wait until `docker compose ps` shows `browser` as `healthy`.
+
+The box refuses to start without `BROWSER_TOKEN`. The server gets the box's address, `http://browser:7700`, and the token only when `BROWSER_TOKEN` is set, so leave it empty while the box is off.
+
+To watch the desktop or take it over, open **Settings > Integrations > Browser box** in the web app and choose **Open desktop**. The server shows the desktop only to a password login. The box publishes no ports, and it shares a network only with `thevault`.
+
+### What it keeps and uses
+
+- `/home/agent` is the named volume `thevault_browser-home`. Browser profiles that `playwright-cli` saves, logins and the desktop's settings stay there across restarts and upgrades. `/work`, where commands run and screenshots land, is emptied when the container is re-created.
+- The box gets 1 GB of shared memory for Chromium, and at most 2 GB of memory and 2 CPUs. Set `BROWSER_MEMORY` and `BROWSER_CPUS` in `.env` to change the limits.
+- It follows `THEVAULT_VERSION`, so `docker compose pull` upgrades it with the server.
+
+### What it can reach
+
+The box holds no vault data, no secrets and no Docker socket. It needs the internet, and like any container on a Docker network it can also reach your local network. Two things follow:
+
+- Whatever you log in to in the box's browser, every agent with the Browser automation permission can use. Log in only to accounts you would let those agents act in.
+- A web page can carry text that tries to instruct the agent reading it. Keep the permission off for agents that do not need it.
+
+To keep the box off your local network, add firewall rules for its network's private ranges on the host. Find the network's subnet first:
+
+```sh
+subnet=$(docker network inspect thevault_browser -f '{{(index .IPAM.Config 0).Subnet}}')
+sudo iptables -I DOCKER-USER 1 -s "$subnet" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+sudo iptables -I DOCKER-USER 2 -s "$subnet" -d 10.0.0.0/8 -j REJECT
+sudo iptables -I DOCKER-USER 3 -s "$subnet" -d 172.16.0.0/12 -j REJECT
+sudo iptables -I DOCKER-USER 4 -s "$subnet" -d 192.168.0.0/16 -j REJECT
+sudo iptables -I DOCKER-USER 5 -s "$subnet" -d 169.254.0.0/16 -j REJECT
+sudo iptables -I DOCKER-USER 6 -s "$subnet" -d 100.64.0.0/10 -j REJECT
+```
+
+The first rule lets the box answer the server. If your DNS server is on the local network, allow it before the others, such as `sudo iptables -I DOCKER-USER 2 -s "$subnet" -d 192.168.1.1 -p udp --dport 53 -j RETURN`. The rules last until the host restarts; keep them with your distribution's iptables persistence. The subnet changes if the network is removed, such as by `docker compose down`, so check it again after that.
+
+### Turn it off
+
+Stop the box and remove its container:
+
+```sh
+docker compose --profile browser rm -sf browser
+```
+
+Then remove `browser` from `COMPOSE_PROFILES`, empty `BROWSER_TOKEN` in `.env`, and run `docker compose up -d`, so the server stops offering the box to agents.
+
+To delete its saved logins and profiles too, run `docker volume rm thevault_browser-home`.
+
 ## Back up
 
 Run a backup whenever you want a copy of the vault:
@@ -210,6 +275,7 @@ A release is cut by a `release: true` or `pre-release: true` trailer on a commit
 1. `release.yml` builds the desktop AppImage, deb, rpm and AUR package and the static `vault` CLI for Linux `x86_64` and `aarch64`. At the same time `android-release.yml` builds the signed APK and runs the release smoke test on it.
 2. When both have passed, the train creates the tag and the GitHub Release with all of them.
 3. `image.yml` downloads the APK, the AppImage and the two CLI builds from the release, checks them against its `SHA256SUMS` files, and builds the image with them baked in. It starts the image, checks that it serves all four, and pushes `ghcr.io/wiltaylor/thevault`. A release is tagged `<version>`, `<major>.<minor>`, `latest` and `edge`, and a pre-release only `<version>` and `edge`. Then it attaches `compose.yaml`, `Caddyfile` and `env.example` to the release.
+4. At the same time, `browser-image.yml` builds the browser box image, checks it, and pushes `ghcr.io/wiltaylor/thevault-browser` with the same tags.
 
 So `docker compose pull` gets a new version only after its apps are on the release, and `latest` never gets a pre-release. To follow the pre-releases, set `THEVAULT_VERSION` in `.env` to `edge`. The image carries the source, version, revision and licence as OCI labels: `docker image inspect ghcr.io/wiltaylor/thevault:latest` shows them. `just image-release <assets>` builds and checks the same image on your machine from a folder of the release's files, without pushing it.
 
@@ -266,4 +332,4 @@ To delete everything, including the vault, the key, and Caddy's certificates, ba
 docker compose down -v
 ```
 
-`down -v` cannot be undone. Remove the folder with `compose.yaml` afterwards, and the image with `docker image rm ghcr.io/wiltaylor/thevault:latest`.
+`down -v` cannot be undone. Remove the folder with `compose.yaml` afterwards, and the images with `docker image rm ghcr.io/wiltaylor/thevault:latest ghcr.io/wiltaylor/thevault-browser:latest`.
