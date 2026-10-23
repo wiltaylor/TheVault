@@ -187,7 +187,9 @@ The browser box is an optional second container, `browser`, from the image `ghcr
 
 The box refuses to start without `BROWSER_TOKEN`. The server gets the box's address, `http://browser:7700`, and the token only when `BROWSER_TOKEN` is set, so leave it empty while the box is off.
 
-To watch the desktop or take it over, open **Settings > Integrations > Browser box** in the web app and choose **Open desktop**. The server shows the desktop only to a password login. The box publishes no ports, and it shares a network only with `thevault`.
+To watch the desktop or take it over, open **Settings > Integrations > Browser box** in the web app and choose **Open desktop**. The card also says whether the box answers, and which box and `playwright-cli` versions it runs. The server shows the desktop only to a password login: it proxies `/browser/` to the box's noVNC, and refuses every API token, `admin` included, with 403 `human_only`, so no agent, script or app reaches the desktop. The desktop is not offered in the desktop and Android apps. The box publishes no ports, and it shares a network only with `thevault`.
+
+The server finds noVNC on port 6080 of the host in `VAULT_BROWSER_URL`, such as `http://browser:6080`. To run noVNC somewhere else, set `VAULT_BROWSER_DESKTOP_URL` on the `thevault` service to its `http://` address. When `VAULT_BROWSER_URL` is empty, the server has no `/browser/` at all.
 
 ### What it keeps and uses
 

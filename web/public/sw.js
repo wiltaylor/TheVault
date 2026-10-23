@@ -50,6 +50,9 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
   if (url.pathname === "/api" || url.pathname.startsWith("/api/")) return;
+  // The browser box's desktop (noVNC through the server) is not the app: its page must never be
+  // stored as the shell.
+  if (url.pathname === "/browser" || url.pathname.startsWith("/browser/")) return;
 
   if (request.mode === "navigate") {
     // Every app route is the same shell page.

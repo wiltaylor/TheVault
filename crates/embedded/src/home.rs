@@ -177,13 +177,15 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     {
         return Route::Ai;
     }
-    // Emptying the trash is for the signed-in user only (ai D21). The embedded server answers
-    // every request as the owner, so it cannot tell the user from the device token, and the
-    // home server refuses the device token: it is done in the web app.
+    // Emptying the trash and the browser box's desktop are for the signed-in user only (ai D21,
+    // browser B4). The embedded server answers every request as the owner, so it cannot tell the
+    // user from the device token, and the home server refuses the device token: they are the web
+    // app's, and so is the browser box's status.
     if api::is_human_only(method, path)
         || under(path, "/api/tokens")
         || under(path, "/api/secrets")
         || under(path, "/api/integrations/ai")
+        || under(path, "/api/integrations/browser")
         || under(path, "/api/ai")
     {
         return Route::NeedsWebApp;
@@ -931,6 +933,10 @@ mod tests {
             route(&Method::DELETE, &format!("/api/trash/{id}")),
             Route::NeedsWebApp
         );
+        // The browser box's desktop and status are the web app's (browser B4).
+        assert_eq!(route(&get, "/browser/vnc.html"), Route::NeedsWebApp);
+        assert_eq!(route(&get, "/browser/websockify"), Route::NeedsWebApp);
+        assert_eq!(route(&get, "/api/integrations/browser"), Route::NeedsWebApp);
         assert_eq!(route(&get, "/api/app"), Route::App);
         assert_eq!(route(&get, "/api/app/sync"), Route::AppSync);
         assert_eq!(route(&post, "/api/app/sync"), Route::AppSyncNow);

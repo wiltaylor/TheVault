@@ -5,7 +5,9 @@
 //! `ai_settings.endpoints` `anthropic`, `openai` (and `chatgpt` for the plan) and `chatgpt_auth`
 //! at their `base_url()`s. [`FakeBrave`] is the Brave Search API; point `brave_settings.endpoint`
 //! at its `base_url()`. [`FakeWeb`] is the web the chat's `fetch_url` and `download_asset` read;
-//! it runs on a loopback address, so tests set `ai_settings.fetch_private`.
+//! it runs on a loopback address, so tests set `ai_settings.fetch_private`. [`FakeNoVnc`] is the
+//! browser box's noVNC and health, for the `/browser/` proxy; point `VAULT_BROWSER_URL` and
+//! `VAULT_BROWSER_DESKTOP_URL` at its `base_url()`.
 //!
 //! ```no_run
 //! let server = testkit::TestServer::start();
@@ -30,6 +32,7 @@ pub mod fake_brave;
 pub mod fake_google;
 mod fake_http;
 mod fake_images;
+pub mod fake_novnc;
 pub mod fake_openai;
 pub mod fake_siwc;
 pub mod fake_web;
@@ -40,6 +43,7 @@ pub use fake_anthropic::{
 };
 pub use fake_brave::{BRAVE_SEARCH_PATH, BraveReply, BraveResult, DEFAULT_BRAVE_KEY, FakeBrave};
 pub use fake_images::FakeImage;
+pub use fake_novnc::{FakeNoVnc, NOVNC_PAGE, WsClient};
 pub use fake_openai::{
     DEFAULT_OPENAI_KEY, Ending, FakeOpenAi, FakeOpenAiBuilder, OpenAiReply, OpenAiResponse,
 };

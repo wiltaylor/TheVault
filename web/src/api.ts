@@ -719,6 +719,19 @@ export interface BraveStatus {
   configured: boolean;
 }
 
+/**
+ * The Browser box card's state (browser B4), from the box's health: whether `VAULT_BROWSER_URL`
+ * is set, whether the box answers, and its versions; `error` says why it does not answer.
+ */
+export interface BrowserStatus {
+  configured: boolean;
+  reachable: boolean;
+  version: string | null;
+  playwright_cli: string | null;
+  display: string | null;
+  error: string | null;
+}
+
 /** How the Brave Search card's Test went: the number of results for "TheVault", or Brave's error. */
 export interface BraveTestResult {
   ok: boolean;
@@ -1492,6 +1505,8 @@ export const api = {
   bravePutKey: (key: string) => request<BraveStatus>("PUT", "/api/integrations/brave/key", { key }),
   /** Search Brave once for "TheVault" with the stored key. */
   braveTest: () => request<BraveTestResult>("POST", "/api/integrations/brave/test"),
+  /** Whether the browser box is set up and answers, and its versions (browser B4). */
+  browserStatus: () => request<BrowserStatus>("GET", "/api/integrations/browser"),
   /** Settings > AI: each provider's sign-in and default model (ai D7). */
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
   /**

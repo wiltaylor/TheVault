@@ -35,6 +35,10 @@
 //! Settings > Integrations > Brave Search stores the key the chat's `web_search` tool uses under
 //! `/api/integrations/brave` (ai D26).
 //!
+//! Settings > Integrations > Browser box reads the browser box's health at
+//! `/api/integrations/browser`, and `/browser/` shows its desktop to a password login (browser
+//! B4).
+//!
 //! Settings > AI stores the provider keys and signs in with ChatGPT under
 //! `/api/integrations/ai`, and `/api/ai/models` lists a provider's models (ai D6, D8, D15).
 //!
@@ -73,6 +77,7 @@ mod assets;
 mod auth;
 mod batch;
 mod brave;
+mod browser;
 mod defs;
 mod devices;
 mod error;
@@ -195,6 +200,8 @@ struct Built {
     google: Routes<Arc<google::Google>>,
     /// The Settings > AI routes, which take the ChatGPT sign-ins started.
     ai: Routes<Arc<ai_settings::Ai>>,
+    /// The browser box's status, which takes where the box is.
+    browser: Routes<Arc<browser::Config>>,
 }
 
 fn build() -> Built {
@@ -371,6 +378,7 @@ fn build() -> Built {
         .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)
         .post("/api/ai/apply", ai_turns::apply)
         .post("/api/ai/discard", ai_turns::discard);
+    let browser = Routes::new().get("/api/integrations/browser", browser::status);
     Built {
         api,
         login,
@@ -378,6 +386,7 @@ fn build() -> Built {
         apps,
         google,
         ai,
+        browser,
     }
 }
 
@@ -390,6 +399,7 @@ pub fn routes() -> Vec<(Method, &'static str)> {
         apps,
         google,
         ai,
+        browser,
     } = build();
     api.seen
         .into_iter()
@@ -398,6 +408,7 @@ pub fn routes() -> Vec<(Method, &'static str)> {
         .chain(apps.seen)
         .chain(google.seen)
         .chain(ai.seen)
+        .chain(browser.seen)
         .collect()
 }
 
@@ -414,8 +425,21 @@ pub fn router(
     // Only the server runs agent triggers (agents G10): the embedded app servers come through
     // `owner_router`, which installs no runner.
     scheduler.set_agent_runner(Arc::new(agent_runs::TriggerRunner::new(writer.clone())));
-    assemble(writer, scheduler, test_clock, sessions.clone(), clients)
-        .layer(middleware::from_fn_with_state(sessions, auth::authenticate))
+    let browser = browser::Config::from_env();
+    let mut app = assemble(
+        writer,
+        scheduler,
+        test_clock,
+        sessions.clone(),
+        clients,
+        browser.clone(),
+    );
+    // The desktop is the signed-in user's alone (browser B4), so the embedded app servers, which
+    // answer as the owner, never get it.
+    if let Some(desktop) = browser::desktop_router(&browser) {
+        app = app.merge(desktop);
+    }
+    app.layer(middleware::from_fn_with_state(sessions, auth::authenticate))
 }
 
 /// Builds the router for every `/api` route with no credentials checked: every request acts as
@@ -423,7 +447,15 @@ pub fn router(
 /// its custom URI scheme, which nothing else can reach (D26). Never serve it on a port.
 pub fn owner_router(writer: Arc<Writer>, scheduler: Arc<Scheduler>) -> Router {
     let sessions = Arc::new(auth::Sessions::new(writer.clone()));
-    assemble(writer, scheduler, None, sessions, None).layer(middleware::from_fn(auth::as_owner))
+    assemble(
+        writer,
+        scheduler,
+        None,
+        sessions,
+        None,
+        browser::Config::default(),
+    )
+    .layer(middleware::from_fn(auth::as_owner))
 }
 
 fn assemble(
@@ -432,6 +464,7 @@ fn assemble(
     test_clock: Option<Arc<TestClock>>,
     sessions: Arc<auth::Sessions>,
     clients: Option<PathBuf>,
+    browser_config: browser::Config,
 ) -> Router {
     let Built {
         api,
@@ -440,6 +473,7 @@ fn assemble(
         apps,
         google,
         ai,
+        browser,
     } = build();
     let writer_for_ai = writer.clone();
     let mut app = api
@@ -456,7 +490,8 @@ fn assemble(
         .merge(
             ai.router
                 .with_state(Arc::new(ai_settings::Ai::new(writer_for_ai))),
-        );
+        )
+        .merge(browser.router.with_state(Arc::new(browser_config)));
     if let Some(clock) = test_clock {
         app = app.merge(
             Router::new()

@@ -1,7 +1,8 @@
 import { A, useLocation, useNavigate } from "@solidjs/router";
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createResource, createSignal, onCleanup, onMount } from "solid-js";
 import {
   type BraveStatus,
+  type BrowserStatus,
   type GoogleRedirect,
   type GoogleSettings,
   type GoogleSide,
@@ -11,6 +12,7 @@ import {
 } from "../api";
 import { ChipPicker } from "../components/ChipPicker";
 import { Spinner } from "../components/SyncStatus";
+import { appInfo } from "../inApp";
 import { errorText } from "./TypeEditor";
 
 // Settings > Integrations (google-sync D1, D18, D21): the Google card signs in with the user's own
@@ -25,6 +27,9 @@ import { errorText } from "./TypeEditor";
 //
 // The Brave Search card (ai D26) stores the API key the AI chat's web_search tool uses: the key is
 // never shown back, only whether one is set; Test searches once for "TheVault".
+//
+// The Browser box card (browser B4) shows whether the box answers and its versions, and opens its
+// desktop, which the server proxies at /browser/ for a password login only, in a new tab.
 
 /** How often the card reads the status again while a side is running. */
 export const POLL_MS = 3000;
@@ -630,6 +635,108 @@ export function BraveCard() {
   );
 }
 
+/** The browser box's desktop, as "Open desktop" opens it: noVNC through the server (browser B4). */
+export const BROWSER_DESKTOP = "/browser/vnc.html?autoconnect=1&resize=remote&path=browser/websockify";
+/** How to turn the browser box on. */
+export const BROWSER_SETUP_DOC = "https://github.com/wiltaylor/TheVault/blob/main/docs/install.md#browser-box";
+
+/**
+ * The Browser box card (browser B4): whether the box is set up and answers, its versions, and
+ * "Open desktop", which shows the box's desktop in a new tab to watch an agent or take over. The
+ * server shows the desktop only to a password login, so the apps leave the card out.
+ */
+export function BrowserCard() {
+  const [app] = createResource(appInfo);
+  const [status, setStatus] = createSignal<BrowserStatus | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  const [checking, setChecking] = createSignal(false);
+
+  async function load() {
+    setError(null);
+    setChecking(true);
+    try {
+      setStatus(await api.browserStatus());
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setChecking(false);
+    }
+  }
+  onMount(load);
+
+  return (
+    <Show when={app.state === "ready" && !app()}>
+      <section class="field-card browser-card" aria-label="Browser box">
+        <header>
+          <h2>Browser box</h2>
+          <p class="muted">
+            A desktop with Chromium and playwright-cli that agents with the Browser automation permission drive. Watch
+            them or take over here.
+          </p>
+        </header>
+        <Show when={status()}>
+          {(s) => (
+            <Show
+              when={s().configured}
+              fallback={
+                <p>
+                  Not set up.{" "}
+                  <a href={BROWSER_SETUP_DOC} target="_blank" rel="noopener noreferrer">
+                    How to turn on the browser box
+                  </a>
+                </p>
+              }
+            >
+              <Show
+                when={s().reachable}
+                fallback={
+                  <p class="error" role="alert">
+                    The browser box does not answer{s().error ? `: ${s().error}` : "."}
+                  </p>
+                }
+              >
+                <dl class="form-grid">
+                  <dt>Status</dt>
+                  <dd>Running</dd>
+                  <dt>Box version</dt>
+                  <dd>{s().version ?? "unknown"}</dd>
+                  <dt>playwright-cli</dt>
+                  <dd>{s().playwright_cli ?? "unknown"}</dd>
+                  <Show when={s().display}>
+                    <dt>Display</dt>
+                    <dd>{s().display}</dd>
+                  </Show>
+                </dl>
+              </Show>
+              <div class="actions">
+                <Show when={s().reachable}>
+                  <a class="button primary" href={BROWSER_DESKTOP} target="_blank" rel="noopener noreferrer">
+                    Open desktop
+                  </a>
+                </Show>
+                <button
+                  type="button"
+                  disabled={checking()}
+                  aria-busy={checking() ? "true" : undefined}
+                  onClick={() => void load()}
+                >
+                  <Busy on={checking()} />
+                  Check again
+                </button>
+              </div>
+            </Show>
+          )}
+        </Show>
+        <Show when={error()}>
+          <p class="error" role="alert">
+            {error()}
+          </p>
+        </Show>
+      </section>
+    </Show>
+  );
+}
+
 /** Settings > Integrations. */
 export function Integrations() {
   return (
@@ -639,6 +746,7 @@ export function Integrations() {
       </header>
       <GoogleCard />
       <BraveCard />
+      <BrowserCard />
     </section>
   );
 }

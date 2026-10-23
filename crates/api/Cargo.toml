@@ -12,11 +12,13 @@ base64.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 clients.workspace = true
 futures-util.workspace = true
+hyper = "1"
+hyper-util = { version = "0.1", features = ["tokio"] }
 image.workspace = true
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 query.workspace = true
 regex = "1"
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
 scheduler.workspace = true
 schema.workspace = true
 script-core.workspace = true

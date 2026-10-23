@@ -13,6 +13,8 @@ const googleSaveSettings = vi.fn();
 const braveStatus = vi.fn();
 const bravePutKey = vi.fn();
 const braveTest = vi.fn();
+const browserStatus = vi.fn();
+const app = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
   return {
@@ -29,11 +31,16 @@ vi.mock("../api", async (orig) => {
       braveStatus,
       bravePutKey,
       braveTest,
+      browserStatus,
+      app,
     },
   };
 });
 
-const { BraveCard, GoogleCard, GoogleCallback, redirectMode } = await import("./Integrations");
+const { BROWSER_DESKTOP, BraveCard, BrowserCard, GoogleCard, GoogleCallback, redirectMode } = await import(
+  "./Integrations"
+);
+const { forgetAppInfo } = await import("../inApp");
 const M = await import("../workspace/model");
 const { PaneRouter } = await import("../workspace/pane");
 const { resetWorkspace, workspace } = await import("../workspace/store");
@@ -508,6 +515,86 @@ describe("BraveCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Test" }));
     expect((await screen.findByRole("alert")).textContent).toContain("subscription token is invalid");
     expect(braveTest).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("BrowserCard", () => {
+  function inBrowser() {
+    forgetAppInfo();
+    app.mockRejectedValue(new Error("not an app"));
+  }
+
+  it("shows the box's versions and opens the desktop in a new tab", async () => {
+    inBrowser();
+    browserStatus
+      .mockResolvedValueOnce({
+        configured: true,
+        reachable: true,
+        version: "0.1.12",
+        playwright_cli: "0.1.22",
+        display: ":1",
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        configured: true,
+        reachable: false,
+        version: null,
+        playwright_cli: null,
+        display: null,
+        error: "the browser box did not answer: connection refused",
+      });
+    render(() => <BrowserCard />);
+
+    const open = await screen.findByRole("link", { name: "Open desktop" });
+    expect(open.getAttribute("href")).toBe(BROWSER_DESKTOP);
+    expect(BROWSER_DESKTOP).toBe("/browser/vnc.html?autoconnect=1&resize=remote&path=browser/websockify");
+    expect(open.getAttribute("target")).toBe("_blank");
+    expect(open.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("0.1.12")).toBeTruthy();
+    expect(screen.getByText("0.1.22")).toBeTruthy();
+    expect(screen.getByText(":1")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("connection refused");
+    expect(screen.queryByRole("link", { name: "Open desktop" })).toBeNull();
+    expect(browserStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("says the box is not set up, with how to turn it on", async () => {
+    inBrowser();
+    browserStatus.mockResolvedValue({
+      configured: false,
+      reachable: false,
+      version: null,
+      playwright_cli: null,
+      display: null,
+      error: null,
+    });
+    render(() => <BrowserCard />);
+
+    const how = await screen.findByRole("link", { name: "How to turn on the browser box" });
+    expect(how.getAttribute("href")).toContain("docs/install.md#browser-box");
+    expect(screen.queryByRole("link", { name: "Open desktop" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+  });
+
+  it("is left out in the apps", async () => {
+    forgetAppInfo();
+    app.mockResolvedValue({ platform: "android", version: "0.1.12" });
+    browserStatus.mockResolvedValue({
+      configured: true,
+      reachable: true,
+      version: "0.1.12",
+      playwright_cli: "0.1.22",
+      display: ":1",
+      error: null,
+    });
+    render(() => <BrowserCard />);
+    await waitFor(() => expect(app).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(screen.queryByRole("region", { name: "Browser box" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open desktop" })).toBeNull();
   });
 });
 

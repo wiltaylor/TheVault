@@ -610,6 +610,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/integrations/browser",
+        "Settings > Integrations > Browser box: whether it is set up and answers, and its versions",
+    ),
+    (
+        "GET",
         "/api/integrations/ai",
         "Settings > AI: the default provider and each provider's sign-in and default model, never a key or token",
     ),

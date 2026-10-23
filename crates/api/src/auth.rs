@@ -131,15 +131,22 @@ fn is_device_command_result(path: &str) -> bool {
         })
 }
 
-/// Whether `method` on `path` purges notes from the trash, which only a password-login session
-/// may do: every API token, `admin` among them, is refused with 403 `human_only`, so no agent,
-/// script or AI can empty the trash (ai D21).
+/// Whether `method` on `path` is for a password-login session only: every API token, `admin`
+/// among them, is refused with 403 `human_only`. Purging notes from the trash is, so no agent,
+/// script or AI can empty the trash (ai D21), and so is the browser box's desktop under
+/// `/browser`, which only the user watches and takes over (browser B4).
 pub fn is_human_only(method: &Method, path: &str) -> bool {
     (*method == Method::POST && path == "/api/trash/empty")
         || (*method == Method::DELETE
             && path
                 .strip_prefix("/api/trash/")
                 .is_some_and(|id| !id.is_empty() && !id.contains('/')))
+        || is_desktop(path)
+}
+
+/// Whether `path` is the browser box's desktop, `/browser` or below it.
+fn is_desktop(path: &str) -> bool {
+    path == "/browser" || path.starts_with("/browser/")
 }
 
 /// The answer to a caller other than the signed-in user on an [`is_human_only`] route.
@@ -149,6 +156,19 @@ pub fn human_only() -> ApiError {
         "human_only",
         "Only the signed-in user can empty the trash.",
     )
+}
+
+/// [`human_only`] for `path`.
+fn human_only_for(path: &str) -> ApiError {
+    if is_desktop(path) {
+        ApiError::new(
+            StatusCode::FORBIDDEN,
+            "human_only",
+            "Only the signed-in user can open the browser box's desktop.",
+        )
+    } else {
+        human_only()
+    }
 }
 
 /// Paths a GET or HEAD reads without credentials, with everything under them: the app builds,
@@ -319,7 +339,7 @@ pub async fn authenticate(
     if is_human_only(req.method(), req.uri().path())
         && !matches!(granted.author, Author::Session(_))
     {
-        return human_only().into_response();
+        return human_only_for(req.uri().path()).into_response();
     }
     if !granted.scope.allows(needed) {
         return ApiError::new(
@@ -584,6 +604,11 @@ mod tests {
         assert!(!is_human_only(&Method::POST, "/api/trash/x/restore"));
         assert!(!is_human_only(&Method::DELETE, "/api/trash/x/restore"));
         assert!(!is_human_only(&Method::DELETE, "/api/notes/x"));
+        assert!(is_human_only(&Method::GET, "/browser"));
+        assert!(is_human_only(&Method::GET, "/browser/vnc.html"));
+        assert!(is_human_only(&Method::GET, "/browser/websockify"));
+        assert!(!is_human_only(&Method::GET, "/browsers"));
+        assert!(!is_human_only(&Method::GET, "/api/integrations/browser"));
     }
 
     #[test]

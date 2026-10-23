@@ -94,6 +94,7 @@ The device token is never widened to `admin`. In the apps, Settings hides the Se
 | `GET /api/app/ai/turns/{turn}?after=<n>` | A chat turn's event stream, read from the home server by the embedded server | Answered by the embedded server only: `{ events, next, done }`, the turn's events after the first `n`, so the webview, which gets whole bodies, can follow a turn as it streams (docs/ai.md, "The turns form") |
 | `/api/integrations/ai` and below | Settings > AI, which needs `admin` | Not forwarded: 403 `needs_web_app` at once |
 | `POST /api/trash/empty`, `DELETE /api/trash/{id}` | Purging the trash, which only the signed-in user may do; the server refuses every token, the device's among them, with 403 `human_only` (ai D21) | Not forwarded and not answered locally: 403 `needs_web_app` at once, since the embedded server cannot tell the user from the device token. The Trash page offers neither action in the apps |
+| `/browser` and below, `GET /api/integrations/browser` | The browser box's desktop, which the server shows only to a password login, every token getting 403 `human_only`, and its status, which needs `admin` (browser B4) | Not forwarded: 403 `needs_web_app` at once. The apps have no Settings > Integrations |
 
 ### The history
 
