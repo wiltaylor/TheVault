@@ -13,3 +13,7 @@ verified: unknown
 Spec: /home/wil/dev/TheVault/.scratch/plans/browser/SPEC.md, B5, B6, B7. Acceptance: server tests against a fake exec service (testkit) for each tool, the output cuts, an image file as an image part, browser_save as a proposal or direct per the downloads switch; tools absent without VAULT_BROWSER_URL or the permission, absent for Assistant by default and with an absent tools list; G20 refuses granting it; the trail line; web tests for the Permissions switch and the steps. Targeted tests only.
 
 ## Worklog
+
+### 2026-10-23T09:32:38Z — wil
+
+Ticket 185 notes: VAULT_BROWSER_URL is an empty string (not unset) when the box is off - treat empty as unset; /health also answers playwright_cli (the pinned version) beside ok, version, display; /file takes absolute paths or paths relative to /work (playwright-cli prints relative ones); YAML is application/yaml; /files answers {dir, entries:[{name, kind, size, modified_ms}]}.
