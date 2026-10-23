@@ -4,8 +4,8 @@ title: 'AI browser tools: browser_run, browser_file and browser_save behind an o
   agent permission'
 plan: browser
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # AI browser tools: browser_run, browser_file and browser_save behind an off-by-default agent permission
@@ -17,3 +17,11 @@ Spec: /home/wil/dev/TheVault/.scratch/plans/browser/SPEC.md, B5, B6, B7. Accepta
 ### 2026-10-23T09:32:38Z — wil
 
 Ticket 185 notes: VAULT_BROWSER_URL is an empty string (not unset) when the box is off - treat empty as unset; /health also answers playwright_cli (the pinned version) beside ok, version, display; /file takes absolute paths or paths relative to /work (playwright-cli prints relative ones); YAML is application/yaml; /files answers {dir, entries:[{name, kind, size, modified_ms}]}.
+
+### 2026-10-23T09:51:39Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T09:51:39Z — wil
+
+Status set to done.
