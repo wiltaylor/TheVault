@@ -113,7 +113,7 @@ fn every_example_round_trips_through_load_and_canonical_write() {
     let mut files = Vec::new();
     wcl_files(&root, &mut files);
     files.sort();
-    assert_eq!(files.len(), 8, "{files:?}");
+    assert_eq!(files.len(), 9, "{files:?}");
 
     let dir = TempDir::new().unwrap();
     let vault = Vault::init(dir.path()).unwrap();

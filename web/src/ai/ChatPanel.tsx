@@ -1023,7 +1023,19 @@ function ThreadPicker() {
         if (!el.contains(e.target as Node) && !anchor?.contains(e.target as Node)) close(false);
       };
       document.addEventListener("pointerdown", outside, true);
-      onCleanup(() => document.removeEventListener("pointerdown", outside, true));
+      // Escape closes the menu wherever focus is: a refresh of the thread list can leave focus
+      // outside it.
+      const escape = (e: KeyboardEvent) => {
+        if (e.key === "Escape" && !el.contains(document.activeElement)) {
+          e.preventDefault();
+          close(true);
+        }
+      };
+      document.addEventListener("keydown", escape);
+      onCleanup(() => {
+        document.removeEventListener("pointerdown", outside, true);
+        document.removeEventListener("keydown", escape);
+      });
     });
     function onKey(e: KeyboardEvent) {
       const list = items();
