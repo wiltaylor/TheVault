@@ -1691,6 +1691,7 @@ These text items use the inline markup in PRD Appendix A (D41): `heading.text`, 
 | `[[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB]]` | Mention of a note, shown with its current title |
 | `[[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB\|label]]` | Mention of a note, shown with the label |
 | `[[+task\|Fix the pump]]` | Placeholder link: a note of type `task` titled `Fix the pump` that does not exist yet |
+| `[@Clerk tidy this](agent:clerk?call=01JB8Z4K2MQ7V3X9T5R6W8Y2ZB)` | A call of an agent; see [Agent files](#agent-files) |
 | `\*` | A literal `*`. A backslash escapes any markup character |
 
 Inside a template's fixed blocks, `{{name}}` also renders a field's value; see [Field references](#field-references). Everywhere else it is plain text.
@@ -2177,11 +2178,11 @@ A `trigger` block is labelled with its name and holds a `prompt`, the first user
 | `schedule` | string | none | A five-field cron expression, read as a task file's `schedule` is |
 | `timezone` | string | `"UTC"` | With `schedule` only. The IANA time zone the schedule is read in |
 | `on` | list of `create`, `update` and `delete` | none | With no `schedule`. The note changes that start a run. At least one, each at most once |
-| `mention` | `true` | none | With no `schedule` or `on` (agents G16). Adds to how the agent answers a call, `@<name>` written in a note: a `prompt` before what the note says, or a `type` limit. Only `true` is allowed. An enabled agent with no mention trigger still answers calls from every type except `agent_thread`, through an implicit trigger named `mention` |
+| `mention` | `true` | none | With no `schedule` or `on` (agents G16). Adds to how the agent answers a call committed in a note (agents G19): a `prompt` before the request, or a `type` limit. Only `true` is allowed. An enabled agent with no mention trigger still answers calls from every type except `agent_thread`, through an implicit trigger named `mention` |
 | `type` | type name, or list of type names | every type | With `on` or `mention`. The note types the trigger fires for, or whose notes may call the agent. Each must exist when the file is saved |
 | `where` | string | every note | With `on` only. A condition in the query language, such as `processed != true`, checked against the note after the change, or before it for a delete |
 
-A call is plain text in a note: `@` followed by the agent's name, or by its label when the label is one word, matched ignoring case. It stands in the inline markup of a content block (a paragraph, heading, list item, quote, toggle or admonition title, at any depth) or in a `string` field that is neither hidden nor computed. It counts only when the `@` follows the start of the text, whitespace, one of `(`, `[`, `{`, `"` and `'`, or a markup delimiter (`*`, `+`, `~`, `=`, the `}` of a colour), and the word is followed by the end of the text, whitespace or punctuation. So `bob@clerk.com`, `a@clerk` and `@clerks` are not calls of `clerk`, and text inside inline code, a link, a note mention or a placeholder link never holds one. The server replaces each call it answers: in markup with the link `[@<label>](/agents/<name>/chat?thread=<thread id>)`, and in a string field, which holds no markup, with the text `<label> (asked: /agents/<name>/chat?thread=<thread id>)`.
+A call is a link in a note's inline markup whose URL is `agent:<name>?call=<id>`: `<name>` is the agent's name and `<id>` a ULID the client makes when it commits the call, as in `[@Clerk list what to buy](agent:clerk?call=01JB8Z4K2MQ7V3X9T5R6W8Y2ZB)`. The link text is `@<label>` followed by the request. A call stands in the inline markup of a content block (a paragraph, heading, list item, quote, toggle or admonition title, at any depth); one inside inline code or escaped is text, and plain text such as `@clerk` is not a call. The server answers each call id once, records it in `state.db`, and never rewrites the note for it.
 
 ```wcl
 label         = "Inbox triage"

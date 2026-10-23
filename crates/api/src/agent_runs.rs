@@ -1,5 +1,5 @@
-//! Agent trigger runs (agents G9 to G12): the runner the scheduler starts them through, and
-//! `GET /api/agents/{name}/runs`.
+//! Agent trigger runs (agents G9 to G12): the runner the scheduler starts them through,
+//! `GET /api/agents/{name}/runs` and `GET /api/agents/calls/{call}`.
 //!
 //! [`TriggerRunner`] opens a thread (`origin = "trigger:<name>"`) and runs one unattended turn on
 //! it with [`ai_chat::run_unattended`]: the agent is the caller, and the turn is offered only the
@@ -11,11 +11,16 @@
 //! run of the agent is offered, and for each trigger in file order `{name, kind, runs}`, `runs`
 //! its last [`RUNS_SHOWN`] runs, newest first, each `{id, thread, started, ended, outcome,
 //! message}` with times in milliseconds since the epoch.
+//!
+//! `GET /api/agents/calls/{call}` (read) answers what became of a call committed in a note
+//! (agents G19): `{agent, note, thread, running}`, `thread` null for a call that was not run and
+//! `running` whether a turn runs on its thread now; 404 while the server has not seen the call.
 
 use std::sync::{Arc, OnceLock};
 
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use schema::{Agent, TriggerWhen};
 use serde_json::{Value, json};
 use writer::Writer;
@@ -123,4 +128,29 @@ pub async fn list(
     })
     .await?;
     Ok(Json(out))
+}
+
+/// `GET /api/agents/calls/{call}`.
+pub async fn call(
+    State(w): State<Arc<Writer>>,
+    Path(call): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let found = blocking(w, move |w| Ok::<_, ApiError>(w.state().agent_call(&call)?)).await?;
+    let Some(c) = found else {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "the server has not seen this call yet",
+        ));
+    };
+    let running = c
+        .thread
+        .as_deref()
+        .is_some_and(|t| agent_threads::running(t).is_some());
+    Ok(Json(json!({
+        "agent": c.agent,
+        "note": c.note,
+        "thread": c.thread,
+        "running": running,
+    })))
 }

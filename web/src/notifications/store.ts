@@ -7,6 +7,7 @@ import { api } from "../api";
 import { needsServer } from "../inApp";
 import { noteChangedElsewhere } from "../changes";
 import { refreshAgents } from "../agents";
+import { callsSaved } from "../agentCalls";
 import { bumpTurns, liveTurn } from "../ai/running";
 import { connectLive } from "../live";
 import {
@@ -139,6 +140,8 @@ export function startPolling(): () => void {
       if (name === "note.changed") {
         const { id, version } = (data ?? {}) as { id?: unknown; version?: unknown };
         if (typeof id === "string" && typeof version === "string") noteChangedElsewhere({ id, version });
+        // A save may have carried a call of an agent the server has now seen (agents G19).
+        callsSaved();
       }
       else if (name === "ai_turn") {
         // A chat turn on an agent's thread started or ended (agents G17).

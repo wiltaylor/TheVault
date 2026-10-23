@@ -1,7 +1,7 @@
 //! Agent triggers (agents G9 to G12) with a stand-in runner and a clock the tests move: schedule
 //! triggers, note events with their filters and debounce, no loops from agent writes, the run
-//! limits, the run records and the failure notification; calls of agents written in notes, with
-//! their idle wait and a conflicting write.
+//! limits, the run records and the failure notification; calls of agents committed in notes,
+//! each answered once by its call id and never by rewriting the note.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,19 +23,29 @@ field status {
   kind = "string"
 }
 
+field body {
+  kind = "content"
+}
+
 template default {
   tab "Main" {
     slot "title"
     slot "status"
+    slot "body"
   }
 }
 "#;
 
 const LOG: &str = r#"label = "Log"
 
+field body {
+  kind = "content"
+}
+
 template default {
   tab "Main" {
     slot "title"
+    slot "body"
   }
 }
 "#;
@@ -423,98 +433,158 @@ trigger asked {
 }
 "#;
 
-fn status_of(r: &Rig, id: &str) -> String {
-    let n = r.writer.read(id).unwrap();
-    n.doc
-        .field("status")
-        .and_then(|v| v.as_str())
-        .unwrap()
-        .to_owned()
+const CALL: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
+const CALL2: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC";
+
+impl Rig {
+    /// A note of `type_name` whose body is one paragraph per text.
+    fn note(&self, type_name: &str, title: &str, paragraphs: &[&str], by: &Author) -> String {
+        self.writer
+            .create(type_name, &Input::Json(body_json(title, paragraphs)), by)
+            .unwrap()
+            .id
+    }
+
+    fn save(&self, id: &str, title: &str, paragraphs: &[&str], by: &Author) {
+        let n = self.writer.read(id).unwrap();
+        self.writer
+            .update(
+                id,
+                &Input::Json(body_json(title, paragraphs)),
+                Some(&n.version),
+                by,
+            )
+            .unwrap();
+    }
+}
+
+fn body_json(title: &str, paragraphs: &[&str]) -> serde_json::Value {
+    let blocks: Vec<_> = paragraphs
+        .iter()
+        .map(|p| json!({ "kind": "paragraph", "fields": { "text": p } }))
+        .collect();
+    json!({
+        "fields": { "title": title },
+        "blocks": [{ "kind": "content", "labels": ["body"], "blocks": blocks }],
+    })
+}
+
+/// A call of `agent` with link text `text` and call id `call`.
+fn call(text: &str, agent: &str, call: &str) -> String {
+    format!("[{text}](agent:{agent}?call={call})")
 }
 
 #[test]
-fn a_call_is_answered_once_the_note_is_idle_for_five_seconds() {
+fn a_committed_call_is_answered_at_once_and_once_without_touching_the_note() {
     let r = Rig::new();
     r.agent("clerk", CLERK);
-    let id = r.create("memo", "Roof", "@clerk check the gutters", &user());
-    r.advance(3);
-    // A later save restarts the wait.
-    r.set_status(&id, "@clerk check the gutters too", &user());
-    r.advance(3);
-    assert!(r.fake.turns().is_empty(), "the note was saved 3 s ago");
-    r.advance(3);
+    let text = format!(
+        "Gutters: {} today.",
+        call("@Clerk check the gutters", "clerk", CALL)
+    );
+    let id = r.note("memo", "Roof", &[&text], &user());
+    let version = r.writer.read(&id).unwrap().version;
+    r.advance(1);
     let threads = r.fake.threads.lock().unwrap().clone();
     assert_eq!(
         threads,
         vec![(
             "clerk".to_owned(),
             "mention".to_owned(),
-            "Roof: you check the gutters too".to_owned()
+            "Roof: check the gutters".to_owned()
         )]
     );
-    let turns = r.fake.turns();
-    assert_eq!(turns.len(), 1);
     assert_eq!(
-        turns[0].2,
-        format!(
-            "you check the gutters too\nCalled from note {id} (type memo, title \"Roof\"); the call was replaced with a link to this thread."
-        )
+        r.fake.turns(),
+        vec![(
+            "clerk".to_owned(),
+            "thread1".to_owned(),
+            format!(
+                "check the gutters\nContext: Gutters: @Clerk check the gutters today.\nCalled from note {id} (type memo, title \"Roof\")."
+            )
+        )]
     );
-    // A string field holds no markup, so the call becomes plain text.
+    // The note is as the user saved it.
+    assert_eq!(r.writer.read(&id).unwrap().version, version);
+    let recorded = r.writer.state().agent_call(CALL).unwrap().unwrap();
     assert_eq!(
-        status_of(&r, &id),
-        "Clerk (asked: /agents/clerk/chat?thread=thread1) check the gutters too"
+        (recorded.agent.as_str(), recorded.note.as_str()),
+        ("clerk", id.as_str())
     );
+    assert_eq!(recorded.thread.as_deref(), Some("thread1"));
     let runs = r.writer.state().agent_runs("clerk", "asked", 20).unwrap();
     assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].thread.as_deref(), Some("thread1"));
-    // A later save has no call left to answer.
-    r.set_status(&id, &format!("{} (done)", status_of(&r, &id)), &user());
-    r.advance(10);
+
+    // Saving again, editing the call's text or moving it calls no one again.
+    r.save(&id, "Roof", &[&text, "More."], &user());
+    r.advance(1);
+    let edited = call("@Clerk check the gutters and the roof", "clerk", CALL);
+    r.save(&id, "Roof", &["Moved.", &edited], &user());
+    r.advance(1);
+    // The same call in another note calls no one either.
+    r.note("memo", "Copy", &[&edited], &user());
+    r.advance(1);
     assert_eq!(r.fake.turns().len(), 1);
+    // A new call does.
+    let again = call("@clerk and the shed", "clerk", CALL2);
+    r.save(&id, "Roof", &[&edited, &again], &user());
+    r.advance(1);
+    assert_eq!(r.fake.turns().len(), 2);
+    assert!(r.fake.turns()[1].2.starts_with("and the shed\n"));
 }
 
 #[test]
-fn a_write_meeting_a_newer_version_leaves_the_call_for_the_next_save() {
+fn plain_text_and_an_agent_s_own_calls_call_no_one() {
     let r = Rig::new();
     r.agent("clerk", CLERK);
-    let id = r.create("memo", "Roof", "@clerk look", &user());
-    // While the thread is opened, the user saves the note again.
-    let w = r.writer.clone();
-    let note = id.clone();
-    *r.fake.on_open.lock().unwrap() = Some(Box::new(move || {
-        let n = w.read(&note).unwrap();
-        let mut doc = writer::doc_to_json(&n.doc);
-        doc["fields"]["status"] = json!("@clerk look again");
-        w.update(&note, &Input::Json(doc), Some(&n.version), &user())
-            .unwrap();
-    }));
-    r.advance(6);
-    assert!(r.fake.turns().is_empty(), "no run for a call left in place");
-    assert_eq!(status_of(&r, &id), "@clerk look again");
-    // That save is the next one: its call is answered.
-    r.advance(6);
-    assert_eq!(r.fake.turns().len(), 1);
-    assert!(r.fake.turns()[0].2.starts_with("you look again\n"));
-    assert_eq!(
-        status_of(&r, &id),
-        "Clerk (asked: /agents/clerk/chat?thread=thread2) look again"
-    );
-}
-
-#[test]
-fn a_call_written_by_an_agent_calls_no_one() {
-    let r = Rig::new();
-    r.agent("clerk", CLERK);
-    let id = r.create(
+    r.note(
         "memo",
         "Roof",
-        "@clerk look",
-        &Author::Agent("other".into()),
+        &[
+            "@clerk look",
+            "`[@Clerk x](agent:clerk?call=01JB8Z4K2MQ7V3X9T5R6W8Y2ZB)`",
+        ],
+        &user(),
     );
     r.advance(10);
     assert!(r.fake.turns().is_empty());
-    assert_eq!(status_of(&r, &id), "@clerk look");
+    assert_eq!(r.writer.state().agent_call(CALL).unwrap(), None);
+    let by = Author::Agent("other".into());
+    r.note("memo", "Roof", &[&call("@Clerk look", "clerk", CALL)], &by);
+    r.advance(10);
+    assert!(r.fake.turns().is_empty());
+    assert_eq!(r.writer.state().agent_call(CALL).unwrap(), None);
+}
+
+#[test]
+fn a_call_the_agent_may_not_answer_is_recorded_with_no_thread() {
+    let r = Rig::new();
+    r.agent("clerk", CLERK);
+    // Clerk answers only memos; nobody is called "ghost".
+    let id = r.note(
+        "log",
+        "Day",
+        &[
+            &call("@Clerk tidy this", "clerk", CALL),
+            &call("@ghost boo", "ghost", CALL2),
+        ],
+        &user(),
+    );
+    r.advance(1);
+    assert!(r.fake.turns().is_empty());
+    for c in [CALL, CALL2] {
+        let got = r.writer.state().agent_call(c).unwrap().unwrap();
+        assert_eq!((got.note.as_str(), got.thread), (id.as_str(), None));
+    }
+    // It is never tried again.
+    r.save(
+        &id,
+        "Day",
+        &[&call("@Clerk tidy this", "clerk", CALL)],
+        &user(),
+    );
+    r.advance(1);
+    assert!(r.fake.threads.lock().unwrap().is_empty());
 }
 
 #[test]

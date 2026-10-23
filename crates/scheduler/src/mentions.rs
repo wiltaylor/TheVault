@@ -1,126 +1,78 @@
-//! Calls of agents written in notes (agents G16): where in a note a call may stand, what a call
-//! asks, and the note with its calls replaced.
+//! Calls of agents committed in notes (agents G19): where in a note a call may stand and what it
+//! asks.
 //!
-//! A call stands in a note's content blocks, in the inline markup of each paragraph, heading,
-//! list item, quote, toggle and admonition title at any depth, or in one of its string fields.
-//! [`schema::calls`] finds the calls in one text; inline code, links and note mentions hold none.
+//! A call is a link `[@<Label> <request>](agent:<name>?call=<id>)` in the inline markup of a
+//! note's content blocks: each paragraph, heading, list item, quote, toggle and admonition title
+//! at any depth. [`schema::agent_calls`] finds the calls in one text; inline code, note mentions
+//! and other links hold none.
 
-use schema::{Call, Doc, DocBlock, Value};
+use schema::{Agent, AgentCall, Doc, DocBlock};
 
-/// One text of a note that holds calls: a markup item of a content block, or a string field's
-/// value (or one value of a list of strings).
-pub(crate) struct Place {
-    pub text: String,
-    pub calls: Vec<Call>,
+/// One call in a note, with the text around it: the markup item that holds it.
+pub(crate) struct Found {
+    pub call: AgentCall,
+    pub context: String,
 }
 
-/// Each text of `doc` that may hold a call, mutably, with whether it is inline markup: the
-/// top-level `fields` named (plain strings) and the markup items of every `content` block.
-fn each_text(doc: &mut Doc, fields: &[String], f: &mut impl FnMut(&mut String, bool)) {
-    for (name, value) in &mut doc.fields {
-        if !fields.contains(name) {
-            continue;
-        }
-        match value {
-            Value::Str(s) => f(s, false),
-            Value::List(items) => {
-                for v in items {
-                    if let Value::Str(s) = v {
-                        f(s, false);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    for b in &mut doc.blocks {
-        if b.kind == "content" {
-            each_markup(&mut b.body.blocks, f);
-        }
-    }
-}
-
-fn each_markup(blocks: &mut [DocBlock], f: &mut impl FnMut(&mut String, bool)) {
-    for b in blocks {
-        if let Some(item) = schema::markup_item(&b.kind) {
-            for (name, value) in &mut b.body.fields {
-                if name == item
-                    && let Value::Str(s) = value
-                {
-                    f(s, true);
-                }
-            }
-        }
-        each_markup(&mut b.body.blocks, f);
-    }
-}
-
-/// The texts of `doc` that hold a call of any of `words`, in note order.
-pub(crate) fn places(doc: &Doc, fields: &[String], words: &[&str]) -> Vec<Place> {
-    let mut doc = doc.clone();
+/// The calls of agents in `doc`'s content blocks, in note order.
+pub(crate) fn calls(doc: &Doc) -> Vec<Found> {
     let mut out = Vec::new();
-    each_text(&mut doc, fields, &mut |s, markup| {
-        let calls = schema::calls(s, words, markup);
-        if !calls.is_empty() {
-            out.push(Place {
-                text: s.clone(),
-                calls,
-            });
+    for b in &doc.blocks {
+        if b.kind == "content" {
+            each_markup(&b.body.blocks, &mut out);
         }
-    });
+    }
     out
 }
 
-/// `text` with each call that `pick` names replaced by what `with` makes of it.
-fn replaced(text: &str, calls: &[Call], pick: impl Fn(&Call) -> bool, with: &str) -> String {
+fn each_markup(blocks: &[DocBlock], out: &mut Vec<Found>) {
+    for b in blocks {
+        if let Some(item) = schema::markup_item(&b.kind)
+            && let Some(text) = b.body.field(item).and_then(|v| v.as_str())
+        {
+            let found = schema::agent_calls(text);
+            let context = with_labels(text, &found);
+            out.extend(found.into_iter().map(|call| Found {
+                call,
+                context: context.clone(),
+            }));
+        }
+        each_markup(&b.body.blocks, out);
+    }
+}
+
+/// `text` with each call in it standing as its link text.
+fn with_labels(text: &str, calls: &[AgentCall]) -> String {
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
-    for c in calls.iter().filter(|c| pick(c)) {
+    for c in calls {
         out.push_str(&text[at..c.start]);
-        out.push_str(with);
+        out.push_str(&c.label);
         at = c.end;
     }
     out.push_str(&text[at..]);
-    out
+    out.trim().to_owned()
 }
 
-/// What the agent whose words `mine` picks is asked: each text that calls it, with its calls
-/// replaced by "you", one text to a paragraph.
-pub(crate) fn instruction(places: &[Place], mine: impl Fn(usize) -> bool) -> String {
-    places
-        .iter()
-        .filter(|p| p.calls.iter().any(|c| mine(c.word)))
-        .map(|p| replaced(&p.text, &p.calls, |c| mine(c.word), "you"))
-        .map(|t| t.trim().to_owned())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-/// Replace, in `doc`, every call of a word `mine` picks: in markup by `link`, in a plain string
-/// field by `plain`. Answers how many were replaced.
-pub(crate) fn rewrite(
-    doc: &mut Doc,
-    fields: &[String],
-    words: &[&str],
-    mine: impl Fn(usize) -> bool,
-    link: &str,
-    plain: &str,
-) -> usize {
-    let mut n = 0;
-    each_text(doc, fields, &mut |s, markup| {
-        let calls = schema::calls(s, words, markup);
-        let count = calls.iter().filter(|c| mine(c.word)).count();
-        if count > 0 {
-            n += count;
-            *s = replaced(
-                s,
-                &calls,
-                |c| mine(c.word),
-                if markup { link } else { plain },
-            );
+/// What a call's link text asks of `agent`: the text after `@<Label>` or `@<name>`, or all of
+/// it when it starts with neither.
+pub(crate) fn request(label: &str, agent: &Agent) -> String {
+    let text = label.trim();
+    for word in [agent.label.trim(), agent.name.as_str()] {
+        if word.is_empty() {
+            continue;
         }
-    });
-    n
+        let call = format!("@{word}");
+        if let Some(head) = text.get(..call.len())
+            && head.eq_ignore_ascii_case(&call)
+        {
+            let rest = &text[call.len()..];
+            if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+                return rest.trim().to_owned();
+            }
+        }
+    }
+    text.to_owned()
 }
 
 /// The first `n` characters of `s`, with its runs of whitespace as single spaces.

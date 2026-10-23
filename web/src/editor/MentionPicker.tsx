@@ -1,4 +1,5 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { agentCallHref, newUlid } from "../agentCalls";
 import { AGENT_ICON, agentLabel, agents, callableAgents } from "../agents";
 import { type AgentSummary, type Row, type TypeDef, api } from "../api";
 import { TypeIcon } from "../components/Icon";
@@ -6,6 +7,7 @@ import { readPickerQuery, recentTypes, typeOptions, typeUsed } from "../placehol
 import { typeDef, types } from "../session";
 import { useThisNote } from "../views/thisNote";
 import { isUlid } from "./markup";
+import type { Node as PMNode } from "@tiptap/pm/model";
 import type { SolidNodeViewProps } from "./solidNodeView";
 import { knowTitle, noteType } from "./titles";
 
@@ -25,9 +27,11 @@ type Choice =
 /**
  * The mention picker: a search box inside the document, standing where the mention will go.
  * Opened by typing `@`, it lists first "Ask <Label>" for each agent the note's type may call
- * (agents G16) whose name or label starts with the text; choosing one writes the call, the text
- * `@<name> `, which the server answers once the note is saved. Then it lists the notes the text
- * finds, then "New <type>" for a placeholder link titled with the text: the type of the note
+ * (agents G16) whose name or label starts with the text. Choosing one turns the box into the
+ * request box, "Ask <Label>…" (agents G19): Enter with a request commits the call as one link,
+ * `[@<Label> <request>](agent:<name>?call=<ULID>)`, which the note's next save carries whole;
+ * Shift+Enter adds a line; Escape, Enter with nothing written, or leaving the box leaves
+ * nothing. Then it lists the notes the text finds, then "New <type>" for a placeholder link titled with the text: the type of the note
  * being edited and the recently used types first, and "Choose type…" for the rest, which `type:`
  * in the text also narrows. Enter or a click takes the choice; Escape, Backspace in the empty
  * box, or leaving the box gives up. Given up, a picker opened by typing `@` leaves the `@` and
@@ -35,6 +39,9 @@ type Choice =
  */
 export function MentionPicker(props: SolidNodeViewProps) {
   let input!: HTMLInputElement;
+  let requestBox: HTMLTextAreaElement | undefined;
+  // The agent the request box asks, once "Ask <Label>" is chosen.
+  const [asking, setAsking] = createSignal<AgentSummary | null>(null);
   const trigger = (): string => (props.node().attrs.trigger === "@" ? "@" : "[[");
   const host = useThisNote();
   const [query, setQuery] = createSignal("");
@@ -106,7 +113,11 @@ export function MentionPicker(props: SolidNodeViewProps) {
    * placeholder link, or for an abandoned `@` picker the text typed.
    */
   function finish(
-    content?: { note: { id: string; title: string } } | { placeholder: { type: string; title: string } } | { call: string },
+    content?:
+      | { note: { id: string; title: string } }
+      | { placeholder: { type: string; title: string } }
+      | { call: { agent: AgentSummary; request: string } }
+      | { nothing: true },
   ) {
     if (done) return;
     done = true;
@@ -122,10 +133,21 @@ export function MentionPicker(props: SolidNodeViewProps) {
       typeUsed(content.placeholder.type);
       props.replaceWith(placeholderLink.create({ noteType: content.placeholder.type, title: content.placeholder.title }));
       size = 1;
-    } else if (content && "call" in content) {
-      const text = `@${content.call} `;
-      props.replaceWith(editor.schema.text(text));
-      size = text.length;
+    } else if (content && "call" in content && editor.schema.marks.link) {
+      // One link, the call, then a space outside it (agents G19).
+      const { agent, request } = content.call;
+      const link = editor.schema.marks.link.create({ href: agentCallHref(agent.name, newUlid()) });
+      const lines = `@${agentLabel(agent)} ${request}`.split("\n");
+      const nodes: PMNode[] = [];
+      lines.forEach((line, i) => {
+        if (i > 0 && editor.schema.nodes.hardBreak) nodes.push(editor.schema.nodes.hardBreak.create(null, null, [link]));
+        if (line) nodes.push(editor.schema.text(line, [link]));
+      });
+      nodes.push(editor.schema.text(" "));
+      props.replaceWith(nodes);
+      size = nodes.reduce((n, node) => n + node.nodeSize, 0);
+    } else if (content && "nothing" in content) {
+      props.replaceWith();
     } else if (trigger() === "@") {
       const text = `@${query()}`;
       props.replaceWith(editor.schema.text(text));
@@ -143,7 +165,10 @@ export function MentionPicker(props: SolidNodeViewProps) {
   function choose(i: number) {
     const c = choices()[i];
     const title = parsed().title;
-    if (c?.kind === "agent") finish({ call: c.agent.name });
+    if (c?.kind === "agent") {
+      setAsking(c.agent);
+      queueMicrotask(() => requestBox?.focus());
+    }
     else if (c?.kind === "note") finish({ note: { id: c.row.id, title: c.row.title } });
     else if (c?.kind === "new") finish({ placeholder: { type: c.type.name, title } });
     else if (c?.kind === "types") {
@@ -185,13 +210,29 @@ export function MentionPicker(props: SolidNodeViewProps) {
     }
   }
 
+  function onRequestKeyDown(e: KeyboardEvent) {
+    const agent = asking();
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      const request = (requestBox?.value ?? "").trim();
+      finish(agent && request ? { call: { agent, request } } : { nothing: true });
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish({ nothing: true });
+    }
+  }
+
   function onFocusOut(e: FocusEvent) {
     const root = (e.currentTarget as HTMLElement) ?? null;
     if (root && e.relatedTarget instanceof Node && root.contains(e.relatedTarget)) return;
     // Leaving the box abandons the mention. Wait a tick so a click on a result lands first.
     setTimeout(() => {
       if (!done && !root?.contains(document.activeElement)) {
-        if (trigger() === "@") {
+        if (asking()) {
+          // A request not committed is not sent.
+          done = true;
+          props.replaceWith();
+        } else if (trigger() === "@") {
           done = true;
           props.replaceWith(props.editor.schema.text(`@${query()}`));
         } else {
@@ -206,21 +247,41 @@ export function MentionPicker(props: SolidNodeViewProps) {
 
   return (
     <span class="mention-picker" data-testid="mention-picker" data-trigger={trigger()} onFocusOut={onFocusOut}>
-      <span class="mention-picker-prefix">{trigger()}</span>
-      <input
-        ref={input}
-        type="search"
-        aria-label="Find a note to mention, or name a new one"
-        role="combobox"
-        aria-expanded={choices().length > 0}
-        aria-controls="mention-results"
-        aria-autocomplete="list"
-        autocomplete="off"
-        value={query()}
-        onInput={(e) => search(e.currentTarget.value)}
-        onKeyDown={onKeyDown}
-      />
-      <Show when={choices().length > 0 || error()}>
+      <Show when={asking()}>
+        {(a) => (
+          <span class="mention-request" data-testid="mention-request" data-agent={a().name} data-node-view-interactive>
+            <label class="mention-request-label">
+              <TypeIcon name={a().icon || AGENT_ICON} size={14} />
+              <span>Ask {agentLabel(a())}…</span>
+              <textarea
+                ref={requestBox}
+                rows={2}
+                aria-label={`Ask ${agentLabel(a())}…`}
+                placeholder={`What should ${agentLabel(a())} do?`}
+                onKeyDown={onRequestKeyDown}
+              />
+            </label>
+            <span class="muted mention-hint">Enter to send, Shift+Enter for a new line, Escape to cancel</span>
+          </span>
+        )}
+      </Show>
+      <Show when={!asking()}>
+        <span class="mention-picker-prefix">{trigger()}</span>
+        <input
+          ref={input}
+          type="search"
+          aria-label="Find a note to mention, or name a new one"
+          role="combobox"
+          aria-expanded={choices().length > 0}
+          aria-controls="mention-results"
+          aria-autocomplete="list"
+          autocomplete="off"
+          value={query()}
+          onInput={(e) => search(e.currentTarget.value)}
+          onKeyDown={onKeyDown}
+        />
+      </Show>
+      <Show when={!asking() && (choices().length > 0 || error())}>
         <span class="mention-results" id="mention-results" role="listbox" data-node-view-interactive>
           <Show when={error()}>
             <span class="error">{error()}</span>

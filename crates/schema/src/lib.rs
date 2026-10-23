@@ -42,8 +42,8 @@ pub use encoding::{
     is_ulid, is_url, is_utc_datetime,
 };
 pub use inline::{
-    Call, MARKUP_ITEMS, Placeholder, calls, escape_markup, markup_item, placeholder_at,
-    placeholders,
+    AGENT_CALL_SCHEME, AgentCall, MARKUP_ITEMS, Placeholder, agent_calls, escape_markup,
+    markup_item, parse_agent_call, placeholder_at, placeholders,
 };
 pub use note::{NoteLookup, NoteReport};
 pub use queryviews::{FieldRename, VIEW_FIELD_ITEMS, query_view_issues, reads_type};

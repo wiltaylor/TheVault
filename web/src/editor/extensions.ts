@@ -10,6 +10,8 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import StarterKit from "@tiptap/starter-kit";
 import { followLink, wantsNewTab } from "../workspace/events";
+import { callTarget, parseAgentCall } from "../agentCalls";
+import { AgentCallChips, agentCallAt } from "./agentCallChips";
 import { BlockHolder } from "./BlockHolder";
 import {
   type BlockHandleOptions,
@@ -178,6 +180,13 @@ export const FollowLinks = Extension.create({
         placeholder(background);
         return true;
       }
+      // A call of an agent opens its thread (agents G19).
+      const call = e.target instanceof Element && view.dom.contains(e.target) ? agentCallAt(e.target) : null;
+      if (call && e.target instanceof Element) {
+        e.preventDefault();
+        followLink(callTarget(call.agent, call.call), e.target, background);
+        return true;
+      }
       const a = linkAt(view, e);
       if (!a || !followLink(a.getAttribute("href")!, a, background)) return false;
       e.preventDefault();
@@ -192,7 +201,7 @@ export const FollowLinks = Extension.create({
           handleDOMEvents: {
             mousedown: (view, e) => {
               down = { x: e.clientX, y: e.clientY };
-              if (!linkAt(view, e) && !placeholderAt(view, e)) return false;
+              if (!linkAt(view, e) && !placeholderAt(view, e) && !agentCallAt(e.target)) return false;
               // A middle press on a link would paste or start the browser's autoscroll, and a
               // Ctrl/Cmd press would select the block around it.
               if (e.button !== 1 && !(e.button === 0 && wantsNewTab(e))) return false;
@@ -396,7 +405,13 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
       horizontalRule: false,
       trailingNode: false,
       blockquote: {},
-      link: { openOnClick: false, autolink: false, linkOnPaste: true },
+      // A call of an agent is a link to `agent:<name>?call=<id>` (agents G19).
+      link: {
+        openOnClick: false,
+        autolink: false,
+        linkOnPaste: true,
+        isAllowedUri: (url, ctx) => ctx.defaultValidate(url) || parseAgentCall(url) !== null,
+      },
     }),
     // Markup lets code sit inside bold, a link or a colour, so code excludes no other mark.
     Code.extend({ excludes: "" }),
@@ -408,6 +423,7 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
     PlaceholderLink,
     MentionPickerNode,
     FollowLinks,
+    AgentCallChips,
     VaultBlock,
     ImageUpload.configure(options.images ?? {}),
   ];

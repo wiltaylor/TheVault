@@ -1,9 +1,11 @@
 import { For, type JSX, Match, Show, Switch, createMemo, createSignal, useContext } from "solid-js";
+import { parseAgentCall } from "../agentCalls";
 import { type InlineNode, type Mark, parseInline } from "../editor/markup";
 import { mentionText, noteArchived } from "../editor/titles";
 import { followPlaceholder, resolvePlaceholder } from "../placeholders";
 import { useThisNote } from "../views/thisNote";
 import { wantsNewTab } from "../workspace/events";
+import { AgentCallChip } from "./AgentCallChip";
 import { FieldRefs } from "./fieldRefs";
 import { PlaceholderLinkView, PlaceholdersInert } from "./PlaceholderLink";
 
@@ -32,7 +34,15 @@ function wrap(mark: Mark, child: JSX.Element): JSX.Element {
           {child}
         </span>
       );
-    case "link":
+    case "link": {
+      // A call of an agent shows as its chip (agents G19).
+      const call = parseAgentCall(mark.attrs.href);
+      if (call)
+        return (
+          <AgentCallChip agent={call.agent} call={call.call}>
+            {child}
+          </AgentCallChip>
+        );
       if (!SAFE_HREF.test(mark.attrs.href)) return child;
       // A link into the app opens in the pane, as the workspace opens every in-app link;
       // another site opens in a new browser tab.
@@ -43,6 +53,7 @@ function wrap(mark: Mark, child: JSX.Element): JSX.Element {
           {child}
         </a>
       );
+    }
   }
 }
 

@@ -1,8 +1,9 @@
-//! S1 with S7 and the fake Anthropic: calling an agent from a note (agents G16). A saved note
-//! with `@name` in its text gets the call replaced by a link to a new thread, whose run starts
-//! with the instruction; a call is answered once; email addresses, inline code and an agent's
-//! own writes call no one; two agents in one note start two runs; a type the trigger leaves out
-//! calls no one.
+//! S1 with S7 and the fake Anthropic: calling an agent from a note (agents G16, G19). A saved
+//! note with a committed call, a link `[@<Label> <request>](agent:<name>?call=<id>)`, starts one
+//! run whose first message is the request, and the note is left as it was; a call id is answered
+//! once, whatever is saved after; plain `@name` text, inline code and an agent's own writes call
+//! no one; a type the trigger leaves out records the call with no run; `GET
+//! /api/agents/calls/{call}` answers what became of a call, or 404.
 
 use std::ffi::OsStr;
 use std::time::Duration;
@@ -106,6 +107,10 @@ impl Api {
             }).to_string() }),
         );
         api
+    }
+
+    fn status(&self, path: &str) -> u16 {
+        self.request("GET", path, None).status().as_u16()
     }
 
     fn request(&self, method: &str, path: &str, body: Option<Value>) -> Response {
@@ -227,41 +232,36 @@ fn first_messages(fake: &FakeAnthropic) -> Vec<String> {
         .collect()
 }
 
+const CALL: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
+const CALL2: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC";
+
+/// A call of `agent` with link text `text` and call id `call`, as the editor commits it.
+fn call(text: &str, agent: &str, call: &str) -> String {
+    format!("[{text}](agent:{agent}?call={call})")
+}
+
 #[test]
-fn a_call_is_replaced_by_a_link_to_a_new_thread_and_answered_once() {
+fn a_committed_call_starts_one_run_and_leaves_the_note_as_it_was() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
-    let id = api.note(
-        "memo",
-        "Roof",
-        &["Gutters are full.", "@Clerk please list what to buy."],
-    );
+    assert_eq!(api.status(&format!("/api/agents/calls/{CALL}")), 404);
+    let asked = call("@Clerk please list what to buy.", "clerk", CALL);
+    let id = api.note("memo", "Roof", &["Gutters are full.", &asked]);
+    let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
     fake.push(AnthropicMessage::text("Ladder, gloves."));
-    api.advance("PT3S");
-    assert!(
-        fake.message_requests().is_empty(),
-        "the note is idle 5 s first"
-    );
-    api.advance("PT3S");
+    api.advance("PT1S");
 
     // One thread, from the call, holding the run.
     let threads = api.threads("clerk");
     assert_eq!(threads.len(), 1, "{threads:?}");
     assert_eq!(threads[0]["origin"], "mention");
-    assert_eq!(threads[0]["title"], "Roof: you please list what to buy.");
+    assert_eq!(threads[0]["title"], "Roof: please list what to buy.");
     let thread = threads[0]["id"].as_str().unwrap();
-    assert_eq!(
-        api.paragraphs(&id),
-        [
-            "Gutters are full.".to_owned(),
-            format!("[@Clerk](/agents/clerk/chat?thread={thread}) please list what to buy."),
-        ]
-    );
     assert_eq!(
         first_messages(&fake),
         [format!(
-            "Keep it short.\nyou please list what to buy.\nCalled from note {id} (type memo, title \"Roof\"); the call was replaced with a link to this thread."
+            "Keep it short.\nplease list what to buy.\nCalled from note {id} (type memo, title \"Roof\")."
         )]
     );
     let read = api.get(&format!("/api/agents/clerk/threads/{thread}"));
@@ -270,51 +270,54 @@ fn a_call_is_replaced_by_a_link_to_a_new_thread_and_answered_once() {
         "{read}"
     );
     let runs = api.get("/api/agents/clerk/runs");
-    let asked = &runs["triggers"][0];
-    assert_eq!(asked["kind"], "mention");
-    assert_eq!(asked["runs"][0]["thread"], thread);
-    assert_eq!(asked["runs"][0]["outcome"], "succeeded", "{runs}");
+    let trigger = &runs["triggers"][0];
+    assert_eq!(trigger["kind"], "mention");
+    assert_eq!(trigger["runs"][0]["thread"], thread);
+    assert_eq!(trigger["runs"][0]["outcome"], "succeeded", "{runs}");
 
-    // The rewrite is the agent's.
-    let history = api.get(&format!("/api/notes/{id}/history"));
-    let current = history["versions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|v| v["current"] == true)
-        .unwrap()
-        .clone();
-    assert_eq!(current["author"]["kind"], "agent", "{current}");
+    // The note is as the user saved it.
+    let note = api.get(&format!("/api/notes/{id}"));
+    assert_eq!(note["version"], version);
+    assert_eq!(
+        api.paragraphs(&id),
+        ["Gutters are full.".to_owned(), asked.clone()]
+    );
+    assert_eq!(
+        api.get(&format!("/api/agents/calls/{CALL}")),
+        json!({ "agent": "clerk", "note": id, "thread": thread, "running": false })
+    );
 
-    // Saving again calls no one: the call is a link now.
-    let mut text = api.paragraphs(&id);
-    text.push("Bought them.".to_owned());
-    let text: Vec<&str> = text.iter().map(String::as_str).collect();
-    api.save(&id, "Roof", &text);
-    api.advance("PT10S");
+    // Saving again, editing the call's text, or the call in another note calls no one.
+    api.save(&id, "Roof", &["Gutters are full.", &asked, "Bought them."]);
+    api.advance("PT1S");
+    let edited = call("@Clerk list what to buy, and where.", "clerk", CALL);
+    api.save(&id, "Roof", &[&edited]);
+    api.advance("PT1S");
+    api.note("memo", "Copy", &[&edited]);
+    api.advance("PT1S");
     assert_eq!(fake.message_requests().len(), 1);
     assert_eq!(api.threads("clerk").len(), 1);
 }
 
 #[test]
-fn addresses_code_and_links_call_no_one() {
+fn plain_text_code_and_other_links_call_no_one() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
-    let id = api.note(
+    api.note(
         "memo",
         "Mail",
         &[
-            "Write to bob@clerk.com today.",
-            "Type `@clerk` to call it.",
-            "See [@clerk](https://example.com/@clerk).",
-            "a@clerk and @clerks and \\@clerk",
+            "@assistant and @clerk tidy this.",
+            &format!("Type `{}` to call it.", call("@Clerk x", "clerk", CALL)),
+            "See [@Clerk](/agents/clerk/chat?thread=01JB8Z4K2MQ7V3X9T5R6W8Y2ZD).",
         ],
     );
     api.advance("PT10S");
     assert!(fake.message_requests().is_empty());
     assert!(api.threads("clerk").is_empty());
-    assert!(api.paragraphs(&id)[0].contains("bob@clerk.com"));
+    assert!(api.threads("assistant").is_empty());
+    assert_eq!(api.status(&format!("/api/agents/calls/{CALL}")), 404);
 }
 
 #[test]
@@ -322,39 +325,37 @@ fn a_call_written_by_the_agent_itself_calls_no_one() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
-    api.note("memo", "Roof", &["@clerk start a memo for the gutters."]);
+    api.note(
+        "memo",
+        "Roof",
+        &[&call("@Clerk start a memo for the gutters.", "clerk", CALL)],
+    );
     // The run writes a memo that calls the agent again, as the agent: that calls no one (G11).
-    let memo = note_json("Gutters", &["@clerk look at this later."]);
+    let again = call("@Clerk look at this later.", "clerk", CALL2);
+    let memo = note_json("Gutters", &[&again]);
     fake.push(AnthropicMessage::new().tool_use(
         "toolu_c",
         "propose_create",
         json!({ "type": "memo", "note": memo.to_string() }),
     ));
     fake.push(AnthropicMessage::text("Started it."));
-    api.advance("PT6S");
+    api.advance("PT1S");
     assert_eq!(fake.message_requests().len(), 2);
     let found = api.get("/api/notes?type=memo");
     let rows = found["notes"].as_array().unwrap().clone();
-    let gutters = rows
-        .iter()
-        .find(|r| r["title"] == "Gutters")
-        .unwrap_or_else(|| panic!("{found}"));
-    let gutters = gutters["id"].as_str().unwrap();
+    assert!(rows.iter().any(|r| r["title"] == "Gutters"), "{found}");
     api.advance("PT10S");
     assert_eq!(
         fake.message_requests().len(),
         2,
         "the agent's own call starts nothing"
     );
-    assert_eq!(
-        api.paragraphs(gutters),
-        ["@clerk look at this later.".to_owned()]
-    );
     assert_eq!(api.threads("clerk").len(), 1);
+    assert_eq!(api.status(&format!("/api/agents/calls/{CALL2}")), 404);
 }
 
 #[test]
-fn two_agents_called_in_one_note_start_two_runs() {
+fn two_calls_in_one_note_start_two_runs() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
@@ -363,52 +364,40 @@ fn two_agents_called_in_one_note_start_two_runs() {
         "memo",
         "Plan",
         &[
-            "@clerk and @owl, split this.",
-            "(@owl) also check the dates",
+            &format!("{} and the rest.", call("@Clerk split this", "clerk", CALL)),
+            &call("@Night owl check the dates", "owl", CALL2),
         ],
     );
-    api.advance("PT6S");
-    let clerk = api.threads("clerk");
-    let owl = api.threads("owl");
+    api.advance("PT1S");
+    let (clerk, owl) = (api.threads("clerk"), api.threads("owl"));
     assert_eq!((clerk.len(), owl.len()), (1, 1));
-    let (c, o) = (
-        clerk[0]["id"].as_str().unwrap(),
-        owl[0]["id"].as_str().unwrap(),
-    );
-    // The owl's label is two words, so only its name calls it; both its calls make one run.
-    assert_eq!(
-        api.paragraphs(&id),
-        [
-            format!(
-                "[@Clerk](/agents/clerk/chat?thread={c}) and [@Night owl](/agents/owl/chat?thread={o}), split this."
-            ),
-            format!("([@Night owl](/agents/owl/chat?thread={o})) also check the dates"),
-        ]
-    );
     let mut firsts = first_messages(&fake);
     firsts.sort();
-    assert_eq!(firsts.len(), 2, "{firsts:?}");
-    assert!(
-        firsts[0].starts_with(
-            "@clerk and you, split this.\n\n(you) also check the dates\nCalled from note"
-        ),
-        "{firsts:?}"
-    );
-    assert!(
-        firsts[1].starts_with("Keep it short.\nyou and @owl, split this.\nCalled from note"),
-        "{firsts:?}"
+    assert_eq!(
+        firsts,
+        [
+            format!(
+                "Keep it short.\nsplit this\nContext: @Clerk split this and the rest.\nCalled from note {id} (type memo, title \"Plan\")."
+            ),
+            format!("check the dates\nCalled from note {id} (type memo, title \"Plan\")."),
+        ]
     );
 }
 
 #[test]
-fn a_type_the_trigger_leaves_out_calls_no_one() {
+fn a_type_the_trigger_leaves_out_records_the_call_with_no_run() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
-    let id = api.note("log", "Day", &["@clerk tidy this."]);
+    let asked = call("@Clerk tidy this.", "clerk", CALL);
+    let id = api.note("log", "Day", &[&asked]);
     api.advance("PT10S");
     assert!(fake.message_requests().is_empty());
-    assert_eq!(api.paragraphs(&id), ["@clerk tidy this.".to_owned()]);
+    assert_eq!(api.paragraphs(&id), [asked]);
+    assert_eq!(
+        api.get(&format!("/api/agents/calls/{CALL}")),
+        json!({ "agent": "clerk", "note": id, "thread": null, "running": false })
+    );
     // The agents list says which types may call each agent, for the editor's picker.
     let agents = api.get("/api/agents");
     let clerk = agents["agents"]
@@ -433,23 +422,20 @@ fn an_agent_with_no_mention_trigger_is_called_too() {
     let api = Api::start(&fake);
     // No trigger at all: the agent answers a call from any type through the implicit trigger.
     api.agent("helper", "label = \"Helper\"\n");
-    let id = api.note("memo", "Shed", &["@helper what paint lasts outdoors?"]);
+    let id = api.note(
+        "memo",
+        "Shed",
+        &[&call("@Helper what paint lasts outdoors?", "helper", CALL)],
+    );
     fake.push(AnthropicMessage::text("Oil-based enamel."));
-    api.advance("PT6S");
+    api.advance("PT1S");
 
     let threads = api.threads("helper");
     assert_eq!(threads.len(), 1, "{threads:?}");
-    let thread = threads[0]["id"].as_str().unwrap();
-    assert_eq!(
-        api.paragraphs(&id),
-        [format!(
-            "[@Helper](/agents/helper/chat?thread={thread}) what paint lasts outdoors?"
-        )]
-    );
     assert_eq!(
         first_messages(&fake),
         [format!(
-            "you what paint lasts outdoors?\nCalled from note {id} (type memo, title \"Shed\"); the call was replaced with a link to this thread."
+            "what paint lasts outdoors?\nCalled from note {id} (type memo, title \"Shed\")."
         )]
     );
 }

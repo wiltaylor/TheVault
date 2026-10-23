@@ -27,7 +27,7 @@ export interface SolidNodeViewProps {
   getPos: () => number | undefined;
   updateAttributes: (attrs: Record<string, unknown>) => void;
   /** Replace this node with `content`, or delete it when `content` is omitted. */
-  replaceWith: (content?: PMNode) => void;
+  replaceWith: (content?: PMNode | readonly PMNode[]) => void;
 }
 
 /** Elements inside a node view whose events belong to the component, not to ProseMirror. */

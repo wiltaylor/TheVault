@@ -269,6 +269,7 @@ fn build() -> Built {
         .get("/api/agents/{name}", agent_files::read)
         .put("/api/agents/{name}", agent_files::put)
         .delete("/api/agents/{name}", agent_files::delete)
+        .get("/api/agents/calls/{call}", agent_runs::call)
         .get("/api/agents/{name}/runs", agent_runs::list)
         .get("/api/agents/{name}/threads", agent_threads::list)
         .post("/api/agents/{name}/threads", agent_threads::start)

@@ -503,6 +503,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/agents/calls/{call}",
+        "What became of a call of an agent committed in a note: {agent, note, thread, running}, thread null for a call that was not run; 404 while the server has not seen the call",
+    ),
+    (
+        "GET",
         "/api/agents/{name}/runs",
         "The agent's trigger runs: {tools, triggers: [{name, kind, runs}]}, the last 20 runs of each trigger and the tools a trigger run is offered",
     ),

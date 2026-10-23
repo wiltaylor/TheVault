@@ -4,7 +4,8 @@ import { activePane, expect, logIn, test } from "./fixtures";
 // Typing `@` at the start of a word opens the mention picker, as `[[` does. Besides the notes
 // found, the picker offers "New <type>" for the text typed, which inserts a placeholder link
 // `[[+type|title]]`. Clicking a placeholder creates the note, rewrites the placeholder as a
-// mention of it in the note that holds it, and opens the new note.
+// mention of it in the note that holds it, and opens the new note. "Ask <Label>" opens a request
+// box instead, and Enter commits the call of the agent as one link (agents G19).
 
 interface Stored {
   id: string;
@@ -261,4 +262,38 @@ test("a placeholder in a version shown from history only shows", async ({ page, 
   await chip.click();
   await expect(page).toHaveURL(new RegExp(`/notes/${note.id}$`));
   expect(await notesTitled(admin, title)).toEqual([]);
+});
+
+test("Ask <Label> commits a call in one go, shown as a chip that opens the agent", async ({ page, admin }) => {
+  // The agent is disabled once the page has listed it, so the server records the call without a
+  // run, and no run of it fails in this shared vault.
+  const tok = token();
+  const name = `caller_${tok}`;
+  const label = `Caller${tok}`;
+  const put = (wcl: string) => admin.put(`/api/agents/${name}`, { data: { wcl } });
+  expect((await put(`label = "${label}"\n`)).ok()).toBe(true);
+  const note = await createNote(admin, "task", `Call ${tok}`);
+  const doc = await editBody(page, note.id);
+  expect((await put(`label = "${label}"\nenabled = false\n`)).ok()).toBe(true);
+
+  await page.keyboard.type(`@${name}`);
+  await page.getByTestId("mention-agent").filter({ hasText: `Ask ${label}` }).click();
+  const box = page.getByRole("textbox", { name: `Ask ${label}…` });
+  await expect(box).toBeFocused();
+  await expect(box).toHaveAttribute("placeholder", `What should ${label} do?`);
+  await box.fill("tidy this");
+  await box.press("Enter");
+  await expect(page.getByTestId("mention-picker")).toHaveCount(0);
+  await saveAndWait(page);
+  const text = await bodyText(admin, note.id);
+  expect(text).toMatch(new RegExp(`^\\[@${label} tidy this\\]\\(agent:${name}\\?call=(${ULID})\\)\\s*$`));
+  const call = new RegExp(`call=(${ULID})`).exec(text)![1];
+  await expect.poll(async () => (await admin.get(`/api/agents/calls/${call}`)).status()).toBe(200);
+
+  const chip = doc.getByTestId("agent-call");
+  await expect(chip).toHaveText(`@${label} tidy this`);
+  await expect(doc.getByText("Not answered")).toBeVisible({ timeout: 10_000 });
+  await chip.click();
+  await expect(page).toHaveURL(new RegExp(`/agents/${name}/chat$`));
+  expect((await admin.delete(`/api/agents/${name}`)).ok()).toBe(true);
 });

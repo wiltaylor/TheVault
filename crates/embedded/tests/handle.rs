@@ -48,6 +48,10 @@ field review {
   kind = "string"
 }
 
+field body {
+  kind = "content"
+}
+
 handler "after_create" {
   script   = "review"
   function = "after_update"
@@ -419,19 +423,27 @@ async fn runs_no_agent_triggers() {
     let note = d.create("report", json!({ "title": "Q3" })).await;
     d.update(s(&note["id"]), json!({ "title": "Q3 final" }))
         .await;
-    // A call of the agent written in a note is the home server's to answer too (agents G16).
-    let called = d
-        .create(
-            "report",
-            json!({ "title": "Q4", "review": "@watcher read this" }),
-        )
-        .await;
-    tokio::time::sleep(Duration::from_millis(5500)).await;
+    // A call of the agent committed in a note is the home server's to answer too (agents G19).
+    let call = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
+    let text = format!("[@Watcher read this](agent:watcher?call={call})");
+    let body = json!({ "type": "report", "note": {
+        "fields": { "title": "Q4" },
+        "blocks": [{ "kind": "content", "labels": ["body"], "blocks": [
+            { "kind": "paragraph", "fields": { "text": text } },
+        ] }],
+    } });
+    let called = d.json("POST", "/api/notes", Some(body), 201).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let read = d.get(&format!("/api/notes/{}", s(&called["id"]))).await;
     assert_eq!(
-        read["note"]["fields"]["review"], "@watcher read this",
+        read["note"]["blocks"][0]["blocks"][0]["fields"]["text"], text,
         "{read}"
     );
+    assert_eq!(d.server.writer().state().agent_call(call).unwrap(), None);
+    let asked = d
+        .json("GET", &format!("/api/agents/calls/{call}"), None, 503)
+        .await;
+    assert_eq!(asked["error"], "not_paired", "{asked}");
 
     // The triggers are the home server's: their runs are read there, and nothing ran here or
     // started a thread.

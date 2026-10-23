@@ -1397,6 +1397,87 @@ mark {
   font-size: 0.95em;
 }
 
+/* The request box the picker turns into once "Ask <Label>" is chosen (agents G19). */
+.mention-request {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  vertical-align: top;
+  padding: 0.35rem 0.5rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  box-shadow: 0 4px 12px rgb(15 23 42 / 0.12);
+}
+
+.mention-request-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mention-request textarea {
+  flex-basis: 100%;
+  width: 22rem;
+  max-width: 100%;
+  font: inherit;
+  resize: vertical;
+}
+
+.mention-request .mention-hint {
+  margin-left: 0;
+}
+
+/* A call of an agent (agents G19): its icon, its text and its state, as one chip. */
+.agent-call,
+.agent-call-widget {
+  color: var(--accent);
+  background: var(--accent-soft);
+  text-decoration: none;
+}
+
+a.agent-call {
+  display: inline;
+  border-radius: 0.25rem;
+  padding: 0 0.25rem;
+}
+
+.agent-call-icon {
+  display: inline-flex;
+  vertical-align: -0.1em;
+  margin-right: 0.2rem;
+}
+
+.agent-call-note {
+  margin-left: 0.3rem;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+a.agent-call .ai-running {
+  margin-left: 0.3rem;
+}
+
+.agent-call-widget {
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-call-widget.agent-call-start {
+  border-radius: 0.25rem 0 0 0.25rem;
+  padding-left: 0.25rem;
+}
+
+.agent-call-widget.agent-call-end {
+  border-radius: 0 0.25rem 0.25rem 0;
+  padding-right: 0.25rem;
+}
+
+.agent-call-widget.agent-call-end .ai-running {
+  margin-left: 0.3rem;
+}
+
 /* `[[+type|title]]`: a note not created yet. Dashed and muted, unlike a mention. */
 .placeholder-link {
   display: inline-flex;

@@ -1,6 +1,6 @@
 # AI agents in the vault
 
-An agent is an AI chat with its own model, system prompt and permissions, defined by a file in the vault. You chat with it in threads, and it can also run on its own: on a schedule, when notes change, or when you call it from a note with `@<name>`. The chat panel's default agent is the built-in **Assistant**.
+An agent is an AI chat with its own model, system prompt and permissions, defined by a file in the vault. You chat with it in threads, and it can also run on its own: on a schedule, when notes change, or when you call it from a note with the editor's `@` picker. The chat panel's default agent is the built-in **Assistant**.
 
 This page is about agents the vault runs with your own AI provider. To connect an outside AI agent, such as a coding assistant, to the vault through the CLI, see [Connecting an AI agent](agents.md). Setting up the providers themselves is in [AI providers](ai.md).
 
@@ -87,7 +87,7 @@ Note events fire on the home server only, after the change is written. A change 
 
 ### Calls from notes
 
-Every enabled agent can be called from a note. Write `@` and the agent's name in a note, such as `@clerk list what to buy`, or type `@` in the editor and choose **Ask <label>**, which the picker lists before the notes for each agent the note's type may call. The label calls the agent too when it is one word. An agent with no mention trigger answers a call from any note type except its own threads. A trigger with `mention = true` adds to that: `type` limits which note types may call the agent, and `prompt`, which is optional here, is added before what the note says. With mention triggers that name types, only those types may call it.
+Every enabled agent can be called from a note. Type `@` in the editor and choose **Ask <label>**, which the picker lists before the notes for each agent the note's type may call. The picker becomes a request box, "Ask <label>…": write what the agent should do and press Enter. Shift+Enter starts a new line; Escape, or Enter with nothing written, leaves nothing in the note. An agent with no mention trigger answers a call from any note type except its own threads. A trigger with `mention = true` adds to that: `type` limits which note types may call the agent, and `prompt`, which is optional here, is added before the request. With mention triggers that name types, only those types may call it.
 
 ```wcl
 trigger asked {
@@ -97,23 +97,35 @@ trigger asked {
 }
 ```
 
-A call stands in the text of a note's content (paragraphs, headings, list items, quotes, toggles and admonition titles) or in a text field. It needs a space or the start of the text before the `@` and a space, punctuation or the end of the text after the name, so an email address such as `bob@clerk.com` never calls `clerk`. Text in inline code, a link or a note mention never calls anyone. [Vault file format, Agent files](vault-format.md#agent-files) has the exact rule.
+Enter commits the call into the note as one link, with an id the editor makes for it, and the note's next save carries it whole:
 
-Once the note has been idle for 5 seconds (each save starts the wait again), the server answers each agent the note calls, once however many times it is called:
+```text
+[@Clerk list what to buy for the gutters](agent:clerk?call=01JB8Z4K2MQ7V3X9T5R6W8Y2ZB)
+```
 
-1. It opens a thread, with origin `mention`, titled with the note's title and the start of what was asked.
-2. It rewrites the note once, as the agent, replacing each call with a link to the thread: `[@Clerk](/agents/clerk/chat?thread=<id>)`. In a text field, which shows no links, the call becomes `Clerk (asked: /agents/clerk/chat?thread=<id>)`. A call that is a link no longer calls, so saving the note again does not call the agent again.
-3. It starts the run. Its first message is the trigger's prompt, then the paragraph or list item that held the call with the call written as "you", then a line naming the note:
+The editor and the note page show a call as a chip: the agent's icon, `@<label>` and the request, with a spinner while its run goes. Clicking it opens the run's thread. Until the server has seen the call the chip says "Sending…"; a call the server did not run, because the agent may not be called from that note's type, is disabled or is missing, says so. The chip's text stays editable like a link's.
+
+Only a committed call calls. Plain text such as `@clerk tidy this` calls no one, and neither does a call in inline code. A call stands in the text of a note's content: paragraphs, headings, list items, quotes, toggles and admonition titles.
+
+When the server saves a note, it reads the note's calls at once. Each call id it has not seen before is recorded and answered once:
+
+1. It opens a thread, with origin `mention`, titled with the note's title and the start of the request.
+2. It starts the run. Its first message is the trigger's prompt, then the request, then the paragraph or list item around the call, then a line naming the note:
 
 ```text
 Keep your answer short.
-you list what to buy for the gutters.
-Called from note 01JB8Z0Q6W4ZK3V9T1M5XH7N2C (type memo, title "Roof"); the call was replaced with a link to this thread.
+list what to buy for the gutters
+Context: Roof work: @Clerk list what to buy for the gutters
+Called from note 01JB8Z0Q6W4ZK3V9T1M5XH7N2C (type memo, title "Roof").
 ```
 
-The run is unattended, as any trigger run is (below). To let it change the note it was called from, turn off **Ask before creating and editing notes** on the agent's Permissions tab; the Triggers tab warns when the agent could not. Otherwise it answers in the thread, which the link opens.
+The `Context:` line is left out when the call is all its paragraph holds. The server never changes the note for a call. Saving the note again, editing the call's text or moving it never calls again, and neither does the same call copied into another note; delete the call and commit a new one to ask again. A call to an agent that may not be called from the note, is disabled or missing, or has reached its hourly limit is recorded as not run and is never tried again.
 
-If the note changes between the server reading it and rewriting it, the call is left where it is, the thread just opened goes to the trash, and the save that changed the note is read for calls in turn. A call written by an agent, including the called agent's own changes to the note, calls no one. Calls are answered on the home server only: a call written in the desktop or Android app is answered when the note reaches the server by sync.
+The run is unattended, as any trigger run is (below). To let it change the note it was called from, turn off **Ask before creating and editing notes** on the agent's Permissions tab; the Triggers tab warns when the agent could not. Otherwise it answers in the thread, which the chip opens.
+
+A call written by an agent, including the called agent's own changes to the note, calls no one. Calls are answered on the home server only: a call written in the desktop or Android app is answered when the note reaches the server by sync.
+
+Links that earlier versions wrote in place of a call, `[@Clerk](/agents/clerk/chat?thread=<id>)`, stay ordinary links.
 
 ### What an unattended run may do
 
@@ -126,7 +138,7 @@ A change tool whose switch is on is left out of the run's tool list, so nothing 
 
 ## No loops
 
-Every change an agent makes is authored by the agent (author kind `agent`) in the note's history: changes its tools make, changes you apply from its proposals, its writes to its threads, and the rewrite that replaces a call with a link. A change authored by any agent never fires a note event trigger and is never read for calls, so an agent cannot set itself or another agent off.
+Every change an agent makes is authored by the agent (author kind `agent`) in the note's history: changes its tools make, changes you apply from its proposals, and its writes to its threads. A change authored by any agent never fires a note event trigger and is never read for calls, so an agent cannot set itself or another agent off.
 
 Changes by you, by tokens, by scripts, tasks and handlers, and by sync from the apps do fire triggers. A handler that runs because of an agent's change writes as the handler, so it can fire a trigger.
 
@@ -139,7 +151,6 @@ Changes by you, by tokens, by scripts, tasks and handlers, and by sync from the 
 | Trigger runs one agent starts in an hour | 60 | Further runs are skipped and logged, with one notification an hour |
 | Model calls in one run | 12 | The run stops, as a chat turn does |
 | Quiet time before a note event run | 30 seconds | Changes to the same note coalesce |
-| Idle time before a note's calls are answered | 5 seconds | Each save starts the wait again |
 
 ## Runs and notifications
 
@@ -159,6 +170,7 @@ The Triggers tab shows each trigger's last 20 runs, with a link to each run's th
 | `GET /api/agents/{name}` | read | The parsed agent and its WCL |
 | `PUT /api/agents/{name}` | admin | Writes the agent from WCL, `{ wcl }`, or the JSON form `GET` answers |
 | `DELETE /api/agents/{name}` | admin | Deletes the agent file; its threads stay |
+| `GET /api/agents/calls/{call}` | read | What became of a call committed in a note: `{ agent, note, thread, running }`, `thread` null for a call that was not run; 404 while the server has not seen the call |
 | `GET /api/agents/{name}/runs` | read | `{ tools, triggers: [{ name, kind, runs }] }`: the tools a trigger run is offered, and each trigger's last 20 runs, newest first, each `{ id, thread, started, ended, outcome, message }` with times in milliseconds |
 | `GET /api/agents/{name}/threads` | read | The agent's threads, newest activity first, each with `archived`; archived threads only with `?archived=true` |
 | `POST /api/agents/{name}/threads` | read | Starts a thread from `{ title? }` |
@@ -166,4 +178,4 @@ The Triggers tab shows each trigger's last 20 runs, with a link to each run's th
 | `PATCH /api/agents/{name}/threads/{id}` | write | Renames a thread from `{ title }` |
 | `DELETE /api/agents/{name}/threads/{id}` | write | Moves a thread to the trash |
 
-The chat routes take `agent` and `thread`; see [The chat route](ai.md#the-chat-route). In the apps, the runs and threads routes are answered by the home server.
+The chat routes take `agent` and `thread`; see [The chat route](ai.md#the-chat-route). In the apps, the runs, calls and threads routes are answered by the home server.
