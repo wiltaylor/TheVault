@@ -337,6 +337,10 @@ function SettingsTab(p: AgentTabProps) {
 export const OUTBOX_WARNING =
   "Emails, SMS messages and calendar invites this agent drafts are sent at once, in your name, without you seeing them first.";
 
+/** What the Permissions tab says of the Browser automation switch (browser B6). */
+export const BROWSER_NOTE =
+  "Lets this agent run commands in the browser box and drive a browser as you watch. Web pages can try to instruct it.";
+
 function PermissionsTab(p: AgentTabProps) {
   const perms = () => p.draft.permissions;
   const setPerms = (patch: Partial<AgentForm["permissions"]>) =>
@@ -442,6 +446,23 @@ function PermissionsTab(p: AgentTabProps) {
               {OUTBOX_WARNING}
             </p>
           </Show>
+        </div>
+        <h3>Browser</h3>
+        <div class="ai-confirm">
+          <label class="ai-confirm-switch">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={perms().browser ?? false}
+              onChange={(e) => setPerms({ browser: e.currentTarget.checked })}
+            />{" "}
+            Browser automation
+          </label>
+          <p class="muted">{BROWSER_NOTE}</p>
+          <p class="muted">
+            Whatever you are signed in to in the box's browser, this agent can reach. It needs the browser box (see
+            Settings {">"} Integrations).
+          </p>
         </div>
         <h2>Note types</h2>
         <div class="agent-types" role="radiogroup" aria-label="Note types">

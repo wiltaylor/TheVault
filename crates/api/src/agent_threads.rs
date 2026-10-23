@@ -187,6 +187,9 @@ pub fn proposal_what(event: &str, d: &Value) -> String {
         _ => match d["op"].as_str().unwrap_or("update") {
             "update" => format!("edit of note {}", s("note_id")),
             "create" => format!("new {} note{}", s("type"), quoted(&d["title"])),
+            "download" if d["source"] == "browser" => {
+                format!("save of {} from the browser box", s("path"))
+            }
             "download" => format!("download of {}", s("url")),
             op => format!("{op} of note {}", s("note_id")),
         },
@@ -238,8 +241,12 @@ fn proposal_done(event: &str, d: &Value, done: &Value) -> String {
             }
             "delete" => format!("delete of note {}: moved to the trash", s(d, "note_id")),
             "download" => format!(
-                "download of {} stored as asset {} ({})",
-                s(d, "url"),
+                "{} stored as asset {} ({})",
+                if d["source"] == "browser" {
+                    format!("save of {} from the browser box", s(d, "path"))
+                } else {
+                    format!("download of {}", s(d, "url"))
+                },
                 s(done, "asset_id"),
                 s(done, "filename")
             ),

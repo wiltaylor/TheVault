@@ -31,6 +31,7 @@ An agent's permissions are its own: nothing is inherited from Settings > AI.
 - **Internet switches** (`permissions.web`): which web tools the agent is given at all. See [Internet switches](ai.md#internet-switches).
 - **Note types** (`permissions.types`): the types the agent may read and change. Search, query, backlinks and asset results leave out notes of other types, reading one is refused with "This agent may not read <type> notes.", and every change to one is refused.
 - **Outbox** (`permissions.outbox.send_without_review`, off by default): "Send from the Outbox without review". Off, what the agent drafts waits in the Outbox for you. On, its drafts are approved at once and sent. See [Drafting into the Outbox](#drafting-into-the-outbox).
+- **Browser automation** (`permissions.browser`, off by default): the browser box tools. See [Driving the browser box](#driving-the-browser-box).
 
 In a chat, the person or token running it still caps what the agent can change: an agent never writes more than its caller could.
 
@@ -55,7 +56,8 @@ The confirmation switch is "Ask before changing agents" (`permissions.confirm.ag
 - a note type outside the proposing agent's types. No types list means every type;
 - a confirmation switch off that is on for the proposing agent;
 - an Internet switch on that is off for the proposing agent;
-- the Outbox switch `send_without_review` on when it is off for the proposing agent.
+- the Outbox switch `send_without_review` on when it is off for the proposing agent;
+- Browser automation on when the proposing agent does not have it.
 
 The whole new file is checked, not only what the change adds, so an agent with fewer permissions cannot edit a more powerful agent at all. An agent can never change or delete its own file: "An agent cannot change its own file." Deleting another agent needs only the tool and the switch. Each proposal records the agent that made it, and `POST /api/ai/apply` checks the change again against that agent as it is at the time of Apply, so an agent whose permissions were narrowed since cannot apply what it proposed before. Your own edits on the agent screen are never checked this way.
 
@@ -75,6 +77,34 @@ A person note id resolves to the person's first email address or phone number wh
 - an agent can change only its own items while they are in Draft or Review, and never approves, sends or rejects one, by these tools or by `propose_edit`. Its confirmation switches do not change this: with "Ask before creating and editing notes" off, an edit that approves an item is still refused.
 
 Drafting is not a change the chat asks you to apply, since the Outbox is the review, so the tools have no confirmation switch and unattended runs are offered them. They need a caller with `write`: a read-only token's chat gets an error. The chat shows each draft as a compact card, such as "Drafted an email to Ann Lee for review", linking to the item.
+
+## Driving the browser box
+
+With the browser box set up ([Browser box](install.md#browser-box)), an agent with **Browser automation** on can run commands in the box and drive its browser with playwright-cli while you watch the desktop. The switch is on the agent screen's Permissions tab, with the line "Lets this agent run commands in the browser box and drive a browser as you watch. Web pages can try to instruct it." It is off for every agent unless you turn it on, the Assistant included.
+
+The switch is `permissions.browser = true` in the agent file, and it is apart from the tools list: an agent with no tools list (every tool) does not get the browser tools, and a tools list cannot name them. The tools are offered only when the server has a box (`VAULT_BROWSER_URL` set and not empty) and the switch is on.
+
+| Tool | What it does |
+|------|--------------|
+| `browser_run {command, timeout}` | Runs a bash command in the box, in `/work`, killed after `timeout` seconds (1 to 300, 60 when `null`). The model gets the exit code, stdout and stderr, each cut to its last 20,000 characters, and whether it timed out. At most 4 commands run in the box at once; a fifth is an error result |
+| `browser_file {path}` | Reads a file from the box, by an absolute path or one relative to `/work`. A PNG, JPEG, GIF or WebP image, such as a screenshot, goes to the model as an image, scaled as [Attachments](ai.md#attachments) says and counting toward the 8 images per question. Text, JSON, XML and YAML, such as a playwright-cli snapshot, are its text cut at 40,000 characters. Anything else is its path, media type and size |
+| `browser_save {path, filename}` | Stores a file from the box in the vault as an asset, named `filename` or after the file, streamed to `.vault/incoming` as a download is |
+
+`browser_save` follows the agent's **Ask before downloading files into the vault** switch (`permissions.confirm.downloads`). On, the panel shows a card with the path, file name, type and size, and Apply sends it to `POST /api/ai/apply`, which reads the file from the box and stores it; Apply is refused unless the agent that proposed it still has Browser automation. Off, and with `write`, the file is stored at once. An unattended run (see [What an unattended run may do](#what-an-unattended-run-may-do)) gets `browser_run` and `browser_file` when the agent has the switch, and `browser_save` only when its downloads switch is off.
+
+The panel shows a `browser_run` step as the command, with its output in the step's collapsible body, and a `browser_file` image as a small thumbnail. The image is not in the vault, so the step's summary carries the thumbnail as a JPEG data URL of at most 240 pixels; it is kept in the thread with the step, and the model's own copy is held for that question only.
+
+Each `browser_run` writes one line, to the run's log for an unattended run and to the server log, and the step, with its command and output, is kept in the thread:
+
+```text
+browser: exit=0 ms=812 timed_out=false cmd=playwright-cli snapshot
+```
+
+`cmd` is the first 120 characters of the command, on one line. A run the box refused or could not take writes `exit=-` and an `error="..."`.
+
+Pages and command output are untrusted: a page can try to instruct the agent. The box holds no vault credentials, but whatever you sign in to in its browser is reachable by every agent with the switch.
+
+Agent files that hold `browser = true` are new: an app from before the browser box refuses an agent file holding it, as it does `permissions.outbox`. The file holds `browser` only when it is on, so turning the switch off makes the file readable by older apps again. A release ships the apps first (see [Releasing a format change](android-release.md#releasing-a-format-change)).
 
 ## Threads
 

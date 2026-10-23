@@ -463,6 +463,11 @@ export interface AgentPermissions {
   web: AiWeb;
   /** The Outbox switches (outbox X2, X9); absent from a server before the Outbox. */
   outbox?: AgentOutbox;
+  /**
+   * Browser automation (browser B6): the browser box tools, apart from `tools`. Off when absent;
+   * absent from a server before the browser box.
+   */
+  browser?: boolean;
 }
 
 /** An agent's Outbox switches (outbox X2). */

@@ -204,6 +204,61 @@ describe("ChatPanel", () => {
     expect(m.getAllByRole("img")).toHaveLength(1);
   });
 
+  it("shows a browser_run step as its command, with its output in the step's collapsible body", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await askIt(m);
+    emit("tool", { id: "b1", name: "browser_run", input: { command: "playwright-cli snapshot", timeout: null } });
+    expect(await m.findByText(/Running a command in the browser box/)).toBeInTheDocument();
+    emit("tool_result", {
+      id: "b1",
+      is_error: false,
+      summary: {
+        notes: [],
+        browser: { kind: "run", command: "playwright-cli snapshot", exit: 0, ms: 812, timed_out: false, stdout: "- button \"Go\" [ref=e21]", stderr: "slow page" },
+      },
+    });
+    await waitFor(() => expect(m.getByText("Ran playwright-cli snapshot in the browser box")).toBeInTheDocument());
+    expect(m.getByText("(exit 0)")).toBeInTheDocument();
+    const step = m.getByText("Ran playwright-cli snapshot in the browser box").closest("details")!;
+    expect(step.open).toBe(false);
+    expect(within(step).getByLabelText("Output")).toHaveTextContent('- button "Go" [ref=e21]');
+    expect(within(step).getByLabelText("Errors")).toHaveTextContent("slow page");
+    // A command that timed out says so.
+    emit("tool", { id: "b2", name: "browser_run", input: { command: "sleep 999\necho done", timeout: 1 } });
+    emit("tool_result", {
+      id: "b2",
+      is_error: false,
+      summary: { notes: [], browser: { kind: "run", command: "sleep 999", exit: 137, ms: 1000, timed_out: true, stdout: "", stderr: "" } },
+    });
+    await waitFor(() => expect(m.getByText("(timed out)")).toBeInTheDocument());
+    expect(m.getByText("Ran sleep 999… in the browser box")).toBeInTheDocument();
+  });
+
+  it("shows a browser_file image as the thumbnail its step carries, and nothing else as an image", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await askIt(m);
+    const thumb = "data:image/jpeg;base64,/9j/AAAA";
+    emit("tool", { id: "f1", name: "browser_file", input: { path: "shot.png" } });
+    emit("tool_result", {
+      id: "f1",
+      is_error: false,
+      summary: { notes: [], browser: { kind: "image", path: "shot.png", media_type: "image/png", size: 900, thumbnail: thumb } },
+    });
+    const img = await m.findByRole("img", { name: "shot.png" });
+    expect(img).toHaveAttribute("src", thumb);
+    expect(m.getByText("Read shot.png from the browser box")).toBeInTheDocument();
+    expect(m.getByText("(image/png)")).toBeInTheDocument();
+    // A thumbnail that is not the server's JPEG data URL is not shown.
+    emit("tool", { id: "f2", name: "browser_file", input: { path: "x.png" } });
+    emit("tool_result", {
+      id: "f2",
+      is_error: false,
+      summary: { notes: [], browser: { kind: "image", path: "x.png", media_type: "image/png", size: 9, thumbnail: "https://evil.example/x.png" } },
+    });
+    await waitFor(() => expect(m.getByText("Read x.png from the browser box")).toBeInTheDocument());
+    expect(m.getAllByRole("img")).toHaveLength(1);
+  });
+
   it("applies a proposal on the server with POST /api/ai/apply, as the chat sent it", async () => {
     aiApply.mockResolvedValue({ op: "update", note_id: "01JNOTE", version: "v2" });
     const before = changes();

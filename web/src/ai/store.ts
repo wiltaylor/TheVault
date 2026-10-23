@@ -63,6 +63,28 @@ export interface WebRef {
   title?: string;
 }
 
+/**
+ * What a browser step did (browser B5), from its `tool_result` summary: a `browser_run`'s command
+ * and output, a `browser_file`'s file (an image with a small thumbnail as a data URL, since the
+ * image is not in the vault), or a `browser_save`'s file and asset.
+ */
+export interface BrowserRef {
+  /** `run`; `image`, `text` or `metadata` for a read; `save`. */
+  kind: string;
+  command?: string;
+  exit?: number;
+  ms?: number;
+  timed_out?: boolean;
+  stdout?: string;
+  stderr?: string;
+  path?: string;
+  media_type?: string;
+  size?: number;
+  thumbnail?: string;
+  filename?: string;
+  asset_id?: string;
+}
+
 /** The asset a `read_asset` step read, from its `tool_result` summary. */
 export interface AssetRef {
   id: string;
@@ -224,6 +246,9 @@ export type Applied =
 export interface DownloadProposal {
   id: string;
   op: "download";
+  /** `browser` for a file from the browser box (browser B5), which has `path` and no `url`. */
+  source?: "browser";
+  path?: string;
   url: string;
   filename: string;
   media_type: string | null;
@@ -259,6 +284,8 @@ export type Part =
       assets?: FoundAsset[];
       /** The Outbox item a draft step made (outbox X9). */
       draft?: DraftRef;
+      /** What a browser step did (browser B5). */
+      browser?: BrowserRef;
     }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
@@ -355,7 +382,8 @@ function proposalDone(p: Proposal, done: AiApplied): string {
 }
 
 const typeWhat = (p: TypeProposal) => (p.exists ? `change to type ${p.name}` : `new type ${p.name}`);
-const downloadWhat = (p: DownloadProposal) => `download of ${p.url}`;
+const downloadWhat = (p: DownloadProposal) =>
+  p.source === "browser" ? `save of ${p.path ?? ""} from the browser box` : `download of ${p.url}`;
 
 /** What a taxonomy proposal is, for an outcome line (ai D31). */
 function taxonomyWhat(p: TaxonomyProposal): string {
@@ -504,7 +532,16 @@ export function pending(p: Part): boolean {
 
 /** Fill tool step `p` from its `tool_result` summary. */
 function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boolean) {
-  const summary = (raw ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef; assets?: FoundAsset[]; draft?: DraftRef };
+  const summary = (raw ?? {}) as {
+    notes?: NoteRef[];
+    message?: string;
+    asset?: AssetRef;
+    links?: WebLink[];
+    web?: WebRef;
+    assets?: FoundAsset[];
+    draft?: DraftRef;
+    browser?: BrowserRef;
+  };
   p.done = true;
   p.isError = isError;
   p.notes = (summary.notes ?? []).filter((n) => n && typeof n.id === "string").map((n) => ({ id: n.id, title: String(n.title ?? n.id) }));
@@ -517,6 +554,12 @@ function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boo
   if (summary.web && typeof summary.web.url === "string") p.web = summary.web;
   if (Array.isArray(summary.assets))
     p.assets = summary.assets.filter((a) => a && typeof a.id === "string").map((a) => ({ id: a.id, filename: String(a.filename ?? a.id) }));
+  const b = summary.browser;
+  if (b && typeof b === "object" && typeof b.kind === "string") {
+    // Only a JPEG data URL is shown as a thumbnail: the server makes it, and nothing else is trusted as an image source.
+    const thumbnail = typeof b.thumbnail === "string" && b.thumbnail.startsWith("data:image/jpeg;base64,") ? b.thumbnail : undefined;
+    p.browser = { ...b, thumbnail };
+  }
   const d = summary.draft;
   if (d && typeof d.note_id === "string")
     p.draft = {
@@ -558,10 +601,19 @@ function eventPart(event: string, d: Record<string, unknown>): Part | null {
     }
     case "applied": {
       if (d.op === "download") {
-        const asset = d as unknown as DownloadedAsset & { url?: string };
+        const asset = d as unknown as DownloadedAsset & { url?: string; source?: string; path?: string };
+        const browser = asset.source === "browser" ? { source: "browser" as const, path: asset.path ?? "" } : {};
         return {
           kind: "download",
-          proposal: { id: String(d.id), op: "download", url: asset.url ?? "", filename: asset.filename, media_type: asset.media_type ?? null, size: asset.size ?? null },
+          proposal: {
+            id: String(d.id),
+            op: "download",
+            ...browser,
+            url: asset.url ?? "",
+            filename: asset.filename,
+            media_type: asset.media_type ?? null,
+            size: asset.size ?? null,
+          },
           state: "applied",
           asset,
           auto: true,

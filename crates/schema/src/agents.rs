@@ -102,6 +102,10 @@ pub struct Permissions {
     pub outbox: Outbox,
     /// The note types the agent may read and change; `None` is every type.
     pub types: Option<Vec<String>>,
+    /// Browser automation (browser B6): the `browser_run`, `browser_file` and `browser_save`
+    /// tools, offered when the server has a browser box. Absent means `false`, and it is
+    /// independent of `tools`: an absent tools list does not include the browser tools.
+    pub browser: bool,
 }
 
 impl Permissions {
@@ -559,6 +563,10 @@ impl Agent {
             if let Some(types) = &p.types {
                 field(&mut out, "  ", "types", &list(types));
             }
+            // Written only when on, so a file without it still reads in an app from before it.
+            if p.browser {
+                field(&mut out, "  ", "browser", "true");
+            }
             let off: Vec<_> = p
                 .confirm
                 .switches()
@@ -766,13 +774,16 @@ impl Reader<'_> {
     fn permissions(&mut self, d: &Doc) -> Permissions {
         self.known(
             d,
-            &["tools", "types"],
+            &["tools", "types", "browser"],
             "permissions.",
-            "is not a permission: use tools, types, confirm { ... }, web { ... } or outbox { ... }",
+            "is not a permission: use tools, types, browser, confirm { ... }, web { ... } or outbox { ... }",
         );
         let mut p = Permissions {
             tools: self.names(d, "tools", "permissions.tools", "tool"),
             types: self.names(d, "types", "permissions.types", "type"),
+            browser: self
+                .bool(d, "browser", "permissions.browser")
+                .unwrap_or(false),
             ..Permissions::default()
         };
         let mut seen = HashSet::new();

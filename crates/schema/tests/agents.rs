@@ -531,3 +531,23 @@ fn the_outbox_switch_is_off_unless_the_file_turns_it_on() {
         ]
     );
 }
+
+#[test]
+fn browser_automation_is_off_unless_the_file_turns_it_on() {
+    // Browser automation is off by default and apart from the tools list (browser B6).
+    let a = Agent::parse("helper", "").unwrap();
+    assert!(!a.permissions.browser);
+    assert!(a.permissions.tools.is_none());
+    let a = Agent::parse("driver", "permissions {\n  browser = true\n}\n").unwrap();
+    assert!(a.permissions.browser);
+    assert!(a.to_wcl().contains("browser = true"), "{}", a.to_wcl());
+    assert_eq!(Agent::parse("driver", &a.to_wcl()).unwrap(), a);
+    // Off is written as nothing at all, so older apps still read the file.
+    let a = Agent::parse("careful", "permissions {\n  browser = false\n}\n").unwrap();
+    assert!(!a.permissions.browser);
+    assert_eq!(a.to_wcl(), "");
+    assert_eq!(
+        at("permissions {\n  browser = \"yes\"\n}\n"),
+        ["permissions.browser"]
+    );
+}

@@ -154,6 +154,8 @@ export function agentForm(a: Agent): AgentForm {
       confirm: { ...a.permissions.confirm },
       web: { ...a.permissions.web },
       outbox: { send_without_review: a.permissions.outbox?.send_without_review ?? false },
+      // Sent only when on, as the agent file holds it only then (browser B6).
+      ...(a.permissions.browser ? { browser: true } : {}),
     },
     triggers: a.triggers.map((t) => ({ ...t })),
   };

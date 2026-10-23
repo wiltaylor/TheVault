@@ -66,6 +66,7 @@ mod agent_threads;
 mod agents;
 mod ai_agents;
 mod ai_assets;
+mod ai_browser;
 mod ai_chat;
 mod ai_outbox;
 mod ai_settings;

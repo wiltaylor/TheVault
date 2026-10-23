@@ -256,19 +256,21 @@ fn change_switch(name: &str) -> Option<&'static str> {
         "propose_type_change" => "types",
         "propose_taxonomy_change" | "propose_taxonomy_delete" => "taxonomies",
         "propose_agent_change" | "propose_agent_delete" => "agents",
-        "download_asset" => "downloads",
+        "download_asset" | "browser_save" => "downloads",
         _ => return None,
     })
 }
 
 /// The tools a turn offers: those the internet switches leave (ai D28), `web_search` only with a
-/// Brave key (ai D26), only those the agent may use (agents G4), and, unattended, no change tool
-/// that would only propose (agents G12).
+/// Brave key (ai D26), only those the agent may use (agents G4), the browser tools with
+/// `browser`, the agent's browser permission and a browser box, whatever its tools list says
+/// (browser B6), and, unattended, no change tool that would only propose (agents G12).
 fn turn_tools(
     web: ai::Web,
     brave: bool,
     allowed: Option<&[String]>,
     unattended: Option<Direct>,
+    browser: bool,
 ) -> Vec<ToolSpec> {
     let mut tools = offered_tools(web);
     if web.search && brave {
@@ -276,6 +278,9 @@ fn turn_tools(
     }
     if let Some(allowed) = allowed {
         tools.retain(|t| allowed.contains(&t.name));
+    }
+    if browser {
+        tools.extend(crate::ai_browser::tool_specs());
     }
     if let Some(direct) = unattended {
         tools.retain(|t| change_switch(&t.name).is_none_or(|s| direct.makes(s)));
@@ -292,6 +297,7 @@ pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
         brave,
         agent.permissions.tools.as_deref(),
         Some(direct),
+        agent.permissions.browser && crate::ai_browser::BrowserBox::from_env().is_some(),
     )
     .into_iter()
     .map(|t| t.name)
@@ -596,6 +602,8 @@ struct Setup {
     limits: Limits,
     /// The agent whose turn it is, which the agent tools check a change against (agents G20).
     agent: Arc<Agent>,
+    /// The browser box, when the server has one and the agent may use it (browser B6).
+    browser: Option<crate::ai_browser::BrowserBox>,
 }
 
 /// The note types an agent's note tools reach (agents G4): those its `permissions.types` names,
@@ -798,6 +806,11 @@ fn setup(
         tools: agent.permissions.tools.clone(),
         limits: Limits::of(agent),
         agent: Arc::new(agent.clone()),
+        browser: agent
+            .permissions
+            .browser
+            .then(crate::ai_browser::BrowserBox::from_env)
+            .flatten(),
     })
 }
 
@@ -1005,6 +1018,7 @@ impl Turn {
             setup.web_search.is_some(),
             setup.tools.as_deref(),
             self.report.is_some().then_some(setup.direct),
+            setup.browser.is_some(),
         );
         let offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         // The images read_asset has sent this turn (ai D19).
@@ -1207,6 +1221,42 @@ impl Turn {
                     });
                     continue;
                 }
+                // The browser tools (browser B5): only offered, and so only run, with a box and
+                // the agent's permission.
+                if crate::ai_browser::is_browser_tool(&c.name)
+                    && c.error.is_none()
+                    && let Some(b) = &setup.browser
+                {
+                    let got = self.browser_tool(&c, b, &setup, images_sent).await;
+                    if !got.parts.is_empty() {
+                        images_sent += 1;
+                    }
+                    if let Some(line) = &got.trail {
+                        eprintln!("{line}");
+                        self.report(|r| r.log.push(line.clone()));
+                    }
+                    if let Some((name, p)) = got.event
+                        && !self.emit(name, p).await
+                    {
+                        return;
+                    }
+                    if !self
+                        .emit(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::ToolResult {
+                        id: c.id,
+                        content: cut(&got.content, RESULT_LIMIT),
+                        is_error: got.is_error,
+                        parts: got.parts,
+                    });
+                    continue;
+                }
                 let web_allowed = match c.name.as_str() {
                     "fetch_url" => setup.web.read,
                     "download_asset" => setup.web.download,
@@ -1328,6 +1378,27 @@ impl Turn {
             let direct = setup.direct.downloads;
             crate::ai_web::download_asset(self.writer.clone(), f, direct, &call.id, &call.input)
                 .await
+        }
+    }
+
+    /// `browser_run`, `browser_file` or `browser_save`, with the turn's image count (browser B5).
+    async fn browser_tool(
+        &self,
+        call: &ToolCall,
+        b: &crate::ai_browser::BrowserBox,
+        setup: &Setup,
+        images_sent: usize,
+    ) -> crate::ai_browser::BrowserOut {
+        match call.name.as_str() {
+            "browser_run" => crate::ai_browser::run(b, &call.input).await,
+            "browser_file" => {
+                let may_send = images_sent < ai_assets::IMAGE_LIMIT;
+                crate::ai_browser::file(b, &call.id, &call.input, may_send, &self.images).await
+            }
+            _ => {
+                let direct = setup.direct.downloads;
+                crate::ai_browser::save(self.writer.clone(), b, direct, &call.id, &call.input).await
+            }
         }
     }
 
@@ -1613,7 +1684,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "propose_agent_change",
-            "Propose an agent file for the user to apply: a change to an existing agent, or a new agent under a new name. It is checked as the agent write would check it, and refused when it would give the agent a tool, a note type, a confirmation switch turned off, an Internet switch turned on or the Outbox switch send_without_review turned on that you do not have yourself; you cannot change your own file. The user sees a diff of the WCL and applies or discards it. When the user lets agent changes go ahead without asking, it is written at once and the result says applied.",
+            "Propose an agent file for the user to apply: a change to an existing agent, or a new agent under a new name. It is checked as the agent write would check it, and refused when it would give the agent a tool, a note type, a confirmation switch turned off, an Internet switch turned on, the Outbox switch send_without_review turned on or Browser automation turned on that you do not have yourself; you cannot change your own file. The user sees a diff of the WCL and applies or discards it. When the user lets agent changes go ahead without asking, it is written at once and the result says applied.",
             json!({
                 "name": { "type": "string", "description": "The agent's name: an existing agent to change, or a new name (lowercase letters, digits and underscores, starting with a letter) to create one." },
                 "wcl": { "type": "string", "description": "The whole new agent file as WCL text, with everything it keeps." },
@@ -1871,14 +1942,17 @@ pub enum ApplyError {
     /// The proposing agent may not make the change (agents G20): it would give another agent
     /// more than it has, or it is the agent's own file.
     Refused(String),
+    /// A save from the browser box got nothing (browser B5): no box, or the box refused.
+    Browser(String),
 }
 
 impl std::fmt::Display for ApplyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApplyError::Invalid(m) | ApplyError::Stale(m) | ApplyError::Refused(m) => {
-                f.write_str(m)
-            }
+            ApplyError::Invalid(m)
+            | ApplyError::Stale(m)
+            | ApplyError::Refused(m)
+            | ApplyError::Browser(m) => f.write_str(m),
             ApplyError::Write(e) => e.fmt(f),
             ApplyError::Fetch(e) => e.fmt(f),
         }
@@ -1899,6 +1973,7 @@ impl From<ApplyError> for ApiError {
             ApplyError::Invalid(m) => ApiError::bad_request(m),
             ApplyError::Stale(m) => ApiError::new(StatusCode::CONFLICT, "stale", m),
             ApplyError::Refused(m) => ApiError::new(StatusCode::FORBIDDEN, "not_permitted", m),
+            ApplyError::Browser(m) => ApiError::new(StatusCode::BAD_GATEWAY, "browser_failed", m),
             ApplyError::Write(e) => e.into(),
             ApplyError::Fetch(e) => {
                 use ai::web::FetchError;
@@ -1923,7 +1998,9 @@ impl From<ApplyError> for ApiError {
 /// - `delete`: the note `note_id` at `base_version`, moved to the trash, never purged (ai D21);
 /// - `download`: the file at `url` downloaded and stored as a new asset called `filename`,
 ///   through the guarded fetcher (ai D27), answering `{op, asset_id, filename, media_type,
-///   size, url}`. It waits for the download, so call this off the async threads;
+///   size, url}`. It waits for the download, so call this off the async threads; with `source`
+///   `browser`, the file at `path` in the browser box, when the proposing agent still has
+///   browser automation (browser B5);
 /// - a type proposal: `after` as the type `name`, when the type file is still `before`; a new
 ///   type through the type write, a change planned and then applied as one commit;
 /// - a taxonomy proposal (ai D31): when the taxonomy file is still `before`, `after` as the
@@ -1979,6 +2056,9 @@ pub fn apply_change(
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
     }
     let op = p["op"].as_str().unwrap_or("update");
+    if op == "download" && p["source"] == "browser" {
+        return crate::ai_browser::apply_save(w, author, p);
+    }
     if op == "download" {
         return crate::ai_web::apply_download(w, p);
     }

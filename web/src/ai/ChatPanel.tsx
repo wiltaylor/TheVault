@@ -31,6 +31,7 @@ import {
   type ChatSession,
   type DraftRef,
   type NoteOp,
+  type BrowserRef,
   type Part,
   type Proposal,
   type ProposalOp,
@@ -109,6 +110,12 @@ export function stepLabel(name: string, input: Json): string {
       return `Read ${hostOf(s("url"))}`;
     case "download_asset":
       return `Download from ${hostOf(s("url"))}`;
+    case "browser_run":
+      return `Ran ${oneLine(s("command"))} in the browser box`;
+    case "browser_file":
+      return `Read ${s("path")} from the browser box`;
+    case "browser_save":
+      return `Saved ${s("path")} from the browser box`;
     default:
       return `Called ${name}`;
   }
@@ -179,9 +186,29 @@ export function activeLabel(name: string, input: Json): string {
       return "Reading a web page";
     case "download_asset":
       return "Checking a download";
+    case "browser_run":
+      return "Running a command in the browser box";
+    case "browser_file":
+      return "Reading a file from the browser box";
+    case "browser_save":
+      return "Checking a file from the browser box";
     default:
       return `Running ${name}`;
   }
+}
+
+/** A command's first line, at most 80 characters, for a step's words. */
+export function oneLine(command: string): string {
+  const first = command.trim().split("\n")[0] ?? "";
+  const more = first.length > 80 || command.trim().includes("\n");
+  return `${first.slice(0, 80)}${more ? "…" : ""}`;
+}
+
+/** What a browser step says once done (browser B5). */
+function browserStatus(b: BrowserRef): string {
+  if (b.kind === "run") return b.timed_out ? "timed out" : `exit ${b.exit ?? "?"}`;
+  if (b.kind === "save") return b.asset_id ? `stored as ${b.filename ?? "an asset"}` : "proposed";
+  return b.media_type || "done";
 }
 
 /** The type, taxonomy and agent tools (ai D18, D31, agents G20), whose steps return no notes. */
@@ -247,6 +274,7 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
   const status = () => {
     if (!props.part.done) return "running";
     if (props.part.isError) return "failed";
+    if (props.part.browser) return browserStatus(props.part.browser);
     if (props.part.asset) return props.part.asset.filename;
     if (props.part.web) return props.part.web.title || props.part.web.media_type || "done";
     if (props.part.name in WEB_TOOLS) return "done";
@@ -276,7 +304,35 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
             </a>
           )}
         </Show>
+        {/* A browser_file image is not in the vault: the step's thumbnail comes in its summary (browser B5). */}
+        <Show when={props.part.browser?.thumbnail}>
+          {(src) => (
+            <span class="ai-step-thumb">
+              <img src={src()} alt={props.part.browser?.path ?? "screenshot"} />
+            </span>
+          )}
+        </Show>
       </summary>
+      <Show when={props.part.browser?.kind === "run" && props.part.browser}>
+        {(b) => (
+          <div class="ai-step-browser">
+            <p class="muted">
+              <code>{b().command}</code>
+              {b().ms !== undefined ? ` (${b().ms} ms)` : ""}
+            </p>
+            <Show when={b().stdout}>
+              <pre class="ai-step-output" aria-label="Output">
+                {b().stdout}
+              </pre>
+            </Show>
+            <Show when={b().stderr}>
+              <pre class="ai-step-output ai-step-stderr" aria-label="Errors">
+                {b().stderr}
+              </pre>
+            </Show>
+          </div>
+        )}
+      </Show>
       <Show when={props.part.message}>
         <p class="muted">{props.part.message}</p>
       </Show>

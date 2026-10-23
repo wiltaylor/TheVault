@@ -227,6 +227,10 @@ Both tools fetch through one guarded client:
 
 To let the tools reach servers on your own network, set `"fetch_private": true` in the `ai_settings` secret (`PUT /api/secrets/ai_settings` with the whole settings object). There is no switch for it in Settings > AI: it is an escape hatch, and it lets a page's text steer the model toward services on your network, so leave it off unless you need it.
 
+### The browser box
+
+An agent with **Browser automation** on its Permissions tab, on a server with the [browser box](install.md#browser-box), gets `browser_run`, `browser_file` and `browser_save`: it runs commands in the box, drives its browser with playwright-cli while you watch, reads screenshots and snapshots, and stores files as assets. The switch is off for every agent, the Assistant included. See [Driving the browser box](ai-agents.md#driving-the-browser-box) for the tools, the `browser:` log line and the risks.
+
 ### Attachments
 
 The model reads a note's attached files with `read_asset`, by the asset ids `get_note` lists. What it gets depends on the file's media type, which comes from its file name:

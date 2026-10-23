@@ -106,6 +106,7 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         "confirm": confirm,
         "web": web,
         "outbox": outbox,
+        "browser": p.browser,
     })
 }
 
@@ -262,6 +263,9 @@ pub struct PermissionsForm {
     web: BTreeMap<String, bool>,
     #[serde(default)]
     outbox: BTreeMap<String, bool>,
+    /// Browser automation (browser B6); absent is off.
+    #[serde(default)]
+    browser: bool,
 }
 
 #[derive(Deserialize)]
@@ -301,6 +305,7 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
     let p = &mut agent.permissions;
     p.tools = f.permissions.tools;
     p.types = f.permissions.types;
+    p.browser = f.permissions.browser;
     for (k, on) in f.permissions.confirm {
         if !p.confirm.set(&k, on) {
             issues.push(Issue::new(

@@ -252,6 +252,27 @@
   object-fit: contain;
 }
 
+/* A browser_run step's output (browser B5), inside the step's own collapsible body. */
+.ai-step-browser {
+  margin: 0.2rem 0 0 1rem;
+}
+
+.ai-step-output {
+  margin: 0.2rem 0 0;
+  padding: 0.3rem 0.4rem;
+  max-height: 16rem;
+  overflow: auto;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--hover);
+  border-radius: 4px;
+}
+
+.ai-step-stderr {
+  color: var(--danger);
+}
+
 .ai-step-error summary {
   color: var(--danger);
 }

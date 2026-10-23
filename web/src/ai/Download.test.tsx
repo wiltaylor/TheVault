@@ -169,6 +169,21 @@ describe("download cards", () => {
     expect(m.queryByRole("button", { name: "Apply" })).toBeNull();
   });
 
+  it("shows a save from the browser box with its path, and applies it as the chat sent it (browser B5)", async () => {
+    aiApply.mockResolvedValue({ op: "download", source: "browser", path: "out/report.pdf", asset_id: "01JSAVED", filename: "report.pdf" });
+    const save = { id: "toolu_s", op: "download", source: "browser", path: "out/report.pdf", url: null, filename: "report.pdf", media_type: "application/pdf", size: 4096, agent: "driver" };
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    live!.onEvent({ event: "tool", data: { id: "toolu_s", name: "browser_save", input: { path: "out/report.pdf", filename: null } } });
+    live!.onEvent({ event: "proposal", data: save });
+    const card = await m.findByRole("region", { name: "Proposed save of report.pdf" });
+    expect(card).toHaveTextContent("From the browser box: out/report.pdf (application/pdf, 4.0 KB)");
+    expect(m.queryByRole("link", { name: /out\/report/ })).toBeNull();
+    fireEvent.click(m.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(aiApply).toHaveBeenCalledWith(save));
+    expect(await m.findByRole("region", { name: "Saved report.pdf" })).toHaveTextContent("Stored in the vault as an asset.");
+  });
+
   it("formats sizes", () => {
     expect(fileSize(10)).toBe("10 bytes");
     expect(fileSize(1536)).toBe("1.5 KB");

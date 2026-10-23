@@ -164,6 +164,13 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
             ));
         }
     }
+    // Browser automation (browser B6): only an agent that has it may give it.
+    if tp.browser && !bp.browser {
+        problems.push(
+            "it would turn on Browser automation (permissions.browser), which is off for this agent"
+                .to_owned(),
+        );
+    }
     problems
 }
 
@@ -410,5 +417,16 @@ mod tests {
         assert!(p[0].contains("send_without_review"), "{p:?}");
         assert!(escalation(&sender, &sender).is_empty());
         assert!(escalation(&sender, &all).is_empty());
+    }
+
+    #[test]
+    fn escalation_refuses_browser_automation_the_proposer_lacks() {
+        let driver = agent("permissions {\n  browser = true\n}\n");
+        let all = agent("");
+        let p = escalation(&all, &driver);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("Browser automation"), "{p:?}");
+        assert!(escalation(&driver, &driver).is_empty());
+        assert!(escalation(&driver, &all).is_empty());
     }
 }

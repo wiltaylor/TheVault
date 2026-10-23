@@ -7,7 +7,9 @@
 //! at its `base_url()`. [`FakeWeb`] is the web the chat's `fetch_url` and `download_asset` read;
 //! it runs on a loopback address, so tests set `ai_settings.fetch_private`. [`FakeNoVnc`] is the
 //! browser box's noVNC and health, for the `/browser/` proxy; point `VAULT_BROWSER_URL` and
-//! `VAULT_BROWSER_DESKTOP_URL` at its `base_url()`.
+//! `VAULT_BROWSER_DESKTOP_URL` at its `base_url()`. [`FakeBrowser`] is the browser box's exec
+//! service the browser tools drive; point `VAULT_BROWSER_URL` at its `base_url()` and
+//! `VAULT_BROWSER_TOKEN` at its `token()`.
 //!
 //! ```no_run
 //! let server = testkit::TestServer::start();
@@ -29,6 +31,7 @@
 
 pub mod fake_anthropic;
 pub mod fake_brave;
+pub mod fake_browser;
 pub mod fake_google;
 mod fake_http;
 mod fake_images;
@@ -42,6 +45,7 @@ pub use fake_anthropic::{
     AnthropicMessage, AnthropicReply, DEFAULT_ANTHROPIC_KEY, FakeAnthropic, FakeAnthropicBuilder,
 };
 pub use fake_brave::{BRAVE_SEARCH_PATH, BraveReply, BraveResult, DEFAULT_BRAVE_KEY, FakeBrave};
+pub use fake_browser::{BROWSER_WORK, BrowserRun, DEFAULT_BROWSER_TOKEN, FakeBrowser};
 pub use fake_images::FakeImage;
 pub use fake_novnc::{FakeNoVnc, NOVNC_PAGE, WsClient};
 pub use fake_openai::{

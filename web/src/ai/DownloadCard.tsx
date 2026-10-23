@@ -22,16 +22,27 @@ export function DownloadCard(props: { part: Extract<Part, { kind: "download" }>;
   const name = () => asset()?.filename ?? p().filename;
   const media = () => asset()?.media_type ?? p().media_type ?? "";
   const open = () => props.part.state === "open" || props.part.state === "failed" || props.part.state === "applying";
-  const label = () => (props.part.state === "applied" ? `Downloaded ${name()}` : `Proposed download of ${name()}`);
+  const browser = () => p().source === "browser";
+  const label = () =>
+    props.part.state === "applied"
+      ? `${browser() ? "Saved" : "Downloaded"} ${name()}`
+      : `Proposed ${browser() ? "save" : "download"} of ${name()}`;
   // In an app an asset not yet on the device does not load: its name is shown alone.
   const [broken, setBroken] = createSignal(false);
   return (
     <section class="ai-proposal" classList={{ "ai-applied-card": props.part.auto === true }} aria-label={label()}>
       <p class="ai-proposal-head" role={props.part.auto ? "status" : undefined}>
-        <Show when={props.part.state === "applied" && asset()} fallback={<>Proposed download of <strong>{name()}</strong></>}>
+        <Show
+          when={props.part.state === "applied" && asset()}
+          fallback={
+            <>
+              Proposed {browser() ? "save" : "download"} of <strong>{name()}</strong>
+            </>
+          }
+        >
           {(a) => (
             <>
-              Downloaded{" "}
+              {browser() ? "Saved" : "Downloaded"}{" "}
               <a href={assetUrl(a().asset_id)} target="_blank" rel="noopener">
                 {name()}
               </a>
@@ -41,10 +52,19 @@ export function DownloadCard(props: { part: Extract<Part, { kind: "download" }>;
       </p>
       <p class="muted">
         From{" "}
-        <Show when={p().url} fallback={<span>the web</span>}>
-          <a href={p().url} target="_blank" rel="noopener noreferrer">
-            {p().url}
-          </a>
+        <Show
+          when={p().source !== "browser"}
+          fallback={
+            <span>
+              the browser box: <code>{p().path}</code>
+            </span>
+          }
+        >
+          <Show when={p().url} fallback={<span>the web</span>}>
+            <a href={p().url} target="_blank" rel="noopener noreferrer">
+              {p().url}
+            </a>
+          </Show>
         </Show>
         {` (${[media(), fileSize(asset()?.size ?? p().size)].filter(Boolean).join(", ")})`}
       </p>

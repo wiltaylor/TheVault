@@ -46,7 +46,7 @@ vi.mock("../api", async (orig) => {
 });
 vi.mock("../inApp", () => ({ appInfo }));
 
-const { AgentScreen, OUTBOX_WARNING } = await import("./AgentScreen");
+const { AgentScreen, BROWSER_NOTE, OUTBOX_WARNING } = await import("./AgentScreen");
 const { ApiError } = await import("../api");
 const { refreshAgents } = await import("../agents");
 const { reloadDefinitions } = await import("../session");
@@ -429,6 +429,32 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByRole("switch", { name: "Send from the Outbox without review" })).toBeChecked();
     expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
+  });
+
+  it("shows Browser automation off with its warning line, and saves it on", async () => {
+    await open();
+    const p = await tab("Permissions");
+    const sw = p.getByRole("switch", { name: "Browser automation" });
+    expect(sw).not.toBeChecked();
+    expect(p.getByText(BROWSER_NOTE)).toBeTruthy();
+    // Not a tool in the tools list: an agent with every tool still has it off.
+    expect(p.queryByText("browser_run")).toBeNull();
+    fireEvent.click(sw);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { browser?: boolean }).browser).toBe(true);
+  });
+
+  it("shows Browser automation on for an agent that has it, and sends nothing for it once off", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, browser: true } }));
+    await open();
+    const p = await tab("Permissions");
+    const sw = p.getByRole("switch", { name: "Browser automation" });
+    expect(sw).toBeChecked();
+    fireEvent.click(sw);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { browser?: boolean }).browser ?? false).toBe(false);
   });
 });
 
