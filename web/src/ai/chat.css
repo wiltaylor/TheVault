@@ -407,3 +407,42 @@
   gap: 0.35rem;
   min-width: 0;
 }
+
+/* The AI panel's thread picker, under its agent picker (agents G18). */
+.ai-threads {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.ai-thread-picker {
+  position: relative;
+  min-width: 0;
+  flex: 1 1 10rem;
+}
+
+.ai-thread-button {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+
+.ai-thread-current,
+.ai-thread-menu .ai-thread-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-thread-menu {
+  left: 0;
+  right: auto;
+  max-width: 18rem;
+}

@@ -7,8 +7,8 @@
 // runs on the home server, which holds the credentials and runs the note tools. Every client
 // starts a turn with POST /api/ai/chat/turns, and the turn runs there until it ends or is
 // stopped, whoever reads it (agents G17): switching threads or agents, closing the panel or the
-// tab only stops reading. Returning to a thread whose turn runs reads that turn again from its
-// first event, over the thread as it stood before the turn. In the web app the events stream
+// tab never stops it. Opening a thread whose turn runs and that this tab does not follow already
+// reads that turn again from its first event, over the thread as it stood before the turn. In the web app the events stream
 // from GET /api/ai/chat/turns/{turn}/events?after=<n>; in the desktop and Android apps, whose
 // webviews get whole bodies from the embedded server, they are polled from the embedded server's
 // GET /api/app/ai/turns/{turn}?after=<n>, which reads the turn's stream from the home server.
@@ -16,10 +16,13 @@
 // back as proposals the user applies with POST /api/ai/apply, on the home server in every
 // client, or, for the kinds the agent lets go ahead without asking, as `applied` events for
 // changes already made. In an app such a change reaches the device's copy with a sync round,
-// which the panel asks for. The right sidebar's panel has one conversation; the agent screen's
-// Chat tab makes its own with `createChatSession`.
+// which the panel asks for. A thread's conversation is one store per thread id, shared by every
+// view in the tab that shows it, with the one subscription to its turn's events (agents G18):
+// the right sidebar's panel and the agent screen's Chat tab are views made with
+// `createChatSession`, each choosing its own thread. A conversation goes once no view holds it
+// and its turn has ended, so one a view left while its turn ran is found as it stands.
 
-import { createContext, createRoot, createSignal, useContext } from "solid-js";
+import { createContext, createRoot, createSignal, untrack, useContext } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { ASSISTANT, agents, refreshAgents } from "../agents";
 import {
@@ -38,7 +41,7 @@ import { noteChangedElsewhere, noteWritten } from "../changes";
 import { appInfo } from "../inApp";
 import { reloadDefinitions } from "../session";
 import { refreshSync } from "../sync/store";
-import { bumpTurns } from "./running";
+import { bumpTurns, turnEnded } from "./running";
 
 /** One piece of a transcript message, as the server's `ai::Content`. */
 export type Content =
@@ -241,26 +244,6 @@ export interface Turn {
  * `tool` event, writing after a `text` delta.
  */
 export type Activity = { step: "thinking" } | { step: "writing" } | { step: "tool"; name: string; input: Json };
-
-export interface ChatState {
-  turns: Turn[];
-  streaming: boolean;
-  /** The running turn's step; null when no turn runs. */
-  activity: Activity | null;
-  /** When the running turn started, in milliseconds since the epoch. */
-  startedAt: number | null;
-  /** The provider and model the next turn uses; null for Settings > AI's defaults. */
-  provider: string | null;
-  model: string | null;
-  /** The agent whose conversation this is (agents G6). */
-  agent: string;
-  /** The thread the conversation is, once its first message started one (agents G7). */
-  thread: string | null;
-  /** The running turn this conversation follows, by its id in the turns form (agents G17). */
-  turn: string | null;
-  /** While a thread is being read. */
-  loading: boolean;
-}
 
 const LABELS: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", chatgpt: "ChatGPT" };
 
@@ -594,24 +577,63 @@ export interface ChatOptions {
   onChange?: () => void;
 }
 
+/** What one thread's conversation shows, the same in every view of it (agents G18). */
+interface ConversationState {
+  turns: Turn[];
+  streaming: boolean;
+  activity: Activity | null;
+  startedAt: number | null;
+  thread: string | null;
+  turn: string | null;
+  loading: boolean;
+}
+
+/** How opening a thread went: open, archived, no longer there, or not readable. */
+export type OpenResult = "open" | "archived" | "gone" | "error";
+
+/** What a view adds to the message it sends. */
+interface AskOptions {
+  noteId?: string | undefined;
+  provider: string | null;
+  model: string | null;
+  /** The message starts a thread of the agent, when the conversation has none yet. */
+  startThread: boolean;
+}
+
 /**
- * One conversation: what it shows, the transcript it sends, and the ways to act on it. The right
- * sidebar's AI panel has one; the agent screen's Chat tab makes its own.
+ * The conversations of threads, by thread id: one per thread, shared by every view in the tab
+ * that shows it, and kept while a view holds it or its turn runs on (agents G18).
  */
-export function createChatSession(options: ChatOptions = {}) {
+const conversations = new Map<string, Conversation>();
+
+type Conversation = ReturnType<typeof createConversation>;
+
+/**
+ * One conversation with agent `agent`: what it shows, the transcript it sends, the turn it
+ * follows, with the one event subscription a thread has, and the ways to act on it. `id` is its
+ * thread, or null for one whose first message has not started a thread yet. Views hold it with
+ * `hold` and let go with `release`; once nothing holds it and its turn has ended, it is gone.
+ */
+function createConversation(agent: string, id: string | null) {
   return createRoot((dispose) => {
-    const [chat, setChat] = createStore<ChatState>({
+    const [chat, setChat] = createStore<ConversationState>({
       turns: [],
       streaming: false,
       activity: null,
       startedAt: null,
-      provider: null,
-      model: null,
-      agent: options.agent ?? ASSISTANT,
-      thread: null,
+      thread: id,
       turn: null,
       loading: false,
     });
+  /** The views holding it, and what each wants told when it changes. */
+  let holders = 0;
+  const listeners = new Set<() => void>();
+  /** Not read from the server yet. */
+  let fresh = id !== null;
+
+  function notify() {
+    for (const l of [...listeners]) l();
+  }
   /** The transcript so far, sent with each turn. Append-only. */
   let transcript: ChatMessage[] = [];
   /** Reads the followed turn's events; aborting it only stops reading (agents G17). */
@@ -645,14 +667,6 @@ export function createChatSession(options: ChatOptions = {}) {
     return [...outcomes.values()];
   }
 
-  function setProvider(provider: string | null, model: string | null) {
-    setChat({ provider, model });
-  }
-
-  function setModel(model: string | null) {
-    setChat("model", model);
-  }
-
   /**
    * Stop following the turn in flight. One on a thread runs on (agents G17); one without a
    * thread, which nothing keeps, is stopped.
@@ -662,15 +676,6 @@ export function createChatSession(options: ChatOptions = {}) {
     if (chat.turn && !chat.thread) void api.aiTurnStop(chat.turn).catch(() => undefined);
     controller?.abort();
     controller = null;
-  }
-
-  /** Start afresh. A turn in flight on a thread runs on, and its thread shows it when opened. */
-  function newConversation() {
-    letGo();
-    transcript = [];
-    replay = new Map();
-    outcomes.clear();
-    setChat({ turns: [], streaming: false, activity: null, startedAt: null, thread: null, turn: null, loading: false });
   }
 
   /** Stop the turn in flight: on the server, the only way to end it early (agents G17). */
@@ -766,23 +771,17 @@ export function createChatSession(options: ChatOptions = {}) {
   }
 
   /**
-   * Whether the next turn starts a thread. The panel keeps threads only for an agent the server
-   * has listed, so a server from before agents is never asked for one.
+   * Start the thread the next turn runs on, and keep the conversation as that thread's. Null when
+   * the server has no threads, so the conversation stays in this tab; an error the user should
+   * see throws.
    */
-  function wantsThread(): boolean {
-    if (!options.threads || chat.thread) return false;
-    return options.threads !== "listed" || agents().some((a) => a.name === chat.agent);
-  }
-
-  /**
-   * Start the thread the next turn runs on. Null when the server has no threads, so the
-   * conversation stays in this tab; an error the user should see throws.
-   */
-  async function startThread(): Promise<string | null> {
+  async function startThread(mine: number): Promise<string | null> {
     try {
-      const t = await api.agentThreadStart(chat.agent);
+      const t = await api.agentThreadStart(agent);
+      if (mine !== generation) return t.id;
       setChat("thread", t.id);
-      options.onChange?.();
+      if (!conversations.has(t.id)) conversations.set(t.id, self);
+      notify();
       return t.id;
     } catch (e) {
       // A home server from before threads, or none reachable to ask: keep it here.
@@ -792,36 +791,24 @@ export function createChatSession(options: ChatOptions = {}) {
   }
 
   /**
-   * Whether thread `id` can still carry the panel's next turn: false once it was archived or
+   * Whether the thread can still carry the panel's next turn: false once it was archived or
    * deleted elsewhere (agents G15). A thread that cannot be read for another reason is kept, and
    * the turn says what went wrong.
    */
-  async function stillOpen(id: string): Promise<boolean> {
+  async function stillOpen(): Promise<boolean> {
+    if (!chat.thread) return true;
     try {
-      return (await api.agentThread(chat.agent, id)).archived !== true;
+      return (await api.agentThread(agent, chat.thread)).archived !== true;
     } catch (e) {
       return !(e instanceof ApiError && e.status === 404);
     }
   }
 
-  /** Ask `text`, beside the note `noteId` when one is open. */
-  async function ask(text: string, noteId?: string) {
+  /** Ask `text`, with what the view adds: the note open beside it, the model, a new thread. */
+  async function ask(text: string, o: AskOptions) {
     const question = text.trim();
     if (!question || chat.streaming) return;
-    let mine = ++generation;
-    // The panel's thread, archived or deleted elsewhere, gives way to a new one (agents G15). A
-    // Chat tab keeps its thread: sending in an archived thread takes it out of the archive.
-    const current = chat.thread;
-    if (options.threads === "listed" && current) {
-      setChat("streaming", true);
-      const open = await stillOpen(current);
-      if (mine !== generation) return;
-      setChat("streaming", false);
-      if (!open) {
-        newConversation();
-        mine = generation;
-      }
-    }
+    const mine = ++generation;
     // The proposals acted on since the last message, shown ahead of the question (ai D29).
     const lines = [...outcomes.values()];
     outcomes.clear();
@@ -839,7 +826,7 @@ export function createChatSession(options: ChatOptions = {}) {
     const ctl = new AbortController();
     controller = ctl;
     try {
-      const thread = wantsThread() ? await startThread() : chat.thread;
+      const thread = o.startThread && !chat.thread ? await startThread(mine) : chat.thread;
       if (mine !== generation) return;
       // On a thread the server keeps the transcript and adds the outcome lines itself; here they
       // go first, as plain text every provider reads (ai D29), and only once.
@@ -847,13 +834,13 @@ export function createChatSession(options: ChatOptions = {}) {
       if (lines.length && !thread) content.unshift({ type: "text", text: lines.join("\n") });
       const user: ChatMessage = { role: "user", content };
       transcript = [...transcript, user];
-      const named = thread || chat.agent !== ASSISTANT;
+      const named = thread || agent !== ASSISTANT;
       const body = {
-        ...(chat.provider ? { provider: chat.provider } : {}),
-        ...(chat.model ? { model: chat.model } : {}),
+        ...(o.provider ? { provider: o.provider } : {}),
+        ...(o.model ? { model: o.model } : {}),
         messages: thread ? [user] : transcript,
-        ...(noteId ? { note_id: noteId } : {}),
-        ...(named ? { agent: chat.agent } : {}),
+        ...(o.noteId ? { note_id: o.noteId } : {}),
+        ...(named ? { agent } : {}),
         ...(thread ? { thread } : {}),
       };
       const started = await api.aiTurnStart(body);
@@ -873,10 +860,10 @@ export function createChatSession(options: ChatOptions = {}) {
     }
   }
 
-  /** The thread list and the sidebar read again: a turn started or ended (agents G17). */
+  /** The thread lists and the sidebar read again: a turn started or ended (agents G17). */
   function changed() {
-    options.onChange?.();
-    bumpTurns();
+    notify();
+    bumpTurns(chat.thread ? { agent, thread: chat.thread, turn: chat.turn, running: chat.streaming } : null);
     void refreshAgents();
   }
 
@@ -889,13 +876,19 @@ export function createChatSession(options: ChatOptions = {}) {
     else push({ kind: "notice", notice: "error", text: e instanceof Error ? e.message : String(e) });
   }
 
-  /** The followed turn is over, or this conversation stopped following it. */
+  /**
+   * The followed turn is over, or this conversation stopped following it. A thread nobody shows
+   * now has a new reply, and a conversation nothing holds any more is gone.
+   */
   function settled(mine: number) {
     if (mine !== generation) return;
     controller = null;
     stopping = false;
+    const followed = chat.turn !== null;
     setChat({ streaming: false, activity: null, startedAt: null, turn: null });
     changed();
+    if (followed && chat.thread) turnEnded(chat.thread);
+    drop();
   }
 
   /**
@@ -933,7 +926,7 @@ export function createChatSession(options: ChatOptions = {}) {
 
   /** Show thread `id` as the server keeps it. */
   async function reload(id: string, mine: number) {
-    const t = await api.agentThread(chat.agent, id);
+    const t = await api.agentThread(agent, id);
     if (mine !== generation) return;
     transcript = (t.messages ?? []) as ChatMessage[];
     setChat({ turns: turnsFromThread(t) });
@@ -968,7 +961,7 @@ export function createChatSession(options: ChatOptions = {}) {
         await sleep(WATCH_MS);
         if (mine !== generation) return;
         ctl.signal.throwIfAborted();
-        const now = await api.agentThread(chat.agent, t.id);
+        const now = await api.agentThread(agent, t.id);
         if (mine !== generation) return;
         if (!now.running) {
           transcript = (now.messages ?? []) as ChatMessage[];
@@ -983,36 +976,34 @@ export function createChatSession(options: ChatOptions = {}) {
     }
   }
 
-  /** Make this a conversation with agent `name`; another agent's conversation starts afresh. */
-  function setAgent(name: string) {
-    if (name === chat.agent) return;
-    newConversation();
-    setChat("agent", name);
-  }
-
   /**
-   * Open thread `id` of the agent: its turns as they were, its pending proposals open again, and
-   * a turn running on it followed (agents G17).
+   * Read the thread: its turns as they were, its pending proposals open again, and a turn running
+   * on it followed (agents G17).
    */
-  async function openThread(id: string) {
-    newConversation();
+  async function load(): Promise<OpenResult> {
+    fresh = false;
+    const id = chat.thread;
+    if (!id) return "open";
     const mine = generation;
-    setChat({ thread: id, loading: true });
+    setChat("loading", true);
     try {
-      const t = await api.agentThread(chat.agent, id);
-      if (mine !== generation) return;
+      const t = await api.agentThread(agent, id);
+      if (mine !== generation) return "open";
+      const result: OpenResult = t.archived === true ? "archived" : "open";
       if (t.running) {
-        await attach(t, mine);
-        return;
+        void attach(t, mine);
+        return result;
       }
       transcript = (t.messages ?? []) as ChatMessage[];
       setChat({ turns: turnsFromThread(t), loading: false });
+      return result;
     } catch (e) {
-      if (mine !== generation) return;
+      if (mine !== generation) return "error";
       setChat({
         loading: false,
         turns: [{ role: "assistant", parts: [{ kind: "notice", notice: "error", text: e instanceof Error ? e.message : String(e) }] }],
       });
+      return e instanceof ApiError && e.status === 404 ? "gone" : "error";
     }
   }
 
@@ -1022,7 +1013,7 @@ export function createChatSession(options: ChatOptions = {}) {
     if (!thread) return;
     void api
       .aiDiscard(proposal.id, thread)
-      .then(() => options.onChange?.())
+      .then(() => notify())
       .catch(() => undefined);
   }
 
@@ -1058,7 +1049,7 @@ export function createChatSession(options: ChatOptions = {}) {
       setProposal(turn, part, { state: "applied", ...(created ? { created } : {}) });
       record(proposal.id, `[Applied by the user: ${proposalDone(proposal, done)}]`);
       await settle("note");
-      options.onChange?.();
+      notify();
     } catch (e) {
       const stale = e instanceof ApiError && (e.isConflict || e.status === 404);
       const error = e instanceof ApiError && e.isConflict ? NOTE_CHANGED : stale ? NOTE_GONE : e instanceof Error ? e.message : String(e);
@@ -1097,7 +1088,7 @@ export function createChatSession(options: ChatOptions = {}) {
       const stored = asset ? ` stored as asset ${asset.asset_id} (${asset.filename})` : "";
       record(p.proposal.id, `[Applied by the user: ${downloadWhat(p.proposal)}${stored}]`);
       await settle("note");
-      options.onChange?.();
+      notify();
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
       setDownload(turn, part, { state: "failed", error });
@@ -1168,7 +1159,7 @@ export function createChatSession(options: ChatOptions = {}) {
       setTypeProposal(turn, part, { state: "applied" });
       record(p.proposal.id, `[Applied by the user: ${p.proposal.exists ? typeWhat(p.proposal) : `created type ${p.proposal.name}`}]`);
       await settle("type");
-      options.onChange?.();
+      notify();
     } catch (e) {
       const stale = e instanceof ApiError && e.status === 409;
       const error = stale ? TYPE_CHANGED : e instanceof Error ? e.message : String(e);
@@ -1214,7 +1205,7 @@ export function createChatSession(options: ChatOptions = {}) {
       setTaxonomyProposal(turn, part, { state: "applied" });
       record(p.proposal.id, `[Applied by the user: ${taxonomyDone(p.proposal, done)}]`);
       await settle("taxonomy");
-      options.onChange?.();
+      notify();
     } catch (e) {
       const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
       const error = stale ? TAXONOMY_CHANGED : e instanceof Error ? e.message : String(e);
@@ -1231,9 +1222,211 @@ export function createChatSession(options: ChatOptions = {}) {
     discarded(p.proposal);
   }
 
+    /** A view shows the conversation; `listener` hears of each change until it lets go. */
+    function hold(listener?: () => void) {
+      holders++;
+      if (listener) listeners.add(listener);
+    }
+
+    /** A view no longer shows the conversation. */
+    function release(listener?: () => void) {
+      holders = Math.max(0, holders - 1);
+      if (listener) listeners.delete(listener);
+      drop();
+    }
+
+    /**
+     * Once no view holds it: a conversation whose thread's turn runs follows it to its end, so a
+     * view that comes back finds it as it stands; any other is gone. A turn without a thread,
+     * which nothing keeps, is stopped (agents G17).
+     */
+    function drop(force = false) {
+      if (!force && (holders > 0 || (chat.streaming && chat.thread))) return;
+      letGo();
+      listeners.clear();
+      if (chat.thread && conversations.get(chat.thread) === self) conversations.delete(chat.thread);
+      dispose();
+    }
+
+    const self = {
+      agent,
+      chat: chat as Readonly<ConversationState>,
+      hold,
+      release,
+      drop,
+      load,
+      isFresh: () => fresh,
+      ask,
+      stop,
+      stillOpen,
+      transcriptNow,
+      outcomesNow,
+      applyProposal,
+      discardProposal,
+      applyDownload,
+      discardDownload,
+      applyAll,
+      applyTypeProposal,
+      discardTypeProposal,
+      applyTaxonomyProposal,
+      discardTaxonomyProposal,
+    };
+    return self;
+  });
+}
+
+/** Hold thread `id`'s conversation, the one every view of it shares (agents G18). */
+function holdThread(agent: string, id: string, listener: () => void): Conversation {
+  let c = conversations.get(id);
+  if (!c) {
+    c = createConversation(agent, id);
+    conversations.set(id, c);
+  }
+  c.hold(listener);
+  return c;
+}
+
+/** Test-only: let every thread's conversation go. */
+export function resetThreads() {
+  for (const c of [...conversations.values()]) c.drop(true);
+  conversations.clear();
+}
+
+/** Test-only: how many threads have a conversation now. */
+export function threadsHeld(): number {
+  return conversations.size;
+}
+
+/** The conversation a view shows, as the views read it: the thread's, and the view's own choices. */
+export interface ChatState extends ConversationState {
+  /** The provider and model the next turn uses; null for Settings > AI's defaults. */
+  provider: string | null;
+  model: string | null;
+  /** The agent whose conversation this is (agents G6). */
+  agent: string;
+}
+
+/**
+ * One view of conversations, such as the right sidebar's AI panel or an agent screen's Chat tab:
+ * the agent, provider and model it chose, and the conversation it shows, a new one or a thread's.
+ * A thread's conversation is shared with every other view showing that thread (agents G18), so
+ * a reply streams in both, and sending, Stop, Apply and Discard in either show in both; each view
+ * chooses its threads by itself.
+ */
+export function createChatSession(options: ChatOptions = {}) {
+  return createRoot((dispose) => {
+    const [view, setView] = createStore({ agent: options.agent ?? ASSISTANT, provider: null as string | null, model: null as string | null });
+    /** While the panel checks that its thread can still take the next message. */
+    const [checking, setChecking] = createSignal(false);
+    const listener = () => options.onChange?.();
+    const fresh = () =>
+      untrack(() => {
+        const c = createConversation(view.agent, null);
+        c.hold(listener);
+        return c;
+      });
+    const [current, setCurrent] = createSignal<Conversation>(fresh());
+
+    /** Show conversation `next`, letting the one shown go. */
+    function show(next: Conversation) {
+      const was = untrack(current);
+      setCurrent(() => next);
+      if (was !== next) was.release(listener);
+    }
+
+    const chat: Readonly<ChatState> = {
+      get turns() {
+        return current().chat.turns;
+      },
+      get streaming() {
+        return checking() || current().chat.streaming;
+      },
+      get activity() {
+        return current().chat.activity;
+      },
+      get startedAt() {
+        return current().chat.startedAt;
+      },
+      get thread() {
+        return current().chat.thread;
+      },
+      get turn() {
+        return current().chat.turn;
+      },
+      get loading() {
+        return current().chat.loading;
+      },
+      get provider() {
+        return view.provider;
+      },
+      get model() {
+        return view.model;
+      },
+      get agent() {
+        return view.agent;
+      },
+    };
+
+    function setProvider(provider: string | null, model: string | null) {
+      setView({ provider, model });
+    }
+
+    function setModel(model: string | null) {
+      setView("model", model);
+    }
+
+    /** Start afresh. A turn in flight on a thread runs on, and its thread shows it when opened. */
+    function newConversation() {
+      setChecking(false);
+      show(fresh());
+    }
+
+    /** Make this a conversation with agent `name`; another agent's conversation starts afresh. */
+    function setAgent(name: string) {
+      if (name === view.agent) return;
+      setView("agent", name);
+      newConversation();
+    }
+
+    /** Show thread `id` of the agent, as every view of it shows it (agents G18). */
+    async function openThread(id: string): Promise<OpenResult> {
+      if (untrack(current).chat.thread === id) return "open";
+      setChecking(false);
+      const c = holdThread(view.agent, id, listener);
+      show(c);
+      return c.isFresh() ? c.load() : "open";
+    }
+
+    /** Ask `text`, beside the note `noteId` when one is open. */
+    async function ask(text: string, noteId?: string) {
+      const question = text.trim();
+      if (!question || chat.streaming) return;
+      // The panel's thread, archived or deleted elsewhere, gives way to a new one (agents G15). A
+      // Chat tab keeps its thread: sending in an archived thread takes it out of the archive.
+      const was = current();
+      if (options.threads === "listed" && was.chat.thread) {
+        setChecking(true);
+        const open = await was.stillOpen();
+        if (current() !== was || !checking()) return;
+        setChecking(false);
+        if (!open) newConversation();
+      }
+      const c = current();
+      // The panel keeps threads only for an agent the server has listed, so a server from before
+      // agents is never asked for one.
+      const startThread = !!options.threads && (options.threads !== "listed" || agents().some((a) => a.name === view.agent));
+      await c.ask(question, { noteId, provider: view.provider, model: view.model, startThread });
+    }
+
+    /** Stop the turn in flight: on the server, the only way to end it early (agents G17). */
+    function stop() {
+      setChecking(false);
+      current().stop();
+    }
+
     /** Let the conversation go. A turn in flight on a thread runs on (agents G17). */
     function close() {
-      letGo();
+      untrack(current).release(listener);
       dispose();
     }
 
@@ -1247,17 +1440,19 @@ export function createChatSession(options: ChatOptions = {}) {
       setModel,
       setAgent,
       openThread,
-      transcriptNow,
-      outcomesNow,
-      applyProposal,
-      discardProposal,
-      applyDownload,
-      discardDownload,
-      applyAll,
-      applyTypeProposal,
-      discardTypeProposal,
-      applyTaxonomyProposal,
-      discardTaxonomyProposal,
+      /** Test-only: the transcript the next turn sends. */
+      transcriptNow: () => current().transcriptNow(),
+      /** Test-only: the outcome lines the next message sends. */
+      outcomesNow: () => current().outcomesNow(),
+      applyProposal: (turn: number, part: number) => current().applyProposal(turn, part),
+      discardProposal: (turn: number, part: number) => current().discardProposal(turn, part),
+      applyDownload: (turn: number, part: number) => current().applyDownload(turn, part),
+      discardDownload: (turn: number, part: number) => current().discardDownload(turn, part),
+      applyAll: (turn: number) => current().applyAll(turn),
+      applyTypeProposal: (turn: number, part: number) => current().applyTypeProposal(turn, part),
+      discardTypeProposal: (turn: number, part: number) => current().discardTypeProposal(turn, part),
+      applyTaxonomyProposal: (turn: number, part: number) => current().applyTaxonomyProposal(turn, part),
+      discardTaxonomyProposal: (turn: number, part: number) => current().discardTaxonomyProposal(turn, part),
     };
   });
 }

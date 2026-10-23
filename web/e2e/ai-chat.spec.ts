@@ -11,7 +11,8 @@ import { activePane, expect, logIn, test } from "./fixtures";
 // note of that type; apply a proposed delete and create (ai D20) and see the note in the trash and
 // the new note open; and, with notes confirmation off (ai D22), see an edit land in the open note
 // without pressing Apply; and, in an app (ai D23), run a turn through the turns form and apply
-// on the home server, asking for a sync round.
+// on the home server, asking for a sync round; and the panel's thread picker lists the thread a
+// message started and opens it in the agent screen as the same conversation (agents G18).
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -344,4 +345,49 @@ test("in an app, the AI panel runs a turn through the turns form and Apply asks 
   const after = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { version: string; note: unknown };
   expect(after.version).not.toBe(note.version);
   expect(JSON.stringify(after.note)).toContain("Laundry");
+});
+
+test("the AI panel's thread opens in the agent screen as the same conversation, and the picker lists it", async ({ page, admin }) => {
+  for (const [name, value] of [
+    ["ai_anthropic_api_key", fake.api_key],
+    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
+  ]) {
+    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
+    expect(res.ok(), await res.text()).toBe(true);
+  }
+  const stamp = Date.now().toString(36);
+  await tell(`push ${JSON.stringify({ text: `Hello from thread ${stamp}.` })}`);
+
+  await logIn(page, "/daily");
+  await page.keyboard.press("Control+Shift+L");
+  const panel = page.getByRole("complementary", { name: "AI" });
+  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await expect(panel.getByRole("button", { name: "Open in agent screen" })).toBeDisabled();
+  await panel.getByLabel("Ask AI").fill(`Say hello ${stamp}.`);
+  await panel.getByLabel("Ask AI").press("Enter");
+  await expect(panel.getByRole("list", { name: "Conversation" })).toContainText(`Hello from thread ${stamp}.`);
+  await expect(panel.getByRole("button", { name: "Send" })).toBeVisible();
+
+  // The picker lists the new thread, checked, under New thread.
+  await panel.getByRole("button", { name: /^Thread: / }).click();
+  const menu = panel.getByRole("menu", { name: "Threads" });
+  await expect(menu.getByRole("menuitem", { name: "New thread" })).toBeVisible();
+  await expect(menu.locator('[role="menuitemradio"][aria-checked="true"]')).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  await panel.getByRole("button", { name: "Open in agent screen" }).click();
+  await expect(page).toHaveURL(/\/agents\/assistant\/chat\?thread=[0-9A-Z]+$/);
+  const chat = activePane(page).getByRole("region", { name: "Chat" });
+  const shown = chat.getByRole("list", { name: "Conversation" });
+  await expect(shown).toContainText(`Say hello ${stamp}.`);
+  await expect(shown).toContainText(`Hello from thread ${stamp}.`);
+  await expect(chat.getByRole("complementary", { name: "Threads" }).locator('[aria-current="true"]')).toHaveCount(1);
+
+  // Starting a new thread in the panel leaves the agent screen's alone.
+  await panel.getByRole("button", { name: /^Thread: / }).click();
+  await menu.getByRole("menuitem", { name: "New thread" }).click();
+  await expect(panel.getByRole("button", { name: "Thread: New thread" })).toBeVisible();
+  await expect(panel.getByRole("list", { name: "Conversation" })).not.toContainText(`Hello from thread ${stamp}.`);
+  await expect(shown).toContainText(`Hello from thread ${stamp}.`);
 });

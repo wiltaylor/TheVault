@@ -9,6 +9,9 @@ import { createRoot, createSignal } from "solid-js";
 
 export const NEW_REPLIES_KEY = "thevault.ai.new_replies";
 
+/** How often a thread list reads again while a thread of it runs (agents G17). */
+export const RUNNING_POLL_MS = 4_000;
+
 /** What `ai_turn` says. */
 export interface AiTurnEvent {
   agent: string;

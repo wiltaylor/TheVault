@@ -10,6 +10,8 @@
 // answers, a running thread shows a spinner, read as "Running", and one that answered while it
 // was not open shows a "New reply" dot until opened. The list reads again when the live stream
 // says a turn of the agent started or ended, and every few seconds while one runs, for the apps.
+// A thread open here and in the AI panel is one conversation, shown in both (agents G18); the
+// tab and the panel each choose their thread by themselves, and the tab sends no open note.
 
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { type AgentThreadSummary, api } from "../api";
@@ -18,7 +20,7 @@ import { NameInput } from "../components/PinnedTree";
 import { errorText } from "../pages/TypeEditor";
 import { Conversation, ModelPicker } from "./ChatPanel";
 import { NewReplyMark, RunningMark } from "./RunningMark";
-import { hasNewReply, lastTurnEvent, turnEnded, turnsChanged } from "./running";
+import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged } from "./running";
 import { createChatSession } from "./store";
 import "./chat.css";
 
@@ -30,8 +32,7 @@ export function lastActive(at: string | null | undefined): string {
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-/** How often the list reads again while a thread of it runs (agents G17). */
-export const RUNNING_POLL_MS = 4_000;
+export { RUNNING_POLL_MS } from "./running";
 
 /** What a thread's badge says. */
 export function pendingLabel(n: number): string {

@@ -1,21 +1,28 @@
-// The right sidebar's AI panel (ai D14, D23; agents G6): pick an agent, Assistant by default,
-// ask about the vault, watch the answer stream, see which notes the model searched and read, and
-// apply or discard the edits it proposes. Each conversation is a thread of the chosen agent,
-// which its Chat tab lists too; New conversation starts another. It shows in the web app and in
-// the desktop and Android apps, whose chat runs on the home server. `Conversation` is the view
-// the panel and the agent screen's Chat tab share.
+// The right sidebar's AI panel (ai D14, D23; agents G6, G18): pick an agent, Assistant by
+// default, and one of its threads, ask about the vault, watch the answer stream, see which notes
+// the model searched and read, and apply or discard the edits it proposes. Each conversation is a
+// thread of the chosen agent, which its Chat tab lists too: the thread picker under the agent
+// picker lists the agent's threads with the running and new-reply marks, starts a new one, and
+// opens the shown one in the agent screen. A thread open here and in a Chat tab is one
+// conversation, shown in both; each chooses its thread by itself. The panel remembers its agent
+// and thread per browser. It shows in the web app and in the desktop and Android apps, whose chat
+// runs on the home server. `Conversation` is the view the panel and the Chat tab share.
 
-import { For, type JSX, Match, Show, Switch, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
+import { For, type JSX, Match, Show, Switch, createEffect, createRoot, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { agentLabel, agents } from "../agents";
-import { type AiModel, type AiProvider, type AiProviders, type Json, type NoteDoc, api, assetUrl } from "../api";
+import { type AgentThreadSummary, type AiModel, type AiProvider, type AiProviders, type Json, type NoteDoc, api, assetUrl } from "../api";
+import { TypeIcon } from "../components/Icon";
 import { formatValue } from "../components/Render";
 import { Spinner } from "../components/SyncStatus";
+import { activePane } from "../workspace/model";
+import { navigatePane, workspace } from "../workspace/store";
 import { blockLines, lineDiff } from "./diff";
 import { DownloadCard } from "./DownloadCard";
 import { Markdown } from "./markdown";
+import { NewReplyMark, RunningMark } from "./RunningMark";
 import { TaxonomyProposalCard } from "./TaxonomyProposalCard";
 import { TypeProposalCard } from "./TypeProposalCard";
-import { viewThread } from "./running";
+import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged, viewThread } from "./running";
 import {
   type Applied,
   ChatContext,
@@ -27,6 +34,7 @@ import {
   chat,
   inApp,
   newConversation,
+  openThread,
   panelSession,
   pending,
   providerLabel,
@@ -874,19 +882,241 @@ export function ModelPicker(props: { session: ChatSession }) {
   );
 }
 
+/** Where the panel keeps its choice of agent and thread, per browser (agents G18). */
+export const PANEL_KEY = "thevault.ai.panel";
+
+interface PanelChoice {
+  agent: string;
+  thread: string | null;
+}
+
+function savedChoice(): PanelChoice | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PANEL_KEY) ?? "null") as Partial<PanelChoice> | null;
+    if (!raw || typeof raw.agent !== "string") return null;
+    return { agent: raw.agent, thread: typeof raw.thread === "string" ? raw.thread : null };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the panel took its saved choice yet; until then nothing is saved over it. */
+let restored = false;
+
+/** Test-only: take the saved choice again, as after a reload. */
+export function forgetPanelChoice() {
+  restored = false;
+}
+
+createRoot(() =>
+  createEffect(() => {
+    const choice: PanelChoice = { agent: chat.agent, thread: chat.thread };
+    if (!restored) return;
+    try {
+      localStorage.setItem(PANEL_KEY, JSON.stringify(choice));
+    } catch {
+      // Private browsing: the choice lasts until the page closes.
+    }
+  }),
+);
+
+/**
+ * Open the panel on the agent and thread it showed last, once the agent list is known, unless a
+ * conversation started first. A thread archived or deleted since gives way to a new one.
+ */
+async function restoreChoice() {
+  const saved = savedChoice();
+  if (!saved || chat.thread || chat.turns.length > 0 || chat.streaming) return;
+  if (!agents().some((a) => a.name === saved.agent && a.enabled !== false && !a.error)) return;
+  setAgent(saved.agent);
+  if (!saved.thread) return;
+  const got = await openThread(saved.thread);
+  if ((got === "archived" || got === "gone") && chat.thread === saved.thread) newConversation();
+}
+
+/** Where thread `id` of agent `agent` opens in the agent screen's Chat tab. */
+export function threadHref(agent: string, id: string): string {
+  return `/agents/${encodeURIComponent(agent)}/chat?thread=${encodeURIComponent(id)}`;
+}
+
+/**
+ * The panel's thread picker (agents G18), under the agent picker: the chosen agent's threads,
+ * newest activity first and archived left out, each with the running spinner or the "New reply"
+ * dot (agents G17); New thread at the top; and Open in agent screen. It reads the threads again
+ * when it opens, when a turn of the agent starts or ends, when the panel's thread changes, and
+ * every few seconds while one runs, as the apps need.
+ */
+function ThreadPicker() {
+  const [threads, setThreads] = createSignal<AgentThreadSummary[]>([]);
+  const [open, setOpen] = createSignal(false);
+  const listed = () => agents().some((a) => a.name === chat.agent);
+  let anchor: HTMLButtonElement | undefined;
+  let asked = 0;
+  let poll: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(poll));
+  async function refresh() {
+    const mine = ++asked;
+    clearTimeout(poll);
+    if (!untrack(listed)) {
+      setThreads([]);
+      return;
+    }
+    const agent = untrack(() => chat.agent);
+    try {
+      const got = await api.agentThreads(agent);
+      if (mine !== asked) return;
+      // A thread that stopped running since the last read answered: a new reply, unless open.
+      const was = new Set(threads().filter((t) => t.running).map((t) => t.id));
+      for (const t of got.threads) if (was.has(t.id) && !t.running) turnEnded(t.id);
+      setThreads(got.threads);
+      if (got.threads.some((t) => t.running)) poll = setTimeout(() => void refresh(), RUNNING_POLL_MS);
+    } catch {
+      if (mine === asked) setThreads([]);
+    }
+  }
+  createEffect(
+    on([() => chat.agent, listed], () => {
+      setThreads([]);
+      setOpen(false);
+      void refresh();
+    }),
+  );
+  createEffect(on(() => chat.thread, () => void refresh(), { defer: true }));
+  createEffect(
+    on(
+      turnsChanged,
+      () => {
+        const e = lastTurnEvent();
+        if (!e || e.agent === chat.agent) void refresh();
+      },
+      { defer: true },
+    ),
+  );
+  const titleOf = (t: AgentThreadSummary) => t.title || "Untitled thread";
+  const current = () => {
+    const id = chat.thread;
+    if (!id) return "New thread";
+    const t = threads().find((x) => x.id === id);
+    return t ? titleOf(t) : "Untitled thread";
+  };
+  function close(refocus: boolean) {
+    setOpen(false);
+    if (refocus) anchor?.focus();
+  }
+  function choose(id: string | null) {
+    close(true);
+    if (id === null) newConversation();
+    else if (chat.thread !== id) void openThread(id);
+  }
+  function inScreen() {
+    const id = chat.thread;
+    if (!id) return;
+    navigatePane(activePane(workspace()), threadHref(chat.agent, id));
+  }
+
+  function Menu() {
+    let el!: HTMLDivElement;
+    const items = () => [...el.querySelectorAll<HTMLElement>("[role^=menuitem]")];
+    onMount(() => {
+      (items().find((i) => i.getAttribute("aria-checked") === "true") ?? items()[0])?.focus();
+      const outside = (e: PointerEvent) => {
+        if (!el.contains(e.target as Node) && !anchor?.contains(e.target as Node)) close(false);
+      };
+      document.addEventListener("pointerdown", outside, true);
+      onCleanup(() => document.removeEventListener("pointerdown", outside, true));
+    });
+    function onKey(e: KeyboardEvent) {
+      const list = items();
+      const at = list.indexOf(document.activeElement as HTMLElement);
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close(true);
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        list[(at + (e.key === "ArrowDown" ? 1 : -1) + list.length) % list.length]?.focus();
+      } else if (e.key === "Tab") {
+        close(false);
+      }
+    }
+    return (
+      <div ref={el} class="pin-menu ai-thread-menu" role="menu" aria-label="Threads" onKeyDown={onKey}>
+        <button type="button" role="menuitem" onClick={() => choose(null)}>
+          <TypeIcon name="plus" size={16} />
+          <span>New thread</span>
+        </button>
+        <For each={threads()}>
+          {(t) => (
+            <button type="button" role="menuitemradio" aria-checked={chat.thread === t.id} onClick={() => choose(t.id)}>
+              <span class="ai-thread-title">{titleOf(t)}</span>
+              <Show when={t.running} fallback={<Show when={hasNewReply(t.id) && chat.thread !== t.id}><NewReplyMark /></Show>}>
+                <RunningMark />
+              </Show>
+            </button>
+          )}
+        </For>
+      </div>
+    );
+  }
+
+  return (
+    <Show when={listed()}>
+      <div class="ai-threads">
+        <div class="ai-thread-picker">
+          <button
+            ref={anchor}
+            type="button"
+            class="ai-thread-button"
+            aria-haspopup="menu"
+            aria-expanded={open()}
+            aria-label={`Thread: ${current()}`}
+            title={current()}
+            onClick={() => {
+              if (!open()) void refresh();
+              setOpen(!open());
+            }}
+          >
+            <span class="ai-thread-current">{current()}</span>
+            <Show when={chat.thread && chat.streaming}>
+              <RunningMark />
+            </Show>
+            <TypeIcon name="chevron-down" size={14} />
+          </button>
+          <Show when={open()}>
+            <Menu />
+          </Show>
+        </div>
+        <button type="button" class="link" onClick={inScreen} disabled={!chat.thread}>
+          Open in agent screen
+        </button>
+      </div>
+    </Show>
+  );
+}
+
 /** The AI panel. `noteId` is the note open in the active pane, if any. */
 export function ChatPanel(props: { noteId: () => string }) {
   const session = panelSession;
+  const listed = () => agents().some((a) => a.name === chat.agent);
+  // The agent and thread shown last, once the agents are known.
+  createEffect(() => {
+    if (restored || agents().length === 0) return;
+    restored = true;
+    untrack(() => void restoreChoice());
+  });
 
   return (
     <div class="ai-panel">
       <div class="ai-toolbar">
         <AgentPicker />
         <ModelPicker session={session} />
-        <button type="button" class="link" onClick={newConversation} disabled={chat.turns.length === 0 && !chat.streaming}>
-          New conversation
-        </button>
+        <Show when={!listed()}>
+          <button type="button" class="link" onClick={newConversation} disabled={chat.turns.length === 0 && !chat.streaming}>
+            New conversation
+          </button>
+        </Show>
       </div>
+      <ThreadPicker />
       <Conversation
         session={session}
         noteId={props.noteId}

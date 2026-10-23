@@ -1,7 +1,9 @@
 // The agent screen's Chat tab (agents G5, G7, G8) and the AI panel's agent picker (agents G6):
 // the thread list with its pending badges, New thread, a thread started by the first message
 // with only that message sent, reopened threads with their pending cards, outcomes recorded in
-// the thread, and the panel's conversations as threads of the chosen agent.
+// the thread, and the panel's conversations as threads of the chosen agent. The panel's thread
+// picker, and a thread open in the panel and the Chat tab at once as one conversation (agents
+// G18).
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +34,7 @@ const renameAgentThread = vi.fn();
 const deleteAgentThread = vi.fn();
 const archiveNote = vi.fn();
 const unarchiveNote = vi.fn();
+const aiTurnPoll = vi.fn();
 
 const turns = turnsOver(streamEvents);
 
@@ -41,14 +44,18 @@ vi.mock("../api", async (orig) => {
     ...real,
     streamEvents,
     streamTurn: turns.streamTurn,
-    api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, agentThreads, agentThread, agentThreadStart, aiApply, aiDiscard, aiModels, aiProviders, agents: agentsList, app, renameAgentThread, deleteAgentThread, archiveNote, unarchiveNote },
+    api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiTurnPoll, agentThreads, agentThread, agentThreadStart, aiApply, aiDiscard, aiModels, aiProviders, agents: agentsList, app, renameAgentThread, deleteAgentThread, archiveNote, unarchiveNote },
   };
 });
-vi.mock("../inApp", () => ({ appInfo: async () => null }));
+/** The app the page runs in, for the tests of the apps' polling transport (ai D23); none by default. */
+const inApp = vi.hoisted(() => ({ now: null as null | { server_url: string } }));
+vi.mock("../inApp", () => ({ appInfo: async () => inApp.now }));
+const navigatePane = vi.fn();
+vi.mock("../workspace/store", async (orig) => ({ ...(await orig<typeof import("../workspace/store")>()), navigatePane }));
 
 const { AgentChat } = await import("./AgentChat");
-const { ChatPanel } = await import("./ChatPanel");
-const { newConversation, setAgent, turnsFromThread } = await import("./store");
+const { ChatPanel, PANEL_KEY, forgetPanelChoice } = await import("./ChatPanel");
+const { newConversation, resetThreads, setAgent, turnsFromThread } = await import("./store");
 const { refreshAgents } = await import("../agents");
 const { hasNewReply, liveTurn, resetRunning } = await import("./running");
 
@@ -122,6 +129,7 @@ afterEach(async () => {
   setAgent("assistant");
   live = null;
   cleanup();
+  resetThreads();
   vi.clearAllMocks();
   agentsList.mockResolvedValue({ agents: [], tools: [] });
   await refreshAgents();
@@ -460,7 +468,7 @@ describe("turns in the background (agents G17)", () => {
     proposals: [],
   });
 
-  it("leaves a turn running when another thread is opened, and follows it again on return with the activity line", async () => {
+  it("leaves a turn running when another thread is opened, and shows it still answering on return", async () => {
     agentThread.mockImplementation(async (_agent: string, id: string) => (id === "01JOLDER" ? ROOF : thread()));
     render(() => <AgentChat agent="triage" label="Triage" />);
     const list = within(screen.getByRole("complementary", { name: "Threads" }));
@@ -468,9 +476,8 @@ describe("turns in the background (agents G17)", () => {
     const convo = () => within(screen.getByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(convo().getByText("Tidy my list.")).toBeTruthy());
     await send("More please.");
-    const { turn } = await turns.aiTurnStart.mock.results[0]!.value;
     live!.onEvent({ event: "text", data: { delta: "Partial" } });
-    // Another thread can be opened while it answers: reading stops, the turn runs on.
+    // Another thread can be opened while it answers: the turn runs on.
     const roof = list.getByRole("button", { name: /^Roof/ });
     expect(roof).not.toBeDisabled();
     fireEvent.click(roof);
@@ -478,14 +485,38 @@ describe("turns in the background (agents G17)", () => {
     expect(turns.aiTurnStop).not.toHaveBeenCalled();
     expect(screen.queryByText("Stopped.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    // What it says meanwhile is kept: the thread's one subscription reads on (agents G18).
+    live!.onEvent({ event: "text", data: { delta: " and more" } });
 
-    // Back on the running thread: the thread before the turn, then the turn read from its start.
-    agentThread.mockImplementation(async (_agent: string, id: string) => (id === "01JTHREAD" ? running(turn, Date.now() - 5_000) : ROOF));
-    live = null;
     fireEvent.click(list.getByRole("button", { name: /^Groceries/ }));
+    await waitFor(() => expect(convo().getByText("Partial and more")).toBeTruthy());
+    expect(turns.streamTurn).toHaveBeenCalledTimes(1);
+    expect(convo().getAllByText("More please.")).toHaveLength(1);
+    expect(document.querySelector(".ai-activity")).toHaveTextContent(/Writing…/);
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    live!.onEvent({ event: "done", data: { stop: "end_turn", messages: [] } });
+    live!.end();
+    await waitFor(() => expect(document.querySelector(".ai-activity")).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeTruthy());
+  });
+
+  it("follows a thread's running turn from its first event, with the activity line timed from its start", async () => {
+    agentThread.mockImplementation(async (_agent: string, id: string) => (id === "01JTHREAD" ? running("turn-elsewhere", Date.now() - 5_000) : ROOF));
+    turns.streamTurn.mockImplementationOnce(
+      (_turn: string, _after: number, onEvent: (e: StreamEvent) => void, signal?: AbortSignal) =>
+        new Promise<void>((resolve, reject) => {
+          live = { onEvent, body: {}, end: resolve };
+          signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        }),
+    );
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = within(screen.getByRole("complementary", { name: "Threads" }));
+    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
     await waitFor(() => expect(live).not.toBeNull());
-    expect(turns.streamTurn).toHaveBeenLastCalledWith(turn, 0, expect.any(Function), expect.any(AbortSignal));
-    expect(convo().getByText("Tidy my list.")).toBeTruthy();
+    const convo = () => within(screen.getByRole("list", { name: "Conversation" }));
+    // The thread before the turn, then the turn read from its start.
+    expect(turns.streamTurn).toHaveBeenLastCalledWith("turn-elsewhere", 0, expect.any(Function), expect.any(AbortSignal));
+    await waitFor(() => expect(convo().getByText("Tidy my list.")).toBeTruthy());
     expect(convo().getAllByText("More please.")).toHaveLength(1);
     expect(convo().queryByText("Partial")).toBeNull();
     const line = () => document.querySelector(".ai-activity");
@@ -497,7 +528,6 @@ describe("turns in the background (agents G17)", () => {
     live!.onEvent({ event: "done", data: { stop: "end_turn", messages: [] } });
     live!.end();
     await waitFor(() => expect(line()).toBeNull());
-    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeTruthy());
   });
 
   it("stops a running thread's turn on the server with Stop", async () => {
@@ -548,5 +578,240 @@ describe("turns in the background (agents G17)", () => {
     await waitFor(() => expect(screen.getByText("Tidy my list.")).toBeTruthy());
     liveTurn({ agent: "triage", thread: "01JTHREAD", turn: null, running: false });
     expect(hasNewReply("01JTHREAD")).toBe(false);
+  });
+});
+
+describe("the AI panel as a view of agent threads (agents G18)", () => {
+  afterEach(() => {
+    resetRunning();
+    localStorage.removeItem(PANEL_KEY);
+  });
+
+  async function withAgents() {
+    agentsList.mockResolvedValue({
+      agents: [
+        { name: "assistant", label: "Assistant", built_in: true, enabled: true },
+        { name: "triage", label: "Triage", built_in: false, enabled: true, provider: "anthropic", model: "claude-sonnet-5" },
+      ],
+      tools: [],
+    });
+    await refreshAgents();
+  }
+
+  const ROOF = thread({
+    id: "01JOLDER",
+    title: "Roof",
+    pending: 0,
+    messages: [{ role: "user", content: [{ type: "text", text: "Slate?" }] }],
+    proposals: [],
+  });
+
+  type View = ReturnType<typeof within>;
+
+  /** The panel, in an aside as the shell has it, and the Chat tab of Triage beside it. */
+  function both(): { panel: View; tab: View } {
+    agentThread.mockImplementation(async (_agent: string, id: string) => (id === "01JOLDER" ? ROOF : thread()));
+    render(() => (
+      <>
+        <aside aria-label="AI">
+          <ChatPanel noteId={() => "01JNOTE"} />
+        </aside>
+        <AgentChat agent="triage" label="Triage" />
+      </>
+    ));
+    return {
+      panel: within(screen.getByRole("complementary", { name: "AI" })),
+      tab: within(screen.getByRole("region", { name: "Chat" })),
+    };
+  }
+
+  /** In the panel, choose thread `title` from its thread picker. */
+  async function pick(panel: View, title: RegExp | string) {
+    fireEvent.click(await panel.findByRole("button", { name: /^Thread: / }));
+    const menu = within(await panel.findByRole("menu", { name: "Threads" }));
+    fireEvent.click(typeof title === "string" ? menu.getByRole("menuitem", { name: title }) : await menu.findByRole("menuitemradio", { name: title }));
+  }
+
+  async function sendIn(view: View, text: string) {
+    fireEvent.input(view.getByLabelText("Ask AI"), { target: { value: text } });
+    fireEvent.click(view.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(live).not.toBeNull());
+  }
+
+  it("lists the agent's threads with running and new-reply marks, and shows the one chosen", async () => {
+    await withAgents();
+    agentThreads.mockResolvedValue({
+      threads: [
+        { id: "01JTHREAD", title: "Groceries", pending: 1, running: true, turn: "turn-x", started_ms: Date.now() },
+        { id: "01JOLDER", title: "Roof", pending: 0 },
+      ],
+    });
+    const { panel } = both();
+    fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
+    liveTurn({ agent: "triage", thread: "01JOLDER", turn: "turn-y", running: false });
+    fireEvent.click(await panel.findByRole("button", { name: "Thread: New thread" }));
+    const menu = within(await panel.findByRole("menu", { name: "Threads" }));
+    await waitFor(() => expect(menu.getAllByRole("menuitemradio")).toHaveLength(2));
+    const [groceries, roof] = menu.getAllByRole("menuitemradio");
+    expect(menu.getByRole("menuitem")).toHaveTextContent("New thread");
+    expect(within(groceries!).getByRole("img", { name: "Running" })).toBeTruthy();
+    expect(within(roof!).getByRole("img", { name: "New reply" })).toBeTruthy();
+    expect(within(roof!).queryByRole("img", { name: "Running" })).toBeNull();
+
+    fireEvent.click(roof!);
+    const convo = within(panel.getByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(convo.getByText("Slate?")).toBeTruthy());
+    expect(agentThread).toHaveBeenCalledWith("triage", "01JOLDER");
+    expect(hasNewReply("01JOLDER")).toBe(false);
+    await waitFor(() => expect(panel.getByRole("button", { name: "Thread: Roof" })).toBeTruthy());
+  });
+
+  it("starts a new thread from the picker, and opens the shown one in the agent screen", async () => {
+    await withAgents();
+    const { panel } = both();
+    fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
+    expect(await panel.findByRole("button", { name: "Open in agent screen" })).toBeDisabled();
+    await pick(panel, /^Groceries/);
+    const convo = () => within(panel.getByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(convo().getByText("Tidy my list.")).toBeTruthy());
+    fireEvent.click(panel.getByRole("button", { name: "Open in agent screen" }));
+    expect(navigatePane).toHaveBeenCalledWith(expect.any(String), "/agents/triage/chat?thread=01JTHREAD");
+
+    await pick(panel, "New thread");
+    await waitFor(() => expect(convo().queryByText("Tidy my list.")).toBeNull());
+    expect(panel.getByRole("button", { name: "Thread: New thread" })).toBeTruthy();
+    await sendIn(panel, "Sort my inbox");
+    expect(live!.body).toMatchObject({ agent: "triage", thread: "01JNEW", note_id: "01JNOTE" });
+  });
+
+  it("shows one stream in the panel and the Chat tab, and a Stop in one ends it in both", async () => {
+    await withAgents();
+    const { panel, tab } = both();
+    fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
+    await pick(panel, /^Groceries/);
+    fireEvent.click(await tab.findByRole("button", { name: /^Groceries/ }));
+    const inPanel = () => within(panel.getByRole("list", { name: "Conversation" }));
+    const inTab = () => within(tab.getByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(inPanel().getByText("Tidy my list.")).toBeTruthy());
+    await waitFor(() => expect(inTab().getByText("Tidy my list.")).toBeTruthy());
+    // One conversation: the thread was read once.
+    expect(agentThread).toHaveBeenCalledTimes(1);
+
+    // The panel adds the open note; the reply streams in both.
+    await sendIn(panel, "More please.");
+    expect(live!.body).toMatchObject({ agent: "triage", thread: "01JTHREAD", note_id: "01JNOTE" });
+    live!.onEvent({ event: "text", data: { delta: "Partial" } });
+    await waitFor(() => expect(inPanel().getByText("Partial")).toBeTruthy());
+    expect(inTab().getByText("Partial")).toBeTruthy();
+    expect(inTab().getAllByText("More please.")).toHaveLength(1);
+    expect(turns.streamTurn).toHaveBeenCalledTimes(1);
+
+    const { turn } = await turns.aiTurnStart.mock.results[0]!.value;
+    fireEvent.click(tab.getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(inPanel().getByText("Stopped.")).toBeTruthy());
+    expect(inTab().getByText("Stopped.")).toBeTruthy();
+    expect(turns.aiTurnStop).toHaveBeenCalledWith(turn);
+    expect(panel.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(tab.getByRole("button", { name: "Send" })).toBeTruthy();
+  });
+
+  it("sends no note from the Chat tab", async () => {
+    await withAgents();
+    const { tab } = both();
+    fireEvent.click(await tab.findByRole("button", { name: /^Groceries/ }));
+    await waitFor(() => expect(within(tab.getByRole("list", { name: "Conversation" })).getByText("Tidy my list.")).toBeTruthy());
+    await sendIn(tab, "More please.");
+    expect(live!.body).toMatchObject({ thread: "01JTHREAD" });
+    expect(live!.body).not.toHaveProperty("note_id");
+  });
+
+  it("switching the panel's thread leaves the Chat tab's alone", async () => {
+    await withAgents();
+    const { panel, tab } = both();
+    fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
+    await pick(panel, /^Groceries/);
+    fireEvent.click(await tab.findByRole("button", { name: /^Groceries/ }));
+    const inPanel = () => within(panel.getByRole("list", { name: "Conversation" }));
+    const inTab = () => within(tab.getByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(inTab().getByText("Tidy my list.")).toBeTruthy());
+
+    await pick(panel, /^Roof/);
+    await waitFor(() => expect(inPanel().getByText("Slate?")).toBeTruthy());
+    expect(inTab().getByText("Tidy my list.")).toBeTruthy();
+    expect(tab.getByRole("button", { name: /^Groceries/ })).toHaveAttribute("aria-current", "true");
+
+    // And the other way round.
+    fireEvent.click(tab.getByRole("button", { name: "New thread" }));
+    await waitFor(() => expect(inTab().queryByText("Tidy my list.")).toBeNull());
+    expect(inPanel().getByText("Slate?")).toBeTruthy();
+  });
+
+  it("in an app, polls a thread open in both views once, and shows its events in both", async () => {
+    inApp.now = { server_url: "https://home.example" };
+    try {
+      await withAgents();
+      let finish: (v: unknown) => void = () => undefined;
+      aiTurnPoll
+        .mockResolvedValueOnce({ events: [{ event: "text", data: { delta: "Polled" } }], next: 1, done: false })
+        .mockImplementationOnce(() => new Promise((r) => (finish = r)));
+      const { panel, tab } = both();
+      fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
+      await pick(panel, /^Groceries/);
+      fireEvent.click(await tab.findByRole("button", { name: /^Groceries/ }));
+      const inPanel = () => within(panel.getByRole("list", { name: "Conversation" }));
+      const inTab = () => within(tab.getByRole("list", { name: "Conversation" }));
+      await waitFor(() => expect(inTab().getByText("Tidy my list.")).toBeTruthy());
+      fireEvent.input(tab.getByLabelText("Ask AI"), { target: { value: "More please." } });
+      fireEvent.click(tab.getByRole("button", { name: "Send" }));
+      await waitFor(() => expect(inPanel().getByText("Polled")).toBeTruthy());
+      expect(inTab().getByText("Polled")).toBeTruthy();
+      await waitFor(() => expect(aiTurnPoll).toHaveBeenCalledTimes(2));
+      const { turn } = await turns.aiTurnStart.mock.results[0]!.value;
+      expect(aiTurnPoll.mock.calls.map((c) => c.slice(0, 2))).toEqual([
+        [turn, 0],
+        [turn, 1],
+      ]);
+      expect(turns.streamTurn).not.toHaveBeenCalled();
+      finish({ events: [{ event: "done", data: { stop: "end_turn", messages: [] } }], next: 2, done: true });
+      await waitFor(() => expect(panel.getByRole("button", { name: "Send" })).toBeTruthy());
+      expect(tab.getByRole("button", { name: "Send" })).toBeTruthy();
+      expect(aiTurnPoll).toHaveBeenCalledTimes(2);
+    } finally {
+      inApp.now = null;
+    }
+  });
+
+  it("keeps the panel's agent and thread over a reload", async () => {
+    await withAgents();
+    const { panel } = both();
+    fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
+    await pick(panel, /^Groceries/);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(PANEL_KEY) ?? "null")).toEqual({ agent: "triage", thread: "01JTHREAD" }));
+
+    // A reload: the panel starts afresh and takes its saved choice.
+    cleanup();
+    forgetPanelChoice();
+    newConversation();
+    setAgent("assistant");
+    resetThreads();
+    expect(JSON.parse(localStorage.getItem(PANEL_KEY) ?? "null")).toEqual({ agent: "triage", thread: "01JTHREAD" });
+    agentThread.mockClear();
+    const again = both().panel;
+    await waitFor(() => expect(within(again.getByRole("list", { name: "Conversation" })).getByText("Tidy my list.")).toBeTruthy());
+    expect(again.getByLabelText("Agent")).toHaveValue("triage");
+    expect(agentThread).toHaveBeenCalledWith("triage", "01JTHREAD");
+  });
+
+  it("opens to a new thread when the saved one was archived since", async () => {
+    await withAgents();
+    localStorage.setItem(PANEL_KEY, JSON.stringify({ agent: "triage", thread: "01JTHREAD" }));
+    forgetPanelChoice();
+    agentThread.mockResolvedValue(thread({ archived: true }));
+    render(() => <ChatPanel noteId={() => ""} />);
+    await waitFor(() => expect(agentThread).toHaveBeenCalledWith("triage", "01JTHREAD"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Thread: New thread" })).toBeTruthy());
+    expect(screen.getByLabelText("Agent")).toHaveValue("triage");
+    expect(screen.queryByText("Tidy my list.")).toBeNull();
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(PANEL_KEY) ?? "null")).toEqual({ agent: "triage", thread: null }));
   });
 });
