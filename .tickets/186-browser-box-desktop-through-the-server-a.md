@@ -3,8 +3,8 @@ id: '186'
 title: Browser box desktop through the server and its Integrations card
 plan: browser
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Browser box desktop through the server and its Integrations card
@@ -16,3 +16,11 @@ Spec: /home/wil/dev/TheVault/.scratch/plans/browser/SPEC.md, B4. Acceptance: ser
 ### 2026-10-23T09:32:38Z — wil
 
 Ticket 185 notes: VAULT_BROWSER_URL is an empty string (not unset) when the box is off - treat empty as unset; /health also answers playwright_cli (the pinned version) beside ok, version, display; /file takes absolute paths or paths relative to /work (playwright-cli prints relative ones); YAML is application/yaml; /files answers {dir, entries:[{name, kind, size, modified_ms}]}.
+
+### 2026-10-23T09:43:33Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T09:43:33Z — wil
+
+Status set to done.
