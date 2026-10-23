@@ -3,8 +3,8 @@ id: '165'
 title: Brave Search integration and the AI web_search tool
 plan: ai
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Brave Search integration and the AI web_search tool
@@ -19,3 +19,11 @@ Acceptance criteria:
 - ./dev env CI=true just check passes.
 
 ## Worklog
+
+### 2026-10-23T02:33:20Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T02:33:20Z — wil
+
+Status set to done.
