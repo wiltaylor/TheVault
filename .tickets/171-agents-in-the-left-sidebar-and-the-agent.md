@@ -5,8 +5,8 @@ title: 'Agents in the left sidebar and the agent screen: Settings, Permissions a
 plan: agents
 blocked_by:
 - '170'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Agents in the left sidebar and the agent screen: Settings, Permissions and File tabs
@@ -18,3 +18,11 @@ Spec: /home/wil/dev/TheVault/.scratch/plans/agents/SPEC.md, G3 and G5 (the Setti
 ### 2026-10-23T03:32:14Z — wil
 
 Design change (user, 2026-10-23, SPEC G6): Assistant is listed first in the sidebar with no Delete or Disable; Settings > AI loses the Chat system prompt and Changes the AI makes cards in favour of a link to Assistant's agent screen, whose Settings and Permissions tabs edit the same things. Add tests for both.
+
+### 2026-10-23T04:06:55Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T04:06:55Z — wil
+
+Status set to done.
