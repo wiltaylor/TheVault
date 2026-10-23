@@ -223,6 +223,10 @@ describe("ChatPanel", () => {
     expect(step.open).toBe(false);
     expect(within(step).getByLabelText("Output")).toHaveTextContent('- button "Go" [ref=e21]');
     expect(within(step).getByLabelText("Errors")).toHaveTextContent("slow page");
+    // The step links to the browser box's desktop, to watch the agent.
+    const watch = within(step).getByRole("link", { name: "Watch" });
+    expect(watch).toHaveAttribute("href", "/browser/vnc.html?autoconnect=1&resize=remote&path=browser/websockify");
+    expect(watch).toHaveAttribute("target", "_blank");
     // A command that timed out says so.
     emit("tool", { id: "b2", name: "browser_run", input: { command: "sleep 999\necho done", timeout: 1 } });
     emit("tool_result", {

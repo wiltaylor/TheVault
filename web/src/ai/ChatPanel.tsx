@@ -237,6 +237,12 @@ export function hostOf(url: string): string {
   }
 }
 
+/** The browser box's desktop through the server (browser B4), as the Integrations card opens it. */
+export const BROWSER_DESKTOP_URL = "/browser/vnc.html?autoconnect=1&resize=remote&path=browser/websockify";
+
+/** Whether a tool drives the browser box (browser B5). */
+const isBrowserTool = (name: string) => name === "browser_run" || name === "browser_file" || name === "browser_save";
+
 /** The web tools (ai D27): their steps name the address read, linking out. */
 const WEB_TOOLS: Record<string, string> = { fetch_url: "Read", download_asset: "Download from" };
 
@@ -297,6 +303,19 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
           <WebLabel name={props.part.name} input={props.part.input} />
         </Show>{" "}
         <span class="muted">({status()})</span>
+        {/* Watch what the agent does in the browser box's desktop; the web app only, as the apps cannot open it (browser B4). */}
+        <Show when={isBrowserTool(props.part.name) && !inApp()}>
+          <a
+            class="ai-step-watch"
+            href={BROWSER_DESKTOP_URL}
+            target="_blank"
+            rel="noopener"
+            title="Open the browser box's desktop in a new tab"
+            onClick={(e) => e.stopPropagation()}
+          >
+            Watch
+          </a>
+        </Show>
         <Show when={image()}>
           {(a) => (
             <a class="ai-step-thumb" href={assetUrl(a().id)} target="_blank" rel="noopener">
