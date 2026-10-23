@@ -3,8 +3,8 @@ id: '164'
 title: OpenAI card speaks Chat Completions as well as Responses, detected by Test
 plan: ai
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # OpenAI card speaks Chat Completions as well as Responses, detected by Test
@@ -20,3 +20,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-23T02:00:03Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T02:00:03Z — wil
+
+Status set to done.
