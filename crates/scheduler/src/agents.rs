@@ -19,19 +19,37 @@
 //! [`MAX_QUEUED`]. At most [`MAX_PER_HOUR`] runs start per agent per hour; further ones are
 //! skipped, with one notification an hour. Every run is recorded in `agent_runs` with its trail
 //! lines, and a failed run leaves one notification linking to its thread (agents G12).
+//!
+//! A mention trigger (agents G16) answers calls, `@<name>` written in a note. Every note a change
+//! not authored by an agent creates or updates is read again once it has been idle for
+//! [`MENTION_IDLE_MS`] (a later save restarts the wait). For each agent it calls, once whatever
+//! the number of calls, the runner opens a thread (`origin = "mention"`), the note is rewritten
+//! once, version-checked and authored by the agent, each call replaced by a link to the thread,
+//! and the run starts, its first message the trigger's prompt and the instruction: the text that
+//! held the call, the call replaced by "you". A conflicting write leaves the call where it is,
+//! for the next save to find, and moves the thread just opened to the trash.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, OnceLock, Weak};
 
 use query::{BinOp, Expr, From, Lit, PageRequest, Query};
-use schema::{Agent, Doc, Schedule, Schema, Trigger, TriggerWhen};
+use schema::{Agent, Doc, FieldKind, Schedule, Schema, Trigger, TriggerWhen};
 use state::{AgentRunOutcome, Author, NewNotification};
-use writer::{Event, Hooks, Migration, NoteChange, Saved, ScriptRole};
+use writer::{Event, Hooks, Input, Migration, NoteChange, Saved, ScriptRole};
 
-use crate::{Scheduler, clip};
+use crate::{Scheduler, clip, mentions};
 
 /// How long a note must be quiet before the run its changes started goes ahead.
 pub const DEBOUNCE_MS: i64 = 30_000;
+
+/// How long a note must be idle before the calls of agents written in it are answered.
+pub const MENTION_IDLE_MS: i64 = 5_000;
+
+/// The origin of a thread a call from a note opened.
+pub const MENTION_ORIGIN: &str = "mention";
+
+/// How much of the instruction a called agent's thread title holds, in characters.
+const MENTION_TITLE_CHARS: usize = 40;
 
 /// The most runs one agent has going at once.
 pub const MAX_RUNNING: usize = 2;
@@ -70,6 +88,8 @@ pub struct AgentJob {
     pub trigger: String,
     pub prompt: String,
     pub title: String,
+    /// The thread opened for the run already, for a call from a note; `None` opens one.
+    pub thread: Option<String>,
 }
 
 /// A note change as the hooks heard it, before it is matched against the triggers.
@@ -130,6 +150,9 @@ pub(crate) struct AgentPlan {
     heard: Vec<Heard>,
     deleting: HashMap<String, Deleting>,
     pending: BTreeMap<(String, String, String), Pending>,
+    /// The notes to read for calls of agents, each with its type and when it has been idle
+    /// long enough.
+    mentions: BTreeMap<String, (String, i64)>,
     lanes: BTreeMap<String, Lane>,
 }
 
@@ -196,6 +219,7 @@ impl AgentPlan {
                 trigger: trigger.clone(),
                 prompt: t.prompt.clone(),
                 title: run_title(trigger, now, Some(&schedule.timezone)),
+                thread: None,
             });
         }
         for h in std::mem::take(&mut self.heard) {
@@ -265,7 +289,49 @@ impl AgentPlan {
             .values()
             .filter_map(|(_, at)| *at)
             .chain(self.pending.values().map(|p| p.due))
+            .chain(self.mentions.values().map(|(_, at)| *at))
             .min()
+    }
+
+    /// The notes idle long enough to be read for calls, taken off the list, but for those of a
+    /// type no agent may be called from, which need not be read.
+    fn take_mentions(&mut self, now: i64) -> Vec<String> {
+        let due: Vec<(String, String)> = self
+            .mentions
+            .iter()
+            .filter(|(_, (_, at))| *at <= now)
+            .map(|(id, (t, _))| (id.clone(), t.clone()))
+            .collect();
+        let mut out = Vec::new();
+        for (id, type_name) in due {
+            self.mentions.remove(&id);
+            if !self.callees(&type_name).is_empty() {
+                out.push(id);
+            }
+        }
+        out
+    }
+
+    /// The agents a note of `type_name` may call, each with the mention trigger it answers by.
+    /// A trigger with no `type` is not called from an `agent_thread` note.
+    fn callees(&self, type_name: &str) -> Vec<(Agent, Trigger)> {
+        self.agents
+            .values()
+            .filter_map(|a| {
+                let t = a.mention_trigger(type_name)?;
+                let named = matches!(&t.when, TriggerWhen::Mention(m) if !m.types.is_empty());
+                (type_name != writer::AGENT_THREAD_TYPE || named).then(|| (a.clone(), t.clone()))
+            })
+            .collect()
+    }
+
+    /// Whether `agent` has started its [`MAX_PER_HOUR`] runs in the last hour.
+    fn over_limit(&mut self, agent: &str, now: i64) -> bool {
+        let lane = self.lanes.entry(agent.to_owned()).or_default();
+        while lane.started.front().is_some_and(|t| *t <= now - HOUR_MS) {
+            lane.started.pop_front();
+        }
+        lane.started.len() >= MAX_PER_HOUR
     }
 
     /// Start `job` now, queue it behind its agent's running runs, or skip it over the hourly
@@ -385,7 +451,7 @@ impl Scheduler {
             .map(|(a, t)| {
                 let cond = match &t.when {
                     TriggerWhen::NoteEvent(e) => e.condition_expr(),
-                    TriggerWhen::Schedule(_) => None,
+                    TriggerWhen::Schedule(_) | TriggerWhen::Mention(_) => None,
                 };
                 (a.name.clone(), t.name.clone(), cond)
             })
@@ -427,6 +493,15 @@ impl Scheduler {
                 Event::Update => "update",
                 Event::Delete => "delete",
             };
+            // A save restarts the wait before the note is read for calls (agents G16).
+            if s.event == Event::Delete {
+                plan.agents.mentions.remove(&s.id);
+            } else {
+                plan.agents.mentions.insert(
+                    s.id.clone(),
+                    (s.type_name.clone(), at.saturating_add(MENTION_IDLE_MS)),
+                );
+            }
             plan.agents.heard.push(Heard {
                 op,
                 id: s.id.clone(),
@@ -485,13 +560,18 @@ impl Scheduler {
         self.reload_agents();
         let now = self.clock.now_ms();
         let (mut jobs, events) = self.plan().agents.take_due(now);
+        let called = self.plan().agents.take_mentions(now);
+        let mut tell = Vec::new();
+        for id in called {
+            jobs.extend(self.mention_jobs(&id, now, &mut tell));
+        }
         for e in events {
             let title = match e.op {
                 "delete" => e.title.clone(),
                 _ => {
                     let cond = match &e.trigger.when {
                         TriggerWhen::NoteEvent(n) => n.condition_expr(),
-                        TriggerWhen::Schedule(_) => None,
+                        TriggerWhen::Schedule(_) | TriggerWhen::Mention(_) => None,
                     };
                     self.note_matches(&e.note, &e.type_name, cond.as_ref())
                 }
@@ -505,10 +585,10 @@ impl Scheduler {
                     e.trigger.prompt, e.op, e.note, e.type_name
                 ),
                 title: run_title(&e.trigger.name, now, None),
+                thread: None,
             });
         }
         let mut starts = Vec::new();
-        let mut tell = Vec::new();
         {
             let mut plan = self.plan();
             for job in jobs {
@@ -524,6 +604,148 @@ impl Scheduler {
             self.notify_limit(&job);
         }
         starts
+    }
+
+    /// The runs that the calls of agents in note `id` ask for (agents G16), each with its thread
+    /// opened and the note rewritten with links to them. An agent over its hourly limit is
+    /// skipped with its calls left in place, and added to `tell` when the user is to hear of it.
+    fn mention_jobs(&self, id: &str, now: i64, tell: &mut Vec<AgentJob>) -> Vec<AgentJob> {
+        let Some(runner) = self.runner.get() else {
+            return Vec::new();
+        };
+        let Ok(note) = self.writer.read(id) else {
+            return Vec::new();
+        };
+        let callees = self.plan().agents.callees(&note.type_name);
+        if callees.is_empty() {
+            return Vec::new();
+        }
+        // The plain text fields a call may stand in. A hidden or computed field is not the
+        // user's to write in.
+        let fields: Vec<String> = self
+            .writer
+            .schema()
+            .type_def(&note.type_name)
+            .map(|t| {
+                t.fields
+                    .iter()
+                    .filter(|f| matches!(f.kind, FieldKind::String) && !f.hidden && !f.computed)
+                    .map(|f| f.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Each agent is called by its name, and by its label when that is one word.
+        let mut words: Vec<String> = Vec::new();
+        let mut owner: Vec<usize> = Vec::new();
+        for (k, (a, _)) in callees.iter().enumerate() {
+            words.push(a.name.clone());
+            owner.push(k);
+            let label = a.label.trim();
+            if !label.is_empty()
+                && !label.contains(char::is_whitespace)
+                && !label.eq_ignore_ascii_case(&a.name)
+            {
+                words.push(label.to_owned());
+                owner.push(k);
+            }
+        }
+        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        let places = mentions::places(&note.doc, &fields, &words);
+        let mut called: Vec<usize> = Vec::new();
+        for c in places.iter().flat_map(|p| &p.calls) {
+            if !called.contains(&owner[c.word]) {
+                called.push(owner[c.word]);
+            }
+        }
+        let title = note
+            .doc
+            .field("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let mut doc = note.doc.clone();
+        let mut version = note.version.clone();
+        let mut jobs = Vec::new();
+        for k in called {
+            let (agent, trigger) = &callees[k];
+            let mine = |w: usize| owner[w] == k;
+            let instruction = mentions::instruction(&places, mine);
+            let thread_title = format!(
+                "{title}: {}",
+                mentions::first_chars(&instruction, MENTION_TITLE_CHARS)
+            );
+            let prompt = [
+                trigger.prompt.trim(),
+                instruction.as_str(),
+                &format!(
+                    "Called from note {id} (type {}, title {title:?}); the call was replaced with a link to this thread.",
+                    note.type_name
+                ),
+            ]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+            let mut job = AgentJob {
+                agent: agent.name.clone(),
+                trigger: trigger.name.clone(),
+                prompt,
+                title: thread_title,
+                thread: None,
+            };
+            if self.plan().agents.over_limit(&agent.name, now) {
+                if let Admitted::Skipped(true) = self.plan().agents.admit(job.clone(), now) {
+                    tell.push(job);
+                }
+                continue;
+            }
+            let thread = match runner.open_thread(agent, MENTION_ORIGIN, &job.title) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!(
+                        "agent {:?}: the thread for a call from note {id} could not be opened: {e}",
+                        agent.name
+                    );
+                    continue;
+                }
+            };
+            let link = format!(
+                "[@{}](/agents/{}/chat?thread={thread})",
+                schema::escape_markup(&agent.label),
+                agent.name
+            );
+            let plain = format!(
+                "{} (asked: /agents/{}/chat?thread={thread})",
+                agent.label, agent.name
+            );
+            let mut next = doc.clone();
+            mentions::rewrite(&mut next, &fields, &words, mine, &link, &plain);
+            let by = Author::Agent(agent.name.clone());
+            let input = Input::Json(writer::doc_to_json(&next));
+            match self.writer.update(id, &input, Some(&version), &by) {
+                Ok(saved) => {
+                    version = saved.version;
+                    doc = next;
+                }
+                Err(e) => {
+                    // The call stays for the next save to find; the thread goes.
+                    eprintln!(
+                        "agent {:?}: the call in note {id} was left in place, as the note could not be rewritten: {e}",
+                        agent.name
+                    );
+                    if let Err(e) = self.writer.delete(&thread, None, &by) {
+                        eprintln!(
+                            "agent {:?}: the unused thread {thread} stays: {e}",
+                            agent.name
+                        );
+                    }
+                    break;
+                }
+            }
+            job.thread = Some(thread);
+            jobs.push(job);
+        }
+        jobs
     }
 
     /// Run `job`, then whatever waits behind it for the same agent, until none does.
@@ -558,7 +780,11 @@ impl Scheduler {
             }
         };
         let origin = format!("trigger:{}", job.trigger);
-        let (outcome, log, thread) = match runner.open_thread(&agent, &origin, &job.title) {
+        let opened = match &job.thread {
+            Some(t) => Ok(t.clone()),
+            None => runner.open_thread(&agent, &origin, &job.title),
+        };
+        let (outcome, log, thread) = match opened {
             Ok(thread) => {
                 if let Err(e) = state.set_agent_run_thread(id, &thread) {
                     eprintln!("agent {:?}: recording the run's thread: {e}", agent.name);

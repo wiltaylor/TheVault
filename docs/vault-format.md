@@ -226,7 +226,7 @@ Every vault has ten types that the app relies on. The server writes each one's t
 | `email` | Email | One Gmail message, written by the Gmail sync (google-sync D17) | nothing |
 | `email_thread` | Email thread | One Gmail thread. Its page lists the thread's emails (google-sync D4) | nothing |
 | `event` | Event | One Google Calendar event, or one occurrence of a recurring one, written by the calendar sync (google-sync D15) | nothing |
-| `agent_thread` | Agent thread | One conversation with an agent (agents G7): `agent`, the agent's name; `origin`, `user` or `trigger:<name>`; `last_activity`; the hidden `pending`, how many proposals wait for the user; the hidden `transcript`, a JSON string of `{ messages, steps, proposals }` the server resumes the conversation from; and the content field `body`, the conversation as readable text. Its list page shows the details view, newest activity first. The server writes threads as their turns run, authored by the agent | nothing |
+| `agent_thread` | Agent thread | One conversation with an agent (agents G7): `agent`, the agent's name; `origin`, `user`, `trigger:<name>`, or `mention` for a call from a note; `last_activity`; the hidden `pending`, how many proposals wait for the user; the hidden `transcript`, a JSON string of `{ messages, steps, proposals }` the server resumes the conversation from; and the content field `body`, the conversation as readable text. Its list page shows the details view, newest activity first. The server writes threads as their turns run, authored by the agent | nothing |
 
 A change that removes a "must keep" field, or changes its kind, is refused with `invalid_type`.
 
@@ -2170,15 +2170,18 @@ The `permissions` block holds the agent's own permissions (agents G4). Nothing i
 | `confirm { ... }` | block | every switch `true` | The confirmation switches of ai D22: `notes`, `archive`, `delete`, `types`, `downloads` and `taxonomies`, each a bool. `true` means the agent proposes the change for the user to apply; `false` means it makes the change itself. A switch left out is `true` |
 | `web { ... }` | block | every switch `true` | The internet switches of ai D28: `search`, `read` and `download`, each a bool. A tool switched off is not offered. A switch left out is `true` |
 
-A `trigger` block is labelled with its name and holds a `prompt`, the first user message of each run (a string, not blank, at most 32000 characters), and either a schedule or a note event, never both.
+A `trigger` block is labelled with its name and holds a `prompt`, the first user message of each run (a string, not blank, at most 32000 characters), and one of a schedule, a note event or a mention, never two. The prompt is required, except in a mention trigger.
 
 | Item | Form | Default | Meaning |
 |------|------|---------|---------|
 | `schedule` | string | none | A five-field cron expression, read as a task file's `schedule` is |
 | `timezone` | string | `"UTC"` | With `schedule` only. The IANA time zone the schedule is read in |
 | `on` | list of `create`, `update` and `delete` | none | With no `schedule`. The note changes that start a run. At least one, each at most once |
-| `type` | type name, or list of type names | every type | With `on` only. The note types the trigger fires for. Each must exist when the file is saved |
+| `mention` | `true` | none | With no `schedule` or `on` (agents G16). The agent answers a call, `@<name>` written in a note. Only `true` is allowed: leave the trigger out to answer no calls |
+| `type` | type name, or list of type names | every type | With `on` or `mention`. The note types the trigger fires for, or whose notes may call the agent. Each must exist when the file is saved |
 | `where` | string | every note | With `on` only. A condition in the query language, such as `processed != true`, checked against the note after the change, or before it for a delete |
+
+A call is plain text in a note: `@` followed by the agent's name, or by its label when the label is one word, matched ignoring case. It stands in the inline markup of a content block (a paragraph, heading, list item, quote, toggle or admonition title, at any depth) or in a `string` field that is neither hidden nor computed. It counts only when the `@` follows the start of the text, whitespace, one of `(`, `[`, `{`, `"` and `'`, or a markup delimiter (`*`, `+`, `~`, `=`, the `}` of a colour), and the word is followed by the end of the text, whitespace or punctuation. So `bob@clerk.com`, `a@clerk` and `@clerks` are not calls of `clerk`, and text inside inline code, a link, a note mention or a placeholder link never holds one. The server replaces each call it answers: in markup with the link `[@<label>](/agents/<name>/chat?thread=<thread id>)`, and in a string field, which holds no markup, with the text `<label> (asked: /agents/<name>/chat?thread=<thread id>)`.
 
 ```wcl
 label         = "Inbox triage"
@@ -2212,6 +2215,12 @@ trigger new_email {
   type   = "email"
   where  = "processed != true"
   prompt = "File this email."
+}
+
+trigger asked {
+  mention = true
+  type    = "email"
+  prompt  = "You were called from an email."
 }
 ```
 

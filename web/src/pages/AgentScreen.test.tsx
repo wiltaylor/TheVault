@@ -50,6 +50,7 @@ const { AgentScreen } = await import("./AgentScreen");
 const { ApiError } = await import("../api");
 const { refreshAgents } = await import("../agents");
 const { reloadDefinitions } = await import("../session");
+const { MENTION_WARNING } = await import("./AgentTriggers");
 
 const SHIPPED = "You are the assistant inside TheVault.";
 
@@ -424,6 +425,46 @@ describe("the Triggers tab", () => {
       triage().triggers[0],
       { name: "new_email", kind: "event", on: ["create", "update"], type: ["email"], where: "processed != true", prompt: "File this email." },
     ]);
+  });
+
+  it("adds a mention trigger, warns that the agent cannot change the note, and saves it", async () => {
+    await open("/agents/inbox_triage/triggers");
+    const t = within(await screen.findByRole("region", { name: "Triggers" }));
+    fireEvent.click(t.getByRole("button", { name: "Add a mention" }));
+    const card = within(t.getByRole("group", { name: "Trigger asked" }));
+    expect(card.getByText("When @mentioned in a note")).toBeTruthy();
+    // Notes confirmation is on, so a run could not change the note it is called from.
+    expect(card.getByRole("note")).toHaveTextContent(MENTION_WARNING);
+    fireEvent.click(card.getByRole("checkbox", { name: "Task" }));
+    fireEvent.click(t.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect(sent().triggers).toEqual([triage().triggers[0], { name: "asked", kind: "mention", type: ["task"], prompt: "" }]);
+  });
+
+  it("shows no warning on a mention trigger of an agent that edits notes itself", async () => {
+    const perms = triage().permissions;
+    agent.mockResolvedValue(
+      triage({
+        permissions: { ...perms, confirm: { ...perms.confirm, notes: false } },
+        triggers: [{ name: "asked", kind: "mention", type: [], prompt: "Be brief." }],
+      }),
+    );
+    await open("/agents/inbox_triage/triggers");
+    const t = within(await screen.findByRole("region", { name: "Triggers" }));
+    const card = within(t.getByRole("group", { name: "Trigger asked" }));
+    expect((card.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("Be brief.");
+    expect(card.queryByRole("note")).toBeNull();
+    // Without the edit tool it cannot change the note either.
+    cleanup();
+    agent.mockResolvedValue(
+      triage({
+        permissions: { ...perms, tools: ["get_note"], confirm: { ...perms.confirm, notes: false } },
+        triggers: [{ name: "asked", kind: "mention", type: [], prompt: "" }],
+      }),
+    );
+    await open("/agents/inbox_triage/triggers");
+    const again = within(await screen.findByRole("region", { name: "Triggers" }));
+    expect(within(again.getByRole("group", { name: "Trigger asked" })).getByRole("note")).toHaveTextContent(MENTION_WARNING);
   });
 
   it("removes a trigger", async () => {

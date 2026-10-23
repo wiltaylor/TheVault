@@ -21,7 +21,10 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use schema::{Agent, AgentPermissions, Invalid, Issue, NoteEvent, Schedule, Trigger, TriggerWhen};
+use schema::{
+    Agent, AgentPermissions, Invalid, Issue, MentionTrigger, NoteEvent, Schedule, Trigger,
+    TriggerWhen,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use writer::Writer;
@@ -110,7 +113,36 @@ fn trigger_json(t: &Trigger) -> Value {
             "where": e.condition,
             "prompt": t.prompt,
         }),
+        TriggerWhen::Mention(m) => json!({
+            "name": t.name,
+            "kind": "mention",
+            "type": m.types,
+            "prompt": t.prompt,
+        }),
     }
+}
+
+/// What a note may call the agent by (agents G16): `null` when it has no mention trigger or is
+/// disabled, else `{types}`, the types whose notes may call it, `null` for every type.
+fn mention_json(a: &Agent) -> Value {
+    if !a.enabled {
+        return Value::Null;
+    }
+    let mut types: Vec<&str> = Vec::new();
+    for t in &a.triggers {
+        if let TriggerWhen::Mention(m) = &t.when {
+            if m.types.is_empty() {
+                return json!({ "types": null });
+            }
+            types.extend(m.types.iter().map(String::as_str));
+        }
+    }
+    if types.is_empty() {
+        return Value::Null;
+    }
+    types.sort_unstable();
+    types.dedup();
+    json!({ "types": types })
 }
 
 /// One line of `GET /api/agents`.
@@ -125,6 +157,7 @@ fn summary_json(name: &str, agent: &Result<Agent, Invalid>) -> Value {
             "model": a.model,
             "enabled": a.enabled,
             "triggers": a.triggers.len(),
+            "mention": mention_json(a),
             "built_in": a.is_built_in(),
         }),
         Err(e) => json!({
@@ -211,8 +244,10 @@ pub struct PermissionsForm {
 #[serde(deny_unknown_fields)]
 pub struct TriggerForm {
     name: String,
-    #[serde(default, rename = "kind")]
-    _kind: Option<Value>,
+    /// `mention` makes a mention trigger; the other kinds are told apart by their fields.
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
     prompt: String,
     schedule: Option<String>,
     timezone: Option<String>,
@@ -260,6 +295,27 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
     }
     for t in f.triggers {
         let at = format!("trigger {}", t.name);
+        if t.kind.as_deref() == Some("mention") {
+            if t.schedule.is_some() || t.on.is_some() {
+                issues.push(Issue::new(
+                    at,
+                    "has mention with schedule or on: a trigger is one kind only",
+                ));
+                continue;
+            }
+            agent.triggers.push(Trigger {
+                name: t.name,
+                prompt: if t.prompt.trim().is_empty() {
+                    String::new()
+                } else {
+                    t.prompt
+                },
+                when: TriggerWhen::Mention(MentionTrigger {
+                    types: t.types.unwrap_or_default(),
+                }),
+            });
+            continue;
+        }
         let when = match (t.schedule, t.on) {
             (Some(cron), None) => TriggerWhen::Schedule(Schedule {
                 cron,

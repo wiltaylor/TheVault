@@ -3,7 +3,9 @@
 // the types and a `where` condition), with the prompt each run starts from and its last runs,
 // each linking to the thread it wrote. The triggers are part of the agent's draft, so the tab's
 // Save writes the whole agent, as Settings and Permissions do. A trigger run has no one to ask,
-// so the tab lists the tools such a run is offered.
+// so the tab lists the tools such a run is offered. A mention trigger (agents G16) answers calls,
+// `@<name>` written in a note of the types it names, and warns when the agent could not change
+// the note it is called from.
 
 import { A } from "@solidjs/router";
 import { For, Index, Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
@@ -28,6 +30,22 @@ export function freshTriggerName(base: string, taken: readonly string[]): string
     const name = `${base}_${i}`;
     if (!taken.includes(name)) return name;
   }
+}
+
+/** The legend of each kind of trigger. */
+const KIND_LEGENDS: Record<AgentTrigger["kind"], string> = {
+  schedule: "On a schedule",
+  event: "When notes change",
+  mention: "When @mentioned in a note",
+};
+
+/** The warning a mention trigger shows when the agent cannot change the note it is called from. */
+export const MENTION_WARNING =
+  "This agent cannot change the note it is called from: turn off Ask before creating and editing notes on its Permissions tab.";
+
+/** Whether an agent with these permissions can change a note itself, with no one to confirm. */
+export function changesNotes(p: AgentTabProps["draft"]["permissions"]): boolean {
+  return !p.confirm.notes && (p.tools === null || p.tools.includes("propose_edit"));
 }
 
 /** The browser's IANA time zone, a new schedule's default. */
@@ -162,7 +180,9 @@ export function TriggersTab(p: AgentTabProps) {
     const t: AgentTrigger =
       kind === "schedule"
         ? { name: freshTriggerName("scheduled", names()), kind, schedule: "0 7 * * *", timezone: browserZone(), prompt: "" }
-        : { name: freshTriggerName("on_change", names()), kind, on: ["create"], type: [], where: null, prompt: "" };
+        : kind === "event"
+          ? { name: freshTriggerName("on_change", names()), kind, on: ["create"], type: [], where: null, prompt: "" }
+          : { name: freshTriggerName("asked", names()), kind, type: [], prompt: "" };
     setTriggers((ts) => [...ts, t]);
   }
 
@@ -175,7 +195,7 @@ export function TriggersTab(p: AgentTabProps) {
 
   function toggleType(i: number, name: string, on: boolean) {
     const t = triggers()[i];
-    if (t?.kind !== "event") return;
+    if (t?.kind !== "event" && t?.kind !== "mention") return;
     setAt(i, { type: on ? [...t.type.filter((n) => n !== name), name] : t.type.filter((n) => n !== name) });
   }
 
@@ -196,8 +216,9 @@ export function TriggersTab(p: AgentTabProps) {
   return (
     <section class="agent-tab" aria-label="Triggers">
       <p class="muted">
-        A trigger runs {p.agent.label || p.agent.name} on its own: on a schedule, or when notes change. Each run starts a
-        new thread whose first message is the trigger's prompt. A note change made by an agent never starts a run.
+        A trigger runs {p.agent.label || p.agent.name} on its own: on a schedule, when notes change, or when a note calls
+        it. Each run starts a new thread whose first message is the trigger's prompt. A note change made by an agent
+        never starts a run.
       </p>
       <Show when={!p.agent.enabled}>
         <p class="agent-perm-note">This agent is disabled, so none of its triggers run.</p>
@@ -222,7 +243,7 @@ export function TriggersTab(p: AgentTabProps) {
         <Index each={triggers()}>
           {(t, i) => (
             <fieldset class="field-card agent-trigger" aria-label={`Trigger ${t().name}`}>
-              <legend>{t().kind === "schedule" ? "On a schedule" : "When notes change"}</legend>
+              <legend>{KIND_LEGENDS[t().kind]}</legend>
               <div class="form-grid">
                 <label for={id(i, "name")}>Name</label>
                 <input
@@ -314,13 +335,52 @@ export function TriggersTab(p: AgentTabProps) {
                   </>
                 )}
               </Show>
+              <Show when={t().kind === "mention" ? (t() as Extract<AgentTrigger, { kind: "mention" }>) : null}>
+                {(m) => (
+                  <>
+                    <p class="muted">
+                      Write <code>@{p.agent.name}</code> in a note to call this agent, or choose “Ask{" "}
+                      {p.agent.label || p.agent.name}” after typing <kbd>@</kbd>. Once the note has been idle for 5 seconds,
+                      the call is replaced with a link to a new thread, and the run starts with the paragraph that held
+                      the call.
+                    </p>
+                    <Show when={!changesNotes(p.draft.permissions)}>
+                      <p class="agent-perm-note" role="note">
+                        {MENTION_WARNING}
+                      </p>
+                    </Show>
+                    <div class="agent-type-list" role="group" aria-label="Note types">
+                      <span>
+                        Called from notes of type{" "}
+                        <span class="muted">{m().type.length === 0 ? "(none ticked: every type)" : ""}</span>
+                      </span>
+                      <For each={typeNames()}>
+                        {(ty) => (
+                          <label class="agent-check">
+                            <input
+                              type="checkbox"
+                              checked={m().type.includes(ty.name)}
+                              onChange={(ev) => toggleType(i, ty.name, ev.currentTarget.checked)}
+                            />{" "}
+                            {ty.label || ty.name}
+                          </label>
+                        )}
+                      </For>
+                    </div>
+                  </>
+                )}
+              </Show>
               <label for={id(i, "prompt")}>Prompt</label>
               <textarea
                 id={id(i, "prompt")}
                 class="ai-system-prompt agent-trigger-prompt"
                 rows={4}
                 value={t().prompt}
-                placeholder="What the agent is asked to do on each run."
+                placeholder={
+                  t().kind === "mention"
+                    ? "Optional: what the agent is told before the text from the note."
+                    : "What the agent is asked to do on each run."
+                }
                 onInput={(e) => setAt(i, { prompt: e.currentTarget.value })}
               />
               <Show when={!p.readOnly}>
@@ -341,6 +401,9 @@ export function TriggersTab(p: AgentTabProps) {
             </button>
             <button type="button" onClick={() => add("event")}>
               Add a note event
+            </button>
+            <button type="button" onClick={() => add("mention")}>
+              Add a mention
             </button>
           </div>
         </Show>

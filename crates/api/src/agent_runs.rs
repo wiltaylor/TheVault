@@ -109,6 +109,7 @@ pub async fn list(
             let kind = match t.when {
                 TriggerWhen::Schedule(_) => "schedule",
                 TriggerWhen::NoteEvent(_) => "event",
+                TriggerWhen::Mention(_) => "mention",
             };
             triggers.push(json!({ "name": t.name, "kind": kind, "runs": runs }));
         }

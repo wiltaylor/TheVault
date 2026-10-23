@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { type Row, type TypeDef, api } from "../api";
+import { AGENT_ICON, agentLabel, agents, callableAgents } from "../agents";
+import { type AgentSummary, type Row, type TypeDef, api } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { readPickerQuery, recentTypes, typeOptions, typeUsed } from "../placeholders";
 import { typeDef, types } from "../session";
@@ -11,16 +12,26 @@ import { knowTitle, noteType } from "./titles";
 const DEBOUNCE_MS = 150;
 const RESULTS = 8;
 
-/** One choice in the picker: a note to mention, a type for a new placeholder, or "Choose type…". */
-type Choice = { kind: "note"; row: Row } | { kind: "new"; type: TypeDef } | { kind: "types" };
+/**
+ * One choice in the picker: an agent to call, a note to mention, a type for a new placeholder,
+ * or "Choose type…".
+ */
+type Choice =
+  | { kind: "agent"; agent: AgentSummary }
+  | { kind: "note"; row: Row }
+  | { kind: "new"; type: TypeDef }
+  | { kind: "types" };
 
 /**
  * The mention picker: a search box inside the document, standing where the mention will go.
- * It lists the notes the text finds, then "New <type>" for a placeholder link titled with the
- * text: the type of the note being edited and the recently used types first, and "Choose type…"
- * for the rest, which `type:` in the text also narrows. Enter or a click takes the choice;
- * Escape, Backspace in the empty box, or leaving the box gives up. Given up, a picker opened by
- * typing `@` leaves the `@` and the text typed after it; one opened by `[[` leaves nothing.
+ * Opened by typing `@`, it lists first "Ask <Label>" for each agent the note's type may call
+ * (agents G16) whose name or label starts with the text; choosing one writes the call, the text
+ * `@<name> `, which the server answers once the note is saved. Then it lists the notes the text
+ * finds, then "New <type>" for a placeholder link titled with the text: the type of the note
+ * being edited and the recently used types first, and "Choose type…" for the rest, which `type:`
+ * in the text also narrows. Enter or a click takes the choice; Escape, Backspace in the empty
+ * box, or leaving the box gives up. Given up, a picker opened by typing `@` leaves the `@` and
+ * the text typed after it; one opened by `[[` leaves nothing.
  */
 export function MentionPicker(props: SolidNodeViewProps) {
   let input!: HTMLInputElement;
@@ -47,8 +58,15 @@ export function MentionPicker(props: SolidNodeViewProps) {
     const current = host ? noteType(host) : undefined;
     return typeOptions(types(), current, recentTypes(), q.typeFilter);
   });
+  const callable = createMemo((): AgentSummary[] => {
+    if (trigger() !== "@") return [];
+    const q = parsed().title;
+    if (q.includes(" ")) return [];
+    return callableAgents(agents(), host ? noteType(host) : undefined, q);
+  });
   const choices = createMemo((): Choice[] => {
-    const out: Choice[] = results().map((row) => ({ kind: "note", row }));
+    const out: Choice[] = callable().map((agent) => ({ kind: "agent", agent }));
+    for (const row of results()) out.push({ kind: "note", row });
     for (const type of newTypes()) out.push({ kind: "new", type });
     if (parsed().title !== "" && parsed().typeFilter === null && types().length > newTypes().length) out.push({ kind: "types" });
     return out;
@@ -87,7 +105,9 @@ export function MentionPicker(props: SolidNodeViewProps) {
    * Remove the picker and put the caret where it stood, after what replaced it: a mention, a
    * placeholder link, or for an abandoned `@` picker the text typed.
    */
-  function finish(content?: { note: { id: string; title: string } } | { placeholder: { type: string; title: string } }) {
+  function finish(
+    content?: { note: { id: string; title: string } } | { placeholder: { type: string; title: string } } | { call: string },
+  ) {
     if (done) return;
     done = true;
     const pos = props.getPos();
@@ -102,6 +122,10 @@ export function MentionPicker(props: SolidNodeViewProps) {
       typeUsed(content.placeholder.type);
       props.replaceWith(placeholderLink.create({ noteType: content.placeholder.type, title: content.placeholder.title }));
       size = 1;
+    } else if (content && "call" in content) {
+      const text = `@${content.call} `;
+      props.replaceWith(editor.schema.text(text));
+      size = text.length;
     } else if (trigger() === "@") {
       const text = `@${query()}`;
       props.replaceWith(editor.schema.text(text));
@@ -119,7 +143,8 @@ export function MentionPicker(props: SolidNodeViewProps) {
   function choose(i: number) {
     const c = choices()[i];
     const title = parsed().title;
-    if (c?.kind === "note") finish({ note: { id: c.row.id, title: c.row.title } });
+    if (c?.kind === "agent") finish({ call: c.agent.name });
+    else if (c?.kind === "note") finish({ note: { id: c.row.id, title: c.row.title } });
     else if (c?.kind === "new") finish({ placeholder: { type: c.type.name, title } });
     else if (c?.kind === "types") {
       // Narrow the types by typing after `type:`; the title stays as typed.
@@ -205,16 +230,32 @@ export function MentionPicker(props: SolidNodeViewProps) {
               <span
                 role="option"
                 class="mention-result"
-                classList={{ "mention-new": c.kind !== "note", "mention-new-first": c.kind !== "note" && choices()[i() - 1]?.kind === "note" }}
+                classList={{
+                  "mention-agent": c.kind === "agent",
+                  "mention-new": c.kind === "new" || c.kind === "types",
+                  "mention-new-first": c.kind !== "note" && c.kind !== "agent" && choices()[i() - 1]?.kind === "note",
+                }}
                 aria-selected={active() === i()}
-                data-testid={c.kind === "note" ? "mention-result" : c.kind === "new" ? "mention-new" : "mention-choose-type"}
+                data-testid={
+                  c.kind === "agent" ? "mention-agent" : c.kind === "note" ? "mention-result" : c.kind === "new" ? "mention-new" : "mention-choose-type"
+                }
                 data-type={c.kind === "new" ? c.type.name : undefined}
+                data-agent={c.kind === "agent" ? c.agent.name : undefined}
                 onMouseDown={(e) => {
                   e.preventDefault();
                   choose(i());
                 }}
                 onMouseEnter={() => setActive(i())}
               >
+                <Show when={c.kind === "agent" && c}>
+                  {(a) => (
+                    <>
+                      <TypeIcon name={a().agent.icon || AGENT_ICON} size={14} />
+                      <span class="mention-result-title">Ask {agentLabel(a().agent)}</span>
+                      <span class="muted"> @{a().agent.name}</span>
+                    </>
+                  )}
+                </Show>
                 <Show when={c.kind === "note" && c}>
                   {(n) => (
                     <>

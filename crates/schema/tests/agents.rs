@@ -1,6 +1,9 @@
 //! Agent files, `agents/<name>.wcl` (agents G1, G4): every item, its default, and every refusal.
 
-use schema::{Agent, AgentConfirm, AgentWeb, NoteEvent, Schedule, Schema, Trigger, TriggerWhen};
+use schema::{
+    Agent, AgentConfirm, AgentWeb, MentionTrigger, NoteEvent, Schedule, Schema, Trigger,
+    TriggerWhen,
+};
 
 const FULL: &str = r#"label         = "Inbox triage"
 description   = "Files new email."
@@ -174,7 +177,7 @@ fn the_format_example_parses() {
     let src = include_str!("../../../docs/vault-format/vault/agents/inbox_triage.wcl");
     let a = Agent::parse("inbox_triage", src).unwrap();
     assert_eq!(a.label, "Inbox triage");
-    assert_eq!(a.triggers.len(), 2);
+    assert_eq!(a.triggers.len(), 3);
     assert!(!a.permissions.confirm.notes);
     assert!(!a.permissions.web.search);
     assert!(a.check(&schema()).is_empty());
@@ -432,4 +435,65 @@ fn to_wcl_reads_back_as_the_same_agent() {
     b.permissions.tools = Some(Vec::new());
     let text = b.to_wcl();
     assert_eq!(Agent::parse("helper", &text).unwrap(), b);
+}
+
+#[test]
+fn a_mention_trigger_takes_type_and_an_optional_prompt() {
+    let src = "trigger asked {\n  mention = true\n  type = [\"email\", \"task\"]\n  prompt = \"Be brief.\"\n}\n\ntrigger anyone {\n  mention = true\n}\n";
+    let a = Agent::parse("clerk", src).unwrap();
+    assert_eq!(
+        a.triggers,
+        [
+            Trigger {
+                name: "asked".into(),
+                prompt: "Be brief.".into(),
+                when: TriggerWhen::Mention(MentionTrigger {
+                    types: vec!["email".into(), "task".into()],
+                }),
+            },
+            Trigger {
+                name: "anyone".into(),
+                prompt: String::new(),
+                when: TriggerWhen::Mention(MentionTrigger::default()),
+            },
+        ]
+    );
+    assert!(a.check(&schema()).is_empty());
+    assert_eq!(a.mention_trigger("email").unwrap().name, "asked");
+    assert_eq!(a.mention_trigger("note").unwrap().name, "anyone");
+    // Written back, the missing prompt stays missing.
+    let text = a.to_wcl();
+    assert!(!text.contains("prompt = \"\""), "{text}");
+    assert_eq!(Agent::parse("clerk", &text).unwrap(), a);
+}
+
+#[test]
+fn a_mention_trigger_is_checked() {
+    assert_eq!(
+        at("trigger t {\n  mention = false\n}\n"),
+        ["trigger t.mention"]
+    );
+    assert_eq!(
+        at("trigger t {\n  mention = \"yes\"\n}\n"),
+        ["trigger t.mention"]
+    );
+    assert_eq!(
+        at("trigger t {\n  mention = true\n  on = [\"create\"]\n}\n"),
+        ["trigger t"]
+    );
+    assert_eq!(
+        at("trigger t {\n  mention = true\n  where = \"done\"\n}\n"),
+        ["trigger t.where"]
+    );
+    assert_eq!(
+        at("trigger t {\n  mention = true\n  prompt = \" \"\n}\n"),
+        ["trigger t.prompt"]
+    );
+    assert_eq!(
+        issues(
+            "clerk",
+            "trigger t {\n  mention = true\n  type = \"nope\"\n}\n"
+        ),
+        ["trigger t.type: there is no type \"nope\""]
+    );
 }

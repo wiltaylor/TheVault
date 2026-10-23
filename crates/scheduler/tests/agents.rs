@@ -1,6 +1,7 @@
 //! Agent triggers (agents G9 to G12) with a stand-in runner and a clock the tests move: schedule
 //! triggers, note events with their filters and debounce, no loops from agent writes, the run
-//! limits, the run records and the failure notification.
+//! limits, the run records and the failure notification; calls of agents written in notes, with
+//! their idle wait and a conflicting write.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -49,10 +50,18 @@ struct Fake {
     delay: Mutex<Duration>,
     running: AtomicUsize,
     most: AtomicUsize,
+    /// Run once, the next time a thread is opened.
+    on_open: Mutex<Option<OnOpen>>,
 }
+
+type OnOpen = Box<dyn FnOnce() + Send>;
 
 impl AgentRunner for Fake {
     fn open_thread(&self, agent: &Agent, origin: &str, title: &str) -> Result<String, String> {
+        let hook = self.on_open.lock().unwrap().take();
+        if let Some(f) = hook {
+            f();
+        }
         let mut t = self.threads.lock().unwrap();
         t.push((agent.name.clone(), origin.to_owned(), title.to_owned()));
         Ok(format!("thread{}", t.len()))
@@ -404,6 +413,108 @@ fn a_failed_run_is_recorded_and_notified_once_linking_to_its_thread() {
     assert_eq!(n.title, "Night owl\u{2019}s nightly run failed");
     assert_eq!(n.body.as_deref(), Some("Anthropic is unavailable"));
     assert_eq!(n.url.as_deref(), Some("/agents/owl/chat?thread=thread1"));
+}
+
+const CLERK: &str = r#"label = "Clerk"
+
+trigger asked {
+  mention = true
+  type    = "memo"
+}
+"#;
+
+fn status_of(r: &Rig, id: &str) -> String {
+    let n = r.writer.read(id).unwrap();
+    n.doc
+        .field("status")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn a_call_is_answered_once_the_note_is_idle_for_five_seconds() {
+    let r = Rig::new();
+    r.agent("clerk", CLERK);
+    let id = r.create("memo", "Roof", "@clerk check the gutters", &user());
+    r.advance(3);
+    // A later save restarts the wait.
+    r.set_status(&id, "@clerk check the gutters too", &user());
+    r.advance(3);
+    assert!(r.fake.turns().is_empty(), "the note was saved 3 s ago");
+    r.advance(3);
+    let threads = r.fake.threads.lock().unwrap().clone();
+    assert_eq!(
+        threads,
+        vec![(
+            "clerk".to_owned(),
+            "mention".to_owned(),
+            "Roof: you check the gutters too".to_owned()
+        )]
+    );
+    let turns = r.fake.turns();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0].2,
+        format!(
+            "you check the gutters too\nCalled from note {id} (type memo, title \"Roof\"); the call was replaced with a link to this thread."
+        )
+    );
+    // A string field holds no markup, so the call becomes plain text.
+    assert_eq!(
+        status_of(&r, &id),
+        "Clerk (asked: /agents/clerk/chat?thread=thread1) check the gutters too"
+    );
+    let runs = r.writer.state().agent_runs("clerk", "asked", 20).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].thread.as_deref(), Some("thread1"));
+    // A later save has no call left to answer.
+    r.set_status(&id, &format!("{} (done)", status_of(&r, &id)), &user());
+    r.advance(10);
+    assert_eq!(r.fake.turns().len(), 1);
+}
+
+#[test]
+fn a_write_meeting_a_newer_version_leaves_the_call_for_the_next_save() {
+    let r = Rig::new();
+    r.agent("clerk", CLERK);
+    let id = r.create("memo", "Roof", "@clerk look", &user());
+    // While the thread is opened, the user saves the note again.
+    let w = r.writer.clone();
+    let note = id.clone();
+    *r.fake.on_open.lock().unwrap() = Some(Box::new(move || {
+        let n = w.read(&note).unwrap();
+        let mut doc = writer::doc_to_json(&n.doc);
+        doc["fields"]["status"] = json!("@clerk look again");
+        w.update(&note, &Input::Json(doc), Some(&n.version), &user())
+            .unwrap();
+    }));
+    r.advance(6);
+    assert!(r.fake.turns().is_empty(), "no run for a call left in place");
+    assert_eq!(status_of(&r, &id), "@clerk look again");
+    // That save is the next one: its call is answered.
+    r.advance(6);
+    assert_eq!(r.fake.turns().len(), 1);
+    assert!(r.fake.turns()[0].2.starts_with("you look again\n"));
+    assert_eq!(
+        status_of(&r, &id),
+        "Clerk (asked: /agents/clerk/chat?thread=thread2) look again"
+    );
+}
+
+#[test]
+fn a_call_written_by_an_agent_calls_no_one() {
+    let r = Rig::new();
+    r.agent("clerk", CLERK);
+    let id = r.create(
+        "memo",
+        "Roof",
+        "@clerk look",
+        &Author::Agent("other".into()),
+    );
+    r.advance(10);
+    assert!(r.fake.turns().is_empty());
+    assert_eq!(status_of(&r, &id), "@clerk look");
 }
 
 #[test]

@@ -30,3 +30,9 @@ trigger new_email {
   where  = "processed != true"
   prompt = "File this email."
 }
+
+trigger asked {
+  mention = true
+  type    = "email"
+  prompt  = "You were called from an email."
+}

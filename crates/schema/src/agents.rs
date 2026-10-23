@@ -215,12 +215,13 @@ impl Web {
     }
 }
 
-/// A `trigger <name> { ... }` block (agents G9, G10).
+/// A `trigger <name> { ... }` block (agents G9, G10, G16).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trigger {
     /// The block label.
     pub name: String,
-    /// The first user message of each run.
+    /// The first user message of each run. A mention trigger's is optional: empty when the file
+    /// has none, and the instruction from the note is then the whole message.
     pub prompt: String,
     pub when: When,
 }
@@ -230,6 +231,22 @@ pub struct Trigger {
 pub enum When {
     Schedule(Schedule),
     NoteEvent(NoteEvent),
+    Mention(Mention),
+}
+
+/// A mention trigger (agents G16): `mention = true`, with `type`. The agent answers a call,
+/// `@<name>` written in a note of one of `types`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Mention {
+    /// The note types whose notes may call the agent; empty is every type.
+    pub types: Vec<String>,
+}
+
+impl Mention {
+    /// Whether a note of `type_name` may call the agent by this trigger.
+    pub fn allows(&self, type_name: &str) -> bool {
+        self.types.is_empty() || self.types.iter().any(|t| t == type_name)
+    }
 }
 
 /// A schedule trigger: `schedule`, with `timezone`, read as a task file's are.
@@ -320,6 +337,13 @@ impl Agent {
     /// The trigger named `name`.
     pub fn trigger(&self, name: &str) -> Option<&Trigger> {
         self.triggers.iter().find(|t| t.name == name)
+    }
+
+    /// The first mention trigger a note of `type_name` may call the agent by (agents G16).
+    pub fn mention_trigger(&self, type_name: &str) -> Option<&Trigger> {
+        self.triggers
+            .iter()
+            .find(|t| matches!(&t.when, When::Mention(m) if m.allows(type_name)))
     }
 
     /// Read agent `name` from the text of `agents/<name>.wcl`. Every problem is reported at once.
@@ -422,14 +446,17 @@ impl Agent {
             }
         }
         for trigger in &self.triggers {
-            if let When::NoteEvent(e) = &trigger.when {
-                for t in &e.types {
-                    if schema.type_def(t).is_none() {
-                        issues.push(Issue::new(
-                            format!("trigger {}.type", trigger.name),
-                            format!("there is no type {t:?}"),
-                        ));
-                    }
+            let types = match &trigger.when {
+                When::NoteEvent(e) => &e.types,
+                When::Mention(m) => &m.types,
+                When::Schedule(_) => continue,
+            };
+            for t in types {
+                if schema.type_def(t).is_none() {
+                    issues.push(Issue::new(
+                        format!("trigger {}.type", trigger.name),
+                        format!("there is no type {t:?}"),
+                    ));
                 }
             }
         }
@@ -515,8 +542,18 @@ impl Agent {
                         field(&mut out, "  ", "where", &quoted(c));
                     }
                 }
+                When::Mention(m) => {
+                    field(&mut out, "  ", "mention", "true");
+                    match m.types.as_slice() {
+                        [] => {}
+                        [one] => field(&mut out, "  ", "type", &quoted(one)),
+                        many => field(&mut out, "  ", "type", &list(many)),
+                    }
+                }
             }
-            field(&mut out, "  ", "prompt", &quoted(&t.prompt));
+            if !(matches!(t.when, When::Mention(_)) && t.prompt.is_empty()) {
+                field(&mut out, "  ", "prompt", &quoted(&t.prompt));
+            }
             out.push_str("}\n");
         }
         out.trim_start_matches('\n').to_owned()
@@ -555,7 +592,9 @@ fn list(items: &[String]) -> String {
 }
 
 /// The trigger fields, by kind.
-const TRIGGER_FIELDS: [&str; 6] = ["schedule", "timezone", "on", "type", "where", "prompt"];
+const TRIGGER_FIELDS: [&str; 7] = [
+    "schedule", "timezone", "on", "mention", "type", "where", "prompt",
+];
 
 struct Reader<'a> {
     c: Check<'a>,
@@ -731,9 +770,12 @@ impl Reader<'_> {
             &format!("{at}."),
             "is not a trigger field",
         );
-        let prompt = self.prompt(d, "prompt", &format!("{at}.prompt"), true);
         let schedule = d.field("schedule").is_some();
         let event = d.field("on").is_some();
+        if d.field("mention").is_some() {
+            return self.mention_trigger(d, name, &at, schedule || event);
+        }
+        let prompt = self.prompt(d, "prompt", &format!("{at}.prompt"), true);
         let when = match (schedule, event) {
             (true, true) => {
                 self.c.fail(
@@ -745,7 +787,7 @@ impl Reader<'_> {
             (false, false) => {
                 self.c.fail(
                     &at,
-                    "needs schedule, a cron expression, or on, a list of note changes",
+                    "needs schedule, a cron expression, on, a list of note changes, or mention = true",
                 );
                 None
             }
@@ -772,6 +814,56 @@ impl Reader<'_> {
             name,
             prompt: prompt?,
             when: when?,
+        })
+    }
+
+    /// A mention trigger (agents G16): `mention = true`, an optional `type` and an optional
+    /// `prompt`, and nothing of the other kinds.
+    fn mention_trigger(
+        &mut self,
+        d: &Doc,
+        name: String,
+        at: &str,
+        other_kind: bool,
+    ) -> Option<Trigger> {
+        let before = self.c.errors();
+        if other_kind {
+            self.c.fail(
+                at,
+                "has mention with schedule or on: a trigger is one kind only",
+            );
+        }
+        for f in ["timezone", "where"] {
+            if d.field(f).is_some() {
+                self.c.fail(
+                    &format!("{at}.{f}"),
+                    "does not belong to a mention trigger, which takes type and prompt",
+                );
+            }
+        }
+        match d.field("mention") {
+            Some(Value::Bool(true)) | None => {}
+            Some(Value::Bool(false)) => self.c.fail(
+                &format!("{at}.mention"),
+                "must be true; leave the trigger out to answer no calls",
+            ),
+            Some(v) => self.c.fail(
+                &format!("{at}.mention"),
+                format!("must be true, not {}", v.describe()),
+            ),
+        }
+        let prompt = if d.field("prompt").is_some() {
+            self.prompt(d, "prompt", &format!("{at}.prompt"), false)
+        } else {
+            Some(String::new())
+        };
+        let types = self
+            .names(d, "type", &format!("{at}.type"), "type")
+            .unwrap_or_default();
+        (self.c.errors() == before).then_some(Trigger {
+            name,
+            prompt: prompt?,
+            when: When::Mention(Mention { types }),
         })
     }
 

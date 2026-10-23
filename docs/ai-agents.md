@@ -1,6 +1,6 @@
 # AI agents in the vault
 
-An agent is an AI chat with its own model, system prompt and permissions, defined by a file in the vault. You chat with it in threads, and it can also run on its own: on a schedule, or when notes change. The chat panel's default agent is the built-in **Assistant**.
+An agent is an AI chat with its own model, system prompt and permissions, defined by a file in the vault. You chat with it in threads, and it can also run on its own: on a schedule, when notes change, or when you call it from a note with `@<name>`. The chat panel's default agent is the built-in **Assistant**.
 
 This page is about agents the vault runs with your own AI provider. To connect an outside AI agent, such as a coding assistant, to the vault through the CLI, see [Connecting an AI agent](agents.md). Setting up the providers themselves is in [AI providers](ai.md).
 
@@ -17,7 +17,7 @@ In the web app, the left sidebar's **Agents** section lists every agent, Assista
 | Chat | The agent's threads and the open thread |
 | Settings | Label, description, icon, enabled, provider, model, effort and system prompt |
 | Permissions | Tools, confirmation switches, internet switches and note types |
-| Triggers | Schedules and note events, with each trigger's last runs |
+| Triggers | Schedules, note events and mentions, with each trigger's last runs |
 | File | The WCL file itself, checked as the form is |
 
 The Assistant (`agents/assistant.wcl`) is shipped with every vault. It cannot be deleted or disabled; everything else about it can be changed.
@@ -35,7 +35,7 @@ In a chat, the person or token running it still caps what the agent can change: 
 
 ## Threads
 
-Every conversation with an agent is a note of the built-in type `agent_thread`, holding the agent's name, where it came from (`user`, or `trigger:<name>` for a trigger run), when it was last active, the transcript and a readable copy of the conversation. The server writes the thread as each turn streams, so closing a tab loses nothing. Proposals and what became of them are kept in the thread, so a reopened thread shows its pending proposals with Apply and Discard. [Threads](ai.md#threads) describes them in full.
+Every conversation with an agent is a note of the built-in type `agent_thread`, holding the agent's name, where it came from (`user`, `trigger:<name>` for a trigger run, or `mention` for a call from a note), when it was last active, the transcript and a readable copy of the conversation. The server writes the thread as each turn streams, so closing a tab loses nothing. Proposals and what became of them are kept in the thread, so a reopened thread shows its pending proposals with Apply and Discard. [Threads](ai.md#threads) describes them in full.
 
 The note tools leave threads out unless the agent's `permissions.types` names `agent_thread`, so an agent does not read chats back as vault content. Deleting an agent keeps its threads.
 
@@ -81,6 +81,36 @@ A run starts once the note has been quiet for 30 seconds: several changes to one
 
 Note events fire on the home server only, after the change is written. A change made in the desktop or Android app fires when it reaches the server by sync. The apps themselves never run triggers.
 
+### Calls from notes
+
+A trigger with `mention = true` lets a note call the agent. Write `@` and the agent's name in a note, such as `@clerk list what to buy`, or type `@` in the editor and choose **Ask <label>**, which the picker lists before the notes for each agent the note's type may call. The label calls the agent too when it is one word. `type` limits which note types may call it, and `prompt`, which is optional here, is added before what the note says.
+
+```wcl
+trigger asked {
+  mention = true
+  type    = ["memo", "project"]
+  prompt  = "Keep your answer short."
+}
+```
+
+A call stands in the text of a note's content (paragraphs, headings, list items, quotes, toggles and admonition titles) or in a text field. It needs a space or the start of the text before the `@` and a space, punctuation or the end of the text after the name, so an email address such as `bob@clerk.com` never calls `clerk`. Text in inline code, a link or a note mention never calls anyone. [Vault file format, Agent files](vault-format.md#agent-files) has the exact rule.
+
+Once the note has been idle for 5 seconds (each save starts the wait again), the server answers each agent the note calls, once however many times it is called:
+
+1. It opens a thread, with origin `mention`, titled with the note's title and the start of what was asked.
+2. It rewrites the note once, as the agent, replacing each call with a link to the thread: `[@Clerk](/agents/clerk/chat?thread=<id>)`. In a text field, which shows no links, the call becomes `Clerk (asked: /agents/clerk/chat?thread=<id>)`. A call that is a link no longer calls, so saving the note again does not call the agent again.
+3. It starts the run. Its first message is the trigger's prompt, then the paragraph or list item that held the call with the call written as "you", then a line naming the note:
+
+```text
+Keep your answer short.
+you list what to buy for the gutters.
+Called from note 01JB8Z0Q6W4ZK3V9T1M5XH7N2C (type memo, title "Roof"); the call was replaced with a link to this thread.
+```
+
+The run is unattended, as any trigger run is (below). To let it change the note it was called from, turn off **Ask before creating and editing notes** on the agent's Permissions tab; the Triggers tab warns when the agent could not. Otherwise it answers in the thread, which the link opens.
+
+If the note changes between the server reading it and rewriting it, the call is left where it is, the thread just opened goes to the trash, and the save that changed the note is read for calls in turn. A call written by an agent, including the called agent's own changes to the note, calls no one. Calls are answered on the home server only: a call written in the desktop or Android app is answered when the note reaches the server by sync.
+
 ### What an unattended run may do
 
 A trigger run has no one present to apply a proposal, so it is offered only:
@@ -92,7 +122,7 @@ A change tool whose switch is on is left out of the run's tool list, so nothing 
 
 ## No loops
 
-Every change an agent makes is authored by the agent (author kind `agent`) in the note's history: changes its tools make, changes you apply from its proposals, and its writes to its threads. A change authored by any agent never fires a note event trigger, so an agent cannot set itself or another agent off.
+Every change an agent makes is authored by the agent (author kind `agent`) in the note's history: changes its tools make, changes you apply from its proposals, its writes to its threads, and the rewrite that replaces a call with a link. A change authored by any agent never fires a note event trigger and is never read for calls, so an agent cannot set itself or another agent off.
 
 Changes by you, by tokens, by scripts, tasks and handlers, and by sync from the apps do fire triggers. A handler that runs because of an agent's change writes as the handler, so it can fire a trigger.
 
@@ -105,6 +135,7 @@ Changes by you, by tokens, by scripts, tasks and handlers, and by sync from the 
 | Trigger runs one agent starts in an hour | 60 | Further runs are skipped and logged, with one notification an hour |
 | Model calls in one run | 12 | The run stops, as a chat turn does |
 | Quiet time before a note event run | 30 seconds | Changes to the same note coalesce |
+| Idle time before a note's calls are answered | 5 seconds | Each save starts the wait again |
 
 ## Runs and notifications
 
@@ -120,7 +151,7 @@ The Triggers tab shows each trigger's last 20 runs, with a link to each run's th
 
 | Method and path | Scope | Does |
 |---|---|---|
-| `GET /api/agents` | read | Every agent's summary, Assistant first, and the tools `permissions.tools` may name |
+| `GET /api/agents` | read | Every agent's summary, Assistant first, and the tools `permissions.tools` may name. A summary's `mention` is `null`, or `{ types }` for an enabled agent with a mention trigger: the types whose notes may call it, `null` for every type |
 | `GET /api/agents/{name}` | read | The parsed agent and its WCL |
 | `PUT /api/agents/{name}` | admin | Writes the agent from WCL, `{ wcl }`, or the JSON form `GET` answers |
 | `DELETE /api/agents/{name}` | admin | Deletes the agent file; its threads stay |

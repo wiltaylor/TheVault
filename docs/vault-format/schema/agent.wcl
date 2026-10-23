@@ -1,6 +1,6 @@
 # Schema for agents/<agent>.wcl: an agent's model, prompt, permissions and triggers (agents G1).
 # Check an agent file with this file alone. See docs/vault-format.md. The schema crate checks
-# the closed lists, each schedule and condition, that a trigger is a schedule or a note event,
+# the closed lists, each schedule and condition, that a trigger is a schedule, a note event or a mention,
 # and that the types named exist.
 
 @block("confirm") type AgentConfirm {
@@ -30,10 +30,12 @@
   schedule: utf8?
   timezone: utf8?
   on:       list<utf8>?
+  mention:  bool?
   # A type name or a list of them, which a WCL schema cannot say.
   @schemaless type: utf8?
   where:    utf8?
-  prompt:   utf8
+  # Required, except in a mention trigger.
+  prompt:   utf8?
 }
 
 @document type AgentFile {

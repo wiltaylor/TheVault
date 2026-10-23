@@ -115,6 +115,7 @@ fn the_vault_starts_with_the_assistant() {
             "model": null,
             "enabled": true,
             "triggers": 0,
+            "mention": null,
             "built_in": true,
         }])
     );

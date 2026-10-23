@@ -432,6 +432,11 @@ export interface AgentSummary {
   model?: string | null;
   enabled?: boolean;
   triggers?: number;
+  /**
+   * What a note may call the agent by (agents G16): `null` when it is disabled or has no mention
+   * trigger, else the types whose notes may call it, `types: null` for every type.
+   */
+  mention?: { types: string[] | null } | null;
   built_in: boolean;
   error?: string;
 }
@@ -450,10 +455,14 @@ export interface AgentPermissions {
   web: AiWeb;
 }
 
-/** An agent's trigger, as the routes answer it and take it back (agents G9, G10). */
+/**
+ * An agent's trigger, as the routes answer it and take it back (agents G9, G10, G16). A mention
+ * trigger's prompt may be empty: the instruction from the note is then the whole first message.
+ */
 export type AgentTrigger =
   | { name: string; kind: "schedule"; schedule: string; timezone: string; prompt: string }
-  | { name: string; kind: "event"; on: string[]; type: string[]; where: string | null; prompt: string };
+  | { name: string; kind: "event"; on: string[]; type: string[]; where: string | null; prompt: string }
+  | { name: string; kind: "mention"; type: string[]; prompt: string };
 
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -492,7 +501,7 @@ export interface AgentRun {
 /** An agent's trigger runs: the tools a trigger run is offered, and each trigger's last runs. */
 export interface AgentRuns {
   tools: string[];
-  triggers: { name: string; kind: "schedule" | "event"; runs: AgentRun[] }[];
+  triggers: { name: string; kind: AgentTrigger["kind"]; runs: AgentRun[] }[];
 }
 
 /** A cron schedule in words and the next times it fires, as the scheduler reads it. */

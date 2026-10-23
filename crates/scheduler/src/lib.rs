@@ -26,6 +26,7 @@
 
 pub mod agents;
 mod describe;
+mod mentions;
 mod task;
 
 use std::collections::BTreeMap;
@@ -39,8 +40,8 @@ use state::{Clock, RunOutcome, TaskRun};
 use writer::Writer;
 
 pub use agents::{
-    AgentJob, AgentRunner, DEBOUNCE_MS, MAX_PER_HOUR, MAX_QUEUED, MAX_RUNNING, TriggerBinding,
-    TriggerHooks, TurnReport,
+    AgentJob, AgentRunner, DEBOUNCE_MS, MAX_PER_HOUR, MAX_QUEUED, MAX_RUNNING, MENTION_IDLE_MS,
+    MENTION_ORIGIN, TriggerBinding, TriggerHooks, TurnReport,
 };
 pub use describe::describe;
 pub use task::{MAX_RETRIES, TaskDef, parse_duration, preview, with_paused};

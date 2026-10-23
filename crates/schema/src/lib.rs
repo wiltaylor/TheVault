@@ -24,8 +24,8 @@ use std::fmt;
 
 pub use agents::{
     AGENT_EFFORTS, AGENT_PROMPT_MAX, AGENT_PROVIDERS, ASSISTANT_AGENT, Agent, CONFIRM_SWITCHES,
-    Confirm as AgentConfirm, NoteEvent, Permissions as AgentPermissions, Schedule, TRIGGER_OPS,
-    Trigger, WEB_SWITCHES, Web as AgentWeb, When as TriggerWhen, parse_cron,
+    Confirm as AgentConfirm, Mention as MentionTrigger, NoteEvent, Permissions as AgentPermissions,
+    Schedule, TRIGGER_OPS, Trigger, WEB_SWITCHES, Web as AgentWeb, When as TriggerWhen, parse_cron,
 };
 pub use blocks::{
     ADMONITION_KINDS, ARROWS, AdmonitionPreset, CANVAS_HEIGHT_DEFAULT, CANVAS_HEIGHT_MAX,
@@ -40,7 +40,10 @@ pub use encoding::{
     PALETTE, is_date, is_datetime, is_duration, is_ident, is_ink_colour, is_name, is_palette,
     is_ulid, is_url, is_utc_datetime,
 };
-pub use inline::{MARKUP_ITEMS, Placeholder, markup_item, placeholder_at, placeholders};
+pub use inline::{
+    Call, MARKUP_ITEMS, Placeholder, calls, escape_markup, markup_item, placeholder_at,
+    placeholders,
+};
 pub use note::{NoteLookup, NoteReport};
 pub use queryviews::{FieldRename, VIEW_FIELD_ITEMS, query_view_issues, reads_type};
 pub use taxonomy::{Taxonomy, Term};

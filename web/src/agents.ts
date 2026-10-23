@@ -102,6 +102,25 @@ export function agentNameFrom(text: string): string {
   return name.slice(0, 64).replace(/_+$/, "");
 }
 
+/** The type of the conversations with agents, which a trigger with no `type` is not called from. */
+export const AGENT_THREAD_TYPE = "agent_thread";
+
+/**
+ * The agents a note of `type` may call by writing `@<name>` (agents G16), as the mention picker
+ * offers them: each enabled agent with a mention trigger for the type, whose name or label
+ * starts with `query`, ignoring case. With no type known, only agents every type may call.
+ */
+export function callableAgents(list: readonly AgentSummary[], type: string | undefined, query: string): AgentSummary[] {
+  const q = query.trim().toLowerCase();
+  return list.filter((a) => {
+    const m = a.mention;
+    if (!m || a.enabled === false || a.error) return false;
+    const allowed = m.types === null ? type !== AGENT_THREAD_TYPE : type !== undefined && m.types.includes(type);
+    if (!allowed) return false;
+    return q === "" || a.name.toLowerCase().startsWith(q) || agentLabel(a).toLowerCase().startsWith(q);
+  });
+}
+
 /** What an agent is called: its label, or its name. */
 export function agentLabel(a: Pick<AgentSummary, "name" | "label">): string {
   return a.label?.trim() || a.name;

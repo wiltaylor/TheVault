@@ -130,6 +130,181 @@ pub(crate) fn placeholders_in_doc(body: &Doc, at: &str) -> Vec<(String, Placehol
     out
 }
 
+/// One call of an agent in text (agents G16): `@` and one of the words asked for, at bytes
+/// `start..end` of the text, `word` the index of the word it matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Call {
+    pub start: usize,
+    pub end: usize,
+    pub word: usize,
+}
+
+/// The calls in `text` of any of `words` (agent names and one-word labels), in order. A call is
+/// `@` and a word, matched ignoring case, preceded by the start of the text, whitespace, one of
+/// `([{"'` or a markup delimiter (`*`, `+`, `~`, `=`, the `}` of a colour), and followed by the
+/// end of the text, whitespace or punctuation, so `a@b` and email addresses never match. Where
+/// two words match at one place, the longer wins.
+///
+/// With `markup`, `text` is inline markup (PRD Appendix A): text inside inline code, links,
+/// note mentions and placeholder links holds no call, and neither does an escaped character.
+/// Without it, `text` is a plain string field's.
+pub fn calls(text: &str, words: &[&str], markup: bool) -> Vec<Call> {
+    let mut order: Vec<usize> = (0..words.len()).filter(|&w| !words[w].is_empty()).collect();
+    order.sort_by_key(|&w| std::cmp::Reverse(words[w].chars().count()));
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(c) = text[i..].chars().next() {
+        if markup {
+            match c {
+                '\\' => {
+                    let escaped = text[i + 1..].chars().next().filter(|e| is_markup_char(*e));
+                    i += 1 + escaped.map_or(0, char::len_utf8);
+                    continue;
+                }
+                '`' => {
+                    if let Some(close) = find_unescaped(text, b'`', i + 1) {
+                        i = close + 1;
+                        continue;
+                    }
+                }
+                '[' => {
+                    let end = mention_end(text, i)
+                        .or_else(|| placeholder_at(&text[i..]).map(|(_, len)| i + len))
+                        .or_else(|| link_end(text, i));
+                    if let Some(end) = end {
+                        i = end;
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if c == '@' && opens_call(text[..i].chars().next_back()) {
+            let rest = &text[i + 1..];
+            let hit = order.iter().find_map(|&w| {
+                prefix_ignoring_case(rest, words[w])
+                    .filter(|len| closes_call(rest[*len..].chars().next()))
+                    .map(|len| (w, len))
+            });
+            if let Some((word, len)) = hit {
+                out.push(Call {
+                    start: i,
+                    end: i + 1 + len,
+                    word,
+                });
+                i += 1 + len;
+                continue;
+            }
+        }
+        i += c.len_utf8();
+    }
+    out
+}
+
+/// `s` with every markup character escaped, to stand as literal text in inline markup.
+pub fn escape_markup(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if is_markup_char(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn opens_call(before: Option<char>) -> bool {
+    before.is_none_or(|c| c.is_whitespace() || "([{\"'\u{201c}\u{2018}*+~=}".contains(c))
+}
+
+fn closes_call(after: Option<char>) -> bool {
+    after.is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+}
+
+/// The length in bytes of the start of `s` that is `word`, ignoring case.
+fn prefix_ignoring_case(s: &str, word: &str) -> Option<usize> {
+    let mut rest = s.char_indices();
+    for w in word.chars() {
+        let (_, c) = rest.next()?;
+        if !c.to_lowercase().eq(w.to_lowercase()) {
+            return None;
+        }
+    }
+    Some(rest.next().map_or(s.len(), |(at, _)| at))
+}
+
+/// The index of the next unescaped ASCII `ch` at or after byte `from`.
+fn find_unescaped(s: &str, ch: u8, from: usize) -> Option<usize> {
+    let b = s.as_bytes();
+    let mut j = from;
+    while j < b.len() {
+        if b[j] == b'\\' {
+            j += 2;
+        } else if b[j] == ch {
+            return Some(j);
+        } else {
+            j += 1;
+        }
+    }
+    None
+}
+
+/// The end of a note mention, `[[ULID]]` or `[[ULID|label]]`, starting at byte `i`.
+fn mention_end(s: &str, i: usize) -> Option<usize> {
+    let rest = s.get(i..)?.strip_prefix("[[")?;
+    let id = rest.get(..26)?;
+    if !crate::encoding::is_ulid(id) {
+        return None;
+    }
+    let after = i + 2 + 26;
+    if s[after..].starts_with("]]") {
+        return Some(after + 2);
+    }
+    if !s[after..].starts_with('|') {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut j = after + 1;
+    while j < b.len() {
+        if b[j] == b'\\' {
+            j += 2;
+        } else if b[j..].starts_with(b"]]") {
+            return Some(j + 2);
+        } else {
+            j += 1;
+        }
+    }
+    None
+}
+
+/// The end of a link, `[label](href)`, starting at byte `i`, read as the web editor reads it: the
+/// label may hold code spans and mentions but no other unescaped `[` or `]`.
+fn link_end(s: &str, i: usize) -> Option<usize> {
+    let b = s.as_bytes();
+    let mut j = i + 1;
+    while j < b.len() {
+        match b[j] {
+            b'\\' => j += 2,
+            b'`' => match find_unescaped(s, b'`', j + 1) {
+                Some(k) => j = k + 1,
+                None => j += 1,
+            },
+            b'[' => {
+                j = mention_end(s, j)
+                    .or_else(|| placeholder_at(&s[j..]).map(|(_, len)| j + len))?;
+            }
+            b']' => {
+                if b.get(j + 1) != Some(&b'(') {
+                    return None;
+                }
+                return find_unescaped(s, b')', j + 2).map(|k| k + 1);
+            }
+            _ => j += 1,
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +344,54 @@ mod tests {
         ] {
             assert_eq!(placeholder_at(s), None, "{s}");
         }
+    }
+
+    fn found<'a>(text: &'a str, words: &[&str], markup: bool) -> Vec<&'a str> {
+        calls(text, words, markup)
+            .into_iter()
+            .map(|c| &text[c.start..c.end])
+            .collect()
+    }
+
+    #[test]
+    fn calls_need_a_boundary_on_both_sides() {
+        let words = ["clerk"];
+        assert_eq!(
+            found("@clerk tidy this, (@Clerk) and \"@CLERK.\"", &words, true),
+            vec!["@clerk", "@Clerk", "@CLERK"]
+        );
+        for text in [
+            "mail me at bob@clerk.com",
+            "a@clerk",
+            "@clerks",
+            "@clerk_2",
+            "@cler",
+        ] {
+            assert!(found(text, &words, true).is_empty(), "{text}");
+        }
+        assert_eq!(found("**@clerk** {red}@clerk{/}", &words, true).len(), 2);
+    }
+
+    #[test]
+    fn calls_skip_code_links_mentions_and_escapes() {
+        let words = ["clerk"];
+        let text = "`@clerk` [ask @clerk](https://x.test/@clerk) [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB|@clerk]] [[+task|@clerk]] \\@clerk";
+        assert!(found(text, &words, true).is_empty(), "{text}");
+        assert_eq!(found("`@clerk` @clerk", &words, true), vec!["@clerk"]);
+        // An unclosed backtick or bracket is text.
+        assert_eq!(found("` @clerk [ @clerk", &words, true).len(), 2);
+        // A plain string has no markup to skip.
+        assert_eq!(found("`@clerk`", &words, false), Vec::<&str>::new());
+        assert_eq!(found("see [@clerk](x)", &words, false), vec!["@clerk"]);
+    }
+
+    #[test]
+    fn the_longer_word_wins() {
+        let words = ["tri", "triage"];
+        let c = calls("@Triage now", &words, true);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].word, 1);
+        assert_eq!(escape_markup("a*b[c]"), "a\\*b\\[c\\]");
     }
 
     #[test]
