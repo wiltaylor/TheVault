@@ -494,6 +494,8 @@ export interface AiConfirm {
   delete: boolean;
   /** Changing and creating types. */
   types: boolean;
+  /** Downloading files from the web into the vault as assets (ai D27). */
+  downloads: boolean;
 }
 
 /** A model a provider offers now (ai D6). */
@@ -519,7 +521,8 @@ export interface AiProviders {
 /** What `POST /api/ai/apply` did (ai D23): a note's change with its new version, or a type's. */
 export type AiApplied =
   | { op: "update" | "create" | "archive" | "unarchive" | "delete"; note_id: string; version: string }
-  | { op: "type_change" | "type_create"; type_name: string };
+  | { op: "type_change" | "type_create"; type_name: string }
+  | { op: "download"; asset_id: string; filename: string; media_type?: string; size?: number; url?: string };
 
 /** A poll of a chat turn's events through an app's embedded server (ai D23). */
 export interface AiTurnPoll {

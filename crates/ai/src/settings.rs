@@ -261,6 +261,10 @@ pub struct Settings {
     /// Which kinds of chat change wait for the user (ai D22).
     #[serde(default, skip_serializing_if = "Confirm::is_default")]
     pub confirm: Confirm,
+    /// Lifts the chat fetcher's address rule, so `fetch_url` and `download_asset` reach
+    /// addresses on the local network (ai D27). An escape hatch with no UI; absent means false.
+    #[serde(default, skip_serializing_if = "is_no")]
+    pub fetch_private: bool,
     #[serde(flatten)]
     pub other: Map<String, Value>,
 }
@@ -271,6 +275,10 @@ fn yes() -> bool {
 
 fn is_yes(b: &bool) -> bool {
     *b
+}
+
+fn is_no(b: &bool) -> bool {
+    !*b
 }
 
 /// Which kinds of change the chat proposes for the user to apply (`true`) rather than making
@@ -289,6 +297,9 @@ pub struct Confirm {
     /// `propose_type_change`.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub types: bool,
+    /// `download_asset`, which stores a file from the web as an asset (ai D27).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub downloads: bool,
 }
 
 impl Default for Confirm {
@@ -298,6 +309,7 @@ impl Default for Confirm {
             archive: true,
             delete: true,
             types: true,
+            downloads: true,
         }
     }
 }
@@ -314,6 +326,7 @@ impl Confirm {
             "archive": self.archive,
             "delete": self.delete,
             "types": self.types,
+            "downloads": self.downloads,
         })
     }
 }

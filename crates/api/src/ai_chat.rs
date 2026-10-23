@@ -19,10 +19,10 @@
 //! |---|---|
 //! | `text` | `{delta}`: answer text as it arrives |
 //! | `tool` | `{id, name, input}`: a tool the model called, before it runs |
-//! | `tool_result` | `{id, summary, is_error}`: `summary` holds the ids and titles returned (`notes`), never bodies, a `message` on an error, and for `read_asset` the `asset` read (id, filename, media type, size, kind), never its bytes |
-//! | `proposal` | a note change for the user to apply, by `op` (ai D14, D20): `update` `{id, op, note_id, title, base_version, before, after, ops}`; `create` `{id, op, type, title, after}`; `archive`, `unarchive` and `delete` `{id, op, note_id, title, base_version}` |
+//! | `tool_result` | `{id, summary, is_error}`: `summary` holds the ids and titles returned (`notes`), never bodies, a `message` on an error, for `read_asset` the `asset` read (id, filename, media type, size, kind), never its bytes, and for `fetch_url` and `download_asset` the `web` address read (url, host, media type, size, kind, and a page's title or a download's filename and asset id), never its content (ai D27) |
+//! | `proposal` | a note change for the user to apply, by `op` (ai D14, D20): `update` `{id, op, note_id, title, base_version, before, after, ops}`; `create` `{id, op, type, title, after}`; `archive`, `unarchive` and `delete` `{id, op, note_id, title, base_version}`; and a file to store, `download` `{id, op, url, filename, media_type, size}` (ai D27) |
 //! | `type_proposal` | `{id, name, exists, before, after, issues}`: a type file's new WCL for the user to apply (ai D18) |
-//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create` |
+//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
 //! | `error` | `{kind, message, messages}`: the turn failed; ends the stream |
@@ -222,6 +222,8 @@ struct Setup {
     direct: Direct,
     /// Brave Search, when its key is stored: `web_search` is offered only then (ai D26).
     web_search: Option<crate::brave::Search>,
+    /// Whether the web tools may reach the local network (`ai_settings.fetch_private`, ai D27).
+    fetch_private: bool,
 }
 
 /// The kinds of change the tools make themselves rather than propose (ai D22): those whose
@@ -233,6 +235,8 @@ struct Direct {
     archive: bool,
     delete: bool,
     types: bool,
+    /// `download_asset` stores the file at once (ai D27).
+    downloads: bool,
 }
 
 impl Direct {
@@ -243,6 +247,7 @@ impl Direct {
             archive: !confirm.archive && write,
             delete: !confirm.delete && write,
             types: !confirm.types && scope.allows(Scope::Admin),
+            downloads: !confirm.downloads && write,
         }
     }
 
@@ -254,6 +259,7 @@ impl Direct {
                 "update" | "create" => self.notes,
                 "archive" | "unarchive" => self.archive,
                 "delete" => self.delete,
+                "download" => self.downloads,
                 _ => false,
             },
             _ => false,
@@ -300,6 +306,7 @@ fn setup(
         system,
         direct: Direct::of(settings.confirm, scope),
         web_search: crate::brave::Search::load(state),
+        fetch_private: settings.fetch_private,
     })
 }
 
@@ -570,6 +577,34 @@ impl Turn {
                     });
                     continue;
                 }
+                if matches!(c.name.as_str(), "fetch_url" | "download_asset") && c.error.is_none() {
+                    let got = self.web_tool(&c, &setup, images_sent).await;
+                    if !got.parts.is_empty() {
+                        images_sent += 1;
+                    }
+                    if let Some((name, p)) = got.event
+                        && !self.out.send(name, p).await
+                    {
+                        return;
+                    }
+                    if !self
+                        .out
+                        .send(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::ToolResult {
+                        id: c.id,
+                        content: cut(&got.content, RESULT_LIMIT),
+                        is_error: got.is_error,
+                        parts: got.parts,
+                    });
+                    continue;
+                }
                 let w = self.writer.clone();
                 let author = self.author.clone();
                 let call = c.clone();
@@ -638,6 +673,24 @@ impl Turn {
                 parts: Vec::new(),
                 summary: json!({ "notes": [], "message": e.to_string() }),
             })
+    }
+
+    /// `fetch_url` or `download_asset`, with the turn's image count (ai D27).
+    async fn web_tool(
+        &self,
+        call: &ToolCall,
+        setup: &Setup,
+        images_sent: usize,
+    ) -> crate::ai_web::WebOut {
+        let f = crate::ai_web::fetcher(setup.fetch_private);
+        if call.name == "fetch_url" {
+            let may_send = images_sent < ai_assets::IMAGE_LIMIT;
+            crate::ai_web::fetch_url(f, &call.id, &call.input, may_send, &self.images).await
+        } else {
+            let direct = setup.direct.downloads;
+            crate::ai_web::download_asset(self.writer.clone(), f, direct, &call.id, &call.input)
+                .await
+        }
     }
 
     /// One model call, its text and usage streamed to the client as they arrive.
@@ -788,7 +841,7 @@ pub(crate) fn tool(name: &str, description: &str, properties: Value) -> ToolSpec
 }
 
 /// The chat's tools: read-only ones, and proposals that write nothing unless Settings > AI turned
-/// their confirmation off (ai D14, D18, D20, D22).
+/// their confirmation off (ai D14, D18, D20, D22), then the web tools (ai D27).
 pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
         tool(
@@ -879,6 +932,9 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         ),
     ]
+    .into_iter()
+    .chain(crate::ai_web::tool_specs())
+    .collect()
 }
 
 /// `s` cut to `limit` characters, with a marker saying how much was left out.
@@ -1018,6 +1074,8 @@ pub enum ApplyError {
     Stale(String),
     /// The write refused it: a conflict, a validation failure, a missing note.
     Write(writer::Error),
+    /// A download got nothing (ai D27): the address rule, the size limit, the server.
+    Fetch(ai::web::FetchError),
 }
 
 impl std::fmt::Display for ApplyError {
@@ -1025,6 +1083,7 @@ impl std::fmt::Display for ApplyError {
         match self {
             ApplyError::Invalid(m) | ApplyError::Stale(m) => f.write_str(m),
             ApplyError::Write(e) => e.fmt(f),
+            ApplyError::Fetch(e) => e.fmt(f),
         }
     }
 }
@@ -1043,6 +1102,16 @@ impl From<ApplyError> for ApiError {
             ApplyError::Invalid(m) => ApiError::bad_request(m),
             ApplyError::Stale(m) => ApiError::new(StatusCode::CONFLICT, "stale", m),
             ApplyError::Write(e) => e.into(),
+            ApplyError::Fetch(e) => {
+                use ai::web::FetchError;
+                let (status, code) = match &e {
+                    FetchError::LocalNetwork => (StatusCode::FORBIDDEN, "local_network"),
+                    FetchError::BadUrl(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+                    FetchError::TooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+                    _ => (StatusCode::BAD_GATEWAY, "fetch_failed"),
+                };
+                ApiError::new(status, code, e.to_string())
+            }
         }
     }
 }
@@ -1054,6 +1123,9 @@ impl From<ApplyError> for ApiError {
 /// - `create`: a new note of `type` from `after`;
 /// - `archive` and `unarchive`: the note `note_id` at `base_version`;
 /// - `delete`: the note `note_id` at `base_version`, moved to the trash, never purged (ai D21);
+/// - `download`: the file at `url` downloaded and stored as a new asset called `filename`,
+///   through the guarded fetcher (ai D27), answering `{op, asset_id, filename, media_type,
+///   size, url}`. It waits for the download, so call this off the async threads;
 /// - a type proposal: `after` as the type `name`, when the type file is still `before`; a new
 ///   type through the type write, a change planned and then applied as one commit.
 ///
@@ -1096,6 +1168,9 @@ pub fn apply_change(
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
     }
     let op = p["op"].as_str().unwrap_or("update");
+    if op == "download" {
+        return crate::ai_web::apply_download(w, p);
+    }
     let doc = || match &p["after"] {
         v @ Value::Object(_) => Ok(Input::Json(v.clone())),
         _ => Err(ApplyError::Invalid("the change has no after".into())),

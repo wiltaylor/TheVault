@@ -7,6 +7,7 @@ import { For, Match, Show, Switch, createSignal, onMount } from "solid-js";
 import { type AiModel, type AiProvider, type AiProviders, type Json, type NoteDoc, api, assetUrl } from "../api";
 import { formatValue } from "../components/Render";
 import { blockLines, lineDiff } from "./diff";
+import { DownloadCard } from "./DownloadCard";
 import { Markdown } from "./markdown";
 import { TypeProposalCard } from "./TypeProposalCard";
 import {
@@ -63,6 +64,10 @@ export function stepLabel(name: string, input: Json): string {
       return `Checked a change to type ${s("name")}`;
     case "web_search":
       return `Searched the web for “${s("query")}”`;
+    case "fetch_url":
+      return `Read ${hostOf(s("url"))}`;
+    case "download_asset":
+      return `Download from ${hostOf(s("url"))}`;
     default:
       return `Called ${name}`;
   }
@@ -71,11 +76,55 @@ export function stepLabel(name: string, input: Json): string {
 /** The type tools (ai D18), whose steps return no notes. */
 const TYPE_TOOLS = new Set(["list_types", "get_type", "type_format", "propose_type_change"]);
 
+/** The host of `url`, or `url` itself when it is not a URL. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+
+/** The web tools (ai D27): their steps name the address read, linking out. */
+const WEB_TOOLS: Record<string, string> = { fetch_url: "Read", download_asset: "Download from" };
+
+/** An http or https URL, safe to link to. */
+function webLink(url: string): string | undefined {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A web step's words: what it did, and the host linking to the URL (ai D27). */
+function WebLabel(props: { name: string; input: Json }) {
+  const url = () => {
+    const o = props.input && typeof props.input === "object" && !Array.isArray(props.input) ? props.input : {};
+    return typeof o.url === "string" ? o.url : "";
+  };
+  return (
+    <span>
+      {WEB_TOOLS[props.name]}{" "}
+      <Show when={webLink(url())} fallback={hostOf(url())}>
+        {(href) => (
+          <a href={href()} target="_blank" rel="noopener noreferrer">
+            {hostOf(url())}
+          </a>
+        )}
+      </Show>
+    </span>
+  );
+}
+
 function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
   const status = () => {
     if (!props.part.done) return "running";
     if (props.part.isError) return "failed";
     if (props.part.asset) return props.part.asset.filename;
+    if (props.part.web) return props.part.web.title || props.part.web.media_type || "done";
+    if (props.part.name in WEB_TOOLS) return "done";
     if (TYPE_TOOLS.has(props.part.name)) return "done";
     if (props.part.links) return `${props.part.links.length} found`;
     return `${props.part.notes.length} found`;
@@ -90,7 +139,10 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
   return (
     <details class="ai-step" classList={{ "ai-step-error": props.part.isError }}>
       <summary>
-        <span>{stepLabel(props.part.name, props.part.input)}</span> <span class="muted">({status()})</span>
+        <Show when={props.part.name in WEB_TOOLS} fallback={<span>{stepLabel(props.part.name, props.part.input)}</span>}>
+          <WebLabel name={props.part.name} input={props.part.input} />
+        </Show>{" "}
+        <span class="muted">({status()})</span>
         <Show when={image()}>
           {(a) => (
             <a class="ai-step-thumb" href={assetUrl(a().id)} target="_blank" rel="noopener">
@@ -115,6 +167,15 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
             )}
           </For>
         </ul>
+      </Show>
+      <Show when={props.part.web && webLink(props.part.web.url)}>
+        {(href) => (
+          <p class="muted">
+            <a href={href()} target="_blank" rel="noopener noreferrer">
+              {href()}
+            </a>
+          </p>
+        )}
       </Show>
       <Show when={props.part.notes.length}>
         <ul>
@@ -357,7 +418,7 @@ function ApplyAll(props: { turn: number; parts: Part[] }) {
         <button
           type="button"
           class="primary"
-          disabled={busy() || props.parts.some((p) => (p.kind === "proposal" || p.kind === "type_proposal") && p.state === "applying")}
+          disabled={busy() || props.parts.some((p) => (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "download") && p.state === "applying")}
           onClick={async () => {
             setBusy(true);
             try {
@@ -516,6 +577,7 @@ export function ChatPanel(props: { noteId: () => string }) {
                         <Match when={part.kind === "proposal" && part}>{(p) => <ProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "applied" && part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
+                        <Match when={part.kind === "download" && part}>{(p) => <DownloadCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>
                       </Switch>
                     )}

@@ -678,6 +678,7 @@ export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
   { key: "archive", label: "Ask before archiving notes" },
   { key: "delete", label: "Ask before moving notes to the trash" },
   { key: "types", label: "Ask before changing types" },
+  { key: "downloads", label: "Ask before downloading files into the vault" },
 ];
 
 /**

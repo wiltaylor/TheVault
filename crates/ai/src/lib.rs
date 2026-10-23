@@ -57,6 +57,7 @@ mod anthropic;
 mod chat;
 mod credentials;
 mod error;
+pub mod html;
 mod http;
 mod openai;
 pub mod schema;
@@ -66,6 +67,7 @@ pub mod sse;
 mod trail;
 mod turn;
 mod types;
+pub mod web;
 
 use std::collections::VecDeque;
 use std::io::Read;

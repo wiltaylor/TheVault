@@ -47,7 +47,7 @@ function status(over: Partial<Record<"anthropic" | "openai" | "chatgpt", object>
     system_prompt: DEFAULT_PROMPT,
     default_system_prompt: DEFAULT_PROMPT,
     system_prompt_custom: false,
-    confirm: { notes: true, archive: true, delete: true, types: true },
+    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true },
   };
 }
 
@@ -335,9 +335,10 @@ describe("the Changes the AI makes card", () => {
     "Ask before archiving notes",
     "Ask before moving notes to the trash",
     "Ask before changing types",
+    "Ask before downloading files into the vault",
   ];
 
-  it("shows the four switches on by default and says the trash is never emptied", async () => {
+  it("shows the five switches on by default and says the trash is never emptied", async () => {
     aiStatus.mockResolvedValue(status());
     render(() => <Ai />);
     await screen.findByRole("region", { name: "Changes the AI makes" });
@@ -349,7 +350,7 @@ describe("the Changes the AI makes card", () => {
 
   it("saves one switch as a partial confirm and shows the answer", async () => {
     aiStatus.mockResolvedValue(status());
-    const off = { ...status(), confirm: { notes: true, archive: true, delete: false, types: true } };
+    const off = { ...status(), confirm: { notes: true, archive: true, delete: false, types: true, downloads: true } };
     aiSaveSettings.mockResolvedValue(off);
     render(() => <Ai />);
     await screen.findByRole("region", { name: "Changes the AI makes" });
@@ -358,6 +359,17 @@ describe("the Changes the AI makes card", () => {
     await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ confirm: { delete: false } }));
     await waitFor(() => expect(trash.checked).toBe(false));
     expect((changes().getByRole("switch", { name: "Ask before creating and editing notes" }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("saves the downloads switch (ai D27)", async () => {
+    aiStatus.mockResolvedValue(status());
+    aiSaveSettings.mockResolvedValue({ ...status(), confirm: { ...status().confirm, downloads: false } });
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Changes the AI makes" });
+    const downloads = changes().getByRole("switch", { name: "Ask before downloading files into the vault" }) as HTMLInputElement;
+    fireEvent.click(downloads);
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ confirm: { downloads: false } }));
+    await waitFor(() => expect(downloads.checked).toBe(false));
   });
 
   it("shows a failed save", async () => {

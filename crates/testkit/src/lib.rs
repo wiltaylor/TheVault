@@ -4,7 +4,8 @@
 //! ChatGPT plan) and [`FakeSiwc`] (the Sign in with ChatGPT server); point
 //! `ai_settings.endpoints` `anthropic`, `openai` (and `chatgpt` for the plan) and `chatgpt_auth`
 //! at their `base_url()`s. [`FakeBrave`] is the Brave Search API; point `brave_settings.endpoint`
-//! at its `base_url()`.
+//! at its `base_url()`. [`FakeWeb`] is the web the chat's `fetch_url` and `download_asset` read;
+//! it runs on a loopback address, so tests set `ai_settings.fetch_private`.
 //!
 //! ```no_run
 //! let server = testkit::TestServer::start();
@@ -31,6 +32,7 @@ mod fake_http;
 mod fake_images;
 pub mod fake_openai;
 pub mod fake_siwc;
+pub mod fake_web;
 mod standin;
 
 pub use fake_anthropic::{
@@ -42,6 +44,7 @@ pub use fake_openai::{
     DEFAULT_OPENAI_KEY, Ending, FakeOpenAi, FakeOpenAiBuilder, OpenAiReply, OpenAiResponse,
 };
 pub use fake_siwc::{FakeSiwc, FakeSiwcBuilder};
+pub use fake_web::{FAKE_PAGE, FakeWeb};
 
 pub use fake_google::{
     CALENDAR_PATH, FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, TOKEN_PATH, USERINFO_PATH,

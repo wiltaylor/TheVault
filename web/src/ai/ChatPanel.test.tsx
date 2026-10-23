@@ -49,7 +49,7 @@ const STATUS = {
     openai: { configured: false, model: null },
     chatgpt: { configured: false, model: null },
   },
-  confirm: { notes: true, archive: true, delete: true, types: true },
+  confirm: { notes: true, archive: true, delete: true, types: true, downloads: true },
 };
 
 const MODELS = {

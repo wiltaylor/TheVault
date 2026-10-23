@@ -61,6 +61,7 @@ mod ai_assets;
 mod ai_chat;
 mod ai_settings;
 mod ai_turns;
+mod ai_web;
 mod apps;
 mod assets;
 mod auth;

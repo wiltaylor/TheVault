@@ -28,6 +28,16 @@ export type Content =
 /** A tool result's part beyond its text (ai D19): an image by asset id, never its bytes. */
 export type ResultPart = { type: "text"; text: string } | { type: "image"; asset_id: string; media_type: string };
 
+/** The address a `fetch_url` or `download_asset` step read, from its `tool_result` summary (ai D27). */
+export interface WebRef {
+  url: string;
+  host?: string;
+  media_type?: string;
+  /** `html`, `text`, `pdf`, `image`, `metadata` or `download`. */
+  kind?: string;
+  title?: string;
+}
+
 /** The asset a `read_asset` step read, from its `tool_result` summary. */
 export interface AssetRef {
   id: string;
@@ -112,10 +122,30 @@ export type Applied =
   | { id: string; op: NoteOp; note_id: string; title: Json; version: string }
   | { id: string; op: "type_change" | "type_create"; type_name: string };
 
+/** A file the model asked to download into the vault as an asset (ai D27). */
+export interface DownloadProposal {
+  id: string;
+  op: "download";
+  url: string;
+  filename: string;
+  media_type: string | null;
+  size: number | null;
+}
+
+/** The asset a download stored. */
+export interface DownloadedAsset {
+  asset_id: string;
+  filename: string;
+  media_type?: string;
+  size?: number;
+}
+
 export type Part =
   | { kind: "text"; text: string }
+  /** A download (ai D27): proposed and waiting, or stored, by Apply or by the AI itself (`auto`). */
+  | { kind: "download"; proposal: DownloadProposal; state: ProposalState; error?: string; asset?: DownloadedAsset; auto?: boolean }
   | { kind: "applied"; applied: Applied }
-  | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[] }
+  | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
@@ -258,7 +288,7 @@ function onEvent(e: StreamEvent) {
       const i = lastTurn();
       const at = state.chat.turns[i]?.parts.findIndex((p) => p.kind === "tool" && p.id === d.id) ?? -1;
       if (at < 0) break;
-      const summary = (d.summary ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[] };
+      const summary = (d.summary ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef };
       state.setChat(
         "turns",
         i,
@@ -275,17 +305,33 @@ function onEvent(e: StreamEvent) {
             p.links = summary.links
               .filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url))
               .map((l) => ({ url: l.url, title: String(l.title || l.url) }));
+          if (summary.web && typeof summary.web.url === "string") p.web = summary.web;
         }),
       );
       break;
     }
     case "proposal":
+      if (d.op === "download") {
+        push({ kind: "download", proposal: d as unknown as DownloadProposal, state: "open" });
+        break;
+      }
       push({ kind: "proposal", proposal: { ...d, op: typeof d.op === "string" ? d.op : "update" } as unknown as Proposal, state: "open" });
       break;
     case "type_proposal":
       push({ kind: "type_proposal", proposal: { ...(d as unknown as TypeProposal), issues: Array.isArray(d.issues) ? (d.issues as TypeProposal["issues"]) : [] }, state: "open" });
       break;
     case "applied": {
+      if (d.op === "download") {
+        const asset = d as unknown as DownloadedAsset & { url?: string };
+        push({
+          kind: "download",
+          proposal: { id: String(d.id), op: "download", url: asset.url ?? "", filename: asset.filename, media_type: asset.media_type ?? null, size: asset.size ?? null },
+          state: "applied",
+          asset,
+          auto: true,
+        });
+        break;
+      }
       const applied = d as unknown as Applied;
       push({ kind: "applied", applied });
       // Open views of the note or type take the change, as after a write of this client's own.
@@ -455,7 +501,45 @@ export async function applyProposal(turn: number, part: number) {
 
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
-  return (p.kind === "proposal" || p.kind === "type_proposal") && (p.state === "open" || p.state === "failed");
+  return (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "download") && (p.state === "open" || p.state === "failed");
+}
+
+function setDownload(turn: number, part: number, patch: { state: ProposalState; error?: string; asset?: DownloadedAsset }) {
+  state.setChat(
+    "turns",
+    turn,
+    "parts",
+    part,
+    produce((p) => {
+      if (p.kind !== "download") return;
+      p.state = patch.state;
+      p.error = patch.error;
+      if (patch.asset) p.asset = patch.asset;
+    }),
+  );
+}
+
+/**
+ * Apply a download proposal with POST /api/ai/apply (ai D23, D27): the home server downloads the
+ * file and stores it as an asset. In an app the asset reaches the device with a sync round.
+ */
+export async function applyDownload(turn: number, part: number) {
+  const p = state.chat.turns[turn]?.parts[part];
+  if (p?.kind !== "download" || (p.state !== "open" && p.state !== "failed")) return;
+  setDownload(turn, part, { state: "applying" });
+  try {
+    const done = await api.aiApply(p.proposal);
+    const asset = "asset_id" in done ? done : undefined;
+    setDownload(turn, part, { state: "applied", ...(asset ? { asset } : {}) });
+    await settle("note");
+  } catch (e) {
+    setDownload(turn, part, { state: "failed", error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+export function discardDownload(turn: number, part: number) {
+  const p = state.chat.turns[turn]?.parts[part];
+  if (p?.kind === "download" && p.state !== "applied" && p.state !== "applying") setDownload(turn, part, { state: "discarded" });
 }
 
 /**
@@ -469,9 +553,10 @@ export async function applyAll(turn: number) {
     const p = state.chat.turns[turn]?.parts[i];
     if (!p || !pending(p)) continue;
     if (p.kind === "proposal") await applyProposal(turn, i);
+    else if (p.kind === "download") await applyDownload(turn, i);
     else await applyTypeProposal(turn, i);
     const after = state.chat.turns[turn]?.parts[i];
-    if (!after || (after.kind !== "proposal" && after.kind !== "type_proposal") || after.state !== "applied") return;
+    if (!after || (after.kind !== "proposal" && after.kind !== "type_proposal" && after.kind !== "download") || after.state !== "applied") return;
   }
 }
 

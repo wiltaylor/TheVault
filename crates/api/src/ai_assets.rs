@@ -190,6 +190,9 @@ fn load_image(w: &Writer, id: &str, media: &str, images: &Images) -> Result<Imag
     if let Some(got) = images.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
         return got.clone();
     }
+    if id.starts_with(crate::ai_web::WEB_IMAGE) {
+        return Err("it was fetched in an earlier question".to_owned());
+    }
     let got = match w.asset_info(id) {
         Err(_) => Err(format!("asset {id} no longer exists")),
         Ok(a) if a.size > MAX_DECODE_BYTES => Err(format!(
@@ -265,7 +268,11 @@ pub fn hydrate(w: &Writer, messages: &mut [Message], images: &Images) {
                 match load_image(w, asset_id, media_type, images) {
                     Ok(d) => *data = Some(d),
                     Err(why) => {
-                        let text = if w.asset_info(asset_id).is_err() {
+                        let text = if asset_id.starts_with(crate::ai_web::WEB_IMAGE) {
+                            "an image fetched from the web in an earlier question is not kept: \
+                             fetch it again to see it"
+                                .to_owned()
+                        } else if w.asset_info(asset_id).is_err() {
                             format!("asset {asset_id} no longer exists")
                         } else {
                             format!("asset {asset_id} could not be sent: {why}")

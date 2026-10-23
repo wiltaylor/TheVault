@@ -117,6 +117,7 @@ A call sends the provider the prompt and any text the caller includes:
 - The AI panel sends the conversation and the results of the note tools the model calls, such as the notes it searches and reads, and the attachments it reads with `read_asset`: an image itself, a PDF's or text file's text.
 - The Test button sends only "Reply with OK."
 - With a Brave Search key stored, a `web_search` call sends Brave the query the model wrote; see [Web search](#web-search).
+- A `fetch_url` or `download_asset` call requests the address the model chose from the web, as TheVault, and `fetch_url` sends the provider what it read: a page's text, a PDF's text or an image. See [Read pages and download files](#read-pages-and-download-files).
 
 Nothing else from the vault is sent. Responses API requests set `store: false`, so OpenAI keeps no stored response for later reuse. Chat Completions requests, which go only to a custom API URL, carry no such field; the service's own policy decides what it keeps. Each provider's own data policy applies to what it receives.
 
@@ -171,6 +172,8 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `type_format` | The type-file sections of the vault format, so the model knows the vocabulary |
 | `propose_type_change` | Checks a whole new type file, for an existing type or a new name, and shows it to you; writes it only when confirmation is off; never deletes a type |
 | `web_search` | Searches the web with Brave Search, 1 to 10 results; offered only with a Brave Search key. See [Web search](#web-search) |
+| `fetch_url` | Reads a web page or file for the model; never a change. See [Read pages and download files](#read-pages-and-download-files) |
+| `download_asset` | Downloads a file into the vault as an asset, at most 25 MiB; stores it only when [confirmation is off](#changes-the-ai-makes) |
 
 A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 12 calls to the model; after that the panel says it stopped, and asking again goes on.
 
@@ -185,6 +188,32 @@ With a Brave Search API key stored in Settings > Integrations > Brave Search ([W
 - A Brave error is an error result for the model, with Brave's message and a `kind`: `rate_limit` for 429, `auth` for 401, 403 and 422.
 - The panel shows the step as "Searched the web for “<query>”", with the result titles linking out in a new tab.
 - Each search writes its own `brave:` line to the server log, which never holds the query; the turn's `ai:` trail line is unchanged.
+
+### Read pages and download files
+
+`fetch_url { url }` reads a page or file for the model. Reading changes nothing, so it is never a proposal. The step shows "Read <host>", the host linking to the address in a new tab.
+
+- The server reads at most 5 MiB. The result starts with the final URL, after redirects, and the media type, then says the content is the page's and not the user's.
+- HTML: the page's `<title>`, then its readable text as Markdown-like plain text: headings as `#` lines, paragraphs, lists as `- ` or `1. ` lines, links as `[text](url)` made absolute. Scripts, styles, navigation, page headers and footers, asides, forms and hidden elements are dropped.
+- `text/*`, JSON and XML: the text. A PDF: its text, through the extractor the index uses for PDF assets.
+- Text of every kind is cut at 40,000 characters with a marker.
+- An image: the image itself, sent to the provider and scaled as [Attachments](#attachments) says, counting toward the 8 images per question. It is held for this question only; a later question gets a text saying it is gone, and the model can fetch it again.
+- Anything else: the final URL, media type and size.
+
+`download_asset { url, filename }` downloads a file of at most 25 MiB into the vault as an asset. A larger file is refused, by its `Content-Length` and while reading, and nothing is stored. The file name is `filename`, else the last part of the URL's path, else `download`; slashes, backslashes and control characters become `_`, a name without an extension takes one from the media type, and a name over 255 bytes is shortened, keeping its extension.
+
+- With **Ask before downloading files into the vault** on, the default, the server asks the address for its size and media type (a HEAD request, else a GET of the first byte) and the panel shows a card with the address, file name, type and size, and Apply and Discard. Apply sends it to `POST /api/ai/apply`, which downloads the file and stores it.
+- With the switch off, the file is stored at once and the panel shows "Downloaded <file name>", with a thumbnail for an image. A caller without `write` always gets the card.
+- The model is told the new asset's id, so a later `propose_edit` or `propose_create` can attach it to a note.
+
+Both tools fetch through one guarded client:
+
+- Only `http` and `https` addresses with a host, and no user name or password in the address.
+- **The local-network rule.** The server resolves the host once and refuses the fetch when any address it resolves to is loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16, fe80::/10), unique-local (fc00::/7), carrier-grade NAT (100.64/10), multicast, unspecified, broadcast or 0/8, or the IPv4-mapped IPv6 form of one of these. It connects to the addresses it checked, with no second lookup, and through no proxy. An address written as an IP in the URL is checked the same way. The model gets "TheVault does not fetch addresses on the local network."
+- Redirects are followed by the server itself, at most 5, and each target is checked as the first address was. A sixth is refused.
+- A fetch, redirects and body included, has 30 seconds. Requests say `User-Agent: TheVault/<version> (+https://github.com/wiltaylor/TheVault)`.
+
+To let the tools reach servers on your own network, set `"fetch_private": true` in the `ai_settings` secret (`PUT /api/secrets/ai_settings` with the whole settings object). There is no switch for it in Settings > AI: it is an escape hatch, and it lets a page's text steer the model toward services on your network, so leave it off unless you need it.
 
 ### Attachments
 
@@ -245,7 +274,7 @@ Scripts do not use this prompt: a script's `ai` call passes its own `system`.
 
 ### Changes the AI makes
 
-By default every change the model asks for waits for you as a proposal. The **Changes the AI makes** card in Settings > AI has four switches, all on by default:
+By default every change the model asks for waits for you as a proposal. The **Changes the AI makes** card in Settings > AI has five switches, all on by default:
 
 | Switch | Covers |
 |---|---|
@@ -253,6 +282,7 @@ By default every change the model asks for waits for you as a proposal. The **Ch
 | Ask before archiving notes | `propose_archive`, archiving and unarchiving |
 | Ask before moving notes to the trash | `propose_delete` |
 | Ask before changing types | `propose_type_change`, changed and new types |
+| Ask before downloading files into the vault | `download_asset`; see [Read pages and download files](#read-pages-and-download-files) |
 
 Each switch saves when you change it. With a switch off, the tool makes that kind of change itself, right after checking it, through the same writes Apply uses:
 
@@ -278,10 +308,10 @@ When the provider refuses a request, the answer stops where it was and the panel
 |---|---|
 | `text` | `{ delta }`, the next piece of the answer |
 | `tool` | `{ id, name, input }`, a tool call about to run |
-| `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text |
-| `proposal` | A note change, by `op`, to apply with `POST /api/ai/apply`. `update`: `{ id, op, note_id, title, base_version, before, after, ops }`, an edit. `create`: `{ id, op, type, title, after }`, a new note. `archive` and `unarchive`: `{ id, op, note_id, title, base_version }`. `delete`: `{ id, op, note_id, title, base_version }`, a move to the trash. A proposal without `op` is an `update` |
+| `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text; for `fetch_url` and `download_asset`, `summary.web` is `{ url, host, media_type, size, kind }`, with a page's `title` or a download's `filename` (and `asset_id` once stored), never the content |
+| `proposal` | A note change, by `op`, to apply with `POST /api/ai/apply`. `update`: `{ id, op, note_id, title, base_version, before, after, ops }`, an edit. `create`: `{ id, op, type, title, after }`, a new note. `archive` and `unarchive`: `{ id, op, note_id, title, base_version }`. `delete`: `{ id, op, note_id, title, base_version }`, a move to the trash. `download`: `{ id, op, url, filename, media_type, size }`, a file to store as an asset (`media_type` and `size` may be null). A proposal without `op` is an `update` |
 | `type_proposal` | `{ id, name, exists, before, after, issues }`: `before` is the type file as stored (null for a new type), `after` the checked type file in canonical form, `issues` the warnings the check found |
-| `applied` | A change the tool made itself, its confirmation off, sent in place of the proposal. For a note, `{ id, op, note_id, title, version }`, where `op` is `update`, `create`, `archive`, `unarchive` or `delete` and `version` is the note's new version (for a delete, the version that went to the trash). For a type, `{ id, op, type_name }`, where `op` is `type_change` or `type_create` |
+| `applied` | A change the tool made itself, its confirmation off, sent in place of the proposal. For a note, `{ id, op, note_id, title, version }`, where `op` is `update`, `create`, `archive`, `unarchive` or `delete` and `version` is the note's new version (for a delete, the version that went to the trash). For a type, `{ id, op, type_name }`, where `op` is `type_change` or `type_create`. For a download, `{ id, op, asset_id, filename, media_type, size, url }` |
 | `usage` | `{ provider, model, input, output }` for one model call |
 | `refusal` | `{ provider, model, category, explanation, messages }`; the last event |
 | `error` | `{ kind, message, messages }`; the last event |
@@ -309,6 +339,7 @@ In the desktop and Android apps the embedded server forwards these routes to the
 
 - A note change is written at its `base_version`: an update, an archive or unarchive, or a delete, which moves the note to the trash. A create makes the note. It needs `write`. A note that changed since is a 409 `conflict`, and nothing is written.
 - A type change needs `admin`; without it the answer is 403 `needs_admin`, "Apply type changes in the web app." A type file that changed since the proposal is a 409 `stale`.
+- A download needs `write`. The server downloads `url` through the guarded client and stores it as a new asset called `filename`, answering `{ op: "download", asset_id, filename, media_type, size, url }`. An address the local-network rule refuses is a 403 `local_network`, a file over 25 MiB a 413 `too_large`, and a fetch that fails a 502 `fetch_failed`; nothing is stored.
 - It answers `{ op, note_id, version }` for a note, with the note's new version (for a delete, the version that went to the trash), and `{ op, type_name }` for a type, where `op` is `type_change` or `type_create`.
 - Anything that is not a change the chat proposes is a 400.
 
@@ -318,8 +349,8 @@ Settings > AI uses these routes. Every route under `/api/integrations/ai` needs 
 
 | Method and path | Does |
 |---|---|
-| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`, and for OpenAI the `api` its calls use, `responses` or `chat_completions` (always `responses` without a URL); the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types }`, with every switch filled |
-| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? }, urls?: { anthropic?, openai? }, openai_api? }`; an empty string clears a value, an empty `system_prompt` means the default, an empty URL the official API, and an empty `openai_api` the Responses API. Another `openai_api` than `responses` or `chat_completions` is a 400. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
+| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`, and for OpenAI the `api` its calls use, `responses` or `chat_completions` (always `responses` without a URL); the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types, downloads }`, with every switch filled |
+| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types?, downloads? }, urls?: { anthropic?, openai? }, openai_api? }`; an empty string clears a value, an empty `system_prompt` means the default, an empty URL the official API, and an empty `openai_api` the Responses API. Another `openai_api` than `responses` or `chat_completions` is a 400. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
 | `PUT /api/integrations/ai/{anthropic\|openai}/key` | Stores `{ key }`; an empty key deletes it |
 | `POST /api/integrations/ai/{provider}/test` | Sends the test request to `{ model }` or the default model, and answers `{ ok, model, ms, text, api, error }`. On OpenAI with a custom URL it detects and saves the API type as above, and `api` names the one the answer came over; otherwise `api` is null |
 | `POST /api/integrations/ai/chatgpt/start` | Answers `{ auth_url }`, the ChatGPT sign-in page |

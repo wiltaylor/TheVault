@@ -63,7 +63,7 @@ use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, CommitStep, Vault};
 
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
-pub use assets::Asset;
+pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
 pub use builtin::{
     BUILT_IN_KEYS, BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, CALL_TYPE, CONVERSATION_TYPE,
@@ -81,7 +81,10 @@ pub use devices::{
 };
 pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
-pub use index::{Archived, AssetHow, AssetUse, Graph, GraphEdge, GraphNode, StoredText};
+pub use index::{
+    Archived, AssetHow, AssetUse, Extracted, Graph, GraphEdge, GraphNode, StoredText,
+    extract_pdf_text,
+};
 pub use note::{
     ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, value_to_json, value_wcl,
 };

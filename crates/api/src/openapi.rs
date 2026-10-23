@@ -616,7 +616,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/apply",
-        "Apply a proposal or type_proposal as the chat sent it, at its base version: {op, note_id, version} or {op, type_name}; a type change needs admin",
+        "Apply a proposal or type_proposal as the chat sent it, at its base version: {op, note_id, version} or {op, type_name}, or for a download {op, asset_id, filename}; a type change needs admin",
     ),
 ];
 
