@@ -25,7 +25,14 @@ fn keys_resolve_from_the_secrets() {
     assert!(Credentials::configured(&env.state, Provider::OpenAi).unwrap());
     assert!(!Credentials::configured(&env.state, Provider::ChatGpt).unwrap());
 
+    // With no key, the custom API URL the fake is still resolves, keyless (ai D24); with the
+    // official API too, it is not configured.
     env.state.delete_secret(ai::ANTHROPIC_API_KEY).unwrap();
+    assert!(env.cred(Provider::Anthropic).secret.is_empty());
+    let mut settings = Settings::load(&env.state).unwrap();
+    settings.endpoints.anthropic = None;
+    settings.save(&env.state).unwrap();
+    assert!(!Credentials::configured(&env.state, Provider::Anthropic).unwrap());
     let e = Credentials::resolve(&env.state, Provider::Anthropic).unwrap_err();
     assert_eq!(e.kind, ErrorKind::NotConfigured);
     let e = Credentials::resolve(&env.state, Provider::ChatGpt).unwrap_err();
@@ -477,7 +484,7 @@ fn no_key_or_token_shows_in_debug_errors_or_trail_lines() {
     assert_eq!(e.kind, ErrorKind::Auth);
     leaks(&format!("{e} {e:?}"));
     assert!(!e.message.contains("sk-test-openai-01"), "{}", e.message);
-    let line = ai::trail_for(Provider::OpenAi, &req.model, &result, began.elapsed());
+    let line = ai::trail_for(Provider::OpenAi, &req.model, &result, began.elapsed(), None);
     leaks(&line);
     assert!(
         line.starts_with("ai: provider=openai model=gpt-6 in=0 out=0 outcome=error:auth ms="),
@@ -492,6 +499,7 @@ fn no_key_or_token_shows_in_debug_errors_or_trail_lines() {
         },
         Outcome::Ok,
         Duration::from_millis(3),
+        None,
     );
     assert_eq!(
         line,

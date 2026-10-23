@@ -1,6 +1,8 @@
 //! The `ai_settings` secret (ai D7): the default provider, the default model per provider, and
-//! the base URLs the clients call, which tests point at the testkit fakes.
+//! the base URLs the clients call: the API URLs of Settings > AI (ai D24), which tests point at
+//! the testkit fakes.
 
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -13,7 +15,8 @@ pub const SETTINGS: &str = "ai_settings";
 /// Anthropic's API, which `/v1/messages` and `/v1/models` hang off.
 pub const ANTHROPIC_BASE: &str = "https://api.anthropic.com";
 
-/// OpenAI's API, for an API key and a ChatGPT plan token alike (ai D1).
+/// OpenAI's API, for an API key and a ChatGPT plan token alike (ai D1). The ChatGPT plan always
+/// uses it, whatever API URL the OpenAI card names (ai D24).
 pub const OPENAI_BASE: &str = "https://api.openai.com";
 
 /// OpenAI's sign-in server for Sign in with ChatGPT (ai D8).
@@ -33,10 +36,14 @@ pub struct Models {
     pub chatgpt: Option<String>,
 }
 
-/// Base URLs, without a trailing slash, in place of the real hosts. Absent means the real one.
-/// The `anthropic` base takes `/v1/messages` and `/v1/models`; the `openai` base takes
-/// `/v1/responses` and `/v1/models`, for the ChatGPT plan too; the `chatgpt_auth` base takes
-/// `/api/accounts/oauth/token` and `/.well-known/openid-configuration`.
+/// Base URLs in place of the real hosts. Absent or empty means the real one.
+///
+/// `anthropic` and `openai` are the API URLs Settings > AI edits (ai D24); tests point them at
+/// the testkit fakes. The `anthropic` one takes `/v1/messages` and `/v1/models`, the `openai` one
+/// `/v1/responses` and `/v1/models`. A URL whose path ends in `/v1` is the API root as it is; any
+/// other gets `/v1` appended. `chatgpt` is the ChatGPT plan's base, a test seam that is not in
+/// the UI: the plan never follows `openai`. `chatgpt_auth` takes `/api/accounts/oauth/token` and
+/// `/.well-known/openid-configuration`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Endpoints {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,30 +51,113 @@ pub struct Endpoints {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chatgpt_auth: Option<String>,
 }
 
 impl Endpoints {
-    /// The base URL `provider`'s inference and model calls go to.
+    /// The base URL `provider`'s inference and model calls go to, without the `/v1` the paths
+    /// add: the custom API URL, else the real host. A URL ending in `/v1` loses it, so
+    /// `https://openrouter.ai/api/v1` and `https://openrouter.ai/api` both reach
+    /// `https://openrouter.ai/api/v1/...`. The ChatGPT plan uses `chatgpt` or
+    /// [`OPENAI_BASE`], never the OpenAI API URL (ai D24).
     pub fn api_base(&self, provider: Provider) -> String {
         let (set, real) = match provider {
             Provider::Anthropic => (&self.anthropic, ANTHROPIC_BASE),
-            Provider::OpenAi | Provider::ChatGpt => (&self.openai, OPENAI_BASE),
+            Provider::OpenAi => (&self.openai, OPENAI_BASE),
+            Provider::ChatGpt => (&self.chatgpt, OPENAI_BASE),
         };
-        base(set.as_deref(), real)
+        match set.as_deref().map(trimmed).filter(|s| !s.is_empty()) {
+            Some(s) => s.strip_suffix("/v1").unwrap_or(s).to_owned(),
+            None => real.to_owned(),
+        }
+    }
+
+    /// The API URL set for `provider`, as stored. Only Anthropic and OpenAI have one (ai D24).
+    pub fn url(&self, provider: Provider) -> Option<&str> {
+        match provider {
+            Provider::Anthropic => self.anthropic.as_deref(),
+            Provider::OpenAi => self.openai.as_deref(),
+            Provider::ChatGpt => None,
+        }
+        .map(trimmed)
+        .filter(|s| !s.is_empty())
+    }
+
+    /// The host, with its port when the URL names one, of `provider`'s custom API URL, for the
+    /// trail line (ai D24). `None` for the official API and for the ChatGPT plan.
+    pub fn custom_host(&self, provider: Provider) -> Option<String> {
+        let url = Url::parse(self.url(provider)?).ok()?;
+        let host = url.host_str()?;
+        Some(match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_owned(),
+        })
+    }
+
+    /// Set `provider`'s API URL, checked by [`check_url`], or clear it with `None` or an empty
+    /// string. The ChatGPT plan takes none.
+    pub fn set_url(&mut self, provider: Provider, url: Option<&str>) -> Result<(), AiError> {
+        let slot = match provider {
+            Provider::Anthropic => &mut self.anthropic,
+            Provider::OpenAi => &mut self.openai,
+            Provider::ChatGpt => {
+                return Err(AiError::invalid(
+                    "the ChatGPT plan always uses OpenAI's own API: it takes no API URL",
+                ));
+            }
+        };
+        *slot = match url.map(trimmed).filter(|u| !u.is_empty()) {
+            Some(u) => Some(check_url(u)?),
+            None => None,
+        };
+        Ok(())
     }
 
     /// The base URL of the ChatGPT sign-in server.
     pub fn chatgpt_auth_base(&self) -> String {
-        base(self.chatgpt_auth.as_deref(), CHATGPT_AUTH_BASE)
+        match self
+            .chatgpt_auth
+            .as_deref()
+            .map(trimmed)
+            .filter(|s| !s.is_empty())
+        {
+            Some(s) => s.to_owned(),
+            None => CHATGPT_AUTH_BASE.to_owned(),
+        }
     }
 }
 
-fn base(set: Option<&str>, real: &str) -> String {
-    match set.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.trim_end_matches('/').to_owned(),
-        None => real.to_owned(),
+/// `s` trimmed and without trailing slashes.
+fn trimmed(s: &str) -> &str {
+    s.trim().trim_end_matches('/')
+}
+
+/// `url` as the settings keep it: trimmed and without trailing slashes, checked to be an `http`
+/// or `https` URL with a host and no user name, password, query or fragment (ai D24). `http` is
+/// allowed, for servers on the local network. A refusal is an `invalid` error saying why.
+pub fn check_url(url: &str) -> Result<String, AiError> {
+    let url = trimmed(url);
+    let refuse = |why: &str| AiError::invalid(format!("The API URL {why}."));
+    let parsed = Url::parse(url).map_err(|_| {
+        refuse("is not a URL: give the whole address, such as https://api.example.com/v1")
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(refuse("must start with http:// or https://"));
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(refuse(
+            "must not hold a user name or password: put the key in the API key field",
+        ));
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err(refuse("names no host"));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(refuse("must not have a query (?) or a fragment (#)"));
+    }
+    Ok(url.to_owned())
 }
 
 /// The longest chat system prompt the settings take, in characters (ai D17).

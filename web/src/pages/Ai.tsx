@@ -1,10 +1,11 @@
-import { For, type JSX, Show, createEffect, createSignal, on } from "solid-js";
+import { For, type JSX, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { type AiConfirm, type AiModel, type AiProvider, type AiStatus, type AiTestResult, api } from "../api";
 import { Spinner } from "../components/SyncStatus";
 import { errorText } from "./TypeEditor";
 
 // Settings > AI (ai D6, D7, D8, D16): one card per provider. The Anthropic and OpenAI cards take
-// an API key, which the server stores and never answers back; the ChatGPT card signs in with
+// an API key, which the server stores and never answers back, and an API URL for another service
+// that speaks the same API, which makes the key optional (ai D24); the ChatGPT card signs in with
 // OpenAI's Sign in with ChatGPT, through the same paste-the-address step as Google's card. Each
 // card lists the provider's models live, saves the chosen default model, tests it, and can be
 // made the default provider. Below them, the chat system prompt (ai D17) and the switches that
@@ -66,11 +67,13 @@ function ModelAndTest(props: {
       setListError(errorText(e));
     }
   }
-  // List the models once the provider is set up, and again after a new key or sign-in.
+  // List the models once the provider is set up, and again after a new key, sign-in or API URL.
+  const configured = createMemo(() => p().configured);
+  const url = createMemo(() => p().url ?? "");
   createEffect(
     on(
-      () => p().configured,
-      (configured) => {
+      [configured, url],
+      ([configured]) => {
         setResult(null);
         if (configured) void loadModels();
         else setModels(null);
@@ -79,6 +82,10 @@ function ModelAndTest(props: {
   );
 
   const chosen = () => p().model ?? preselected() ?? "";
+  // On a custom API URL whose model list fails or is empty, the model is typed (ai D24).
+  const typed = () => !!p().url && (listError() !== null || models()?.length === 0);
+  const [typedModel, setTypedModel] = createSignal("");
+  createEffect(on(chosen, (m) => setTypedModel(m)));
 
   async function act(what: "test" | "model" | "default", f: () => Promise<void>) {
     setError(null);
@@ -117,24 +124,58 @@ function ModelAndTest(props: {
       <div class="form-grid">
         <label for={id("model")}>Model</label>
         <Show
-          when={models()}
-          fallback={<span class="muted">{listError() ?? "Listing the models…"}</span>}
+          when={!typed()}
+          fallback={
+            <>
+              <input
+                id={id("model")}
+                list={id("model-ids")}
+                autocomplete="off"
+                spellcheck={false}
+                placeholder="Type a model id"
+                value={typedModel()}
+                disabled={pending() !== null}
+                onInput={(e) => setTypedModel(e.currentTarget.value)}
+                onChange={(e) => {
+                  const m = e.currentTarget.value.trim();
+                  if (m && m !== p().model) pick(m);
+                }}
+              />
+              <datalist id={id("model-ids")}>
+                <For each={[...new Set([...(models() ?? []).map((m) => m.id), chosen()].filter((m) => m))]}>
+                  {(m) => <option value={m} />}
+                </For>
+              </datalist>
+            </>
+          }
         >
-          {(list) => (
-            <select
-              id={id("model")}
-              value={chosen()}
-              disabled={pending() !== null}
-              onChange={(e) => pick(e.currentTarget.value)}
-            >
-              <Show when={!chosen()}>
-                <option value="">Choose a model</option>
-              </Show>
-              <For each={list()}>{(m) => <option value={m.id}>{modelLabel(m)}</option>}</For>
-            </select>
-          )}
+          <Show
+            when={models()}
+            fallback={<span class="muted">{listError() ?? "Listing the models…"}</span>}
+          >
+            {(list) => (
+              <select
+                id={id("model")}
+                value={chosen()}
+                disabled={pending() !== null}
+                onChange={(e) => pick(e.currentTarget.value)}
+              >
+                <Show when={!chosen()}>
+                  <option value="">Choose a model</option>
+                </Show>
+                <For each={list()}>{(m) => <option value={m.id}>{modelLabel(m)}</option>}</For>
+              </select>
+            )}
+          </Show>
         </Show>
       </div>
+      <Show when={typed()}>
+        <p class="muted">
+          {listError() === null
+            ? "This service lists no models: type the id of the one to use."
+            : "The model list could not be read: type the id of the model to use."}
+        </p>
+      </Show>
       <Show when={listError()}>
         <p class="error" role="alert">
           {listError()}
@@ -189,7 +230,91 @@ function Card(props: { title: string; blurb: JSX.Element; children: JSX.Element 
   );
 }
 
-/** An Anthropic or OpenAI card: the API key, stored and never shown again. */
+/** The official API URLs, the API URL fields' placeholders (ai D24). */
+export const OFFICIAL_URLS = {
+  anthropic: "https://api.anthropic.com/v1",
+  openai: "https://api.openai.com/v1",
+} as const;
+
+/**
+ * An Anthropic or OpenAI card's API URL (ai D24): empty for the official API, or another
+ * service that speaks the same API. With a custom URL the key is optional.
+ */
+function UrlForm(props: {
+  provider: "anthropic" | "openai";
+  label: string;
+  status: AiStatus;
+  onStatus: (s: AiStatus) => void;
+}) {
+  const stored = () => props.status.providers[props.provider].url ?? "";
+  const [url, setUrl] = createSignal(stored());
+  const [error, setError] = createSignal<string | null>(null);
+  const [notice, setNotice] = createSignal<string | null>(null);
+  const [pending, setPending] = createSignal(false);
+  createEffect(on(stored, (u) => setUrl(u), { defer: true }));
+  const id = `ai-${props.provider}-url`;
+
+  async function save(ev: SubmitEvent) {
+    ev.preventDefault();
+    setError(null);
+    setNotice(null);
+    setPending(true);
+    const value = url().trim();
+    try {
+      props.onStatus(await api.aiSaveSettings({ urls: { [props.provider]: value } }));
+      setNotice(value ? "Saved. Calls go to this URL." : `Saved. Calls go to the official ${props.label} API.`);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <form class="admin-form" aria-label={`${props.label} API URL`} onSubmit={save}>
+      <div class="form-grid">
+        <label for={id}>API URL</label>
+        <input
+          id={id}
+          type="url"
+          autocomplete="off"
+          spellcheck={false}
+          placeholder={OFFICIAL_URLS[props.provider]}
+          value={url()}
+          onInput={(e) => setUrl(e.currentTarget.value)}
+        />
+      </div>
+      <p class="muted">
+        Leave empty for the official API. Another service must speak the{" "}
+        {props.provider === "anthropic" ? "Anthropic Messages API" : "OpenAI Responses API"}; with its own URL the
+        key is optional.
+      </p>
+      <div class="actions">
+        <button
+          type="submit"
+          disabled={pending() || url().trim() === stored()}
+          aria-busy={pending() ? "true" : undefined}
+        >
+          <Busy on={pending()} />
+          Save URL
+        </button>
+      </div>
+      <Show when={error()}>
+        <p class="error" role="alert">
+          {error()}
+        </p>
+      </Show>
+      <Show when={notice()}>
+        <p class="muted">{notice()}</p>
+      </Show>
+    </form>
+  );
+}
+
+/**
+ * An Anthropic or OpenAI card: the API key, stored and never shown again, and the API URL
+ * (ai D24).
+ */
 export function KeyCard(props: {
   provider: "anthropic" | "openai";
   label: string;
@@ -200,7 +325,9 @@ export function KeyCard(props: {
   const [key, setKey] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   const [pending, setPending] = createSignal<"save" | "remove" | null>(null);
-  const set = () => props.status.providers[props.provider].configured;
+  const p = () => props.status.providers[props.provider];
+  // A custom API URL makes the provider configured with no key (ai D24), so `has_key` says.
+  const set = () => p().has_key ?? p().configured;
   const id = `ai-${props.provider}-key`;
 
   async function act(what: "save" | "remove", value: string) {
@@ -239,7 +366,7 @@ export function KeyCard(props: {
             id={id}
             type="password"
             autocomplete="off"
-            placeholder={set() ? "set" : "Paste a key"}
+            placeholder={set() ? "set" : p().url ? "Optional with a custom API URL" : "Paste a key"}
             value={key()}
             onInput={(e) => setKey(e.currentTarget.value)}
           />
@@ -276,6 +403,7 @@ export function KeyCard(props: {
           {error()}
         </p>
       </Show>
+      <UrlForm provider={props.provider} label={props.label} status={props.status} onStatus={props.onStatus} />
       <ModelAndTest provider={props.provider} label={props.label} status={props.status} onStatus={props.onStatus} />
     </Card>
   );

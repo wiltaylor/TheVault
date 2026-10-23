@@ -373,3 +373,95 @@ describe("the AI section", () => {
     expect(screen.getByRole("link", { name: "Devices" })).toBeTruthy();
   });
 });
+
+describe("Settings > AI API URLs (ai D24)", () => {
+  it("saves an API URL and clears it back to the official API", async () => {
+    aiStatus.mockResolvedValue(status());
+    const custom = "https://openrouter.ai/api/v1";
+    aiSaveSettings
+      .mockResolvedValueOnce(status({ openai: { configured: true, url: custom, has_key: false } }))
+      .mockResolvedValueOnce(status());
+    aiModels.mockResolvedValue({ provider: "openai", model: null, models: [{ id: "gpt-6", display_name: null }] });
+    render(() => <Ai />);
+    await ready();
+
+    const input = card("OpenAI").getByLabelText("API URL") as HTMLInputElement;
+    expect(input.placeholder).toBe("https://api.openai.com/v1");
+    expect((card("Anthropic").getByLabelText("API URL") as HTMLInputElement).placeholder).toBe(
+      "https://api.anthropic.com/v1",
+    );
+    expect(card("OpenAI").getByText(/Leave empty for the official API/)).toBeTruthy();
+    const save = card("OpenAI").getByRole("button", { name: "Save URL" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.input(input, { target: { value: ` ${custom} ` } });
+    fireEvent.click(save);
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ urls: { openai: custom } }));
+    expect(await card("OpenAI").findByText("Saved. Calls go to this URL.")).toBeTruthy();
+    // Configured with no key: the key is optional and not shown as set.
+    const key = card("OpenAI").getByLabelText("API key") as HTMLInputElement;
+    expect(key.placeholder).toBe("Optional with a custom API URL");
+    expect(card("OpenAI").queryByRole("button", { name: "Remove key" })).toBeNull();
+    await waitFor(() => expect(aiModels).toHaveBeenCalledWith("openai"));
+
+    const after = card("OpenAI").getByLabelText("API URL") as HTMLInputElement;
+    expect(after.value).toBe(custom);
+    fireEvent.input(after, { target: { value: "" } });
+    fireEvent.click(card("OpenAI").getByRole("button", { name: "Save URL" }));
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenLastCalledWith({ urls: { openai: "" } }));
+    expect(await card("OpenAI").findByText("Saved. Calls go to the official OpenAI API.")).toBeTruthy();
+    expect((card("OpenAI").getByLabelText("API URL") as HTMLInputElement).value).toBe("");
+  });
+
+  it("shows a refused URL's message", async () => {
+    aiStatus.mockResolvedValue(status());
+    aiSaveSettings.mockRejectedValue(new Error("The API URL must start with http:// or https://."));
+    render(() => <Ai />);
+    await ready();
+    fireEvent.input(card("Anthropic").getByLabelText("API URL"), { target: { value: "ftp://example.com" } });
+    fireEvent.click(card("Anthropic").getByRole("button", { name: "Save URL" }));
+    expect((await card("Anthropic").findByRole("alert")).textContent).toContain("must start with http://");
+  });
+
+  it("types the model when a custom URL lists none", async () => {
+    const url = "http://10.0.0.5:11434";
+    aiStatus.mockResolvedValue(status({ openai: { configured: true, url, has_key: false } }));
+    aiModels.mockResolvedValue({ provider: "openai", model: null, models: [] });
+    aiSaveSettings.mockResolvedValue(status({ openai: { configured: true, url, has_key: false, model: "llama-4" } }));
+    render(() => <Ai />);
+    await ready();
+
+    const model = (await card("OpenAI").findByLabelText("Model")) as HTMLInputElement;
+    expect(model.tagName).toBe("INPUT");
+    expect(card("OpenAI").getByText(/lists no models/)).toBeTruthy();
+    fireEvent.input(model, { target: { value: " llama-4 " } });
+    fireEvent.change(model, { target: { value: " llama-4 " } });
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ models: { openai: "llama-4" } }));
+    await waitFor(() => expect((card("OpenAI").getByLabelText("Model") as HTMLInputElement).value).toBe("llama-4"));
+  });
+
+  it("types the model when a custom URL's model list fails, and keeps the select otherwise", async () => {
+    aiStatus.mockResolvedValue(
+      status({
+        anthropic: { configured: true, url: "https://llm.example/v1", has_key: true, model: "my-model" },
+        openai: { configured: true, has_key: true },
+      }),
+    );
+    aiModels.mockImplementation(async (p: string) => {
+      if (p === "anthropic") throw new Error("Anthropic answered 404: Not found");
+      throw new Error("OpenAI answered 500: down");
+    });
+    render(() => <Ai />);
+    await ready();
+
+    const model = (await card("Anthropic").findByLabelText("Model")) as HTMLInputElement;
+    expect(model.tagName).toBe("INPUT");
+    await waitFor(() => expect((card("Anthropic").getByLabelText("Model") as HTMLInputElement).value).toBe("my-model"));
+    expect(card("Anthropic").getByText(/could not be read/)).toBeTruthy();
+    expect(card("Anthropic").getByRole("alert").textContent).toContain("404");
+    // A key is set too: it shows, and Remove key is offered.
+    expect(card("Anthropic").getByRole("button", { name: "Remove key" })).toBeTruthy();
+    // The official OpenAI API keeps the error and no model field to type in.
+    await waitFor(() => expect(card("OpenAI").getByRole("alert").textContent).toContain("500"));
+    expect(card("OpenAI").queryByRole("textbox", { name: "Model" })).toBeNull();
+  });
+});

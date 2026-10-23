@@ -33,6 +33,7 @@ fn fixture() -> Fixture {
         endpoints: Endpoints {
             anthropic: Some(f.anthropic.base_url()),
             openai: Some(f.openai.base_url()),
+            chatgpt: None,
             chatgpt_auth: None,
         },
         ..Settings::default()

@@ -56,18 +56,30 @@ pub(crate) struct Call {
     pub model: String,
     /// The key or token, scrubbed out of any error message.
     pub secret: String,
+    /// The path under the base URL, such as `/v1/responses`.
+    pub path: String,
+    /// Whether the call goes to a custom API URL (ai D24).
+    pub custom: bool,
 }
 
 impl Call {
+    /// A GET of `path` under `cred`'s base URL. An empty secret, a custom API URL with no key,
+    /// sends no auth header (ai D24).
     pub fn new(cred: &Credential, model: &str, path: &str) -> Call {
         let mut headers = Vec::new();
+        let secret = cred.secret.expose();
+        let keyed = !cred.secret.is_empty();
         match cred.provider {
             Provider::Anthropic => {
-                headers.push(("x-api-key", cred.secret.expose().to_owned()));
+                if keyed {
+                    headers.push(("x-api-key", secret.to_owned()));
+                }
                 headers.push(("anthropic-version", crate::anthropic::VERSION.to_owned()));
             }
             Provider::OpenAi | Provider::ChatGpt => {
-                headers.push(("authorization", format!("Bearer {}", cred.secret.expose())));
+                if keyed {
+                    headers.push(("authorization", format!("Bearer {secret}")));
+                }
             }
         }
         Call {
@@ -77,7 +89,9 @@ impl Call {
             body: None,
             provider: cred.provider,
             model: model.to_owned(),
-            secret: cred.secret.expose().to_owned(),
+            secret: secret.to_owned(),
+            path: path.to_owned(),
+            custom: cred.custom_host.is_some(),
         }
     }
 
@@ -103,6 +117,21 @@ impl Call {
     }
 
     fn status_error(&self, status: u16, body: &str) -> AiError {
+        if self.custom
+            && !self.get
+            && matches!(status, 404 | 405)
+            && !error::names_model(body)
+            && let Some(api) = match self.path.as_str() {
+                "/v1/responses" => Some("the OpenAI Responses API (POST /v1/responses)"),
+                "/v1/messages" => Some("the Anthropic Messages API (POST /v1/messages)"),
+                _ => None,
+            }
+        {
+            return self.fail(
+                AiError::invalid(format!("This service does not support {api}."))
+                    .with_status(status),
+            );
+        }
         self.fail(error::from_response(
             self.provider,
             &self.model,

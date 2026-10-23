@@ -23,7 +23,8 @@
 //! `message_stop`, when the body says `stream: true`; the whole message as JSON otherwise.
 //!
 //! It checks what the real API under `anthropic-version: 2026-10-21` checks: the `x-api-key`
-//! (401 `authentication_error` otherwise), the version header, and no `temperature`, `top_p`
+//! (401 `authentication_error` otherwise; a missing one is accepted when built
+//! [`FakeAnthropicBuilder::open`]), the version header, and no `temperature`, `top_p`
 //! or `top_k`, which that version rejects (400 `invalid_request_error`). It also rejects
 //! `fallbacks`, which TheVault never sends. `GET /v1/models` answers the configured models,
 //! paginated with `limit` and `after_id`, newest first as Anthropic lists them.
@@ -327,6 +328,7 @@ pub struct FakeAnthropicBuilder {
     api_key: String,
     models: Vec<(String, String)>,
     page_size: usize,
+    open: bool,
 }
 
 impl Default for FakeAnthropicBuilder {
@@ -339,11 +341,19 @@ impl Default for FakeAnthropicBuilder {
                 ("claude-haiku-4-5".to_owned(), "Claude Haiku 4.5".to_owned()),
             ],
             page_size: 1000,
+            open: false,
         }
     }
 }
 
 impl FakeAnthropicBuilder {
+    /// Also answer requests that send no `x-api-key`, as a local server with no key does
+    /// (ai D24). A wrong key is still refused.
+    pub fn open(mut self) -> Self {
+        self.open = true;
+        self
+    }
+
     /// The `x-api-key` the fake accepts.
     pub fn api_key(mut self, key: &str) -> Self {
         self.api_key = key.to_owned();
@@ -456,7 +466,9 @@ fn error(status: u16, kind: &str, message: &str) -> Answer {
 
 fn handle(shared: &Shared, request: &Request) -> Answer {
     lock(&shared.requests).push(request.clone());
-    if request.header("x-api-key") != Some(shared.config.api_key.as_str()) {
+    let key = request.header("x-api-key");
+    let keyless = shared.config.open && key.is_none();
+    if !keyless && key != Some(shared.config.api_key.as_str()) {
         return error(401, "authentication_error", "invalid x-api-key");
     }
     if request.header("anthropic-version").is_none() {

@@ -288,6 +288,7 @@ async fn a_refusal_ends_the_stream_and_is_an_error_when_collected() {
         &req.model,
         &result,
         Duration::from_millis(5),
+        None,
     );
     assert!(line.contains("outcome=refused"), "{line}");
     assert_eq!(

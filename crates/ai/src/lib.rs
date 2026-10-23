@@ -16,7 +16,8 @@
 //! let req = Request::new(provider, model, "Summarise: ...");
 //! let began = Instant::now();
 //! let result = ai::complete_blocking(&ai::blocking_client(), &cred, &req, None);
-//! let line = ai::trail_for(provider, &req.model, &result, began.elapsed());
+//! let host = cred.custom_host.as_deref(); // a custom API URL's host, for the trail
+//! let line = ai::trail_for(provider, &req.model, &result, began.elapsed(), host);
 //! # Ok(()) }
 //! ```
 //!
@@ -40,8 +41,12 @@
 //! `tokio::task::spawn_blocking` in async code. Keys and tokens are [`Secret`]s, whose `Debug`
 //! never shows them, and error messages are scrubbed of them.
 //!
-//! Every base URL comes from `ai_settings.endpoints` ([`Endpoints`]), the test seam: the testkit
-//! fakes `FakeAnthropic`, `FakeOpenAi` and `FakeSiwc` stand in for the real hosts.
+//! Every base URL comes from `ai_settings.endpoints` ([`Endpoints`]): the Anthropic and OpenAI
+//! API URLs of Settings > AI (ai D24, checked by [`check_url`]), and the test seam, where the
+//! testkit fakes `FakeAnthropic`, `FakeOpenAi` and `FakeSiwc` stand in for the real hosts. With
+//! a custom API URL the key is optional: none sends no auth header. A 404 or 405 from a custom
+//! URL on `/v1/messages` or `/v1/responses` is an `invalid` error saying the service does not
+//! support that API.
 
 mod anthropic;
 mod credentials;
@@ -73,7 +78,7 @@ pub use error::{AiError, ErrorKind};
 pub use http::{blocking_client, client};
 pub use settings::{
     ANTHROPIC_BASE, ANTHROPIC_DEFAULT_MODEL, CHATGPT_AUTH_BASE, Confirm, Endpoints, Models,
-    OPENAI_BASE, SETTINGS, SYSTEM_PROMPT_MAX, Settings,
+    OPENAI_BASE, SETTINGS, SYSTEM_PROMPT_MAX, Settings, check_url,
 };
 pub use trail::{Outcome, trail_for, trail_line};
 pub use types::{

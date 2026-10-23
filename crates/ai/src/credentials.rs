@@ -83,9 +83,14 @@ pub struct Credential {
     pub provider: Provider,
     /// The API base URL, from `ai_settings.endpoints` or the real host.
     pub base_url: String,
+    /// The key or token. Empty for a custom API URL with no key, which sends no auth header
+    /// (ai D24).
     pub secret: Secret,
     /// The ChatGPT account's address, for the ChatGPT plan.
     pub account: Option<String>,
+    /// The host of a custom API URL, for the trail line and the compatibility errors (ai D24).
+    /// `None` for the official API.
+    pub custom_host: Option<String>,
 }
 
 impl Credential {
@@ -95,6 +100,7 @@ impl Credential {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             secret,
             account: None,
+            custom_host: None,
         }
     }
 }
@@ -208,7 +214,8 @@ impl Credentials {
     /// The credential for `provider`, with its base URL from `ai_settings.endpoints`. A ChatGPT
     /// plan token close to expiry is refreshed first (see the module docs). Errors with
     /// `not_configured` when the provider has no key or sign-in, and `auth` when the ChatGPT
-    /// sign-in has just expired.
+    /// sign-in has just expired. Anthropic or OpenAI with a custom API URL and no key resolves
+    /// to an empty secret, which sends no auth header (ai D24).
     ///
     /// It blocks on the refresh request: from async code call it inside
     /// `tokio::task::spawn_blocking`.
@@ -217,20 +224,19 @@ impl Credentials {
         let base = settings.endpoints.api_base(provider);
         match provider {
             Provider::Anthropic | Provider::OpenAi => {
-                let name = key_secret(provider);
-                let key = state
-                    .get_secret(name)
-                    .map_err(state_error)?
-                    .map(|k| k.trim().to_owned())
-                    .filter(|k| !k.is_empty())
-                    .ok_or_else(|| {
-                        AiError::not_configured(format!(
-                            "no {} API key is set: add one in Settings > AI",
-                            provider.label()
-                        ))
-                        .on(provider, "")
-                    })?;
-                Ok(Credential::new(provider, base, Secret::new(key)))
+                let custom = settings.endpoints.url(provider).is_some();
+                let key = stored_key(state, provider)?;
+                if key.is_none() && !custom {
+                    return Err(AiError::not_configured(format!(
+                        "no {} API key is set: add one in Settings > AI",
+                        provider.label()
+                    ))
+                    .on(provider, ""));
+                }
+                let mut cred =
+                    Credential::new(provider, base, Secret::new(key.unwrap_or_default()));
+                cred.custom_host = settings.endpoints.custom_host(provider);
+                Ok(cred)
             }
             Provider::ChatGpt => {
                 let auth = resolve_chatgpt(state, &settings.endpoints.chatgpt_auth_base())?;
@@ -245,16 +251,26 @@ impl Credentials {
         }
     }
 
-    /// Whether `provider` has a key or a ChatGPT sign-in, without refreshing anything.
+    /// Whether `provider` has a key, a custom API URL (ai D24) or a ChatGPT sign-in, without
+    /// refreshing anything.
     pub fn configured(state: &state::State, provider: Provider) -> Result<bool, AiError> {
         Ok(match provider {
-            Provider::Anthropic | Provider::OpenAi => state
-                .get_secret(key_secret(provider))
-                .map_err(state_error)?
-                .is_some_and(|k| !k.trim().is_empty()),
+            Provider::Anthropic | Provider::OpenAi => {
+                stored_key(state, provider)?.is_some()
+                    || Settings::load(state)?.endpoints.url(provider).is_some()
+            }
             Provider::ChatGpt => ChatGptAuth::load(state)?.signed_in(),
         })
     }
+}
+
+/// `provider`'s API key, trimmed, when one is stored.
+fn stored_key(state: &state::State, provider: Provider) -> Result<Option<String>, AiError> {
+    Ok(state
+        .get_secret(key_secret(provider))
+        .map_err(state_error)?
+        .map(|k| k.trim().to_owned())
+        .filter(|k| !k.is_empty()))
 }
 
 /// The secret holding `provider`'s API key. The ChatGPT plan has none: it is [`CHATGPT`].

@@ -102,7 +102,7 @@ impl Api {
             &json!({
                 "default_provider": "chatgpt",
                 "models": { "chatgpt": PLAN_MODEL },
-                "endpoints": { "openai": fake.base_url() },
+                "endpoints": { "chatgpt": fake.base_url() },
             })
             .to_string(),
         );
@@ -1989,7 +1989,7 @@ fn get_providers_answers_a_read_token_with_no_key_token_or_account() {
         &json!({
             "default_provider": "anthropic",
             "models": { "anthropic": MODEL, "chatgpt": PLAN_MODEL },
-            "endpoints": { "anthropic": fake.base_url(), "openai": plan.base_url() },
+            "endpoints": { "anthropic": fake.base_url(), "chatgpt": plan.base_url() },
         })
         .to_string(),
     );
@@ -2025,6 +2025,10 @@ fn get_providers_answers_a_read_token_with_no_key_token_or_account() {
         "oaiapp_test",
         "account",
         "system_prompt",
+        // No API URL either (ai D24).
+        "url",
+        fake.base_url().as_str(),
+        "127.0.0.1",
     ] {
         assert!(!text.contains(secret), "{secret} in {text}");
     }

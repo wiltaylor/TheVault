@@ -80,6 +80,7 @@ impl Api {
         let settings = json!({ "endpoints": {
             "anthropic": api.anthropic.base_url(),
             "openai": api.openai.base_url(),
+            "chatgpt": api.openai.base_url(),
             "chatgpt_auth": auth_base.unwrap_or_else(|| api.siwc.base_url()),
         }});
         api.send(
@@ -394,6 +395,11 @@ fn a_bad_id_token_signature_and_a_wrong_nonce_are_refused() {
 #[test]
 fn keys_are_stored_and_deleted_and_never_answered() {
     let api = Api::start();
+    // The official APIs: a provider is configured only by its key (ai D24).
+    api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "anthropic": "", "openai": "" } }),
+    );
     let empty = api.get("/api/integrations/ai");
     assert_eq!(empty["secrets_key"], true);
     assert_eq!(empty["providers"]["anthropic"]["configured"], false);
@@ -404,6 +410,7 @@ fn keys_are_stored_and_deleted_and_never_answered() {
         json!({ "key": format!(" {} ", api.anthropic.api_key()) }),
     );
     assert_eq!(s["providers"]["anthropic"]["configured"], true);
+    assert_eq!(s["providers"]["anthropic"]["has_key"], true);
     assert_eq!(s["default_provider"], "anthropic");
     assert_eq!(
         api.server.secret("ai_anthropic_api_key").as_deref(),
@@ -425,8 +432,8 @@ fn keys_are_stored_and_deleted_and_never_answered() {
     assert_eq!(s["providers"]["openai"]["model"], "gpt-6-mini");
     // The test seam survives a save.
     assert_eq!(
-        api.server.secret_json("ai_settings")["endpoints"]["openai"],
-        api.openai.base_url()
+        api.server.secret_json("ai_settings")["endpoints"]["chatgpt_auth"],
+        api.siwc.base_url()
     );
     assert!(
         api.get("/api/integrations/ai")
@@ -458,7 +465,11 @@ fn keys_are_stored_and_deleted_and_never_answered() {
 #[test]
 fn test_reports_ok_from_each_provider_and_the_error_kind_on_failure() {
     let api = Api::start();
-    // No key yet.
+    // No key yet, and the official API.
+    api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "anthropic": "" } }),
+    );
     let t = api.post(
         "/api/integrations/ai/anthropic/test",
         json!({}),
@@ -467,6 +478,10 @@ fn test_reports_ok_from_each_provider_and_the_error_kind_on_failure() {
     assert_eq!(t["ok"], false);
     assert_eq!(t["error"]["kind"], "not_configured");
 
+    api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "anthropic": api.anthropic.base_url() } }),
+    );
     api.put(
         "/api/integrations/ai/anthropic/key",
         json!({ "key": api.anthropic.api_key() }),
@@ -591,7 +606,11 @@ fn a_read_token_lists_models_but_cannot_reach_settings() {
         assert_eq!(res.status(), StatusCode::FORBIDDEN, "{method} {path}");
     }
 
-    // A provider with no key is a clear 400.
+    // A provider with no key and the official API is a clear 400.
+    api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "openai": "" } }),
+    );
     let res = reader
         .get(api.server.url("/api/ai/models?provider=openai"))
         .send()
@@ -599,4 +618,144 @@ fn a_read_token_lists_models_but_cannot_reach_settings() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     let e: Value = res.json().unwrap();
     assert_eq!(e["error"], "not_configured");
+}
+
+#[test]
+fn api_urls_are_stored_answered_and_cleared() {
+    let api = Api::start();
+    api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "openai": "", "anthropic": "" } }),
+    );
+    let s = api.get("/api/integrations/ai");
+    assert_eq!(s["providers"]["openai"]["url"], Value::Null);
+    assert_eq!(s["providers"]["anthropic"]["url"], Value::Null);
+    assert!(s["providers"]["chatgpt"].get("url").is_none(), "{s}");
+
+    // Stored trimmed, without trailing slashes, and counting as configured with no key.
+    let s = api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "openai": " https://openrouter.ai/api/v1/ " } }),
+    );
+    assert_eq!(
+        s["providers"]["openai"]["url"],
+        "https://openrouter.ai/api/v1"
+    );
+    assert_eq!(s["providers"]["openai"]["configured"], true);
+    assert_eq!(s["providers"]["anthropic"]["configured"], false);
+    assert_eq!(
+        api.get("/api/integrations/ai")["providers"]["openai"]["url"],
+        "https://openrouter.ai/api/v1"
+    );
+    assert_eq!(
+        api.server.secret_json("ai_settings")["endpoints"]["openai"],
+        "https://openrouter.ai/api/v1"
+    );
+
+    // Refused URLs are a 400 invalid_url and change nothing.
+    for bad in [
+        json!({ "openai": "ftp://example.com/v1" }),
+        json!({ "openai": "https://me:hunter2@example.com/v1" }),
+        json!({ "anthropic": "example.com" }),
+        json!({ "chatgpt": "https://example.com/v1" }),
+        json!({ "gemini": "https://example.com/v1" }),
+    ] {
+        let e = api.send(
+            api.client
+                .put(api.server.url("/api/integrations/ai/settings"))
+                .json(&json!({ "urls": bad, "default_provider": "openai" })),
+            StatusCode::BAD_REQUEST,
+        );
+        if bad.get("gemini").is_none() {
+            assert_eq!(e["error"], "invalid_url", "{bad} {e}");
+        }
+        assert!(!e.to_string().contains("hunter2"), "{e}");
+    }
+    let s = api.get("/api/integrations/ai");
+    assert_eq!(
+        s["providers"]["openai"]["url"],
+        "https://openrouter.ai/api/v1"
+    );
+    assert_eq!(s["providers"]["anthropic"]["url"], Value::Null);
+    assert_eq!(s["default_provider"], Value::Null);
+
+    // The chat panel's picker never shows a URL.
+    let providers = api.get("/api/ai/providers").to_string();
+    assert!(!providers.contains("openrouter"), "{providers}");
+    assert!(!providers.contains("url"), "{providers}");
+
+    // Empty clears it: the official API, with no key, is not configured.
+    let s = api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": { "openai": "" } }),
+    );
+    assert_eq!(s["providers"]["openai"]["url"], Value::Null);
+    assert_eq!(s["providers"]["openai"]["configured"], false);
+    assert!(
+        api.server.secret_json("ai_settings")["endpoints"]
+            .get("openai")
+            .is_none()
+    );
+}
+
+#[test]
+fn test_works_against_custom_urls_with_no_key() {
+    let api = Api::start();
+    let anthropic = FakeAnthropic::builder().open().start();
+    let openai = FakeOpenAi::builder().open().start();
+    let s = api.put(
+        "/api/integrations/ai/settings",
+        json!({ "urls": {
+            "anthropic": format!("{}/v1", anthropic.base_url()),
+            "openai": openai.base_url(),
+        } }),
+    );
+    assert_eq!(s["providers"]["anthropic"]["configured"], true);
+    assert_eq!(s["providers"]["openai"]["configured"], true);
+    assert_eq!(s["providers"]["anthropic"]["has_key"], false);
+    assert_eq!(s["providers"]["openai"]["has_key"], false);
+    assert_eq!(api.server.secret("ai_anthropic_api_key"), None);
+    assert_eq!(api.server.secret("ai_openai_api_key"), None);
+
+    // Anthropic with no model chosen: the live list's preselected model is tested.
+    let t = api.post(
+        "/api/integrations/ai/anthropic/test",
+        json!({}),
+        StatusCode::OK,
+    );
+    assert_eq!(t["ok"], true, "{t}");
+    assert_eq!(t["model"], "claude-opus-5");
+    let t = api.post(
+        "/api/integrations/ai/openai/test",
+        json!({ "model": "gpt-6" }),
+        StatusCode::OK,
+    );
+    assert_eq!(t["ok"], true, "{t}");
+    assert_eq!(t["text"], "OK");
+
+    assert_eq!(anthropic.message_requests().len(), 1);
+    assert_eq!(openai.response_requests().len(), 1);
+    for r in anthropic.requests() {
+        assert_eq!(r.header("x-api-key"), None);
+    }
+    for r in openai.requests() {
+        assert_eq!(r.header("authorization"), None);
+    }
+    // The fixture's own fakes, at the URLs replaced, saw nothing.
+    assert!(api.anthropic.requests().is_empty());
+    assert!(api.openai.requests().is_empty());
+
+    // A service without the Responses API is named.
+    openai.push(OpenAiReply::error(404, "not_found", "Not found"));
+    let t = api.post(
+        "/api/integrations/ai/openai/test",
+        json!({ "model": "gpt-6" }),
+        StatusCode::OK,
+    );
+    assert_eq!(t["ok"], false, "{t}");
+    assert_eq!(t["error"]["kind"], "invalid");
+    assert_eq!(
+        t["error"]["message"],
+        "This service does not support the OpenAI Responses API (POST /v1/responses)."
+    );
 }

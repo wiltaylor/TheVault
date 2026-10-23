@@ -237,6 +237,17 @@ pub(crate) fn from_response(provider: Provider, model: &str, status: u16, body: 
         .with_status(status)
 }
 
+/// Whether an error body says the model was not found (OpenAI's `model_not_found`, or an error
+/// message that starts `model:` as Anthropic's does), so that a 404 from a custom API URL is a
+/// missing model rather than a missing API (ai D24).
+pub(crate) fn names_model(body: &str) -> bool {
+    let json: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let error = json.get("error");
+    let field = |k: &str| error.and_then(|e| e.get(k)).and_then(Value::as_str);
+    field("code") == Some("model_not_found")
+        || field("message").is_some_and(|m| m.trim_start().starts_with("model:"))
+}
+
 /// The kind a provider's error code or type means, when it says more than the status does.
 pub(crate) fn kind_of_code(code: &str) -> Option<ErrorKind> {
     Some(match code {

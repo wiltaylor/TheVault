@@ -2,7 +2,8 @@
 //! stand-in HTTP server is [`StandIn`], and the fake Google APIs the Google sync calls are
 //! [`FakeGoogle`]. The AI providers' fakes are [`FakeAnthropic`], [`FakeOpenAi`] (API key and
 //! ChatGPT plan) and [`FakeSiwc`] (the Sign in with ChatGPT server); point
-//! `ai_settings.endpoints` `anthropic`, `openai` and `chatgpt_auth` at their `base_url()`s.
+//! `ai_settings.endpoints` `anthropic`, `openai` (and `chatgpt` for the plan) and `chatgpt_auth`
+//! at their `base_url()`s.
 //!
 //! ```no_run
 //! let server = testkit::TestServer::start();

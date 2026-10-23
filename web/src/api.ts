@@ -451,12 +451,16 @@ export type AiProvider = "anthropic" | "openai" | "chatgpt";
 
 /** One provider in Settings > AI. Never a key or token (ai D7). */
 export interface AiProviderStatus {
-  /** Whether it has a key, or for ChatGPT a sign-in. */
+  /** Whether it has a key or a custom API URL, or for ChatGPT a sign-in. */
   configured: boolean;
   /** The default model chosen for it. */
   model: string | null;
   /** The signed-in ChatGPT account, for `chatgpt`. */
   account?: string | null;
+  /** The custom API URL, for `anthropic` and `openai`; null means the official API (ai D24). */
+  url?: string | null;
+  /** Whether an API key is stored, for `anthropic` and `openai`: with a custom URL it is optional. */
+  has_key?: boolean;
 }
 
 /** Settings > AI, from `GET /api/integrations/ai`. */
@@ -1237,15 +1241,17 @@ export const api = {
   /** Settings > AI: each provider's sign-in and default model (ai D7). */
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
   /**
-   * Save the default provider, default models, chat system prompt and confirmation switches; an
-   * empty string clears one, which for the system prompt means the default. `confirm` may be
-   * partial.
+   * Save the default provider, default models, chat system prompt, confirmation switches and
+   * API URLs; an empty string clears one, which for the system prompt means the default and for
+   * a URL the official API (ai D24). `confirm` may be partial. A URL that is not http or https,
+   * or holds a user name or password, is a 400 `invalid_url`.
    */
   aiSaveSettings: (settings: {
     default_provider?: AiProvider | "";
     models?: Partial<Record<AiProvider, string>>;
     system_prompt?: string;
     confirm?: Partial<AiConfirm>;
+    urls?: Partial<Record<"anthropic" | "openai", string>>;
   }) =>
     request<AiStatus>("PUT", "/api/integrations/ai/settings", settings),
   /** Store an Anthropic or OpenAI API key; an empty key deletes it. */

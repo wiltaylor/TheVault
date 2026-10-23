@@ -8,11 +8,13 @@ This page covers the three providers, how to connect each in Settings > AI, what
 
 | Provider | What you need | Where requests go |
 |---|---|---|
-| Anthropic | An API key from the [Anthropic Console](https://console.anthropic.com/) | `https://api.anthropic.com/v1/messages` |
-| OpenAI | An API key from the [OpenAI Platform](https://platform.openai.com/api-keys) | `https://api.openai.com/v1/responses` |
+| Anthropic | An API key from the [Anthropic Console](https://console.anthropic.com/) | `https://api.anthropic.com/v1/messages`, or the card's API URL |
+| OpenAI | An API key from the [OpenAI Platform](https://platform.openai.com/api-keys) | `https://api.openai.com/v1/responses`, or the card's API URL |
 | ChatGPT | A ChatGPT plan, signed in with OpenAI's Sign in with ChatGPT | `https://api.openai.com/v1/responses`, with the plan's access token |
 
 The two API-key providers bill your API account per token. The ChatGPT provider uses the allowance of your ChatGPT plan instead.
+
+The Anthropic and OpenAI providers can also call another service that speaks the same API, such as a gateway or a model server on your network. See [Use another service](#use-another-service).
 
 ## Settings > AI
 
@@ -20,7 +22,7 @@ Settings > AI is in the web app only. The desktop and Android apps pair with a d
 
 Each provider has a card with:
 
-- Its credential: an API key field, or the ChatGPT sign-in.
+- Its credential: an API key field and an API URL field, or the ChatGPT sign-in.
 - A model list, read live from the provider each time the card opens. No model id is built into TheVault, except that the Anthropic card preselects `claude-opus-5` when Anthropic lists it. The model you pick is that provider's default.
 - A **Test** button. It sends a short "Reply with OK" request (16 output tokens at most) to the selected model and shows the result, such as `OK from claude-opus-5 in 840 ms`, or the error kind and message.
 - **Use <provider> by default**, which makes it the provider scripts and the AI panel use when they do not name one. The first provider you connect becomes the default.
@@ -34,6 +36,34 @@ A script or the AI panel can still name another provider and model for one call.
 3. Pick a model from the list, then select **Test**.
 
 The server stores the key encrypted and never sends it back. The field then shows `set` as its placeholder. To replace the key, paste another and save. **Remove key** deletes it.
+
+### Use another service
+
+The Anthropic and OpenAI cards each have an **API URL** field. Leave it empty for the official API; the placeholder shows the official URL. To call another service with that card's API:
+
+1. Type the service's API URL into the **API URL** field and select **Save URL**.
+2. If the service needs a key, paste it into **API key** and select **Save key**. With an API URL of its own, the key is optional: a card with a URL and no key counts as connected, and its requests carry no key at all.
+3. Pick a model and select **Test**.
+
+How TheVault reads the URL:
+
+- Spaces around it and trailing slashes are dropped.
+- A URL whose path ends in `/v1` is the API root as it is. Any other URL gets `/v1` added. So `https://openrouter.ai/api/v1`, `https://openrouter.ai/api` and `http://10.0.0.5:11434` all work, and requests go to paths such as `https://openrouter.ai/api/v1/responses`.
+- It must start with `http://` or `https://`. `http` is allowed for servers on your own network; the key, when there is one, then crosses the network unencrypted.
+- It must not hold a user name or password (`https://user:pass@...`), a query or a fragment. Put a key in the **API key** field instead.
+
+A URL that breaks these rules is refused with the reason, and the stored URL stays as it was. To go back to the official API, empty the field and select **Save URL**.
+
+The service must speak the card's API:
+
+- The OpenAI card needs the OpenAI Responses API, `POST /v1/responses`. Many services that call themselves OpenAI-compatible offer only the older Chat Completions API, and do not work here. TheVault names no service that does.
+- The Anthropic card needs the Anthropic Messages API, `POST /v1/messages`.
+
+A service that answers 404 or 405 to that path fails with the error kind `invalid` and the message "This service does not support the OpenAI Responses API (POST /v1/responses)." or "This service does not support the Anthropic Messages API (POST /v1/messages)."
+
+The card lists the service's models from its `GET /v1/models`. When that list fails or is empty, the **Model** field becomes a text box: type the model id the service expects, then press Enter or move to another field.
+
+The ChatGPT plan never uses the OpenAI card's API URL. Its token is for OpenAI alone, so plan requests always go to `https://api.openai.com`.
 
 ### Sign in with ChatGPT
 
@@ -94,6 +124,7 @@ ai: provider=anthropic model=claude-opus-5 in=1234 out=56 outcome=ok ms=840
 | `in`, `out` | Input and output tokens |
 | `outcome` | `ok`, `refused` when the provider refused the request, or `error:<kind>` |
 | `ms` | How long the call took |
+| `host` | Only for a call to a custom API URL: the service's host, with its port when the URL names one, such as `host=openrouter.ai` |
 
 The error kinds are `not_configured`, `auth`, `rate_limit`, `refusal`, `invalid`, `timeout`, `unavailable` and `provider`.
 
@@ -263,12 +294,12 @@ Settings > AI uses these routes. Every route under `/api/integrations/ai` needs 
 
 | Method and path | Does |
 |---|---|
-| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, and the ChatGPT `account`; the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types }`, with every switch filled |
-| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? } }`; an empty string clears a value, and an empty `system_prompt` means the default. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400 |
+| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`; the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types }`, with every switch filled |
+| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? }, urls?: { anthropic?, openai? } }`; an empty string clears a value, an empty `system_prompt` means the default, and an empty URL the official API. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
 | `PUT /api/integrations/ai/{anthropic\|openai}/key` | Stores `{ key }`; an empty key deletes it |
 | `POST /api/integrations/ai/{provider}/test` | Sends the test request to `{ model }` or the default model, and answers `{ ok, model, ms, text, error }` |
 | `POST /api/integrations/ai/chatgpt/start` | Answers `{ auth_url }`, the ChatGPT sign-in page |
 | `POST /api/integrations/ai/chatgpt/finish` | Takes `{ url }`, the pasted address, and stores the sign-in; a refused sign-in is a 400 with the reason |
 | `POST /api/integrations/ai/chatgpt/disconnect` | Revokes and deletes the ChatGPT sign-in |
 | `GET /api/ai/models?provider=` | The provider's models now, `{ provider, model, models: [{ id, display_name }] }`; without `provider`, the default one |
-| `GET /api/ai/providers` | The chat panel's picker in every client: `{ default_provider, providers: { anthropic, openai, chatgpt: { configured, model } }, confirm }`. It holds no account, no system prompt and never a key or token |
+| `GET /api/ai/providers` | The chat panel's picker in every client: `{ default_provider, providers: { anthropic, openai, chatgpt: { configured, model } }, confirm }`. It holds no account, no system prompt, no API URL and never a key or token |

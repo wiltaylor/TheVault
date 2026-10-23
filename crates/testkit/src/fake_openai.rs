@@ -6,7 +6,8 @@
 //! use testkit::{FakeOpenAi, OpenAiReply, OpenAiResponse};
 //!
 //! let fake = FakeOpenAi::start();
-//! // ai_settings.endpoints.openai = fake.base_url(); the API key is fake.api_key().
+//! // ai_settings.endpoints.openai = fake.base_url(), and .chatgpt for the ChatGPT plan; the
+//! // API key is fake.api_key().
 //! fake.push(OpenAiResponse::text("Hello there"));
 //! fake.push(OpenAiResponse::new().function_call("call_1", "get_note", json!({"id": "01J"})));
 //! fake.push(OpenAiResponse::new().refusal("I can't help with that."));
@@ -344,6 +345,7 @@ pub struct FakeOpenAiBuilder {
     api_key: String,
     models: Vec<String>,
     plan_models: Vec<(String, String, String)>,
+    open: bool,
 }
 
 impl Default for FakeOpenAiBuilder {
@@ -372,11 +374,19 @@ impl Default for FakeOpenAiBuilder {
                     "hide".to_owned(),
                 ),
             ],
+            open: false,
         }
     }
 }
 
 impl FakeOpenAiBuilder {
+    /// Answer requests that send no `Authorization` header as API-key ones, as a local server
+    /// with no key does (ai D24).
+    pub fn open(mut self) -> Self {
+        self.open = true;
+        self
+    }
+
     /// The bearer token that makes a request an API-key one.
     pub fn api_key(mut self, key: &str) -> Self {
         self.api_key = key.to_owned();
@@ -437,8 +447,8 @@ impl FakeOpenAi {
         self.listener.addr
     }
 
-    /// `http://127.0.0.1:<port>`: the value for `ai_settings.endpoints.openai`, which the
-    /// ChatGPT plan uses too.
+    /// `http://127.0.0.1:<port>`: the value for `ai_settings.endpoints.openai`, and for
+    /// `endpoints.chatgpt`, which the ChatGPT plan uses instead (ai D24).
     pub fn base_url(&self) -> String {
         format!("http://{}", self.listener.addr)
     }
@@ -487,20 +497,23 @@ fn error(status: u16, code: &str, message: &str, param: Option<&str>) -> Answer 
 
 fn handle(shared: &Shared, request: &Request) -> Answer {
     lock(&shared.requests).push(request.clone());
-    let Some(token) = request
+    let token = request
         .header("authorization")
         .and_then(|h| h.strip_prefix("Bearer "))
         .map(str::trim)
-        .filter(|t| !t.is_empty())
-    else {
-        return error(
-            401,
-            "invalid_api_key",
-            "You didn't provide an API key.",
-            None,
-        );
+        .filter(|t| !t.is_empty());
+    let plan = match token {
+        Some(t) => t != shared.config.api_key,
+        None if shared.config.open && request.header("authorization").is_none() => false,
+        None => {
+            return error(
+                401,
+                "invalid_api_key",
+                "You didn't provide an API key.",
+                None,
+            );
+        }
     };
-    let plan = token != shared.config.api_key;
     match (request.method.as_str(), request.route()) {
         ("POST", "/v1/responses") => responses(shared, request, plan),
         ("GET", "/v1/models") => models(shared, plan),

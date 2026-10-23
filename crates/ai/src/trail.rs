@@ -48,14 +48,17 @@ impl Outcome {
     }
 }
 
-/// `ai: provider=<p> model=<m> in=<input tokens> out=<output tokens> outcome=ok|refused|error:<kind> ms=<duration>`.
-/// The model id is cut to the characters model ids use, so nothing can break the line.
+/// `ai: provider=<p> model=<m> in=<input tokens> out=<output tokens> outcome=ok|refused|error:<kind> ms=<duration>`,
+/// with ` host=<host>` after it when the call went to a custom API URL (ai D24): pass
+/// [`crate::Credential::custom_host`]. The model id and host are cut to the characters they use,
+/// so nothing can break the line.
 pub fn trail_line(
     provider: Provider,
     model: &str,
     usage: Usage,
     outcome: Outcome,
     took: Duration,
+    host: Option<&str>,
 ) -> String {
     let model: String = model
         .chars()
@@ -67,27 +70,39 @@ pub fn trail_line(
     } else {
         model
     };
-    format!(
+    let mut line = format!(
         "ai: provider={provider} model={model} in={} out={} outcome={} ms={}",
         usage.input,
         usage.output,
         outcome.as_string(),
         took.as_millis()
-    )
+    );
+    let host: String = host
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | ':' | '[' | ']'))
+        .take(255)
+        .collect();
+    if !host.is_empty() {
+        line.push_str(&format!(" host={host}"));
+    }
+    line
 }
 
-/// [`trail_line`] for a finished call of `provider` and `model`.
+/// [`trail_line`] for a finished call of `provider` and `model`, to `host` when it is a custom
+/// API URL's.
 pub fn trail_for(
     provider: Provider,
     model: &str,
     result: &Result<Reply, AiError>,
     took: Duration,
+    host: Option<&str>,
 ) -> String {
     let usage = match result {
         Ok(r) => r.usage,
         Err(e) => e.usage,
     };
-    trail_line(provider, model, usage, Outcome::of(result), took)
+    trail_line(provider, model, usage, Outcome::of(result), took, host)
 }
 
 #[cfg(test)]
@@ -105,6 +120,7 @@ mod tests {
             },
             Outcome::Ok,
             Duration::from_millis(1234),
+            None,
         );
         assert_eq!(
             line,
@@ -116,6 +132,7 @@ mod tests {
             Usage::default(),
             Outcome::Error(ErrorKind::RateLimit),
             Duration::ZERO,
+            None,
         );
         assert_eq!(
             line,
@@ -127,9 +144,21 @@ mod tests {
                 "m",
                 Usage::default(),
                 Outcome::Refused,
-                Duration::ZERO
+                Duration::ZERO,
+                None
             )
             .contains("outcome=refused")
+        );
+        assert_eq!(
+            trail_line(
+                Provider::OpenAi,
+                "m",
+                Usage::default(),
+                Outcome::Ok,
+                Duration::ZERO,
+                Some("10.0.0.5:11434\nx=1 y")
+            ),
+            "ai: provider=openai model=m in=0 out=0 outcome=ok ms=0 host=10.0.0.5:11434x1y"
         );
     }
 }

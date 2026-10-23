@@ -241,7 +241,7 @@ fn refused_early(
         Some(p) => e.on(p, model),
         None => e,
     };
-    finish(provider, model, Err(e), Duration::ZERO)
+    finish(provider, model, Err(e), Duration::ZERO, None)
 }
 
 /// Make one call. `Ok(Err(..))` is a failure the script sees; `Err(..)` faults the run, which
@@ -263,7 +263,7 @@ fn call(
             ErrorKind::Unavailable,
             "AI is not available on this device: a script that calls ai runs on the home server",
         );
-        return finish(asked, model, Err(e), began.elapsed());
+        return finish(asked, model, Err(e), began.elapsed(), None);
     };
     let opts = match parsed {
         Ok(o) => o,
@@ -272,12 +272,12 @@ fn call(
             if let Some(p) = asked {
                 e = e.on(p, model);
             }
-            return finish(asked, model, Err(e), began.elapsed());
+            return finish(asked, model, Err(e), began.elapsed(), None);
         }
     };
     let Some(writer) = binding.get().and_then(Weak::upgrade) else {
         let e = ::ai::AiError::new(ErrorKind::Unavailable, "the vault is not open");
-        return finish(asked, model, Err(e), began.elapsed());
+        return finish(asked, model, Err(e), began.elapsed(), None);
     };
     let state = writer.state();
     let picked = Settings::load(state).and_then(|s| s.pick(opts.provider, opts.model.as_deref()));
@@ -285,10 +285,12 @@ fn call(
         Ok(p) => p,
         Err(e) => {
             let provider = e.provider.or(asked);
-            return finish(provider, model, Err(e), began.elapsed());
+            return finish(provider, model, Err(e), began.elapsed(), None);
         }
     };
+    let mut host = None;
     let result = Credentials::resolve(state, provider).and_then(|cred| {
+        host = cred.custom_host.clone();
         let req = Request {
             provider,
             model: model.clone(),
@@ -301,19 +303,26 @@ fn call(
         };
         ::ai::complete_blocking(client, &cred, &req, Some(deadline))
     });
-    finish(Some(provider), &model, result, began.elapsed())
+    finish(
+        Some(provider),
+        &model,
+        result,
+        began.elapsed(),
+        host.as_deref(),
+    )
 }
 
 /// Log the call's trail line, end the run when the call outlasted its deadline, and hand the
-/// script its answer.
+/// script its answer. `host` is the custom API URL's the call went to (ai D24).
 fn finish(
     provider: Option<Provider>,
     model: &str,
     result: Result<::ai::Reply, ::ai::AiError>,
     took: Duration,
+    host: Option<&str>,
 ) -> Result<Result<Reply, AiError>, HostError> {
     let line = match provider {
-        Some(p) => ::ai::trail_for(p, model, &result, took),
+        Some(p) => ::ai::trail_for(p, model, &result, took, host),
         None => no_provider_trail(model, &result, took),
     };
     run::with(|r| {
@@ -359,6 +368,7 @@ fn no_provider_trail(
         Usage::default(),
         Outcome::of(result),
         took,
+        None,
     );
     line.replacen(
         &format!("provider={}", Provider::Anthropic),

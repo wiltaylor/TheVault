@@ -2,16 +2,19 @@
 //! (ai D6, D7, D8, D15, D16). The calls themselves are `crates/ai`'s.
 //!
 //! - `GET /api/integrations/ai` answers `{ secrets_key, default_provider, providers: { anthropic:
-//!   { configured, model }, openai: { configured, model }, chatgpt: { configured, account, model }
-//!   } }, system_prompt, default_system_prompt, system_prompt_custom, confirm }`: the chat system
-//!   prompt in use, the shipped one, and whether they differ (ai D17), and `confirm: { notes,
-//!   archive, delete, types }` with every key filled (ai D22). No answer of these routes ever
-//!   holds a key or a token.
+//!   { configured, model, url, has_key }, openai: { configured, model, url, has_key }, chatgpt: {
+//!   configured, account, model } } }, system_prompt, default_system_prompt, system_prompt_custom,
+//!   confirm }`: each API URL as stored, or null for the official API, and whether a key is
+//!   stored, which a custom URL makes optional (ai D24), the chat system prompt in
+//!   use, the shipped one, and whether they differ (ai D17), and `confirm: { notes, archive,
+//!   delete, types }` with every key filled (ai D22). A provider with a custom API URL counts as
+//!   configured without a key. No answer of these routes ever holds a key or a token.
 //! - `PUT /api/integrations/ai/settings` takes `{ default_provider?, models?: { anthropic?,
-//!   openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? } }`; a
-//!   field sent replaces the stored one, and an empty string clears it, which for
-//!   `system_prompt` means the default. A system prompt over
-//!   [`ai::SYSTEM_PROMPT_MAX`] characters is a 400. The `endpoints` test seam is kept.
+//!   openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types? }, urls?:
+//!   { anthropic?, openai? } }`; a field sent replaces the stored one, and an empty string clears
+//!   it, which for `system_prompt` means the default and for a URL the official API. A system
+//!   prompt over [`ai::SYSTEM_PROMPT_MAX`] characters is a 400; a URL [`ai::check_url`] refuses
+//!   is a 400 `invalid_url`. The rest of `endpoints`, the test seam, is kept.
 //! - `PUT /api/integrations/ai/{anthropic|openai}/key` takes `{ key }` and stores it in
 //!   `ai_<provider>_api_key`; an empty key deletes the secret.
 //! - `POST /api/integrations/ai/chatgpt/start` builds the authorize URL of ai D8 and holds the
@@ -29,7 +32,7 @@
 //!   answers 200 `{ ok, provider, model, ms, text, error: null | { kind, message } }`.
 //! - `GET /api/ai/providers` (scope `read`) answers `{ default_provider, providers: { <p>: {
 //!   configured, model } }, confirm }`, the chat panel's picker in every client (ai D23): no
-//!   account, no prompt, never a secret.
+//!   account, no prompt, no API URL, never a secret.
 //! - `GET /api/ai/models?provider=` (scope `read`) lists the provider's models live, with the
 //!   default model, or the preselected one when none is chosen.
 //!
@@ -116,6 +119,11 @@ fn api_error(e: AiError) -> ApiError {
     ApiError::new(status, e.kind.as_str(), e.message)
 }
 
+/// A refused API URL (ai D24): a 400 `invalid_url`.
+fn url_error(e: AiError) -> ApiError {
+    ApiError::new(StatusCode::BAD_REQUEST, "invalid_url", e.message)
+}
+
 /// A refused ChatGPT sign-in step: always a 400 the card shows as it is.
 fn chatgpt_error(message: impl Into<String>) -> ApiError {
     ApiError::new(StatusCode::BAD_REQUEST, "chatgpt", message)
@@ -152,7 +160,7 @@ fn default_to(s: &state::State, p: Provider) -> Result<(), ApiError> {
 /// What `GET /api/integrations/ai` answers. Nothing in it is a key or a token.
 fn status_of(s: &state::State) -> Result<Value, ApiError> {
     if !s.has_secret_key() {
-        let off = json!({ "configured": false, "model": null });
+        let off = json!({ "configured": false, "model": null, "url": null, "has_key": false });
         return Ok(json!({
             "secrets_key": false,
             "default_provider": null,
@@ -175,6 +183,10 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
         if p == Provider::ChatGpt {
             let auth = ChatGptAuth::load(s).map_err(api_error)?;
             entry["account"] = json!(auth.account.filter(|_| configured));
+        } else {
+            entry["url"] = json!(settings.endpoints.url(p));
+            let key = s.get_secret(ai::key_secret(p))?;
+            entry["has_key"] = json!(key.is_some_and(|k| !k.trim().is_empty()));
         }
         providers.insert(p.as_str().to_owned(), entry);
     }
@@ -230,6 +242,8 @@ pub struct SettingsBody {
     system_prompt: Option<String>,
     #[serde(default)]
     confirm: Option<ConfirmBody>,
+    #[serde(default)]
+    urls: Option<HashMap<String, Option<String>>>,
 }
 
 /// A partial `confirm`: each switch sent replaces the stored one (ai D22).
@@ -260,10 +274,26 @@ pub async fn put_settings(
     for (name, model) in b.models.unwrap_or_default() {
         models.push((provider(&name)?, model.map(|m| m.trim().to_owned())));
     }
+    let mut urls = Vec::new();
+    for (name, url) in b.urls.unwrap_or_default() {
+        let p = provider(&name)?;
+        // Checked before anything is saved, so a bad URL changes nothing.
+        let url = match url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            Some(u) => Some(ai::check_url(u).map_err(url_error)?),
+            None => None,
+        };
+        urls.push((p, url));
+    }
     let prompt = b.system_prompt;
     let confirm = b.confirm;
     blocking(&a, move |s| {
         let mut settings = Settings::load(s).map_err(api_error)?;
+        for (p, url) in urls {
+            settings
+                .endpoints
+                .set_url(p, url.as_deref())
+                .map_err(url_error)?;
+        }
         if let Some(c) = confirm {
             let to = &mut settings.confirm;
             for (slot, value) in [
@@ -593,7 +623,11 @@ pub async fn test(
             ),
         )),
     };
-    eprintln!("{}", ai::trail_for(p, &model, &result, began.elapsed()));
+    let host = cred.custom_host.as_deref();
+    eprintln!(
+        "{}",
+        ai::trail_for(p, &model, &result, began.elapsed(), host)
+    );
     Ok(Json(answer(Some(&model), result.map(|r| r.text))))
 }
 

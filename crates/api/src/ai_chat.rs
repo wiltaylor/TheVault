@@ -407,7 +407,8 @@ impl Turn {
                         &setup.model,
                         usage,
                         outcome,
-                        began.elapsed()
+                        began.elapsed(),
+                        setup.cred.custom_host.as_deref(),
                     )
                 );
             };

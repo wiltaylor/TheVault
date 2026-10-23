@@ -33,6 +33,7 @@ impl Env {
             endpoints: Endpoints {
                 anthropic: Some(anthropic.base_url()),
                 openai: Some(openai.base_url()),
+                chatgpt: Some(openai.base_url()),
                 chatgpt_auth: Some(siwc.base_url()),
             },
             ..Settings::default()
