@@ -51,7 +51,23 @@ const WRITE_PATHS: [&str; 9] = [
 /// notes, its edits being proposals the user applies through the write routes (ai D15); a change
 /// the chat makes itself, its confirmation turned off, needs the caller's own `write` or `admin`
 /// scope, which the chat's tools check (ai D22).
-const READ_POST_PATHS: [&str; 2] = ["/api/query", "/api/ai/chat"];
+const READ_POST_PATHS: [&str; 3] = ["/api/query", "/api/ai/chat", "/api/ai/discard"];
+
+/// `/api/agents/{name}/threads` and `/api/agents/{name}/threads/{id}`: `Some(false)` for the
+/// list, `Some(true)` for one thread (agents G7).
+fn agent_threads_path(path: &str) -> Option<bool> {
+    let rest = path.strip_prefix("/api/agents/")?;
+    let mut parts = rest.split('/');
+    let name = parts.next()?;
+    if name.is_empty() || parts.next()? != "threads" {
+        return None;
+    }
+    match (parts.next(), parts.next()) {
+        (None, _) => Some(false),
+        (Some(id), None) if !id.is_empty() => Some(true),
+        _ => None,
+    }
+}
 
 /// Paths that need `admin` even to read, because they disclose or hand out credentials.
 const ADMIN_PATHS: [&str; 3] = ["/api/tokens", "/api/secrets", "/api/integrations"];
@@ -172,13 +188,17 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
         || path == "/api/logout"
         || (method == Method::POST && READ_POST_PATHS.iter().any(|p| under(p)))
         || (method == Method::DELETE && under("/api/ai/chat/turns"))
+        // Starting a thread with an agent is part of chatting with it (agents G7).
+        || (method == Method::POST && agent_threads_path(path) == Some(false))
     {
         return Some(Scope::Read);
     }
     // A device sets its own push endpoint and bases, reports on its own commands and its failed
     // device events, and queues an import of its own history, with its `write` token; the
     // handler checks it is its own.
+    // Renaming and deleting a thread are note edits (agents G7).
     if WRITE_PATHS.iter().any(|p| under(p))
+        || agent_threads_path(path) == Some(true)
         || (method == Method::PUT && is_device_own(path))
         || (method == Method::POST && is_device_command_result(path))
         || (method == Method::POST && is_device_commands(path))

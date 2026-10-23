@@ -1,0 +1,62 @@
+label       = "Agent thread"
+plural      = "Agent threads"
+description = "One chat with an agent: what was said, the tools it used and the changes it proposed."
+icon        = "message-square"
+colour      = "purple"
+
+field agent {
+  kind        = "string"
+  label       = "Agent"
+  description = "The name of the agent the thread belongs to."
+}
+
+field origin {
+  kind        = "string"
+  label       = "Origin"
+  description = "user for a thread the user started, trigger:<name> for one a trigger started."
+}
+
+field last_activity {
+  kind  = "datetime"
+  label = "Last activity"
+}
+
+field pending {
+  kind        = "int"
+  label       = "Pending proposals"
+  description = "How many proposed changes wait for the user."
+  hidden      = true
+}
+
+field transcript {
+  kind        = "string"
+  label       = "Transcript"
+  description = "The conversation as the server resumes it, as JSON."
+  hidden      = true
+}
+
+field body {
+  kind  = "content"
+  label = "Conversation"
+}
+
+template default {
+  tab "Thread" {
+    slot "agent"
+    slot "last_activity"
+    slot "body"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "agent"
+    slot "last_activity"
+  }
+}
+
+list_page {
+  view = "details"
+  sort = "last_activity desc"
+}

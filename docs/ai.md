@@ -146,7 +146,9 @@ A script's calls write the line to the run's log. The server's own calls, such a
 
 ## Chat panel
 
-The AI panel in the right sidebar answers questions about your notes and proposes edits to them. Open it with the AI tab, Ctrl+Shift+L (Cmd+Shift+L on a Mac), or Ask AI in the command palette (Ctrl+K). It uses the default provider and model from Settings > AI; the two menus at the top of the panel pick another for this conversation.
+The AI panel in the right sidebar answers questions about your notes and proposes edits to them. Open it with the AI tab, Ctrl+Shift+L (Cmd+Shift+L on a Mac), or Ask AI in the command palette (Ctrl+K). The **Agent** menu at the top picks whose conversation it is: the built-in Assistant first, chosen by default, then every enabled agent. The Assistant uses the default provider and model from Settings > AI, and the two menus beside it pick another for this conversation; an agent that names its own model shows it in their place.
+
+Every conversation in the panel is a thread of the chosen agent (agents G6, G7): see [Threads](#threads).
 
 The panel shows in the web app and in the desktop and Android apps. The chat always runs on the home server, which holds the credentials: an app's embedded server sends the panel's requests there with the device token, so an app needs to be paired and to reach its server. Offline or unpaired, the panel says "The AI chat needs the home server, which is not reachable." When no provider is set up, the app's panel says so and links to Settings > AI on the home server ("Set up AI in the web app"), since Settings > AI is in the web app only.
 
@@ -295,12 +297,17 @@ The model can also propose deleting a taxonomy. A taxonomy a type's field uses c
 
 Applying a taxonomy change needs `admin`, as the taxonomy editor does; in the desktop and Android apps the card answers "Apply taxonomy changes in the web app."
 
+### Threads
+
+Each conversation with an agent is a note of the built-in type `agent_thread` (agents G7). The server writes it as the turn streams, so closing the tab loses nothing, and reads its transcript itself for the next turn, so the client sends only the new question. The thread holds the transcript the providers replay, every tool step, and every proposal with what became of it: pending, applied, discarded or failed (agents G8). The note's `body` is the conversation as plain text, so a search finds it, and its `title` is the first question until you rename it. Every write to a thread is authored by the agent.
+
+The agent screen's **Chat** tab, at `/agents/<name>`, lists the agent's threads, newest activity first, with a badge counting the proposals that still wait for you. **New thread** starts another; its first message creates the note. Opening a thread shows it as it was, with Apply and Discard on its pending proposals. Apply and Discard are recorded in the thread, and the next question tells the model what became of each, as [What the model learns you applied](#what-the-model-learns-you-applied) describes. Renaming a thread is an edit of its title, and deleting it moves the note to the trash. Deleting an agent keeps its threads.
+
+The note tools leave threads out unless an agent's `permissions.types` names `agent_thread`, so an agent does not read chats back as vault content. A turn by an agent other than the Assistant authors its changes as that agent, and so does applying its proposal.
+
 ### The system prompt
 
-The **Chat system prompt** card in Settings > AI holds the instructions the panel sends the model before every conversation, for every provider. It shows the prompt in use and whether it is the **Default** or **Customised**:
-
-- Edit the text and select **Save**. The next question uses it. The prompt can be at most 32,000 characters.
-- **Reset to default** goes back to the prompt TheVault ships. It is disabled while the default is in use. Saving an empty prompt, or the default text unchanged, also resets it.
+The system prompt is the Assistant's (agents G6): edit it in the Assistant's agent screen, under Settings, where **Use the shipped prompt** goes back to the prompt TheVault ships. Every other agent has its own. The prompt can be at most 32,000 characters. A vault from before agents moves the prompt it had in Settings > AI to the Assistant on its first start.
 
 The server adds the open note's id, type and title after your prompt, so the editable text never holds them. The tool list reaches the model through the tool definitions, so a custom prompt does not need to repeat it. The default prompt also summarises the query language and how to link notes; keep those parts if you want the model to go on doing both well.
 
@@ -308,7 +315,7 @@ Scripts do not use this prompt: a script's `ai` call passes its own `system`.
 
 ### Changes the AI makes
 
-By default every change the model asks for waits for you as a proposal. The **Changes the AI makes** card in Settings > AI has six switches, all on by default:
+By default every change the model asks for waits for you as a proposal. Each agent's Permissions tab has six confirmation switches, all on by default; the panel's are the Assistant's (agents G4, G6), and a vault from before agents moves the ones it had in Settings > AI there on its first start:
 
 | Switch | Covers |
 |---|---|
@@ -328,7 +335,7 @@ Each switch saves when you change it. With a switch off, the tool makes that kin
 
 ### Internet switches
 
-The same card has an **Internet** group, which decides which web tools the AI is given at all. All three are on by default.
+The Permissions tab also has an **Internet** group, which decides which web tools the agent is given at all. All three are on by default.
 
 | Switch | Tool |
 |---|---|
@@ -336,13 +343,13 @@ The same card has an **Internet** group, which decides which web tools the AI is
 | Let the AI read web pages | `fetch_url` |
 | Let the AI download files into the vault | `download_asset`, which still follows Ask before downloading files into the vault |
 
-With a switch off, the tool is left out of the tool list, so the model never sees it, and a call naming it anyway is refused without fetching anything. `GET /api/integrations/ai` answers `web: { search, read, download }` and `PUT /api/integrations/ai/settings` takes a partial `web`.
+With a switch off, the tool is left out of the tool list, so the model never sees it, and a call naming it anyway is refused without fetching anything. `GET /api/integrations/ai` and `GET /api/ai/providers` answer the Assistant's `confirm` and `web`, and `PUT /api/integrations/ai/settings` still takes a partial `confirm`, `web` and `system_prompt`, which it writes into the Assistant's file.
 
 A change that does not check, or that fails, writes nothing and goes back to the model as an error. The model is told the change was made, with the note's new version.
 
 The panel shows each change made this way as a short card, such as "Edited Shopping", "Created Reading list", "Archived Old plan", "Moved Scratch to the trash", "Changed type task" or "Changed taxonomy status", linking to the note, the trash, the type or Settings > Taxonomies. A note or type open in a pane shows the change at once, unless you have unsaved edits in it.
 
-The change is written as whoever asked: the signed-in user in the web app, or the token's name for an API caller. It is in the note's history under that name like any other write; the trail line is the same as for any chat call. The switches never widen a caller's rights: a caller whose scope cannot make the write still gets a proposal. Notes need `write`, types and taxonomies need `admin`, so a `read` token always gets proposals, and a `write` token gets proposals for type and taxonomy changes.
+The change is written as the agent when the request names one, else as whoever asked: the signed-in user in the web app, or the token's name for an API caller. It is in the note's history under that name like any other write; the trail line is the same as for any chat call. The switches never widen a caller's rights: a caller whose scope cannot make the write still gets a proposal. Notes need `write`, types and taxonomies need `admin`, so a `read` token always gets proposals, and a `write` token gets proposals for type and taxonomy changes.
 
 ### Refusals and errors
 
@@ -350,7 +357,7 @@ When the provider refuses a request, the answer stops where it was and the panel
 
 ### The chat route
 
-`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal with `POST /api/ai/apply` needs `write`, and `admin` for a type or taxonomy proposal. A change the chat makes itself, its confirmation off, needs the same scope from the chat's caller; without it the chat proposes instead. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
+`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal with `POST /api/ai/apply` needs `write`, and `admin` for a type or taxonomy proposal. A change the chat makes itself, its confirmation off, needs the same scope from the chat's caller; without it the chat proposes instead. The body is `{ provider?, model?, messages, note_id?, agent?, thread? }`, where `messages` is the conversation so far ending with the new question. `agent` names the agent whose turn it is: its model (when it names one), prompt, effort, tools, note types and switches apply, and a disabled agent is a 400 `agent_disabled`; without it the turn is the Assistant's. `thread` names one of the agent's threads: the server reads the transcript from the thread, so `messages` holds only the new question, and writes the turn to it; a thread of another agent is a 400, and a thread a turn is already running on a 409 `thread_busy`. With an agent named, each `proposal`, `type_proposal`, `taxonomy_proposal` and `applied` event also carries `agent`, and with a thread `thread`. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
 
 | Event | Data |
 |---|---|
@@ -391,7 +398,12 @@ In the desktop and Android apps the embedded server forwards these routes to the
 - A taxonomy change or delete needs `admin`; without it the answer is 403 `needs_admin`, "Apply taxonomy changes in the web app." A taxonomy file that changed since the proposal is a 409 `stale`. The write refuses as the taxonomy routes do: a dropped term notes hold is a 409 `term_in_use`, a taxonomy in use a 409 `taxonomy_in_use`, and nothing is written.
 - A download needs `write`. The server downloads `url` through the guarded client and stores it as a new asset called `filename`, answering `{ op: "download", asset_id, filename, media_type, size, url }`. An address the local-network rule refuses is a 403 `local_network`, a file over 25 MiB a 413 `too_large`, and a fetch that fails a 502 `fetch_failed`; nothing is stored.
 - It answers `{ op, note_id, version }` for a note, with the note's new version (for a delete, the version that went to the trash), `{ op, type_name }` for a type, where `op` is `type_change` or `type_create`, and `{ op, taxonomy_name, notes }` for a taxonomy, where `op` is `taxonomy_change`, `taxonomy_create` or `taxonomy_delete` and `notes` is how many notes its renames rewrote.
+- With the proposal's `agent`, the change is written as that agent, and a note of a type outside its `permissions.types` is a 403 `not_permitted`. With its `thread`, the outcome, applied with the answer, or failed or stale with the reason, is recorded in the thread.
 - Anything that is not a change the chat proposes is a 400.
+
+`POST /api/ai/discard` (`read`) takes `{ id, thread }` and records that the user discarded the thread's proposal `id`. It changes nothing else.
+
+The thread routes, `/api/agents/{name}/threads` (`GET` lists the agent's threads, newest activity first, as `{ threads: [{ id, title, origin, last_activity, pending }] }`; `POST` with `{ title? }` starts one, both `read`) and `/api/agents/{name}/threads/{id}` (`GET` answers the thread with its `messages`, `steps` and `proposals`, `read`; `PATCH` with `{ title }` renames it and `DELETE` moves it to the trash, both `write`), are forwarded to the home server by the apps' embedded server.
 
 ## API
 

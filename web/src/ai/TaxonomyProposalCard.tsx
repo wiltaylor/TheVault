@@ -5,12 +5,13 @@
 
 import { For, Match, Show, Switch } from "solid-js";
 import type { DiffLine } from "./diff";
-import { type Part, applyTaxonomyProposal, discardTaxonomyProposal } from "./store";
+import { type Part, useChatSession } from "./store";
 import { wclDiff } from "./TypeProposalCard";
 
 const TAXONOMIES = "/settings/taxonomies";
 
 export function TaxonomyProposalCard(props: { part: Extract<Part, { kind: "taxonomy_proposal" }>; turn: number; index: number }) {
+  const session = useChatSession();
   const p = () => props.part.proposal;
   const head = () => {
     const x = p();
@@ -78,17 +79,17 @@ export function TaxonomyProposalCard(props: { part: Extract<Part, { kind: "taxon
       <Switch>
         <Match when={open()}>
           <div class="ai-proposal-actions">
-            <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void applyTaxonomyProposal(props.turn, props.index)}>
+            <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void session.applyTaxonomyProposal(props.turn, props.index)}>
               Apply
             </button>
-            <button type="button" disabled={props.part.state === "applying"} onClick={() => discardTaxonomyProposal(props.turn, props.index)}>
+            <button type="button" disabled={props.part.state === "applying"} onClick={() => session.discardTaxonomyProposal(props.turn, props.index)}>
               Discard
             </button>
           </div>
         </Match>
         <Match when={props.part.state === "stale"}>
           <div class="ai-proposal-actions">
-            <button type="button" onClick={() => discardTaxonomyProposal(props.turn, props.index)}>
+            <button type="button" onClick={() => session.discardTaxonomyProposal(props.turn, props.index)}>
               Discard
             </button>
           </div>

@@ -1,18 +1,35 @@
-// The AI chat panel's conversation (ai D10, D14, D23): what the panel shows, and the neutral
-// transcript the server takes back each turn. It lives in this tab's memory only; nothing is
-// stored in the vault. The chat runs on the home server, which holds the credentials and runs
-// the note tools. In the web app a turn streams from POST /api/ai/chat. In the desktop and
-// Android apps, whose webviews get whole bodies from the embedded server, a turn starts with
-// POST /api/ai/chat/turns, which the embedded server forwards, and its events are polled from
-// the embedded server's GET /api/app/ai/turns/{turn}, which reads the turn's stream from the
-// home server. Edits come back as proposals the user applies with POST /api/ai/apply, on the
-// home server in every client, or, for the kinds Settings > AI lets go ahead without asking, as
-// `applied` events for changes already made. In an app such a change reaches the device's copy
-// with a sync round, which the panel asks for.
+// AI conversations (ai D10, D14, D23; agents G6, G7, G8): what a conversation shows, and the
+// neutral transcript of its turns. Each conversation is a thread of an agent, the built-in
+// Assistant unless another is chosen: the server keeps the thread as a note, reads its
+// transcript for each turn, so a turn sends only the new message, and keeps each proposal's
+// outcome, so a reopened thread shows its pending cards. Against a server without threads the
+// conversation lives in this tab's memory and each turn sends the whole transcript. The chat
+// runs on the home server, which holds the credentials and runs the note tools. In the web app a
+// turn streams from POST /api/ai/chat. In the desktop and Android apps, whose webviews get whole
+// bodies from the embedded server, a turn starts with POST /api/ai/chat/turns, which the
+// embedded server forwards, and its events are polled from the embedded server's
+// GET /api/app/ai/turns/{turn}, which reads the turn's stream from the home server. Edits come
+// back as proposals the user applies with POST /api/ai/apply, on the home server in every
+// client, or, for the kinds the agent lets go ahead without asking, as `applied` events for
+// changes already made. In an app such a change reaches the device's copy with a sync round,
+// which the panel asks for. The right sidebar's panel has one conversation; the agent screen's
+// Chat tab makes its own with `createChatSession`.
 
-import { createRoot, createSignal } from "solid-js";
+import { createContext, createRoot, createSignal, useContext } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { type AiApplied, type AppInfo, type Json, type NoteDoc, ApiError, type StreamEvent, api, streamEvents } from "../api";
+import { ASSISTANT, agents } from "../agents";
+import {
+  type AgentThread,
+  type AiApplied,
+  type AppInfo,
+  type Json,
+  type NoteDoc,
+  ApiError,
+  type StoredProposal,
+  type StreamEvent,
+  api,
+  streamEvents,
+} from "../api";
 import { noteChangedElsewhere, noteWritten } from "../changes";
 import { appInfo } from "../inApp";
 import { reloadDefinitions } from "../session";
@@ -230,6 +247,12 @@ export interface ChatState {
   /** The provider and model the next turn uses; null for Settings > AI's defaults. */
   provider: string | null;
   model: string | null;
+  /** The agent whose conversation this is (agents G6). */
+  agent: string;
+  /** The thread the conversation is, once its first message started one (agents G7). */
+  thread: string | null;
+  /** While a thread is being read. */
+  loading: boolean;
 }
 
 const LABELS: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", chatgpt: "ChatGPT" };
@@ -246,14 +269,10 @@ export function refusalText(provider: string | null, model: string | null, categ
   if (explanation) t += ` ${explanation}`;
   return t;
 }
-
-const state = createRoot(() => {
-  const [chat, setChat] = createStore<ChatState>({ turns: [], streaming: false, activity: null, startedAt: null, provider: null, model: null });
+const appState = createRoot(() => {
   const [app, setApp] = createSignal<AppInfo | null>(null);
-  return { chat, setChat, app, setApp };
+  return { app, setApp };
 });
-
-export const chat = state.chat;
 
 let asked = false;
 
@@ -265,47 +284,18 @@ export function inApp(): AppInfo | null {
   if (!asked) {
     asked = true;
     void appInfo().then(
-      (a) => state.setApp(a),
+      (a) => appState.setApp(a),
       () => undefined,
     );
   }
-  return state.app();
+  return appState.app();
 }
 
 /** Test-only: ask again whether the page runs in an app. */
 export function forgetApp() {
   asked = false;
-  state.setApp(null);
+  appState.setApp(null);
 }
-
-/** The transcript so far, sent with each turn. Append-only. */
-let transcript: ChatMessage[] = [];
-let controller: AbortController | null = null;
-/** Each conversation's turns write only while it is the current one. */
-let generation = 0;
-
-/** Test-only: the transcript the next turn sends. */
-export function transcriptNow(): readonly ChatMessage[] {
-  return transcript;
-}
-
-/**
- * What the user did with proposals since the last message (ai D29), one line each, by proposal
- * id in the order they happened: a proposal acted on twice, failed then applied, keeps its last.
- * The next message sends them ahead of the question, once.
- */
-const outcomes = new Map<string, string>();
-
-function record(id: string, line: string) {
-  outcomes.delete(id);
-  outcomes.set(id, line);
-}
-
-/** Test-only: the outcome lines the next message sends. */
-export function outcomesNow(): string[] {
-  return [...outcomes.values()];
-}
-
 const quoted = (title: Json) => (typeof title === "string" && title ? ` "${title}"` : "");
 
 /** What a note proposal is, for an outcome line. */
@@ -350,41 +340,6 @@ function taxonomyDone(p: TaxonomyProposal, done: AiApplied): string {
   return `changed taxonomy ${p.name}${notes ? `, its renames moving ${notes} ${notes === 1 ? "note" : "notes"}` : ""}`;
 }
 
-export function setProvider(provider: string | null, model: string | null) {
-  state.setChat({ provider, model });
-}
-
-export function setModel(model: string | null) {
-  state.setChat("model", model);
-}
-
-/** Forget the conversation and stop a turn in flight. */
-export function newConversation() {
-  generation++;
-  controller?.abort();
-  controller = null;
-  transcript = [];
-  outcomes.clear();
-  state.setChat({ turns: [], streaming: false, activity: null, startedAt: null });
-}
-
-/** Stop the turn in flight: the request is aborted, and the server stops when it sees that. */
-export function stop() {
-  controller?.abort();
-}
-
-function lastTurn(): number {
-  return state.chat.turns.length - 1;
-}
-
-function push(part: Part) {
-  state.setChat("turns", lastTurn(), "parts", (parts) => [...parts, part]);
-}
-
-function appendMessages(data: { messages?: unknown }) {
-  if (Array.isArray(data.messages)) transcript = [...transcript, ...(data.messages as ChatMessage[])];
-}
-
 /** The notices the server put in the turn's new messages, such as a round limit or a cut-off. */
 function noticesOf(data: { messages?: unknown }): Part[] {
   if (!Array.isArray(data.messages)) return [];
@@ -412,161 +367,6 @@ function activityAfter(e: StreamEvent, d: Record<string, unknown>): Activity | n
       return null;
     default:
       return undefined;
-  }
-}
-
-function onEvent(e: StreamEvent) {
-  const d = (e.data ?? {}) as Record<string, unknown>;
-  const next = activityAfter(e, d);
-  if (next !== undefined) state.setChat("activity", next);
-  switch (e.event) {
-    case "text": {
-      const delta = String(d.delta ?? "");
-      const i = lastTurn();
-      const parts = state.chat.turns[i]?.parts ?? [];
-      const last = parts[parts.length - 1];
-      if (last?.kind === "text") state.setChat("turns", i, "parts", parts.length - 1, produce((p) => void ((p as { text: string }).text += delta)));
-      else push({ kind: "text", text: delta });
-      break;
-    }
-    case "tool":
-      push({ kind: "tool", id: String(d.id), name: String(d.name), input: (d.input ?? null) as Json, done: false, isError: false, notes: [] });
-      break;
-    case "tool_result": {
-      const i = lastTurn();
-      const at = state.chat.turns[i]?.parts.findIndex((p) => p.kind === "tool" && p.id === d.id) ?? -1;
-      if (at < 0) break;
-      const summary = (d.summary ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef; assets?: FoundAsset[] };
-      state.setChat(
-        "turns",
-        i,
-        "parts",
-        at,
-        produce((p) => {
-          if (p.kind !== "tool") return;
-          p.done = true;
-          p.isError = d.is_error === true;
-          p.notes = (summary.notes ?? []).filter((n) => n && typeof n.id === "string").map((n) => ({ id: n.id, title: String(n.title ?? n.id) }));
-          if (summary.message) p.message = summary.message;
-          if (summary.asset && typeof summary.asset.id === "string") p.asset = summary.asset;
-          if (Array.isArray(summary.links))
-            p.links = summary.links
-              .filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url))
-              .map((l) => ({ url: l.url, title: String(l.title || l.url) }));
-          if (summary.web && typeof summary.web.url === "string") p.web = summary.web;
-          if (Array.isArray(summary.assets))
-            p.assets = summary.assets.filter((a) => a && typeof a.id === "string").map((a) => ({ id: a.id, filename: String(a.filename ?? a.id) }));
-        }),
-      );
-      break;
-    }
-    case "proposal":
-      if (d.op === "download") {
-        push({ kind: "download", proposal: d as unknown as DownloadProposal, state: "open" });
-        break;
-      }
-      push({ kind: "proposal", proposal: { ...d, op: typeof d.op === "string" ? d.op : "update" } as unknown as Proposal, state: "open" });
-      break;
-    case "type_proposal":
-      push({ kind: "type_proposal", proposal: { ...(d as unknown as TypeProposal), issues: Array.isArray(d.issues) ? (d.issues as TypeProposal["issues"]) : [] }, state: "open" });
-      break;
-    case "taxonomy_proposal": {
-      const p =
-        d.op === "delete"
-          ? (d as unknown as TaxonomyProposal)
-          : ({
-              ...d,
-              op: d.exists ? "change" : "create",
-              renames: Array.isArray(d.renames) ? d.renames : [],
-              issues: Array.isArray(d.issues) ? d.issues : [],
-              affected: typeof d.affected === "number" ? d.affected : 0,
-            } as unknown as TaxonomyProposal);
-      push({ kind: "taxonomy_proposal", proposal: p, state: "open" });
-      break;
-    }
-    case "applied": {
-      if (d.op === "download") {
-        const asset = d as unknown as DownloadedAsset & { url?: string };
-        push({
-          kind: "download",
-          proposal: { id: String(d.id), op: "download", url: asset.url ?? "", filename: asset.filename, media_type: asset.media_type ?? null, size: asset.size ?? null },
-          state: "applied",
-          asset,
-          auto: true,
-        });
-        break;
-      }
-      const applied = d as unknown as Applied;
-      push({ kind: "applied", applied });
-      // Open views of the note or type take the change, as after a write of this client's own.
-      void settle(applied.op === "type_change" || applied.op === "type_create" ? "type" : applied.op.startsWith("taxonomy_") ? "taxonomy" : "note");
-      break;
-    }
-    case "refusal": {
-      appendMessages(d);
-      const s = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : null);
-      push({
-        kind: "notice",
-        notice: "refusal",
-        category: s("category"),
-        text: refusalText(s("provider"), s("model"), s("category"), s("explanation")),
-      });
-      break;
-    }
-    case "error":
-      appendMessages(d);
-      push({ kind: "notice", notice: "error", text: String(d.message ?? "The request failed.") });
-      break;
-    case "done":
-      appendMessages(d);
-      for (const n of noticesOf(d)) push(n);
-      break;
-  }
-}
-
-/** Ask `text`, beside the note `noteId` when one is open. */
-export async function ask(text: string, noteId?: string) {
-  const question = text.trim();
-  if (!question || state.chat.streaming) return;
-  const mine = ++generation;
-  // The proposals acted on since the last message go first, as plain text every provider reads
-  // (ai D29), and only once.
-  const lines = [...outcomes.values()];
-  outcomes.clear();
-  const content: Content[] = [{ type: "text", text: question }];
-  if (lines.length) content.unshift({ type: "text", text: lines.join("\n") });
-  const user: ChatMessage = { role: "user", content };
-  transcript = [...transcript, user];
-  state.setChat(
-    produce((c) => {
-      c.turns.push({ role: "user", text: question, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
-      c.turns.push({ role: "assistant", parts: [] });
-      c.streaming = true;
-      c.activity = { step: "thinking" };
-      c.startedAt = Date.now();
-    }),
-  );
-  const ctl = new AbortController();
-  controller = ctl;
-  const body = {
-    ...(state.chat.provider ? { provider: state.chat.provider } : {}),
-    ...(state.chat.model ? { model: state.chat.model } : {}),
-    messages: transcript,
-    ...(noteId ? { note_id: noteId } : {}),
-  };
-  const each = (e: StreamEvent) => mine === generation && onEvent(e);
-  try {
-    if (await appInfo().catch(() => null)) await pollTurn(body, each, ctl.signal);
-    else await streamEvents("/api/ai/chat", body, each, ctl.signal);
-  } catch (e) {
-    if (mine !== generation) return;
-    if (ctl.signal.aborted) push({ kind: "notice", notice: "stopped", text: "Stopped." });
-    else push({ kind: "notice", notice: "error", text: e instanceof Error ? e.message : String(e) });
-  } finally {
-    if (mine === generation) {
-      controller = null;
-      state.setChat({ streaming: false, activity: null, startedAt: null });
-    }
   }
 }
 
@@ -628,210 +428,685 @@ export async function settle(kind: "note" | "type" | "taxonomy") {
   if (kind !== "type") noteWritten();
 }
 
-function setProposal(turn: number, part: number, patch: { state: ProposalState; error?: string; created?: string }) {
-  state.setChat(
-    "turns",
-    turn,
-    "parts",
-    part,
-    produce((p) => {
-      if (p.kind !== "proposal") return;
-      p.state = patch.state;
-      p.error = patch.error;
-      if (patch.created) p.created = patch.created;
-    }),
-  );
-}
-
 /** What a card says when the note changed after the proposal (ai D20, D23). */
 export const NOTE_CHANGED = "This note changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
 
 /** What a card says when the note the proposal names is gone. */
 export const NOTE_GONE = "This note is no longer there, so nothing was applied.";
 
-/**
- * Apply a note proposal with POST /api/ai/apply, on the home server, as the chat sent it (ai
- * D23): an update, an archive or unarchive, or a delete, which moves the note to the trash, at
- * the version it was proposed on, or a create. A note that changed since is a conflict and
- * nothing is written.
- */
-export async function applyProposal(turn: number, part: number) {
-  const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind !== "proposal" || (p.state !== "open" && p.state !== "failed")) return;
-  const proposal = p.proposal;
-  setProposal(turn, part, { state: "applying" });
-  try {
-    const done = await api.aiApply(proposal);
-    const created = proposal.op === "create" && "note_id" in done ? done.note_id : undefined;
-    setProposal(turn, part, { state: "applied", ...(created ? { created } : {}) });
-    record(proposal.id, `[Applied by the user: ${proposalDone(proposal, done)}]`);
-    await settle("note");
-  } catch (e) {
-    const stale = e instanceof ApiError && (e.isConflict || e.status === 404);
-    const error = e instanceof ApiError && e.isConflict ? NOTE_CHANGED : stale ? NOTE_GONE : e instanceof Error ? e.message : String(e);
-    setProposal(turn, part, { state: stale ? "stale" : "failed", error });
-    record(proposal.id, `[Failed to apply: ${proposalWhat(proposal)}: ${error}]`);
-  }
-}
-
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
   return (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "download") && (p.state === "open" || p.state === "failed");
 }
 
-function setDownload(turn: number, part: number, patch: { state: ProposalState; error?: string; asset?: DownloadedAsset }) {
-  state.setChat(
-    "turns",
-    turn,
-    "parts",
-    part,
-    produce((p) => {
-      if (p.kind !== "download") return;
-      p.state = patch.state;
-      p.error = patch.error;
-      if (patch.asset) p.asset = patch.asset;
-    }),
-  );
+/** Fill tool step `p` from its `tool_result` summary. */
+function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boolean) {
+  const summary = (raw ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[]; web?: WebRef; assets?: FoundAsset[] };
+  p.done = true;
+  p.isError = isError;
+  p.notes = (summary.notes ?? []).filter((n) => n && typeof n.id === "string").map((n) => ({ id: n.id, title: String(n.title ?? n.id) }));
+  if (summary.message) p.message = summary.message;
+  if (summary.asset && typeof summary.asset.id === "string") p.asset = summary.asset;
+  if (Array.isArray(summary.links))
+    p.links = summary.links
+      .filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url))
+      .map((l) => ({ url: l.url, title: String(l.title || l.url) }));
+  if (summary.web && typeof summary.web.url === "string") p.web = summary.web;
+  if (Array.isArray(summary.assets))
+    p.assets = summary.assets.filter((a) => a && typeof a.id === "string").map((a) => ({ id: a.id, filename: String(a.filename ?? a.id) }));
 }
 
-/**
- * Apply a download proposal with POST /api/ai/apply (ai D23, D27): the home server downloads the
- * file and stores it as an asset. In an app the asset reaches the device with a sync round.
- */
-export async function applyDownload(turn: number, part: number) {
-  const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind !== "download" || (p.state !== "open" && p.state !== "failed")) return;
-  setDownload(turn, part, { state: "applying" });
-  try {
-    const done = await api.aiApply(p.proposal);
-    const asset = "asset_id" in done ? done : undefined;
-    setDownload(turn, part, { state: "applied", ...(asset ? { asset } : {}) });
-    const stored = asset ? ` stored as asset ${asset.asset_id} (${asset.filename})` : "";
-    record(p.proposal.id, `[Applied by the user: ${downloadWhat(p.proposal)}${stored}]`);
-    await settle("note");
-  } catch (e) {
-    const error = e instanceof Error ? e.message : String(e);
-    setDownload(turn, part, { state: "failed", error });
-    record(p.proposal.id, `[Failed to apply: ${downloadWhat(p.proposal)}: ${error}]`);
+/** The card of a `proposal`, `type_proposal`, `taxonomy_proposal` or `applied` event, open. */
+function eventPart(event: string, d: Record<string, unknown>): Part | null {
+  switch (event) {
+    case "proposal":
+      if (d.op === "download") return { kind: "download", proposal: d as unknown as DownloadProposal, state: "open" };
+      return { kind: "proposal", proposal: { ...d, op: typeof d.op === "string" ? d.op : "update" } as unknown as Proposal, state: "open" };
+    case "type_proposal":
+      return { kind: "type_proposal", proposal: { ...(d as unknown as TypeProposal), issues: Array.isArray(d.issues) ? (d.issues as TypeProposal["issues"]) : [] }, state: "open" };
+    case "taxonomy_proposal": {
+      const p =
+        d.op === "delete"
+          ? (d as unknown as TaxonomyProposal)
+          : ({
+              ...d,
+              op: d.exists ? "change" : "create",
+              renames: Array.isArray(d.renames) ? d.renames : [],
+              issues: Array.isArray(d.issues) ? d.issues : [],
+              affected: typeof d.affected === "number" ? d.affected : 0,
+            } as unknown as TaxonomyProposal);
+      return { kind: "taxonomy_proposal", proposal: p, state: "open" };
+    }
+    case "applied": {
+      if (d.op === "download") {
+        const asset = d as unknown as DownloadedAsset & { url?: string };
+        return {
+          kind: "download",
+          proposal: { id: String(d.id), op: "download", url: asset.url ?? "", filename: asset.filename, media_type: asset.media_type ?? null, size: asset.size ?? null },
+          state: "applied",
+          asset,
+          auto: true,
+        };
+      }
+      return { kind: "applied", applied: d as unknown as Applied };
+    }
+    default:
+      return null;
   }
 }
 
-export function discardDownload(turn: number, part: number) {
-  const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind !== "download" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
-  setDownload(turn, part, { state: "discarded" });
-  record(p.proposal.id, `[Discarded by the user: ${downloadWhat(p.proposal)}]`);
+/** A stored proposal's card as a reopened thread shows it (agents G8). */
+function storedPart(p: StoredProposal): Part | null {
+  const part = eventPart(p.event, p.data);
+  if (!part || p.status === "made" || !("state" in part)) return part;
+  const state: ProposalState = p.status === "pending" ? "open" : p.status;
+  const out = { ...part, state, ...(p.error ? { error: p.error } : {}) } as Part;
+  if (out.kind === "proposal" && p.status === "applied" && out.proposal.op === "create" && typeof p.result?.note_id === "string") out.created = p.result.note_id;
+  if (out.kind === "download" && p.status === "applied" && typeof p.result?.asset_id === "string") out.asset = p.result as unknown as DownloadedAsset;
+  return out;
+}
+
+/** Whether `text` is a block of outcome lines rather than the user's own words (ai D29). */
+function isOutcomeLines(text: string): boolean {
+  return /^\s*\[(Applied by the user|Discarded by the user|Failed to apply):/.test(text);
 }
 
 /**
- * Apply all: every pending proposal of the turn, in order, stopping at the first one that does
- * not apply (ai D20). Its card shows why; the rest stay pending.
+ * A stored thread as the conversation shows it: each user message with its outcome lines, and
+ * each answer's text, tool steps with what they found, proposal cards as they stand, and
+ * notices.
  */
-export async function applyAll(turn: number) {
-  const parts = state.chat.turns[turn]?.parts ?? [];
-  const todo = parts.flatMap((p, i) => (pending(p) ? [i] : []));
-  for (const i of todo) {
-    const p = state.chat.turns[turn]?.parts[i];
-    if (!p || !pending(p)) continue;
-    if (p.kind === "proposal") await applyProposal(turn, i);
-    else if (p.kind === "download") await applyDownload(turn, i);
-    else if (p.kind === "taxonomy_proposal") await applyTaxonomyProposal(turn, i);
-    else await applyTypeProposal(turn, i);
-    const after = state.chat.turns[turn]?.parts[i];
-    if (!after || !("state" in after) || after.state !== "applied") return;
+export function turnsFromThread(t: AgentThread): Turn[] {
+  const turns: Turn[] = [];
+  const steps = t.steps ?? {};
+  const proposals = t.proposals ?? [];
+  const answer = (): Turn => {
+    const last = turns[turns.length - 1];
+    if (last?.role === "assistant") return last;
+    const fresh: Turn = { role: "assistant", parts: [] };
+    turns.push(fresh);
+    return fresh;
+  };
+  for (const m of (t.messages ?? []) as ChatMessage[]) {
+    const content = m.content ?? [];
+    const results = content.filter((c) => c.type === "tool_result");
+    if (m.role === "user" && results.length === 0) {
+      const texts = content.flatMap((c) => (c.type === "text" ? [c.text] : []));
+      const lines = texts.filter(isOutcomeLines).flatMap((x) => x.split("\n").filter((l) => l.trim()));
+      const words = texts.filter((x) => !isOutcomeLines(x)).join("\n\n");
+      turns.push({ role: "user", text: words, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
+      continue;
+    }
+    const turn = answer();
+    for (const c of content) {
+      if (c.type === "text" && m.role === "assistant") turn.parts.push({ kind: "text", text: c.text });
+      else if (c.type === "tool_call") {
+        const step: Extract<Part, { kind: "tool" }> = { kind: "tool", id: c.id, name: c.name, input: c.input, done: false, isError: false, notes: [] };
+        const got = steps[c.id];
+        if (got) fillStep(step, got.summary, got.is_error === true);
+        turn.parts.push(step);
+      } else if (c.type === "tool_result") {
+        const step = turn.parts.find((p) => p.kind === "tool" && p.id === c.id);
+        if (step?.kind === "tool" && !step.done) fillStep(step, null, c.is_error === true);
+        for (const p of proposals) {
+          if (p.data.id !== c.id) continue;
+          const part = storedPart(p);
+          if (part) turn.parts.push(part);
+        }
+      } else if (c.type === "notice") {
+        turn.parts.push({ kind: "notice", notice: c.kind, text: c.text });
+      }
+    }
   }
+  return turns;
 }
 
-export function discardProposal(turn: number, part: number) {
-  const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind !== "proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
-  setProposal(turn, part, { state: "discarded" });
-  record(p.proposal.id, `[Discarded by the user: ${proposalWhat(p.proposal)}]`);
-}
-
-function setTypeProposal(turn: number, part: number, patch: { state: TypeProposalState; error?: string }) {
-  state.setChat(
-    "turns",
-    turn,
-    "parts",
-    part,
-    produce((p) => {
-      if (p.kind !== "type_proposal") return;
-      p.state = patch.state;
-      p.error = patch.error;
-    }),
-  );
+/** How a conversation is kept. */
+export interface ChatOptions {
+  /** The agent whose conversation it is; the built-in Assistant when none is named. */
+  agent?: string;
+  /**
+   * Keep the conversation as a thread of the agent on the server (agents G7): the first message
+   * starts one, the server keeps the transcript and the proposals' outcomes, and each turn sends
+   * only the new message. A server without threads keeps the conversation in this tab instead.
+   */
+  threads?: boolean | "listed";
+  /** Called when a turn ends, a thread starts or a proposal is applied or discarded. */
+  onChange?: () => void;
 }
 
 /**
- * Apply a type proposal with POST /api/ai/apply, on the home server (ai D18, D23): a new type, or
- * a change planned and applied as one commit, when the type file is still the one proposed
- * against. It needs admin: from an app, the server answers that it is done in the web app.
+ * One conversation: what it shows, the transcript it sends, and the ways to act on it. The right
+ * sidebar's AI panel has one; the agent screen's Chat tab makes its own.
  */
-export async function applyTypeProposal(turn: number, part: number) {
-  const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind !== "type_proposal" || (p.state !== "open" && p.state !== "failed")) return;
-  setTypeProposal(turn, part, { state: "applying" });
-  try {
-    await api.aiApply(p.proposal);
-    setTypeProposal(turn, part, { state: "applied" });
-    record(p.proposal.id, `[Applied by the user: ${p.proposal.exists ? typeWhat(p.proposal) : `created type ${p.proposal.name}`}]`);
-    await settle("type");
-  } catch (e) {
-    const stale = e instanceof ApiError && e.status === 409;
-    const error = stale ? TYPE_CHANGED : e instanceof Error ? e.message : String(e);
-    setTypeProposal(turn, part, { state: stale ? "stale" : "failed", error });
-    record(p.proposal.id, `[Failed to apply: ${typeWhat(p.proposal)}: ${error}]`);
+export function createChatSession(options: ChatOptions = {}) {
+  return createRoot((dispose) => {
+    const [chat, setChat] = createStore<ChatState>({
+      turns: [],
+      streaming: false,
+      activity: null,
+      startedAt: null,
+      provider: null,
+      model: null,
+      agent: options.agent ?? ASSISTANT,
+      thread: null,
+      loading: false,
+    });
+  /** The transcript so far, sent with each turn. Append-only. */
+  let transcript: ChatMessage[] = [];
+  let controller: AbortController | null = null;
+  /** Each conversation's turns write only while it is the current one. */
+  let generation = 0;
+
+  /** Test-only: the transcript the next turn sends. */
+  function transcriptNow(): readonly ChatMessage[] {
+    return transcript;
   }
-}
 
-export function discardTypeProposal(turn: number, part: number) {
-  const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind !== "type_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
-  setTypeProposal(turn, part, { state: "discarded" });
-  record(p.proposal.id, `[Discarded by the user: ${typeWhat(p.proposal)}]`);
-}
+  /**
+   * What the user did with proposals since the last message (ai D29), one line each, by proposal
+   * id in the order they happened: a proposal acted on twice, failed then applied, keeps its last.
+   * The next message sends them ahead of the question, once.
+   */
+  const outcomes = new Map<string, string>();
 
-function setTaxonomyProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
-  state.setChat(
-    "turns",
-    turn,
-    "parts",
-    part,
-    produce((p) => {
-      if (p.kind !== "taxonomy_proposal") return;
-      p.state = patch.state;
-      p.error = patch.error;
-    }),
-  );
-}
-
-/**
- * Apply a taxonomy proposal with POST /api/ai/apply, on the home server (ai D31): the new file
- * with its renames, which move the notes holding the renamed terms, or the delete. The server
- * first re-reads the taxonomy and writes nothing when it changed since the proposal (a 409). It
- * needs admin: from an app, the server answers that it is done in the web app.
- */
-export async function applyTaxonomyProposal(turn: number, part: number) {
-  const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind !== "taxonomy_proposal" || (p.state !== "open" && p.state !== "failed")) return;
-  setTaxonomyProposal(turn, part, { state: "applying" });
-  try {
-    const done = await api.aiApply(p.proposal);
-    setTaxonomyProposal(turn, part, { state: "applied" });
-    record(p.proposal.id, `[Applied by the user: ${taxonomyDone(p.proposal, done)}]`);
-    await settle("taxonomy");
-  } catch (e) {
-    const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
-    const error = stale ? TAXONOMY_CHANGED : e instanceof Error ? e.message : String(e);
-    setTaxonomyProposal(turn, part, { state: stale ? "stale" : "failed", error });
-    record(p.proposal.id, `[Failed to apply: ${taxonomyWhat(p.proposal)}: ${error}]`);
+  function record(id: string, line: string) {
+    outcomes.delete(id);
+    outcomes.set(id, line);
   }
+
+  /** Test-only: the outcome lines the next message sends. */
+  function outcomesNow(): string[] {
+    return [...outcomes.values()];
+  }
+
+  function setProvider(provider: string | null, model: string | null) {
+    setChat({ provider, model });
+  }
+
+  function setModel(model: string | null) {
+    setChat("model", model);
+  }
+
+  /** Forget the conversation and stop a turn in flight. */
+  function newConversation() {
+    generation++;
+    controller?.abort();
+    controller = null;
+    transcript = [];
+    outcomes.clear();
+    setChat({ turns: [], streaming: false, activity: null, startedAt: null, thread: null, loading: false });
+  }
+
+  /** Stop the turn in flight: the request is aborted, and the server stops when it sees that. */
+  function stop() {
+    controller?.abort();
+  }
+
+  function lastTurn(): number {
+    return chat.turns.length - 1;
+  }
+
+  function push(part: Part) {
+    setChat("turns", lastTurn(), "parts", (parts) => [...parts, part]);
+  }
+
+  function appendMessages(data: { messages?: unknown }) {
+    if (Array.isArray(data.messages)) transcript = [...transcript, ...(data.messages as ChatMessage[])];
+  }
+
+  function onEvent(e: StreamEvent) {
+    const d = (e.data ?? {}) as Record<string, unknown>;
+    const next = activityAfter(e, d);
+    if (next !== undefined) setChat("activity", next);
+    switch (e.event) {
+      case "text": {
+        const delta = String(d.delta ?? "");
+        const i = lastTurn();
+        const parts = chat.turns[i]?.parts ?? [];
+        const last = parts[parts.length - 1];
+        if (last?.kind === "text") setChat("turns", i, "parts", parts.length - 1, produce((p) => void ((p as { text: string }).text += delta)));
+        else push({ kind: "text", text: delta });
+        break;
+      }
+      case "tool":
+        push({ kind: "tool", id: String(d.id), name: String(d.name), input: (d.input ?? null) as Json, done: false, isError: false, notes: [] });
+        break;
+      case "tool_result": {
+        const i = lastTurn();
+        const at = chat.turns[i]?.parts.findIndex((p) => p.kind === "tool" && p.id === d.id) ?? -1;
+        if (at < 0) break;
+        setChat(
+          "turns",
+          i,
+          "parts",
+          at,
+          produce((p) => {
+            if (p.kind === "tool") fillStep(p, d.summary, d.is_error === true);
+          }),
+        );
+        break;
+      }
+      case "proposal":
+      case "type_proposal":
+      case "taxonomy_proposal":
+        push(eventPart(e.event, d)!);
+        break;
+      case "applied": {
+        push(eventPart(e.event, d)!);
+        if (d.op === "download") break;
+        const applied = d as unknown as Applied;
+        // Open views of the note or type take the change, as after a write of this client's own.
+        void settle(applied.op === "type_change" || applied.op === "type_create" ? "type" : applied.op.startsWith("taxonomy_") ? "taxonomy" : "note");
+        break;
+      }
+      case "refusal": {
+        appendMessages(d);
+        const s = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : null);
+        push({
+          kind: "notice",
+          notice: "refusal",
+          category: s("category"),
+          text: refusalText(s("provider"), s("model"), s("category"), s("explanation")),
+        });
+        break;
+      }
+      case "error":
+        appendMessages(d);
+        push({ kind: "notice", notice: "error", text: String(d.message ?? "The request failed.") });
+        break;
+      case "done":
+        appendMessages(d);
+        for (const n of noticesOf(d)) push(n);
+        break;
+    }
+  }
+
+  /**
+   * Whether the next turn starts a thread. The panel keeps threads only for an agent the server
+   * has listed, so a server from before agents is never asked for one.
+   */
+  function wantsThread(): boolean {
+    if (!options.threads || chat.thread) return false;
+    return options.threads !== "listed" || agents().some((a) => a.name === chat.agent);
+  }
+
+  /**
+   * Start the thread the next turn runs on. Null when the server has no threads, so the
+   * conversation stays in this tab; an error the user should see throws.
+   */
+  async function startThread(): Promise<string | null> {
+    try {
+      const t = await api.agentThreadStart(chat.agent);
+      setChat("thread", t.id);
+      options.onChange?.();
+      return t.id;
+    } catch (e) {
+      // A home server from before threads, or none reachable to ask: keep it here.
+      if (!(e instanceof ApiError) || e.status === 404 || e.status === 405) return null;
+      throw e;
+    }
+  }
+
+  /** Ask `text`, beside the note `noteId` when one is open. */
+  async function ask(text: string, noteId?: string) {
+    const question = text.trim();
+    if (!question || chat.streaming) return;
+    const mine = ++generation;
+    // The proposals acted on since the last message, shown ahead of the question (ai D29).
+    const lines = [...outcomes.values()];
+    outcomes.clear();
+    setChat(
+      produce((c) => {
+        c.turns.push({ role: "user", text: question, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
+        c.turns.push({ role: "assistant", parts: [] });
+        c.streaming = true;
+        c.activity = { step: "thinking" };
+        c.startedAt = Date.now();
+      }),
+    );
+    const ctl = new AbortController();
+    controller = ctl;
+    const each = (e: StreamEvent) => mine === generation && onEvent(e);
+    try {
+      const thread = wantsThread() ? await startThread() : chat.thread;
+      if (mine !== generation) return;
+      // On a thread the server keeps the transcript and adds the outcome lines itself; here they
+      // go first, as plain text every provider reads (ai D29), and only once.
+      const content: Content[] = [{ type: "text", text: question }];
+      if (lines.length && !thread) content.unshift({ type: "text", text: lines.join("\n") });
+      const user: ChatMessage = { role: "user", content };
+      transcript = [...transcript, user];
+      const named = thread || chat.agent !== ASSISTANT;
+      const body = {
+        ...(chat.provider ? { provider: chat.provider } : {}),
+        ...(chat.model ? { model: chat.model } : {}),
+        messages: thread ? [user] : transcript,
+        ...(noteId ? { note_id: noteId } : {}),
+        ...(named ? { agent: chat.agent } : {}),
+        ...(thread ? { thread } : {}),
+      };
+      if (await appInfo().catch(() => null)) await pollTurn(body, each, ctl.signal);
+      else await streamEvents("/api/ai/chat", body, each, ctl.signal);
+    } catch (e) {
+      if (mine !== generation) return;
+      if (ctl.signal.aborted) push({ kind: "notice", notice: "stopped", text: "Stopped." });
+      else push({ kind: "notice", notice: "error", text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      if (mine === generation) {
+        controller = null;
+        setChat({ streaming: false, activity: null, startedAt: null });
+        options.onChange?.();
+      }
+    }
+  }
+
+  /** Make this a conversation with agent `name`; another agent's conversation starts afresh. */
+  function setAgent(name: string) {
+    if (name === chat.agent) return;
+    newConversation();
+    setChat("agent", name);
+  }
+
+  /** Open thread `id` of the agent: its turns as they were, its pending proposals open again. */
+  async function openThread(id: string) {
+    newConversation();
+    const mine = generation;
+    setChat({ thread: id, loading: true });
+    try {
+      const t = await api.agentThread(chat.agent, id);
+      if (mine !== generation) return;
+      transcript = (t.messages ?? []) as ChatMessage[];
+      setChat({ turns: turnsFromThread(t), loading: false });
+    } catch (e) {
+      if (mine !== generation) return;
+      setChat({
+        loading: false,
+        turns: [{ role: "assistant", parts: [{ kind: "notice", notice: "error", text: e instanceof Error ? e.message : String(e) }] }],
+      });
+    }
+  }
+
+  /** Tell the thread the user discarded proposal `id` (agents G8). */
+  function discarded(proposal: { id: string; thread?: unknown }) {
+    const thread = typeof proposal.thread === "string" ? proposal.thread : null;
+    if (!thread) return;
+    void api
+      .aiDiscard(proposal.id, thread)
+      .then(() => options.onChange?.())
+      .catch(() => undefined);
+  }
+
+  function setProposal(turn: number, part: number, patch: { state: ProposalState; error?: string; created?: string }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "proposal") return;
+        p.state = patch.state;
+        p.error = patch.error;
+        if (patch.created) p.created = patch.created;
+      }),
+    );
+  }
+
+  /**
+   * Apply a note proposal with POST /api/ai/apply, on the home server, as the chat sent it (ai
+   * D23): an update, an archive or unarchive, or a delete, which moves the note to the trash, at
+   * the version it was proposed on, or a create. A note that changed since is a conflict and
+   * nothing is written.
+   */
+  async function applyProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "proposal" || (p.state !== "open" && p.state !== "failed")) return;
+    const proposal = p.proposal;
+    setProposal(turn, part, { state: "applying" });
+    try {
+      const done = await api.aiApply(proposal);
+      const created = proposal.op === "create" && "note_id" in done ? done.note_id : undefined;
+      setProposal(turn, part, { state: "applied", ...(created ? { created } : {}) });
+      record(proposal.id, `[Applied by the user: ${proposalDone(proposal, done)}]`);
+      await settle("note");
+      options.onChange?.();
+    } catch (e) {
+      const stale = e instanceof ApiError && (e.isConflict || e.status === 404);
+      const error = e instanceof ApiError && e.isConflict ? NOTE_CHANGED : stale ? NOTE_GONE : e instanceof Error ? e.message : String(e);
+      setProposal(turn, part, { state: stale ? "stale" : "failed", error });
+      record(proposal.id, `[Failed to apply: ${proposalWhat(proposal)}: ${error}]`);
+    }
+  }
+
+  function setDownload(turn: number, part: number, patch: { state: ProposalState; error?: string; asset?: DownloadedAsset }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "download") return;
+        p.state = patch.state;
+        p.error = patch.error;
+        if (patch.asset) p.asset = patch.asset;
+      }),
+    );
+  }
+
+  /**
+   * Apply a download proposal with POST /api/ai/apply (ai D23, D27): the home server downloads the
+   * file and stores it as an asset. In an app the asset reaches the device with a sync round.
+   */
+  async function applyDownload(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "download" || (p.state !== "open" && p.state !== "failed")) return;
+    setDownload(turn, part, { state: "applying" });
+    try {
+      const done = await api.aiApply(p.proposal);
+      const asset = "asset_id" in done ? done : undefined;
+      setDownload(turn, part, { state: "applied", ...(asset ? { asset } : {}) });
+      const stored = asset ? ` stored as asset ${asset.asset_id} (${asset.filename})` : "";
+      record(p.proposal.id, `[Applied by the user: ${downloadWhat(p.proposal)}${stored}]`);
+      await settle("note");
+      options.onChange?.();
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      setDownload(turn, part, { state: "failed", error });
+      record(p.proposal.id, `[Failed to apply: ${downloadWhat(p.proposal)}: ${error}]`);
+    }
+  }
+
+  function discardDownload(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "download" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setDownload(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${downloadWhat(p.proposal)}]`);
+    discarded(p.proposal);
+  }
+
+  /**
+   * Apply all: every pending proposal of the turn, in order, stopping at the first one that does
+   * not apply (ai D20). Its card shows why; the rest stay pending.
+   */
+  async function applyAll(turn: number) {
+    const parts = chat.turns[turn]?.parts ?? [];
+    const todo = parts.flatMap((p, i) => (pending(p) ? [i] : []));
+    for (const i of todo) {
+      const p = chat.turns[turn]?.parts[i];
+      if (!p || !pending(p)) continue;
+      if (p.kind === "proposal") await applyProposal(turn, i);
+      else if (p.kind === "download") await applyDownload(turn, i);
+      else if (p.kind === "taxonomy_proposal") await applyTaxonomyProposal(turn, i);
+      else await applyTypeProposal(turn, i);
+      const after = chat.turns[turn]?.parts[i];
+      if (!after || !("state" in after) || after.state !== "applied") return;
+    }
+  }
+
+  function discardProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setProposal(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${proposalWhat(p.proposal)}]`);
+    discarded(p.proposal);
+  }
+
+  function setTypeProposal(turn: number, part: number, patch: { state: TypeProposalState; error?: string }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "type_proposal") return;
+        p.state = patch.state;
+        p.error = patch.error;
+      }),
+    );
+  }
+
+  /**
+   * Apply a type proposal with POST /api/ai/apply, on the home server (ai D18, D23): a new type, or
+   * a change planned and applied as one commit, when the type file is still the one proposed
+   * against. It needs admin: from an app, the server answers that it is done in the web app.
+   */
+  async function applyTypeProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "type_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+    setTypeProposal(turn, part, { state: "applying" });
+    try {
+      await api.aiApply(p.proposal);
+      setTypeProposal(turn, part, { state: "applied" });
+      record(p.proposal.id, `[Applied by the user: ${p.proposal.exists ? typeWhat(p.proposal) : `created type ${p.proposal.name}`}]`);
+      await settle("type");
+      options.onChange?.();
+    } catch (e) {
+      const stale = e instanceof ApiError && e.status === 409;
+      const error = stale ? TYPE_CHANGED : e instanceof Error ? e.message : String(e);
+      setTypeProposal(turn, part, { state: stale ? "stale" : "failed", error });
+      record(p.proposal.id, `[Failed to apply: ${typeWhat(p.proposal)}: ${error}]`);
+    }
+  }
+
+  function discardTypeProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "type_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setTypeProposal(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${typeWhat(p.proposal)}]`);
+    discarded(p.proposal);
+  }
+
+  function setTaxonomyProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "taxonomy_proposal") return;
+        p.state = patch.state;
+        p.error = patch.error;
+      }),
+    );
+  }
+
+  /**
+   * Apply a taxonomy proposal with POST /api/ai/apply, on the home server (ai D31): the new file
+   * with its renames, which move the notes holding the renamed terms, or the delete. The server
+   * first re-reads the taxonomy and writes nothing when it changed since the proposal (a 409). It
+   * needs admin: from an app, the server answers that it is done in the web app.
+   */
+  async function applyTaxonomyProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "taxonomy_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+    setTaxonomyProposal(turn, part, { state: "applying" });
+    try {
+      const done = await api.aiApply(p.proposal);
+      setTaxonomyProposal(turn, part, { state: "applied" });
+      record(p.proposal.id, `[Applied by the user: ${taxonomyDone(p.proposal, done)}]`);
+      await settle("taxonomy");
+      options.onChange?.();
+    } catch (e) {
+      const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
+      const error = stale ? TAXONOMY_CHANGED : e instanceof Error ? e.message : String(e);
+      setTaxonomyProposal(turn, part, { state: stale ? "stale" : "failed", error });
+      record(p.proposal.id, `[Failed to apply: ${taxonomyWhat(p.proposal)}: ${error}]`);
+    }
+  }
+
+  function discardTaxonomyProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "taxonomy_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setTaxonomyProposal(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${taxonomyWhat(p.proposal)}]`);
+    discarded(p.proposal);
+  }
+
+    /** Stop the turn in flight and let the conversation go. */
+    function close() {
+      generation++;
+      controller?.abort();
+      dispose();
+    }
+
+    return {
+      chat,
+      ask,
+      stop,
+      close,
+      newConversation,
+      setProvider,
+      setModel,
+      setAgent,
+      openThread,
+      transcriptNow,
+      outcomesNow,
+      applyProposal,
+      discardProposal,
+      applyDownload,
+      discardDownload,
+      applyAll,
+      applyTypeProposal,
+      discardTypeProposal,
+      applyTaxonomyProposal,
+      discardTaxonomyProposal,
+    };
+  });
 }
 
-export function discardTaxonomyProposal(turn: number, part: number) {
-  const p = state.chat.turns[turn]?.parts[part];
-  if (p?.kind !== "taxonomy_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
-  setTaxonomyProposal(turn, part, { state: "discarded" });
-  record(p.proposal.id, `[Discarded by the user: ${taxonomyWhat(p.proposal)}]`);
+export type ChatSession = ReturnType<typeof createChatSession>;
+
+/** The right sidebar's AI panel's conversation: a thread of the agent it has chosen (agents G6). */
+const panel = createChatSession({ threads: "listed" });
+
+/** The panel's conversation itself, for the views that take a session. */
+export const panelSession = panel;
+
+export const chat = panel.chat;
+export const ask = panel.ask;
+export const stop = panel.stop;
+export const newConversation = panel.newConversation;
+export const setProvider = panel.setProvider;
+export const setModel = panel.setModel;
+export const setAgent = panel.setAgent;
+export const openThread = panel.openThread;
+/** Test-only: the transcript the next turn sends. */
+export const transcriptNow = panel.transcriptNow;
+/** Test-only: the outcome lines the next message sends. */
+export const outcomesNow = panel.outcomesNow;
+export const applyProposal = panel.applyProposal;
+export const discardProposal = panel.discardProposal;
+export const applyDownload = panel.applyDownload;
+export const discardDownload = panel.discardDownload;
+export const applyAll = panel.applyAll;
+export const applyTypeProposal = panel.applyTypeProposal;
+export const discardTypeProposal = panel.discardTypeProposal;
+export const applyTaxonomyProposal = panel.applyTaxonomyProposal;
+export const discardTaxonomyProposal = panel.discardTaxonomyProposal;
+
+/** The conversation the cards below act on: the panel's, unless a Chat tab provides its own. */
+export const ChatContext = createContext<ChatSession>(panel);
+
+export function useChatSession(): ChatSession {
+  return useContext(ChatContext);
 }

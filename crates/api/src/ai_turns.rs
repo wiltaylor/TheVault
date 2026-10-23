@@ -39,6 +39,7 @@ use state::{Author, Scope};
 use tokio::sync::{mpsc, watch};
 
 use crate::ApiError;
+use crate::agent_threads::{self, Status};
 use crate::ai_chat::{self, ChatBody};
 use crate::ai_settings::Ai;
 use crate::auth::{Caller, GrantedScope};
@@ -116,7 +117,8 @@ pub async fn start(
             ));
         }
     }
-    let (rx, running) = ai_chat::start(a.writer.clone(), author.clone(), scope, body, stop_rx)?;
+    let (rx, running) =
+        ai_chat::start(a.writer.clone(), author.clone(), scope, body, stop_rx).await?;
     a.turns.live().insert(
         id.clone(),
         Held {
@@ -232,9 +234,101 @@ pub async fn apply(
         }
     }
     let w = a.writer.clone();
-    tokio::task::spawn_blocking(move || ai_chat::apply_change(&w, &author, event, &change))
+    tokio::task::spawn_blocking(move || apply_as_agent(&w, author, event, &change))
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
         .map(Json)
-        .map_err(ApiError::from)
+}
+
+/// Apply `change` as the caller, or, when it names the agent that proposed it, as that agent
+/// (agents G11) within its note types (agents G4); with its `thread`, record the outcome there
+/// (agents G8).
+fn apply_as_agent(
+    w: &writer::Writer,
+    caller: Author,
+    event: &str,
+    change: &Value,
+) -> Result<Value, ApiError> {
+    let author = match change["agent"].as_str().filter(|n| !n.is_empty()) {
+        Some(name) => {
+            let agent = w.agent(name)?;
+            if event == "proposal" {
+                let limits = ai_chat::Limits::of(&agent);
+                let type_name = match change["op"].as_str().unwrap_or("update") {
+                    "download" => None,
+                    "create" => change["type"].as_str().map(str::to_owned),
+                    _ => change["note_id"]
+                        .as_str()
+                        .and_then(|id| w.read(id).ok())
+                        .map(|n| n.type_name),
+                };
+                if let Some(t) = type_name
+                    && !limits.allows(&t)
+                {
+                    return Err(ApiError::new(
+                        StatusCode::FORBIDDEN,
+                        "not_permitted",
+                        format!("{} may not change {t} notes.", agent.label),
+                    ));
+                }
+            }
+            Author::Agent(agent.name)
+        }
+        None => caller,
+    };
+    let result = ai_chat::apply_change(w, &author, event, change);
+    if let (Some(thread), Some(id)) = (change["thread"].as_str(), change["id"].as_str()) {
+        let recorded = match &result {
+            Ok(done) => agent_threads::record_outcome(
+                w,
+                thread,
+                id,
+                Status::Applied,
+                Some(done.clone()),
+                None,
+            ),
+            Err(e) => {
+                let stale = matches!(
+                    e,
+                    ai_chat::ApplyError::Stale(_)
+                        | ai_chat::ApplyError::Write(
+                            writer::Error::Conflict { .. } | writer::Error::NotFound(_)
+                        )
+                );
+                let status = if stale { Status::Stale } else { Status::Failed };
+                agent_threads::record_outcome(w, thread, id, status, None, Some(e.to_string()))
+            }
+        };
+        if let Err(e) = recorded {
+            eprintln!(
+                "the outcome of proposal {id} was not recorded in thread {thread}: {}",
+                e.body
+            );
+        }
+    }
+    result.map_err(ApiError::from)
+}
+
+/// The body of `POST /api/ai/discard`: the proposal as the chat sent it, which names its thread.
+#[derive(Debug, serde::Deserialize)]
+pub struct Discard {
+    id: String,
+    thread: String,
+}
+
+/// `POST /api/ai/discard` (read): the user discarded a proposal of a thread, recorded there so
+/// the reopened thread shows it and the next turn tells the model (agents G8, ai D29). It
+/// changes nothing else.
+pub async fn discard(
+    State(a): State<Arc<Ai>>,
+    Json(b): Json<Discard>,
+) -> Result<Json<Value>, ApiError> {
+    let w = a.writer.clone();
+    let t = crate::blocking(w, move |w| {
+        agent_threads::record_outcome(w, &b.thread, &b.id, Status::Discarded, None, None)
+    })
+    .await?;
+    Ok(Json(
+        json!({ "thread": t.id, "pending": t.transcript.pending() }),
+    ))
 }

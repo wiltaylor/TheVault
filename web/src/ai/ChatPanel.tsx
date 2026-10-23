@@ -1,9 +1,12 @@
-// The right sidebar's AI panel (ai D14, D23): ask about the vault, watch the answer stream, see
-// which notes the model searched and read, and apply or discard the edits it proposes. The
-// conversation lives in this tab's memory (store.ts); New conversation forgets it. It shows in
-// the web app and in the desktop and Android apps, whose chat runs on the home server.
+// The right sidebar's AI panel (ai D14, D23; agents G6): pick an agent, Assistant by default,
+// ask about the vault, watch the answer stream, see which notes the model searched and read, and
+// apply or discard the edits it proposes. Each conversation is a thread of the chosen agent,
+// which its Chat tab lists too; New conversation starts another. It shows in the web app and in
+// the desktop and Android apps, whose chat runs on the home server. `Conversation` is the view
+// the panel and the agent screen's Chat tab share.
 
-import { For, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
+import { For, type JSX, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
+import { agentLabel, agents } from "../agents";
 import { type AiModel, type AiProvider, type AiProviders, type Json, type NoteDoc, api, assetUrl } from "../api";
 import { formatValue } from "../components/Render";
 import { Spinner } from "../components/SyncStatus";
@@ -14,22 +17,20 @@ import { TaxonomyProposalCard } from "./TaxonomyProposalCard";
 import { TypeProposalCard } from "./TypeProposalCard";
 import {
   type Applied,
+  ChatContext,
+  type ChatSession,
   type NoteOp,
   type Part,
   type Proposal,
   type ProposalOp,
-  applyAll,
-  applyProposal,
-  ask,
   chat,
-  discardProposal,
   inApp,
   newConversation,
+  panelSession,
   pending,
   providerLabel,
-  setModel,
-  setProvider,
-  stop,
+  setAgent,
+  useChatSession,
 } from "./store";
 import "./chat.css";
 
@@ -340,6 +341,7 @@ export function createOps(after: NoteDoc | undefined): ProposalOp[] {
 }
 
 function ProposalCard(props: { part: Extract<Part, { kind: "proposal" }>; turn: number; index: number }) {
+  const session = useChatSession();
   const p = (): Proposal => props.part.proposal;
   const noteId = () => {
     const x = p();
@@ -395,17 +397,17 @@ function ProposalCard(props: { part: Extract<Part, { kind: "proposal" }>; turn: 
       <Switch>
         <Match when={open()}>
           <div class="ai-proposal-actions">
-            <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void applyProposal(props.turn, props.index)}>
+            <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void session.applyProposal(props.turn, props.index)}>
               Apply
             </button>
-            <button type="button" disabled={props.part.state === "applying"} onClick={() => discardProposal(props.turn, props.index)}>
+            <button type="button" disabled={props.part.state === "applying"} onClick={() => session.discardProposal(props.turn, props.index)}>
               Discard
             </button>
           </div>
         </Match>
         <Match when={props.part.state === "stale"}>
           <div class="ai-proposal-actions">
-            <button type="button" onClick={() => discardProposal(props.turn, props.index)}>
+            <button type="button" onClick={() => session.discardProposal(props.turn, props.index)}>
               Discard
             </button>
           </div>
@@ -522,7 +524,7 @@ export function AppliedCard(props: { applied: Applied }) {
           )}
         </Show>
       </p>
-      <p class="muted">Made without asking, as Settings &gt; AI allows.</p>
+      <p class="muted">Made without asking, as the agent's permissions allow.</p>
     </section>
   );
 }
@@ -532,6 +534,7 @@ export function AppliedCard(props: { applied: Applied }) {
  * order and stops at the first that does not apply, whose card shows why.
  */
 function ApplyAll(props: { turn: number; parts: Part[] }) {
+  const session = useChatSession();
   const [busy, setBusy] = createSignal(false);
   const count = () => props.parts.filter(pending).length;
   return (
@@ -544,7 +547,7 @@ function ApplyAll(props: { turn: number; parts: Part[] }) {
           onClick={async () => {
             setBusy(true);
             try {
-              await applyAll(props.turn);
+              await session.applyAll(props.turn);
             } finally {
               setBusy(false);
             }
@@ -574,6 +577,7 @@ function Notice(props: { part: Extract<Part, { kind: "notice" }> }) {
  * the verb is in the polite status region, so a screen reader hears each step, not each second.
  */
 function ActivityLine() {
+  const { chat } = useChatSession();
   const [now, setNow] = createSignal(Date.now());
   const timer = setInterval(() => setNow(Date.now()), 1000);
   onCleanup(() => clearInterval(timer));
@@ -610,7 +614,8 @@ function settingsUrl(): string {
  * `GET /api/ai/providers` in every client (ai D23), and each one's live model list (ai D6),
  * starting from the defaults chosen there.
  */
-function Picker() {
+function Picker(props: { session: ChatSession }) {
+  const { chat, setProvider, setModel } = props.session;
   const [status, setStatus] = createSignal<AiProviders | null>(null);
   const [models, setModels] = createSignal<AiModel[]>([]);
   const [error, setError] = createSignal<string | null>(null);
@@ -689,28 +694,51 @@ function Picker() {
   );
 }
 
-/** The AI panel. `noteId` is the note open in the active pane, if any. */
-export function ChatPanel(props: { noteId: () => string }) {
+/**
+ * The panel's agent picker (agents G6): Assistant first and chosen by default, then every enabled
+ * agent. Choosing another starts a conversation with it.
+ */
+function AgentPicker() {
+  const enabled = () => agents().filter((a) => a.enabled !== false && !a.error);
+  return (
+    <Show when={enabled().length > 0}>
+      <select aria-label="Agent" class="ai-agent-picker" value={chat.agent} onChange={(e) => setAgent(e.currentTarget.value)}>
+        <For each={enabled()}>{(a) => <option value={a.name}>{agentLabel(a)}</option>}</For>
+      </select>
+    </Show>
+  );
+}
+
+/** The model an agent names itself, which the provider and model picker gives way to. */
+function agentModel(name: string): string | null {
+  const a = agents().find((x) => x.name === name);
+  if (!a || (!a.provider && !a.model)) return null;
+  return a.model ? a.model : `${providerLabel(a.provider)}'s default model`;
+}
+
+/**
+ * A conversation as the panel and the Chat tab show it: its turns, with streaming text, tool
+ * steps, proposal cards, Apply all, applied cards and notices, the activity line, and the box to
+ * ask in. `noteId` is the note open beside it, if any.
+ */
+export function Conversation(props: { session: ChatSession; noteId?: () => string; empty?: JSX.Element; placeholder?: string }) {
+  const s = props.session;
+  const chat = s.chat;
   const [draft, setDraft] = createSignal("");
   let list: HTMLOListElement | undefined;
   function send() {
     const text = draft();
     if (!text.trim() || chat.streaming) return;
     setDraft("");
-    void ask(text, props.noteId() || undefined);
+    void s.ask(text, props.noteId?.() || undefined);
     queueMicrotask(() => list?.lastElementChild?.scrollIntoView?.({ block: "end" }));
   }
   return (
-    <div class="ai-panel">
-      <div class="ai-toolbar">
-        <Picker />
-        <button type="button" class="link" onClick={newConversation} disabled={chat.turns.length === 0 && !chat.streaming}>
-          New conversation
-        </button>
-      </div>
-      <Show when={chat.turns.length === 0}>
-        <p class="muted ai-empty">
-          Ask about your notes. Answers come from {providerLabel(chat.provider)}; the notes it reads are sent there. Edits are proposals you apply, unless Settings &gt; AI lets them go ahead without asking.
+    <ChatContext.Provider value={s}>
+      <Show when={chat.turns.length === 0 && !chat.loading}>{props.empty}</Show>
+      <Show when={chat.loading}>
+        <p class="muted" role="status">
+          Loading the thread…
         </p>
       </Show>
       <ol class="ai-turns" ref={list} aria-label="Conversation" aria-busy={chat.streaming}>
@@ -764,7 +792,7 @@ export function ChatPanel(props: { noteId: () => string }) {
         </Show>
         <textarea
           aria-label="Ask AI"
-          placeholder="Ask about your notes"
+          placeholder={props.placeholder ?? "Ask about your notes"}
           rows={3}
           value={draft()}
           onInput={(e) => setDraft(e.currentTarget.value)}
@@ -783,11 +811,46 @@ export function ChatPanel(props: { noteId: () => string }) {
             </button>
           }
         >
-          <button type="button" onClick={stop}>
+          <button type="button" onClick={s.stop}>
             Stop
           </button>
         </Show>
       </form>
+    </ChatContext.Provider>
+  );
+}
+
+/** The provider and model picker, or the model the conversation's agent names itself. */
+export function ModelPicker(props: { session: ChatSession }) {
+  return (
+    <Show when={agentModel(props.session.chat.agent)} fallback={<Picker session={props.session} />}>
+      {(m) => <p class="muted ai-agent-model">Model: {m()}</p>}
+    </Show>
+  );
+}
+
+/** The AI panel. `noteId` is the note open in the active pane, if any. */
+export function ChatPanel(props: { noteId: () => string }) {
+  const session = panelSession;
+
+  return (
+    <div class="ai-panel">
+      <div class="ai-toolbar">
+        <AgentPicker />
+        <ModelPicker session={session} />
+        <button type="button" class="link" onClick={newConversation} disabled={chat.turns.length === 0 && !chat.streaming}>
+          New conversation
+        </button>
+      </div>
+      <Conversation
+        session={session}
+        noteId={props.noteId}
+        empty={
+          <p class="muted ai-empty">
+            Ask about your notes. Answers come from {providerLabel(chat.provider)}; the notes it reads are sent there. Edits are proposals you apply, unless the agent's permissions let them go ahead without asking.
+          </p>
+        }
+      />
     </div>
   );
 }

@@ -3,7 +3,7 @@
 
 import { For, Match, Show, Switch } from "solid-js";
 import { type DiffLine, lineDiff } from "./diff";
-import { type Part, applyTypeProposal, discardTypeProposal } from "./store";
+import { type Part, useChatSession } from "./store";
 
 /** Unchanged lines kept around each change; longer unchanged runs fold into one line. */
 const CONTEXT = 2;
@@ -29,6 +29,7 @@ export function wclDiff(before: string | null, after: string): Row[] {
 }
 
 export function TypeProposalCard(props: { part: Extract<Part, { kind: "type_proposal" }>; turn: number; index: number }) {
+  const session = useChatSession();
   const p = () => props.part.proposal;
   const label = () => (p().exists ? `Proposed change to type ${p().name}` : `Proposed new type ${p().name}`);
   const open = () => props.part.state === "open" || props.part.state === "failed" || props.part.state === "applying";
@@ -68,17 +69,17 @@ export function TypeProposalCard(props: { part: Extract<Part, { kind: "type_prop
       <Switch>
         <Match when={open()}>
           <div class="ai-proposal-actions">
-            <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void applyTypeProposal(props.turn, props.index)}>
+            <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void session.applyTypeProposal(props.turn, props.index)}>
               Apply
             </button>
-            <button type="button" disabled={props.part.state === "applying"} onClick={() => discardTypeProposal(props.turn, props.index)}>
+            <button type="button" disabled={props.part.state === "applying"} onClick={() => session.discardTypeProposal(props.turn, props.index)}>
               Discard
             </button>
           </div>
         </Match>
         <Match when={props.part.state === "stale"}>
           <div class="ai-proposal-actions">
-            <button type="button" onClick={() => discardTypeProposal(props.turn, props.index)}>
+            <button type="button" onClick={() => session.discardTypeProposal(props.turn, props.index)}>
               Discard
             </button>
           </div>

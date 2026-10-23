@@ -258,3 +258,81 @@
 .ai-form button {
   align-self: flex-end;
 }
+
+/* The agent screen's Chat tab (agents G5): threads on the left, the chosen one on the right. */
+.agent-chat {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 40rem) {
+  .agent-chat {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.agent-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.agent-thread-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-thread-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.15rem 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-thread-item:hover,
+.agent-thread-item[aria-current="true"] {
+  border-color: var(--border, #ddd);
+  background: var(--hover, rgba(0, 0, 0, 0.04));
+}
+
+.agent-thread-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-thread-item time {
+  grid-column: 1 / -1;
+  font-size: 0.8rem;
+}
+
+.agent-thread-badge {
+  min-width: 1.4rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--accent, #6b46c1);
+  color: #fff;
+  font-size: 0.75rem;
+  line-height: 1.4rem;
+  text-align: center;
+}
+
+.agent-thread-view {
+  min-height: 24rem;
+}
+
+.ai-agent-picker {
+  max-width: 12rem;
+}

@@ -35,6 +35,9 @@ pub const EMAIL_THREAD_TYPE: &str = "email_thread";
 /// The name of the built-in event type: one note per Google Calendar event or occurrence.
 pub const EVENT_TYPE: &str = "event";
 
+/// The name of the built-in agent thread type: one note per chat with an agent (agents G7).
+pub const AGENT_THREAD_TYPE: &str = "agent_thread";
+
 /// The name of the built-in open taxonomy of Gmail labels.
 pub const GMAIL_LABEL_TAXONOMY: &str = "gmail_label";
 
@@ -59,6 +62,9 @@ pub const DEFAULT_EMAIL_THREAD_TYPE: &str = include_str!("../defaults/email_thre
 /// The `event` type a vault without it gets.
 pub const DEFAULT_EVENT_TYPE: &str = include_str!("../defaults/event.wcl");
 
+/// The `agent_thread` type a vault without it gets (agents G7).
+pub const DEFAULT_AGENT_THREAD_TYPE: &str = include_str!("../defaults/agent_thread.wcl");
+
 /// The `gmail_label` taxonomy a vault without it gets. It is open, so the Gmail sync adds each
 /// label it meets; the file is never replaced once written.
 pub const DEFAULT_GMAIL_LABEL_TAXONOMY: &str =
@@ -69,7 +75,7 @@ pub const DEFAULT_GMAIL_LABEL_TAXONOMY: &str =
 pub const DEFAULT_PERSON_TYPE: &str = include_str!("../defaults/person.wcl");
 
 /// Every built-in type, as `(name, the type file a vault without it gets)`.
-pub const BUILT_IN_TYPES: [(&str, &str); 8] = [
+pub const BUILT_IN_TYPES: [(&str, &str); 9] = [
     (daily::DAILY_TYPE, daily::DEFAULT_DAILY_TYPE),
     (fleeting::FLEETING_TYPE, fleeting::DEFAULT_FLEETING_TYPE),
     (MESSAGE_TYPE, DEFAULT_MESSAGE_TYPE),
@@ -78,6 +84,7 @@ pub const BUILT_IN_TYPES: [(&str, &str); 8] = [
     (EMAIL_TYPE, DEFAULT_EMAIL_TYPE),
     (EMAIL_THREAD_TYPE, DEFAULT_EMAIL_THREAD_TYPE),
     (EVENT_TYPE, DEFAULT_EVENT_TYPE),
+    (AGENT_THREAD_TYPE, DEFAULT_AGENT_THREAD_TYPE),
 ];
 
 /// The built-in types that reference `person`, so a vault given one of them without a `person`
@@ -110,13 +117,14 @@ pub fn is_built_in_type(name: &str) -> bool {
 /// type of the name that declares it as a string field is the built-in even with no record of
 /// the server having written it (ticket 104). `dailynote` and `fleeting` have no key: the app
 /// owns those names outright and [`check_built_in_types`] holds them to the fields it needs.
-pub const BUILT_IN_KEYS: [(&str, &str); 6] = [
+pub const BUILT_IN_KEYS: [(&str, &str); 7] = [
     (MESSAGE_TYPE, "device_ref"),
     (CALL_TYPE, "device_ref"),
     (CONVERSATION_TYPE, "thread_ref"),
     (EMAIL_TYPE, "gmail_ref"),
     (EMAIL_THREAD_TYPE, "thread_ref"),
     (EVENT_TYPE, "google_ref"),
+    (AGENT_THREAD_TYPE, "transcript"),
 ];
 
 /// The key field of built-in type `name`, if it has one: see [`BUILT_IN_KEYS`].

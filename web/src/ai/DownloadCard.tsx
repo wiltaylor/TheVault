@@ -5,7 +5,7 @@
 
 import { Match, Show, Switch, createSignal } from "solid-js";
 import { assetUrl } from "../api";
-import { type Part, applyDownload, discardDownload } from "./store";
+import { type Part, useChatSession } from "./store";
 
 /** `n` bytes as people read a file size. */
 export function fileSize(n: number | null | undefined): string {
@@ -16,6 +16,7 @@ export function fileSize(n: number | null | undefined): string {
 }
 
 export function DownloadCard(props: { part: Extract<Part, { kind: "download" }>; turn: number; index: number }) {
+  const session = useChatSession();
   const p = () => props.part.proposal;
   const asset = () => props.part.asset;
   const name = () => asset()?.filename ?? p().filename;
@@ -62,10 +63,10 @@ export function DownloadCard(props: { part: Extract<Part, { kind: "download" }>;
       <Switch>
         <Match when={open()}>
           <div class="ai-proposal-actions">
-            <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void applyDownload(props.turn, props.index)}>
+            <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void session.applyDownload(props.turn, props.index)}>
               Apply
             </button>
-            <button type="button" disabled={props.part.state === "applying"} onClick={() => discardDownload(props.turn, props.index)}>
+            <button type="button" disabled={props.part.state === "applying"} onClick={() => session.discardDownload(props.turn, props.index)}>
               Discard
             </button>
           </div>

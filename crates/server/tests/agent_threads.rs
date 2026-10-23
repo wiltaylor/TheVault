@@ -1,0 +1,783 @@
+//! S1 with the fake Anthropic: turns run by an agent on a stored thread (agents G4, G6, G7, G8,
+//! G11). The agent's model, prompt, tools and switches; its note types in every note tool; the
+//! thread note written as the turn streams and read back by the server; proposals and their
+//! outcomes kept in the thread; the thread routes; and the Assistant holding the chat settings.
+
+use std::io::{BufRead, BufReader};
+use std::time::Duration;
+
+use reqwest::StatusCode;
+use reqwest::blocking::{Client, Response};
+use serde_json::{Value, json};
+use testkit::{AnthropicMessage, FakeAnthropic, TestServer};
+
+const MEMO: &str = r#"label = "Memo"
+
+field body {
+  kind = "content"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "body"
+  }
+}
+"#;
+
+const LOG: &str = r#"label = "Log"
+
+template default {
+  tab "Main" {
+    slot "title"
+  }
+}
+"#;
+
+const MODEL: &str = "claude-opus-5";
+
+struct Api {
+    server: TestServer,
+    client: Client,
+}
+
+impl Api {
+    fn start(fake: &FakeAnthropic) -> Api {
+        let server = TestServer::start_seeded(|vault| {
+            std::fs::create_dir_all(vault.join("types")).unwrap();
+            std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
+            std::fs::write(vault.join("types/log.wcl"), LOG).unwrap();
+        });
+        let client = Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap();
+        let api = Api { server, client };
+        api.send(
+            "PUT",
+            "/api/secrets/ai_anthropic_api_key",
+            json!({ "value": fake.api_key() }),
+        );
+        api.send(
+            "PUT",
+            "/api/secrets/ai_settings",
+            json!({ "value": json!({
+                "default_provider": "anthropic",
+                "models": { "anthropic": MODEL },
+                "endpoints": { "anthropic": fake.base_url() },
+            }).to_string() }),
+        );
+        api
+    }
+
+    fn token(&self) -> String {
+        self.server.admin_token().to_owned()
+    }
+
+    fn token_of(&self, name: &str, scope: &str) -> String {
+        let v = self.send(
+            "POST",
+            "/api/tokens",
+            json!({ "name": name, "scope": scope }),
+        );
+        v["secret"].as_str().unwrap().to_owned()
+    }
+
+    fn request_as(&self, token: &str, method: &str, path: &str, body: Option<Value>) -> Response {
+        let url = self.server.url(path);
+        let req = match method {
+            "GET" => self.client.get(url),
+            "POST" => self.client.post(url),
+            "PUT" => self.client.put(url),
+            "PATCH" => self.client.patch(url),
+            "DELETE" => self.client.delete(url),
+            m => panic!("{m}"),
+        }
+        .bearer_auth(token);
+        let req = match body {
+            Some(b) => req.json(&b),
+            None => req,
+        };
+        req.send().unwrap()
+    }
+
+    /// `method` on `path` as the admin, which must succeed: its JSON answer.
+    fn send(&self, method: &str, path: &str, body: Value) -> Value {
+        let res = self.request_as(&self.token(), method, path, Some(body));
+        assert!(
+            res.status().is_success(),
+            "{method} {path}: {}",
+            res.text().unwrap()
+        );
+        res.json().unwrap_or(Value::Null)
+    }
+
+    fn get(&self, path: &str) -> Value {
+        let res = self.request_as(&self.token(), "GET", path, None);
+        assert!(
+            res.status().is_success(),
+            "GET {path}: {}",
+            res.text().unwrap()
+        );
+        res.json().unwrap()
+    }
+
+    fn agent(&self, name: &str, wcl: &str) {
+        let res = self
+            .client
+            .put(self.server.url(&format!("/api/agents/{name}")))
+            .bearer_auth(self.token())
+            .header("content-type", "text/plain")
+            .body(wcl.to_owned())
+            .send()
+            .unwrap();
+        assert!(res.status().is_success(), "{}", res.text().unwrap());
+    }
+
+    fn thread(&self, agent: &str) -> String {
+        let res = self.request_as(
+            &self.token(),
+            "POST",
+            &format!("/api/agents/{agent}/threads"),
+            Some(json!({})),
+        );
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let v: Value = res.json().unwrap();
+        v["id"].as_str().unwrap().to_owned()
+    }
+
+    fn read_thread(&self, agent: &str, id: &str) -> Value {
+        self.get(&format!("/api/agents/{agent}/threads/{id}"))
+    }
+
+    fn note(&self, type_name: &str, title: &str) -> (String, String) {
+        let v = self.send(
+            "POST",
+            &format!("/api/notes?type={type_name}"),
+            json!({ "note": { "fields": { "title": title } } }),
+        );
+        (
+            v["id"].as_str().unwrap().to_owned(),
+            v["version"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    fn chat_as(&self, token: &str, body: Value) -> Vec<(String, Value)> {
+        let res = self.request_as(token, "POST", "/api/ai/chat", Some(body));
+        assert_eq!(res.status(), StatusCode::OK);
+        read_events(res)
+    }
+
+    fn chat(&self, body: Value) -> Vec<(String, Value)> {
+        self.chat_as(&self.token(), body)
+    }
+
+    /// The author of note `id`'s current version.
+    fn author(&self, id: &str) -> Value {
+        let history = self.get(&format!("/api/notes/{id}/history"));
+        history["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["current"] == true)
+            .unwrap()["author"]
+            .clone()
+    }
+}
+
+fn read_events(res: Response) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    let mut name = String::new();
+    let mut data = String::new();
+    for line in BufReader::new(res).lines() {
+        let Ok(line) = line else { break };
+        if line.is_empty() {
+            if !data.is_empty() {
+                out.push((
+                    std::mem::take(&mut name),
+                    serde_json::from_str(&data).unwrap(),
+                ));
+                data.clear();
+            }
+            continue;
+        }
+        if let Some(v) = line.strip_prefix("event:") {
+            name = v.trim().to_owned();
+        } else if let Some(v) = line.strip_prefix("data:") {
+            data.push_str(v.strip_prefix(' ').unwrap_or(v));
+        }
+    }
+    out
+}
+
+fn user(text: &str) -> Value {
+    json!({ "role": "user", "content": [{ "type": "text", "text": text }] })
+}
+
+fn events_named<'a>(events: &'a [(String, Value)], name: &str) -> Vec<&'a Value> {
+    events
+        .iter()
+        .filter(|(n, _)| n == name)
+        .map(|(_, d)| d)
+        .collect()
+}
+
+/// The tool result request `request` sent back for the call before it, as the fake saw it.
+fn tool_result(fake: &FakeAnthropic, request: usize) -> Value {
+    let r = fake.message_requests()[request].json();
+    r["messages"].as_array().unwrap().last().unwrap()["content"][0].clone()
+}
+
+fn tool_names(fake: &FakeAnthropic, request: usize) -> Vec<String> {
+    fake.message_requests()[request].json()["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+const RESEARCHER: &str = r#"label         = "Researcher"
+provider      = "anthropic"
+model         = "claude-sonnet-5"
+effort        = "high"
+system_prompt = "You research the vault."
+
+permissions {
+  tools = ["search_notes", "get_note"]
+}
+"#;
+
+#[test]
+fn a_thread_turn_uses_the_agents_model_prompt_and_tools_and_is_written_as_it_streams() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("researcher", RESEARCHER);
+    let (memo, _) = api.note("memo", "Roof decision");
+    let thread = api.thread("researcher");
+    let fresh = api.read_thread("researcher", &thread);
+    assert_eq!(fresh["title"], "New thread");
+    assert_eq!(fresh["messages"], json!([]));
+
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_s",
+        "search_notes",
+        json!({ "text": "roof", "limit": 5 }),
+    ));
+    fake.push(AnthropicMessage::text("Found the roof note."));
+    let events = api.chat(json!({
+        "agent": "researcher",
+        "thread": thread,
+        "messages": [user("What did I decide about the roof?")],
+    }));
+    assert!(events.iter().any(|(n, _)| n == "done"), "{events:?}");
+
+    let req = fake.message_requests()[0].json();
+    assert_eq!(req["model"], "claude-sonnet-5");
+    assert!(
+        req["system"]
+            .as_str()
+            .unwrap()
+            .starts_with("You research the vault."),
+        "{req}"
+    );
+    assert_eq!(req["output_config"]["effort"], "high");
+    assert_eq!(tool_names(&fake, 0), ["search_notes", "get_note"]);
+
+    // The thread holds the whole turn, named by its first question, authored by the agent.
+    let t = api.read_thread("researcher", &thread);
+    assert_eq!(t["title"], "What did I decide about the roof?");
+    let messages = t["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 4, "{t}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[3]["content"][0]["text"], "Found the roof note.");
+    assert_eq!(
+        t["steps"]["toolu_s"]["summary"]["notes"][0]["id"],
+        memo.as_str()
+    );
+    assert_eq!(
+        api.author(&thread),
+        json!({ "kind": "agent", "name": "researcher" })
+    );
+    let note = api.get(&format!("/api/notes/{thread}"));
+    let text = note.to_string();
+    assert!(text.contains("Found the roof note."), "{text}");
+    assert!(text.contains("Used search_notes"), "{text}");
+    let list = api.get("/api/agents/researcher/threads");
+    assert_eq!(list["threads"][0]["id"], thread.as_str());
+    assert_eq!(
+        list["threads"][0]["title"],
+        "What did I decide about the roof?"
+    );
+    assert_eq!(list["threads"][0]["pending"], 0);
+
+    // The next turn sends only the new question: the server replays the thread itself.
+    fake.push(AnthropicMessage::text("Slate."));
+    api.chat(json!({
+        "agent": "researcher",
+        "thread": thread,
+        "messages": [user("Which tiles?")],
+    }));
+    let replay = fake.message_requests()[2].json();
+    let sent = replay["messages"].as_array().unwrap();
+    assert_eq!(sent.len(), 5, "{replay}");
+    assert_eq!(
+        sent[0]["content"][0]["text"],
+        "What did I decide about the roof?"
+    );
+    assert_eq!(sent[4]["content"][0]["text"], "Which tiles?");
+    assert_eq!(
+        api.read_thread("researcher", &thread)["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        6
+    );
+
+    // A tool outside the agent's list is not run, even when the model calls it.
+    fake.push(AnthropicMessage::new().tool_use("toolu_l", "list_types", json!({})));
+    fake.push(AnthropicMessage::text("No."));
+    api.chat(json!({
+        "agent": "researcher",
+        "thread": thread,
+        "messages": [user("List the types.")],
+    }));
+    let refused = tool_result(&fake, 4);
+    assert_eq!(refused["is_error"], true, "{refused}");
+}
+
+#[test]
+fn the_turns_form_takes_the_agent_and_the_thread() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let thread = api.thread("assistant");
+    fake.push(AnthropicMessage::text("Hello."));
+    let started = api.send(
+        "POST",
+        "/api/ai/chat/turns",
+        json!({ "agent": "assistant", "thread": thread, "messages": [user("Hi")] }),
+    );
+    let turn = started["turn"].as_str().unwrap();
+    let res = api.request_as(
+        &api.token(),
+        "GET",
+        &format!("/api/ai/chat/turns/{turn}/events"),
+        None,
+    );
+    let events = read_events(res);
+    assert!(events.iter().any(|(n, _)| n == "done"), "{events:?}");
+    let t = api.read_thread("assistant", &thread);
+    assert_eq!(t["messages"].as_array().unwrap().len(), 2, "{t}");
+    assert_eq!(t["title"], "Hi");
+}
+
+const MEMOS_ONLY: &str = r#"label = "Memos"
+
+permissions {
+  types = ["memo"]
+}
+"#;
+
+#[test]
+fn every_note_tool_keeps_to_the_agents_types_and_leaves_threads_out() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("memos", MEMOS_ONLY);
+    let (memo, _) = api.note("memo", "Roof memo");
+    let (log, log_version) = api.note("log", "Roof log");
+
+    let call = |tool: &str, input: Value| -> Value {
+        fake.clear_requests();
+        fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
+        fake.push(AnthropicMessage::text("Done."));
+        api.chat(json!({ "agent": "memos", "messages": [user("Go.")] }));
+        tool_result(&fake, 1)
+    };
+
+    let found = call("search_notes", json!({ "text": "roof", "limit": 10 }));
+    let rows: Value = serde_json::from_str(found["content"].as_str().unwrap()).unwrap();
+    let ids: Vec<&str> = rows["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [memo.as_str()], "{rows}");
+    assert_eq!(rows["left_out"], 1);
+
+    let q = call("query_notes", json!({ "query": "from log" }));
+    let rows: Value = serde_json::from_str(q["content"].as_str().unwrap()).unwrap();
+    assert_eq!(rows["rows"], json!([]), "{rows}");
+    assert_eq!(rows["left_out"], 1);
+
+    let got = call("get_note", json!({ "id": log }));
+    assert_eq!(got["is_error"], true);
+    assert!(
+        got["content"]
+            .as_str()
+            .unwrap()
+            .contains("This agent may not read log notes."),
+        "{got}"
+    );
+    let edit = call(
+        "propose_edit",
+        json!({ "id": log, "base_version": log_version, "note": json!({ "fields": { "title": "x" } }).to_string() }),
+    );
+    assert_eq!(edit["is_error"], true);
+    assert!(
+        edit["content"]
+            .as_str()
+            .unwrap()
+            .contains("may not change log notes")
+    );
+    let create = call(
+        "propose_create",
+        json!({ "type": "log", "note": json!({ "fields": { "title": "x" } }).to_string() }),
+    );
+    assert_eq!(create["is_error"], true);
+    let delete = call("propose_delete", json!({ "id": log }));
+    assert_eq!(delete["is_error"], true);
+    let mine = call("get_note", json!({ "id": memo }));
+    assert_eq!(mine["is_error"], false);
+
+    // A thread is left out of the Assistant's searches, as it names no types...
+    let thread = api.thread("assistant");
+    api.send(
+        "PATCH",
+        &format!("/api/agents/assistant/threads/{thread}"),
+        json!({ "title": "Roof chat" }),
+    );
+    fake.clear_requests();
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_t",
+        "search_notes",
+        json!({ "text": "roof chat", "limit": 10 }),
+    ));
+    fake.push(AnthropicMessage::text("Done."));
+    api.chat(json!({ "messages": [user("Go.")] }));
+    let found = tool_result(&fake, 1);
+    assert!(
+        !found["content"].as_str().unwrap().contains(&thread),
+        "{found}"
+    );
+    // ...and read by an agent whose types name agent_thread.
+    api.agent(
+        "historian",
+        "label = \"Historian\"\n\npermissions {\n  types = [\"agent_thread\"]\n}\n",
+    );
+    fake.clear_requests();
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_t",
+        "search_notes",
+        json!({ "text": "roof chat", "limit": 10 }),
+    ));
+    fake.push(AnthropicMessage::text("Done."));
+    api.chat(json!({ "agent": "historian", "messages": [user("Go.")] }));
+    let found = tool_result(&fake, 1);
+    assert!(
+        found["content"].as_str().unwrap().contains(&thread),
+        "{found}"
+    );
+}
+
+#[test]
+fn an_agent_applies_its_own_confirm_switches_within_the_callers_scope() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "scribe",
+        "label = \"Scribe\"\n\npermissions {\n  confirm {\n    notes = false\n  }\n}\n",
+    );
+    let (memo, version) = api.note("memo", "Groceries");
+    let edit = |token: &str, agent: Option<&str>, version: &str, title: &str| {
+        fake.push(AnthropicMessage::new().tool_use(
+            "toolu_e",
+            "propose_edit",
+            json!({
+                "id": memo, "base_version": version,
+                "note": json!({ "fields": { "title": title } }).to_string(),
+            }),
+        ));
+        fake.push(AnthropicMessage::text("Done."));
+        let mut body = json!({ "messages": [user("Edit it.")] });
+        if let Some(a) = agent {
+            body["agent"] = json!(a);
+        }
+        api.chat_as(token, body)
+    };
+
+    // The Assistant asks first: its own switch is on.
+    let events = edit(&api.token(), None, &version, "Groceries and more");
+    assert_eq!(events_named(&events, "proposal").len(), 1);
+    assert!(events_named(&events, "applied").is_empty());
+
+    // The scribe writes at once, authored by itself.
+    let events = edit(&api.token(), Some("scribe"), &version, "Groceries and more");
+    let applied = events_named(&events, "applied");
+    assert_eq!(applied.len(), 1, "{events:?}");
+    assert_eq!(applied[0]["agent"], "scribe");
+    assert_eq!(
+        api.author(&memo),
+        json!({ "kind": "agent", "name": "scribe" })
+    );
+
+    // A caller with read scope only gets a proposal, whatever the agent's switch says.
+    let reader = api.token_of("reader", "read");
+    let now = api.get(&format!("/api/notes/{memo}"))["version"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let events = edit(&reader, Some("scribe"), &now, "Groceries for Monday");
+    assert_eq!(events_named(&events, "proposal").len(), 1, "{events:?}");
+    assert!(events_named(&events, "applied").is_empty());
+}
+
+#[test]
+fn proposals_and_their_outcomes_are_kept_in_the_thread_and_told_to_the_model_once() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let (memo, version) = api.note("memo", "Groceries");
+    let thread = api.thread("assistant");
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use(
+                "toolu_a",
+                "propose_edit",
+                json!({
+                    "id": memo, "base_version": version,
+                    "note": json!({ "fields": { "title": "Groceries for Sunday" } }).to_string(),
+                }),
+            )
+            .tool_use(
+                "toolu_b",
+                "propose_create",
+                json!({ "type": "memo", "note": json!({ "fields": { "title": "Hardware" } }).to_string() }),
+            ),
+    );
+    fake.push(AnthropicMessage::text("Two changes for you."));
+    let events = api.chat(json!({
+        "agent": "assistant", "thread": thread, "messages": [user("Tidy up.")],
+    }));
+    let proposals = events_named(&events, "proposal");
+    assert_eq!(proposals.len(), 2, "{events:?}");
+    assert_eq!(proposals[0]["thread"], thread.as_str());
+    assert_eq!(proposals[0]["agent"], "assistant");
+
+    // Reopened, the thread holds both, pending, and the list shows the badge count.
+    let t = api.read_thread("assistant", &thread);
+    let stored = t["proposals"].as_array().unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(stored.iter().all(|p| p["status"] == "pending"), "{t}");
+    assert_eq!(t["pending"], 2);
+    assert_eq!(
+        api.get("/api/agents/assistant/threads")["threads"][0]["pending"],
+        2
+    );
+
+    // Apply the edit, as the Assistant; discard the create.
+    let done = api.send("POST", "/api/ai/apply", proposals[0].clone());
+    assert_eq!(done["op"], "update");
+    assert_eq!(
+        api.author(&memo),
+        json!({ "kind": "agent", "name": "assistant" })
+    );
+    api.send(
+        "POST",
+        "/api/ai/discard",
+        json!({ "id": proposals[1]["id"], "thread": thread }),
+    );
+    let t = api.read_thread("assistant", &thread);
+    assert_eq!(t["proposals"][0]["status"], "applied");
+    assert_eq!(t["proposals"][0]["result"]["version"], done["version"]);
+    assert_eq!(t["proposals"][1]["status"], "discarded");
+    assert_eq!(t["pending"], 0);
+
+    // The next turn starts with the outcomes, once.
+    fake.clear_requests();
+    fake.push(AnthropicMessage::text("Noted."));
+    api.chat(json!({ "agent": "assistant", "thread": thread, "messages": [user("Thanks.")] }));
+    let req = fake.message_requests()[0].json();
+    let last = req["messages"].as_array().unwrap().last().unwrap().clone();
+    let lines = last["content"][0]["text"].as_str().unwrap();
+    assert!(
+        lines.contains(&format!(
+            "[Applied by the user: edit of note {memo} now at version"
+        )),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("[Discarded by the user: new memo note \"Hardware\"]"),
+        "{lines}"
+    );
+    assert_eq!(last["content"][1]["text"], "Thanks.");
+    fake.clear_requests();
+    fake.push(AnthropicMessage::text("Sure."));
+    api.chat(json!({ "agent": "assistant", "thread": thread, "messages": [user("Bye.")] }));
+    let req = fake.message_requests()[0].json();
+    let last = req["messages"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["content"].as_array().unwrap().len(), 1, "{last}");
+
+    // A failed apply is kept as stale: the note moved on.
+    let stale = api.request_as(
+        &api.token(),
+        "POST",
+        "/api/ai/apply",
+        Some(proposals[0].clone()),
+    );
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let t = api.read_thread("assistant", &thread);
+    assert_eq!(t["proposals"][0]["status"], "stale");
+}
+
+#[test]
+fn thread_routes_list_create_get_rename_and_delete() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("researcher", RESEARCHER);
+    let reader = api.token_of("reader", "read");
+
+    // A read token starts a thread and reads it; renaming and deleting need write.
+    let res = api.request_as(
+        &reader,
+        "POST",
+        "/api/agents/researcher/threads",
+        Some(json!({ "title": "Roofing" })),
+    );
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let t: Value = res.json().unwrap();
+    let id = t["id"].as_str().unwrap().to_owned();
+    assert_eq!(t["title"], "Roofing");
+    assert_eq!(t["origin"], "user");
+    assert_eq!(
+        api.author(&id),
+        json!({ "kind": "agent", "name": "researcher" })
+    );
+    let res = api.request_as(
+        &reader,
+        "GET",
+        &format!("/api/agents/researcher/threads/{id}"),
+        None,
+    );
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = api.request_as(
+        &reader,
+        "PATCH",
+        &format!("/api/agents/researcher/threads/{id}"),
+        Some(json!({ "title": "Nope" })),
+    );
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    let older = api.thread("researcher");
+    std::thread::sleep(Duration::from_millis(1100));
+    let renamed = api.send(
+        "PATCH",
+        &format!("/api/agents/researcher/threads/{older}"),
+        json!({ "title": "Slate" }),
+    );
+    assert_eq!(renamed["title"], "Slate");
+    let list = api.get("/api/agents/researcher/threads");
+    let ids: Vec<&str> = list["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [older.as_str(), id.as_str()], "newest activity first");
+    // Another agent's thread is not this agent's.
+    let res = api.request_as(
+        &api.token(),
+        "GET",
+        &format!("/api/agents/assistant/threads/{id}"),
+        None,
+    );
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    // A thread of another agent cannot carry this agent's turn.
+    let res = api.request_as(
+        &api.token(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({ "agent": "assistant", "thread": id, "messages": [user("Hi")] })),
+    );
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    api.send(
+        "DELETE",
+        &format!("/api/agents/researcher/threads/{id}"),
+        json!({}),
+    );
+    let res = api.request_as(&api.token(), "GET", &format!("/api/notes/{id}"), None);
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let trash = api.get("/api/trash");
+    assert!(trash.to_string().contains(&id), "{trash}");
+    assert_eq!(
+        api.get("/api/agents/researcher/threads")["threads"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_disabled_agent_takes_no_turn() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("sleepy", "label = \"Sleepy\"\nenabled = false\n");
+    let res = api.request_as(
+        &api.token(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({ "agent": "sleepy", "messages": [user("Hi")] })),
+    );
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let v: Value = res.json().unwrap();
+    assert_eq!(v["error"], "agent_disabled");
+    let res = api.request_as(
+        &api.token(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({ "agent": "nobody", "messages": [user("Hi")] })),
+    );
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn the_chat_settings_are_the_assistants_and_providers_answers_them() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "assistant",
+        "label = \"Assistant\"\nsystem_prompt = \"Be brief.\"\n\npermissions {\n  confirm {\n    delete = false\n  }\n\n  web {\n    read = false\n  }\n}\n",
+    );
+    let reader = api.token_of("reader", "read");
+    let res = api.request_as(&reader, "GET", "/api/ai/providers", None);
+    let p: Value = res.json().unwrap();
+    assert_eq!(p["confirm"]["delete"], false, "{p}");
+    assert_eq!(p["confirm"]["notes"], true);
+    assert_eq!(p["web"]["read"], false);
+    assert_eq!(p["web"]["search"], true);
+    let status = api.get("/api/integrations/ai");
+    assert_eq!(status["system_prompt"], "Be brief.");
+    assert_eq!(status["system_prompt_custom"], true);
+    assert_eq!(status["confirm"]["delete"], false);
+
+    fake.push(AnthropicMessage::text("Hi."));
+    api.chat(json!({ "messages": [user("Hello")] }));
+    let req = fake.message_requests()[0].json();
+    assert!(
+        req["system"].as_str().unwrap().starts_with("Be brief."),
+        "{req}"
+    );
+    assert!(!tool_names(&fake, 0).contains(&"fetch_url".to_owned()));
+
+    // Settings > AI's old keys write the Assistant too.
+    api.send(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({ "confirm": { "delete": true }, "web": { "read": true } }),
+    );
+    let a = api.get("/api/agents/assistant");
+    assert_eq!(a["permissions"]["confirm"]["delete"], true);
+    assert_eq!(a["permissions"]["web"]["read"], true);
+    assert_eq!(a["system_prompt"], "Be brief.");
+}

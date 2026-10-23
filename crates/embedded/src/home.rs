@@ -119,6 +119,16 @@ fn segment(s: &str) -> Option<&str> {
     (!s.is_empty() && !s.contains('/')).then_some(s)
 }
 
+/// `/api/agents/{name}/threads` or below: an agent's threads, which the home server writes as
+/// it runs their turns, so the device reads and starts them there (agents G7).
+fn is_agent_threads(path: &str) -> bool {
+    path.strip_prefix("/api/agents/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(name, rest)| {
+            segment(name).is_some() && (rest == "threads" || rest.starts_with("threads/"))
+        })
+}
+
 /// Where `method` on `path` is answered.
 pub(crate) fn route(method: &Method, path: &str) -> Route {
     let get = *method == Method::GET || *method == Method::HEAD;
@@ -162,6 +172,8 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         || path == "/api/ai/models"
         || path == "/api/ai/providers"
         || path == "/api/ai/apply"
+        || path == "/api/ai/discard"
+        || is_agent_threads(path)
     {
         return Route::Ai;
     }
@@ -830,6 +842,18 @@ mod tests {
         assert_eq!(route(&get, "/api/ai/chat/turns/t/events"), Route::Ai);
         assert_eq!(route(&Method::DELETE, "/api/ai/chat/turns/t"), Route::Ai);
         assert_eq!(route(&post, "/api/ai/apply"), Route::Ai);
+        assert_eq!(route(&post, "/api/ai/discard"), Route::Ai);
+        assert_eq!(route(&get, "/api/agents/assistant/threads"), Route::Ai);
+        assert_eq!(route(&post, "/api/agents/assistant/threads"), Route::Ai);
+        assert_eq!(route(&get, "/api/agents/triage/threads/01J"), Route::Ai);
+        assert_eq!(
+            route(&Method::PATCH, "/api/agents/triage/threads/01J"),
+            Route::Ai
+        );
+        assert_eq!(
+            route(&Method::DELETE, "/api/agents/triage/threads/01J"),
+            Route::Ai
+        );
         assert_eq!(route(&get, "/api/ai/other"), Route::NeedsWebApp);
         assert_eq!(
             route(&get, "/api/app/ai/turns/t"),

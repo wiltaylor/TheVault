@@ -41,7 +41,7 @@ pub fn tool_names() -> Vec<String> {
 }
 
 /// The issues for each tool `agent` names that the server does not have.
-fn unknown_tools(agent: &Agent) -> Vec<Issue> {
+pub(crate) fn unknown_tools(agent: &Agent) -> Vec<Issue> {
     let known = tool_names();
     agent
         .permissions
@@ -157,10 +157,16 @@ pub async fn read(
     Path(name): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    // A file that does not parse is a 400 `invalid` with its issues and its text, so the File
+    // tab can show it to be fixed.
     let (wcl, agent) = blocking(w, move |w| {
         let wcl = w.read_agent(&name)?;
-        let agent = Agent::parse(&name, &wcl).map_err(writer::Error::Invalid)?;
-        Ok::<_, writer::Error>((wcl, agent))
+        let agent = Agent::parse(&name, &wcl).map_err(|e| {
+            let mut err = ApiError::from(writer::Error::Invalid(e));
+            err.body["wcl"] = json!(wcl);
+            err
+        })?;
+        Ok::<_, ApiError>((wcl, agent))
     })
     .await?;
     Ok(agent_response(&headers, &agent, wcl))

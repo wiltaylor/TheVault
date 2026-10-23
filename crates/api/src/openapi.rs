@@ -503,6 +503,31 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/agents/{name}/threads",
+        "The agent's threads, newest activity first: {threads: [{id, title, origin, last_activity, pending}]}",
+    ),
+    (
+        "POST",
+        "/api/agents/{name}/threads",
+        "Start a thread with the agent from {title?}: the agent_thread note",
+    ),
+    (
+        "GET",
+        "/api/agents/{name}/threads/{id}",
+        "A thread with its messages, tool steps and proposals with their outcomes",
+    ),
+    (
+        "PATCH",
+        "/api/agents/{name}/threads/{id}",
+        "Rename a thread from {title}",
+    ),
+    (
+        "DELETE",
+        "/api/agents/{name}/threads/{id}",
+        "Move a thread to the trash",
+    ),
+    (
+        "GET",
         "/api/tasks",
         "Every scheduled task with its next run and latest run",
     ),
@@ -636,7 +661,12 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/apply",
-        "Apply a proposal or type_proposal as the chat sent it, at its base version: {op, note_id, version} or {op, type_name}, or for a download {op, asset_id, filename}; a type change needs admin",
+        "Apply a proposal or type_proposal as the chat sent it, at its base version: {op, note_id, version} or {op, type_name}, or for a download {op, asset_id, filename}; a type change needs admin; with the proposal's agent it is authored by the agent, and with its thread the outcome is recorded there",
+    ),
+    (
+        "POST",
+        "/api/ai/discard",
+        "Record that the user discarded a thread's proposal, from {id, thread}",
     ),
 ];
 

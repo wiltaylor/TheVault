@@ -388,6 +388,38 @@ export interface Task {
   wcl?: string;
 }
 
+/** One line of `GET /api/agents/{name}/threads` (agents G7). */
+export interface AgentThreadSummary {
+  id: string;
+  title: string;
+  /** `user`, or `trigger:<name>` for a thread a trigger started. */
+  origin?: string | null;
+  last_activity?: string | null;
+  /** How many proposals wait for the user. */
+  pending: number;
+}
+
+/** A proposal of a thread and where it stands (agents G8). */
+export interface StoredProposal {
+  /** `proposal`, `type_proposal`, `taxonomy_proposal`, or `applied` for a change the agent made. */
+  event: string;
+  data: Record<string, unknown>;
+  status: "pending" | "applied" | "discarded" | "failed" | "stale" | "made";
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+}
+
+/** A thread with its transcript (agents G7, G8). */
+export interface AgentThread extends AgentThreadSummary {
+  agent: string;
+  version: string;
+  /** The neutral transcript (ai D10). */
+  messages?: { role: "user" | "assistant"; content: Json[]; provider_state?: Json }[];
+  /** Each tool step's summary, by call id. */
+  steps?: Record<string, { summary?: Record<string, unknown>; is_error?: boolean }>;
+  proposals?: StoredProposal[];
+}
+
 /** One line of `GET /api/agents` (agents G2). An agent whose file does not check has `error`. */
 export interface AgentSummary {
   name: string;
@@ -586,6 +618,8 @@ export interface AiProviders {
   default_provider: AiProvider | null;
   providers: Record<AiProvider, { configured: boolean; model: string | null }>;
   confirm: AiConfirm;
+  /** The built-in Assistant's internet switches (agents G6). */
+  web?: AiWeb;
 }
 
 /** What `POST /api/ai/apply` did (ai D23): a note's change with its new version, or a type's. */
@@ -1313,6 +1347,18 @@ export const api = {
   putAgent: (name: string, body: Partial<AgentForm> | { wcl: string }) => request<Agent>("PUT", `/api/agents/${enc(name)}`, body),
   /** Delete an agent; its threads stay. Assistant is a 400 `built_in`. */
   deleteAgent: (name: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}`),
+  /** The agent's threads, newest activity first (agents G7). */
+  agentThreads: (name: string) => request<{ threads: AgentThreadSummary[] }>("GET", `/api/agents/${enc(name)}/threads`),
+  /** Start a thread with the agent. */
+  agentThreadStart: (name: string, title?: string) =>
+    request<AgentThread>("POST", `/api/agents/${enc(name)}/threads`, title ? { title } : {}),
+  /** One thread with its transcript, its tool steps and its proposals (agents G8). */
+  agentThread: (name: string, id: string) => request<AgentThread>("GET", `/api/agents/${enc(name)}/threads/${enc(id)}`),
+  /** Rename a thread. */
+  renameAgentThread: (name: string, id: string, title: string) =>
+    request<AgentThread>("PATCH", `/api/agents/${enc(name)}/threads/${enc(id)}`, { title }),
+  /** Move a thread to the trash. */
+  deleteAgentThread: (name: string, id: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}/threads/${enc(id)}`),
   taskRuns: async (name: string, limit = 50) =>
     (await request<{ runs: TaskRun[] }>("GET", `/api/tasks/${enc(name)}/runs?limit=${limit}`)).runs,
   /**
@@ -1382,6 +1428,8 @@ export const api = {
    * version (ai D23). A stale one is a 409; a type change without admin a 403 `needs_admin`.
    */
   aiApply: (proposal: unknown) => request<AiApplied>("POST", "/api/ai/apply", proposal),
+  /** Record that the user discarded a thread's proposal (agents G8). */
+  aiDiscard: (id: string, thread: string) => request<{ thread: string; pending: number }>("POST", "/api/ai/discard", { id, thread }),
   /** Start a chat turn in the turns form: its id (ai D23). */
   aiTurnStart: async (body: unknown) => (await request<{ turn: string }>("POST", "/api/ai/chat/turns", body)).turn,
   /** In an app: the turn's events after the first `after`, waiting briefly for one. */

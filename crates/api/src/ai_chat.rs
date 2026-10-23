@@ -1,8 +1,13 @@
 //! `POST /api/ai/chat`: the chat panel's conversation turn (ai D10, D11, D14).
 //!
-//! The body is `{ provider?, model?, messages, note_id? }`: the transcript so far, ending with the
-//! user's new message, in the neutral form of [`ai::Message`]. Provider and model default to
-//! Settings > AI's. `note_id` names the note open beside the panel: its id, type and title (never
+//! The body is `{ provider?, model?, messages, note_id?, agent?, thread? }`: the transcript so
+//! far, ending with the user's new message, in the neutral form of [`ai::Message`]. Provider and
+//! model default to Settings > AI's. The turn is run by `agent`, the built-in Assistant when it is
+//! absent (agents G4, G6): its provider and model when it names them, its prompt, effort, tools,
+//! note types ([`Limits`]) and confirmation and internet switches; a named agent is the author of
+//! what the tools write (agents G11). With `thread`, a note of the agent's (agents G7), the server
+//! reads the transcript from the thread, `messages` holding only the new message, and writes the
+//! turn to it after each round (`crate::agent_threads`). `note_id` names the note open beside the panel: its id, type and title (never
 //! its body) join the system prompt, so "this note" resolves through `get_note`.
 //!
 //! The answer is a server-sent event stream. The server runs the tool loop, at most
@@ -52,6 +57,7 @@ use axum::http::header::{CACHE_CONTROL, HeaderName};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Extension, Json};
+use schema::Agent;
 use script_core::Vault;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -59,6 +65,7 @@ use state::{Author, Scope};
 use tokio::sync::{mpsc, watch};
 use writer::{Input, Op, TypeChange, Writer, doc_to_json};
 
+use crate::agent_threads::{self, Busy, Stored, Thread};
 use crate::ai_taxonomies::apply_taxonomy;
 use crate::auth::{Caller, GrantedScope};
 use crate::events::HEARTBEAT;
@@ -92,6 +99,15 @@ pub struct ChatBody {
     messages: Vec<Message>,
     #[serde(default)]
     note_id: Option<String>,
+    /// The agent whose turn this is (agents G4, G6): its model, prompt, tools and switches.
+    /// Absent means the built-in Assistant, with the caller as the author of what the tools
+    /// write; named, the agent is the author (agents G11).
+    #[serde(default)]
+    agent: Option<String>,
+    /// The thread note the turn belongs to (agents G7): the server reads its transcript, so
+    /// `messages` holds only the user's new message, and writes the turn to it as it streams.
+    #[serde(default)]
+    thread: Option<String>,
 }
 
 /// The one HTTP client chat calls share.
@@ -109,14 +125,14 @@ pub async fn chat(
 ) -> Result<impl IntoResponse, ApiError> {
     // No one stops this form of turn but the client, by going away.
     let (_, never) = watch::channel(false);
-    let (rx, _) = start(w, author, scope, body, never)?;
+    let (rx, _) = start(w, author, scope, body, never).await?;
     Ok(sse(receive(rx)))
 }
 
 /// Check `body` and start its turn, which sends its events to the receiver returned and stops
 /// when the receiver goes or `stop` turns true. The flag returned turns false when the turn is
 /// over. Both chat forms start their turns here.
-pub(crate) fn start(
+pub(crate) async fn start(
     w: Arc<Writer>,
     author: Author,
     scope: Scope,
@@ -132,22 +148,173 @@ pub(crate) fn start(
             "send the conversation, ending with the user's message",
         ));
     }
+    let ChatBody {
+        model,
+        messages,
+        note_id,
+        agent,
+        thread,
+        ..
+    } = body;
+    let writer = w.clone();
+    let prepared = tokio::task::spawn_blocking(move || prepare(&writer, agent, thread, messages))
+        .await
+        .map_err(|e| {
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+        })??;
     let (tx, rx) = mpsc::channel::<Event>(64);
+    let named = prepared.named;
     let turn = Turn {
         writer: w,
-        author,
+        author: if named {
+            Author::Agent(prepared.agent.name.clone())
+        } else {
+            author
+        },
         scope,
         out: Out { tx, stop },
         images: ai_assets::Images::default(),
+        agent_name: named.then(|| prepared.agent.name.clone()),
+        log: prepared.log.map(std::sync::Mutex::new),
     };
+    let agent = prepared.agent;
+    let history = prepared.history;
     let running = Arc::new(AtomicBool::new(true));
     let flag = running.clone();
     tokio::spawn(async move {
-        turn.run(provider, body.model, body.messages, body.note_id)
-            .await;
+        turn.run(agent, provider, model, history, note_id).await;
         flag.store(false, Ordering::SeqCst);
     });
     Ok((rx, running))
+}
+
+/// A turn's agent and the transcript it starts from.
+struct Prepared {
+    agent: Agent,
+    /// Whether the body named the agent.
+    named: bool,
+    /// The messages the first request sends.
+    history: Vec<Message>,
+    log: Option<ThreadLog>,
+}
+
+/// The agent a turn runs as: the one named, or the built-in Assistant. A disabled agent takes
+/// no turn.
+pub(crate) fn turn_agent(w: &Writer, name: Option<&str>) -> Result<Agent, ApiError> {
+    let agent = match name {
+        Some(n) => w.agent(n).map_err(|e| match e {
+            writer::Error::Missing(m) => ApiError::new(StatusCode::NOT_FOUND, "not_found", m),
+            e => e.into(),
+        })?,
+        None => crate::ai_settings::assistant(w)?,
+    };
+    if !agent.enabled {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "agent_disabled",
+            format!("{} is disabled: enable it to chat with it", agent.label),
+        ));
+    }
+    Ok(agent)
+}
+
+/// Load the turn's agent, and for a thread its transcript, which the user's new message joins
+/// at once, after the lines on the outcomes the model has not heard of (ai D29), so a closed tab
+/// loses nothing.
+fn prepare(
+    w: &Writer,
+    agent: Option<String>,
+    thread: Option<String>,
+    messages: Vec<Message>,
+) -> Result<Prepared, ApiError> {
+    let named = agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let agent = turn_agent(w, named.as_deref())?;
+    let Some(id) = thread
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+    else {
+        return Ok(Prepared {
+            agent,
+            named: named.is_some(),
+            history: messages,
+            log: None,
+        });
+    };
+    let thread = Thread::read(w, &id)?;
+    if thread.agent != agent.name {
+        return Err(ApiError::bad_request(format!(
+            "thread {id} belongs to agent {:?}, not {:?}",
+            thread.agent, agent.name
+        )));
+    }
+    let busy = Busy::take(&thread.id)?;
+    let mut transcript = thread.transcript.clone();
+    let lines = transcript.take_outcome_lines();
+    let mut new = messages;
+    if !lines.is_empty()
+        && let Some(first) = new.iter_mut().find(|m| m.role == Role::User)
+    {
+        first.content.insert(0, Content::text(lines.join("\n")));
+    }
+    let question = new
+        .iter()
+        .rev()
+        .flat_map(|m| m.content.iter())
+        .find_map(|c| match c {
+            Content::Text { text } if !agent_threads::is_outcome_lines(text) => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let unnamed = thread.title.trim().is_empty() || thread.title == agent_threads::DEFAULT_TITLE;
+    let title = if unnamed {
+        agent_threads::title_of(&question)
+    } else {
+        None
+    };
+    let mut history = transcript.messages;
+    history.extend(new);
+    let base = history.clone();
+    agent_threads::save(w, &thread.id, &agent.label, None, |t| {
+        t.transcript.messages = base.clone();
+        t.transcript.take_outcome_lines();
+        if let Some(title) = &title {
+            t.title = title.clone();
+        }
+    })?;
+    let log = ThreadLog {
+        id: thread.id,
+        label: agent.label.clone(),
+        base: history.clone(),
+        steps: serde_json::Map::new(),
+        proposals: Vec::new(),
+        saved: (0, 0),
+        _busy: busy,
+    };
+    Ok(Prepared {
+        agent,
+        named: true,
+        history,
+        log: Some(log),
+    })
+}
+
+/// What a turn on a thread has added, written to the thread note as the turn streams.
+struct ThreadLog {
+    id: String,
+    label: String,
+    /// The transcript the turn started from, the user's new message included.
+    base: Vec<Message>,
+    /// The tool steps of this turn, by call id.
+    steps: serde_json::Map<String, Value>,
+    /// The proposals and changes of this turn.
+    proposals: Vec<Stored>,
+    /// How many messages, and steps and proposals, the last write held.
+    saved: (usize, usize),
+    _busy: Busy,
 }
 
 /// The events of `rx` as a server-sent event answer, with a heartbeat every [`HEARTBEAT`].
@@ -227,8 +394,66 @@ struct Setup {
     web_search: Option<crate::brave::Search>,
     /// Whether the web tools may reach the local network (`ai_settings.fetch_private`, ai D27).
     fetch_private: bool,
-    /// Which internet tools Settings > AI allows (ai D28).
+    /// Which internet tools the agent is given (ai D28, agents G4).
     web: ai::Web,
+    /// The agent's effort, when it names one.
+    effort: Option<ai::Effort>,
+    /// The tools the agent may use; `None` is every tool the server offers (agents G4).
+    tools: Option<Vec<String>>,
+    /// The note types the agent's tools reach (agents G4, G7).
+    limits: Limits,
+}
+
+/// The note types an agent's note tools reach (agents G4): those its `permissions.types` names,
+/// or every type. Agent threads are left out unless the list names `agent_thread`, so an agent
+/// does not read chats back as vault content (agents G7).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Limits {
+    types: Option<Vec<String>>,
+}
+
+impl Limits {
+    pub(crate) fn of(agent: &Agent) -> Limits {
+        Limits {
+            types: agent.permissions.types.clone(),
+        }
+    }
+
+    /// Whether the agent may read and change notes of type `name`.
+    pub(crate) fn allows(&self, name: &str) -> bool {
+        match &self.types {
+            None => name != agent_threads::THREAD_TYPE,
+            Some(t) => t.iter().any(|n| n == name),
+        }
+    }
+
+    /// `rows` without the notes of types the agent may not read, and how many went.
+    fn keep(&self, rows: &mut Vec<Value>) -> usize {
+        let before = rows.len();
+        rows.retain(|r| self.allows(r["type"].as_str().unwrap_or_default()));
+        before - rows.len()
+    }
+
+    /// The refusal of a call that names a note, or a type of note, the agent may not reach.
+    fn check(&self, w: &Writer, call: &ToolCall) -> Option<ToolOut> {
+        let input = &call.input;
+        let (type_name, verb) = match call.name.as_str() {
+            "propose_create" => (input["type"].as_str()?.trim().to_owned(), "change"),
+            "get_note" | "propose_edit" | "propose_archive" | "propose_delete" => {
+                let id = input["id"].as_str()?.trim();
+                let n = w.read(id).ok()?;
+                let verb = if call.name == "get_note" {
+                    "read"
+                } else {
+                    "change"
+                };
+                (n.type_name, verb)
+            }
+            _ => return None,
+        };
+        (!self.allows(&type_name))
+            .then(|| ToolOut::error(format!("This agent may not {verb} {type_name} notes.")))
+    }
 }
 
 /// The kinds of change the tools make themselves rather than propose (ai D22): those whose
@@ -276,19 +501,58 @@ impl Direct {
     }
 }
 
+/// The agent's confirmation switches as the chat reads them (ai D22).
+fn confirm_of(agent: &Agent) -> ai::Confirm {
+    let c = agent.permissions.confirm;
+    ai::Confirm {
+        notes: c.notes,
+        archive: c.archive,
+        delete: c.delete,
+        types: c.types,
+        downloads: c.downloads,
+        taxonomies: c.taxonomies,
+    }
+}
+
+/// The agent's internet switches as the chat reads them (ai D28).
+fn web_of(agent: &Agent) -> ai::Web {
+    let w = agent.permissions.web;
+    ai::Web {
+        search: w.search,
+        read: w.read,
+        download: w.download,
+    }
+}
+
 fn setup(
     w: &Writer,
     scope: Scope,
+    agent: &Agent,
     provider: Option<Provider>,
     model: Option<String>,
     note_id: Option<String>,
 ) -> Result<Setup, AiError> {
     let state = w.state();
     let settings = Settings::load(state)?;
-    let (provider, model) = settings.pick(provider, model.as_deref())?;
+    // An agent that names its provider or model uses it; otherwise the request's choice, and
+    // then Settings > AI's defaults (agents G1).
+    let own = agent
+        .provider
+        .as_deref()
+        .and_then(|p| p.parse::<Provider>().ok());
+    let (provider, model) = match (own, agent.model.as_deref()) {
+        (Some(p), m) => settings.pick(Some(p), m)?,
+        (None, Some(m)) => settings.pick(provider, Some(m))?,
+        (None, None) => settings.pick(provider, model.as_deref())?,
+    };
     let cred = Credentials::resolve(state, provider)?;
-    // The prompt in use (ai D17), the default or the user's own; the open note follows it.
-    let mut system = settings.chat_prompt().to_owned();
+    // The agent's prompt, or the shipped one (ai D17, agents G6); the open note follows it.
+    let mut system = agent
+        .system_prompt
+        .as_deref()
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or(ai::CHAT_PROMPT)
+        .to_owned();
     if !system.ends_with('\n') {
         system.push('\n');
     }
@@ -313,10 +577,13 @@ fn setup(
         model,
         cred,
         system,
-        direct: Direct::of(settings.confirm, scope),
+        direct: Direct::of(confirm_of(agent), scope),
         web_search: crate::brave::Search::load(state),
         fetch_private: settings.fetch_private,
-        web: settings.web,
+        web: web_of(agent),
+        effort: agent.effort.as_deref().and_then(|e| e.parse().ok()),
+        tools: agent.permissions.tools.clone(),
+        limits: Limits::of(agent),
     })
 }
 
@@ -367,38 +634,152 @@ struct Turn {
     out: Out,
     /// The images prepared this turn, by asset id (ai D19).
     images: ai_assets::Images,
+    /// The agent the request named, which its proposals carry so their apply is authored by it
+    /// (agents G11).
+    agent_name: Option<String>,
+    /// The thread the turn writes to (agents G7).
+    log: Option<std::sync::Mutex<ThreadLog>>,
 }
 
 impl Turn {
     async fn run(
         self,
+        agent: Agent,
         provider: Option<Provider>,
         model: Option<String>,
         history: Vec<Message>,
         note_id: Option<String>,
     ) {
+        let mut added = Vec::new();
+        self.rounds(agent, provider, model, history, note_id, &mut added)
+            .await;
+        // What the turn added before it stopped, the client gone or not.
+        self.persist(&added).await;
+    }
+
+    fn log(&self) -> Option<std::sync::MutexGuard<'_, ThreadLog>> {
+        self.log
+            .as_ref()
+            .map(|l| l.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    /// Send event `name`, first keeping it in the thread: a step's summary, a proposal as
+    /// pending, a change the agent made as made. A proposal carries the agent and the thread, so
+    /// its apply is authored by the agent and recorded in the thread.
+    async fn emit(&self, name: &'static str, mut data: Value) -> bool {
+        let proposal = matches!(
+            name,
+            "proposal" | "type_proposal" | "taxonomy_proposal" | "applied"
+        );
+        if proposal && let Some(a) = &self.agent_name {
+            data["agent"] = json!(a);
+        }
+        if let Some(mut log) = self.log() {
+            if name == "tool_result"
+                && let Some(id) = data["id"].as_str()
+            {
+                let step = json!({ "summary": data["summary"], "is_error": data["is_error"] });
+                log.steps.insert(id.to_owned(), step);
+            } else if proposal {
+                data["thread"] = json!(log.id);
+                let status = if name == "applied" {
+                    agent_threads::Status::Made
+                } else {
+                    agent_threads::Status::Pending
+                };
+                log.proposals.push(Stored {
+                    event: name.to_owned(),
+                    data: data.clone(),
+                    status,
+                    result: None,
+                    error: None,
+                    reported: false,
+                });
+            }
+        }
+        self.out.send(name, data).await
+    }
+
+    /// Write the thread's transcript as it stands: the messages it started from and `added`,
+    /// with this turn's steps and proposals. Nothing new since the last write writes nothing.
+    async fn persist(&self, added: &[Message]) {
+        let (id, label, messages, steps, proposals) = {
+            let Some(mut log) = self.log() else { return };
+            let now = (added.len(), log.steps.len() + log.proposals.len());
+            if now == log.saved {
+                return;
+            }
+            log.saved = now;
+            let mut messages = log.base.clone();
+            messages.extend(added.iter().cloned());
+            (
+                log.id.clone(),
+                log.label.clone(),
+                messages,
+                log.steps.clone(),
+                log.proposals.clone(),
+            )
+        };
+        let w = self.writer.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            agent_threads::save(&w, &id, &label, None, |t| {
+                t.transcript.messages = messages.clone();
+                for (k, v) in &steps {
+                    t.transcript.steps.insert(k.clone(), v.clone());
+                }
+                for p in &proposals {
+                    if !t.transcript.proposals.iter().any(|q| q.id() == p.id()) {
+                        t.transcript.proposals.push(p.clone());
+                    }
+                }
+            })
+            .map(|_| ())
+            .map_err(|e| format!("thread {id} was not written: {}", e.body))
+        })
+        .await;
+        match saved {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("{e}"),
+            Err(e) => eprintln!("a thread was not written: {e}"),
+        }
+    }
+
+    async fn rounds(
+        &self,
+        agent: Agent,
+        provider: Option<Provider>,
+        model: Option<String>,
+        history: Vec<Message>,
+        note_id: Option<String>,
+        added: &mut Vec<Message>,
+    ) {
         let w = self.writer.clone();
         let scope = self.scope;
-        let setup =
-            match tokio::task::spawn_blocking(move || setup(&w, scope, provider, model, note_id))
-                .await
-            {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => {
-                    self.failed(&e, &[]).await;
-                    return;
-                }
-                Err(e) => {
-                    let e = AiError::new(ErrorKind::Unavailable, e.to_string());
-                    self.failed(&e, &[]).await;
-                    return;
-                }
-            };
+        let setup = match tokio::task::spawn_blocking(move || {
+            setup(&w, scope, &agent, provider, model, note_id)
+        })
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                self.failed(&e, &[]).await;
+                return;
+            }
+            Err(e) => {
+                let e = AiError::new(ErrorKind::Unavailable, e.to_string());
+                self.failed(&e, &[]).await;
+                return;
+            }
+        };
         let mut tools = offered_tools(setup.web);
         if setup.web.search && setup.web_search.is_some() {
             tools.push(crate::brave::tool_spec());
         }
-        let mut added: Vec<Message> = Vec::new();
+        // Only the tools the agent may use (agents G4); a call naming another is not run.
+        if let Some(allowed) = &setup.tools {
+            tools.retain(|t| allowed.contains(&t.name));
+        }
+        let offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         // The images read_asset has sent this turn (ai D19).
         let mut images_sent = 0usize;
         for round in 1..=MAX_ROUNDS {
@@ -415,7 +796,7 @@ impl Turn {
                 messages,
                 tools: tools.clone(),
                 schema: None,
-                effort: None,
+                effort: setup.effort,
                 max_tokens: None,
             };
             let began = Instant::now();
@@ -449,7 +830,7 @@ impl Turn {
                             category: error.category.clone(),
                             explanation: error.explanation.clone(),
                         };
-                        self.refused(&setup, content, &stop, &mut added).await;
+                        self.refused(&setup, content, &stop, added).await;
                     } else {
                         if !content.is_empty() {
                             content.push(Content::Notice {
@@ -458,7 +839,7 @@ impl Turn {
                             });
                             added.push(assistant(content, None));
                         }
-                        self.failed(&error, &added).await;
+                        self.failed(&error, added).await;
                     }
                     return;
                 }
@@ -479,7 +860,7 @@ impl Turn {
             }
             match &stop {
                 Stop::Refusal { .. } => {
-                    self.refused(&setup, content, &stop, &mut added).await;
+                    self.refused(&setup, content, &stop, added).await;
                     return;
                 }
                 Stop::EndTurn | Stop::MaxTokens => {
@@ -490,7 +871,7 @@ impl Turn {
                         });
                     }
                     added.push(assistant(content, state));
-                    self.done(&stop, &added).await;
+                    self.done(&stop, added).await;
                     return;
                 }
                 Stop::ToolUse => {}
@@ -525,7 +906,7 @@ impl Turn {
                     ),
                 });
                 added.push(Message::tool_results(results));
-                self.done(&stop, &added).await;
+                self.done(&stop, added).await;
                 return;
             }
             let mut results = Vec::with_capacity(calls.len());
@@ -540,14 +921,27 @@ impl Turn {
                 {
                     return;
                 }
+                if c.error.is_none() && !offered.contains(&c.name) {
+                    let out = ToolOut::error(format!("there is no tool {:?}", c.name));
+                    if !self
+                        .emit(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": out.summary, "is_error": true }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::tool_result(c.id, out.content, true));
+                    continue;
+                }
                 if c.name == "read_asset" && c.error.is_none() {
                     let read = self.read_asset(&c, images_sent).await;
                     if !read.parts.is_empty() {
                         images_sent += 1;
                     }
                     if !self
-                        .out
-                        .send(
+                        .emit(
                             "tool_result",
                             json!({ "id": c.id, "summary": read.summary, "is_error": read.is_error }),
                         )
@@ -571,8 +965,7 @@ impl Turn {
                 {
                     let got = crate::brave::web_search(search, &c.input).await;
                     if !self
-                        .out
-                        .send(
+                        .emit(
                             "tool_result",
                             json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
                         )
@@ -599,13 +992,12 @@ impl Turn {
                         images_sent += 1;
                     }
                     if let Some((name, p)) = got.event
-                        && !self.out.send(name, p).await
+                        && !self.emit(name, p).await
                     {
                         return;
                     }
                     if !self
-                        .out
-                        .send(
+                        .emit(
                             "tool_result",
                             json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
                         )
@@ -625,17 +1017,19 @@ impl Turn {
                 let author = self.author.clone();
                 let call = c.clone();
                 let direct = setup.direct;
-                let got = tokio::task::spawn_blocking(move || run_tool(&w, &author, direct, &call))
-                    .await
-                    .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                let limits = setup.limits.clone();
+                let got = tokio::task::spawn_blocking(move || {
+                    run_tool(&w, &author, direct, &limits, &call)
+                })
+                .await
+                .unwrap_or_else(|e| ToolOut::error(e.to_string()));
                 if let Some((name, p)) = got.proposal
-                    && !self.out.send(name, p).await
+                    && !self.emit(name, p).await
                 {
                     return;
                 }
                 if !self
-                    .out
-                    .send(
+                    .emit(
                         "tool_result",
                         json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
                     )
@@ -651,6 +1045,7 @@ impl Turn {
                 });
             }
             added.push(Message::tool_results(results));
+            self.persist(added).await;
         }
     }
 
@@ -767,12 +1162,14 @@ impl Turn {
     }
 
     async fn done(&self, stop: &Stop, added: &[Message]) {
+        self.persist(added).await;
         self.out
             .send("done", json!({ "stop": stop.as_str(), "messages": added }))
             .await;
     }
 
     async fn failed(&self, e: &AiError, added: &[Message]) {
+        self.persist(added).await;
         self.out
             .send(
                 "error",
@@ -816,6 +1213,7 @@ impl Turn {
             text: notice,
         });
         added.push(assistant(content, None));
+        self.persist(added).await;
         self.out
             .send(
                 "refusal",
@@ -1054,6 +1452,16 @@ pub(crate) fn str_arg<'a>(input: &'a Value, name: &str) -> Result<&'a str, ToolO
         .ok_or_else(|| ToolOut::error(format!("{name} must be a non-empty string")))
 }
 
+/// What a listing tells the model of the rows an agent's types left out (agents G4).
+fn left_out_of(n: usize) -> Value {
+    if n == 0 {
+        return json!({});
+    }
+    json!({ "left_out": n, "left_out_message": format!(
+        "{n} more notes matched, of types this agent may not read."
+    ) })
+}
+
 fn rows_out(rows: Vec<Value>, extra: Value) -> ToolOut {
     let summary = json!({ "notes": notes_of(&rows) });
     let mut content = json!({ "rows": rows });
@@ -1070,8 +1478,14 @@ fn rows_out(rows: Vec<Value>, extra: Value) -> ToolOut {
 
 /// Run one tool call. A call the model got wrong is answered as an error, not run (ai D5).
 /// A proposal whose confirmation is off is applied here, in place of being sent (ai D22).
-fn run_tool(w: &Writer, author: &Author, direct: Direct, call: &ToolCall) -> ToolOut {
-    let out = propose_or_read(w, author, call);
+fn run_tool(
+    w: &Writer,
+    author: &Author,
+    direct: Direct,
+    limits: &Limits,
+    call: &ToolCall,
+) -> ToolOut {
+    let out = propose_or_read(w, author, limits, call);
     match &out.proposal {
         Some((event, p)) if direct.covers(event, p) => {
             let (event, p) = (*event, p.clone());
@@ -1297,9 +1711,12 @@ pub fn apply_change(
 }
 
 /// A tool call's answer, a proposal not yet applied.
-fn propose_or_read(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
+fn propose_or_read(w: &Writer, author: &Author, limits: &Limits, call: &ToolCall) -> ToolOut {
     if let Some(e) = &call.error {
         return ToolOut::error(e.clone());
+    }
+    if let Some(refused) = limits.check(w, call) {
+        return refused;
     }
     let input = &call.input;
     let result = match call.name.as_str() {
@@ -1309,17 +1726,21 @@ fn propose_or_read(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
                 .map_or(10, |n| usize::try_from(n).unwrap_or(SEARCH_LIMIT))
                 .clamp(1, SEARCH_LIMIT);
             Vault::search(w, text, limit, script_core::Archived::Exclude)
-                .map(|rows| rows_out(rows, json!({})))
+                .map(|mut rows| {
+                    let left_out = limits.keep(&mut rows);
+                    rows_out(rows, left_out_of(left_out))
+                })
                 .map_err(ToolOut::error)
         }),
         "query_notes" => str_arg(input, "query").and_then(|q| {
             Vault::query_page(w, q, QUERY_LIMIT, None)
                 .map(|page| {
-                    let rows = page["rows"].as_array().cloned().unwrap_or_default();
-                    rows_out(
-                        rows,
-                        json!({ "total": page["total"], "more": !page["next"].is_null() }),
-                    )
+                    let mut rows = page["rows"].as_array().cloned().unwrap_or_default();
+                    let left_out = limits.keep(&mut rows);
+                    let mut extra = left_out_of(left_out);
+                    extra["total"] = page["total"].clone();
+                    extra["more"] = json!(!page["next"].is_null());
+                    rows_out(rows, extra)
                 })
                 .map_err(ToolOut::error)
         }),
@@ -1351,7 +1772,10 @@ fn propose_or_read(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
         }
         "backlinks" => str_arg(input, "id").and_then(|id| {
             Vault::backlinks(w, id)
-                .map(|rows| rows_out(rows, json!({})))
+                .map(|mut rows| {
+                    let left_out = limits.keep(&mut rows);
+                    rows_out(rows, left_out_of(left_out))
+                })
                 .map_err(ToolOut::error)
         }),
         "propose_edit" => propose(w, author, &call.id, input),

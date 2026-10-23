@@ -38,8 +38,12 @@
 //!   error: null | { kind, message } }`, `api` being the OpenAI API the answer came over, or null
 //!   for the other providers and the official OpenAI API.
 //! - `GET /api/ai/providers` (scope `read`) answers `{ default_provider, providers: { <p>: {
-//!   configured, model } }, confirm }`, the chat panel's picker in every client (ai D23): no
+//!   configured, model } }, confirm, web }`, the chat panel's picker in every client (ai D23): no
 //!   account, no prompt, no API URL, never a secret.
+//!
+//! The chat's system prompt and its `confirm` and `web` switches are the built-in Assistant's,
+//! `agents/assistant.wcl` (agents G6): both GETs answer them from it, and `PUT .../settings`
+//! writes the ones it is sent into it, checked as `PUT /api/agents/assistant` checks it.
 //! - `GET /api/ai/models?provider=` (scope `read`) lists the provider's models live, with the
 //!   default model, or the preselected one when none is chosen.
 //!
@@ -116,6 +120,17 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
 }
 
+/// Run blocking work against the writer off the async runtime.
+async fn blocking_w<T: Send + 'static>(
+    a: &Arc<Ai>,
+    f: impl FnOnce(&Writer) -> Result<T, ApiError> + Send + 'static,
+) -> Result<T, ApiError> {
+    let w = a.writer.clone();
+    tokio::task::spawn_blocking(move || f(&w))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
+}
+
 /// An AI error as an answer: its kind is the error code. A missing credential or a bad request
 /// is the caller's to fix (400); anything the provider did is a 502.
 fn api_error(e: AiError) -> ApiError {
@@ -164,8 +179,45 @@ fn default_to(s: &state::State, p: Provider) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// What `GET /api/integrations/ai` answers. Nothing in it is a key or a token.
-fn status_of(s: &state::State) -> Result<Value, ApiError> {
+/// The built-in Assistant, which holds the chat panel's prompt and switches (agents G6): the
+/// agent file, or every default when the vault has none yet.
+pub(crate) fn assistant(w: &Writer) -> Result<schema::Agent, ApiError> {
+    match w.agent(schema::ASSISTANT_AGENT) {
+        Ok(a) => Ok(a),
+        Err(writer::Error::Missing(_)) => Ok(schema::Agent::new(schema::ASSISTANT_AGENT)),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// An agent's confirmation switches with every key filled (ai D22).
+pub(crate) fn confirm_json(c: &schema::AgentConfirm) -> Value {
+    Value::Object(
+        c.switches()
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), json!(v)))
+            .collect(),
+    )
+}
+
+/// An agent's internet switches with every key filled (ai D28).
+pub(crate) fn web_json(web: &schema::AgentWeb) -> Value {
+    Value::Object(
+        web.switches()
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), json!(v)))
+            .collect(),
+    )
+}
+
+/// What `GET /api/integrations/ai` answers. Nothing in it is a key or a token. The prompt and the
+/// switches are the built-in Assistant's (agents G6).
+fn status_of(w: &Writer) -> Result<Value, ApiError> {
+    let s = w.state();
+    let agent = assistant(w)?;
+    let custom = agent.system_prompt.clone().filter(|p| !p.trim().is_empty());
+    let prompt = custom.clone().unwrap_or_else(|| ai::CHAT_PROMPT.to_owned());
+    let confirm = confirm_json(&agent.permissions.confirm);
+    let web = web_json(&agent.permissions.web);
     if !s.has_secret_key() {
         let off = json!({ "configured": false, "model": null, "url": null, "has_key": false });
         return Ok(json!({
@@ -176,11 +228,11 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
                 "openai": off,
                 "chatgpt": { "configured": false, "account": null, "model": null },
             },
-            "system_prompt": ai::CHAT_PROMPT,
+            "system_prompt": prompt,
             "default_system_prompt": ai::CHAT_PROMPT,
-            "system_prompt_custom": false,
-            "confirm": ai::Confirm::default().to_json(),
-            "web": ai::Web::default().to_json(),
+            "system_prompt_custom": custom.is_some(),
+            "confirm": confirm,
+            "web": web,
         }));
     }
     let settings = Settings::load(s).map_err(api_error)?;
@@ -205,23 +257,23 @@ fn status_of(s: &state::State) -> Result<Value, ApiError> {
         "secrets_key": true,
         "default_provider": settings.default_provider,
         "providers": providers,
-        "system_prompt": settings.chat_prompt(),
+        "system_prompt": prompt,
         "default_system_prompt": ai::CHAT_PROMPT,
-        "system_prompt_custom": settings.system_prompt_custom(),
-        "confirm": settings.confirm.to_json(),
-        "web": settings.web.to_json(),
+        "system_prompt_custom": custom.is_some(),
+        "confirm": confirm,
+        "web": web,
     }))
 }
 
 async fn status_answer(a: &Arc<Ai>) -> Result<Json<Value>, ApiError> {
-    blocking(a, status_of).await.map(Json)
+    blocking_w(a, status_of).await.map(Json)
 }
 
 /// `GET /api/ai/providers` (read): which providers are set up and their default models, the
 /// default provider and the confirmation switches, for the chat panel's picker in every client
 /// (ai D23). Unlike `GET /api/integrations/ai` it holds no account and no system prompt.
 pub async fn providers(State(a): Shared) -> Result<Json<Value>, ApiError> {
-    let status = blocking(&a, status_of).await?;
+    let status = blocking_w(&a, status_of).await?;
     let mut providers = Map::new();
     if let Some(all) = status["providers"].as_object() {
         for (name, p) in all {
@@ -235,6 +287,7 @@ pub async fn providers(State(a): Shared) -> Result<Json<Value>, ApiError> {
         "default_provider": status["default_provider"],
         "providers": providers,
         "confirm": status["confirm"],
+        "web": status["web"],
     })))
 }
 
@@ -326,7 +379,8 @@ pub async fn put_settings(
     let prompt = b.system_prompt;
     let confirm = b.confirm;
     let web = b.web;
-    blocking(&a, move |s| {
+    blocking_w(&a, move |w| {
+        let s = w.state();
         let mut settings = Settings::load(s).map_err(api_error)?;
         for (p, url) in urls {
             settings
@@ -337,35 +391,47 @@ pub async fn put_settings(
         if let Some(api) = openai_api {
             settings.endpoints.openai_api = api;
         }
-        if let Some(c) = confirm {
-            let to = &mut settings.confirm;
-            for (slot, value) in [
-                (&mut to.notes, c.notes),
-                (&mut to.archive, c.archive),
-                (&mut to.delete, c.delete),
-                (&mut to.types, c.types),
-                (&mut to.downloads, c.downloads),
-                (&mut to.taxonomies, c.taxonomies),
-            ] {
-                if let Some(v) = value {
-                    *slot = v;
+        // The chat's prompt and switches are the built-in Assistant's (agents G6): written
+        // there first, so a refused prompt changes nothing.
+        if prompt.is_some() || confirm.is_some() || web.is_some() {
+            let mut agent = assistant(w)?;
+            if let Some(c) = confirm {
+                let to = &mut agent.permissions.confirm;
+                for (slot, value) in [
+                    (&mut to.notes, c.notes),
+                    (&mut to.archive, c.archive),
+                    (&mut to.delete, c.delete),
+                    (&mut to.types, c.types),
+                    (&mut to.downloads, c.downloads),
+                    (&mut to.taxonomies, c.taxonomies),
+                ] {
+                    if let Some(v) = value {
+                        *slot = v;
+                    }
                 }
             }
-        }
-        if let Some(w) = web {
-            let to = &mut settings.web;
-            for (slot, value) in [
-                (&mut to.search, w.search),
-                (&mut to.read, w.read),
-                (&mut to.download, w.download),
-            ] {
-                if let Some(v) = value {
-                    *slot = v;
+            if let Some(b) = web {
+                let to = &mut agent.permissions.web;
+                for (slot, value) in [
+                    (&mut to.search, b.search),
+                    (&mut to.read, b.read),
+                    (&mut to.download, b.download),
+                ] {
+                    if let Some(v) = value {
+                        *slot = v;
+                    }
                 }
             }
-        }
-        if let Some(p) = prompt {
-            settings.set_system_prompt(&p).map_err(api_error)?;
+            if let Some(p) = prompt {
+                let mut check = Settings::default();
+                check.set_system_prompt(&p).map_err(api_error)?;
+                agent.system_prompt = check.system_prompt;
+            }
+            w.put_agent(
+                schema::ASSISTANT_AGENT,
+                &agent.to_wcl(),
+                crate::agent_files::unknown_tools,
+            )?;
         }
         if let Some(d) = default {
             settings.default_provider = d;
@@ -374,7 +440,7 @@ pub async fn put_settings(
             settings.set_model(p, m);
         }
         settings.save(s).map_err(api_error)?;
-        status_of(s)
+        status_of(w)
     })
     .await
     .map(Json)
@@ -399,7 +465,8 @@ pub async fn put_key(
         ));
     }
     let key = b.key.trim().to_owned();
-    blocking(&a, move |s| {
+    blocking_w(&a, move |w| {
+        let s = w.state();
         let secret = ai::key_secret(p);
         if key.is_empty() {
             delete_secret(s, secret)?;
@@ -407,7 +474,7 @@ pub async fn put_key(
             s.set_secret(secret, &key)?;
             default_to(s, p)?;
         }
-        status_of(s)
+        status_of(w)
     })
     .await
     .map(Json)
@@ -495,7 +562,8 @@ pub async fn chatgpt_finish(
         .ok_or_else(|| chatgpt_error("the address has no code: Continue with ChatGPT again"))?;
     let issued = param("client_id");
 
-    blocking(&a, move |s| {
+    blocking_w(&a, move |w| {
+        let s = w.state();
         let mut auth = ChatGptAuth::load(s).map_err(api_error)?;
         let Some(client_id) = issued.or_else(|| auth.client_id.clone().filter(|c| !c.is_empty()))
         else {
@@ -553,7 +621,7 @@ pub async fn chatgpt_finish(
         auth.account = claims.email.or(claims.subject);
         auth.save(s).map_err(api_error)?;
         default_to(s, Provider::ChatGpt)?;
-        status_of(s)
+        status_of(w)
     })
     .await
     .map(Json)
@@ -561,7 +629,8 @@ pub async fn chatgpt_finish(
 
 /// `POST /api/integrations/ai/chatgpt/disconnect`.
 pub async fn chatgpt_disconnect(State(a): Shared) -> Result<Json<Value>, ApiError> {
-    blocking(&a, |s| {
+    blocking_w(&a, |w| {
+        let s = w.state();
         let auth = ChatGptAuth::load(s).map_err(api_error)?;
         if let (Some(client_id), Some(refresh)) = (&auth.client_id, &auth.refresh_token) {
             let base = Settings::load(s)
@@ -582,7 +651,7 @@ pub async fn chatgpt_disconnect(State(a): Shared) -> Result<Json<Value>, ApiErro
             }
         }
         delete_secret(s, ai::CHATGPT)?;
-        status_of(s)
+        status_of(w)
     })
     .await
     .map(Json)

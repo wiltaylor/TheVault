@@ -1,4 +1,5 @@
-// The agent screen, `/agents/<name>` (agents G5): one agent's file as tabs. Settings holds its
+// The agent screen, `/agents/<name>` (agents G5): one agent as tabs. Chat, the default, holds its
+// threads (agents G7, `ai/AgentChat.tsx`). Settings holds its
 // label, icon, model and system prompt; Permissions its own tools, confirmation and internet
 // switches and note types (agents G4); File its WCL. Settings and Permissions edit one draft, so
 // moving between them keeps unsaved changes, and either tab's Save writes the whole agent. In the
@@ -39,6 +40,7 @@ import {
   ApiError,
   api,
 } from "../api";
+import { AgentChat } from "../ai/AgentChat";
 import { IconPicker } from "../components/IconPicker";
 import { TypeIcon } from "../components/Icon";
 import { Spinner } from "../components/SyncStatus";
@@ -86,6 +88,7 @@ export interface AgentTabProps {
  * add it here.
  */
 export const AGENT_TABS: { id: string; label: string; render: (p: AgentTabProps) => JSX.Element }[] = [
+  { id: "chat", label: "Chat", render: (p) => <AgentChat agent={p.agent.name} label={agentLabel(p.agent)} /> },
   { id: "settings", label: "Settings", render: (p) => <SettingsTab {...p} /> },
   { id: "permissions", label: "Permissions", render: (p) => <PermissionsTab {...p} /> },
   { id: "file", label: "File", render: (p) => <FileTab {...p} /> },

@@ -214,7 +214,109 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0005_list_page_defaults",
         run: list_page_defaults,
     },
+    UpgradeStep {
+        id: "0006_assistant_settings",
+        run: assistant_settings,
+    },
 ];
+
+/// The secret holding Settings > AI (crates/ai's `ai_settings`, ai D7).
+const AI_SETTINGS: &str = "ai_settings";
+
+/// Step `0006_assistant_settings` (agents G6): the chat panel's system prompt and its
+/// confirmation and internet switches (ai D17, D22, D28) moved from `ai_settings` to the built-in
+/// agent, `agents/assistant.wcl`. Each of the three that `ai_settings` holds and that differs from
+/// the default is written into the agent file when the file has none of its own: a prompt when
+/// the file names no `system_prompt`, a switch turned off when the file's `permissions.confirm`
+/// (or `web`) are all on. Then the three keys are taken out of `ai_settings`, keeping the rest.
+///
+/// A vault from before agent files has no `agents/assistant.wcl` yet: the step writes the shipped
+/// one with the moved settings and records the shipped version as written, so the seeding after
+/// it keeps the file without telling the user of a newer version. Without the secrets key and with
+/// `ai_settings` stored, it defers. A fresh vault has no `ai_settings` and changes nothing.
+fn assistant_settings(w: &Writer) -> Result<()> {
+    use serde_json::Value;
+
+    let text = match w.state.get_secret(AI_SETTINGS) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Ok(()),
+        Err(state::Error::KeyMissing { .. }) => {
+            return Err(crate::Error::StepDeferred(
+                "step 0006_assistant_settings needs the secrets key to read ai_settings: start \
+                 the server with its key file to finish it"
+                    .to_owned(),
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let Ok(Value::Object(mut settings)) = serde_json::from_str::<Value>(&text) else {
+        return Ok(());
+    };
+    let prompt = settings.remove("system_prompt");
+    let confirm = settings.remove("confirm");
+    let web = settings.remove("web");
+    if prompt.is_none() && confirm.is_none() && web.is_none() {
+        return Ok(());
+    }
+    let name = schema::ASSISTANT_AGENT;
+    let path = crate::agent_path(name);
+    let shipped = SHIPPED_FILES
+        .iter()
+        .find(|f| f.path == path)
+        .expect("the built-in agent is a shipped file");
+    let (source, missing) = match w.read_agent(name) {
+        Ok(text) => (text, false),
+        Err(crate::Error::Missing(_)) => (shipped.text()?, true),
+        Err(e) => return Err(e),
+    };
+    let mut agent = match schema::Agent::parse(name, &source) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!(
+                "step 0006_assistant_settings left ai_settings as it is: {path} does not parse: {e}"
+            );
+            return Ok(());
+        }
+    };
+    let before = agent.clone();
+    if let Some(Value::String(p)) = &prompt
+        && !p.trim().is_empty()
+        && agent.system_prompt.is_none()
+    {
+        agent.system_prompt = Some(p.clone());
+    }
+    let switches_off = |v: &Option<Value>| -> Vec<String> {
+        v.as_ref()
+            .and_then(Value::as_object)
+            .map(|o| {
+                o.iter()
+                    .filter(|(_, on)| on.as_bool() == Some(false))
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    if agent.permissions.confirm == schema::AgentConfirm::default() {
+        for k in switches_off(&confirm) {
+            agent.permissions.confirm.set(&k, false);
+        }
+    }
+    if agent.permissions.web == schema::AgentWeb::default() {
+        for k in switches_off(&web) {
+            agent.permissions.web.set(&k, false);
+        }
+    }
+    if agent != before {
+        if missing {
+            let hash = shipped_hash(shipped.path, &shipped.text()?);
+            w.state.record_shipped(shipped.path, &hash)?;
+        }
+        w.put_agent(name, &agent.to_wcl(), |_| Vec::new())?;
+    }
+    let text = Value::Object(settings).to_string();
+    w.state.set_secret(AI_SETTINGS, &text)?;
+    Ok(())
+}
 
 /// Step `0005_list_page_defaults` (lists L5): the `email` and `message` types from before type
 /// list pages had settings have no `list_page` block, and the seeding only ever adds fields to a

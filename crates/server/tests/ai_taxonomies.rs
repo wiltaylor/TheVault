@@ -94,10 +94,25 @@ impl Api {
                 "default_provider": "anthropic",
                 "models": { "anthropic": MODEL },
                 "endpoints": { "anthropic": fake.base_url() },
-                "confirm": confirm,
             })
             .to_string(),
         );
+        // The chat's switches are the built-in Assistant's (agents G6).
+        let mut all = json!({
+            "notes": true, "archive": true, "delete": true,
+            "types": true, "downloads": true, "taxonomies": true,
+        });
+        for (k, v) in confirm.as_object().into_iter().flatten() {
+            all[k] = v.clone();
+        }
+        let res = self
+            .client
+            .put(self.server.url("/api/integrations/ai/settings"))
+            .bearer_auth(self.token())
+            .json(&json!({ "confirm": all }))
+            .send()
+            .unwrap();
+        assert!(res.status().is_success(), "{}", res.text().unwrap());
     }
 
     fn task(&self, title: &str, stage: &str) -> String {

@@ -117,7 +117,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "0002_person_labels",
             "0003_event_google_handler",
             "0004_remove_google_sync",
-            "0005_list_page_defaults"
+            "0005_list_page_defaults",
+            "0006_assistant_settings"
         ]
     );
     let fields: Vec<&str> = done
@@ -157,6 +158,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
     assert_eq!(
         added,
         [
+            "agent_thread",
             "call",
             "conversation",
             "dailynote",
@@ -456,7 +458,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
             "0002_person_labels",
             "0003_event_google_handler",
             "0004_remove_google_sync",
-            "0005_list_page_defaults"
+            "0005_list_page_defaults",
+            "0006_assistant_settings"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
@@ -633,7 +636,8 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
                 "0002_person_labels",
                 "0003_event_google_handler",
                 "0004_remove_google_sync",
-                "0005_list_page_defaults"
+                "0005_list_page_defaults",
+                "0006_assistant_settings"
             ],
             "{name}"
         );
@@ -763,7 +767,8 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
     assert_eq!(done.taxonomies_added, ["gmail_label"]);
     let mut added = done.types_added.clone();
     added.sort();
-    assert_eq!(added, GOOGLE_TYPES);
+    assert_eq!(added[0], "agent_thread");
+    assert_eq!(added[1..], GOOGLE_TYPES);
     // Steps 0002 to 0005 are the ones 0.1.6 had not run; 0003 and 0004 find no event type yet,
     // and 0005 gives the message type 0.1.6 had its `list_page` block, in a commit of its own.
     // The seeding is then one commit, with no field added to a new type and no note edited.
@@ -773,7 +778,8 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0002_person_labels",
             "0003_event_google_handler",
             "0004_remove_google_sync",
-            "0005_list_page_defaults"
+            "0005_list_page_defaults",
+            "0006_assistant_settings"
         ]
     );
     assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 3);
@@ -1214,7 +1220,11 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     assert_eq!(
         done.steps,
-        ["0004_remove_google_sync", "0005_list_page_defaults"]
+        [
+            "0004_remove_google_sync",
+            "0005_list_page_defaults",
+            "0006_assistant_settings"
+        ]
     );
 
     assert_eq!(
@@ -1301,7 +1311,11 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_ke
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     assert_eq!(
         done.steps,
-        ["0004_remove_google_sync", "0005_list_page_defaults"]
+        [
+            "0004_remove_google_sync",
+            "0005_list_page_defaults",
+            "0006_assistant_settings"
+        ]
     );
     assert!(w.schema().type_def("google_sync").is_none());
     assert!(read(root, "types/google_sync.wcl").is_none());
@@ -1325,7 +1339,10 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
     {
         let w = open_with(root, None);
         let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
-        assert_eq!(done.steps, ["0005_list_page_defaults"]);
+        assert_eq!(
+            done.steps,
+            ["0005_list_page_defaults", "0006_assistant_settings"]
+        );
         assert!(w.schema().type_def("google_sync").is_some());
         assert_eq!(read(root, &note_path).unwrap(), note);
         assert!(

@@ -57,6 +57,7 @@
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
 mod agent_files;
+mod agent_threads;
 mod agents;
 mod ai_assets;
 mod ai_chat;
@@ -267,6 +268,11 @@ fn build() -> Built {
         .get("/api/agents/{name}", agent_files::read)
         .put("/api/agents/{name}", agent_files::put)
         .delete("/api/agents/{name}", agent_files::delete)
+        .get("/api/agents/{name}/threads", agent_threads::list)
+        .post("/api/agents/{name}/threads", agent_threads::start)
+        .get("/api/agents/{name}/threads/{id}", agent_threads::read)
+        .patch("/api/agents/{name}/threads/{id}", agent_threads::rename)
+        .delete("/api/agents/{name}/threads/{id}", agent_threads::delete)
         .get("/api/assets", assets::list)
         .post_up_to("/api/assets", assets::MAX_UPLOAD, assets::upload)
         .post("/api/assets/cleanup", assets::cleanup)
@@ -358,7 +364,8 @@ fn build() -> Built {
         .post("/api/ai/chat/turns", ai_turns::start)
         .get("/api/ai/chat/turns/{turn}/events", ai_turns::events)
         .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)
-        .post("/api/ai/apply", ai_turns::apply);
+        .post("/api/ai/apply", ai_turns::apply)
+        .post("/api/ai/discard", ai_turns::discard);
     Built {
         api,
         login,

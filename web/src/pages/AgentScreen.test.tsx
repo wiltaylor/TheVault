@@ -16,9 +16,11 @@ const aiModels = vi.fn();
 const types = vi.fn();
 const taxonomies = vi.fn();
 const appInfo = vi.fn();
+const agentThreads = vi.fn();
+const aiProviders = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, agent, agents: agentsList, putAgent, aiStatus, aiModels, types, taxonomies } };
+  return { ...real, api: { ...real.api, agent, agents: agentsList, putAgent, aiStatus, aiModels, types, taxonomies, agentThreads, aiProviders } };
 });
 vi.mock("../inApp", () => ({ appInfo }));
 
@@ -119,6 +121,8 @@ beforeEach(async () => {
   ]);
   taxonomies.mockResolvedValue([]);
   appInfo.mockResolvedValue(null);
+  agentThreads.mockResolvedValue({ threads: [] });
+  aiProviders.mockResolvedValue({ default_provider: "anthropic", providers: status().providers, confirm: status().confirm });
   await refreshAgents();
   await reloadDefinitions();
 });
@@ -128,7 +132,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function open(path = "/agents/inbox_triage") {
+async function open(path = "/agents/inbox_triage/settings") {
   window.history.replaceState({}, "", path);
   render(() => (
     <Router>
@@ -150,11 +154,13 @@ function sent(): Record<string, unknown> {
 }
 
 describe("the agent screen", () => {
-  it("has Settings, Permissions and File tabs, Settings first", async () => {
-    await open();
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Settings", "Permissions", "File"]);
-    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("region", { name: "Settings" })).toBeTruthy();
+  it("has Chat, Settings, Permissions and File tabs, Chat first", async () => {
+    await open("/agents/inbox_triage");
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Settings", "Permissions", "File"]);
+    expect(screen.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("region", { name: "Chat" })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "Threads" })).toBeTruthy();
+    expect(agentThreads).toHaveBeenCalledWith("inbox_triage");
     expect(agent).toHaveBeenCalledWith("inbox_triage");
   });
 
@@ -258,7 +264,7 @@ describe("the Settings tab", () => {
 
   it("keeps Assistant enabled: its switch cannot be turned off", async () => {
     agent.mockResolvedValue(triage({ name: "assistant", label: "Assistant", built_in: true }));
-    await open("/agents/assistant");
+    await open("/agents/assistant/settings");
     const s = within(screen.getByRole("region", { name: "Settings" }));
     const enabled = s.getByRole("switch");
     expect(enabled).toBeChecked();
