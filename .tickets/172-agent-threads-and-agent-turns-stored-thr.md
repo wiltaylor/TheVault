@@ -5,8 +5,8 @@ title: 'Agent threads and agent turns: stored threads, the agent''s permissions 
 plan: agents
 blocked_by:
 - '170'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Agent threads and agent turns: stored threads, the agent's permissions applied, the Chat tab and the AI panel's agent picker
@@ -22,3 +22,11 @@ Design change before work started (user, 2026-10-23): threads are notes of a new
 ### 2026-10-23T03:32:14Z — wil
 
 Design change (user, 2026-10-23, SPEC G6): every AI panel conversation is a thread of the chosen agent, Assistant by default; the chat reads system prompt, confirm and web from the agent, no longer from ai_settings; an upgrade step moves ai_settings.system_prompt, confirm and web into agents/assistant.wcl and clears them. Add tests for the migration and that /api/ai/providers still answers confirm and web from Assistant.
+
+### 2026-10-23T04:29:32Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T04:29:32Z — wil
+
+Status set to done.
