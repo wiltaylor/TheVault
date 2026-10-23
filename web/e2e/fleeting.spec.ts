@@ -92,26 +92,18 @@ async function fleeting(admin: APIRequestContext, title: string, body: string, i
   return (await res.json()) as { id: string; version: string };
 }
 
-test("Ctrl+Shift+K, the + button and the sidebar open the capture dialog from any page", async ({ page }) => {
+test("Ctrl+Shift+K and the sidebar open the capture dialog from any page; a wide screen has no + button", async ({ page }) => {
   await logIn(page, "/daily");
   for (const path of ["/daily", "/search", "/trash", "/settings/types", "/types/task"]) {
     await page.goto(path);
-    await expect(page.getByRole("button", { name: "Quick capture" })).toBeVisible();
+    // The floating + is the phone's capture; on a wide screen with a mouse it is hidden.
+    await expect(page.getByRole("button", { name: "Quick capture" })).toBeHidden();
     await page.keyboard.press("Control+Shift+K");
     await expect(dialog(page)).toBeVisible();
     await expect(captureText(page)).toBeFocused();
     await expect(dialog(page).getByRole("button", { name: "Save" })).toBeDisabled();
-    // The + hides while the dialog shows.
-    await expect(page.getByRole("button", { name: "Quick capture" })).toBeHidden();
     await page.keyboard.press("Escape");
     await expect(dialog(page)).toHaveCount(0);
-
-    await page.getByRole("button", { name: "Quick capture" }).click();
-    await expect(captureText(page)).toBeFocused();
-    await dialog(page).getByRole("button", { name: "Close" }).click();
-    await expect(dialog(page)).toHaveCount(0);
-    // Focus goes back where it was.
-    await expect(page.getByRole("button", { name: "Quick capture" })).toBeFocused();
   }
   await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Capture" }).click();
   await expect(captureText(page)).toBeFocused();
@@ -170,7 +162,7 @@ test("a pasted and an attached image are saved with a title from the date", asyn
       rows: Row[];
     }).rows;
   const existing = new Set((await fleeting()).map((r) => r.id));
-  await page.getByRole("button", { name: "Quick capture" }).click();
+  await page.keyboard.press("Control+Shift+K");
   await pasteImage(page, gradientPng(120, 80, [37, 99, 235], [236, 72, 153]));
   const thumbs = dialog(page).getByRole("list", { name: "Attached images" }).getByRole("img");
   await expect(thumbs).toHaveCount(1);

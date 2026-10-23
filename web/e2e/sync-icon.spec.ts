@@ -153,7 +153,7 @@ test("a local write asks for the sync status at once", async ({ page }) => {
   });
   await logIn(page, "/");
   await expect(icon(page)).toBeVisible();
-  await page.getByRole("button", { name: "Quick capture" }).click();
+  await page.keyboard.press("Control+Shift+K");
   await page.getByLabel("Capture text").fill("A thought");
   const saved = page.waitForResponse((r) => r.request().method() === "POST" && r.url().includes("/api/notes"));
   await page.keyboard.press("Control+Enter");

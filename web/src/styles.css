@@ -8093,6 +8093,14 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   }
 }
 
+/* The button is the phone's quick capture. On a wide screen with a mouse it is out of place:
+   capture from the sidebar's Capture, the command palette or Ctrl+Shift+K instead. */
+@media (min-width: 601px) and (pointer: fine) {
+  .capture-fab {
+    display: none;
+  }
+}
+
 /* A drawer open on a narrow screen keeps its own controls clear. */
 .menu-open .capture-fab,
 .right-open .capture-fab {
