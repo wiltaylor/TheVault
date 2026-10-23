@@ -44,6 +44,7 @@ pub mod google;
 mod note;
 mod notify;
 pub mod outbox;
+mod outbox_sms;
 mod purge;
 mod queryviews;
 mod refs;
@@ -79,7 +80,7 @@ pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, par
 pub use defs::{ScriptProblem, TaxonomyCheck, agent_path};
 pub use devices::{
     COMMAND_TTL_MS, DEFAULT_ANDROID_DEVICE_FILE, DEFAULT_DEVICE_SCRIPTS, MAX_COMMAND_PAYLOAD,
-    command_json, default_device_file, default_device_script, device_file_path,
+    SEND_SMS, command_json, default_device_file, default_device_script, device_file_path,
 };
 pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
@@ -90,6 +91,7 @@ pub use index::{
 pub use note::{
     ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, value_to_json, value_wcl,
 };
+pub use outbox_sms::{COPY_WINDOW_MS, same_number, sms_words};
 pub use purge::Purged;
 pub use refs::Referrer;
 pub use remote::{REMOTE_AUTHOR, Remote};

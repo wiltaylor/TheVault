@@ -80,9 +80,12 @@ Only a write from the Outbox emails the attendees. Your direct edits of an event
 
 An SMS is sent by your Android phone. The phone must be paired with the vault, and **SMS sending** must be on for it in **Settings > Devices**. Otherwise the item fails and says which setting to turn on. The item's **Device** field picks the phone; empty means the vault's one Android phone with SMS sending on.
 
-The server queues a command for the phone, and the item shows **Waiting for phone** until the phone takes it and sends the message. The phone's record of the sent message comes back as a message note, linked as the item's sent copy. An SMS carries text only.
+The server queues a `send_sms` command for the phone, and the item shows **Waiting for phone** until the phone takes it and sends the message. An SMS carries text only: the body's paragraphs, one per line, without formatting.
 
-SMS sending arrives in a later release. Until then, an SMS item fails with a message that says it is not available yet.
+- The phone waits up to 60 seconds for Android to say whether the message went. When it went, the item is **Sent**, and its sent reference becomes the phone's id of the sent message (`sms:<id>`).
+- When Android reports an error, such as no service, the item is **Failed** with Android's result code. When Android says nothing within 60 seconds, the item is **Failed** too, because the phone cannot tell whether the message went. Check the phone's messages before you select **Retry**.
+- The phone's record of the sent message comes back as a message note, linked as the item's sent copy. The link is made by the phone's id of the message. An older app that does not report the id still marks the item **Sent**. Its copy is linked by number and text, to an outgoing SMS sent within 10 minutes of the item.
+- A command the phone never takes expires after a day, and the item stays **Sending**. Open the phone app so that it checks for commands.
 
 ## Notifications
 

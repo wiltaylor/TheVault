@@ -1716,3 +1716,156 @@ async fn a_handler_that_fails_three_times_is_listed_and_retry_reruns_it_and_dism
     assert!(runtime.unreported_failures().unwrap().is_empty());
     assert!(runtime.run_pending().unwrap().is_empty());
 }
+
+/// A UTC datetime `minutes` from now, as a sent time.
+fn minutes_from_now(minutes: i64) -> String {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        + minutes * 60_000;
+    let secs = ms.div_euclid(1000);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Howard Hinnant's civil-from-days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// An SMS Outbox item as this phone pulled it from the home server, with `fields`.
+fn outbox_sms(d: &Device, fields: Json, body: &str) -> String {
+    d.writer()
+        .create(
+            "outbox",
+            &Input::Json(json!({
+                "fields": fields,
+                "blocks": [{ "kind": "content", "labels": ["body"], "blocks": [
+                    { "kind": "paragraph", "fields": { "text": body } },
+                ] }],
+            })),
+            &Author::Session("test".into()),
+        )
+        .unwrap()
+        .id
+}
+
+fn sent_sms(device_ref: &str, number: &str, body: &str, sent: &str) -> Json {
+    let mut data = sms(device_ref, Some(number), number, "t9", body);
+    data["sent"] = json!(sent);
+    data
+}
+
+fn message_id(d: &Device, device_ref: &str) -> String {
+    let rows = d.query(&format!(
+        "from message where device_ref == \"{device_ref}\""
+    ));
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    rows[0]["id"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_sent_sms_is_linked_as_the_copy_of_the_outbox_item_with_its_device_ref() {
+    let d = Device::open();
+    // The home server marked the item sent with the phone's id of the message.
+    let item = outbox_sms(
+        &d,
+        json!({ "title": "SMS to Ann", "kind": "sms", "status": "sent", "phone": "+61400000002", "sent_ref": "sms:900" }),
+        "Bins out",
+    );
+    d.send(
+        "sms_sent",
+        sent_sms(
+            "sms:900",
+            "+61400000002",
+            "Bins out",
+            "2026-10-20T09:30:00+11:00",
+        ),
+    );
+    let copy = message_id(&d, "sms:900");
+    let f = d.fields(&item);
+    assert_eq!(f["result"], copy.as_str(), "{f}");
+    assert_eq!(f["status"], "sent");
+    assert_eq!(f["sent_ref"], "sms:900");
+}
+
+#[test]
+fn a_sent_sms_is_linked_by_number_text_and_time_while_its_item_waits_for_the_phone() {
+    let d = Device::open();
+    // Two items wait for the phone, both saying the same; only one is to this number.
+    let ann = outbox_sms(
+        &d,
+        json!({ "title": "SMS to Ann", "kind": "sms", "status": "sending", "phone": "0400 000 002", "sent_ref": "01CMDANN" }),
+        "Bins out **tonight**",
+    );
+    let bob = outbox_sms(
+        &d,
+        json!({ "title": "SMS to Bob", "kind": "sms", "status": "sending", "phone": "+61400000003", "sent_ref": "01CMDBOB" }),
+        "Bins out **tonight**",
+    );
+
+    // The same words to Ann, but from twenty minutes before: an old message, not the copy.
+    d.send(
+        "sms_sent",
+        sent_sms(
+            "sms:1",
+            "+61400000002",
+            "Bins out tonight",
+            &minutes_from_now(-20),
+        ),
+    );
+    assert!(d.fields(&ann).get("result").is_none(), "{}", d.fields(&ann));
+
+    // Other words to Ann now.
+    d.send(
+        "sms_sent",
+        sent_sms(
+            "sms:2",
+            "+61400000002",
+            "Running late",
+            &minutes_from_now(0),
+        ),
+    );
+    assert!(d.fields(&ann).get("result").is_none(), "{}", d.fields(&ann));
+
+    // The copy: the same words, to Ann's number, now.
+    d.send(
+        "sms_sent",
+        sent_sms(
+            "sms:3",
+            "+61400000002",
+            "Bins out tonight",
+            &minutes_from_now(0),
+        ),
+    );
+    let copy = message_id(&d, "sms:3");
+    let f = d.fields(&ann);
+    assert_eq!(f["result"], copy.as_str(), "{f}");
+    // The handler links the copy and nothing else: the home server marks the item sent.
+    assert_eq!(f["status"], "sending");
+    assert_eq!(f["sent_ref"], "01CMDANN");
+    assert!(d.fields(&bob).get("result").is_none());
+
+    // A message received is never a sent copy.
+    d.send(
+        "sms_received",
+        sent_sms(
+            "sms:4",
+            "+61400000003",
+            "Bins out tonight",
+            &minutes_from_now(0),
+        ),
+    );
+    assert!(d.fields(&bob).get("result").is_none());
+}

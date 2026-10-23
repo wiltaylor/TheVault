@@ -61,6 +61,27 @@ class SmsReader(
         }.firstOrNull() ?: throw NoSuchElementException("no SMS $deviceRef")
     }
 
+    /**
+     * The `device_ref` of the newest sent SMS to [to] saying [body] with a key above [after],
+     * such as `sms:4412`, or null when the provider holds none: the row Android wrote for a
+     * message this app just sent, [after] being the [latestKey] from before it sent.
+     */
+    fun latestSent(to: String, body: String, after: Long): String? {
+        val number = numbers.normalise(to)
+        return resolver.rows(
+            Sms.CONTENT_URI,
+            arrayOf(Sms._ID, Sms.ADDRESS),
+            "${Sms._ID} > ? AND ${Sms.TYPE} = ? AND ${Sms.BODY} = ?",
+            arrayOf(after.toString(), Sms.MESSAGE_TYPE_SENT.toString(), body),
+            "${Sms._ID} DESC",
+            limit = 1,
+        ) { c ->
+            val address = c.string(Sms.ADDRESS)
+            val same = address == to || (number != null && numbers.normalise(address) == number)
+            if (same) PREFIX + c.long(Sms._ID) else null
+        }.firstOrNull()
+    }
+
     private fun payload(c: Cursor): Pair<String, JSONObject> {
         val received = c.int(Sms.TYPE) == Sms.MESSAGE_TYPE_INBOX
         // A received SMS carries when the sender sent it; some networks leave that out.

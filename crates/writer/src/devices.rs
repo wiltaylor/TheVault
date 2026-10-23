@@ -155,9 +155,31 @@ impl Writer {
         Ok(by)
     }
 
+    /// The device a `send_sms` naming no device goes to: the vault's one Android device with SMS
+    /// sending on (outbox X1).
+    fn sms_device(&self) -> Result<state::Device> {
+        let mut phones: Vec<_> = self
+            .state()
+            .list_devices()?
+            .into_iter()
+            .filter(|d| d.platform == "android" && sends_sms(d))
+            .collect();
+        match phones.len() {
+            1 => Ok(phones.remove(0)),
+            0 => Err(Error::BadRequest(
+                "Turn on SMS sending for a phone in Settings > Devices.".into(),
+            )),
+            n => Err(Error::BadRequest(format!(
+                "{n} phones have SMS sending on: choose the device to send from"
+            ))),
+        }
+    }
+
     /// Queue command `name` with `payload` for `device`, a device id or a device's name, on
     /// behalf of `source`. Refused unless the device's platform file declares the command and the
-    /// device has it enabled.
+    /// device has it enabled. A `send_sms` naming no device (an empty `device`) goes to the
+    /// vault's one Android device with SMS sending on, and one for an Outbox item (`outbox` in its
+    /// payload) is refused while the device's SMS sending switch is off.
     pub fn device_command(
         &self,
         device: &str,
@@ -168,6 +190,9 @@ impl Writer {
         let state = self.state();
         let device = match state.device(device) {
             Ok(d) => d,
+            Err(state::Error::UnknownDevice(_)) if device.is_empty() && name == SEND_SMS => {
+                self.sms_device()?
+            }
             Err(state::Error::UnknownDevice(_)) => {
                 let mut named: Vec<_> = state
                     .list_devices()?
@@ -217,6 +242,14 @@ impl Writer {
                 device.name
             )));
         }
+        // The phone refuses an SMS while the switch is off (D23); an Outbox item's is refused here,
+        // so the item fails at once with the setting to turn on (outbox X6).
+        if name == SEND_SMS && payload.get("outbox").is_some() && !sends_sms(&device) {
+            return Err(Error::BadRequest(format!(
+                "Turn on SMS sending for {} in Settings > Devices.",
+                device.name
+            )));
+        }
         let payload = payload.to_string();
         if payload.len() > MAX_COMMAND_PAYLOAD {
             return Err(Error::BadRequest(format!(
@@ -231,6 +264,15 @@ impl Writer {
             ttl_ms: COMMAND_TTL_MS,
         })?)
     }
+}
+
+/// The device command that sends an SMS (D23).
+pub const SEND_SMS: &str = "send_sms";
+
+/// Whether the device's SMS sending switch is on (D23).
+fn sends_sms(device: &state::Device) -> bool {
+    serde_json::from_str::<serde_json::Value>(&device.settings)
+        .is_ok_and(|s| s.get("sms_send") == Some(&serde_json::Value::Bool(true)))
 }
 
 /// A command in the JSON form the API and scripts see. `payload` and `result` are JSON values.

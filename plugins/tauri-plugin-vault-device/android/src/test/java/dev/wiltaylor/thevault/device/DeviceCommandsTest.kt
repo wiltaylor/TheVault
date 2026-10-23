@@ -50,7 +50,21 @@ class DeviceCommandsTest {
                 .put("device_name", "Pixel")
                 .put("token", FakeHome.TOKEN),
         )
-        FakePhone(context).install()
+        phone.install()
+    }
+
+    private val phone by lazy { FakePhone(context) }
+
+    /**
+     * Android's side of the next send, on a thread of its own while the command blocks: once the
+     * text is handed to SmsManager, write its sent row as [row] and report the send with [code].
+     */
+    private fun androidSends(row: Long, code: Int = android.app.Activity.RESULT_OK) = kotlin.concurrent.thread {
+        val until = System.currentTimeMillis() + 10_000
+        while (sent() == null && System.currentTimeMillis() < until) Thread.sleep(10)
+        val params = sent() ?: return@thread
+        phone.sms(row, params.destinationAddress, params.text, android.provider.Telephony.Sms.MESSAGE_TYPE_SENT)
+        params.sentIntent.send(context, code, null)
     }
 
     @After
@@ -104,11 +118,15 @@ class DeviceCommandsTest {
         assertTrue(result("01CMD3").getString("result"), result("01CMD3").getString("result").contains("SEND_SMS"))
         assertNull(sent())
 
-        // Everything allows it: the text goes, and the result is posted.
+        // Everything allows it: the text goes, and once Android reports it sent, the result is
+        // posted with the phone's id of the message (outbox X6).
         app.grantPermissions(Manifest.permission.SEND_SMS)
         sendSms("01CMD4")
+        val android = androidSends(row = 4412)
         push("""{"event":"device.command","id":"01CMD4"}""")
+        android.join()
         assertEquals(result("01CMD4").toString(), "done", result("01CMD4").getString("status"))
+        assertEquals("sms:4412", result("01CMD4").getJSONObject("result").getString("device_ref"))
         assertEquals("+61400000002", sent().destinationAddress)
         assertEquals("Bins out", sent().text)
 

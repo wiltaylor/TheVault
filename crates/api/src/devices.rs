@@ -758,7 +758,8 @@ pub struct ResultBody {
 
 /// `POST /api/devices/{id}/commands/{cid}/result`: the device reports `delivered`, or `done` or
 /// `failed` with a result. A command that is finished or expired answers 409. An `upsert_contact`
-/// reported done links its person to the contact in the result.
+/// reported done links its person to the contact in the result. A `send_sms` from the Outbox
+/// reported done or failed marks its item sent, linking the sent copy, or failed (outbox X6).
 pub async fn command_result(
     State(w): Shared,
     Caller(author): Caller,
@@ -797,6 +798,10 @@ pub async fn command_result(
         // An `upsert_contact` done links its person to the contact the phone reported (D24).
         if let Err(e) = w.link_upserted_contact(&command) {
             eprintln!("person of command {cid} not linked to its contact: {e}");
+        }
+        // A `send_sms` from the Outbox marks its item sent or failed (outbox X6).
+        if let Err(e) = w.finish_outbox_sms(&command) {
+            eprintln!("Outbox item of command {cid} not finished: {e}");
         }
         Ok::<_, ApiError>(command)
     })

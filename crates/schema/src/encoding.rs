@@ -155,7 +155,7 @@ pub(crate) fn parse_date(s: &str) -> Option<i64> {
 }
 
 /// Seconds since the Unix epoch, as a float to keep the fraction, of a valid datetime.
-pub(crate) fn parse_datetime(s: &str) -> Option<f64> {
+pub fn parse_datetime(s: &str) -> Option<f64> {
     if s.len() < 20 || s.as_bytes()[10] != b'T' {
         return None;
     }

@@ -2320,7 +2320,7 @@ command "show_notification" {
 }
 ```
 
-A server script queues a command with `vault::device_command`. The server refuses a command the device's platform file does not declare, and one the user has not enabled for that device in Settings > Devices. So declaring a command makes it available, and enabling it is a choice made per device. `docs/scripts.md` gives the value each handler and command function takes, the payload of every event and command, and what a command reports back.
+A server script queues a command with `vault::device_command`. The server refuses a command the device's platform file does not declare, and one the user has not enabled for that device in Settings > Devices. It refuses a `send_sms` for an Outbox item while the device's SMS-send switch is off. So declaring a command makes it available, and enabling it is a choice made per device. `docs/scripts.md` gives the value each handler and command function takes, the payload of every event and command, and what a command reports back.
 
 A script that a device file names cannot be deleted. Device scripts reach the `vault` module and the `device` module, and no `http`, `secrets` or `fs`. The home server checks that they compile as device scripts, and never runs them.
 
@@ -2328,7 +2328,7 @@ A vault with no `devices/android.wcl` runs the built-in default on an Android de
 
 | Script | Handles |
 |--------|---------|
-| `device_messages` | `sms_received`, `sms_sent`, `mms_received` and `rcs_received`: one `message` note per message, in the `conversation` note of its thread, linked to the `person` holding the number, or for RCS the person of the sender's name. An unknown number creates no person. The commands `send_sms` and `show_notification` |
+| `device_messages` | `sms_received`, `sms_sent`, `mms_received` and `rcs_received`: one `message` note per message, in the `conversation` note of its thread, linked to the `person` holding the number, or for RCS the person of the sender's name. An unknown number creates no person. A sent SMS that an Outbox item asked for becomes that item's `result` (outbox X6). The commands `send_sms` and `show_notification` |
 | `device_calls` | `call_ended`: one `call` note per call, linked to the `person` holding the number |
 | `device_contacts` | `contact_changed` and `contact_deleted`: phone contacts and `person` notes kept in step, linked through `device_contacts`; the side changed most recently wins, and a delete only unlinks. The commands `upsert_contact` and `delete_contact` |
 | `device_share` | `share_received`: a fleeting note with the shared text, link, images and files |

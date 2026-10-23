@@ -121,7 +121,7 @@ In the web app, open Settings > Devices for the phone. Turn on **Contacts write*
 |---|---------|-------------|
 | 44 | On the phone, add a second number to a linked contact. At about the same time, change that person's email address in the web app. | After the next sync, both sides hold both changes: the phone's new number and the web app's new email address. |
 | 45 | Delete a linked `person` note in the web app, then edit its contact on the phone. | No `person` note comes back. The contact stays on the phone. |
-| 46 | From a server script, queue `send_sms` for the phone with your own number, with the app closed and the screen off. | The text arrives within a few seconds of the push. The web app's command list shows the command `done`. |
+| 46 | From a server script, queue `send_sms` for the phone with your own number, with the app closed and the screen off. | The text arrives within a few seconds of the push. The web app's command list shows the command `done`, with the result `{ "device_ref": "sms:<id>" }` once Android reported the text sent. |
 | 47 | Turn **SMS send** off for the phone and queue `send_sms` again. | No text is sent. The command shows `failed`, and its result says to turn on SMS send. |
 | 48 | Uninstall the UnifiedPush distributor and queue `show_notification`. Wait up to 15 minutes without opening the app. | The notification appears within 15 minutes. The fallback check runs pending commands while the phone has a network. |
 

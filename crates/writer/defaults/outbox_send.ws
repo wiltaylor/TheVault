@@ -342,11 +342,34 @@ fn description_block(blocks: List[Value]) -> Value {
 
 // ---- sms (outbox X6) ------------------------------------------------------------------------
 
-// An SMS: queue `send_sms` for the item's device, recording the command id as `sent_ref` with
-// `done = false`; the command's result marks the item sent or failed. Ticket 182 fills this in.
+// An SMS: queue `send_sms` for the item's device (empty for the vault's one phone with SMS
+// sending on) with `{ to, body, outbox }`, recording the command id as `sent_ref` with
+// `done = false`. The phone's result for the command marks the item sent, with the phone's id of
+// the sent message, or failed (the command result route); the phone's capture of the sent message
+// links the copy as `result`. A device whose SMS sending switch is off refuses the command, and
+// the item fails with that.
 fn send_sms(item: Value) -> Result[Sent, string] {
-    vault::log("Item " + text_of(item, "id") + " is an SMS.")
-    Err("Sending SMS from the Outbox is not available yet.")
+    let fields = fields_of(item)
+    let to = text_of(fields, "phone").trim()
+    if to == "" {
+        return Err("The SMS has no number: fill in Phone number and send again.")
+    }
+    let lines: List[string] = []
+    let html: List[string] = []
+    render_blocks(content_of(item, "body"), lines, html)
+    let body = lines.join("\n").trim()
+    if body == "" {
+        return Err("The SMS has no text: write it in Body and send again.")
+    }
+    let payload = Value::Map(#{
+        "to": Value::String(to),
+        "body": Value::String(body),
+        "outbox": Value::String(text_of(item, "id")),
+    })
+    let command = vault::device_command(text_of(fields, "device").trim(), "send_sms", payload)?
+    let id = text_of(command, "id")
+    vault::log("Item " + text_of(item, "id") + " waits for the phone as command " + id + ".")
+    Ok(Sent { done: false, sent_ref: id, result: "" })
 }
 
 // ---- email (outbox X4) ----------------------------------------------------------------------

@@ -40,7 +40,7 @@ pub use devices::{DEVICE_COMMANDS, DEVICE_EVENTS, DEVICE_PLATFORMS, DeviceFile, 
 pub use doc::{Doc, DocBlock, Value};
 pub use encoding::{
     PALETTE, is_date, is_datetime, is_duration, is_ident, is_ink_colour, is_name, is_palette,
-    is_ulid, is_url, is_utc_datetime,
+    is_ulid, is_url, is_utc_datetime, parse_datetime,
 };
 pub use inline::{
     AGENT_CALL_SCHEME, AgentCall, MARKUP_ITEMS, Placeholder, agent_calls, escape_markup,

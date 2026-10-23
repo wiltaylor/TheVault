@@ -73,6 +73,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
         hashes: &[
             "0120b5326e2e611d79c56abd62b705851c7762f376d813bcadfa5b2d67e8cb64",
             "cacc4fa862ca2b36215187e1ff71632930e357f8ee926f6faca3896280819b80",
+            "ded1600480a80faf0bd741b9c26ef831f4ed53acc2c8e402beb4dba4ab4bc002",
         ],
     },
     ShippedFile {
@@ -169,6 +170,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
         hashes: &[
             "48d6e8cc94b6bcac9a858a539391d2e9e3e8e8bbe96d4bda2b039632399ab461",
             "bc27a3a0c03cc59ac5a20539e639d3d6845b69ad377f57d26e333f6aefe40ab8",
+            "b353fb621d71e67501b22f64043170277f2373769912b026267161198a57b0dc",
         ],
     },
     // The built-in agent, the chat panel's default (agents G6).
