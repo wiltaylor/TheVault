@@ -149,14 +149,20 @@ fn ink_and_canvas_heights_round_trip() {
         &author(),
     );
     assert!(again.is_ok(), "{again:?}");
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(
+        without_updated(&std::fs::read_to_string(&path).unwrap()),
+        without_updated(&text)
+    );
 
     // Past the bound is refused, and the file stays as it was.
     let too_tall = text.replace("height = 4000", "height = 4001");
     let version = again.unwrap().version;
     let refused = w.update(&saved.id, &Input::Wcl(too_tall), Some(&version), &author());
     assert!(refused.is_err(), "4001 was accepted");
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(
+        without_updated(&std::fs::read_to_string(&path).unwrap()),
+        without_updated(&text)
+    );
 }
 
 /// An endless drawing's saved view, and strokes far from the origin with negative coordinates,
@@ -198,7 +204,10 @@ fn ink_viewport_and_negative_coordinates_round_trip() {
         &author(),
     );
     assert!(again.is_ok(), "{again:?}");
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(
+        without_updated(&std::fs::read_to_string(&path).unwrap()),
+        without_updated(&text)
+    );
 }
 
 /// The default ink is stored as the token `ink`, next to strokes in a hex colour, and both are
@@ -235,5 +244,17 @@ fn the_default_ink_token_round_trips() {
         &author(),
     );
     assert!(again.is_ok(), "{again:?}");
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(
+        without_updated(&std::fs::read_to_string(&path).unwrap()),
+        without_updated(&text)
+    );
+}
+
+/// A note's text without its `updated` line: a save moves `updated` to the current second, so a
+/// round trip that crosses a second boundary differs there and nowhere else.
+fn without_updated(text: &str) -> String {
+    text.lines()
+        .filter(|l| !l.trim_start().starts_with("updated "))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
