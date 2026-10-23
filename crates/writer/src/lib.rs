@@ -43,6 +43,7 @@ mod fleeting;
 pub mod google;
 mod note;
 mod notify;
+pub mod outbox;
 mod purge;
 mod queryviews;
 mod refs;
@@ -69,9 +70,9 @@ pub use builtin::{
     AGENT_THREAD_TYPE, BUILT_IN_KEYS, BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, CALL_TYPE,
     CONVERSATION_TYPE, DEFAULT_AGENT_THREAD_TYPE, DEFAULT_CALL_TYPE, DEFAULT_CONVERSATION_TYPE,
     DEFAULT_EMAIL_THREAD_TYPE, DEFAULT_EMAIL_TYPE, DEFAULT_EVENT_TYPE,
-    DEFAULT_GMAIL_LABEL_TAXONOMY, DEFAULT_MESSAGE_TYPE, DEFAULT_PERSON_TYPE, EMAIL_THREAD_TYPE,
-    EMAIL_TYPE, EVENT_TYPE, GMAIL_LABEL_TAXONOMY, MESSAGE_TYPE, PERSON_TYPE, TYPES_NEEDING_PERSON,
-    is_built_in_type, matches_built_in,
+    DEFAULT_GMAIL_LABEL_TAXONOMY, DEFAULT_MESSAGE_TYPE, DEFAULT_OUTBOX_TYPE, DEFAULT_PERSON_TYPE,
+    EMAIL_THREAD_TYPE, EMAIL_TYPE, EVENT_TYPE, GMAIL_LABEL_TAXONOMY, MESSAGE_TYPE, OUTBOX_TYPE,
+    PERSON_TYPE, TYPES_NEEDING_PERSON, is_built_in_type, matches_built_in,
 };
 pub use contacts::{CONTACTS_SOURCE, UPSERT_CONTACT, contact_link_key};
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
@@ -1195,6 +1196,10 @@ impl Writer {
                 return Err(Error::Invalid(Invalid { file: path, issues }));
             }
         }
+        let outbox = type_name == OUTBOX_TYPE;
+        if outbox {
+            self.fill_outbox(&mut doc, old.is_none(), author);
+        }
         // A new note gets the default of every field it omits; an update does not.
         if old.is_none() {
             for f in &ty.fields {
@@ -1202,6 +1207,9 @@ impl Writer {
                     doc.fields.push((f.name.clone(), value.clone()));
                 }
             }
+        }
+        if outbox {
+            self.check_outbox(ty, &path, &doc, old_doc.as_ref(), author)?;
         }
         let archived = archived.unwrap_or_else(|| old_doc.as_ref().is_some_and(note::is_archived));
         note::set_archived(&mut doc, archived);

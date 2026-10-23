@@ -1,12 +1,17 @@
 //! The `http` host module: blocking HTTP for `after_*` handlers and scheduled tasks only, checked
 //! against the run's domain allowlist (D10, D30). An allowlist holding `"*"` reaches any http or
 //! https host. wscript has no HTTP of its own (notes/01).
+//!
+//! Request bodies are strings, so the module also encodes them: `base64` and `base64url` turn
+//! text into its UTF-8 bytes in base64, and `wrap` breaks a long line into lines, as a MIME
+//! message's base64 parts need (outbox X4).
 
 use std::collections::HashMap;
 use std::io::Read;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::engine::general_purpose::URL_SAFE as BASE64_URL;
 use reqwest::blocking::Client;
 use reqwest::{Method, Url};
 use wscript::{Fault, HostError, Module, Script};
@@ -46,6 +51,17 @@ pub fn module(client: Client) -> Module {
             Fault(call(&c, "POST", &url, headers, body))
         },
     );
+    m.fn_named("base64", ["text"], |text: String| -> String {
+        BASE64.encode(text.as_bytes())
+    });
+    m.fn_named("base64url", ["text"], |text: String| -> String {
+        BASE64_URL.encode(text.as_bytes())
+    });
+    m.fn_named(
+        "wrap",
+        ["text", "width"],
+        |text: String, width: i64| -> String { wrap(&text, width) },
+    );
     m.fn_named(
         "request",
         ["method", "url", "headers", "body"],
@@ -56,6 +72,25 @@ pub fn module(client: Client) -> Module {
               -> Reply { Fault(call(&client, &method, &url, headers, body)) },
     );
     m
+}
+
+/// `text` cut into lines of `width` characters joined by CRLF, the last one shorter. A `width`
+/// below 1 leaves the text as it is.
+pub fn wrap(text: &str, width: i64) -> String {
+    let Ok(width) = usize::try_from(width) else {
+        return text.to_owned();
+    };
+    if width == 0 || text.chars().count() <= width {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len() + text.len() / width * 2 + 2);
+    for (k, ch) in text.chars().enumerate() {
+        if k > 0 && k % width == 0 {
+            out.push_str("\r\n");
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// A client that follows no redirects, so every host a script reaches is one it named and the
@@ -161,4 +196,17 @@ fn failed(e: reqwest::Error, url: &Url) -> Result<Result<Response, String>, Host
         e.to_string()
     };
     Ok(Err(format!("{url}: {why}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap;
+
+    #[test]
+    fn wrap_cuts_lines_of_the_width_joined_by_crlf() {
+        assert_eq!(wrap("abcdefg", 3), "abc\r\ndef\r\ng");
+        assert_eq!(wrap("abcdef", 3), "abc\r\ndef");
+        assert_eq!(wrap("ab", 3), "ab");
+        assert_eq!(wrap("abc", 0), "abc");
+    }
 }

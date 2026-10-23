@@ -16,7 +16,7 @@ Scripts are wscript files, `scripts/<name>.ws`. They run as type handlers (`docs
 
 A script that uses a module its kind of run lacks does not compile. wscript's own `fs`, `process` and `time` modules are never available.
 
-Each run has limits: 50 million instructions, a call depth of 256, a wall-clock time limit (a task's `timeout`, 30 seconds by default), 1 MiB per HTTP response, 16 MiB per file or asset read, 10,000 rows per `vault::query`, and 64 KiB of log.
+Each run has limits: 50 million instructions, a call depth of 256, a wall-clock time limit (a task's `timeout`, 30 seconds by default, and five minutes for the Outbox's `outbox_send` handler), 1 MiB per HTTP response, 16 MiB per file or asset read, 10,000 rows per `vault::query`, and 64 KiB of log.
 
 ## Conventions
 
@@ -232,6 +232,16 @@ A scheduled script's log is kept with each run, under Settings > Scheduled and i
 
 `Response` is `{ status: int, headers: Map[string, string], body: string, body_base64: string }`. Header names are lower case. `body` replaces bytes that are not UTF-8; `body_base64` holds them exactly.
 
+A request body is a string, so the module also encodes text for one, such as a MIME message:
+
+| Function | Returns |
+|----------|---------|
+| `http::base64(text: string)` | `string`: the UTF-8 bytes of `text` in standard base64, with padding |
+| `http::base64url(text: string)` | `string`: the same in the URL-safe alphabet, with padding, as Gmail's `raw` takes |
+| `http::wrap(text: string, width: int)` | `string`: `text` cut into lines of `width` characters joined by CRLF, as a base64 MIME part needs at 76. A `width` below 1 leaves it as it is |
+
+`vault::read_asset` gives an asset's bytes as base64 already, so `http::wrap(asset.base64, 76)` is an attachment's part body.
+
 A call reaches only the hosts in the run's `allow_domains`. `["*"]` allows any http or https host, including hosts on your own network. Redirects are never followed. A status such as 404 is a response, not an error; check `status`.
 
 ```rust
@@ -267,12 +277,12 @@ The Google sync keeps its settings and state in secrets, never in notes (google-
 | Secret | Written by | Read by | Holds |
 |--------|------------|---------|-------|
 | `google_client_id`, `google_client_secret`, `google_refresh_token` | Settings > Integrations | every Google script | The OAuth client and the sign-in |
-| `google_account` | Settings > Integrations, on connect | the Integrations page | The connected address, as plain text |
-| `google_settings` | Settings > Integrations | every Google script | The settings, below |
+| `google_account` | Settings > Integrations, on connect | the Integrations page, and `outbox_send` for an email's `From` | The connected address, as plain text |
+| `google_settings` | Settings > Integrations | every Google script | The settings, below, and the scopes the connection granted |
 | `google_gmail_state` | the `google_gmail` task | the `google_gmail` task | `{ history_id, listed, backfill_page, last_run, last_error, notified_invalid_grant }` |
 | `google_calendar_state` | the `google_calendar` task | the `google_calendar` task | `{ sync_tokens, window_end, last_run, last_error, notified_invalid_grant }` |
 
-`google_settings` is `{ gmail_mode, gmail_labels, gmail_window_days, gmail_backfill_to, calendars, default_calendar, endpoints }`:
+`google_settings` is `{ gmail_mode, gmail_labels, gmail_window_days, gmail_backfill_to, calendars, default_calendar, endpoints, scopes }`:
 
 | Key | Holds | When missing |
 |-----|-------|--------------|
@@ -282,7 +292,8 @@ The Google sync keeps its settings and state in secrets, never in notes (google-
 | `gmail_backfill_to` | A date, `YYYY-MM-DD`, older mail is paged back to, a page each run; or null | null |
 | `calendars` | The ids of the calendars to pull, such as `primary` | `["primary"]` |
 | `default_calendar` | The calendar a new event note goes to when it names none | `primary` |
-| `endpoints` | The test seam: `{ token, gmail, calendar, userinfo }` URLs. The Integrations page never shows or sets it | Google's own hosts |
+| `endpoints` | The test seam: `{ token, gmail, calendar, userinfo }` URLs, and `gmail_upload`, the Gmail media upload base, which defaults to `gmail` with `/gmail/v1` replaced by `/upload/gmail/v1`. The Integrations page never shows or sets it | Google's own hosts |
+| `scopes` | The scopes Google granted when the user connected, a list of strings. Connecting writes it and disconnecting removes it. The Outbox sends email only when it holds `https://www.googleapis.com/auth/gmail.send` (outbox X4) | `[]`: nothing granted is known, so no email is sent |
 
 A missing `google_settings` means every default. In the two state objects, `last_run` is an RFC 3339 time, `last_error` the last run's error or null, and `notified_invalid_grant` is true once the run has told the user Google refused the sign-in; it goes back to false when a token refresh succeeds. `history_id` and `backfill_page` are Gmail's history id and back-fill page token. `listed` is what the last finished window listing covered, `{ mode, labels, window_days }` with `labels` the sorted Gmail label ids, or null before one: a run whose settings differ lists the window again besides reading history (all of it for a new mode or window, only the added labels otherwise, nothing when labels were only removed) and starts the back-fill over, and a run with nothing to list saves no `history_id`. `sync_tokens` holds each calendar's sync token by calendar id, and `window_end` is the date recurring events have occurrence notes up to. Disconnecting Google sets the cursors (`history_id`, `listed`, `backfill_page`, `sync_tokens`, `window_end`) back to null or empty.
 
@@ -621,3 +632,30 @@ The note fields map to the event as the sync's table above, inverted:
 | `status` | `status` |
 
 `organiser` and `meet_url` are Google's own and are never sent; the write-back takes Google's values for them.
+
+## The Outbox's send handler
+
+The shipped `outbox` type runs `scripts/outbox_send.ws` after every create and update of an Outbox item, from the handler queue, on the home server only (outbox X3). Its handlers name the three credential secrets, `google_settings` and `google_account`, and `allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com"]`. A run may take five minutes, rather than the 30 seconds of other handlers, since it may upload 25 MB.
+
+A run acts only on an item whose `status` is `approved`, read again with `vault::get` when the run starts. It claims the item by setting `status = sending` with `vault::patch` against the version it read, so a second run for the same approval finds the item changed and does nothing. It then sends the item by its `kind`:
+
+| Kind | Sends |
+|------|-------|
+| `email` | Through Gmail (outbox X4), below |
+| `event` | Not yet: the item fails with "Sending calendar invites from the Outbox is not available yet." |
+| `sms` | Not yet: the item fails with "Sending SMS from the Outbox is not available yet." |
+
+When the send succeeds the run sets `status = sent`, `sent_ref` and `sent_at`, an RFC 3339 time in UTC. When it fails the run sets `status = failed` with the reason in `error`, and the run itself succeeds. The writer lets a handler make only these changes to an item: see `docs/vault-format.md`, "The Outbox".
+
+An email is sent as follows:
+
+1. `google_settings` must list the `gmail.send` scope in `scopes`. Without it the item fails with "Reconnect Google in Settings > Integrations to send email.", before any request. Without `google_refresh_token` it fails with "Google is not connected".
+2. The run refreshes an access token as the sync scripts do. An `invalid_grant` fails the item with "The Google sign-in expired".
+3. For a reply, the run reads the `gmail_ref` of the `in_reply_to` email note and gets that message with `format=metadata`, for its `Message-ID`, `References` and `threadId`.
+4. The attachments' sizes come from `vault::assets()`. More than 25 MB together, or one over 16 MB, fails the item before any is read.
+5. The run builds the RFC 822 message: `From` (the `google_account` address), `To`, `Cc`, `Bcc`, `Subject` (the item's `subject`, else its title), `In-Reply-To` and `References` for a reply, and `MIME-Version`. A header value that is not ASCII is sent as an RFC 2047 encoded word, and an address's display name alone is encoded. The body is a `multipart/alternative` of a `text/plain` part and a `text/html` part, each UTF-8 in base64, inside a `multipart/mixed` with one base64 part per attachment when there are attachments. The parts are rendered from `body`: paragraphs, headings, lists, quotes, code, and the blocks inside toggles, admonitions and columns. Inline markup becomes plain text in the text part and the matching HTML in the HTML part, and a note mention shows the note's title.
+6. A message under 4.5 MB is sent with `POST {gmail}/users/me/messages/send` and `{ raw, threadId }`, `raw` from `http::base64url`. A larger one is sent with `POST {gmail_upload}/users/me/messages/send?uploadType=media` and `Content-Type: message/rfc822`, which carries no `threadId`; Gmail threads a reply by its headers.
+7. Gmail's message id becomes `sent_ref`. A 403 that names insufficient permission fails the item with the reconnect message; any other error with `Gmail answered <status> to messages.send: <message>`.
+
+The sent copy: the `outbox` type's second `after_update` handler runs `copy_sent` in `scripts/google_gmail.ws`. For an `email` item that is `sent` with a `sent_ref` and no `result`, it gets that message from Gmail, saves it as an `email` note with the sync's own `save` (or finds the note already pulled, by `gmail_ref`), and sets the item's `result` to it. When the token refresh fails it logs and leaves the copy to the `google_gmail` task, whose every run links the copies still missing, whatever the label settings.
+

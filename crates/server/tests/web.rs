@@ -82,6 +82,7 @@ fn lists_every_type_with_its_fields_and_templates() {
             "event",
             "fleeting",
             "message",
+            "outbox",
             "person",
             "task"
         ]

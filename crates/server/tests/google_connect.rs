@@ -208,6 +208,7 @@ fn start_answers_googles_consent_url_with_offline_access_pkce_and_state() {
     let scopes: Vec<&str> = scope.split(' ').collect();
     for s in [
         "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/calendar",
         "openid",
         "email",
@@ -319,6 +320,9 @@ fn finish_with_the_pasted_loopback_url_connects_and_unpauses_the_tasks() {
     let status = api.status();
     assert_eq!(status["connected"], true);
     assert_eq!(status["account"], DEFAULT_ACCOUNT);
+    // The connection granted gmail.send, so the Outbox can send (outbox X4).
+    assert_eq!(status["can_send"], true, "{status}");
+    assert!(status["settings"].get("scopes").is_none(), "{status}");
     assert_eq!(status["gmail"]["paused"], false);
     assert_eq!(status["calendar"]["paused"], false);
 
@@ -354,6 +358,13 @@ fn finish_writes_the_settings_keeping_the_endpoints_the_start_used() {
             "calendars": ["primary"],
             "default_calendar": "primary",
             "endpoints": api.google.endpoints(),
+            "scopes": [
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/calendar",
+                "openid",
+                "email",
+            ],
         })
     );
     assert_eq!(api.secrets(), SECRETS);
@@ -445,7 +456,11 @@ fn disconnect_deletes_the_sign_in_and_account_keeps_the_settings_and_clears_the_
     });
     api.put_secret("google_gmail_state", &gmail.to_string());
     api.put_secret("google_calendar_state", &calendar.to_string());
-    let settings = api.server.secret("google_settings");
+    let mut settings = api.server.secret_json("google_settings");
+    assert!(settings["scopes"].is_array(), "{settings}");
+    assert_eq!(api.status()["can_send"], true);
+    // The granted scopes belong to the connection, and go with it.
+    settings.as_object_mut().unwrap().remove("scopes");
 
     let out = expect(
         api.post("/api/integrations/google/disconnect")
@@ -462,7 +477,7 @@ fn disconnect_deletes_the_sign_in_and_account_keeps_the_settings_and_clears_the_
             "google_settings"
         ]
     );
-    assert_eq!(api.server.secret("google_settings"), settings);
+    assert_eq!(api.server.secret_json("google_settings"), settings);
     assert_eq!(
         api.server.secret_json("google_gmail_state"),
         json!({
@@ -482,6 +497,7 @@ fn disconnect_deletes_the_sign_in_and_account_keeps_the_settings_and_clears_the_
     }
     let status = api.status();
     assert_eq!(status["connected"], false);
+    assert_eq!(status["can_send"], false);
     assert_eq!(status["account"], Value::Null);
     assert_eq!(status["gmail"]["paused"], true);
     assert_eq!(status["gmail"]["last_run"], "2026-10-18T09:00:00Z");

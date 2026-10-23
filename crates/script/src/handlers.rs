@@ -47,6 +47,11 @@ const AFTER_WORKERS: usize = 2;
 /// How long the queue thread sleeps before looking at `state.db` again without being woken.
 const POLL: Duration = Duration::from_secs(1);
 
+/// The `after_*` handler scripts that may run longer than [`Limits::timeout`], with their wall
+/// clock limit: the Outbox's send handler uploads a message of up to 25 MB to Gmail (outbox X3,
+/// X4).
+const LONG_HANDLERS: [(&str, Duration); 1] = [("outbox_send", Duration::from_secs(5 * 60))];
+
 /// One handler run in a chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Link {
@@ -414,6 +419,10 @@ impl Shared {
             })];
             job.allow_domains = list("allow_domains");
             job.secrets = list("secrets");
+            job.timeout = LONG_HANDLERS
+                .iter()
+                .find(|(name, _)| *name == script)
+                .map(|(_, limit)| *limit);
             job.context = json!({ "chain": p.get("chain").cloned().unwrap_or_default() });
             Ok::<_, String>(job)
         })();

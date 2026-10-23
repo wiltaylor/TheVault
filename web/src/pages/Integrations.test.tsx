@@ -63,6 +63,7 @@ const disconnected: GoogleStatus = {
 const connected: GoogleStatus = {
   connected: true,
   client_stored: true,
+  can_send: true,
   account: "me@example.com",
   settings: { ...defaults, gmail_labels: ["INBOX"] },
   gmail: side("google_gmail", { paused: false, last_run: "2026-10-18T09:00:00Z" }),
@@ -181,6 +182,33 @@ describe("GoogleCard", () => {
     expect(screen.queryByText(/Connected as/)).toBeNull();
     expect(screen.getByRole("row", { name: /Gmail/ }).textContent).toContain("Paused");
     confirm.mockRestore();
+  });
+
+  it("asks a connection without gmail.send to connect again, and connects again", async () => {
+    googleStatus.mockResolvedValue({ ...connected, can_send: false });
+    googleStart.mockResolvedValue({ auth_url: AUTH_URL });
+    googleFinish.mockResolvedValue(connected);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+
+    expect(await screen.findByText("Connected as me@example.com")).toBeTruthy();
+    expect(screen.getByText(/Reconnect Google in Settings > Integrations to send email\./)).toBeTruthy();
+    expect(screen.queryByLabelText("Client ID")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    fireEvent.input(await screen.findByLabelText("Client ID"), { target: { value: "abc" } });
+    fireEvent.input(screen.getByLabelText("Client secret"), { target: { value: "shh" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect Google" }));
+    await waitFor(() => expect(googleStart).toHaveBeenCalledWith("abc", "shh", "loopback"));
+    fireEvent.input(await screen.findByLabelText("Address from the browser"), { target: { value: "http://127.0.0.1:53682/?state=s1&code=c1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Finish connecting" }));
+    expect(await screen.findByText("Connected as me@example.com")).toBeTruthy();
+    expect(screen.queryByText(/to send email/)).toBeNull();
+  });
+
+  it("does not ask a connection that can send to connect again", async () => {
+    googleStatus.mockResolvedValue(connected);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+    expect(await screen.findByText("Connected as me@example.com")).toBeTruthy();
+    expect(screen.queryByText(/to send email/)).toBeNull();
   });
 
   it("keeps the connection when Disconnect is not confirmed", async () => {

@@ -24,7 +24,7 @@
 //! | Module | Paths | Endpoint key |
 //! |--------|-------|--------------|
 //! | `oauth` | `/token`, `/oauth2/v3/userinfo`, the consent page `/o/oauth2/v2/auth` | `token`, `userinfo` |
-//! | `gmail` | under `/gmail/v1` | `gmail` |
+//! | `gmail` | under `/gmail/v1`, and `/upload/gmail/v1` for sending | `gmail` |
 //! | `calendar` | under `/calendar/v3` | `calendar` |
 //!
 //! A module adds its builder switches in an `impl FakeGoogleBuilder` block, its test controls in
@@ -38,6 +38,8 @@
 mod calendar;
 mod gmail;
 mod oauth;
+
+pub use gmail::{SendRoute, SentMessage};
 
 pub use oauth::{
     AUTH_PATH, DEFAULT_ACCOUNT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN,
@@ -61,6 +63,9 @@ pub const USERINFO_PATH: &str = "/oauth2/v3/userinfo";
 
 /// The path every Gmail API path starts with.
 pub const GMAIL_PATH: &str = "/gmail/v1";
+
+/// The path every Gmail media upload path starts with.
+pub const GMAIL_UPLOAD_PATH: &str = "/upload/gmail/v1";
 
 /// The path every Calendar API path starts with.
 pub const CALENDAR_PATH: &str = "/calendar/v3";

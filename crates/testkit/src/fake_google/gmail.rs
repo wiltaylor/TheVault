@@ -1,5 +1,6 @@
 //! The fake Gmail API, under [`super::GMAIL_PATH`]: labels, messages list, message get,
-//! attachments and history, for the `users/me` mailbox (google-sync D2, D3, D11, D14).
+//! attachments, history and send, for the `users/me` mailbox (google-sync D2, D3, D11, D14;
+//! outbox X4), and the media upload of a message to send, under [`super::GMAIL_UPLOAD_PATH`].
 //!
 //! ```no_run
 //! use serde_json::json;
@@ -20,6 +21,8 @@
 //! }));
 //! google.set_message_labels(&id, &["INBOX"]); // recorded in history as label changes
 //! google.delete_message(&id); // recorded in history as messagesDeleted
+//! let sent = google.sent_messages(); // what messages.send received, parsed
+//! google.set_send_error(Some((500, "Backend Error"))); // messages.send answers that
 //! google.set_history_not_found(true); // history.list answers 404
 //! google.set_gmail_delay(Some(std::time::Duration::from_secs(2))); // each request waits 2 s
 //! google.set_gmail_delay(None); // and any request still waiting answers now
@@ -44,6 +47,17 @@
 //!   `{ history, historyId, nextPageToken? }`, paged like messages. `labelId` keeps the records
 //!   whose message has that label now. A missing `startHistoryId`, or the
 //!   [`FakeGoogle::set_history_not_found`] switch, answers 404.
+//! - `POST /messages/send`: `{ raw, threadId? }`, `raw` the RFC 822 message in base64url. The
+//!   message joins the mailbox labelled `SENT`, in thread `threadId` or a thread of its own, with
+//!   its `From`, `To`, `Cc` and `Subject` (encoded words decoded), a `Message-ID`, its first
+//!   `text/plain` and `text/html` parts and its attachments; `Bcc` is not kept, as Gmail keeps it
+//!   from the recipients. Answers `{ id, threadId, labelIds }`, or the
+//!   [`FakeGoogle::set_send_error`] error.
+//! - `POST /upload/gmail/v1/users/me/messages/send?uploadType=media` with `Content-Type:
+//!   message/rfc822`: the same, with the message as the body.
+//!
+//! Every message has a `Message-ID` header, `<id@mail.fake.example>` unless `add_message` was
+//! given `message_id`, and a `References` header when it was given `references`.
 //!
 //! Body data and attachment data are base64url with padding, as Gmail sends them. Each change
 //! (a message added, labels changed, a message deleted) takes the next history id.
@@ -51,10 +65,10 @@
 use std::time::Duration;
 
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 
-use super::{FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, Shared, error, lock};
+use super::{FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, GMAIL_UPLOAD_PATH, Shared, error, lock};
 use crate::standin::{Reply, Request};
 
 /// The system labels every fake mailbox has.
@@ -75,6 +89,7 @@ pub(super) struct Config {
     page_size: Option<usize>,
     history_not_found: bool,
     delay: Option<Duration>,
+    send_error: Option<(u16, String)>,
 }
 
 impl FakeGoogleBuilder {
@@ -142,6 +157,45 @@ struct History {
     change: Change,
 }
 
+/// How a message reached `messages.send`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendRoute {
+    /// `POST /gmail/v1/users/me/messages/send` with `{ raw }`.
+    Raw,
+    /// `POST /upload/gmail/v1/users/me/messages/send?uploadType=media`.
+    Upload,
+}
+
+/// One message `messages.send` received, as it came and as the fake read it.
+#[derive(Debug, Clone)]
+pub struct SentMessage {
+    /// The id the fake gave it, the answer's `id`.
+    pub id: String,
+    pub route: SendRoute,
+    /// The `threadId` the request named, if any.
+    pub thread_id: Option<String>,
+    /// The RFC 822 message, decoded from base64url for [`SendRoute::Raw`].
+    pub raw: String,
+    /// The top-level headers, unfolded, in order, values as written.
+    pub headers: Vec<(String, String)>,
+    /// The first `text/plain` part, decoded.
+    pub text: Option<String>,
+    /// The first `text/html` part, decoded.
+    pub html: Option<String>,
+    /// Each attachment as `(filename, MIME type, bytes)`.
+    pub attachments: Vec<(String, String, Vec<u8>)>,
+}
+
+impl SentMessage {
+    /// The value of top-level header `name`, ignoring case, as written.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
 /// The fake Gmail's mailbox.
 #[derive(Debug)]
 pub(super) struct State {
@@ -151,6 +205,7 @@ pub(super) struct State {
     history: Vec<History>,
     history_id: u64,
     issued: usize,
+    sent: Vec<SentMessage>,
 }
 
 impl State {
@@ -169,6 +224,7 @@ impl State {
             history: Vec::new(),
             history_id: 1000,
             issued: 0,
+            sent: Vec::new(),
         }
     }
 
@@ -238,6 +294,15 @@ impl FakeGoogle {
         }
         if let Some(subject) = spec["subject"].as_str() {
             headers.push(("Subject".to_owned(), subject.to_owned()));
+        }
+        headers.push((
+            "Message-ID".to_owned(),
+            spec["message_id"]
+                .as_str()
+                .map_or_else(|| format!("<{id}@mail.fake.example>"), str::to_owned),
+        ));
+        if let Some(references) = spec["references"].as_str() {
+            headers.push(("References".to_owned(), references.to_owned()));
         }
         headers.push((
             "Date".to_owned(),
@@ -370,17 +435,45 @@ impl FakeGoogle {
     pub fn gmail_history_id(&self) -> u64 {
         self.gmail().history_id
     }
+
+    /// Every message `messages.send` took, oldest first.
+    pub fn sent_messages(&self) -> Vec<SentMessage> {
+        self.gmail().sent.clone()
+    }
+
+    /// Answer every `messages.send` with Google's error body of `status` and `message`, or send
+    /// again with `None`.
+    pub fn set_send_error(&self, error: Option<(u16, &str)>) {
+        self.gmail().config.send_error = error.map(|(s, m)| (s, m.to_owned()));
+    }
 }
 
 /// Answer a Gmail request, or `None` when `request` is not one.
 pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
-    let rest = request.route().strip_prefix(GMAIL_PATH)?;
+    let route = request.route();
+    let (upload, rest) = match route.strip_prefix(GMAIL_UPLOAD_PATH) {
+        Some(rest) => (true, rest),
+        None => (false, route.strip_prefix(GMAIL_PATH)?),
+    };
     if !super::authorized(shared, request) {
         return Some(super::unauthorized());
     }
     let Some(rest) = rest.strip_prefix("/users/me/") else {
         return Some(not_found());
     };
+    if rest == "messages/send" {
+        if request.method != "POST" {
+            return Some(error(
+                405,
+                "METHOD_NOT_ALLOWED",
+                "messages.send takes POST.",
+            ));
+        }
+        return Some(send(&mut lock(&shared.gmail), request, upload));
+    }
+    if upload {
+        return Some(not_found());
+    }
     if request.method != "GET" {
         return Some(error(
             405,
@@ -637,4 +730,249 @@ fn history(gmail: &State, request: &Request) -> Reply {
         body["nextPageToken"] = json!(next);
     }
     Reply::json(200, &body)
+}
+
+/// `messages.send`, by `raw` or by media upload.
+fn send(gmail: &mut State, request: &Request, upload: bool) -> Reply {
+    if let Some((status, message)) = &gmail.config.send_error {
+        let code = match status {
+            400 => "INVALID_ARGUMENT",
+            403 => "PERMISSION_DENIED",
+            _ => "INTERNAL",
+        };
+        return error(*status, code, message);
+    }
+    let (raw, thread_id, route) = if upload {
+        if request.query("uploadType").as_deref() != Some("media") {
+            return error(400, "INVALID_ARGUMENT", "uploadType must be media.");
+        }
+        if !request
+            .header("content-type")
+            .is_some_and(|c| c.starts_with("message/rfc822"))
+        {
+            return error(400, "INVALID_ARGUMENT", "The media must be message/rfc822.");
+        }
+        (
+            String::from_utf8_lossy(&request.body).into_owned(),
+            None,
+            SendRoute::Upload,
+        )
+    } else {
+        let body = request.json();
+        let Some(raw) = body["raw"].as_str() else {
+            return error(
+                400,
+                "INVALID_ARGUMENT",
+                "'raw' RFC822 payload message string or uploading message via /upload/* URL required",
+            );
+        };
+        let bytes = match URL_SAFE_NO_PAD.decode(raw.trim_end_matches('=')) {
+            Ok(b) => b,
+            Err(_) => return error(400, "INVALID_ARGUMENT", "Invalid value for ByteString"),
+        };
+        (
+            String::from_utf8_lossy(&bytes).into_owned(),
+            body["threadId"].as_str().map(str::to_owned),
+            SendRoute::Raw,
+        )
+    };
+    let (headers, body) = split_message(&raw);
+    let mut parsed = Parsed::default();
+    walk_mime(&headers, body, &mut parsed);
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| decode_words(v))
+    };
+    if header("to").is_none() && header("cc").is_none() && header("bcc").is_none() {
+        return error(400, "INVALID_ARGUMENT", "Invalid To header");
+    }
+    gmail.issued += 1;
+    let id = format!("s{:04}", gmail.issued);
+    let thread = thread_id.clone().unwrap_or_else(|| id.clone());
+    let mut kept = Vec::new();
+    for name in ["From", "To", "Cc", "Subject", "In-Reply-To", "References"] {
+        if let Some(v) = header(name) {
+            kept.push((name.to_owned(), v));
+        }
+    }
+    kept.push(("Message-ID".to_owned(), format!("<{id}@mail.fake.example>")));
+    let history_id = gmail.next_history();
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64);
+    let attachments = parsed
+        .attachments
+        .iter()
+        .enumerate()
+        .map(|(k, (filename, mime, data))| Attachment {
+            id: format!("att-{id}-{k}"),
+            filename: filename.clone(),
+            mime: mime.clone(),
+            data: data.clone(),
+        })
+        .collect();
+    gmail.messages.push(Message {
+        id: id.clone(),
+        thread: thread.clone(),
+        labels: vec!["SENT".to_owned()],
+        at,
+        history_id,
+        headers: kept,
+        snippet: parsed
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .chars()
+            .take(100)
+            .collect(),
+        text: parsed.text.clone(),
+        html: parsed.html.clone(),
+        attachments,
+        deleted: false,
+    });
+    gmail.history.push(History {
+        id: history_id,
+        message: id.clone(),
+        change: Change::Added,
+    });
+    gmail.sent.push(SentMessage {
+        id: id.clone(),
+        route,
+        thread_id,
+        raw: raw.clone(),
+        headers: headers.clone(),
+        text: parsed.text,
+        html: parsed.html,
+        attachments: parsed.attachments,
+    });
+    Reply::json(
+        200,
+        &json!({ "id": id, "threadId": thread, "labelIds": ["SENT"] }),
+    )
+}
+
+/// What [`walk_mime`] found in a message.
+#[derive(Default)]
+struct Parsed {
+    text: Option<String>,
+    html: Option<String>,
+    attachments: Vec<(String, String, Vec<u8>)>,
+}
+
+/// The headers of a MIME entity, unfolded, and its body.
+fn split_message(text: &str) -> (Vec<(String, String)>, &str) {
+    let (head, body) = match text.find("\r\n\r\n") {
+        Some(at) => (&text[..at], &text[at + 4..]),
+        None => match text.find("\n\n") {
+            Some(at) => (&text[..at], &text[at + 2..]),
+            None => (text, ""),
+        },
+    };
+    let mut headers: Vec<(String, String)> = Vec::new();
+    for line in head.lines() {
+        if line.starts_with([' ', '\t']) {
+            if let Some((_, v)) = headers.last_mut() {
+                v.push(' ');
+                v.push_str(line.trim());
+            }
+        } else if let Some((n, v)) = line.split_once(':') {
+            headers.push((n.trim().to_owned(), v.trim().to_owned()));
+        }
+    }
+    (headers, body)
+}
+
+/// The value of parameter `name` of a header such as `Content-Type`, without quotes.
+fn param(value: &str, name: &str) -> Option<String> {
+    value.split(';').skip(1).find_map(|p| {
+        let (k, v) = p.split_once('=')?;
+        k.trim()
+            .eq_ignore_ascii_case(name)
+            .then(|| v.trim().trim_matches('"').to_owned())
+    })
+}
+
+/// RFC 2047 encoded words of `=?UTF-8?B?...?=` form decoded, the rest as it is.
+fn decode_words(value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some(start) = rest.find("=?") {
+        let Some(len) = rest[start + 2..].find("?=") else {
+            break;
+        };
+        let word = &rest[start + 2..start + 2 + len];
+        let mut parts = word.splitn(3, '?');
+        let (charset, enc, data) = (parts.next(), parts.next(), parts.next());
+        out.push_str(&rest[..start]);
+        match (charset, enc, data) {
+            (Some(c), Some(e), Some(d))
+                if c.eq_ignore_ascii_case("utf-8") && e.eq_ignore_ascii_case("b") =>
+            {
+                let bytes = STANDARD.decode(d).unwrap_or_default();
+                out.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            _ => out.push_str(&rest[start..start + 4 + len]),
+        }
+        rest = &rest[start + 4 + len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The bytes of a part's body, by its `Content-Transfer-Encoding`.
+fn part_bytes(headers: &[(String, String)], body: &str) -> Vec<u8> {
+    let encoding = headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("content-transfer-encoding"))
+        .map(|(_, v)| v.to_ascii_lowercase());
+    if encoding.as_deref() == Some("base64") {
+        let clean: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        STANDARD.decode(clean).unwrap_or_default()
+    } else {
+        body.as_bytes().to_vec()
+    }
+}
+
+fn walk_mime(headers: &[(String, String)], body: &str, found: &mut Parsed) {
+    let get = |name: &str| {
+        headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.clone())
+    };
+    let content_type = get("content-type").unwrap_or_else(|| "text/plain".to_owned());
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if mime.starts_with("multipart/") {
+        let Some(boundary) = param(&content_type, "boundary") else {
+            return;
+        };
+        let open = format!("--{boundary}");
+        for chunk in body.split(open.as_str()).skip(1) {
+            if chunk.starts_with("--") {
+                break;
+            }
+            let chunk = chunk.strip_prefix("\r\n").unwrap_or(chunk);
+            let chunk = chunk.strip_suffix("\r\n").unwrap_or(chunk);
+            let (h, b) = split_message(chunk);
+            walk_mime(&h, b, found);
+        }
+        return;
+    }
+    let disposition = get("content-disposition").unwrap_or_default();
+    let filename = param(&disposition, "filename").or_else(|| param(&content_type, "name"));
+    let bytes = part_bytes(headers, body);
+    if let Some(name) = filename {
+        found.attachments.push((decode_words(&name), mime, bytes));
+    } else if mime == "text/plain" && found.text.is_none() {
+        found.text = Some(String::from_utf8_lossy(&bytes).into_owned());
+    } else if mime == "text/html" && found.html.is_none() {
+        found.html = Some(String::from_utf8_lossy(&bytes).into_owned());
+    }
 }

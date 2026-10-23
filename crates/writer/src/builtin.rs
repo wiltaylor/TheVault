@@ -1,7 +1,8 @@
 //! The built-in types every vault has: `dailynote`, `fleeting`, the phone data types `message`,
 //! `call` and `conversation` (D15), and the Google sync types `email`, `email_thread` and `event`
 //! (google-sync D4, D15, D17), with the `gmail_label` taxonomy `email` uses
-//! (google-sync D14).
+//! (google-sync D14), and `outbox`, the email, SMS and calendar invites waiting to be sent
+//! (outbox X1).
 //!
 //! A built-in type is added when a vault lacks it, can be customised, and cannot be deleted. A
 //! vault type holding a built-in's name is the built-in only when the server recorded writing it
@@ -38,6 +39,10 @@ pub const EVENT_TYPE: &str = "event";
 /// The name of the built-in agent thread type: one note per chat with an agent (agents G7).
 pub const AGENT_THREAD_TYPE: &str = "agent_thread";
 
+/// The name of the built-in outbox type: one note per email, SMS or calendar invite to send
+/// (outbox X1).
+pub const OUTBOX_TYPE: &str = "outbox";
+
 /// The name of the built-in open taxonomy of Gmail labels.
 pub const GMAIL_LABEL_TAXONOMY: &str = "gmail_label";
 
@@ -65,6 +70,9 @@ pub const DEFAULT_EVENT_TYPE: &str = include_str!("../defaults/event.wcl");
 /// The `agent_thread` type a vault without it gets (agents G7).
 pub const DEFAULT_AGENT_THREAD_TYPE: &str = include_str!("../defaults/agent_thread.wcl");
 
+/// The `outbox` type a vault without it gets (outbox X1).
+pub const DEFAULT_OUTBOX_TYPE: &str = include_str!("../defaults/outbox.wcl");
+
 /// The `gmail_label` taxonomy a vault without it gets. It is open, so the Gmail sync adds each
 /// label it meets; the file is never replaced once written.
 pub const DEFAULT_GMAIL_LABEL_TAXONOMY: &str =
@@ -75,7 +83,7 @@ pub const DEFAULT_GMAIL_LABEL_TAXONOMY: &str =
 pub const DEFAULT_PERSON_TYPE: &str = include_str!("../defaults/person.wcl");
 
 /// Every built-in type, as `(name, the type file a vault without it gets)`.
-pub const BUILT_IN_TYPES: [(&str, &str); 9] = [
+pub const BUILT_IN_TYPES: [(&str, &str); 10] = [
     (daily::DAILY_TYPE, daily::DEFAULT_DAILY_TYPE),
     (fleeting::FLEETING_TYPE, fleeting::DEFAULT_FLEETING_TYPE),
     (MESSAGE_TYPE, DEFAULT_MESSAGE_TYPE),
@@ -85,6 +93,7 @@ pub const BUILT_IN_TYPES: [(&str, &str); 9] = [
     (EMAIL_THREAD_TYPE, DEFAULT_EMAIL_THREAD_TYPE),
     (EVENT_TYPE, DEFAULT_EVENT_TYPE),
     (AGENT_THREAD_TYPE, DEFAULT_AGENT_THREAD_TYPE),
+    (OUTBOX_TYPE, DEFAULT_OUTBOX_TYPE),
 ];
 
 /// The built-in types that reference `person`, so a vault given one of them without a `person`
@@ -117,7 +126,7 @@ pub fn is_built_in_type(name: &str) -> bool {
 /// type of the name that declares it as a string field is the built-in even with no record of
 /// the server having written it (ticket 104). `dailynote` and `fleeting` have no key: the app
 /// owns those names outright and [`check_built_in_types`] holds them to the fields it needs.
-pub const BUILT_IN_KEYS: [(&str, &str); 7] = [
+pub const BUILT_IN_KEYS: [(&str, &str); 8] = [
     (MESSAGE_TYPE, "device_ref"),
     (CALL_TYPE, "device_ref"),
     (CONVERSATION_TYPE, "thread_ref"),
@@ -125,6 +134,7 @@ pub const BUILT_IN_KEYS: [(&str, &str); 7] = [
     (EMAIL_THREAD_TYPE, "thread_ref"),
     (EVENT_TYPE, "google_ref"),
     (AGENT_THREAD_TYPE, "transcript"),
+    (OUTBOX_TYPE, "sent_ref"),
 ];
 
 /// The key field of built-in type `name`, if it has one: see [`BUILT_IN_KEYS`].

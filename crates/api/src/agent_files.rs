@@ -94,7 +94,19 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), json!(v)))
         .collect();
-    json!({ "tools": p.tools, "types": p.types, "confirm": confirm, "web": web })
+    let outbox: serde_json::Map<String, Value> = p
+        .outbox
+        .switches()
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), json!(v)))
+        .collect();
+    json!({
+        "tools": p.tools,
+        "types": p.types,
+        "confirm": confirm,
+        "web": web,
+        "outbox": outbox,
+    })
 }
 
 fn trigger_json(t: &Trigger) -> Value {
@@ -248,6 +260,8 @@ pub struct PermissionsForm {
     confirm: BTreeMap<String, bool>,
     #[serde(default)]
     web: BTreeMap<String, bool>,
+    #[serde(default)]
+    outbox: BTreeMap<String, bool>,
 }
 
 #[derive(Deserialize)]
@@ -299,6 +313,14 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
         if !p.web.set(&k, on) {
             issues.push(Issue::new(
                 format!("permissions.web.{k}"),
+                "is not a switch",
+            ));
+        }
+    }
+    for (k, on) in f.permissions.outbox {
+        if !p.outbox.set(&k, on) {
+            issues.push(Issue::new(
+                format!("permissions.outbox.{k}"),
                 "is not a switch",
             ));
         }

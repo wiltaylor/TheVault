@@ -26,7 +26,7 @@ created      = "2026-10-01T00:00:00Z"
 updated      = "2026-10-01T00:00:00Z"
 "#;
 
-const SCRIPTS: [&str; 8] = [
+const SCRIPTS: [&str; 9] = [
     "device_calls",
     "device_contacts",
     "device_import",
@@ -35,6 +35,7 @@ const SCRIPTS: [&str; 8] = [
     "google_calendar",
     "google_event",
     "google_gmail",
+    "outbox_send",
 ];
 
 fn get(server: &TestServer, path: &str) -> Value {

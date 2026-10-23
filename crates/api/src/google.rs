@@ -13,19 +13,21 @@
 //!   checks the state, exchanges the code with the verifier at the token endpoint, stores
 //!   `google_refresh_token`, reads the account's address from userinfo, writes it to the
 //!   `google_account` secret and writes `google_settings` (the current settings, keeping the
-//!   endpoints the start used), unpauses the `google_gmail` and `google_calendar` tasks that
+//!   endpoints the start used, with `scopes`, the scopes Google granted), unpauses the `google_gmail` and `google_calendar` tasks that
 //!   exist, and starts a run of each on its own thread. It answers once the runs are marked
 //!   running, never waiting on them (ticket 113). An error from Google is a 400 carrying
 //!   Google's message.
 //! - `POST /api/integrations/google/disconnect` deletes the three credential secrets and
-//!   `google_account`, pauses the tasks, keeps `google_settings`, and clears the cursors in both
+//!   `google_account`, pauses the tasks, keeps `google_settings` without its `scopes`, and clears
+//!   the cursors in both
 //!   state secrets, so a later connection lists everything again.
 //! - `PUT /api/integrations/google/settings` saves `{ gmail_mode, gmail_labels,
 //!   gmail_window_days, gmail_backfill_to, calendars, default_calendar }` into `google_settings`,
 //!   keeping its `endpoints`. `gmail_mode` is `labels` or `all`, the window 1 to 3650 days, the
 //!   back-fill date `YYYY-MM-DD` or null, and `calendars` not empty.
-//! - `GET /api/integrations/google` answers `{ connected, account, client_stored, settings,
-//!   gmail, calendar }`, each side `{ task, installed, paused, running, last_run, last_error,
+//! - `GET /api/integrations/google` answers `{ connected, account, client_stored, can_send,
+//!   settings, gmail, calendar }`, `can_send` true when the connection granted [`SEND_SCOPE`]
+//!   (outbox X4), each side `{ task, installed, paused, running, last_run, last_error,
 //!   summary }`, from the secrets of [`writer::google`] and the tasks. `paused` is `null` when the
 //!   task does not exist; `running` is the scheduler's, true while a run is going; `last_run` is
 //!   RFC 3339 in UTC ending `Z`; `summary` is the last line the latest finished run logged.
@@ -66,8 +68,14 @@ const TASKS: [(&str, &str, &str); 2] = [
     ("google_calendar", "calendar", CALENDAR_STATE),
 ];
 
-/// The scopes the consent page asks for.
-pub const SCOPES: &str = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar openid email";
+/// The scopes the consent page asks for. `gmail.send` lets the Outbox send email (outbox X4).
+pub const SCOPES: &str = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar openid email";
+
+/// The scope the Outbox needs to send email (outbox X4).
+pub const SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
+
+/// The key of `google_settings` holding the scopes the connection granted, as a list.
+const SCOPES_KEY: &str = "scopes";
 
 /// Google's consent page.
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -381,6 +389,13 @@ pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<
         .as_str()
         .unwrap_or_default()
         .to_owned();
+    // What the user granted: the consent screen lets them untick a scope.
+    let granted: Vec<String> = tokens["scope"]
+        .as_str()
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
 
     // Who signed in.
     let res = g
@@ -409,6 +424,7 @@ pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<
             Some(d) => s.insert("endpoints".to_owned(), Value::Object(d)),
             None => s.remove("endpoints"),
         };
+        s.insert(SCOPES_KEY.to_owned(), json!(granted));
         writer::google::write_object(w.state(), SETTINGS, &s)?;
         Ok(())
     })
@@ -455,6 +471,11 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
                 state.insert("sync_tokens".to_owned(), json!({}));
             }
             writer::google::write_object(w.state(), name, &state)?;
+        }
+        // The scopes belong to the connection.
+        let mut s = object(w, SETTINGS)?;
+        if s.remove(SCOPES_KEY).is_some() {
+            writer::google::write_object(w.state(), SETTINGS, &s)?;
         }
         Ok(())
     })
@@ -575,9 +596,16 @@ async fn status_of(g: &Arc<Google>) -> Result<Value, ApiError> {
         let mut settings = settings(w)?;
         // The test seam is the server's own business.
         settings.remove("endpoints");
+        let connected = has(CLIENT_ID) && has(CLIENT_SECRET) && has(REFRESH_TOKEN);
+        let can_send = connected
+            && settings
+                .remove(SCOPES_KEY)
+                .and_then(|v| v.as_array().cloned())
+                .is_some_and(|s| s.iter().any(|v| v.as_str() == Some(SEND_SCOPE)));
         let mut out = json!({
-            "connected": has(CLIENT_ID) && has(CLIENT_SECRET) && has(REFRESH_TOKEN),
+            "connected": connected,
             "client_stored": has(CLIENT_ID) && has(CLIENT_SECRET),
+            "can_send": can_send,
             "account": account,
             "settings": settings,
         });

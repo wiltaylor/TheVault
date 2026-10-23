@@ -190,6 +190,8 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
   const [clientSecret, setClientSecret] = createSignal("");
   const [authUrl, setAuthUrl] = createSignal<string | null>(null);
   const [pasted, setPasted] = createSignal("");
+  /** Whether a connected card shows the connect form, to connect again for a new scope. */
+  const [reconnecting, setReconnecting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
   const [pending, setPending] = createSignal<Action | null>(null);
@@ -255,6 +257,7 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
     ev.preventDefault();
     void act("finish", async () => {
       setStatus(await api.googleFinish(pasted().trim()));
+      setReconnecting(false);
       setAuthUrl(null);
       setPasted("");
       setClientSecret("");
@@ -306,7 +309,7 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
         {(s) => (
           <>
             <Show
-              when={s().connected}
+              when={s().connected && !reconnecting()}
               fallback={
                 <Show
                   when={authUrl()}
@@ -396,6 +399,14 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
               <p class="google-account" role="status">
                 Connected as {s().account ?? "an unknown address"}
               </p>
+              <Show when={!s().can_send}>
+                <p class="google-reconnect">
+                  Reconnect Google in Settings &gt; Integrations to send email.{" "}
+                  <button type="button" disabled={busy()} onClick={() => setReconnecting(true)}>
+                    Connect
+                  </button>
+                </p>
+              </Show>
             </Show>
             <table class="admin-table" aria-label="Google sync">
               <thead>

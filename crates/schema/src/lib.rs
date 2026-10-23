@@ -25,8 +25,8 @@ use std::fmt;
 pub use agents::{
     AGENT_EFFORTS, AGENT_PROMPT_MAX, AGENT_PROVIDERS, ASSISTANT_AGENT, Agent, CONFIRM_SWITCHES,
     Confirm as AgentConfirm, IMPLICIT_MENTION, Mention as MentionTrigger, NoteEvent,
-    Permissions as AgentPermissions, Schedule, TRIGGER_OPS, Trigger, WEB_SWITCHES, Web as AgentWeb,
-    When as TriggerWhen, parse_cron,
+    OUTBOX_SWITCHES, Outbox as AgentOutbox, Permissions as AgentPermissions, Schedule, TRIGGER_OPS,
+    Trigger, WEB_SWITCHES, Web as AgentWeb, When as TriggerWhen, parse_cron,
 };
 pub use blocks::{
     ADMONITION_KINDS, ARROWS, AdmonitionPreset, CANVAS_HEIGHT_DEFAULT, CANVAS_HEIGHT_MAX,

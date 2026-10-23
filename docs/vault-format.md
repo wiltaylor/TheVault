@@ -226,6 +226,7 @@ Every vault has ten types that the app relies on. The server writes each one's t
 | `email` | Email | One Gmail message, written by the Gmail sync (google-sync D17) | nothing |
 | `email_thread` | Email thread | One Gmail thread. Its page lists the thread's emails (google-sync D4) | nothing |
 | `event` | Event | One Google Calendar event, or one occurrence of a recurring one, written by the calendar sync (google-sync D15) | nothing |
+| `outbox` | Outbox item | One email, SMS or calendar invite waiting to be sent, or sent (outbox X1). What an agent drafts waits in Review for the user. See [The Outbox](#the-outbox) | nothing |
 | `agent_thread` | Agent thread | One conversation with an agent (agents G7): `agent`, the agent's name; `origin`, `user`, `trigger:<name>`, or `mention` for a call from a note; `last_activity`; the hidden `pending`, how many proposals wait for the user; the hidden `transcript`, a JSON string of `{ messages, steps, proposals }` the server resumes the conversation from; and the content field `body`, the conversation as readable text. Its list page shows the details view, newest activity first. The server writes threads as their turns run, authored by the agent | nothing |
 
 A change that removes a "must keep" field, or changes its kind, is refused with `invalid_type`.
@@ -342,6 +343,43 @@ The Gmail sync is the shipped task `tasks/google_gmail.wcl`, which runs `scripts
 - Finds or creates the `email_thread` with the message's `thread_ref`, titled by the subject without `Re:` or `Fwd:`, and adds any new participants (google-sync D4). `from`, `to` and `cc` link to the person whose `emails` hold the address; an unknown address stays only in `from_raw`, `to_raw` or `cc_raw`, and no person is created (google-sync D5).
 - Adds each label it meets to `gmail_label`, a user label by its name and a Gmail label under `system`.
 - Stops early, before four minutes or before it has decoded 1,200,000 base64 characters, so it keeps within its timeout and its instruction limit. It then leaves its cursor where it was, and the next run carries on: messages already pulled are skipped.
+- Imports the sent copy of every `outbox` email item that is `sent`, has a `sent_ref` and has no `result` yet, whatever the label settings, as any other message, and sets the item's `result` to the email note (outbox X4). A copy already pulled is linked, not pulled again.
+
+#### The Outbox
+
+The `outbox` type holds what TheVault sends for the user: emails through Gmail, SMS through the phone, and calendar invites and changes through Google Calendar (outbox X1). Its fields, as a new vault gets them:
+
+| Field | Kind | Meaning |
+|-------|------|---------|
+| `title` | | A summary: the subject, `SMS to <name>`, or the event's title |
+| `kind` | `select`: `email`, `sms`, `event`, default `email` | What the item sends |
+| `status` | `select`: `draft`, `review`, `approved`, `sending`, `sent`, `failed`, `rejected`, default `draft` | Where the item is. See the rules below |
+| `drafted_by` | `string` | `user`, or the name of the agent that drafted it. The writer fills it in on a new item |
+| `error` | `string` | Why the last send failed |
+| `sent_at` | `datetime` | When it was sent |
+| `sent_ref` | `string`, hidden | The sent copy's id: the Gmail message id, the Google event id, or the phone's `sms:<_id>` (the device command id while it waits) |
+| `result` | `reference` to any type | The `email`, `message` or `event` note of what was sent, once it came back |
+| `to`, `cc`, `bcc` | `list` of `string` | Email: the addresses, each `addr` or `Name <addr>` |
+| `subject` | `string` | Email: the subject. Empty sends the title |
+| `in_reply_to` | `reference` to any type | Email: the `email` note this one answers. The reply joins its Gmail thread |
+| `attachments` | `asset`, `multiple` | Email: the files to attach, at most 25 MB together and 16 MB each |
+| `body` | `content` | Email and SMS: the text. An email sends it as a `text/plain` part and a `text/html` part |
+| `phone` | `string` | SMS: the number |
+| `device` | `string` | SMS: the id of the device that sends it; empty is the vault's one Android device with SMS sending on |
+| `event` | `reference` to any type | Event: the `event` note to change; empty for a new event |
+| `when`, `location`, `attendees_raw`, `calendar`, `description` | as the `event` type's | Event: each means "set to this" for a change; an empty field leaves the event's value as it is |
+
+`result`, `in_reply_to` and `event` take any type (`target = "*"`) so that the built-in type never ties a vault's own `email` or `event` type to it. The default template shows one tab for the item's kind, by [conditional tabs](#conditional-tabs) on `kind`, with a `dropdown` control on `status`, then a Message tab with `body` (not for events) and a Status tab. Its list page is the `list` view, newest `updated` first.
+
+Every write of an `outbox` note is checked against these rules by who makes it (outbox X2). A write that breaks one is refused as `invalid` with an issue at `status` that names the rule, whether it comes through the notes API, the chat, sync from an app, or a script:
+
+| Author | May |
+|--------|-----|
+| The user (a session or an API token) | Make any change, such as `draft -> approved` (Send), `review -> approved` or `rejected`, and the retry `failed -> approved` |
+| An agent | Create an item only as `review`, or as `approved` when its file has `permissions.outbox.send_without_review = true` (see [Agent files](#agent-files)). An item it creates without a `status` is `review`, and `drafted_by` is its name. Change an item only while it is `draft` or `review`, only when it drafted it, and only to `draft` or `review`. Never write `sent_ref`, `result`, `error` or `sent_at`, or change `drafted_by`. Its `permissions.confirm` switches change none of this |
+| A handler or a scheduled task | Move an item `approved -> sending`, `sending -> sent` and `sending -> failed`, and write `sent_ref`, `result`, `error` and `sent_at`, and nothing else. Create no item |
+
+The `outbox` type declares three handlers: `after_create` and `after_update` run `scripts/outbox_send.ws`, and a second `after_update` runs the function `copy_sent` of `scripts/google_gmail.ws`. Each names `allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com"]` and the Google credential secrets and `google_settings`; `outbox_send` also names `google_account`. They run on the home server only, so an item approved in an app sends once it syncs (outbox X3). `docs/scripts.md`, "The Outbox's send handler", says what they do.
 
 The `person` type, both the starter pack's and the one added with the phone data types, holds every detail a phone contact holds, and the device scripts keep the two in step both ways (D16, D24):
 
@@ -2173,6 +2211,7 @@ The `permissions` block holds the agent's own permissions (agents G4). Nothing i
 | `types` | list of type names | every type | The note types the agent may read and change. Each must exist when the file is saved. `[]` allows none |
 | `confirm { ... }` | block | every switch `true` | The confirmation switches of ai D22: `notes`, `archive`, `delete`, `types`, `downloads`, `taxonomies` and `agents` (agent creates, changes and deletes, agents G20), each a bool. `true` means the agent proposes the change for the user to apply; `false` means it makes the change itself. A switch left out is `true` |
 | `web { ... }` | block | every switch `true` | The internet switches of ai D28: `search`, `read` and `download`, each a bool. A tool switched off is not offered. A switch left out is `true` |
+| `outbox { ... }` | block | every switch `false` | The Outbox switch of outbox X2: `send_without_review`, a bool. `true` lets the agent create Outbox items as `approved`, so they send without the user's review. A switch left out is `false`. An app from before the Outbox refuses an agent file holding it, so a release ships the apps first (see [Releasing a format change](android-release.md#releasing-a-format-change)) |
 
 A `trigger` block is labelled with its name and holds a `prompt`, the first user message of each run (a string, not blank, at most 32000 characters), and one of a schedule, a note event or a mention, never two. The prompt is required, except in a mention trigger.
 
@@ -2295,7 +2334,7 @@ Each script captures an item once, by its `device_ref`, archived notes included.
 
 ## Shipped defaults and upgrades
 
-The app ships defaults into every vault: the built-in types (and the `person` type the phone data types reference), the built-in taxonomy `gmail_label`, the default device file `devices/android.wcl`, the five default device scripts `scripts/device_*.ws`, and the Google sync's paused tasks `tasks/google_calendar.wcl` and `tasks/google_gmail.wcl` with their scripts `scripts/google_calendar.ws` and `scripts/google_gmail.ws`, and the `event` type's write-back script `scripts/google_event.ws` (google-sync D19), and the built-in agent `agents/assistant.wcl` (agents G6). On every start the home server brings them up to date, and a device's local vault does the same when the app opens it. The code is `crates/writer/src/shipped.rs`.
+The app ships defaults into every vault: the built-in types (and the `person` type the phone data types reference), the built-in taxonomy `gmail_label`, the default device file `devices/android.wcl`, the five default device scripts `scripts/device_*.ws`, and the Google sync's paused tasks `tasks/google_calendar.wcl` and `tasks/google_gmail.wcl` with their scripts `scripts/google_calendar.ws` and `scripts/google_gmail.ws`, and the `event` type's write-back script `scripts/google_event.ws` (google-sync D19), the `outbox` type's send handler `scripts/outbox_send.ws` (outbox X3), and the built-in agent `agents/assistant.wcl` (agents G6). On every start the home server brings them up to date, and a device's local vault does the same when the app opens it. The code is `crates/writer/src/shipped.rs`.
 
 1. **Upgrade steps.** One-time upgrades for changes that are not additive, such as a field rename with a migration script. Each has an id, runs once per vault in the order the app lists them, and is recorded in `state.db` once it succeeds. A step that fails stops the server from starting and runs again on the next start. A step that cannot run yet, such as one that needs the secrets key on a server started without its key file, is logged and not recorded: it runs again on the next start, and the server starts. Steps run first, so the seeding below never adds a field under the name a step is about to rename it to. Only the home server runs them; a device takes their results through sync. The steps are:
 

@@ -497,3 +497,37 @@ fn a_mention_trigger_is_checked() {
         ["trigger t.type: there is no type \"nope\""]
     );
 }
+
+#[test]
+fn the_outbox_switch_is_off_unless_the_file_turns_it_on() {
+    // An agent's Outbox items wait for review unless the file says otherwise (outbox X2).
+    assert!(
+        !Agent::parse("helper", "")
+            .unwrap()
+            .permissions
+            .outbox
+            .send_without_review
+    );
+    let src = "permissions {\n  outbox {\n    send_without_review = true\n  }\n}\n";
+    let a = Agent::parse("sender", src).unwrap();
+    assert!(a.permissions.outbox.send_without_review);
+    assert_eq!(Agent::parse("sender", &a.to_wcl()).unwrap(), a);
+    assert!(
+        a.to_wcl().contains("send_without_review = true"),
+        "{}",
+        a.to_wcl()
+    );
+    let off = "permissions {\n  outbox {\n    send_without_review = false\n  }\n}\n";
+    let a = Agent::parse("careful", off).unwrap();
+    assert!(!a.permissions.outbox.send_without_review);
+    assert_eq!(a.to_wcl(), "");
+    assert_eq!(
+        at(
+            "permissions {\n  outbox {\n    send_without_review = \"yes\"\n    approve = true\n  }\n}\n"
+        ),
+        [
+            "permissions.outbox.approve",
+            "permissions.outbox.send_without_review"
+        ]
+    );
+}

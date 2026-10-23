@@ -43,6 +43,9 @@ pub const CONFIRM_SWITCHES: [&str; 7] = [
 /// The internet switches of `permissions.web` (ai D28).
 pub const WEB_SWITCHES: [&str; 3] = ["search", "read", "download"];
 
+/// The Outbox switches of `permissions.outbox` (outbox X2).
+pub const OUTBOX_SWITCHES: [&str; 1] = ["send_without_review"];
+
 /// The note changes a trigger's `on` may name (agents G10).
 pub const TRIGGER_OPS: [&str; 3] = ["create", "update", "delete"];
 
@@ -96,6 +99,7 @@ pub struct Permissions {
     pub tools: Option<Vec<String>>,
     pub confirm: Confirm,
     pub web: Web,
+    pub outbox: Outbox,
     /// The note types the agent may read and change; `None` is every type.
     pub types: Option<Vec<String>>,
 }
@@ -217,6 +221,30 @@ impl Web {
             _ => return false,
         };
         *slot = on;
+        true
+    }
+}
+
+/// What the agent may do with Outbox items (outbox X2). A switch left out of the file is
+/// `false`: an agent's items wait in Review for the user.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Outbox {
+    /// The agent's items may be created as `approved`, so they send without the user's review.
+    pub send_without_review: bool,
+}
+
+impl Outbox {
+    /// The switches in [`OUTBOX_SWITCHES`] order.
+    pub fn switches(&self) -> [(&'static str, bool); 1] {
+        [("send_without_review", self.send_without_review)]
+    }
+
+    /// Set switch `name`, one of [`OUTBOX_SWITCHES`]. `false` for any other name.
+    pub fn set(&mut self, name: &str, on: bool) -> bool {
+        match name {
+            "send_without_review" => self.send_without_review = on,
+            _ => return false,
+        }
         true
     }
 }
@@ -552,6 +580,19 @@ impl Agent {
                 }
                 out.push_str("  }\n");
             }
+            let on: Vec<_> = p
+                .outbox
+                .switches()
+                .into_iter()
+                .filter(|(_, on)| *on)
+                .collect();
+            if !on.is_empty() {
+                out.push_str("\n  outbox {\n");
+                for (name, _) in on {
+                    field(&mut out, "    ", name, "true");
+                }
+                out.push_str("  }\n");
+            }
             out.push_str("}\n");
         }
         for t in &self.triggers {
@@ -727,7 +768,7 @@ impl Reader<'_> {
             d,
             &["tools", "types"],
             "permissions.",
-            "is not a permission: use tools, types, confirm { ... } or web { ... }",
+            "is not a permission: use tools, types, confirm { ... }, web { ... } or outbox { ... }",
         );
         let mut p = Permissions {
             tools: self.names(d, "tools", "permissions.tools", "tool"),
@@ -740,10 +781,11 @@ impl Reader<'_> {
             let switches: &[&str] = match b.kind.as_str() {
                 "confirm" => &CONFIRM_SWITCHES,
                 "web" => &WEB_SWITCHES,
+                "outbox" => &OUTBOX_SWITCHES,
                 _ => {
                     self.c.fail(
                         &format!("permissions > {}", b.name()),
-                        "is not a permissions block: use confirm { ... } or web { ... }",
+                        "is not a permissions block: use confirm { ... }, web { ... } or outbox { ... }",
                     );
                     continue;
                 }
@@ -775,11 +817,11 @@ impl Reader<'_> {
                 }) else {
                     continue;
                 };
-                if b.kind == "confirm" {
-                    p.confirm.set(name, on);
-                } else {
-                    p.web.set(name, on);
-                }
+                match b.kind.as_str() {
+                    "confirm" => p.confirm.set(name, on),
+                    "outbox" => p.outbox.set(name, on),
+                    _ => p.web.set(name, on),
+                };
             }
         }
         p

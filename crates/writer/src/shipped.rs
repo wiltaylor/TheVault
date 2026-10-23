@@ -64,9 +64,9 @@ pub struct ShippedFile {
 }
 
 /// The shipped files: the default device scripts, then the device file that names them, then the
-/// Google sync's scripts, each before the task that names it (google-sync D19), then the built-in
-/// agent (agents G6).
-pub const SHIPPED_FILES: [ShippedFile; 12] = [
+/// Google sync's scripts, each before the task that names it (google-sync D19), the Outbox's send
+/// handler (outbox X3), then the built-in agent (agents G6).
+pub const SHIPPED_FILES: [ShippedFile; 13] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -140,6 +140,7 @@ pub const SHIPPED_FILES: [ShippedFile; 12] = [
             "0d42ff00a0888f1a7b51fc693e75e2b150373d3a22a17f085aa76dffdc7d802a",
             "a4f144978e8d41264463826d12ca54bb75e765b0401b1e9bdc8a74204f7c54b8",
             "25bb9e337bdb15c08a696f5b96a2416ac078aafd43afd51673799528a188cd84",
+            "b4782f4a6b52f51dedc82f1269f290d8a8fdad7404667526089afdee0b63b1aa",
         ],
     },
     ShippedFile {
@@ -159,6 +160,12 @@ pub const SHIPPED_FILES: [ShippedFile; 12] = [
             "87423adde9c434f260c4d07f2cb1196cb7d89a91411c783838391cf2434c9e1d",
             "dc7c8f91ab0b2c8bdda7e31ccd2422b4edc628f0beb7a11b7dbb45c52fe15b7b",
         ],
+    },
+    // The Outbox's send handler, named by the shipped `outbox` type's handlers (outbox X3).
+    ShippedFile {
+        path: "scripts/outbox_send.ws",
+        source: include_str!("../defaults/outbox_send.ws"),
+        hashes: &["48d6e8cc94b6bcac9a858a539391d2e9e3e8e8bbe96d4bda2b039632399ab461"],
     },
     // The built-in agent, the chat panel's default (agents G6).
     ShippedFile {
@@ -1552,6 +1559,7 @@ mod tests {
         paths.push(crate::defs::script_path("google_gmail"));
         paths.push(crate::defs::task_path("google_gmail"));
         paths.push(crate::defs::script_path("google_event"));
+        paths.push(crate::defs::script_path("outbox_send"));
         paths.push(crate::agent_path(schema::ASSISTANT_AGENT));
         let shipped: Vec<String> = SHIPPED_FILES.iter().map(|f| f.path.to_owned()).collect();
         assert_eq!(shipped, paths);

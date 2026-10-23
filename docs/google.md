@@ -1,6 +1,6 @@
 # Connecting Gmail and Google Calendar
 
-TheVault syncs Gmail and Google Calendar from the home server. The server signs in to Google with an OAuth client that you create in your own Google Cloud project, so no third party sits between your vault and your Google account.
+TheVault syncs Gmail and Google Calendar from the home server, and sends the email you approve in the Outbox through Gmail. The server signs in to Google with an OAuth client that you create in your own Google Cloud project, so no third party sits between your vault and your Google account.
 
 This guide covers the one-time setup in Google Cloud, connecting from Settings > Integrations > Google, and what keeps the sign-in working afterwards.
 
@@ -108,11 +108,41 @@ A vault from 0.1.7 had a **Google sync** settings note instead. The first start 
 
 | Scope | Why |
 |---|---|
-| `https://www.googleapis.com/auth/gmail.readonly` | Read mail and labels. TheVault never sends, deletes or changes mail. Google classes this scope as restricted; no narrower scope can read message bodies. |
+| `https://www.googleapis.com/auth/gmail.readonly` | Read mail and labels. TheVault never deletes or changes mail. Google classes this scope as restricted; no narrower scope can read message bodies. |
+| `https://www.googleapis.com/auth/gmail.send` | Send the emails you approve in the Outbox. See [Sending email from the Outbox](#sending-email-from-the-outbox). |
 | `https://www.googleapis.com/auth/calendar` | Read events, and write back the events you edit, create or delete in the vault. |
 | `openid`, `email` | Learn which Google address signed in, to show it on the card. |
 
 TheVault asks with `access_type=offline` and `prompt=consent`, so Google issues a refresh token every time you connect, and uses PKCE to bind the code to the server that asked for it.
+
+When you connect, TheVault records the scopes Google granted in the `google_settings` secret, as `scopes`. Google's consent screen lets you untick a permission, so TheVault checks this list rather than assume it has every scope it asked for.
+
+## Sending email from the Outbox
+
+TheVault sends an email only when an Outbox item of kind `email` becomes `approved`. That happens when you select **Send** on an item you wrote, or **Approve and send** on an item an agent drafted. An agent's drafts wait in Review for you. The exception is an agent whose permissions turn on **Send from the Outbox without review**: its items go straight to `approved`. That switch is off for every agent unless you turn it on.
+
+The home server sends the item through Gmail as your connected address. An item approved in the desktop or Android app is sent once the approval syncs to the server.
+
+1. The item's status moves to **Sending**.
+2. TheVault builds the message from the item: To, Cc, Bcc, Subject, the body as plain text and as HTML, and the attachments. A reply carries `In-Reply-To` and `References` from the email it answers, and joins that email's Gmail thread.
+3. TheVault sends the message with `messages.send`. A message of 4.5 MB or more is sent through Gmail's upload endpoint instead.
+4. The item's status moves to **Sent**, with the time and Gmail's message id.
+5. TheVault imports the sent copy from Gmail as an email note and links it to the item as its sent copy. The `google_gmail` sync also links any copy that did not arrive at once, whatever labels it syncs.
+
+Attachments come to at most 25 MB together, Gmail's limit, and at most 16 MB each, the most a script can read. An item over either limit fails before anything is sent, and the error says which limit it hit.
+
+When a send fails, the item's status moves to **Failed** with the reason, such as Gmail's error message. Fix the item and approve it again to retry.
+
+### Reconnect to send
+
+A connection made before TheVault could send has no `gmail.send` scope. The Google card then shows **Reconnect Google in Settings > Integrations to send email.** with a **Connect** button, and an email item fails with the same message. To fix it:
+
+1. Open **Settings > Integrations**.
+2. In the **Google** card, select **Connect**.
+3. Enter the client ID and secret again and select **Connect Google**.
+4. Tick every permission on Google's consent screen, including **Send email on your behalf**, and finish connecting.
+
+The card stops showing the line once Google has granted the scope. `GET /api/integrations/google` answers `can_send: true` from then on.
 
 ## Keeping the sign-in alive
 
@@ -133,7 +163,7 @@ When this happens, the next sync run gets `invalid_grant` from Google. TheVault 
 
 ## Disconnect
 
-Select **Disconnect** on the Google card. TheVault deletes the three sign-in secrets and the connected address, pauses both sync tasks, and clears each sync's progress, so the next connection pulls from the start. The **What to sync** settings stay. Notes that were already synced stay in the vault. To stop Google from accepting the old token as well, remove TheVault's access in your Google account's security settings.
+Select **Disconnect** on the Google card. TheVault deletes the three sign-in secrets and the connected address, forgets the granted scopes, pauses both sync tasks, and clears each sync's progress, so the next connection pulls from the start. The Outbox cannot send email until you connect again. The **What to sync** settings stay. Notes that were already synced stay in the vault. To stop Google from accepting the old token as well, remove TheVault's access in your Google account's security settings.
 
 ## Troubleshooting
 

@@ -166,7 +166,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "email_thread",
             "event",
             "fleeting",
-            "message"
+            "message",
+            "outbox"
         ]
     );
     assert_eq!(done.taxonomies_added, ["gmail_label"]);
@@ -210,7 +211,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "device_share",
             "google_calendar",
             "google_event",
-            "google_gmail"
+            "google_gmail",
+            "outbox_send"
         ]
     );
     assert!(notification_titles(&w).is_empty());
@@ -768,7 +770,8 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
     let mut added = done.types_added.clone();
     added.sort();
     assert_eq!(added[0], "agent_thread");
-    assert_eq!(added[1..], GOOGLE_TYPES);
+    assert_eq!(added[1..4], GOOGLE_TYPES);
+    assert_eq!(added[4..], ["outbox"]);
     // Steps 0002 to 0005 are the ones 0.1.6 had not run; 0003 and 0004 find no event type yet,
     // and 0005 gives the message type 0.1.6 had its `list_page` block, in a commit of its own.
     // The seeding is then one commit, with no field added to a new type and no note edited.

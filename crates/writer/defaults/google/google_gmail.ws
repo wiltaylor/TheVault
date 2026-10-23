@@ -35,6 +35,11 @@ use regex
 //   the run successfully. Any other failure is written there too and fails the run.
 // - A run stops early, before its time or work limit, and leaves the cursor where it was, so the
 //   next run carries on.
+// - The Outbox's sent emails (outbox X4): each run imports every `outbox` email item that is
+//   `sent` with a `sent_ref` (its Gmail message id) and no `result` yet, whatever the label
+//   settings, with the same `save`, and sets the item's `result` to the email note. The `outbox`
+//   type also runs `copy_sent` after each update of an item, so the copy usually arrives as soon
+//   as the send handler records the send.
 
 // The longest a run works before it stops early: the task's timeout is five minutes.
 fn time_budget() -> int {
@@ -1139,7 +1144,18 @@ fn run() -> Result[(), string] {
         },
     }
     state["notified_invalid_grant"] = Value::Bool(false);
-    let ctx = Ctx {
+    let ctx = new_ctx(endpoints, token, started)
+    match sync(ctx, state, fields) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            record_error(state, e)?
+            Err(e)
+        },
+    }
+}
+
+fn new_ctx(endpoints: Value, token: string, started: int) -> Ctx {
+    Ctx {
         codec: codec(),
         gmail: endpoint(endpoints, "gmail", "https://gmail.googleapis.com/gmail/v1"),
         auth: #{ "authorization": "Bearer " + token, "accept": "application/json" },
@@ -1154,13 +1170,6 @@ fn run() -> Result[(), string] {
         archived: 0,
         failed: 0,
         first_failure: "",
-    }
-    match sync(ctx, state, fields) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            record_error(state, e)?
-            Err(e)
-        },
     }
 }
 
@@ -1235,6 +1244,9 @@ fn sync(ctx: Ctx, state: Map[string, Value], fields: Value) -> Result[(), string
     let cursor = if same { text_of(Value::Map(state), "backfill_page") } else { "" }
     let to = text_of(fields, "gmail_backfill_to")
     let next_cursor = if ctx.stopped { cursor } else { backfill(ctx, cursor, to, lists, window_start)? }
+    if !ctx.stopped {
+        copy_outbox(ctx)
+    }
 
     let error = if ctx.failed > 0 {
         Value::String(fmt("{} messages were not saved. The first: {}", ctx.failed, ctx.first_failure))
@@ -1248,5 +1260,74 @@ fn sync(ctx: Ctx, state: Map[string, Value], fields: Value) -> Result[(), string
     state["listed"] = next_listed;
     save_state(state)?;
     vault::log(fmt("Gmail: {} new, {} relabelled, {} archived, {} not saved.", ctx.imported, ctx.updated, ctx.archived, ctx.failed))
+    Ok(())
+}
+
+// ---- the Outbox's sent copies (outbox X4) ---------------------------------------------------
+
+// Whether an `outbox` item, by its fields, is a sent email whose copy is not linked yet.
+fn wants_copy(fields: Value) -> bool {
+    text_of(fields, "kind") == "email" && text_of(fields, "status") == "sent" && text_of(fields, "sent_ref") != "" && text_of(fields, "result") == ""
+}
+
+// Import Gmail message `gmail_id`, the sent copy of Outbox item `item`, unless it is stored
+// already, and link it as the item's `result`. `Ok(false)` when Gmail has no such message yet.
+fn copy_one(ctx: Ctx, item: string, gmail_id: string) -> Result[bool, string] {
+    if stored(gmail_id)?.is_null() {
+        save(ctx, gmail_id)?
+    }
+    let row = stored(gmail_id)?
+    if row.is_null() {
+        vault::log("Gmail has no message " + gmail_id + " for Outbox item " + item + " yet.")
+        return Ok(false)
+    }
+    vault::patch(item, Value::Map(#{ "result": Value::String(text_of(row, "id")) }), "")?;
+    Ok(true)
+}
+
+// Link the copy of every sent Outbox email that has none yet. A failure is logged, and the next
+// run tries again.
+fn copy_outbox(ctx: Ctx) {
+    let rows = match vault::query("from outbox where kind == \"email\" && status == \"sent\"") {
+        Ok(rows) => rows,
+        Err(e) => {
+            vault::log("The Outbox's sent emails were not read: " + e)
+            return
+        },
+    }
+    for row in rows {
+        let fields = row.get("fields").unwrap_or(Value::Null)
+        if wants_copy(fields) && !out_of_budget(ctx) {
+            match copy_one(ctx, text_of(row, "id"), text_of(fields, "sent_ref")) {
+                Ok(_) => {},
+                Err(e) => vault::log("The sent copy of Outbox item " + text_of(row, "id") + " was not imported: " + e),
+            }
+        }
+    }
+}
+
+// The `outbox` type's `after_update` handler: import the sent copy of an item the send handler
+// just marked sent. Without Google connected, or when the token refresh fails, it leaves the
+// copy to the next run of the task.
+fn copy_sent(note: Value) -> Result[(), string] {
+    let fields = note.get("note").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
+    if !wants_copy(fields) {
+        return Ok(())
+    }
+    match secrets::get("google_refresh_token") {
+        Ok(_) => {},
+        Err(_) => return Ok(()),
+    }
+    let endpoints = secret_json("google_settings").get("endpoints").unwrap_or(Value::Null)
+    let token = match access_token(endpoint(endpoints, "token", "https://oauth2.googleapis.com/token")) {
+        Ok(t) => t,
+        Err(e) => {
+            vault::log("The sent copy is left to the next Gmail sync: " + e)
+            return Ok(())
+        },
+    }
+    let ctx = new_ctx(endpoints, token, vault::now())
+    load_labels(ctx)?;
+    copy_one(ctx, text_of(note, "id"), text_of(fields, "sent_ref"))?;
     Ok(())
 }
