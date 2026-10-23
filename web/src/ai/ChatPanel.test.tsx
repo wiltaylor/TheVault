@@ -140,7 +140,7 @@ describe("ChatPanel", () => {
     });
     const card = await m.findByRole("group", { name: "Outbox draft" });
     expect(card).toHaveTextContent("Drafted an email to Ann Lee for review");
-    expect(within(card).getByRole("link", { name: "Review it in the Outbox" })).toHaveAttribute("href", "/notes/01JITEM");
+    expect(within(card).getByRole("link", { name: "Review it in the Outbox" })).toHaveAttribute("href", "/outbox?item=01JITEM");
     // An agent that sends without review says so; a failed draft stays a step.
     emit("tool", { id: "d2", name: "draft_sms", input: {} });
     emit("tool_result", {

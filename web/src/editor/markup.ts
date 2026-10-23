@@ -453,7 +453,7 @@ const PAIRED = new Set("+~=");
  * stays bare unless it touches another of its kind or the edge of the run, where a delimiter
  * could sit beside it.
  */
-function escapeText(t: string): string {
+export function escapeText(t: string): string {
   let out = "";
   for (let k = 0; k < t.length; k++) {
     const ch = t.charAt(k);

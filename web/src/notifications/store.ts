@@ -95,8 +95,8 @@ export async function refreshNotifications(): Promise<void> {
 /** A notification event from the live stream: the count at once, the list as it changed. */
 function liveNotification(event: NotificationEvent) {
   setUnread(event.data.unread);
-  if (event.name === "notification.created") {
-    // The event names the notification only: fetch it to announce it and list it.
+  if (event.name === "notification.created" || event.name === "notification.updated") {
+    // The event names the notification only: fetch it to announce it and list it, or show its new text.
     void refreshNotifications();
     return;
   }

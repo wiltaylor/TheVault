@@ -119,6 +119,7 @@ export function announcement(prev: { newest: string | null; unread: number } | n
 /** A notification event from the server's live stream (`/api/events`), with its data. */
 export type NotificationEvent =
   | { name: "notification.created"; data: { id: string; unread: number } }
+  | { name: "notification.updated"; data: { id: string; unread: number } }
   | { name: "notification.read"; data: { id: string | null; unread: number } }
   | { name: "notification.dismissed"; data: { id: string; unread: number } }
   | { name: "notification.cleared"; data: { cleared: number; unread: number } };
@@ -130,6 +131,7 @@ export type NotificationEvent =
 export function applyEvent(state: ListState, event: NotificationEvent, at: number): ListState {
   switch (event.name) {
     case "notification.created":
+    case "notification.updated":
       return state;
     case "notification.read":
       return event.data.id === null ? markAllRead(state, at) : markRead(state, event.data.id, at);

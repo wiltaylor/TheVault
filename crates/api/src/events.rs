@@ -4,6 +4,7 @@
 //! | Event | Data |
 //! |---|---|
 //! | `notification.created` | `{id, unread}` |
+//! | `notification.updated` | `{id, unread}`: an unread notification's title or body changed |
 //! | `notification.read` | `{id, unread}`; `id` is `null` when every one was marked read |
 //! | `notification.dismissed` | `{id, unread}` |
 //! | `notification.cleared` | `{cleared, unread}` |
@@ -38,6 +39,7 @@ pub const HEARTBEAT: Duration = Duration::from_secs(15);
 fn sse(seq: u64, event: &LiveEvent) -> Event {
     let data = match event {
         LiveEvent::NotificationCreated { id, unread }
+        | LiveEvent::NotificationUpdated { id, unread }
         | LiveEvent::NotificationDismissed { id, unread } => json!({ "id": id, "unread": unread }),
         LiveEvent::NotificationRead { id, unread } => json!({ "id": id, "unread": unread }),
         LiveEvent::NotificationCleared { cleared, unread } => {

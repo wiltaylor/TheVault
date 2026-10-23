@@ -3380,7 +3380,7 @@ button.link {
   text-align: center;
   vertical-align: middle;
   color: #fff;
-  background: var(--danger, #c0392b);
+  background: var(--danger);
 }
 
 .capture-problems {
@@ -8732,6 +8732,110 @@ button.toast-action {
   .inbox-actions > * {
     padding: 0.3rem 0.5rem;
   }
+}
+
+/* The Outbox (outbox X7): tabs by status, and each item's preview by kind. */
+.outbox-tabs {
+  margin: 0.75rem 0 1rem;
+}
+
+.outbox-bulk {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.75rem;
+}
+
+.outbox-status[data-status="review"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.outbox-status[data-status="failed"] {
+  color: var(--danger);
+}
+
+.outbox-preview {
+  margin-top: 0.5rem;
+}
+
+.outbox-focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.outbox-headers {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.15rem 0.75rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.outbox-header-row {
+  display: contents;
+}
+
+.outbox-header-row dt {
+  color: var(--muted);
+}
+
+.outbox-header-row dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.outbox-body {
+  margin-top: 0.5rem;
+}
+
+.outbox-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.outbox-sms-to {
+  margin: 0 0 0.3rem;
+  font-size: 0.85rem;
+}
+
+.outbox-bubble {
+  display: inline-block;
+  max-width: 28rem;
+  margin: 0;
+  padding: 0.45rem 0.75rem;
+  border-radius: 1rem 1rem 0.25rem 1rem;
+  background: var(--accent-soft);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.outbox-event > p {
+  margin: 0 0 0.3rem;
+  font-size: 0.85rem;
+}
+
+.outbox-before {
+  color: var(--muted);
+}
+
+.outbox-after {
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.outbox-error {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+}
+
+.outbox-result {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
 }
 
 /* Settings > Scheduled: the list of scheduled scripts and their one-screen editor. */

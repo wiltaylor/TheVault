@@ -18,6 +18,9 @@ pub const CAPACITY: usize = 1024;
 pub enum LiveEvent {
     /// A notification was added.
     NotificationCreated { id: String, unread: u64 },
+    /// An unread notification's title or body changed, such as an agent's count of drafted
+    /// Outbox items going up within one turn.
+    NotificationUpdated { id: String, unread: u64 },
     /// One notification was marked read, or every one when `id` is `None`.
     NotificationRead { id: Option<String>, unread: u64 },
     /// One notification was removed.
@@ -67,6 +70,7 @@ impl LiveEvent {
     pub fn name(&self) -> &'static str {
         match self {
             LiveEvent::NotificationCreated { .. } => "notification.created",
+            LiveEvent::NotificationUpdated { .. } => "notification.updated",
             LiveEvent::NotificationRead { .. } => "notification.read",
             LiveEvent::NotificationDismissed { .. } => "notification.dismissed",
             LiveEvent::NotificationCleared { .. } => "notification.cleared",

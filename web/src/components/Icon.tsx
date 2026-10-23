@@ -157,6 +157,16 @@ export function InboxIcon() {
   );
 }
 
+/** A paper plane, for the Outbox. */
+export function OutboxIcon() {
+  return (
+    <Glyph>
+      <path d="m22 2-7 20-4-9-9-4Z" />
+      <path d="M22 2 11 13" />
+    </Glyph>
+  );
+}
+
 /** A plus in a circle, for the Capture button. */
 export function CaptureIcon() {
   return (

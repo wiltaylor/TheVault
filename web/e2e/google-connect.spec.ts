@@ -3,13 +3,17 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { request } from "@playwright/test";
+import { type APIRequestContext, request } from "@playwright/test";
 import { expect, logIn, test } from "./fixtures";
 
 // Settings > Integrations > Google (google-sync D1, D18): the loopback paste flow against the fake
 // Google server, which the `google_settings` secret's endpoints point at. The consent page is the fake's too:
 // the test plays the browser's part by sending the consent URL's query to it and pasting the
 // address it redirects to.
+//
+// The Outbox (outbox X7, X8) runs against the same fake in this file, so the two tests never
+// change the Google secrets at once: compose an email from the side menu's Outbox, send it, and
+// find it in Sent with the copy Gmail kept linked.
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -162,4 +166,84 @@ test("the Google card connects through a pasted loopback address, shows the acco
     "google_gmail_state",
     "google_settings",
   ]);
+});
+
+/** Outbox item `id`'s fields, as stored. */
+async function itemFields(admin: APIRequestContext, id: string): Promise<Record<string, unknown>> {
+  return ((await (await admin.get(`/api/notes/${id}`)).json()) as { note: { fields: Record<string, unknown> } }).note.fields;
+}
+
+test("an email composed in the Outbox is sent through Gmail and shows in Sent with its copy linked", async ({ page, admin }) => {
+  const subject = `Outbox lunch ${Date.now().toString(36)}`;
+  for (const [name, value] of [
+    ["google_client_id", "fake-client-id.apps.googleusercontent.com"],
+    ["google_client_secret", "fake-client-secret"],
+    ["google_refresh_token", "fake-refresh-token"],
+    ["google_account", "me@example.com"],
+    ["google_settings", JSON.stringify({ endpoints: fake.endpoints, scopes: ["https://www.googleapis.com/auth/gmail.send"] })],
+  ]) {
+    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
+    expect(res.ok(), await res.text()).toBe(true);
+  }
+  // The shipped Outbox type, with the fake's host allowed as the server tests do.
+  const shipped = (await (await admin.get("/api/types/outbox")).json()) as { wcl: string };
+  const allowed = shipped.wcl.replaceAll("allow_domains = [", `allow_domains = ["${fake.host}", `);
+  const put = await admin.put("/api/types/outbox", { data: { wcl: allowed } });
+  expect(put.ok(), await put.text()).toBe(true);
+
+  try {
+    await logIn(page, "/daily");
+    const outbox = page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /^Outbox/ });
+    await outbox.click();
+    await expect(page).toHaveURL(/\/outbox$/);
+    await page.getByRole("button", { name: "New email" }).click();
+    await expect(page).toHaveURL(/\/notes\/[0-9A-Z]{26}$/);
+    const id = /\/notes\/([0-9A-Z]{26})$/.exec(page.url())![1]!;
+
+    // Compose: the title, To, Subject and the body.
+    const title = page.getByRole("textbox", { name: "Title" });
+    await title.click();
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.type(subject);
+    await page.getByRole("button", { name: "Add to To" }).click();
+    const to = page.getByRole("combobox", { name: "Add to To" });
+    await to.fill("ada@example.com");
+    await to.press("Enter");
+    await to.press("Escape");
+    await page.getByLabel("Subject", { exact: true }).fill(subject);
+    await page.getByRole("tab", { name: "Message" }).click();
+    await page.getByRole("textbox", { name: "Body" }).click();
+    await page.keyboard.type("Shall we meet at noon?");
+    await expect(page.getByTestId("save-status")).toHaveText("Saved");
+
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => itemFields(admin, id), { timeout: 30_000 }).toMatchObject({ status: "sent", to: ["ada@example.com"], subject });
+    await expect.poll(async () => (await itemFields(admin, id)).result, { timeout: 30_000 }).toBeTruthy();
+    const fields = await itemFields(admin, id);
+    expect(fields.sent_ref).toBeTruthy();
+    const copy = fields.result as string;
+
+    // The Outbox lists it under Sent, linking to the copy.
+    await outbox.click();
+    await page.getByRole("tab", { name: "Sent" }).click();
+    const item = page
+      .getByRole("list", { name: "Sent items" })
+      .getByRole("listitem")
+      .filter({ has: page.getByRole("link", { name: subject, exact: true }) });
+    await expect(item).toBeVisible();
+    await expect(item.getByLabel("Email preview")).toContainText("ada@example.com");
+    await expect(item.getByLabel("Email preview")).toContainText("Shall we meet at noon?");
+    const link = item.getByRole("link", { name: /^Sent copy/ });
+    await expect(link).toHaveAttribute("href", `/notes/${copy}`);
+    await link.click();
+    await expect(page).toHaveURL(new RegExp(`/notes/${copy}$`));
+    await expect(page.getByRole("textbox", { name: "Title" })).toHaveText(subject);
+    // The copy is an email note, so it offers Reply.
+    await expect(page.getByRole("button", { name: "Reply" })).toBeVisible();
+  } finally {
+    await admin.put("/api/types/outbox", { data: { wcl: shipped.wcl } });
+    for (const name of ["google_client_id", "google_client_secret", "google_refresh_token", "google_account"]) {
+      await admin.delete(`/api/secrets/${name}`);
+    }
+  }
 });

@@ -211,6 +211,47 @@ impl State {
         })
     }
 
+    /// Change an unread notification's title and body, checked as [`State::add_notification`]
+    /// checks them. Returns `None`, changing nothing, when the notification is gone or read.
+    pub fn update_notification(
+        &self,
+        id: &str,
+        title: &str,
+        body: Option<&str>,
+    ) -> Result<Option<Notification>> {
+        let Some(old) = self.notification(id)? else {
+            return Ok(None);
+        };
+        if old.read_ms.is_some() {
+            return Ok(None);
+        }
+        let n = checked(&NewNotification {
+            title: title.to_owned(),
+            body: body.map(str::to_owned),
+            note_id: old.note_id.clone(),
+            url: old.url.clone(),
+            source: old.source.clone(),
+        })?;
+        let conn = self.conn();
+        let changed = conn.execute(
+            "UPDATE notifications SET title = ?2, body = ?3 WHERE id = ?1 AND read_ms IS NULL",
+            params![id, n.title, n.body],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        self.events.publish(LiveEvent::NotificationUpdated {
+            id: id.to_owned(),
+            unread: unread(&conn)?,
+        });
+        drop(conn);
+        Ok(Some(Notification {
+            title: n.title,
+            body: n.body,
+            ..old
+        }))
+    }
+
     /// One notification by id.
     pub fn notification(&self, id: &str) -> Result<Option<Notification>> {
         Ok(self

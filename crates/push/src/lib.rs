@@ -73,7 +73,7 @@ pub fn message(event: &LiveEvent) -> Option<Message> {
         LiveEvent::NotificationRead { id, .. } => {
             (None, json!({ "event": name, "id": id }), "normal")
         }
-        LiveEvent::NotificationDismissed { id, .. } => {
+        LiveEvent::NotificationUpdated { id, .. } | LiveEvent::NotificationDismissed { id, .. } => {
             (None, json!({ "event": name, "id": id }), "normal")
         }
         LiveEvent::NotificationCleared { .. } => (None, json!({ "event": name }), "normal"),

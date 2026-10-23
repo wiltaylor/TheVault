@@ -8,6 +8,7 @@ import { AssetView } from "./pages/AssetView";
 import { DailyNotes } from "./pages/DailyNotes";
 import { Devices } from "./pages/Devices";
 import { Inbox } from "./pages/Inbox";
+import { Outbox } from "./pages/Outbox";
 import { Ai } from "./pages/Ai";
 import { AgentScreen } from "./pages/AgentScreen";
 import { GoogleCallback, Integrations } from "./pages/Integrations";
@@ -69,6 +70,7 @@ export function paneRoutes() {
       <Route path="/archive" component={Archive} />
       <Route path="/search" component={Search} />
       <Route path="/inbox" component={Inbox} />
+      <Route path="/outbox" component={Outbox} />
       <Route path="*" component={() => <p class="error">There is no page here.</p>} />
     </>
   );

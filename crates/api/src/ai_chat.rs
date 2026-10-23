@@ -867,10 +867,15 @@ impl Turn {
         note_id: Option<String>,
     ) {
         let mut added = Vec::new();
+        let name = agent.name.clone();
         self.rounds(agent, provider, model, history, note_id, &mut added)
             .await;
         // What the turn added before it stopped, the client gone or not.
         self.persist(&added).await;
+        // The items the turn drafted into Review share one notification, which the writer raised
+        // as each was written (outbox X10); the agent's next turn starts another. The Outbox
+        // tools draft as the agent, the Assistant included.
+        self.writer.end_outbox_drafts(&name);
     }
 
     /// Keep what an unattended turn reports.

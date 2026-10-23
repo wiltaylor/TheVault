@@ -759,6 +759,8 @@ impl Scheduler {
         if let Err(e) = state.finish_agent_run(id, &outcome, &log.join("\n")) {
             eprintln!("agent {:?}: recording the run's end: {e}", agent.name);
         }
+        // What the run drafted into the Outbox has its notification; the next run starts another.
+        self.writer.end_outbox_drafts(&agent.name);
         if let AgentRunOutcome::Failed(message) = &outcome {
             self.notify_agent_failure(&agent, &job.trigger, thread.as_deref(), message);
         }

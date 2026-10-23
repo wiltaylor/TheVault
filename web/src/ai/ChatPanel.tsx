@@ -23,6 +23,7 @@ import { Markdown } from "./markdown";
 import { NewReplyMark, RunningMark } from "./RunningMark";
 import { TaxonomyProposalCard } from "./TaxonomyProposalCard";
 import { TypeProposalCard } from "./TypeProposalCard";
+import { outboxItemHref } from "../outbox/model";
 import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged, viewThread } from "./running";
 import {
   type Applied,
@@ -347,7 +348,7 @@ function DraftCard(props: { draft: DraftRef }) {
   return (
     <div class="ai-draft" role="group" aria-label="Outbox draft">
       <span>{draftText(props.draft)}</span>{" "}
-      <a href={`/notes/${encodeURIComponent(props.draft.note_id)}`}>
+      <a href={outboxItemHref(props.draft.note_id)}>
         {props.draft.status === "approved" ? "Open the item" : "Review it in the Outbox"}
       </a>
     </div>

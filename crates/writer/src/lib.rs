@@ -461,6 +461,8 @@ pub struct Writer {
     inner: Mutex<Inner>,
     /// The changes handlers made during step 5 of the write in progress, `None` outside step 5.
     staging: Mutex<Option<Vec<(NoteChange, Author)>>>,
+    /// Each agent's open notification of the Outbox items it drafted this turn (outbox X10).
+    drafts: Mutex<HashMap<String, outbox::DraftBatch>>,
 }
 
 /// Rounds of step 5 and step 6 one write may take before it is refused. Each round runs handlers
@@ -503,6 +505,7 @@ impl Writer {
                 commit_hook: None,
             }),
             staging: Mutex::new(None),
+            drafts: Mutex::new(HashMap::new()),
         })
     }
 
@@ -1362,6 +1365,7 @@ impl Writer {
         let mut saved = Vec::with_capacity(rendered.len());
         let mut updates = Vec::with_capacity(rendered.len());
         let mut people = Vec::new();
+        let mut items = Vec::new();
         for r in rendered {
             let NoteChange {
                 id,
@@ -1391,6 +1395,22 @@ impl Writer {
                             before,
                             after: doc_to_json(&doc),
                         });
+                    }
+                    if type_name == OUTBOX_TYPE
+                        && inner
+                            .schema
+                            .type_def(&type_name)
+                            .is_some_and(|t| self.is_built_in_def(t))
+                    {
+                        let was = match event {
+                            Event::Update => self.state.head(&id)?.and_then(|v| {
+                                Input::Wcl(v.content)
+                                    .parse(&note_path(&type_name, &id))
+                                    .ok()
+                            }),
+                            _ => None,
+                        };
+                        items.push(outbox::ItemChange::new(&id, by, was.as_ref(), &doc));
                     }
                     let v = if flips.contains(&id) {
                         self.state
@@ -1440,6 +1460,7 @@ impl Writer {
         });
         self.hooks.after(&saved, author, &inner.schema);
         self.people_to_contacts(&people);
+        self.outbox_notifications(&items);
         Ok(saved)
     }
 

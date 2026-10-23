@@ -139,6 +139,8 @@ describe("applyEvent", () => {
   it("leaves the list alone for a new notification, which the caller fetches", () => {
     const s = state();
     expect(applyEvent(s, { name: "notification.created", data: { id: "D", unread: 3 } }, 9)).toBe(s);
+    // A changed one's new text is fetched too.
+    expect(applyEvent(s, { name: "notification.updated", data: { id: "C", unread: 3 } }, 9)).toBe(s);
   });
 
   it("marks one read, or all when the event names none", () => {

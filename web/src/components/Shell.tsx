@@ -1,11 +1,11 @@
 import { Navigate, useLocation } from "@solidjs/router";
-import { For, type JSX, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { ChatPanel } from "../ai/ChatPanel";
 import { CaptureModal } from "../capture/CaptureModal";
 import { CommandPalette } from "../palette/CommandPalette";
 import { trackRecents } from "../palette/recents";
 import { PALETTE_KEYS, closePalette, isPaletteKey, openPalette, paletteOpen } from "../palette/store";
-import { captureOpen, inboxCount, isCaptureKey, openCapture, refreshInboxCount } from "../capture/store";
+import { captureOpen, isCaptureKey, openCapture, refreshInboxCount } from "../capture/store";
 import { assetIdOf } from "../assetLibrary";
 import { GraphView } from "../graph/GraphPanel";
 import { HistoryPanel } from "../history/HistoryPanel";
@@ -36,20 +36,15 @@ import { Workspace } from "../workspace/Workspace";
 import { AssetUsagePanel } from "./AssetUsage";
 import { dayOfLocation, todayDay } from "../daily/calendar";
 import { DailyCalendar } from "../daily/DailyCalendar";
-import { ArchiveIcon, CalendarIcon, CaptureIcon, GearIcon, InboxIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
+import { ArchiveIcon, CaptureIcon, GearIcon, SearchIcon, ThemeGlyph, TrashIcon } from "./Icon";
+import { MainNavLinks } from "./MainNav";
+import { refreshOutboxCount } from "../outbox/store";
 import { NotificationsBell, NotificationsLive } from "../notifications/NotificationsPanel";
 import { PinnedTree } from "./PinnedTree";
 import { SyncStatusButton } from "./SyncStatus";
 import { Toasts } from "./Toasts";
 import { TypesNav } from "./TypesNav";
 import { AgentsNav } from "./AgentsNav";
-
-/** The sidebar's main links. Each opens in the active pane; a middle-click opens a background tab. */
-const NAV: { href: string; label: string; icon: () => JSX.Element; badge?: () => number | null }[] = [
-  { href: "/daily", label: "Daily notes", icon: CalendarIcon },
-  { href: "/search", label: "Search", icon: SearchIcon },
-  { href: "/inbox", label: "Inbox", icon: InboxIcon, badge: inboxCount },
-];
 
 /** Below these widths the sidebars are drawers over the app rather than columns beside it. */
 const LEFT_DRAWER = "(max-width: 1024px)";
@@ -357,10 +352,14 @@ export function Shell() {
     };
     document.addEventListener("keydown", onPaletteKey);
     onCleanup(() => document.removeEventListener("keydown", onPaletteKey));
-    // The inbox's count, now and whenever the window comes back, for captures made elsewhere.
+    // The inbox's and the Outbox's counts, now and whenever the window comes back, for captures
+    // and drafts made elsewhere.
     void refreshInboxCount();
+    void refreshOutboxCount();
     const onVisible = () => {
-      if (document.visibilityState === "visible") void refreshInboxCount();
+      if (document.visibilityState !== "visible") return;
+      void refreshInboxCount();
+      void refreshOutboxCount();
     };
     document.addEventListener("visibilitychange", onVisible);
     onCleanup(() => document.removeEventListener("visibilitychange", onVisible));
@@ -465,28 +464,7 @@ export function Shell() {
                   <kbd aria-hidden="true">{PALETTE_KEYS}</kbd>
                 </button>
               </li>
-              <For each={NAV}>
-                {(item) => (
-                  <li>
-                    <a
-                      href={item.href}
-                      class="nav-link"
-                      classList={{ active: isActiveLink(item.href) }}
-                      onClick={() => setLeftDrawer(false)}
-                    >
-                      {item.icon()}
-                      <span>{item.label}</span>
-                      <Show when={item.badge?.()}>
-                        {(n) => (
-                          <span class="nav-badge" title={`${n()} waiting`}>
-                            {n()}
-                          </span>
-                        )}
-                      </Show>
-                    </a>
-                  </li>
-                )}
-              </For>
+              <MainNavLinks onNavigate={() => setLeftDrawer(false)} />
               <li>
                 <button
                   type="button"

@@ -48,6 +48,7 @@ import { setFindText } from "../blocks/toggle";
 import { offerPlaceholders, replacePlaceholderInDoc, resolvePlaceholder } from "../placeholders";
 import { PlaceholdersInert } from "../components/PlaceholderLink";
 import { ArchiveIcon, TrashIcon, TypeIcon, UnarchiveIcon } from "../components/Icon";
+import { NoteOutboxActions } from "../outbox/NoteActions";
 
 /** How long after the last change a note saves itself. */
 export const AUTOSAVE_MS = 1500;
@@ -901,6 +902,18 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                 >
                   {status()}
                 </span>
+                <Show when={!props.newType && !preview() && !conflict()}>
+                  <NoteOutboxActions
+                    id={n().id}
+                    type={n().type}
+                    doc={doc()}
+                    disabled={busy()}
+                    setStatus={(status, extra) => {
+                      setFields({ status, ...extra });
+                      flush();
+                    }}
+                  />
+                </Show>
                 <Show when={props.newType}>
                   <div class="actions">
                       <button type="button" onClick={() => navigate(`/types/${n().type}`)} disabled={busy()}>

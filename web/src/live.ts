@@ -8,6 +8,7 @@ export const RETRY_MS = 10_000;
 /** Every event the server streams. */
 export const LIVE_EVENTS = [
   "notification.created",
+  "notification.updated",
   "notification.read",
   "notification.dismissed",
   "notification.cleared",

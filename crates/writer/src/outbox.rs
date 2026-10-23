@@ -18,9 +18,20 @@
 //!
 //! An item an agent or the user creates without `drafted_by` gets the agent's name or `user`; an
 //! agent's item without a `status` is `review`.
+//!
+//! Notifications (outbox X10), made once a write is committed:
+//!
+//! - An agent putting items into Review gets one notification per turn, "<Agent> drafted <n>
+//!   items for review", linking to `/outbox`. The items of one turn share it: each one more
+//!   raises the count in place while the notification is unread, until the turn ends
+//!   ([`Writer::end_outbox_drafts`]) or the agent drafts nothing for [`DRAFT_BATCH_MS`].
+//! - An item a handler, a task or a device (an API token) moves to `failed` gets "Could not send <title>",
+//!   with the error, linking to the item.
 
 use schema::{Doc, Invalid, Issue, TypeDef, Value};
-use state::Author;
+use state::{Author, NewNotification};
+
+use std::collections::HashMap;
 
 use crate::{Error, Result, Writer};
 
@@ -67,7 +78,164 @@ fn changed<'a>(a: &'a Doc, b: &'a Doc) -> (Vec<&'a str>, bool) {
     (fields, a.blocks != b.blocks)
 }
 
+/// How long an agent's drafts notification stays open for more of the same turn's items once the
+/// agent stops drafting, in milliseconds: ten minutes.
+pub const DRAFT_BATCH_MS: i64 = 10 * 60 * 1000;
+
+/// An agent's open notification of the items it drafted this turn.
+#[derive(Debug, Clone)]
+pub(crate) struct DraftBatch {
+    notification: String,
+    count: usize,
+    last_ms: i64,
+}
+
+/// One committed write of an Outbox item: its status before and after, for the notifications.
+#[derive(Debug, Clone)]
+pub(crate) struct ItemChange {
+    id: String,
+    author: Author,
+    title: String,
+    was: Option<String>,
+    status: String,
+    error: String,
+}
+
+impl ItemChange {
+    pub(crate) fn new(id: &str, author: &Author, old: Option<&Doc>, doc: &Doc) -> ItemChange {
+        ItemChange {
+            id: id.to_owned(),
+            author: author.clone(),
+            title: text(doc, "title").unwrap_or("").trim().to_owned(),
+            was: old.map(|o| text(o, "status").unwrap_or("").to_owned()),
+            status: text(doc, "status").unwrap_or("").to_owned(),
+            error: text(doc, "error").unwrap_or("").trim().to_owned(),
+        }
+    }
+
+    /// Whether the write put the item into Review.
+    fn entered(&self, status: &str) -> bool {
+        self.status == status && self.was.as_deref() != Some(status)
+    }
+}
+
+/// `s` cut to at most `max` characters.
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_owned();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('\u{2026}');
+    out
+}
+
+/// "<label> drafted <n> item(s) for review".
+fn drafted_title(label: &str, count: usize) -> String {
+    let items = if count == 1 { "item" } else { "items" };
+    clip(
+        &format!("{label} drafted {count} {items} for review"),
+        state::MAX_TITLE,
+    )
+}
+
 impl Writer {
+    /// The bell notifications for committed Outbox writes (outbox X10). A notification that
+    /// cannot be stored is logged, never failing the write.
+    pub(crate) fn outbox_notifications(&self, items: &[ItemChange]) {
+        for item in items {
+            match &item.author {
+                Author::Agent(name) if item.entered("review") => self.count_draft(name),
+                // A send handler, a sync task, or a device reporting its command's result.
+                Author::Handler(_) | Author::Task(_) | Author::Token(_)
+                    if item.entered("failed") =>
+                {
+                    self.notify_failed(item);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// End agent `name`'s turn: the next item it drafts starts a new notification. Agent runs and
+    /// chat turns call this as they end.
+    pub fn end_outbox_drafts(&self, name: &str) {
+        self.drafts_slot().remove(name);
+    }
+
+    fn drafts_slot(&self) -> std::sync::MutexGuard<'_, HashMap<String, DraftBatch>> {
+        self.drafts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// One more item agent `name` drafted into Review this turn.
+    fn count_draft(&self, name: &str) {
+        let now = self.now_ms();
+        let label = self
+            .agent(name)
+            .map_or_else(|_| name.to_owned(), |a| a.label);
+        let mut drafts = self.drafts_slot();
+        if let Some(batch) = drafts
+            .get_mut(name)
+            .filter(|b| now.saturating_sub(b.last_ms) <= DRAFT_BATCH_MS)
+        {
+            let count = batch.count + 1;
+            match self.state().update_notification(
+                &batch.notification,
+                &drafted_title(&label, count),
+                None,
+            ) {
+                Ok(Some(_)) => {
+                    batch.count = count;
+                    batch.last_ms = now;
+                    return;
+                }
+                // Read or dismissed since: the next items start a notification of their own.
+                Ok(None) => {}
+                Err(e) => eprintln!("outbox: updating {name}'s drafts notification: {e}"),
+            }
+        }
+        let n = NewNotification {
+            title: drafted_title(&label, 1),
+            body: Some("They wait in the Outbox until you approve them.".to_owned()),
+            note_id: None,
+            url: Some("/outbox".to_owned()),
+            source: format!("agent:{name}"),
+        };
+        match self.state().add_notification(&n) {
+            Ok(made) => {
+                drafts.insert(
+                    name.to_owned(),
+                    DraftBatch {
+                        notification: made.id,
+                        count: 1,
+                        last_ms: now,
+                    },
+                );
+            }
+            Err(e) => eprintln!("outbox: notifying {name}'s drafts: {e}"),
+        }
+    }
+
+    /// "Could not send <title>", linking to the item.
+    fn notify_failed(&self, item: &ItemChange) {
+        let title = if item.title.is_empty() {
+            "Untitled"
+        } else {
+            &item.title
+        };
+        let n = NewNotification {
+            title: clip(&format!("Could not send {title}"), state::MAX_TITLE),
+            body: Some(clip(&item.error, state::MAX_BODY)).filter(|b| !b.is_empty()),
+            note_id: Some(item.id.clone()),
+            url: None,
+            source: "outbox".to_owned(),
+        };
+        if let Err(e) = self.state().add_notification(&n) {
+            eprintln!("outbox: notifying the failed send of {}: {e}", item.id);
+        }
+    }
+
     /// Fill in what an item's author leaves out, before the type's defaults: `drafted_by` for the
     /// user's and an agent's new items, and `status = review` for an agent's.
     pub(crate) fn fill_outbox(&self, doc: &mut Doc, is_new: bool, author: &Author) {
