@@ -106,7 +106,16 @@ const childPlace = (path: string | undefined, ...indexes: number[]): string =>
  * A content block with its text's inline markup rendered. With `onChange`, the media, technical
  * ink and canvas blocks are edited in place and report each change as the whole new block.
  */
-export function BlockView(props: { block: Block; onChange?: (block: Block) => void } & BlockPlace) {
+export function BlockView(
+  props: {
+    block: Block;
+    onChange?: (block: Block) => void;
+    /** The editor's selection of the block, which an image shows its Edit and Remove buttons for. */
+    selected?: boolean;
+    /** Delete the block from the editor's content. */
+    onRemove?: () => void;
+  } & BlockPlace,
+) {
   const b = () => props.block;
   return (
     <Switch fallback={<div class="block-placeholder">{b().kind} block</div>}>
@@ -140,7 +149,7 @@ export function BlockView(props: { block: Block; onChange?: (block: Block) => vo
         <MermaidBlock block={b()} onChange={props.onChange} />
       </Match>
       <Match when={b().kind === "image"}>
-        <ImageBlock block={b()} onChange={props.onChange} />
+        <ImageBlock block={b()} onChange={props.onChange} selected={props.selected} onRemove={props.onRemove} />
       </Match>
       <Match when={b().kind === "asset"}>
         <AssetBlock block={b()} onChange={props.onChange} />

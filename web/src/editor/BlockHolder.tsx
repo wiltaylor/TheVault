@@ -34,7 +34,15 @@ export function BlockHolder(props: SolidNodeViewProps) {
           <Show
             when={b().kind === "query_view" && onChange()}
             fallback={
-              <Show when={b().kind === "control"} fallback={<BlockView block={b()} onChange={onChange()} />}>
+              <Show when={b().kind === "control"} fallback={
+                  <BlockView
+                    block={b()}
+                    onChange={onChange()}
+                    selected={props.selected()}
+                    onRemove={editable() ? () => props.replaceWith() : undefined}
+                  />
+                }
+              >
                 <ControlHolder
                   block={b()}
                   selected={props.selected()}

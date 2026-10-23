@@ -148,7 +148,12 @@ test("an image from an asset field: added in the template editor, filled in on a
   const main = page.getByRole("textbox", { name: "Main content" });
   await expect(main.getByTestId("template-item-artist")).toBeVisible();
   await insertFieldImage(page, main, "Cover");
-  await main.getByLabel("Alt text").fill("Cover of {{title}}");
+  await main.getByTestId("field-image-placeholder").click();
+  await main.getByRole("button", { name: "Edit image" }).click();
+  const dialog = page.getByRole("dialog", { name: "Image" });
+  await dialog.getByLabel("Alt text").fill("Cover of {{title}}");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog).toHaveCount(0);
   await page.getByRole("button", { name: "Save template" }).click();
   await expect(page.getByRole("status")).toHaveText("Saved the default template.");
   await shots(page, "editor", page.locator(".template-canvas"));

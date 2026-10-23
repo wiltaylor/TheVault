@@ -88,8 +88,18 @@ test("uploading an image shows it and stores it under assets/", async ({ page, a
   const img = doc.locator("figure.block-image img");
   await expect(img).toBeVisible();
   await expect.poll(() => imageLoaded(img)).toBe(true);
-  await doc.getByLabel("Alt text").fill("A red square");
-  await doc.getByLabel("Caption").fill("Two pixels wide");
+  // At rest the image shows alone; selected, it offers Edit and Remove.
+  await expect(doc.getByLabel("Alt text")).toHaveCount(0);
+  await img.click();
+  await expect(doc.locator("figure.block-image.selected")).toHaveCount(1);
+  await expect(doc.getByRole("button", { name: "Remove image" })).toBeVisible();
+  await doc.getByRole("button", { name: "Edit image" }).click();
+  const dialog = page.getByRole("dialog", { name: "Image" });
+  await dialog.getByLabel("Alt text").fill("A red square");
+  await dialog.getByLabel("Caption").fill("Two pixels wide");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(doc.locator("figure.block-image figcaption")).toHaveText("Two pixels wide");
   await saveAndWait(page);
 
   const blocks = body(await stored(admin, note.id)) ?? [];
@@ -107,7 +117,7 @@ test("uploading an image shows it and stores it under assets/", async ({ page, a
   const shown = page.getByTestId("field-body").getByRole("img", { name: "A red square" });
   await expect(shown).toBeVisible();
   await expect.poll(() => imageLoaded(shown)).toBe(true);
-  await expect(page.getByTestId("field-body").getByLabel("Caption")).toHaveValue("Two pixels wide");
+  await expect(page.getByTestId("field-body").locator("figure.block-image figcaption")).toHaveText("Two pixels wide");
 });
 
 test("a file upload becomes an asset card that downloads the file", async ({ page, admin }) => {

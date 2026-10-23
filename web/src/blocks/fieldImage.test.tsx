@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Asset, type Block, type FieldDef, type Json, type TypeDef, api } from "../api";
@@ -98,17 +98,27 @@ describe("an image from an asset field", () => {
     await waitFor(() => expect(srcs(container)).toEqual(["/api/assets/NEW1"]));
   });
 
-  it("is a placeholder naming the field in the template editor, whose field can be changed", () => {
+  it("is a placeholder naming the field in the template editor, whose field the Edit dialog changes", () => {
     const [block, setBlock] = createSignal<Block>(image("cover"));
-    const { getByTestId, getByLabelText } = render(() => (
+    render(() => (
       <ControlBindingContext.Provider value={{ ...binding({ cover: "IMG1" }), preview: true }}>
-        <ImageBlock block={block()} onChange={setBlock} />
+        <ImageBlock block={block()} onChange={setBlock} selected onRemove={() => {}} />
       </ControlBindingContext.Provider>
     ));
+    // The dialog is portalled to the body, so queries look at the whole document.
+    const { getByTestId, getByLabelText, getByRole, queryByLabelText } = screen;
     expect(getByTestId("field-image-placeholder").textContent).toBe("Image from Cover");
+    expect(queryByLabelText("Image field")).toBeNull();
+    expect(queryByLabelText("Alt text")).toBeNull();
+    fireEvent.click(getByLabelText("Edit image"));
+    const dialog = getByRole("dialog", { name: "Image" });
     const select = getByLabelText("Image field") as HTMLSelectElement;
     expect([...select.options].map((o) => o.value)).toEqual(["cover", "photos"]);
+    // A field image has no file of its own to replace.
+    expect(dialog.querySelector('[aria-label="Replace image"]')).toBeNull();
     fireEvent.change(select, { target: { value: "photos" } });
+    expect(block().fields?.field).toBe("cover");
+    fireEvent.click(getByRole("button", { name: "Save" }));
     expect(block().fields?.field).toBe("photos");
     expect(getByTestId("field-image-placeholder").textContent).toBe("Image from Photos");
   });

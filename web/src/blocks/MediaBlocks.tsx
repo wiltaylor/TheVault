@@ -1,7 +1,8 @@
 // Image and asset blocks. Both name an uploaded file by its asset ULID; the file itself lives at
 // `assets/<ULID>/<filename>` and is uploaded through the assets API (D22).
 
-import { For, Show, createContext, createResource, createSignal, useContext } from "solid-js";
+import { For, Show, createContext, createResource, createSignal, onCleanup, onMount, useContext } from "solid-js";
+import { Portal } from "solid-js/web";
 import { type Asset, type Block, type FieldDef, type Json, api, assetUrl } from "../api";
 import { FieldRefs, fillFieldRefs } from "../components/fieldRefs";
 import { useControlBinding } from "../controls/binding";
@@ -73,8 +74,18 @@ function assetIds(v: Json | undefined): string[] {
   return list.filter((x): x is string => typeof x === "string" && x !== "");
 }
 
+/** What an image block gets: `onChange` when it is edited, and the editor's selection and removal. */
+export interface ImageBlockProps {
+  block: Block;
+  onChange?: (block: Block) => void;
+  /** Whether the editor has the block selected, which shows its Edit and Remove buttons. */
+  selected?: boolean;
+  /** Delete the block from the content. */
+  onRemove?: () => void;
+}
+
 /** The image in an image block: fixed, or a template's image from an asset field of the note. */
-export function ImageBlock(props: { block: Block; onChange?: (block: Block) => void }) {
+export function ImageBlock(props: ImageBlockProps) {
   return (
     <Show when={typeof props.block.fields?.field === "string"} fallback={<FixedImage {...props} />}>
       <FieldImage {...props} />
@@ -87,40 +98,220 @@ const widthOf = (block: Block): number | undefined => {
   return typeof w === "number" ? w : undefined;
 };
 
-/** Alt text, caption and width inputs, which every image block has when edited. */
-function ImageSettings(props: { block: Block; onChange: (block: Block) => void }) {
-  const set = (item: string, value: string) => props.onChange(withText(props.block, item, value));
+const keepSelection = (e: MouseEvent) => e.preventDefault();
+
+function PencilIcon() {
   return (
-    <>
-      <input aria-label="Alt text" placeholder="Alt text" value={text(props.block, "alt")} onInput={(e) => set("alt", e.currentTarget.value)} />
-      <input
-        aria-label="Caption"
-        placeholder="Caption"
-        value={text(props.block, "caption")}
-        onInput={(e) => set("caption", e.currentTarget.value)}
-      />
-      <input
-        type="number"
-        min="1"
-        step="1"
-        aria-label="Width"
-        placeholder="Width"
-        value={widthOf(props.block) ?? ""}
-        onInput={(e) => {
-          const n = Number(e.currentTarget.value);
-          props.onChange(withItem(props.block, "width", Number.isInteger(n) && n > 0 ? n : undefined));
-        }}
-      />
-    </>
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
   );
 }
 
-function FixedImage(props: { block: Block; onChange?: (block: Block) => void }) {
+function BinIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+/**
+ * The Edit and Remove buttons over an edited image's top-right corner, shown while the block is
+ * selected or holds the keyboard focus (styles.css). A press keeps the editor's selection.
+ */
+function ImageTools(props: { onEdit: () => void; onRemove?: () => void }) {
+  return (
+    <div class="block-image-tools" role="toolbar" aria-label="Image">
+      <button type="button" aria-label="Edit image" title="Edit image" aria-haspopup="dialog" onMouseDown={keepSelection} onClick={() => props.onEdit()}>
+        <PencilIcon />
+      </button>
+      <Show when={props.onRemove}>
+        {(remove) => (
+          <button type="button" aria-label="Remove image" title="Remove image" onMouseDown={keepSelection} onClick={() => remove()()}>
+            <BinIcon />
+          </button>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+const FOCUSABLE = 'button:not([disabled]), input:not([type="hidden"]):not([hidden]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+
+/**
+ * The image's properties in a modal dialog: alt text, caption, width and the file (a fixed image)
+ * or the asset field (a template's image from a field, when `fields` lists the type's asset
+ * fields). Save applies every change as one block; Cancel, Escape and a click outside discard
+ * them. Focus returns to what opened it.
+ */
+function ImageDialog(props: { block: Block; fields?: FieldDef[]; onSave: (block: Block) => void; onClose: () => void }) {
+  const fromField = () => props.fields !== undefined;
+  const [alt, setAlt] = createSignal(text(props.block, "alt"));
+  const [caption, setCaption] = createSignal(text(props.block, "caption"));
+  const [width, setWidth] = createSignal(String(widthOf(props.block) ?? ""));
+  const [asset, setAsset] = createSignal(text(props.block, "asset"));
+  const [field, setField] = createSignal(text(props.block, "field"));
+  const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
-  const refs = useContext(FieldRefs);
-  const asset = () => text(props.block, "asset");
+  const returnTo = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  let dialog!: HTMLDivElement;
+  let first!: HTMLInputElement;
 
   async function replace(file: File) {
+    setError(null);
+    setBusy(true);
+    try {
+      const a = await upload(file);
+      setAsset(a.id);
+    } catch (e) {
+      setError(`Could not upload ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function save(e: Event) {
+    e.preventDefault();
+    if (busy()) return;
+    const n = Number(width().trim());
+    let next = withText(props.block, "alt", alt());
+    next = withText(next, "caption", caption());
+    next = withItem(next, "width", width().trim() !== "" && Number.isInteger(n) && n > 0 ? n : undefined);
+    next = fromField() ? withItem(next, "field", field()) : withText(next, "asset", asset());
+    if (JSON.stringify(next) !== JSON.stringify(props.block)) props.onSave(next);
+    props.onClose();
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      props.onClose();
+      return;
+    }
+    if (e.key === "Tab") {
+      const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      if (!items.length) return;
+      const head = items[0]!;
+      const tail = items[items.length - 1]!;
+      if (e.shiftKey && document.activeElement === head) {
+        e.preventDefault();
+        tail.focus();
+      } else if (!e.shiftKey && document.activeElement === tail) {
+        e.preventDefault();
+        head.focus();
+      }
+    }
+  }
+
+  onMount(() => {
+    first.focus();
+    // Focus that wanders out of the dialog (a click on the page behind it) comes back.
+    const keep = (e: FocusEvent) => {
+      if (e.target instanceof Node && !dialog.contains(e.target)) first.focus();
+    };
+    document.addEventListener("focusin", keep);
+    onCleanup(() => {
+      document.removeEventListener("focusin", keep);
+      setTimeout(() => {
+        if (returnTo?.isConnected) returnTo.focus();
+      });
+    });
+  });
+
+  return (
+    <Portal>
+      <div
+        class="capture-backdrop"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) props.onClose();
+        }}
+      >
+        <div ref={dialog} class="capture-dialog image-dialog" role="dialog" aria-modal="true" aria-labelledby="image-dialog-heading" onKeyDown={onKeyDown}>
+          <header class="capture-head">
+            <h2 id="image-dialog-heading">Image</h2>
+            <button type="button" class="capture-x" aria-label="Close" title="Close (Esc)" onClick={() => props.onClose()}>
+              ×
+            </button>
+          </header>
+          <form class="image-dialog-form" onSubmit={save}>
+            <Show when={!fromField() && asset()}>
+              <img class="image-dialog-preview" src={assetUrl(asset())} alt="" />
+            </Show>
+            <Show when={fromField()}>
+              <label>
+                Image field
+                <select value={field()} onChange={(e) => setField(e.currentTarget.value)}>
+                  <For each={props.fields}>{(f) => <option value={f.name}>{f.label}</option>}</For>
+                  <Show when={!props.fields?.some((f) => f.name === field())}>
+                    <option value={field()}>{field()} (not an asset field)</option>
+                  </Show>
+                </select>
+              </label>
+            </Show>
+            <label>
+              Alt text
+              <input ref={first} value={alt()} onInput={(e) => setAlt(e.currentTarget.value)} />
+            </label>
+            <label>
+              Caption
+              <input value={caption()} onInput={(e) => setCaption(e.currentTarget.value)} />
+            </label>
+            <label>
+              Width
+              <input
+                type="number"
+                min="1"
+                step="1"
+                placeholder="Content width"
+                value={width()}
+                onInput={(e) => setWidth(e.currentTarget.value)}
+              />
+            </label>
+            <Show when={!fromField()}>
+              <div class="image-dialog-replace">
+                <FilePicker label="Replace image" text={busy() ? "Uploading…" : "Replace image…"} accept="image/*" onFile={(file) => void replace(file)} />
+              </div>
+              <Show when={error()}>
+                <p class="error" role="alert">
+                  {error()}
+                </p>
+              </Show>
+            </Show>
+            <div class="actions">
+              <button type="button" onClick={() => props.onClose()}>
+                Cancel
+              </button>
+              <button type="submit" class="primary" disabled={busy()}>
+                Save
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
+/**
+ * A fixed image. Edited, it is the image alone with its caption; selected, it shows Edit (the
+ * properties dialog) and Remove over its corner. Without a file yet, it offers to upload one.
+ */
+function FixedImage(props: ImageBlockProps) {
+  const [error, setError] = createSignal<string | null>(null);
+  const [editing, setEditing] = createSignal(false);
+  const refs = useContext(FieldRefs);
+  const asset = () => text(props.block, "asset");
+  const caption = () => (
+    <Show when={text(props.block, "caption")}>
+      <figcaption>{fillFieldRefs(text(props.block, "caption"), refs)}</figcaption>
+    </Show>
+  );
+  const image = () => <img src={assetUrl(asset())} alt={fillFieldRefs(text(props.block, "alt"), refs)} width={widthOf(props.block)} loading="lazy" />;
+
+  async function choose(file: File) {
     setError(null);
     try {
       const a = await upload(file);
@@ -131,33 +322,43 @@ function FixedImage(props: { block: Block; onChange?: (block: Block) => void }) 
   }
 
   return (
-    <figure class="block-image">
-      <Show when={asset()}>
-        <img src={assetUrl(asset())} alt={fillFieldRefs(text(props.block, "alt"), refs)} width={widthOf(props.block)} loading="lazy" />
-      </Show>
-      <Show
-        when={props.onChange}
-        fallback={
-          <Show when={text(props.block, "caption")}>
-            <figcaption>{fillFieldRefs(text(props.block, "caption"), refs)}</figcaption>
-          </Show>
-        }
-      >
-        {(change) => (
-          <>
-            <div class="block-fields">
-              <ImageSettings block={props.block} onChange={change()} />
-              <FilePicker label="Replace image" text="Replace" accept="image/*" onFile={replace} />
-            </div>
-            <Show when={error()}>
-              <p class="error" role="alert">
-                {error()}
-              </p>
+    <Show
+      when={props.onChange}
+      fallback={
+        <figure class="block-image">
+          <Show when={asset()}>{image()}</Show>
+          {caption()}
+        </figure>
+      }
+    >
+      {(change) => (
+        <figure class="block-image editing" classList={{ selected: !!props.selected }}>
+          <div class="block-image-frame">
+            <Show
+              when={asset()}
+              fallback={
+                <div class="field-image-placeholder">
+                  <ImageIcon />
+                  <FilePicker label="Upload image" text="Upload image" accept="image/*" onFile={(file) => void choose(file)} />
+                </div>
+              }
+            >
+              {image()}
             </Show>
-          </>
-        )}
-      </Show>
-    </figure>
+            <ImageTools onEdit={() => setEditing(true)} onRemove={props.onRemove} />
+          </div>
+          {caption()}
+          <Show when={error()}>
+            <p class="error" role="alert">
+              {error()}
+            </p>
+          </Show>
+          <Show when={editing()}>
+            <ImageDialog block={props.block} onSave={change()} onClose={() => setEditing(false)} />
+          </Show>
+        </figure>
+      )}
+    </Show>
   );
 }
 
@@ -178,11 +379,12 @@ export function ImageIcon() {
  * slim row, unless the template places the field another way too (a slot or a control, which has
  * its own upload): then it shows nothing.
  */
-function FieldImage(props: { block: Block; onChange?: (block: Block) => void }) {
+function FieldImage(props: ImageBlockProps) {
   const binding = useControlBinding();
   const refs = useContext(FieldRefs);
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
+  const [editing, setEditing] = createSignal(false);
   const name = () => text(props.block, "field");
   const field = (): FieldDef | undefined => binding?.type()?.fields.find((f) => f.name === name());
   const label = () => field()?.label ?? name();
@@ -236,24 +438,20 @@ function FieldImage(props: { block: Block; onChange?: (block: Block) => void }) 
     <Show
       when={!props.onChange}
       fallback={
-        <figure class="block-image field-image editing" data-field={name()}>
-          <div class="field-image-placeholder" data-testid="field-image-placeholder">
-            <ImageIcon />
-            <span>Image from {label()}</span>
+        <figure class="block-image field-image editing" classList={{ selected: !!props.selected }} data-field={name()}>
+          <div class="block-image-frame">
+            <div class="field-image-placeholder" data-testid="field-image-placeholder">
+              <ImageIcon />
+              <span>Image from {label()}</span>
+            </div>
+            <ImageTools onEdit={() => setEditing(true)} onRemove={props.onRemove} />
           </div>
-          <div class="block-fields">
-            <select
-              aria-label="Image field"
-              value={name()}
-              onChange={(e) => props.onChange?.(withItem(props.block, "field", e.currentTarget.value))}
-            >
-              <For each={assetFields()}>{(f) => <option value={f.name}>{f.label}</option>}</For>
-              <Show when={!assetFields().some((f) => f.name === name())}>
-                <option value={name()}>{name()} (not an asset field)</option>
-              </Show>
-            </select>
-            <ImageSettings block={props.block} onChange={props.onChange!} />
-          </div>
+          <Show when={caption()}>
+            <figcaption>{caption()}</figcaption>
+          </Show>
+          <Show when={editing()}>
+            <ImageDialog block={props.block} fields={assetFields()} onSave={(b) => props.onChange?.(b)} onClose={() => setEditing(false)} />
+          </Show>
         </figure>
       }
     >

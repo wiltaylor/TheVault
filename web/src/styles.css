@@ -852,6 +852,91 @@ a {
   border-radius: 0.3rem;
 }
 
+/* An edited image: the image alone, with Edit and Remove over its top-right corner while the
+   block is selected or holds the keyboard focus. */
+.block-image-frame {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.field-image .block-image-frame {
+  width: auto;
+}
+
+.block-image-tools {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--panel);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.18);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.block-image.selected .block-image-tools,
+.block-image-tools:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.block-image-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--ink);
+}
+
+.block-image-tools button:hover {
+  background: var(--hover);
+}
+
+.block-image-tools button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.image-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.image-dialog-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.image-dialog-form input[type="number"] {
+  max-width: 10rem;
+}
+
+.image-dialog-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 12rem;
+  margin: 0 auto;
+  object-fit: contain;
+  border-radius: 0.3rem;
+}
+
+.image-dialog-form .actions {
+  justify-content: flex-end;
+}
+
 /* A template's image from an asset field: every image in the field, in a row that wraps. */
 .field-images {
   display: flex;
