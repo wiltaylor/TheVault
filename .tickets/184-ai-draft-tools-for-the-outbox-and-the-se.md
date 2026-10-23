@@ -4,8 +4,8 @@ title: AI draft tools for the Outbox and the send-without-review agent permissio
 plan: outbox
 blocked_by:
 - '180'
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # AI draft tools for the Outbox and the send-without-review agent permission
@@ -17,3 +17,11 @@ Spec: /home/wil/dev/TheVault/.scratch/plans/outbox/SPEC.md, X9, X11. Acceptance:
 ### 2026-10-23T08:47:55Z — wil
 
 Ticket 179 landed the no-escalation check in crates/api/src/ai_agents.rs escalation(); X11's send_without_review rule goes there.
+
+### 2026-10-23T09:30:54Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T09:30:54Z — wil
+
+Status set to done.
