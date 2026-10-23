@@ -4,8 +4,8 @@ title: AI reads web pages and downloads files into assets, with a guard against 
   addresses
 plan: ai
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # AI reads web pages and downloads files into assets, with a guard against local-network addresses
@@ -21,3 +21,11 @@ Acceptance criteria:
 - ./dev env CI=true just check passes.
 
 ## Worklog
+
+### 2026-10-23T02:40:21Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T02:40:21Z — wil
+
+Status set to done.
