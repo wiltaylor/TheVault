@@ -40,8 +40,8 @@ pub struct Models {
 ///
 /// `anthropic` and `openai` are the API URLs Settings > AI edits (ai D24); tests point them at
 /// the testkit fakes. The `anthropic` one takes `/v1/messages` and `/v1/models`, the `openai` one
-/// `/v1/responses` and `/v1/models`. A URL whose path ends in `/v1` is the API root as it is; any
-/// other gets `/v1` appended. `chatgpt` is the ChatGPT plan's base, a test seam that is not in
+/// `/v1/responses` and `/v1/models`. A URL whose path ends in a version segment such as `/v1` or
+/// `/v4` is the API root as it is; any other gets `/v1` appended (see [`api_url`]). `chatgpt` is the ChatGPT plan's base, a test seam that is not in
 /// the UI: the plan never follows `openai`. `chatgpt_auth` takes `/api/accounts/oauth/token` and
 /// `/.well-known/openid-configuration`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,10 +57,8 @@ pub struct Endpoints {
 }
 
 impl Endpoints {
-    /// The base URL `provider`'s inference and model calls go to, without the `/v1` the paths
-    /// add: the custom API URL, else the real host. A URL ending in `/v1` loses it, so
-    /// `https://openrouter.ai/api/v1` and `https://openrouter.ai/api` both reach
-    /// `https://openrouter.ai/api/v1/...`. The ChatGPT plan uses `chatgpt` or
+    /// The base URL `provider`'s inference and model calls go to: the custom API URL, else the
+    /// real host. [`api_url`] joins a call's `/v1/...` path to it. The ChatGPT plan uses `chatgpt` or
     /// [`OPENAI_BASE`], never the OpenAI API URL (ai D24).
     pub fn api_base(&self, provider: Provider) -> String {
         let (set, real) = match provider {
@@ -69,7 +67,7 @@ impl Endpoints {
             Provider::ChatGpt => (&self.chatgpt, OPENAI_BASE),
         };
         match set.as_deref().map(trimmed).filter(|s| !s.is_empty()) {
-            Some(s) => s.strip_suffix("/v1").unwrap_or(s).to_owned(),
+            Some(s) => s.to_owned(),
             None => real.to_owned(),
         }
     }
@@ -158,6 +156,28 @@ pub fn check_url(url: &str) -> Result<String, AiError> {
         return Err(refuse("must not have a query (?) or a fragment (#)"));
     }
     Ok(url.to_owned())
+}
+
+/// The URL of a call: `path` (such as `/v1/responses`) under `base`. A base whose path already
+/// ends in a version segment (`/v1`, `/v4`) is the API root, so the path's own `/v1` is dropped:
+/// `https://openrouter.ai/api/v1` and `https://openrouter.ai/api` both reach
+/// `https://openrouter.ai/api/v1/responses`, and `https://api.z.ai/api/coding/paas/v4` reaches
+/// `https://api.z.ai/api/coding/paas/v4/responses` (ai D24).
+pub fn api_url(base: &str, path: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let versioned = base
+        .rsplit('/')
+        .next()
+        .and_then(|last| last.strip_prefix('v'))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    match path.strip_prefix("/v1") {
+        Some(rest)
+            if versioned && (rest.is_empty() || rest.starts_with('/') || rest.starts_with('?')) =>
+        {
+            format!("{base}{rest}")
+        }
+        _ => format!("{base}{path}"),
+    }
 }
 
 /// The longest chat system prompt the settings take, in characters (ai D17).

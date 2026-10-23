@@ -47,6 +47,8 @@ function ModelAndTest(props: {
   label: string;
   status: AiStatus;
   onStatus: (s: AiStatus) => void;
+  /** The card holds a key or API URL not saved yet: a Test now would use the old ones. */
+  unsaved?: boolean;
 }) {
   const p = () => props.status.providers[props.provider];
   const [models, setModels] = createSignal<AiModel[] | null>(null);
@@ -184,7 +186,8 @@ function ModelAndTest(props: {
       <div class="actions">
         <button
           type="button"
-          disabled={pending() !== null}
+          disabled={pending() !== null || props.unsaved}
+          title={props.unsaved ? "Save the key and API URL first" : undefined}
           aria-busy={pending() === "test" ? "true" : undefined}
           onClick={test}
         >
@@ -202,6 +205,9 @@ function ModelAndTest(props: {
           Use {props.label} by default
         </label>
       </div>
+      <Show when={props.unsaved}>
+        <p class="muted">Save the key and API URL first: Test uses the saved ones.</p>
+      </Show>
       <Show when={result()}>
         {(r) => (
           <p class={r().ok ? "ai-test-ok" : "error"} role="status">
@@ -237,83 +243,9 @@ export const OFFICIAL_URLS = {
 } as const;
 
 /**
- * An Anthropic or OpenAI card's API URL (ai D24): empty for the official API, or another
- * service that speaks the same API. With a custom URL the key is optional.
- */
-function UrlForm(props: {
-  provider: "anthropic" | "openai";
-  label: string;
-  status: AiStatus;
-  onStatus: (s: AiStatus) => void;
-}) {
-  const stored = () => props.status.providers[props.provider].url ?? "";
-  const [url, setUrl] = createSignal(stored());
-  const [error, setError] = createSignal<string | null>(null);
-  const [notice, setNotice] = createSignal<string | null>(null);
-  const [pending, setPending] = createSignal(false);
-  createEffect(on(stored, (u) => setUrl(u), { defer: true }));
-  const id = `ai-${props.provider}-url`;
-
-  async function save(ev: SubmitEvent) {
-    ev.preventDefault();
-    setError(null);
-    setNotice(null);
-    setPending(true);
-    const value = url().trim();
-    try {
-      props.onStatus(await api.aiSaveSettings({ urls: { [props.provider]: value } }));
-      setNotice(value ? "Saved. Calls go to this URL." : `Saved. Calls go to the official ${props.label} API.`);
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return (
-    <form class="admin-form" aria-label={`${props.label} API URL`} onSubmit={save}>
-      <div class="form-grid">
-        <label for={id}>API URL</label>
-        <input
-          id={id}
-          type="url"
-          autocomplete="off"
-          spellcheck={false}
-          placeholder={OFFICIAL_URLS[props.provider]}
-          value={url()}
-          onInput={(e) => setUrl(e.currentTarget.value)}
-        />
-      </div>
-      <p class="muted">
-        Leave empty for the official API. Another service must speak the{" "}
-        {props.provider === "anthropic" ? "Anthropic Messages API" : "OpenAI Responses API"}; with its own URL the
-        key is optional.
-      </p>
-      <div class="actions">
-        <button
-          type="submit"
-          disabled={pending() || url().trim() === stored()}
-          aria-busy={pending() ? "true" : undefined}
-        >
-          <Busy on={pending()} />
-          Save URL
-        </button>
-      </div>
-      <Show when={error()}>
-        <p class="error" role="alert">
-          {error()}
-        </p>
-      </Show>
-      <Show when={notice()}>
-        <p class="muted">{notice()}</p>
-      </Show>
-    </form>
-  );
-}
-
-/**
- * An Anthropic or OpenAI card: the API key, stored and never shown again, and the API URL
- * (ai D24).
+ * An Anthropic or OpenAI card (ai D24): the API key, stored and never shown again, and the API
+ * URL, empty for the official API or another service that speaks the same API, saved together
+ * by one Save. With a custom URL the key is optional.
  */
 export function KeyCard(props: {
   provider: "anthropic" | "openai";
@@ -322,20 +254,26 @@ export function KeyCard(props: {
   status: AiStatus;
   onStatus: (s: AiStatus) => void;
 }) {
-  const [key, setKey] = createSignal("");
-  const [error, setError] = createSignal<string | null>(null);
-  const [pending, setPending] = createSignal<"save" | "remove" | null>(null);
   const p = () => props.status.providers[props.provider];
+  const storedUrl = () => p().url ?? "";
+  const [key, setKey] = createSignal("");
+  const [url, setUrl] = createSignal(storedUrl());
+  const [error, setError] = createSignal<string | null>(null);
+  const [notice, setNotice] = createSignal<string | null>(null);
+  const [pending, setPending] = createSignal<"save" | "remove" | null>(null);
+  createEffect(on(storedUrl, (u) => setUrl(u), { defer: true }));
   // A custom API URL makes the provider configured with no key (ai D24), so `has_key` says.
   const set = () => p().has_key ?? p().configured;
-  const id = `ai-${props.provider}-key`;
+  const urlChanged = () => url().trim() !== storedUrl();
+  const unsaved = () => urlChanged() || key().trim() !== "";
+  const id = (what: string) => `ai-${props.provider}-${what}`;
 
-  async function act(what: "save" | "remove", value: string) {
+  async function act(what: "save" | "remove", f: () => Promise<string | null>) {
     setError(null);
+    setNotice(null);
     setPending(what);
     try {
-      props.onStatus(await api.aiPutKey(props.provider, value));
-      setKey("");
+      setNotice(await f());
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -345,32 +283,61 @@ export function KeyCard(props: {
 
   function save(ev: SubmitEvent) {
     ev.preventDefault();
-    if (!key().trim()) {
-      setError(`Paste the ${props.label} API key first.`);
+    const k = key().trim();
+    const u = url().trim();
+    if (!k && !urlChanged()) {
+      setError(set() || u ? "Nothing to save: paste a new key or change the API URL." : `Paste the ${props.label} API key first.`);
       return;
     }
-    void act("save", key().trim());
+    void act("save", async () => {
+      // The URL first: a key saved for a new service then belongs with it.
+      if (urlChanged()) props.onStatus(await api.aiSaveSettings({ urls: { [props.provider]: u } }));
+      if (k) {
+        props.onStatus(await api.aiPutKey(props.provider, k));
+        setKey("");
+      }
+      return u ? `Saved. Calls go to ${u}.` : `Saved. Calls go to the official ${props.label} API.`;
+    });
   }
 
   function remove() {
     if (!confirm(`Remove the ${props.label} API key? TheVault forgets it.`)) return;
-    void act("remove", "");
+    void act("remove", async () => {
+      props.onStatus(await api.aiPutKey(props.provider, ""));
+      setKey("");
+      return null;
+    });
   }
 
   return (
     <Card title={props.label} blurb={props.blurb}>
-      <form class="admin-form" aria-label={`${props.label} API key`} onSubmit={save}>
+      <form class="admin-form" aria-label={`${props.label} connection`} onSubmit={save}>
         <div class="form-grid">
-          <label for={id}>API key</label>
+          <label for={id("url")}>API URL</label>
           <input
-            id={id}
+            id={id("url")}
+            type="url"
+            autocomplete="off"
+            spellcheck={false}
+            placeholder={OFFICIAL_URLS[props.provider]}
+            value={url()}
+            onInput={(e) => setUrl(e.currentTarget.value)}
+          />
+          <label for={id("key")}>API key</label>
+          <input
+            id={id("key")}
             type="password"
             autocomplete="off"
-            placeholder={set() ? "set" : p().url ? "Optional with a custom API URL" : "Paste a key"}
+            placeholder={set() ? "set" : url().trim() ? "Optional with a custom API URL" : "Paste a key"}
             value={key()}
             onInput={(e) => setKey(e.currentTarget.value)}
           />
         </div>
+        <p class="muted">
+          Leave the URL empty for the official API. Another service must speak the{" "}
+          {props.provider === "anthropic" ? "Anthropic Messages API" : "OpenAI Responses API"}; with its own URL the
+          key is optional.
+        </p>
         <Show when={set()}>
           <p class="muted">A key is set. Paste another to replace it.</p>
         </Show>
@@ -378,11 +345,11 @@ export function KeyCard(props: {
           <button
             type="submit"
             class="primary"
-            disabled={pending() !== null}
+            disabled={pending() !== null || !unsaved()}
             aria-busy={pending() === "save" ? "true" : undefined}
           >
             <Busy on={pending() === "save"} />
-            Save key
+            Save
           </button>
           <Show when={set()}>
             <button
@@ -403,8 +370,16 @@ export function KeyCard(props: {
           {error()}
         </p>
       </Show>
-      <UrlForm provider={props.provider} label={props.label} status={props.status} onStatus={props.onStatus} />
-      <ModelAndTest provider={props.provider} label={props.label} status={props.status} onStatus={props.onStatus} />
+      <Show when={notice()}>
+        <p class="muted">{notice()}</p>
+      </Show>
+      <ModelAndTest
+        provider={props.provider}
+        label={props.label}
+        status={props.status}
+        onStatus={props.onStatus}
+        unsaved={unsaved()}
+      />
     </Card>
   );
 }

@@ -115,7 +115,7 @@ describe("Settings > AI", () => {
     expect(input.type).toBe("password");
     expect(input.placeholder).toBe("Paste a key");
     fireEvent.input(input, { target: { value: " sk-ant-secret " } });
-    fireEvent.click(within(anthropic).getByRole("button", { name: "Save key" }));
+    fireEvent.click(within(anthropic).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(aiPutKey).toHaveBeenCalledWith("anthropic", "sk-ant-secret"));
     expect(await card("Anthropic").findByText("A key is set. Paste another to replace it.")).toBeTruthy();
@@ -124,6 +124,30 @@ describe("Settings > AI", () => {
     expect(after.placeholder).toBe("set");
     expect(document.body.textContent).not.toContain("sk-ant-secret");
     await waitFor(() => expect(aiModels).toHaveBeenCalledWith("anthropic"));
+  });
+
+  it("saves the API URL and the key with one Save, URL first, and holds Test until they are saved", async () => {
+    const url = "https://api.z.ai/api/anthropic";
+    aiStatus.mockResolvedValue(status({ anthropic: { configured: true } }, "anthropic"));
+    aiModels.mockResolvedValue(ANTHROPIC_MODELS);
+    aiSaveSettings.mockResolvedValue(status({ anthropic: { configured: true, url, has_key: true } }, "anthropic"));
+    aiPutKey.mockResolvedValue(status({ anthropic: { configured: true, url, has_key: true } }, "anthropic"));
+    render(() => <Ai />);
+    await ready();
+
+    const test = (await card("Anthropic").findByRole("button", { name: "Test" })) as HTMLButtonElement;
+    expect(test.disabled).toBe(false);
+    fireEvent.input(card("Anthropic").getByLabelText("API URL"), { target: { value: url } });
+    fireEvent.input(card("Anthropic").getByLabelText("API key"), { target: { value: "zai-key" } });
+    expect(test.disabled).toBe(true);
+    expect(card("Anthropic").getByText(/Save the key and API URL first/)).toBeTruthy();
+
+    fireEvent.click(card("Anthropic").getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(aiPutKey).toHaveBeenCalledWith("anthropic", "zai-key"));
+    expect(aiSaveSettings).toHaveBeenCalledWith({ urls: { anthropic: url } });
+    expect(aiSaveSettings.mock.invocationCallOrder[0]!).toBeLessThan(aiPutKey.mock.invocationCallOrder[0]!);
+    expect(await card("Anthropic").findByText(`Saved. Calls go to ${url}.`)).toBeTruthy();
+    await waitFor(() => expect(test.disabled).toBe(false));
   });
 
   it("removes a key after confirming", async () => {
@@ -390,13 +414,13 @@ describe("Settings > AI API URLs (ai D24)", () => {
     expect((card("Anthropic").getByLabelText("API URL") as HTMLInputElement).placeholder).toBe(
       "https://api.anthropic.com/v1",
     );
-    expect(card("OpenAI").getByText(/Leave empty for the official API/)).toBeTruthy();
-    const save = card("OpenAI").getByRole("button", { name: "Save URL" }) as HTMLButtonElement;
+    expect(card("OpenAI").getByText(/Leave the URL empty for the official API/)).toBeTruthy();
+    const save = card("OpenAI").getByRole("button", { name: "Save" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     fireEvent.input(input, { target: { value: ` ${custom} ` } });
     fireEvent.click(save);
     await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ urls: { openai: custom } }));
-    expect(await card("OpenAI").findByText("Saved. Calls go to this URL.")).toBeTruthy();
+    expect(await card("OpenAI").findByText(`Saved. Calls go to ${custom}.`)).toBeTruthy();
     // Configured with no key: the key is optional and not shown as set.
     const key = card("OpenAI").getByLabelText("API key") as HTMLInputElement;
     expect(key.placeholder).toBe("Optional with a custom API URL");
@@ -406,7 +430,7 @@ describe("Settings > AI API URLs (ai D24)", () => {
     const after = card("OpenAI").getByLabelText("API URL") as HTMLInputElement;
     expect(after.value).toBe(custom);
     fireEvent.input(after, { target: { value: "" } });
-    fireEvent.click(card("OpenAI").getByRole("button", { name: "Save URL" }));
+    fireEvent.click(card("OpenAI").getByRole("button", { name: "Save" }));
     await waitFor(() => expect(aiSaveSettings).toHaveBeenLastCalledWith({ urls: { openai: "" } }));
     expect(await card("OpenAI").findByText("Saved. Calls go to the official OpenAI API.")).toBeTruthy();
     expect((card("OpenAI").getByLabelText("API URL") as HTMLInputElement).value).toBe("");
@@ -418,7 +442,7 @@ describe("Settings > AI API URLs (ai D24)", () => {
     render(() => <Ai />);
     await ready();
     fireEvent.input(card("Anthropic").getByLabelText("API URL"), { target: { value: "ftp://example.com" } });
-    fireEvent.click(card("Anthropic").getByRole("button", { name: "Save URL" }));
+    fireEvent.click(card("Anthropic").getByRole("button", { name: "Save" }));
     expect((await card("Anthropic").findByRole("alert")).textContent).toContain("must start with http://");
   });
 

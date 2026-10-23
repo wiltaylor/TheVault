@@ -32,7 +32,7 @@ A script or the AI panel can still name another provider and model for one call.
 ### Add an API key
 
 1. Open Settings > AI.
-2. Paste the key into the Anthropic or OpenAI card's **API key** field and select **Save key**.
+2. Paste the key into the Anthropic or OpenAI card's **API key** field and select **Save**.
 3. Pick a model from the list, then select **Test**.
 
 The server stores the key encrypted and never sends it back. The field then shows `set` as its placeholder. To replace the key, paste another and save. **Remove key** deletes it.
@@ -41,18 +41,19 @@ The server stores the key encrypted and never sends it back. The field then show
 
 The Anthropic and OpenAI cards each have an **API URL** field. Leave it empty for the official API; the placeholder shows the official URL. To call another service with that card's API:
 
-1. Type the service's API URL into the **API URL** field and select **Save URL**.
-2. If the service needs a key, paste it into **API key** and select **Save key**. With an API URL of its own, the key is optional: a card with a URL and no key counts as connected, and its requests carry no key at all.
+1. Type the service's API URL into the **API URL** field.
+2. If the service needs a key, paste it into **API key**. With an API URL of its own, the key is optional: a card with a URL and no key counts as connected, and its requests carry no key at all.
+3. Select **Save**. It saves the URL first, then the key. **Test** stays unavailable while the card holds an unsaved URL or key, because it uses the saved ones.
 3. Pick a model and select **Test**.
 
 How TheVault reads the URL:
 
 - Spaces around it and trailing slashes are dropped.
-- A URL whose path ends in `/v1` is the API root as it is. Any other URL gets `/v1` added. So `https://openrouter.ai/api/v1`, `https://openrouter.ai/api` and `http://10.0.0.5:11434` all work, and requests go to paths such as `https://openrouter.ai/api/v1/responses`.
+- A URL whose path ends in a version segment, such as `/v1` or `/v4`, is the API root as it is, and requests go straight under it. Any other URL gets `/v1` added. So `https://openrouter.ai/api/v1`, `https://openrouter.ai/api` and `http://10.0.0.5:11434` all work, and requests go to paths such as `https://openrouter.ai/api/v1/responses`; `https://api.z.ai/api/coding/paas/v4` sends to `https://api.z.ai/api/coding/paas/v4/responses`.
 - It must start with `http://` or `https://`. `http` is allowed for servers on your own network; the key, when there is one, then crosses the network unencrypted.
 - It must not hold a user name or password (`https://user:pass@...`), a query or a fragment. Put a key in the **API key** field instead.
 
-A URL that breaks these rules is refused with the reason, and the stored URL stays as it was. To go back to the official API, empty the field and select **Save URL**.
+A URL that breaks these rules is refused with the reason, and the stored URL stays as it was. To go back to the official API, empty the field and select **Save**.
 
 The service must speak the card's API:
 

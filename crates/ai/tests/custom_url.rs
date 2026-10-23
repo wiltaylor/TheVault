@@ -6,7 +6,7 @@ mod common;
 
 use std::time::Duration;
 
-use ai::{Credentials, Endpoints, ErrorKind, Provider, Request, Settings};
+use ai::{Credentials, Endpoints, ErrorKind, Provider, Request, Settings, api_url};
 use common::Env;
 use state::{SecretKey, State};
 use testkit::{AnthropicReply, FakeAnthropic, FakeOpenAi, OpenAiReply};
@@ -14,38 +14,53 @@ use testkit::{AnthropicReply, FakeAnthropic, FakeOpenAi, OpenAiReply};
 #[test]
 fn api_urls_are_normalised_with_or_without_v1() {
     let mut e = Endpoints::default();
-    for (given, stored, base) in [
+    for (given, stored, responses) in [
         (
             "https://openrouter.ai/api/v1",
             "https://openrouter.ai/api/v1",
-            "https://openrouter.ai/api",
+            "https://openrouter.ai/api/v1/responses",
         ),
         (
             " https://openrouter.ai/api/v1/ ",
             "https://openrouter.ai/api/v1",
-            "https://openrouter.ai/api",
+            "https://openrouter.ai/api/v1/responses",
         ),
         (
             "https://openrouter.ai/api",
             "https://openrouter.ai/api",
-            "https://openrouter.ai/api",
+            "https://openrouter.ai/api/v1/responses",
         ),
         (
             "http://10.0.0.5:11434//",
             "http://10.0.0.5:11434",
-            "http://10.0.0.5:11434",
+            "http://10.0.0.5:11434/v1/responses",
         ),
+        // Another version segment is the API root as it is.
+        (
+            "https://api.z.ai/api/coding/paas/v4",
+            "https://api.z.ai/api/coding/paas/v4",
+            "https://api.z.ai/api/coding/paas/v4/responses",
+        ),
+        // Not a version segment: /v1 is added.
         (
             "https://example.com/v1beta",
             "https://example.com/v1beta",
-            "https://example.com/v1beta",
+            "https://example.com/v1beta/v1/responses",
         ),
     ] {
         e.set_url(Provider::OpenAi, Some(given)).unwrap();
         assert_eq!(e.url(Provider::OpenAi), Some(stored), "{given}");
-        // Every path the clients add starts /v1, so the API root is the base plus /v1.
-        assert_eq!(e.api_base(Provider::OpenAi), base, "{given}");
+        let base = e.api_base(Provider::OpenAi);
+        assert_eq!(api_url(&base, "/v1/responses"), responses, "{given}");
     }
+    assert_eq!(
+        api_url("https://api.z.ai/api/anthropic", "/v1/models?limit=1000"),
+        "https://api.z.ai/api/anthropic/v1/models?limit=1000"
+    );
+    assert_eq!(
+        api_url("https://example.com/api/v2", "/v1/models?limit=1000"),
+        "https://example.com/api/v2/models?limit=1000"
+    );
     assert_eq!(
         e.custom_host(Provider::OpenAi).as_deref(),
         Some("example.com")

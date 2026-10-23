@@ -78,7 +78,7 @@ pub use error::{AiError, ErrorKind};
 pub use http::{blocking_client, client};
 pub use settings::{
     ANTHROPIC_BASE, ANTHROPIC_DEFAULT_MODEL, CHATGPT_AUTH_BASE, Confirm, Endpoints, Models,
-    OPENAI_BASE, SETTINGS, SYSTEM_PROMPT_MAX, Settings, check_url,
+    OPENAI_BASE, SETTINGS, SYSTEM_PROMPT_MAX, Settings, api_url, check_url,
 };
 pub use trail::{Outcome, trail_for, trail_line};
 pub use types::{

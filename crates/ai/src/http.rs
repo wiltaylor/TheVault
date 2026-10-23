@@ -84,7 +84,7 @@ impl Call {
         }
         Call {
             get: true,
-            url: format!("{}{path}", cred.base_url),
+            url: crate::settings::api_url(&cred.base_url, path),
             headers,
             body: None,
             provider: cred.provider,
