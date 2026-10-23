@@ -17,6 +17,11 @@
 //!
 //! [`FakeGoogle::set_calendar_delay`] holds every request for a while, so a sync run is slow.
 //!
+//! Every insert and patch is recorded, with its `sendUpdates` query parameter, for
+//! [`FakeGoogle::calendar_writes`] (outbox X5). A `sendUpdates` other than `all`,
+//! `externalOnly` or `none` answers 400, as Google does. [`FakeGoogle::fail_calendar_writes`]
+//! makes every insert and patch answer an error.
+//!
 //! Series expand from their first `RRULE` with `FREQ` `DAILY` or `WEEKLY`, `INTERVAL`, `COUNT`
 //! and `UNTIL`. An occurrence's id is the series id, `_`, and its original start: `YYYYMMDD` for
 //! an all-day series, `YYYYMMDDTHHMMSSZ` in UTC for a timed one, as Google's are.
@@ -47,6 +52,23 @@ impl FakeGoogleBuilder {
     }
 }
 
+/// One insert or patch the fake Calendar received.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarWrite {
+    /// `POST` for an insert, `PATCH` for a patch.
+    pub method: String,
+    pub calendar: String,
+    /// The event id: the new one for an insert, the patched one for a patch. Empty for an
+    /// insert that was refused.
+    pub id: String,
+    /// The `sendUpdates` query parameter, as sent.
+    pub send_updates: Option<String>,
+    /// The JSON body.
+    pub body: Value,
+    /// The status the fake answered.
+    pub status: u16,
+}
+
 /// One stored event: a single event, a series master or a changed (or cancelled) instance.
 #[derive(Debug, Clone)]
 struct Stored {
@@ -70,6 +92,10 @@ pub(super) struct State {
     time: String,
     /// How long each request waits before it is answered, from [`FakeGoogle::set_calendar_delay`].
     delay: Option<std::time::Duration>,
+    /// Every insert and patch, in arrival order.
+    writes: Vec<CalendarWrite>,
+    /// The error every insert and patch answers, from [`FakeGoogle::fail_calendar_writes`].
+    write_error: Option<(u16, String)>,
 }
 
 impl State {
@@ -85,6 +111,8 @@ impl State {
             generation: 1,
             time: DEFAULT_TIME.to_owned(),
             delay: None,
+            writes: Vec::new(),
+            write_error: None,
         }
     }
 
@@ -223,6 +251,56 @@ impl FakeGoogle {
     pub fn set_calendar_delay(&self, delay: Option<std::time::Duration>) {
         self.calendar().delay = delay;
     }
+
+    /// Every insert and patch received so far, in arrival order, with its `sendUpdates`.
+    pub fn calendar_writes(&self) -> Vec<CalendarWrite> {
+        self.calendar().writes.clone()
+    }
+
+    /// Answer every insert and patch from now on with `status` and Google's error body carrying
+    /// `message`, or answer them again with `None`.
+    pub fn fail_calendar_writes(&self, error: Option<(u16, &str)>) {
+        self.calendar().write_error = error.map(|(s, m)| (s, m.to_owned()));
+    }
+}
+
+/// The reply to an insert or patch the test made fail, or to one with a `sendUpdates` Google does
+/// not take.
+fn write_refusal(cal: &State, request: &Request) -> Option<Reply> {
+    if let Some(send) = request.query("sendUpdates")
+        && !["all", "externalOnly", "none"].contains(&send.as_str())
+    {
+        return Some(bad_request(&format!(
+            "Invalid value for sendUpdates: {send}"
+        )));
+    }
+    let (status, message) = cal.write_error.as_ref()?;
+    Some(super::error(*status, "FAILED_PRECONDITION", message))
+}
+
+/// Record a patch of event `id`, or an insert when `id` is `None`, in `calendar`, and its
+/// `reply`.
+fn record_write(
+    cal: &mut State,
+    calendar: &str,
+    id: Option<&str>,
+    request: &Request,
+    reply: &Reply,
+) {
+    let id = id.map(str::to_owned).unwrap_or_else(|| {
+        serde_json::from_slice::<Value>(&reply.body)
+            .ok()
+            .and_then(|v| v["id"].as_str().map(str::to_owned))
+            .unwrap_or_default()
+    });
+    cal.writes.push(CalendarWrite {
+        method: request.method.clone(),
+        calendar: calendar.to_owned(),
+        id,
+        send_updates: request.query("sendUpdates"),
+        body: request.json(),
+        status: reply.status,
+    });
 }
 
 /// Set each member of `changes` on `event`.
@@ -273,7 +351,12 @@ pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
         ["calendars", c, ..] if !cal.has_calendar(c) => super::error(404, "NOT_FOUND", "Not Found"),
         ["calendars", c, "events"] => match method {
             "GET" => list(&cal, c, request),
-            "POST" => insert(&mut cal, c, request),
+            "POST" => {
+                let reply =
+                    write_refusal(&cal, request).unwrap_or_else(|| insert(&mut cal, c, request));
+                record_write(&mut cal, c, None, request, &reply);
+                reply
+            }
             _ => super::error(405, "METHOD_NOT_ALLOWED", "Method not allowed."),
         },
         ["calendars", c, "events", id, "instances"] if method == "GET" => {
@@ -284,7 +367,12 @@ pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
                 Some(e) => Reply::json(200, &e),
                 None => super::error(404, "NOT_FOUND", "Not Found"),
             },
-            "PATCH" => patch(&mut cal, c, id, request),
+            "PATCH" => {
+                let reply =
+                    write_refusal(&cal, request).unwrap_or_else(|| patch(&mut cal, c, id, request));
+                record_write(&mut cal, c, Some(id), request, &reply);
+                reply
+            }
             "DELETE" => match cal.find(c, id) {
                 None => super::error(404, "NOT_FOUND", "Not Found"),
                 Some(e) if e["status"] == "cancelled" => {

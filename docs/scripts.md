@@ -619,6 +619,8 @@ A handler cannot tell who wrote a note, so the snapshot is the loop guard. A not
 
 After a `POST` or `PATCH`, the handler writes Google's answer back to the note with `vault::update`: `etag`, the `snapshot` of what Google now holds, and, for an insert, `google_ref` and `calendar`. Each field group the note still holds as it was sent takes Google's value, so the note equals its snapshot and the `after_update` that write sets off sends nothing. A group the user changed again meanwhile keeps the user's value, for that next run to send.
 
+The Outbox's invites and changes (outbox X5): a note holding `send_updates`, which only the Outbox's send handler sets, is inserted or patched with the query parameter `sendUpdates=<send_updates>`, so Google emails the attendees; with it unset, as after every direct edit, the request carries no `sendUpdates` and Google emails no one. The write-back clears `send_updates`, and when it was set marks every `event` Outbox item that is `sending` and whose `event` or `result` is this note `sent`, with `sent_ref` (the Google event id), `sent_at` and `result`. When Google answers an error, those items become `failed` with the message (`Google Calendar events.patch of <id> answered <status>: <message>`), the run succeeds, and `send_updates` stays set so a retry sends it again. When the run sends nothing (no `when`, Google not connected, the event gone from Google, or nothing that differs from what Google holds), the items fail with the reason and `send_updates` is cleared.
+
 The note fields map to the event as the sync's table above, inverted:
 
 | Note | Sent as |
@@ -642,7 +644,7 @@ A run acts only on an item whose `status` is `approved`, read again with `vault:
 | Kind | Sends |
 |------|-------|
 | `email` | Through Gmail (outbox X4), below |
-| `event` | Not yet: the item fails with "Sending calendar invites from the Outbox is not available yet." |
+| `event` | Through the event note and its Google Calendar write-back (outbox X5), below |
 | `sms` | Not yet: the item fails with "Sending SMS from the Outbox is not available yet." |
 
 When the send succeeds the run sets `status = sent`, `sent_ref` and `sent_at`, an RFC 3339 time in UTC. When it fails the run sets `status = failed` with the reason in `error`, and the run itself succeeds. The writer lets a handler make only these changes to an item: see `docs/vault-format.md`, "The Outbox".
@@ -656,6 +658,12 @@ An email is sent as follows:
 5. The run builds the RFC 822 message: `From` (the `google_account` address), `To`, `Cc`, `Bcc`, `Subject` (the item's `subject`, else its title), `In-Reply-To` and `References` for a reply, and `MIME-Version`. A header value that is not ASCII is sent as an RFC 2047 encoded word, and an address's display name alone is encoded. The body is a `multipart/alternative` of a `text/plain` part and a `text/html` part, each UTF-8 in base64, inside a `multipart/mixed` with one base64 part per attachment when there are attachments. The parts are rendered from `body`: paragraphs, headings, lists, quotes, code, and the blocks inside toggles, admonitions and columns. Inline markup becomes plain text in the text part and the matching HTML in the HTML part, and a note mention shows the note's title.
 6. A message under 4.5 MB is sent with `POST {gmail}/users/me/messages/send` and `{ raw, threadId }`, `raw` from `http::base64url`. A larger one is sent with `POST {gmail_upload}/users/me/messages/send?uploadType=media` and `Content-Type: message/rfc822`, which carries no `threadId`; Gmail threads a reply by its headers.
 7. Gmail's message id becomes `sent_ref`. A 403 that names insufficient permission fails the item with the reconnect message; any other error with `Gmail answered <status> to messages.send: <message>`.
+
+A calendar invite or change is sent as follows:
+
+1. With `event` empty, and no `result` from an earlier try, the run creates an `event` note from the item's title, `when` (`end` defaults to `start`), `location`, `calendar`, `attendees_raw` and `description`, with `send_updates = "all"`. A missing title or `when.start` fails the item.
+2. Otherwise it reads the `event` note, or the item's `result` for a retry of a new event, sets on it each of the item's title, `when`, `location`, `calendar`, `attendees_raw` and `description` that is not empty, and sets `send_updates = "all"`. A `calendar` that differs from the event's fails the item: the write-back cannot move an event. When `send_updates` is still set from a failed try, the run clears it first, so the write is a change the write-back runs for.
+3. The run sets `result` to the event note and leaves the item `sending`. The event's `after_create` or `after_update` handler, `scripts/google_event.ws`, then sends the note to Google with `sendUpdates=all` and finishes the item: see "The Google Calendar write-back".
 
 The sent copy: the `outbox` type's second `after_update` handler runs `copy_sent` in `scripts/google_gmail.ws`. For an `email` item that is `sent` with a `sent_ref` and no `result`, it gets that message from Gmail, saves it as an `email` note with the sync's own `save` (or finds the note already pulled, by `gmail_ref`), and sets the item's `result` to it. When the token refresh fails it logs and leaves the copy to the `google_gmail` task, whose every run links the copies still missing, whatever the label settings.
 

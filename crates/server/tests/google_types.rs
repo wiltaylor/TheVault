@@ -253,7 +253,8 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
             "series",
             "google_ref",
             "etag",
-            "snapshot"
+            "snapshot",
+            "send_updates"
         ]
     );
     assert_eq!(field(event, "when")["kind"], "date_range");
@@ -274,10 +275,11 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
     assert_eq!(field(event, "meet_url")["kind"], "url");
     assert_eq!(field(event, "series")["kind"], "string");
     assert_eq!(field(event, "series")["computed"], true);
-    for name in ["google_ref", "etag", "snapshot"] {
+    for name in ["google_ref", "etag", "snapshot", "send_updates"] {
         assert_eq!(field(event, name)["hidden"], true, "{name}");
     }
     assert_eq!(field(event, "snapshot")["kind"], "dict");
+    assert_eq!(field(event, "send_updates")["kind"], "string");
     // The write-back ticket declares the handler; this one ships none.
     assert!(
         event["handlers"].as_array().is_none_or(Vec::is_empty),

@@ -69,13 +69,20 @@ Once Gmail has sent the email, TheVault imports Gmail's sent copy as an email no
 
 A calendar invite goes through Google Calendar. TheVault creates the event note, or changes the event the item names, and Google Calendar emails the attendees. The event note is the item's sent copy.
 
+- A new event takes the item's title, **When**, location, attendees, calendar and description. It needs a title and a time. An empty calendar means the default calendar of the Google settings.
+- A change sets each field the item holds on the event and leaves the rest as they are. It cannot move an event to another calendar.
+- The item is **Sent** once Google Calendar has taken the event, with Google's event id. When Google refuses it, the item is **Failed** with Google's message. **Retry** sends it again, and a new event that failed reuses the event note the first try made.
+- When the change asks for nothing the event does not already hold, nothing is sent and the item fails and says so.
+
+Only a write from the Outbox emails the attendees. Your direct edits of an event note write back without emailing anyone.
+
 ### SMS
 
 An SMS is sent by your Android phone. The phone must be paired with the vault, and **SMS sending** must be on for it in **Settings > Devices**. Otherwise the item fails and says which setting to turn on. The item's **Device** field picks the phone; empty means the vault's one Android phone with SMS sending on.
 
 The server queues a command for the phone, and the item shows **Waiting for phone** until the phone takes it and sends the message. The phone's record of the sent message comes back as a message note, linked as the item's sent copy. An SMS carries text only.
 
-Calendar invites and SMS sending arrive in later releases. Until then, an item of either kind fails with a message that says it is not available yet.
+SMS sending arrives in a later release. Until then, an SMS item fails with a message that says it is not available yet.
 
 ## Notifications
 

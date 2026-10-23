@@ -15,7 +15,9 @@ use regex
 // - `email`: through Gmail (`send_email`). Gmail's answer is recorded at once: `sent_ref` (the
 //   Gmail message id), `sent_at` and `status = sent`. The `google_gmail` script's `copy_sent`
 //   handler then imports the sent copy as an `email` note and links it as `result`.
-// - `event`: a calendar invite or change (`send_event`, outbox X5).
+// - `event`: a calendar invite or change (`send_event`, outbox X5), written into the event note
+//   with `send_updates = "all"`. The event's write-back sends it to Google, which emails the
+//   attendees, and marks the item `sent` or `failed`.
 // - `sms`: through the phone (`send_sms`, outbox X6).
 //
 // Each kind's function answers a `Sent`: `done` when the item was sent and its `sent_ref` is
@@ -221,11 +223,121 @@ fn record_sent(id: string, sent: Sent) -> Result[(), string] {
 
 // ---- event (outbox X5) ----------------------------------------------------------------------
 
-// A calendar invite or change: write the event note, which the `event` type's write-back sends
-// with sendUpdates=all. Ticket 181 fills this in.
+// A calendar invite or change: write the event note, authored by this handler, with the event's
+// one-shot `send_updates = "all"`. The `event` type's write-back (`google_event.ws`) then sends
+// it to Google with sendUpdates=all, so Google emails the attendees, and sets this item `sent`,
+// with the Google event id as `sent_ref`, or `failed` with Google's message. So the answer is
+// not `done`, and its `result` is the event note.
+//
+// A new event (no `event`) is created from the item's title, `when`, `location`,
+// `attendees_raw`, `calendar` and `description`. A retry of one whose first send failed reuses
+// the note that try made, the item's `result`. A change sets each of those the item holds on
+// the `event` note and leaves the rest as they are; it cannot move an event to another calendar.
 fn send_event(item: Value) -> Result[Sent, string] {
-    vault::log("Item " + text_of(item, "id") + " is a calendar invite.")
-    Err("Sending calendar invites from the Outbox is not available yet.")
+    let fields = fields_of(item)
+    let target = text_of(fields, "event")
+    if target == "" {
+        target = text_of(fields, "result")
+    }
+    let when = fields.get("when").unwrap_or(Value::Null)
+    let start = text_of(when, "start")
+    let end = text_of(when, "end")
+    let description = content_of(item, "description")
+    let attendees = strings_of(fields, "attendees_raw")
+    if target == "" {
+        let title = text_of(fields, "title").trim()
+        if title == "" {
+            return Err("The new event has no title.")
+        }
+        if start == "" {
+            return Err("The new event has no time: set When and send again.")
+        }
+        let f: Map[string, Value] = #{
+            "title": Value::String(title),
+            "when": Value::Map(#{ "start": Value::String(start), "end": Value::String(if end == "" { start } else { end }) }),
+            "send_updates": Value::String("all"),
+        }
+        for k in ["location", "calendar"] {
+            let v = text_of(fields, k).trim()
+            if v != "" {
+                f[k] = Value::String(v)
+            }
+        }
+        if attendees.len() > 0 {
+            f["attendees_raw"] = Value::List(attendees.map(|a| Value::String(a)))
+        }
+        let blocks: List[Value] = []
+        if description.len() > 0 {
+            blocks.push(description_block(description))
+        }
+        let made = vault::create("event", Value::Map(#{ "fields": Value::Map(f), "blocks": Value::List(blocks) }))?
+        let id = text_of(made, "id")
+        vault::log("Item " + text_of(item, "id") + " created event " + id + ".")
+        return Ok(Sent { done: false, sent_ref: "", result: id })
+    }
+
+    let event = match vault::get(target) {
+        Ok(n) => n,
+        Err(_) => return Err("The event to change is no longer in the vault."),
+    }
+    if text_of(event, "type") != "event" {
+        return Err("The note to change is not an event.")
+    }
+    let body = event.get("note").unwrap_or(Value::Null)
+    let f: Map[string, Value] = match body.get("fields") {
+        Some(Value::Map(m)) => m,
+        _ => #{},
+    }
+    let calendar = text_of(fields, "calendar").trim()
+    let current_calendar = text_of(Value::Map(f), "calendar")
+    if calendar != "" && current_calendar != "" && calendar != current_calendar {
+        return Err("The Outbox cannot move an event to another calendar. Clear Calendar and send again.")
+    }
+    if calendar != "" {
+        f["calendar"] = Value::String(calendar)
+    }
+    let title = text_of(fields, "title").trim()
+    if title != "" {
+        f["title"] = Value::String(title)
+    }
+    if start != "" || end != "" {
+        let from = if start == "" { end } else { start }
+        f["when"] = Value::Map(#{ "start": Value::String(from), "end": Value::String(if end == "" { from } else { end }) })
+    }
+    let location = text_of(fields, "location").trim()
+    if location != "" {
+        f["location"] = Value::String(location)
+    }
+    if attendees.len() > 0 {
+        f["attendees_raw"] = Value::List(attendees.map(|a| Value::String(a)))
+    }
+    let blocks = list_of(body, "blocks")
+    if description.len() > 0 {
+        blocks = blocks.filter(|b| !(text_of(b, "kind") == "content" && strings_of(b, "labels").contains("description")))
+        blocks.push(description_block(description))
+    }
+    // A failed send leaves `send_updates` set. Clear it first, so that this write is a change the
+    // write-back runs for even when the fields are as the last try left them.
+    let version = text_of(event, "version")
+    if text_of(Value::Map(f), "send_updates") != "" {
+        let cleared = vault::patch(target, Value::Map(#{ "send_updates": Value::Null }), version)?
+        version = text_of(cleared, "version")
+    }
+    f["send_updates"] = Value::String("all")
+    f.remove("created");
+    f.remove("updated");
+    vault::update(target, Value::Map(#{ "fields": Value::Map(f), "blocks": Value::List(blocks) }), version)?;
+    vault::log("Item " + text_of(item, "id") + " changed event " + target + ".")
+    Ok(Sent { done: false, sent_ref: "", result: target })
+}
+
+// The event's `description` content field, holding `blocks`.
+fn description_block(blocks: List[Value]) -> Value {
+    Value::Map(#{
+        "kind": Value::String("content"),
+        "labels": Value::List([Value::String("description")]),
+        "blocks": Value::List(blocks),
+    })
 }
 
 // ---- sms (outbox X6) ------------------------------------------------------------------------

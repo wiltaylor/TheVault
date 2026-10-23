@@ -1928,3 +1928,60 @@ fn a_type_that_already_has_a_list_page_block_is_left_alone() {
     // The message type already had the shipped block, so the step made no commit at all.
     assert_eq!(generation(root), before);
 }
+
+#[test]
+fn an_event_type_from_before_the_outbox_gains_send_updates_and_no_note_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let path = "types/event.wcl";
+    let current = writer::DEFAULT_EVENT_TYPE;
+    let start = current
+        .find("field send_updates {")
+        .expect("the shipped event type has send_updates");
+    let end = start + current[start..].find("}\n").unwrap() + 2;
+    let old = format!("{}{}", &current[..start], current[end..].trim_start());
+    std::fs::write(root.join(path), store::canonical(&old, path).unwrap()).unwrap();
+    let event = {
+        let w = open(root);
+        assert!(
+            w.schema()
+                .type_def("event")
+                .unwrap()
+                .field("send_updates")
+                .is_none()
+        );
+        w.create(
+            "event",
+            &writer::Input::Json(json!({ "fields": {
+                "title": "Standup",
+                "when": { "start": "2026-03-05T10:00:00Z", "end": "2026-03-05T10:15:00Z" },
+            } })),
+            &author(),
+        )
+        .unwrap()
+        .id
+    };
+    let note_path = format!("notes/event/{event}.wcl");
+    let before = read(root, &note_path).unwrap();
+
+    let w = open(root);
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert_eq!(
+        done.fields_added,
+        [("event".to_owned(), "send_updates".to_owned())]
+    );
+    assert_eq!(
+        read(root, path).unwrap(),
+        store::canonical(current, path).unwrap()
+    );
+    let schema = w.schema();
+    let field = schema
+        .type_def("event")
+        .unwrap()
+        .field("send_updates")
+        .unwrap();
+    assert!(field.hidden);
+    assert_eq!(field.kind, schema::FieldKind::String);
+    assert_eq!(read(root, &note_path).unwrap(), before);
+}

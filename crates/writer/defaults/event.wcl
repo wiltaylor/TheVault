@@ -92,6 +92,13 @@ field snapshot {
   hidden      = true
 }
 
+field send_updates {
+  kind        = "string"
+  label       = "Send updates"
+  description = "Set to all by the Outbox for one write-back, so Google emails the attendees. The write-back clears it."
+  hidden      = true
+}
+
 handler "after_create" {
   script        = "google_event"
   allow_domains = ["oauth2.googleapis.com", "www.googleapis.com"]

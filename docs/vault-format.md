@@ -324,6 +324,7 @@ The fields of the Google sync types, as a new vault gets them. The Gmail and cal
 | | `google_ref` | `string`, hidden | Google's id for the event, or for this occurrence |
 | | `etag` | `string`, hidden | Google's version of the event, as last synced |
 | | `snapshot` | `dict` of `string`, hidden | The synced fields as Google last sent them, so a sync can tell which side changed (google-sync D10) |
+| | `send_updates` | `string`, hidden | One-shot: the Outbox sets it to `all` when it writes an invite or change into the note, so the write-back sends `sendUpdates=all` and Google emails the attendees. The write-back clears it. A direct edit leaves it unset, so Google emails no one (outbox X5). A vault from before the Outbox gains it on its next start |
 
 The `event` type declares three handlers, on `after_create`, `after_update` and `after_delete`, each running `scripts/google_event.ws` with `allow_domains = ["oauth2.googleapis.com", "www.googleapis.com"]` and the secrets `google_client_id`, `google_client_secret`, `google_refresh_token` and `google_settings`. They write the vault's changes to an event note back to Google Calendar (google-sync D9, D10, D20); `docs/scripts.md`, "The Google Calendar write-back", says what each sends.
 
@@ -368,6 +369,8 @@ The `outbox` type holds what TheVault sends for the user: emails through Gmail, 
 | `device` | `string` | SMS: the id of the device that sends it; empty is the vault's one Android device with SMS sending on |
 | `event` | `reference` to any type | Event: the `event` note to change; empty for a new event |
 | `when`, `location`, `attendees_raw`, `calendar`, `description` | as the `event` type's | Event: each means "set to this" for a change; an empty field leaves the event's value as it is |
+
+An approved `event` item is sent by writing the event note, authored `handler outbox_send`, with the event's `send_updates = "all"`: a new note from the item's title and event fields when `event` is empty (or the note an earlier, failed try made, which is then the item's `result`), else the item's non-empty fields set on the `event` note. A change cannot move an event to another `calendar`. The item stays `sending` with `result` set to the event note until the event's write-back sends it to Google, then becomes `sent` with the Google event id in `sent_ref`, or `failed` with Google's message (outbox X5).
 
 `result`, `in_reply_to` and `event` take any type (`target = "*"`) so that the built-in type never ties a vault's own `email` or `event` type to it. The default template shows one tab for the item's kind, by [conditional tabs](#conditional-tabs) on `kind`, with a `dropdown` control on `status`, then a Message tab with `body` (not for events) and a Status tab. Its list page is the `list` view, newest `updated` first.
 

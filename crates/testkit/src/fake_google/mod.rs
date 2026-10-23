@@ -39,6 +39,7 @@ mod calendar;
 mod gmail;
 mod oauth;
 
+pub use calendar::CalendarWrite;
 pub use gmail::{SendRoute, SentMessage};
 
 pub use oauth::{

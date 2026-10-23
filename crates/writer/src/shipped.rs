@@ -159,13 +159,17 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "5f4a59e376bae6ab443affc0c0fdf241b1f26347a870f35ab03cedf110584cd3",
             "87423adde9c434f260c4d07f2cb1196cb7d89a91411c783838391cf2434c9e1d",
             "dc7c8f91ab0b2c8bdda7e31ccd2422b4edc628f0beb7a11b7dbb45c52fe15b7b",
+            "0d9a17a114dfdc774cef98bca4ec1b885218afeece1b4e52d8fc0bcaf3d4b573",
         ],
     },
     // The Outbox's send handler, named by the shipped `outbox` type's handlers (outbox X3).
     ShippedFile {
         path: "scripts/outbox_send.ws",
         source: include_str!("../defaults/outbox_send.ws"),
-        hashes: &["48d6e8cc94b6bcac9a858a539391d2e9e3e8e8bbe96d4bda2b039632399ab461"],
+        hashes: &[
+            "48d6e8cc94b6bcac9a858a539391d2e9e3e8e8bbe96d4bda2b039632399ab461",
+            "bc27a3a0c03cc59ac5a20539e639d3d6845b69ad377f57d26e333f6aefe40ab8",
+        ],
     },
     // The built-in agent, the chat panel's default (agents G6).
     ShippedFile {

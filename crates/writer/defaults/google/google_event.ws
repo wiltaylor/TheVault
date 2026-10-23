@@ -23,6 +23,12 @@ use regex
 //   is inserted as a new event under a new `google_ref` (D20).
 // - after_delete: DELETE the event or occurrence (D9).
 //
+// The Outbox (outbox X5) writes an invite or change into the note with the hidden one-shot
+// field `send_updates = "all"`. The insert or PATCH then carries `sendUpdates=all`, so Google
+// emails the attendees, and the write-back clears the field and marks the Outbox items sending
+// this event `sent`, or `failed` with Google's message. A direct edit leaves the field unset,
+// so Google emails no one.
+//
 // The settings are the JSON object in the `google_settings` secret: `default_calendar`, and the
 // `endpoints` test seam (google-sync D21). The handler reads it and writes nothing but notes.
 //
@@ -533,6 +539,8 @@ fn body_for(ctx: Ctx, fields: Map[string, Value], blocks: List[Value], values: M
     put(fields, "series", meta["series"])
     put(fields, "google_ref", meta["google_ref"])
     put(fields, "etag", meta["etag"])
+    // The Outbox's one-shot request to email the attendees, sent with this write-back.
+    fields.remove("send_updates");
     fields.remove("created");
     fields.remove("updated");
 
@@ -560,7 +568,9 @@ fn body_for(ctx: Ctx, fields: Map[string, Value], blocks: List[Value], values: M
 // Record Google's answer `event` on note `id`: its etag, its values as the snapshot, and its
 // values in each field group the note still holds as `basis`, what was sent. A group the user
 // changed again since keeps the user's value, for the next run to send. `google_ref` and
-// `calendar` are set when not "", and `clear_series` removes `series`.
+// `calendar` are set when not "", and `clear_series` removes `series`. The write clears the
+// Outbox's one-shot `send_updates`; when it was set, the Outbox items sending this event are
+// marked sent (outbox X5).
 fn write_back(ctx: Ctx, id: string, basis: Map[string, string], event: Value, google_ref: string, calendar: string, clear_series: bool) -> Result[(), string] {
     let google = synced(event)
     let tries = 0
@@ -583,6 +593,7 @@ fn write_back(ctx: Ctx, id: string, basis: Map[string, string], event: Value, go
             }
         }
         let f = Value::Map(fields)
+        let invited = text_of(f, "send_updates") != ""
         let meta = #{
             "calendar": if calendar != "" { calendar } else { text_of(f, "calendar") },
             "series": if clear_series { "" } else { text_of(f, "series") },
@@ -592,7 +603,12 @@ fn write_back(ctx: Ctx, id: string, basis: Map[string, string], event: Value, go
         let same_attendees = value(values, "attendees") == value(current, "attendees")
         let next = body_for(ctx, fields, blocks, values, google, meta, same_attendees)?
         match vault::update(id, next, text_of(note, "version")) {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                if invited {
+                    sent_items(id, text_of(event, "id"))
+                }
+                return Ok(())
+            },
             Err(e) => {
                 last = e
             }
@@ -606,8 +622,17 @@ fn calendar_of(ctx: Ctx, fields: Value) -> string {
     if c == "" { ctx.default_calendar } else { c }
 }
 
-// Insert note `id` as a new event, and record its new `google_ref`.
-fn insert(ctx: Ctx, id: string, fields: Value, mine: Map[string, string]) -> Result[(), string] {
+// The query string that asks Google to email the attendees about an insert or patch: `?sendUpdates=`
+// and the note's `send_updates`, which the Outbox sets for one write-back (outbox X5). "" when it is
+// unset, as for every direct edit of the note, so Google emails no one.
+fn updates_query(fields: Value) -> string {
+    let send = text_of(fields, "send_updates")
+    if send == "" { "" } else { "?sendUpdates=" + encode(send) }
+}
+
+// Insert note `id` as a new event, and record its new `google_ref`. Answers "", as every
+// function below does once Google took the change, or why nothing was sent.
+fn insert(ctx: Ctx, id: string, fields: Value, mine: Map[string, string]) -> Result[string, string] {
     let calendar = calendar_of(ctx, fields)
     let body = to_google(mine, writable(), [])
     for k in ["summary", "location", "description"] {
@@ -615,40 +640,46 @@ fn insert(ctx: Ctx, id: string, fields: Value, mine: Map[string, string]) -> Res
             body.remove(k);
         }
     }
-    let reply = call(ctx, "POST", events_url(ctx, calendar), "", Value::Map(body))?
+    let reply = call(ctx, "POST", events_url(ctx, calendar) + updates_query(fields), "", Value::Map(body))?
     if status_of(reply) != 200 {
         return Err(failure("events.insert into " + calendar, reply))
     }
     let event = body_of(reply)
     vault::log("Inserted as " + text_of(event, "id") + " into " + calendar + ".")
-    write_back(ctx, id, mine, event, text_of(event, "id"), calendar, true)
+    write_back(ctx, id, mine, event, text_of(event, "id"), calendar, true)?;
+    Ok("")
+}
+
+fn gone_reason(google_ref: string) -> string {
+    vault::log("Google no longer has " + google_ref + ", so nothing is sent.")
+    "Google Calendar no longer has this event."
 }
 
 // PATCH the groups of the note that differ from its snapshot; on 412, merge and try once more.
-fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], snapshot: Map[string, string], changed: List[List[string]]) -> Result[(), string] {
+fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], snapshot: Map[string, string], changed: List[List[string]]) -> Result[string, string] {
     let google_ref = text_of(fields, "google_ref")
     let url = event_url(ctx, calendar_of(ctx, fields), google_ref)
+    let updates = updates_query(fields)
     // A new attendee list replaces Google's whole, so read the entries Google holds to keep them.
     let held: List[Value] = []
     if changed.any(|g| g[0] == "attendees") {
         let current = call(ctx, "GET", url, "", Value::Null)?
         if gone(current) {
-            vault::log("Google no longer has " + google_ref + ", so nothing is sent.")
-            return Ok(())
+            return Ok(gone_reason(google_ref))
         }
         if status_of(current) != 200 {
             return Err(failure("events.get of " + google_ref, current))
         }
         held = list_of(body_of(current), "attendees")
     }
-    let reply = call(ctx, "PATCH", url, text_of(fields, "etag"), Value::Map(to_google(mine, changed, held)))?
+    let reply = call(ctx, "PATCH", url + updates, text_of(fields, "etag"), Value::Map(to_google(mine, changed, held)))?
     let status = status_of(reply)
     if status == 200 {
-        return write_back(ctx, id, mine, body_of(reply), "", "", false)
+        write_back(ctx, id, mine, body_of(reply), "", "", false)?;
+        return Ok("")
     }
     if status == 404 || status == 410 {
-        vault::log("Google no longer has " + google_ref + ", so nothing is sent.")
-        return Ok(())
+        return Ok(gone_reason(google_ref))
     }
     if status != 412 {
         return Err(failure("events.patch of " + google_ref, reply))
@@ -656,8 +687,7 @@ fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], 
     // Google changed the event since the snapshot: merge field by field (D10), then send again.
     let fresh = call(ctx, "GET", url, "", Value::Null)?
     if gone(fresh) {
-        vault::log("Google no longer has " + google_ref + ", so nothing is sent.")
-        return Ok(())
+        return Ok(gone_reason(google_ref))
     }
     if status_of(fresh) != 200 {
         return Err(failure("events.get of " + google_ref, fresh))
@@ -668,20 +698,26 @@ fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], 
     let merged = merge(google, snapshot, mine, google_newer)
     let send = differing(merged, google, writable())
     if !send.is_empty() {
-        let again = call(ctx, "PATCH", url, text_of(event, "etag"), Value::Map(to_google(merged, send, list_of(event, "attendees"))))?
+        let again = call(ctx, "PATCH", url + updates, text_of(event, "etag"), Value::Map(to_google(merged, send, list_of(event, "attendees"))))?
         if status_of(again) != 200 {
             return Err(failure("events.patch of " + google_ref + " after a merge", again))
         }
         event = body_of(again)
     }
-    write_back(ctx, id, mine, event, "", "", false)
+    write_back(ctx, id, mine, event, "", "", false)?;
+    Ok("")
 }
 
-// Send the vault's change to note `id`. `created` for an after_create run.
-fn push(id: string, created: bool) -> Result[(), string] {
+fn not_connected_reason() -> string {
+    "Google is not connected, or its sign-in expired. Connect Google in Settings > Integrations and send again."
+}
+
+// Send the vault's change to note `id`. `created` for an after_create run. Answers "" when
+// Google took a change, or why nothing was sent.
+fn push(id: string, created: bool) -> Result[string, string] {
     let note = match vault::get(id) {
         Ok(n) => n,
-        Err(_) => return Ok(()),
+        Err(_) => return Ok("The event is no longer in the vault."),
     }
     let body = note.get("note").unwrap()
     let fields = body.get("fields").unwrap_or(Value::Null)
@@ -693,26 +729,27 @@ fn push(id: string, created: bool) -> Result[(), string] {
     if google_ref == "" {
         if value(mine, "start") == "" {
             vault::log("The note has no time yet, so it is not sent to Google.")
-            return Ok(())
+            return Ok("The event has no time, so it was not sent to Google.")
         }
         let ctx = connect()?
         if !ctx.ok {
-            return Ok(())
+            return Ok(not_connected_reason())
         }
         return insert(ctx, id, fields, mine)
     }
 
     let changed = differing(mine, snapshot, writable())
+    let unchanged = "The event already is as the change asks, so Google had nothing to send."
     if created {
         // The task made this note from Google just now: it holds what Google sent.
         let fresh = text_of(fields, "created") == text_of(fields, "updated") && differing(mine, snapshot, groups()).is_empty()
         if fresh {
-            return Ok(())
+            return Ok(unchanged)
         }
         // Restored from the trash: recreate it when Google no longer has it (D20).
         let ctx = connect()?
         if !ctx.ok {
-            return Ok(())
+            return Ok(not_connected_reason())
         }
         let reply = call(ctx, "GET", event_url(ctx, calendar_of(ctx, fields), google_ref), "", Value::Null)?
         if gone(reply) {
@@ -722,28 +759,119 @@ fn push(id: string, created: bool) -> Result[(), string] {
             return Err(failure("events.get of " + google_ref, reply))
         }
         if changed.is_empty() {
-            return Ok(())
+            return Ok(unchanged)
         }
         return send_changes(ctx, id, fields, mine, snapshot, changed)
     }
 
     // The loop guard: nothing differs from what Google last sent.
     if changed.is_empty() {
-        return Ok(())
+        return Ok(unchanged)
     }
     let ctx = connect()?
     if !ctx.ok {
-        return Ok(())
+        return Ok(not_connected_reason())
     }
     send_changes(ctx, id, fields, mine, snapshot, changed)
 }
 
+// Send the change to note `id`, then settle the Outbox items that asked for it (outbox X5). When
+// the note holds `send_updates`, the change came from the Outbox: a write-back marks its items
+// sent; a Google error marks them failed with Google's message and leaves `send_updates` set, so
+// that a retry sends it again; a run that sent nothing marks them failed with the reason and
+// clears `send_updates`.
+fn run(id: string, created: bool) -> Result[(), string] {
+    let invited = match vault::get(id) {
+        Ok(n) => text_of(n.get("note").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null), "send_updates") != "",
+        Err(_) => false,
+    }
+    match push(id, created) {
+        Ok(reason) => {
+            if invited && reason != "" {
+                failed_items(id, reason);
+                match vault::patch(id, Value::Map(#{ "send_updates": Value::Null }), "") {
+                    Ok(_) => {},
+                    Err(e) => vault::log("send_updates was not cleared: " + e),
+                }
+            }
+            Ok(())
+        },
+        Err(e) => {
+            if invited && failed_items(id, e) > 0 {
+                vault::log("Google refused the Outbox's change: " + e)
+                return Ok(())
+            }
+            Err(e)
+        },
+    }
+}
+
 fn after_create(event: Value) -> Result[(), string] {
-    push(text_of(event, "id"), true)
+    run(text_of(event, "id"), true)
 }
 
 fn after_update(event: Value) -> Result[(), string] {
-    push(text_of(event, "id"), false)
+    run(text_of(event, "id"), false)
+}
+
+// ---- the Outbox (outbox X5) -----------------------------------------------------------------
+
+// The Outbox items that are sending a change to event note `id`: an `event` item whose `event`
+// or `result` is the note and whose status is `sending`.
+fn sending_items(id: string) -> List[string] {
+    let rows = match vault::query("from outbox where kind == \"event\" && status == \"sending\"") {
+        Ok(rows) => rows,
+        Err(e) => {
+            vault::log("The Outbox was not read: " + e)
+            return []
+        },
+    }
+    let out: List[string] = []
+    for row in rows {
+        let f = row.get("fields").unwrap_or(Value::Null)
+        if text_of(f, "event") == id || text_of(f, "result") == id {
+            out.push(text_of(row, "id"))
+        }
+    }
+    out
+}
+
+// Now as an RFC 3339 time in UTC.
+fn now_text() -> string {
+    let secs = vault::now() / 1000
+    let rest = secs % 86400
+    date_of_days(secs / 86400) + fmt("T{:02}:{:02}:{:02}Z", rest / 3600, (rest / 60) % 60, rest % 60)
+}
+
+// Mark the items sending event note `id` sent, as Google event `google_id`.
+fn sent_items(id: string, google_id: string) {
+    for item in sending_items(id) {
+        let f = #{
+            "status": Value::String("sent"),
+            "sent_ref": Value::String(google_id),
+            "sent_at": Value::String(now_text()),
+            "result": Value::String(id),
+        }
+        match vault::patch(item, Value::Map(f), "") {
+            Ok(_) => vault::log("Outbox item " + item + " was sent as " + google_id + "."),
+            Err(e) => vault::log("Outbox item " + item + " was not marked sent: " + e),
+        }
+    }
+}
+
+// Mark the items sending event note `id` failed with `message`, and answer how many there were.
+fn failed_items(id: string, message: string) -> int {
+    let n = 0
+    for item in sending_items(id) {
+        let f = #{ "status": Value::String("failed"), "error": Value::String(message) }
+        match vault::patch(item, Value::Map(f), "") {
+            Ok(_) => {
+                n += 1
+            },
+            Err(e) => vault::log("Outbox item " + item + " was not marked failed: " + e),
+        }
+    }
+    n
 }
 
 // Delete the note's event, or its one occurrence, in Google (D9).
