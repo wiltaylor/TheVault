@@ -20,12 +20,13 @@ import { FieldValue, formatValue } from "../components/Render";
 import { VirtualList } from "../components/VirtualList";
 import { type PagedRows, createPagedRows } from "../components/pagedRows";
 import { MapView } from "../map/MapView";
+import { MAP_VIEW_HEIGHT } from "../map/model";
 import { slotField } from "../notes";
 import { typeDef } from "../session";
 import { resultCanvas } from "./canvasView";
 import { CalendarView, TimelineView } from "./DateViews";
 import { KanbanView } from "./KanbanView";
-import { type ViewDef, readQueryView, viewTemplate } from "./model";
+import { type ViewDef, readQueryView, setViewItem, viewTemplate } from "./model";
 import { NoteLink, TemplateBody } from "./parts";
 import { useThisNote } from "./thisNote";
 
@@ -308,7 +309,7 @@ function createPoll(ms: number | undefined) {
  * canvas draws a bounded number of cards. Every view runs its query again after each note write
  * this client makes, so a change made in one view shows in the others on the page.
  */
-export function QueryView(props: { block: Block }) {
+export function QueryView(props: { block: Block; onChange?: (block: Block) => void }) {
   const thisId = useThisNote();
   const def = createMemo(() => readQueryView(props.block));
   const [selected, setSelected] = createSignal<string | null>(null);
@@ -316,7 +317,8 @@ export function QueryView(props: { block: Block }) {
   const tick = createPoll(useContext(QueryPoll));
   const data = createPagedRows(
     (cursor, size) => api.query(def().query, cursor, size, thisId),
-    () => `${def().query}\u0000${thisId ?? ""}`,
+    // A memo, so a change to the block that leaves the query alone, as a new map height, keeps the rows.
+    createMemo(() => `${def().query}\u0000${thisId ?? ""}`),
     PAGE_SIZE,
     () => [changes(), tick()],
   );
@@ -378,6 +380,16 @@ export function QueryView(props: { block: Block }) {
                         location={view().location}
                         data={data}
                         total={total()}
+                        height={view().height}
+                        onHeight={
+                          props.onChange
+                            ? (h) => {
+                                const i = def().views.indexOf(view());
+                                const value = h === MAP_VIEW_HEIGHT.initial ? undefined : h;
+                                if (i >= 0) props.onChange?.(setViewItem(props.block, i, "height", value));
+                              }
+                            : undefined
+                        }
                         card={(row) => (
                           <>
                             <NoteLink row={row} />

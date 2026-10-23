@@ -2296,6 +2296,15 @@ a.button {
   margin-bottom: 0.5rem;
 }
 
+/* A map with a resize handle on its bottom edge (components/HeightHandle.tsx). */
+.map-frame > .map {
+  margin-bottom: 0;
+}
+
+.map-frame:has(> .location-map) {
+  margin-bottom: 0.5rem;
+}
+
 .map-error {
   position: absolute;
   inset: 0.5rem 0.5rem auto 0.5rem;

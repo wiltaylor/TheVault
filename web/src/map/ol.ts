@@ -58,6 +58,8 @@ export interface MapHandle {
   showPopup(id: string | null): void;
   readonly popup: HTMLElement;
   setTiles(url: string): void;
+  /** Redraw at the target's current size, after it was resized. */
+  updateSize(): void;
   dispose(): void;
 }
 
@@ -240,6 +242,9 @@ export function createMap(opts: MapOptions): MapHandle {
       map.removeLayer(group);
       group = baseLayer(url);
       map.getLayers().insertAt(0, group);
+    },
+    updateSize() {
+      map.updateSize();
     },
     dispose() {
       map.setTarget(undefined);

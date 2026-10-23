@@ -65,7 +65,7 @@ export function BlockHolder(props: SolidNodeViewProps) {
                     {settings() ? "Done" : "Edit query"}
                   </button>
                 </div>
-                <Show when={settings()} fallback={<BlockView block={b()} />}>
+                <Show when={settings()} fallback={<BlockView block={b()} onChange={change()} />}>
                   <QueryViewSettings block={b()} onChange={change()} onRemove={() => props.replaceWith()} />
                 </Show>
               </div>

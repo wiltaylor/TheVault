@@ -8,7 +8,14 @@ import { knowTitle, noteTitle } from "../editor/titles";
 import { MapCanvas } from "../map/MapCanvas";
 import { isPdfFile } from "../pdf/model";
 import { PdfThumbButton } from "../pdf/PdfPreview";
-import { geoPoint, imagePoint, mapKind } from "../map/model";
+import {
+  LOCATION_MAP_HEIGHT,
+  geoPoint,
+  imagePoint,
+  locationMapHeight,
+  mapKind,
+  setLocationMapHeight,
+} from "../map/model";
 import { taxonomyDef, typeDef } from "../session";
 import { ChipPicker, matches } from "./ChipPicker";
 import type { Suggestion } from "./Combobox";
@@ -506,7 +513,8 @@ function PairInput(
 
 /**
  * A location: picked by clicking a map, by dragging its pin, or typed. A geo field picks on a
- * real-world map, an image-map field on its image (D3, D29).
+ * real-world map, an image-map field on its image (D3, D29). The handle on the map's bottom edge
+ * sets its height, which this browser keeps per type and field (docs/vault-format.md, "location").
  */
 function LocationInput(props: FieldInputProps) {
   const map = mapKind(props.field);
@@ -526,6 +534,12 @@ function LocationInput(props: FieldInputProps) {
     const [a, b] = parts;
     props.onChange(next[a] === undefined || next[b] === undefined ? undefined : { [a]: next[a]!, [b]: next[b]! });
   }
+  const heightKey = () => [props.related?.type ?? "", props.field.name] as const;
+  const [height, setHeight] = createSignal(locationMapHeight(...heightKey()));
+  function resize(h: number) {
+    setLocationMapHeight(...heightKey(), h);
+    setHeight(h);
+  }
   const pins = () => {
     const d = draft() as Json;
     const point = image ? imagePoint(d) : geoPoint(d);
@@ -538,6 +552,9 @@ function LocationInput(props: FieldInputProps) {
         pins={pins()}
         label={`${props.label} map`}
         class="location-map"
+        height={height()}
+        range={LOCATION_MAP_HEIGHT}
+        onHeight={resize}
         draggable
         onPick={pick}
         onMove={(_, v) => pick(v)}

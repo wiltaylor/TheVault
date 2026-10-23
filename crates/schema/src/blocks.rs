@@ -199,6 +199,11 @@ pub const CANVAS_HEIGHT_DEFAULT: i64 = 480;
 pub const CANVAS_HEIGHT_MIN: i64 = 160;
 pub const CANVAS_HEIGHT_MAX: i64 = 4000;
 
+/// A `map` view's `height`, in screen pixels: the default when it has none, and the bounds.
+pub const MAP_VIEW_HEIGHT_DEFAULT: i64 = 448;
+pub const MAP_VIEW_HEIGHT_MIN: i64 = 160;
+pub const MAP_VIEW_HEIGHT_MAX: i64 = 4000;
+
 /// An `asset` block's `height`, the height of its PDF viewer in screen pixels: the bounds.
 pub const ASSET_HEIGHT_MIN: i64 = 160;
 pub const ASSET_HEIGHT_MAX: i64 = 4000;
@@ -837,6 +842,10 @@ impl Check<'_> {
             opt("date", Form::Str),
             opt("mode", Form::OneOf(&["month", "week", "day"])),
             opt("location", Form::Str),
+            opt(
+                "height",
+                Form::Int(MAP_VIEW_HEIGHT_MIN, MAP_VIEW_HEIGHT_MAX),
+            ),
         ];
         self.items(d, &items, &[], at);
         let Some(Value::Str(kind)) = d.field("kind") else {
@@ -850,7 +859,7 @@ impl Check<'_> {
             "kanban" => (&["template", "group"], Some("group")),
             "calendar" => (&["date", "mode"], Some("date")),
             "timeline" => (&["date"], Some("date")),
-            "map" => (&["template", "location"], Some("location")),
+            "map" => (&["template", "location", "height"], Some("location")),
             "canvas" => (&["template"], None),
             _ => return,
         };

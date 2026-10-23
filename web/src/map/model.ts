@@ -39,6 +39,42 @@ export function setTileUrl(url: string) {
   setTilesSignal(next);
 }
 
+/** A `map` view's `height`, in screen pixels, as `schema` checks it. */
+export const MAP_VIEW_HEIGHT = { initial: 448, min: 160, max: 4000 };
+
+/** The height of a location field's map in a note's editor, in screen pixels. */
+export const LOCATION_MAP_HEIGHT = { initial: 256, min: 160, max: 2000 };
+
+const LOCATION_HEIGHT_KEY = "thevault.map.locationHeight";
+
+function locationKey(type: string, field: string): string {
+  return `${LOCATION_HEIGHT_KEY}:${type}:${field}`;
+}
+
+/**
+ * The height this browser keeps for field `field` of type `type`'s map, or the default. It is a
+ * display preference, never written to the vault.
+ */
+export function locationMapHeight(type: string, field: string): number {
+  try {
+    const n = Number(globalThis.localStorage?.getItem(locationKey(type, field)));
+    if (Number.isFinite(n) && n >= LOCATION_MAP_HEIGHT.min && n <= LOCATION_MAP_HEIGHT.max) return Math.round(n);
+  } catch {
+    // Storage can be off; the default then shows.
+  }
+  return LOCATION_MAP_HEIGHT.initial;
+}
+
+/** Keep `h` as the height of the field's map in this browser; the default forgets it. */
+export function setLocationMapHeight(type: string, field: string, h: number) {
+  try {
+    if (h === LOCATION_MAP_HEIGHT.initial) globalThis.localStorage?.removeItem(locationKey(type, field));
+    else globalThis.localStorage?.setItem(locationKey(type, field), String(h));
+  } catch {
+    // Storage can be off, as in a private window. The height then lasts for this page.
+  }
+}
+
 /** Whether `url` is a raster tile template rather than a style document. */
 export function isTileTemplate(url: string): boolean {
   return url.includes("{z}") && url.includes("{x}") && (url.includes("{y}") || url.includes("{-y}"));

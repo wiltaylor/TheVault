@@ -143,7 +143,7 @@ export function BlockView(
         <CodeBlock block={b()} onChange={props.onChange} />
       </Match>
       <Match when={b().kind === "query_view"}>
-        <QueryView block={b()} />
+        <QueryView block={b()} onChange={props.onChange} />
       </Match>
       <Match when={b().kind === "mermaid"}>
         <MermaidBlock block={b()} onChange={props.onChange} />

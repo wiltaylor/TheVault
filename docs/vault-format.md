@@ -890,6 +890,8 @@ place = { lat: -37.8136, lng: 144.9631 }
 desk  = { x: 412.0, y: 188.5 }
 ```
 
+The map a note's editor shows for the field is 256 screen pixels tall. The handle on its bottom edge sets a height from 160 to 2000, and a double-click puts back the default. The height is kept on each device, per type and field, and never in a file.
+
 ### `content`
 
 A sequence of [content blocks](#content-blocks) (D34). The note writes a `content` block labelled with the field name.
@@ -1735,6 +1737,7 @@ Each `view` holds a `kind` and the items that kind uses:
 | `date` | string | `calendar`, `timeline`: required, a `date`, `datetime` or `date_range` field |
 | `mode` | string | `calendar`: `month`, `week` or `day`. Default `month` |
 | `location` | string | `map`: required, a `location` field. An image-map field shows its image |
+| `height` | integer | `map`: the map's height in screen pixels, from 160 to 4000. Default 448. The handle on the map's bottom edge sets it, and a double-click on the handle puts back the default, which leaves the item out |
 | `place "<ULID>" { ... }` | block | `canvas`: a saved position for one result note |
 
 | View kind | Shows | Default `template` |

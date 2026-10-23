@@ -18,7 +18,7 @@ const KIND_ITEMS: Record<string, string[]> = {
   kanban: ["template", "group"],
   calendar: ["date", "mode"],
   timeline: ["date"],
-  map: ["template", "location"],
+  map: ["template", "location", "height"],
   canvas: ["template"],
 };
 
@@ -37,6 +37,8 @@ export interface ViewDef {
   columns: string[];
   /** `map`: the location field pins sit at. */
   location: string | null;
+  /** `map`: the stored height in screen pixels, or null for the default. */
+  height: number | null;
   /** `kanban`: the single-term taxonomy field whose terms are the columns. */
   group: string | null;
   /** `calendar`, `timeline`: the date, datetime or date range field. */
@@ -74,6 +76,7 @@ export function readView(view: Block): ViewDef {
     template: str(view.fields, "template"),
     columns: Array.isArray(columns) ? columns.filter((c): c is string => typeof c === "string") : ["title"],
     location: str(view.fields, "location"),
+    height: typeof view.fields?.height === "number" ? view.fields.height : null,
     group: str(view.fields, "group"),
     date: str(view.fields, "date"),
     mode: str(view.fields, "mode") ?? "month",

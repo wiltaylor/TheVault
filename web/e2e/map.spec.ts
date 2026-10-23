@@ -531,3 +531,72 @@ test("keeping the stored version after a stale pin drag puts the pin back", asyn
     return Math.hypot(at.x - back.x, at.y - back.y);
   }).toBeLessThanOrEqual(1.5);
 });
+
+/** Drag `handle` down by `dy` screen pixels with the mouse, in steps, and let go. */
+async function dragDown(page: Page, handle: Locator, dy: number) {
+  await handle.scrollIntoViewIfNeeded();
+  const h = (await handle.boundingBox())!;
+  await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2 + dy, { steps: 8 });
+  await page.mouse.up();
+}
+
+/** The height OpenLayers draws the map's canvas at, in CSS pixels. */
+const drawnHeight = (map: Locator) =>
+  map.locator(".ol-viewport").first().evaluate((el) => Math.round(el.getBoundingClientRect().height));
+
+test("a map view's handle makes it taller, saves the view's height, and a reload keeps it", async ({ page, admin, baseURL }) => {
+  const place = await ensurePlace(admin);
+  const tag = token();
+  await create(admin, place, { title: `Perth ${tag}`, tag, spot: { lat: -31.9523, lng: 115.8613 } });
+  const note = await mapPage(admin, `Tall ${tag}`, `from ${place} where tag == "${tag}"`, "spot");
+
+  await standIn(page, baseURL!);
+  await logIn(page, `/notes/${note.id}`);
+  const map = page.getByTestId("query-view").getByTestId("map");
+  await expect(map.getByTestId("map-pin")).toHaveCount(1);
+  await expect(map).toHaveCSS("height", "448px");
+  await expect.poll(() => drawnHeight(map)).toBeGreaterThan(440);
+  const handle = page.getByRole("separator", { name: "Map height" });
+  await expect(handle).toHaveAttribute("aria-valuenow", "448");
+
+  await dragDown(page, handle, 300);
+  await expect(map).toHaveCSS("height", "748px");
+  // The map redraws at its new size, not only its box.
+  await expect.poll(() => drawnHeight(map)).toBeGreaterThan(740);
+  await page.getByLabel("Title", { exact: true }).focus();
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+  const res = await admin.get(`/api/notes/${note.id}`);
+  const body = (await res.json()) as { note: { blocks: { blocks: { blocks: { fields: Record<string, unknown> }[] }[] }[] } };
+  expect(body.note.blocks[0]!.blocks[0]!.blocks[0]!.fields).toEqual({ kind: "map", location: "spot", height: 748 });
+
+  await page.reload();
+  const again = page.getByTestId("query-view").getByTestId("map");
+  await expect(again).toHaveCSS("height", "748px");
+  await expect.poll(() => drawnHeight(again)).toBeGreaterThan(740);
+  await expect(again.getByTestId("map-pin")).toHaveCount(1);
+});
+
+test("a location field's map is resized from its handle and keeps the height for the type", async ({ page, admin, baseURL }) => {
+  const place = await ensurePlace(admin);
+  const first = await create(admin, place, { title: `Darwin ${token()}`, spot: { lat: -12.4634, lng: 130.8456 } });
+  const second = await create(admin, place, { title: `Cairns ${token()}` });
+
+  await standIn(page, baseURL!);
+  await logIn(page, `/notes/${first.id}`);
+  const map = page.getByRole("region", { name: "Spot map" });
+  await expect(map).toHaveCSS("height", "256px");
+  await dragDown(page, page.getByRole("separator", { name: "Spot map height" }), 200);
+  await expect(map).toHaveCSS("height", "456px");
+  await expect.poll(() => drawnHeight(map)).toBeGreaterThan(450);
+  // A display preference: the note is not changed.
+  expect((await fields(admin, first.id)).spot).toEqual({ lat: -12.4634, lng: 130.8456 });
+
+  await page.goto(`/notes/${second.id}`);
+  await expect(page.getByRole("region", { name: "Spot map" })).toHaveCSS("height", "456px");
+  await page.reload();
+  await expect(page.getByRole("region", { name: "Spot map" })).toHaveCSS("height", "456px");
+  await page.getByRole("separator", { name: "Spot map height" }).dblclick();
+  await expect(page.getByRole("region", { name: "Spot map" })).toHaveCSS("height", "256px");
+});

@@ -1122,6 +1122,54 @@ fn an_asset_block_takes_a_viewer_height_and_a_card_flag() {
 }
 
 #[test]
+fn a_map_view_takes_a_height_from_160_to_4000_and_no_other_view_does() {
+    let block = |kind: &str, items: &str| {
+        format!(
+            "content body {{\n  query_view {{\n    query = \"from kinds\"\n    view v {{\n      kind = \"{kind}\"\n{items}    }}\n  }}\n}}"
+        )
+    };
+    let map = |items: &str| block("map", &format!("      location = \"geo\"\n{items}"));
+    for ok in [
+        "",
+        "      height = 160\n",
+        "      height = 900\n",
+        "      height = 4000\n",
+    ] {
+        check_kinds(&map(ok)).unwrap();
+    }
+    for bad in ["159", "4001"] {
+        let issues = check_kinds(&map(&format!("      height = {bad}\n"))).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("view \"v\".height: must be from 160 to 4000")),
+            "{bad}: {issues:?}"
+        );
+    }
+    let issues = check_kinds(&map("      height = 600.5\n")).unwrap_err();
+    assert!(
+        issues.iter().any(|i| i.contains("must be an integer")),
+        "{issues:?}"
+    );
+    for (kind, items) in [
+        ("table", ""),
+        ("cards", ""),
+        ("kanban", "      group = \"tax\"\n"),
+        ("calendar", "      date = \"d\"\n"),
+        ("canvas", ""),
+    ] {
+        let issues =
+            check_kinds(&block(kind, &format!("{items}      height = 600\n"))).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains(&format!("view \"v\".height: is not used by a {kind} view"))),
+            "{kind}: {issues:?}"
+        );
+    }
+}
+
+#[test]
 fn a_canvas_in_the_old_format_reads_as_cards_and_validates() {
     let old = plan(&format!(
         "  node t {{\n    kind = \"text\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    colour = \"blue\"\n    text = \"Hello **you**\"\n  }}\n  node a {{\n    kind = \"asset\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    asset = \"{ASSET}\"\n  }}\n  node l {{\n    kind = \"link\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    url = \"https://example.com\"\n  }}\n  node q {{\n    kind = \"query\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n    query = \"from box\"\n    view = \"table\"\n  }}\n  node i {{\n    kind = \"ink\"\n    x = 0.0\n    y = 0.0\n    width = 10.0\n    height = 10.0\n  }}\n  edge e {{\n    from = \"t\"\n    to = \"q\"\n    arrow = \"both\"\n  }}\n"

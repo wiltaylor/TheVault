@@ -5,7 +5,7 @@ import type { PagedRows } from "../components/pagedRows";
 import { applyEdits } from "../notes";
 import { typeDef } from "../session";
 import { MapCanvas, type PinView } from "./MapCanvas";
-import { type MapKind, mapKind, pinsOf } from "./model";
+import { MAP_VIEW_HEIGHT, type MapKind, mapKind, pinsOf } from "./model";
 
 /** Pins drawn at once. A larger result pages, like the details view (D33). */
 export const PINS_PER_PAGE = 500;
@@ -24,13 +24,18 @@ interface Conflict {
  * A query view's `map` view: a pin per result note at its `location` field (D29). The field
  * decides the map: a real-world map, or the image an image-map field names. Dragging a pin writes
  * the note's field against the version the note had when the drag started, so a save that lands
- * meanwhile answers 409 and opens the conflict view (D12); clicking a pin opens its card.
+ * meanwhile answers 409 and opens the conflict view (D12); clicking a pin opens its card. The map
+ * is the view's `height` tall; with `onHeight`, a handle on its bottom edge sets that height.
  */
 export function MapView(props: {
   location: string | null;
   data: PagedRows;
   total: number;
   card: (row: Row) => JSX.Element;
+  /** The view's stored `height`, or null for the default. */
+  height?: number | null;
+  /** Write the view's new height; the default leaves the item out. Without it, no handle. */
+  onHeight?: (h: number) => void;
 }) {
   const [page, setPage] = createSignal(0);
   const [open, setOpen] = createSignal<string | null>(null);
@@ -196,6 +201,9 @@ export function MapView(props: {
               frame={page()}
               label="Map"
               class="query-map-canvas"
+              height={props.height ?? MAP_VIEW_HEIGHT.initial}
+              range={MAP_VIEW_HEIGHT}
+              onHeight={props.onHeight}
               draggable
               onDragStart={startDrag}
               onMove={(id, v) => void move(id, v)}
