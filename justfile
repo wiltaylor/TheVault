@@ -45,11 +45,39 @@ dev vault='.scratch/dev-vault' listen='0.0.0.0:8787' password='devpass': web-bui
 	#!/usr/bin/env bash
 	set -euo pipefail
 	export VAULT_SECRET_KEY_FILE="${VAULT_SECRET_KEY_FILE:-{{vault}}.key}"
+	# Local settings for this checkout's dev server, such as the browser box `just dev-browser` writes.
+	if [ -f .scratch/dev.env ]; then
+		set -a
+		. ./.scratch/dev.env
+		set +a
+		echo "Read .scratch/dev.env"
+	fi
 	if [ ! -e '{{vault}}/.vault/state.db' ]; then
 		printf '%s\n' '{{password}}' | cargo run -q -p cli --bin vault -- init '{{vault}}' --starter --password-stdin
 	fi
 	echo "Serving {{vault}} on http://{{listen}}"
 	cargo run -p server --bin vault-server -- --vault '{{vault}}' --listen '{{listen}}' --web web/dist
+
+# Start a browser box for `just dev` on 127.0.0.1 (desktop on :6080, commands on :7700), building the image when it is missing, and write its address and a fresh token to .scratch/dev.env, which `just dev` reads; runs on the host
+[group('docker')]
+dev-browser name='thevault-browser-dev' image='thevault-browser:local': (require-host-tool "docker") (require-host-tool "openssl")
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if ! docker image inspect '{{image}}' >/dev/null 2>&1; then just browser-image-build '{{image}}'; fi
+	token=$(openssl rand -hex 32)
+	docker rm -f '{{name}}' >/dev/null 2>&1 || true
+	docker run -d --name '{{name}}' --shm-size 1g -e BROWSER_TOKEN="$token" \
+		-p 127.0.0.1:7700:7700 -p 127.0.0.1:6080:6080 -v '{{name}}-home':/home/agent '{{image}}' >/dev/null
+	mkdir -p .scratch
+	touch .scratch/dev.env
+	chmod 600 .scratch/dev.env
+	grep -v '^VAULT_BROWSER_' .scratch/dev.env > .scratch/dev.env.new || true
+	printf 'VAULT_BROWSER_URL=http://127.0.0.1:7700\nVAULT_BROWSER_DESKTOP_URL=http://127.0.0.1:6080\nVAULT_BROWSER_TOKEN=%s\n' "$token" >> .scratch/dev.env.new
+	mv .scratch/dev.env.new .scratch/dev.env
+	chmod 600 .scratch/dev.env
+	for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:7700/health >/dev/null 2>&1 && break; sleep 1; done
+	curl -fsS http://127.0.0.1:7700/health; echo
+	echo "Browser box {{name}} is up: desktop http://127.0.0.1:6080/vnc.html. Restart just dev to use it."
 
 # Run the S6 benchmark: generate a seeded vault, time reindex, query, search, open and save, and write target/bench/report.md
 [group('rust')]
