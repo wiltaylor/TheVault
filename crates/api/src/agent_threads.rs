@@ -12,11 +12,13 @@
 //! Routes:
 //!
 //! - `GET /api/agents/{name}/threads` (read): the agent's threads, newest activity first, each
-//!   `{id, title, origin, last_activity, pending}`.
+//!   `{id, title, origin, last_activity, pending, archived, running, turn, started_ms}`:
+//!   `running` says a turn runs on the thread now, `turn` is its id in the turns form (null for a
+//!   trigger's run) and `started_ms` when it started (agents G17).
 //! - `POST /api/agents/{name}/threads` (read) takes `{title?}` and creates a thread, 201 with the
 //!   thread.
 //! - `GET /api/agents/{name}/threads/{id}` (read): the thread with its `messages`, `steps` and
-//!   `proposals`.
+//!   `proposals`, and `running`, `turn` and `started_ms` as the list has them.
 //! - `PATCH /api/agents/{name}/threads/{id}` (write) takes `{title}`: a rename, authored by the
 //!   caller.
 //! - `DELETE /api/agents/{name}/threads/{id}` (write): the note goes to the trash.
@@ -26,7 +28,7 @@
 //! a proposal's `thread` records its outcome here, and `POST /api/ai/discard` records a discard;
 //! the next turn on the thread starts with the D29 lines for every outcome not yet reported.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use ai::{Content, Message, Role};
@@ -338,7 +340,7 @@ impl Thread {
 
     /// The thread as the list answers it.
     pub fn summary(&self) -> Value {
-        json!({
+        let mut v = json!({
             "id": self.id,
             "title": self.title,
             "agent": self.agent,
@@ -347,7 +349,9 @@ impl Thread {
             "pending": self.transcript.pending(),
             "archived": self.archived,
             "version": self.version,
-        })
+        });
+        put_running(&mut v, &self.id);
+        v
     }
 
     /// The thread with its transcript, as `GET /api/agents/{name}/threads/{id}` answers it.
@@ -623,10 +627,45 @@ pub fn render_body(t: &Transcript, label: &str) -> Option<Value> {
     Some(json!({ "kind": "content", "labels": ["body"], "blocks": out }))
 }
 
-/// The threads a turn is running on: a second turn on one of them is refused.
-fn busy() -> &'static Mutex<HashSet<String>> {
-    static BUSY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+/// A turn running on a thread (agents G17): its agent, its id in the turns form (`None` for a
+/// trigger's run or a `POST /api/ai/chat` turn) and when it started, in milliseconds since the
+/// epoch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Running {
+    pub agent: String,
+    pub turn: Option<String>,
+    pub started_ms: i64,
+}
+
+/// The threads a turn is running on, by thread id: a second turn on one of them is refused.
+fn busy() -> &'static Mutex<HashMap<String, Running>> {
+    static BUSY: OnceLock<Mutex<HashMap<String, Running>>> = OnceLock::new();
     BUSY.get_or_init(Mutex::default)
+}
+
+fn held() -> std::sync::MutexGuard<'static, HashMap<String, Running>> {
+    busy().lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The turn running on thread `id`, if one is.
+pub fn running(id: &str) -> Option<Running> {
+    held().get(id).cloned()
+}
+
+/// The turns running on agent `agent`'s threads.
+pub fn running_of(agent: &str) -> Vec<Running> {
+    held()
+        .values()
+        .filter(|r| r.agent == agent)
+        .cloned()
+        .collect()
+}
+
+/// Name the turn running on thread `id`: its id in the turns form.
+pub fn set_turn(id: &str, turn: &str) {
+    if let Some(r) = held().get_mut(id) {
+        r.turn = Some(turn.to_owned());
+    }
 }
 
 /// Holds a thread for its turn; dropping it frees the thread.
@@ -634,27 +673,40 @@ fn busy() -> &'static Mutex<HashSet<String>> {
 pub struct Busy(String);
 
 impl Busy {
-    /// Hold thread `id`, or 409 `thread_busy` when a turn runs on it.
-    pub fn take(id: &str) -> Result<Busy, ApiError> {
-        let mut held = busy().lock().unwrap_or_else(PoisonError::into_inner);
-        if !held.insert(id.to_owned()) {
+    /// Hold thread `id` for a turn of agent `agent`, or 409 `thread_busy` when a turn runs on it.
+    pub fn take(id: &str, agent: &str) -> Result<Busy, ApiError> {
+        let mut held = held();
+        if held.contains_key(id) {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
                 "thread_busy",
                 "a turn is running on this thread: wait for it or stop it",
             ));
         }
+        held.insert(
+            id.to_owned(),
+            Running {
+                agent: agent.to_owned(),
+                turn: None,
+                started_ms: chrono::Utc::now().timestamp_millis(),
+            },
+        );
         Ok(Busy(id.to_owned()))
     }
 }
 
 impl Drop for Busy {
     fn drop(&mut self) {
-        busy()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.0);
+        held().remove(&self.0);
     }
+}
+
+/// `running`, `turn` and `started_ms` of thread `id`, as the list and the thread answer them.
+fn put_running(v: &mut Value, id: &str) {
+    let r = running(id);
+    v["running"] = json!(r.is_some());
+    v["turn"] = json!(r.as_ref().and_then(|r| r.turn.clone()));
+    v["started_ms"] = json!(r.map(|r| r.started_ms));
 }
 
 type Shared = State<Arc<Writer>>;
@@ -695,14 +747,18 @@ pub async fn list(
                 .map_err(ApiError::bad_request)?;
             for r in page["rows"].as_array().into_iter().flatten() {
                 let f = &r["fields"];
-                out.push(json!({
+                let mut row = json!({
                     "id": r["id"],
                     "title": r["title"],
                     "origin": f["origin"],
                     "last_activity": f["last_activity"],
                     "pending": f["pending"].as_u64().unwrap_or(0),
                     "archived": f["archived"].as_bool().unwrap_or(false),
-                }));
+                });
+                if let Some(id) = r["id"].as_str() {
+                    put_running(&mut row, id);
+                }
+                out.push(row);
             }
             match page["next"].as_str() {
                 Some(next) => cursor = Some(next.to_owned()),

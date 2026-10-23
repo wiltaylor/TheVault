@@ -6,6 +6,10 @@
 // message of a new thread starts it. Each thread's ⋯ menu (or a right-click) renames it inline,
 // archives or unarchives it, and deletes it to the trash (agents G15): ordinary note writes,
 // authored by the user. Archived threads are hidden until "Show archived" lists them, dimmed.
+// Turns run on the server in the background (agents G17): any thread can be opened while one
+// answers, a running thread shows a spinner, read as "Running", and one that answered while it
+// was not open shows a "New reply" dot until opened. The list reads again when the live stream
+// says a turn of the agent started or ended, and every few seconds while one runs, for the apps.
 
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { type AgentThreadSummary, api } from "../api";
@@ -13,6 +17,8 @@ import { TypeIcon } from "../components/Icon";
 import { NameInput } from "../components/PinnedTree";
 import { errorText } from "../pages/TypeEditor";
 import { Conversation, ModelPicker } from "./ChatPanel";
+import { NewReplyMark, RunningMark } from "./RunningMark";
+import { hasNewReply, lastTurnEvent, turnEnded, turnsChanged } from "./running";
 import { createChatSession } from "./store";
 import "./chat.css";
 
@@ -23,6 +29,9 @@ export function lastActive(at: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return at;
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
+
+/** How often the list reads again while a thread of it runs (agents G17). */
+export const RUNNING_POLL_MS = 4_000;
 
 /** What a thread's badge says. */
 export function pendingLabel(n: number): string {
@@ -41,14 +50,21 @@ export function AgentChat(props: { agent: string; label?: string; thread?: strin
   const [menu, setMenu] = createSignal<string | null>(null);
   const [renaming, setRenaming] = createSignal<string | null>(null);
   let asked = 0;
+  let poll: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(poll));
   async function refresh() {
     const mine = ++asked;
     const agent = props.agent;
     try {
       const got = await (showArchived() ? api.agentThreads(agent, true) : api.agentThreads(agent));
       if (mine !== asked) return;
+      // A thread that stopped running since the last read answered: a new reply, unless open.
+      const was = new Set(threads().filter((t) => t.running).map((t) => t.id));
+      for (const t of got.threads) if (was.has(t.id) && !t.running) turnEnded(t.id);
       setThreads(got.threads);
       setError(null);
+      clearTimeout(poll);
+      if (got.threads.some((t) => t.running)) poll = setTimeout(() => void refresh(), RUNNING_POLL_MS);
     } catch (e) {
       if (mine !== asked) return;
       setError(e instanceof Error ? e.message : String(e));
@@ -75,6 +91,17 @@ export function AgentChat(props: { agent: string; label?: string; thread?: strin
       (thread) => {
         if (thread && session.chat.thread !== thread) void session.openThread(thread);
       },
+    ),
+  );
+  // A turn of this agent started or ended somewhere.
+  createEffect(
+    on(
+      turnsChanged,
+      () => {
+        const e = lastTurnEvent();
+        if (!e || e.agent === props.agent) void refresh();
+      },
+      { defer: true },
     ),
   );
   const name = () => props.label || props.agent;
@@ -177,7 +204,7 @@ export function AgentChat(props: { agent: string; label?: string; thread?: strin
   return (
     <section class="agent-chat" aria-label="Chat">
       <aside class="agent-threads" aria-label="Threads">
-        <button type="button" class="primary" onClick={() => session.newConversation()} disabled={session.chat.streaming}>
+        <button type="button" class="primary" onClick={() => session.newConversation()}>
           New thread
         </button>
         <Show when={error()}>
@@ -209,10 +236,16 @@ export function AgentChat(props: { agent: string; label?: string; thread?: strin
                           type="button"
                           class="agent-thread-item"
                           aria-current={session.chat.thread === t.id ? "true" : undefined}
-                          disabled={session.chat.streaming}
-                          onClick={() => void session.openThread(t.id)}
+                          onClick={() => {
+                            if (session.chat.thread !== t.id) void session.openThread(t.id);
+                          }}
                         >
-                          <span class="agent-thread-title">{titleOf(t)}</span>
+                          <span class="agent-thread-name">
+                            <span class="agent-thread-title">{titleOf(t)}</span>
+                            <Show when={t.running} fallback={<Show when={hasNewReply(t.id) && session.chat.thread !== t.id}><NewReplyMark /></Show>}>
+                              <RunningMark />
+                            </Show>
+                          </span>
                           <Show when={t.archived}>
                             <span class="visually-hidden"> (archived)</span>
                           </Show>

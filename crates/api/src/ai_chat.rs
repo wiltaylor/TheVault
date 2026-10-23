@@ -38,9 +38,10 @@
 //! `messages` is the turn's new transcript items, for the client to append and send back next
 //! turn: assistant messages with their `provider_state`, and the user messages carrying tool
 //! results. They are never edited afterwards. A comment goes out every [`HEARTBEAT`]. When the
-//! client goes away the loop stops, and the provider call in flight is dropped, which closes its
-//! connection. The turns form (`crate::ai_turns`, ai D23) runs its turns through the same
-//! [`start`], and `POST /api/ai/apply` applies a proposal with [`apply_change`]. An agent
+//! client of `POST /api/ai/chat` goes away the loop stops, and the provider call in flight is
+//! dropped, which closes its connection. The turns form (`crate::ai_turns`, ai D23) runs its
+//! turns through the same [`start`], holding their events itself, so a turn on a thread runs on
+//! with no client reading until it ends or is stopped (agents G17), and `POST /api/ai/apply` applies a proposal with [`apply_change`]. An agent
 //! trigger's run (`crate::agent_runs`, agents G12) is a turn with no client, [`run_unattended`],
 //! offered no change tool whose confirmation switch is on.
 
@@ -110,6 +111,38 @@ pub struct ChatBody {
     /// `messages` holds only the user's new message, and writes the turn to it as it streams.
     #[serde(default)]
     thread: Option<String>,
+}
+
+impl ChatBody {
+    /// The agent the body names, if any.
+    pub(crate) fn agent(&self) -> Option<&str> {
+        self.agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// The thread the body names, if any.
+    pub(crate) fn thread(&self) -> Option<&str> {
+        self.thread
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+}
+
+/// One event a turn sends: its name and its JSON data as text.
+#[derive(Debug, Clone)]
+pub(crate) struct Sent {
+    pub(crate) name: String,
+    pub(crate) data: String,
+}
+
+impl Sent {
+    /// The event as a server-sent event.
+    pub(crate) fn event(&self) -> Event {
+        Event::default().event(&self.name).data(&self.data)
+    }
 }
 
 /// What an unattended turn (an agent trigger's run, agents G12) reports: how it ended and its
@@ -268,7 +301,7 @@ pub(crate) async fn start(
     scope: Scope,
     body: ChatBody,
     stop: watch::Receiver<bool>,
-) -> Result<(mpsc::Receiver<Event>, Arc<AtomicBool>), ApiError> {
+) -> Result<(mpsc::Receiver<Sent>, Arc<AtomicBool>), ApiError> {
     start_with(w, author, scope, body, stop, None).await
 }
 
@@ -280,7 +313,7 @@ async fn start_with(
     body: ChatBody,
     stop: watch::Receiver<bool>,
     report: Option<Report>,
-) -> Result<(mpsc::Receiver<Event>, Arc<AtomicBool>), ApiError> {
+) -> Result<(mpsc::Receiver<Sent>, Arc<AtomicBool>), ApiError> {
     let provider = match body.provider.as_deref().map(str::trim) {
         Some(p) if !p.is_empty() => Some(p.parse::<Provider>().map_err(ApiError::bad_request)?),
         _ => None,
@@ -306,7 +339,7 @@ async fn start_with(
             .map_err(|e| {
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
             })??;
-    let (tx, rx) = mpsc::channel::<Event>(64);
+    let (tx, rx) = mpsc::channel::<Sent>(64);
     let named = prepared.named;
     let turn = Turn {
         writer: w,
@@ -397,7 +430,7 @@ fn prepare(
             thread.agent, agent.name
         )));
     }
-    let busy = Busy::take(&thread.id)?;
+    let busy = Busy::take(&thread.id, &agent.name)?;
     // Sending in an archived thread takes it out of the archive (agents G15).
     if thread.archived {
         w.set_archived(&thread.id, false, Some(&thread.version), author)?;
@@ -484,17 +517,17 @@ where
 
 /// The events a turn sends, in order, ending when it does.
 pub(crate) fn receive(
-    rx: mpsc::Receiver<Event>,
+    rx: mpsc::Receiver<Sent>,
 ) -> impl futures_util::Stream<Item = Result<Event, Infallible>> {
     futures_util::stream::unfold(rx, |mut rx| async move {
         let e = rx.recv().await?;
-        Some((Ok::<_, Infallible>(e), rx))
+        Some((Ok::<_, Infallible>(e.event()), rx))
     })
 }
 
 /// Where the events go. A send fails once the client has gone or the turn was stopped.
 struct Out {
-    tx: mpsc::Sender<Event>,
+    tx: mpsc::Sender<Sent>,
     /// Turns true when the turn is stopped (`DELETE /api/ai/chat/turns/{turn}`).
     stop: watch::Receiver<bool>,
 }
@@ -504,7 +537,10 @@ impl Out {
         if self.gone() {
             return false;
         }
-        let e = Event::default().event(name).data(data.to_string());
+        let e = Sent {
+            name: name.to_owned(),
+            data: data.to_string(),
+        };
         tokio::select! {
             sent = self.tx.send(e) => sent.is_ok(),
             _ = self.stopped() => false,

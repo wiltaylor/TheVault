@@ -399,6 +399,12 @@ export interface AgentThreadSummary {
   pending: number;
   /** Whether the thread note is archived (agents G15). */
   archived?: boolean;
+  /** Whether a turn runs on the thread now (agents G17). */
+  running?: boolean;
+  /** The running turn's id in the turns form; null for a trigger's run. */
+  turn?: string | null;
+  /** When the running turn started, in milliseconds since the epoch. */
+  started_ms?: number | null;
 }
 
 /** A proposal of a thread and where it stands (agents G8). */
@@ -439,6 +445,8 @@ export interface AgentSummary {
   mention?: { types: string[] | null } | null;
   built_in: boolean;
   error?: string;
+  /** How many turns run on the agent's threads now (agents G17). */
+  running?: number;
 }
 
 export interface AgentList {
@@ -658,6 +666,13 @@ export type AiApplied =
   | { op: "download"; asset_id: string; filename: string; media_type?: string; size?: number; url?: string };
 
 /** A poll of a chat turn's events through an app's embedded server (ai D23). */
+/** A turn started in the turns form (ai D23, agents G17). */
+export interface AiTurnStarted {
+  turn: string;
+  /** When it started, in milliseconds since the epoch. */
+  started_ms?: number;
+}
+
 export interface AiTurnPoll {
   events: StreamEvent[];
   /** How many events the turn has sent so far: the next poll's `after`. */
@@ -1175,6 +1190,36 @@ export function sseParser(): { feed: (chunk: string) => StreamEvent[] } {
   };
 }
 
+/** Throw the ApiError a failed streaming answer carries. */
+async function streamFailed(res: Response): Promise<never> {
+  const text = await res.text().catch(() => "");
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = { message: text };
+  }
+  if (res.status === 401) onUnauthorized();
+  throw new ApiError(res.status, parsed && typeof parsed === "object" ? (parsed as ApiError["body"]) : {});
+}
+
+/** Hand each server-sent event of `res` to `onEvent` as it arrives, until the stream ends. */
+async function readStream(res: Response, onEvent: (e: StreamEvent) => void): Promise<void> {
+  if (!res.ok || !res.body) await streamFailed(res);
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  const parser = sseParser();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      for (const e of parser.feed(decoder.decode(value, { stream: true }))) onEvent(e);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 /**
  * POST `body` to `path` and hand each server-sent event of the answer to `onEvent` as it
  * arrives, reading the body with a stream reader (EventSource cannot POST). Resolves when the
@@ -1193,29 +1238,23 @@ export async function streamEvents(
     body: JSON.stringify(body),
     ...(signal ? { signal } : {}),
   });
-  if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => "");
-    let parsed: unknown = null;
-    try {
-      parsed = text ? JSON.parse(text) : null;
-    } catch {
-      parsed = { message: text };
-    }
-    if (res.status === 401) onUnauthorized();
-    throw new ApiError(res.status, parsed && typeof parsed === "object" ? (parsed as ApiError["body"]) : {});
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  const parser = sseParser();
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      for (const e of parser.feed(decoder.decode(value, { stream: true }))) onEvent(e);
-    }
-  } finally {
-    reader.releaseLock();
-  }
+  await readStream(res, onEvent);
+}
+
+/**
+ * Read chat turn `turn`'s events after the first `after` (agents G17), handing each to `onEvent`
+ * as it arrives: those it sent so far, then the rest as they come. Resolves when the stream ends;
+ * aborting `signal` stops reading, and the turn runs on. A turn whose events are no longer kept
+ * throws an ApiError, 410 or 404.
+ */
+export async function streamTurn(turn: string, after: number, onEvent: (e: StreamEvent) => void, signal?: AbortSignal): Promise<void> {
+  const res = await fetch(`/api/ai/chat/turns/${encodeURIComponent(turn)}/events?after=${after}`, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: { Accept: "text/event-stream" },
+    ...(signal ? { signal } : {}),
+  });
+  await readStream(res, onEvent);
 }
 
 const enc = encodeURIComponent;
@@ -1462,7 +1501,7 @@ export const api = {
   /** Record that the user discarded a thread's proposal (agents G8). */
   aiDiscard: (id: string, thread: string) => request<{ thread: string; pending: number }>("POST", "/api/ai/discard", { id, thread }),
   /** Start a chat turn in the turns form: its id (ai D23). */
-  aiTurnStart: async (body: unknown) => (await request<{ turn: string }>("POST", "/api/ai/chat/turns", body)).turn,
+  aiTurnStart: (body: unknown) => request<AiTurnStarted>("POST", "/api/ai/chat/turns", body),
   /** In an app: the turn's events after the first `after`, waiting briefly for one. */
   aiTurnPoll: (turn: string, after: number, signal?: AbortSignal) =>
     request<AiTurnPoll>("GET", `/api/app/ai/turns/${enc(turn)}?after=${after}`, undefined, signal),

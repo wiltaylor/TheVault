@@ -14,6 +14,7 @@ export const LIVE_EVENTS = [
   "note.changed",
   "device.command",
   "device.settings",
+  "ai_turn",
 ] as const;
 
 export type LiveEventName = (typeof LIVE_EVENTS)[number];

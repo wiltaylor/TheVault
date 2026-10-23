@@ -367,3 +367,43 @@
 .ai-agent-picker {
   max-width: 12rem;
 }
+
+/* A thread or agent a turn runs on, and a thread with a reply nobody has seen (agents G17). */
+.ai-running {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--muted);
+}
+
+.ai-running-dot,
+.ai-new-reply {
+  display: none;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ai-new-reply {
+  display: inline-block;
+  flex: none;
+  background: var(--accent, #6b46c1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-running .sync-glyph.spinner {
+    display: none;
+  }
+
+  .ai-running-dot {
+    display: inline-block;
+  }
+}
+
+.agent-thread-name {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../api";
+import { turnsOver } from "./fakeTurns";
 
 // The chat panel's applied cards (ai D22): a change the AI made itself, its confirmation off in
 // Settings > AI, shows what was done and links to the note, the trash or the type, and open views
@@ -22,9 +23,11 @@ const aiProviders = vi.fn();
 const app = vi.fn(async () => null);
 const reloadDefinitions = vi.fn(async () => undefined);
 
+const turns = turnsOver(streamEvents);
+
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, api: { ...real.api, aiModels, aiProviders, app } };
+  return { ...real, streamEvents, streamTurn: turns.streamTurn, api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiModels, aiProviders, app } };
 });
 vi.mock("../session", () => ({ reloadDefinitions }));
 

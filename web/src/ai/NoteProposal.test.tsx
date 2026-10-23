@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../api";
+import { turnsOver } from "./fakeTurns";
 
 // The chat panel's create, archive, unarchive and delete proposals (ai D20): Apply sends each to
 // POST /api/ai/apply as the chat sent it, which applies it on the home server at the version it
@@ -25,12 +26,15 @@ const app = vi.fn(async () => null);
 const updateNote = vi.fn();
 const deleteNote = vi.fn();
 
+const turns = turnsOver(streamEvents);
+
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
   return {
     ...real,
     streamEvents,
-    api: { ...real.api, aiApply, aiModels, aiProviders, app, updateNote, deleteNote },
+    streamTurn: turns.streamTurn,
+    api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiApply, aiModels, aiProviders, app, updateNote, deleteNote },
   };
 });
 

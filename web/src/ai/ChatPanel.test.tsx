@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../api";
+import { turnsOver } from "./fakeTurns";
 
 type OnEvent = (e: StreamEvent) => void;
 
@@ -19,9 +20,9 @@ const aiApply = vi.fn();
 const aiModels = vi.fn();
 const aiProviders = vi.fn();
 const app = vi.fn();
-const aiTurnStart = vi.fn();
+const turns = turnsOver(streamEvents);
+const { aiTurnStart, aiTurnStop, streamTurn } = turns;
 const aiTurnPoll = vi.fn();
-const aiTurnStop = vi.fn();
 const appSync = vi.fn();
 const appSyncNow = vi.fn();
 
@@ -30,6 +31,7 @@ vi.mock("../api", async (orig) => {
   return {
     ...real,
     streamEvents,
+    streamTurn,
     api: { ...real.api, updateNote, aiApply, aiModels, aiProviders, app, aiTurnStart, aiTurnPoll, aiTurnStop, appSync, appSyncNow },
   };
 });
@@ -258,9 +260,10 @@ const APP = { app: true, paired: true, device_id: "d1", device_name: "Laptop", s
 describe("ChatPanel in the desktop and Android apps", () => {
   beforeEach(() => {
     app.mockResolvedValue(APP);
-    aiTurnStart.mockResolvedValue("turn-1");
-    aiTurnStop.mockResolvedValue(undefined);
+    aiTurnStart.mockResolvedValue({ turn: "turn-1" });
   });
+  // Back to the fake turns the other tests run.
+  afterEach(() => aiTurnStart.mockReset());
 
   it("is offered in every client: Ask AI is in the palette", () => {
     const ids = generalActions({ phone: false, dark: false, androidApp: true }).map((a) => a.id);
@@ -281,6 +284,7 @@ describe("ChatPanel in the desktop and Android apps", () => {
     await waitFor(() => expect(m.getByRole("list", { name: "Conversation" })).toHaveTextContent("Hello there."));
     await waitFor(() => expect(m.getByRole("button", { name: "Send" })).toBeInTheDocument());
     expect(streamEvents).not.toHaveBeenCalled();
+    expect(streamTurn).not.toHaveBeenCalled();
     expect(aiTurnStart).toHaveBeenCalledWith(expect.objectContaining({ provider: "anthropic", note_id: "01JOPEN", messages: [expect.objectContaining({ role: "user" })] }));
     expect(aiTurnPoll.mock.calls.map((c) => c.slice(0, 2))).toEqual([
       ["turn-1", 0],

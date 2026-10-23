@@ -290,7 +290,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
         "/api/events",
-        "Server-sent events: notification.created|read|dismissed|cleared, note.changed, device.command, device.settings, clients.updated",
+        "Server-sent events: notification.created|read|dismissed|cleared, note.changed, device.command, device.settings, clients.updated, ai_turn",
     ),
     (
         "POST",
@@ -651,12 +651,12 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/chat/turns",
-        "Start an AI chat turn with the body POST /api/ai/chat takes: {turn}; at most 4 run per caller",
+        "Start an AI chat turn with the body POST /api/ai/chat takes: {turn, started_ms}; at most 4 run per caller and per agent; a turn on a thread runs until it ends or is stopped",
     ),
     (
         "GET",
         "/api/ai/chat/turns/{turn}/events",
-        "The turn's server-sent events, the same as POST /api/ai/chat sends; unread for 30 seconds, the turn stops",
+        "The turn's server-sent events after the first ?after=<n>, the same as POST /api/ai/chat sends, numbered from 1; any number of readers; 410 turn_expired 10 minutes after the turn ended",
     ),
     (
         "DELETE",

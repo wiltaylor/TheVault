@@ -11,6 +11,7 @@
 //! | `device.command` | `{device, id}` |
 //! | `device.settings` | `{device}` |
 //! | `clients.updated` | `{clients: [{kind, arch, version, build}]}`: every app build listed now |
+//! | `ai_turn` | `{agent, thread, turn, running}`: a chat turn on an agent's thread started or ended (agents G17); `turn` is `null` for a trigger's run |
 //!
 //! Each event's SSE `id` is its sequence number since the server started. A comment line goes
 //! out every [`HEARTBEAT`] so proxies keep the connection open. A client that falls too far
@@ -62,6 +63,12 @@ fn sse(seq: u64, event: &LiveEvent) -> Event {
                 }))
                 .collect::<Vec<_>>()
         }),
+        LiveEvent::AiTurn {
+            agent,
+            thread,
+            turn,
+            running,
+        } => json!({ "agent": agent, "thread": thread, "turn": turn, "running": running }),
     };
     Event::default()
         .event(event.name())

@@ -57,8 +57,8 @@ pub const AI_NEEDS_SERVER_MESSAGE: &str =
 /// How long a poll of a turn's events waits for one before answering with none.
 const POLL_WAIT: Duration = Duration::from_secs(2);
 
-/// How long a relayed turn waits for the webview to ask again before it lets the turn go, which
-/// stops it on the home server.
+/// How long a relayed turn waits for the webview to ask again before it stops reading it here. The
+/// turn runs on on the home server (agents G17); a later poll reads it from there again.
 const RELAY_IDLE: Duration = Duration::from_secs(30);
 
 /// Where one `/api` request is answered.
@@ -440,9 +440,12 @@ impl Home {
 
     /// `GET /api/app/ai/turns/{turn}?after=<n>`: `{ events: [{event, data}], next, done }`, the
     /// turn's events after the first `n`, waiting up to [`POLL_WAIT`] for one. The first poll
-    /// opens the turn's event stream on the home server, and a task here reads it into a buffer;
-    /// a turn the webview stops asking about for [`RELAY_IDLE`] is let go, which closes the
-    /// stream and so stops the turn there. `done` says the stream ended: the last event is the
+    /// opens the turn's event stream on the home server, from its first event, and a task here
+    /// reads it into a buffer that any number of the webview's readers poll, each with its own
+    /// `after`. A turn the webview stops asking about for [`RELAY_IDLE`] is let go here, which
+    /// closes the stream but leaves the turn running on the home server (agents G17); the next
+    /// poll opens it again from its first event, so the counts still match. `done` says the
+    /// stream ended: the last event is the
     /// turn's `done`, `error` or `refusal`, or, when the stream broke, an `error` saying so.
     pub async fn poll_turn(&self, turn: &str, after: usize) -> Response<Body> {
         let existing = self
@@ -595,7 +598,7 @@ impl Home {
 }
 
 /// Read a turn's event stream into `relay` until it ends, or until the webview has not asked for
-/// [`RELAY_IDLE`], when dropping the stream stops the turn on the home server.
+/// [`RELAY_IDLE`], when the stream is dropped and the turn runs on on the home server.
 async fn relay_stream(res: reqwest::Response, relay: &Relay) {
     let mut body = res.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();

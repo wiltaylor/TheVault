@@ -5,7 +5,7 @@
 // the desktop and Android apps, whose chat runs on the home server. `Conversation` is the view
 // the panel and the agent screen's Chat tab share.
 
-import { For, type JSX, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
+import { For, type JSX, Match, Show, Switch, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { agentLabel, agents } from "../agents";
 import { type AiModel, type AiProvider, type AiProviders, type Json, type NoteDoc, api, assetUrl } from "../api";
 import { formatValue } from "../components/Render";
@@ -15,6 +15,7 @@ import { DownloadCard } from "./DownloadCard";
 import { Markdown } from "./markdown";
 import { TaxonomyProposalCard } from "./TaxonomyProposalCard";
 import { TypeProposalCard } from "./TypeProposalCard";
+import { viewThread } from "./running";
 import {
   type Applied,
   ChatContext,
@@ -716,16 +717,59 @@ function agentModel(name: string): string | null {
   return a.model ? a.model : `${providerLabel(a.provider)}'s default model`;
 }
 
+/** The nearest ancestor of `el` that scrolls, if any. */
+function scrollParent(el: HTMLElement | undefined): HTMLElement | null {
+  for (let at = el?.parentElement ?? null; at; at = at.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(at).overflowY)) return at;
+  }
+  return null;
+}
+
+/** How near the end, in pixels, still counts as at the end. */
+const AT_END_PX = 48;
+
 /**
  * A conversation as the panel and the Chat tab show it: its turns, with streaming text, tool
  * steps, proposal cards, Apply all, applied cards and notices, the activity line, and the box to
- * ask in. `noteId` is the note open beside it, if any.
+ * ask in. `noteId` is the note open beside it, if any. While it shows a thread, that thread has
+ * no "New reply" (agents G17).
  */
 export function Conversation(props: { session: ChatSession; noteId?: () => string; empty?: JSX.Element; placeholder?: string }) {
   const s = props.session;
   const chat = s.chat;
   const [draft, setDraft] = createSignal("");
   let list: HTMLOListElement | undefined;
+  let form: HTMLFormElement | undefined;
+  createEffect(
+    on(
+      () => chat.thread,
+      (id) => {
+        if (id) onCleanup(viewThread(id));
+      },
+    ),
+  );
+  // The message box sticks to the foot of the scrolling pane, and grows by the activity line
+  // while a turn runs. At the end of the conversation, keep the end in view as the answer and the
+  // box grow, so the last lines never slide under the box; scrolled up, leave the view alone.
+  onMount(() => {
+    const scroller = scrollParent(list);
+    if (!scroller || !list || !form || typeof ResizeObserver === "undefined") return;
+    const atEnd = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= AT_END_PX;
+    let pinned = atEnd();
+    const onScroll = () => {
+      pinned = atEnd();
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    const grown = new ResizeObserver(() => {
+      if (pinned) scroller.scrollTop = scroller.scrollHeight;
+    });
+    grown.observe(list);
+    grown.observe(form);
+    onCleanup(() => {
+      grown.disconnect();
+      scroller.removeEventListener("scroll", onScroll);
+    });
+  });
   function send() {
     const text = draft();
     if (!text.trim() || chat.streaming) return;
@@ -780,6 +824,7 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
         </For>
       </ol>
       <form
+        ref={form}
         class="ai-form"
         onSubmit={(e) => {
           e.preventDefault();

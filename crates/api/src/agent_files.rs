@@ -1,7 +1,8 @@
 //! Agent files, `agents/<name>.wcl` (agents G1, G2, G4).
 //!
-//! - `GET /api/agents`: every agent's summary, the built-in Assistant first, then by name, and
-//!   `tools`, the name of every tool `permissions.tools` may name, for the agent screen.
+//! - `GET /api/agents`: every agent's summary, the built-in Assistant first, then by name, with
+//!   `running`, how many turns run on its threads now (agents G17), and `tools`, the name of
+//!   every tool `permissions.tools` may name, for the agent screen.
 //! - `GET /api/agents/{name}`: the parsed agent and its WCL, or the WCL alone when `Accept` asks
 //!   for text.
 //! - `PUT /api/agents/{name}` (admin): the agent file as WCL text, JSON `{ "wcl": "..." }`, or the
@@ -173,7 +174,14 @@ fn summary_json(name: &str, agent: &Result<Agent, Invalid>) -> Value {
 pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
     let mut agents = blocking(w, |w| w.agents()).await?;
     agents.sort_by_key(|(name, _)| (name != schema::ASSISTANT_AGENT, name.clone()));
-    let agents: Vec<Value> = agents.iter().map(|(n, a)| summary_json(n, a)).collect();
+    let agents: Vec<Value> = agents
+        .iter()
+        .map(|(n, a)| {
+            let mut v = summary_json(n, a);
+            v["running"] = json!(crate::agent_threads::running_of(n).len());
+            v
+        })
+        .collect();
     Ok(Json(json!({ "agents": agents, "tools": tool_names() })))
 }
 

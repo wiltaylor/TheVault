@@ -66,7 +66,16 @@ export const setCreatingAgent = store.setCreating;
 /** Bumped by each change made here, so an open agent screen reads its agent again. */
 export const agentsVersion = store.version;
 
-/** Read the agent list again. */
+/** How often the list reads again while a turn runs on an agent's thread (agents G17). */
+export const AGENTS_RUNNING_POLL_MS = 5_000;
+
+let runningPoll: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Read the agent list again. While a turn runs on any agent's thread it reads again every
+ * [`AGENTS_RUNNING_POLL_MS`], so the sidebar's spinners end without the live stream, as in the
+ * apps.
+ */
 export async function refreshAgents(): Promise<void> {
   store.setReadOnly((await appInfo()) !== null);
   try {
@@ -74,6 +83,8 @@ export async function refreshAgents(): Promise<void> {
     store.setList(l.agents);
     store.setTools(l.tools ?? []);
     store.setError(null);
+    clearTimeout(runningPoll);
+    runningPoll = l.agents.some((a) => (a.running ?? 0) > 0) ? setTimeout(() => void refreshAgents(), AGENTS_RUNNING_POLL_MS) : undefined;
   } catch (e) {
     store.setError(e instanceof Error ? e.message : String(e));
   }

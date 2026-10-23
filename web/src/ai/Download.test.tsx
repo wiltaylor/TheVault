@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../api";
+import { turnsOver } from "./fakeTurns";
 
 // The chat panel's web steps and downloads (ai D27): a fetch_url step reads "Read <host>" with
 // the address linking out; a download_asset proposal is a card whose Apply sends it to
@@ -23,9 +24,11 @@ const aiModels = vi.fn();
 const aiProviders = vi.fn();
 const app = vi.fn(async () => null);
 
+const turns = turnsOver(streamEvents);
+
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, api: { ...real.api, aiApply, aiModels, aiProviders, app } };
+  return { ...real, streamEvents, streamTurn: turns.streamTurn, api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiApply, aiModels, aiProviders, app } };
 });
 
 const { ChatPanel, stepLabel } = await import("./ChatPanel");

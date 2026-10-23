@@ -379,17 +379,19 @@ When the provider refuses a request, the answer stops where it was and the panel
 
 ### The turns form
 
-A client that cannot read a streamed answer to a POST, such as the Android app's webview, which gets whole bodies, runs a turn in two steps instead. Both forms run the turn the same way and send the same events.
+Every client runs its turns in two steps: the web app, and the desktop and Android apps, whose webviews cannot read a streamed answer to a POST. Both forms run the turn the same way and send the same events, but a turn in this form runs on the server whether or not anyone reads it (agents G17): switching threads, closing the panel or the tab never stops it.
 
 | Method and path | Does |
 |---|---|
-| `POST /api/ai/chat/turns` | Takes the body `POST /api/ai/chat` takes, starts the turn, and answers 201 `{ turn }`. At most 4 turns run at once per caller; one more is a 429 `too_many_turns` |
-| `GET /api/ai/chat/turns/{turn}/events` | Streams the turn's events, as `POST /api/ai/chat` would, with the heartbeat; usable with `EventSource`. A turn has one reader: a second one is a 409 `turn_read` |
-| `DELETE /api/ai/chat/turns/{turn}` | Stops the turn, 204 |
+| `POST /api/ai/chat/turns` | Takes the body `POST /api/ai/chat` takes, starts the turn, and answers 201 `{ turn, started_ms }`. At most 4 turns run at once per caller, and per agent, counting the agent's trigger runs; one more is a 429 `too_many_turns`. A turn on a thread that already has one running is a 409 `thread_busy` |
+| `GET /api/ai/chat/turns/{turn}/events?after=<n>` | Streams the turn's events after the first `n` (all of them without `after`): those sent so far, then the rest as they come, as `POST /api/ai/chat` would, with the heartbeat. Each event's SSE `id` is its number from 1, and `EventSource`'s `Last-Event-ID` counts as `after`. Any number of readers may read one turn |
+| `DELETE /api/ai/chat/turns/{turn}` | Stops the turn, 204. Stop is the only way to end a turn on a thread early |
 
-All three need `read`, and a turn is its caller's: another caller's turn is a 404 `unknown_turn`, as is a turn that ended and was read, was stopped, or was never read. A turn nobody reads within 30 seconds stops, and so does a turn whose reader goes away, as a `POST /api/ai/chat` whose client goes away does. Turns are held in the server's memory.
+All three need `read`, and a turn is its caller's: another caller's turn is a 404 `unknown_turn`, as is a stopped turn. A finished turn's events are kept for 10 minutes; after that they answer 410 `turn_expired`, and the client reads the thread, which holds the whole turn. A turn with no `thread` stops when nobody has read it for 30 seconds. Turns are held in the server's memory.
 
-In the desktop and Android apps the embedded server forwards these routes to the home server with the device token. The webview cannot read a stream through the app's custom scheme either, so it polls the embedded server's `GET /api/app/ai/turns/{turn}?after=<n>`, which reads the turn's stream from the home server and answers `{ events: [{ event, data }], next, done }`: the events after the first `n`, waiting up to 2 seconds for one. The panel asks again with `after` set to `next` until `done`. A turn the panel stops asking about for 30 seconds is let go, which stops it on the home server.
+A turn on a thread starting and ending is announced on `/api/events` as `ai_turn` `{ agent, thread, turn, running }` (`turn` is null for a trigger's run), and `GET /api/agents/{name}/threads` answers `running`, `turn` and `started_ms` for each thread, so the Chat tab and the sidebar show a spinner on a running thread and its agent, and a thread that answered while it was not open shows "New reply" until opened. Returning to a running thread reads its turn again from the start.
+
+In the desktop and Android apps the embedded server forwards these routes to the home server with the device token. The webview cannot read a stream through the app's custom scheme either, so it polls the embedded server's `GET /api/app/ai/turns/{turn}?after=<n>`, which reads the turn's stream from the home server and answers `{ events: [{ event, data }], next, done }`: the events after the first `n`, waiting up to 2 seconds for one. The panel asks again with `after` set to `next` until `done`. A turn the panel stops asking about for 30 seconds is let go here; it runs on on the home server, and a later poll reads it again from there.
 
 ### Applying a change
 

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../api";
+import { turnsOver } from "./fakeTurns";
 
 // What the user applied reaches the model (ai D29): Apply, Apply all and Discard record each
 // proposal's outcome, and the next message starts with one text block of `[Applied by the
@@ -22,9 +23,11 @@ const aiModels = vi.fn();
 const aiProviders = vi.fn();
 const app = vi.fn(async () => null);
 
+const turns = turnsOver(streamEvents);
+
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, api: { ...real.api, aiApply, aiModels, aiProviders, app } };
+  return { ...real, streamEvents, streamTurn: turns.streamTurn, api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiApply, aiModels, aiProviders, app } };
 });
 
 const { ChatPanel } = await import("./ChatPanel");

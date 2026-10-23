@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../api";
+import { turnsOver } from "./fakeTurns";
 
 // The chat panel's type proposal card (ai D18): Apply sends it to POST /api/ai/apply, which
 // applies it on the home server (ai D23), Discard writes nothing, a type changed since the
@@ -25,9 +26,11 @@ const aiProviders = vi.fn();
 const app = vi.fn(async () => null);
 const reloadDefinitions = vi.fn(async () => undefined);
 
+const turns = turnsOver(streamEvents);
+
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, api: { ...real.api, aiApply, putType, changeType, aiModels, aiProviders, app } };
+  return { ...real, streamEvents, streamTurn: turns.streamTurn, api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiApply, putType, changeType, aiModels, aiProviders, app } };
 });
 vi.mock("../session", () => ({ reloadDefinitions }));
 

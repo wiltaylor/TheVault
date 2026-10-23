@@ -176,3 +176,13 @@ describe("the sidebar's Agents section", () => {
     expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Open"]);
   });
 });
+
+describe("running agents (agents G17)", () => {
+  it("shows a spinner, read as Running, on an agent while a turn runs on one of its threads", async () => {
+    list = [ASSISTANT, { ...TRIAGE, running: 1 }];
+    render(() => <AgentsNav onNavigate={() => {}} />);
+    const triage = () => screen.getByRole("link", { name: /^Inbox triage/ });
+    await waitFor(() => expect(within(triage()).getByRole("img", { name: "Running" })).toBeTruthy());
+    expect(within(nav().getByRole("link", { name: "Assistant" })).queryByRole("img", { name: "Running" })).toBeNull();
+  });
+});

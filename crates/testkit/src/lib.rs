@@ -115,21 +115,32 @@ impl TestServer {
     /// Starts a server on a new vault after `seed` has written files into the vault folder, such
     /// as the type definitions a test needs.
     pub fn start_seeded(seed: impl FnOnce(&Path)) -> Self {
-        Self::start_inner(&server_binary(), seed, &[])
+        Self::start_inner(&server_binary(), seed, &[], &[])
+    }
+
+    /// Like [`TestServer::start_seeded`], with the environment variables `env` set for the
+    /// server, such as a test build's timing seams.
+    pub fn start_with_env(seed: impl FnOnce(&Path), env: &[(&str, &str)]) -> Self {
+        Self::start_inner(&server_binary(), seed, &[], env)
     }
 
     /// Like [`TestServer::start_seeded`], passing `args` to `vault-server` as well, such as
     /// `--web <dir>`.
     pub fn start_with_args(seed: impl FnOnce(&Path), args: &[&std::ffi::OsStr]) -> Self {
-        Self::start_inner(&server_binary(), seed, args)
+        Self::start_inner(&server_binary(), seed, args, &[])
     }
 
     /// Like [`TestServer::start`], with an explicit path to the `vault-server` binary.
     pub fn start_with_binary(binary: &Path) -> Self {
-        Self::start_inner(binary, |_| {}, &[])
+        Self::start_inner(binary, |_| {}, &[], &[])
     }
 
-    fn start_inner(binary: &Path, seed: impl FnOnce(&Path), args: &[&std::ffi::OsStr]) -> Self {
+    fn start_inner(
+        binary: &Path,
+        seed: impl FnOnce(&Path),
+        args: &[&std::ffi::OsStr],
+        env: &[(&str, &str)],
+    ) -> Self {
         let vault = tempfile::Builder::new()
             .prefix("thevault-test-")
             .tempdir()
@@ -145,9 +156,14 @@ impl TestServer {
         let (program, args): (PathBuf, Vec<std::ffi::OsString>) =
             (binary.to_owned(), args.iter().map(|a| a.into()).collect());
         let key_file = Some(key.clone());
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
         let command = move || {
             let mut command = Command::new(&program);
             command.env("VAULT_SECRET_KEY_FILE", &key).args(&args);
+            command.envs(env.iter().map(|(k, v)| (k, v)));
             command
         };
         Self::launch(

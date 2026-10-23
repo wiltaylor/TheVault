@@ -6,6 +6,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentThread, StreamEvent } from "../api";
+import { turnsOver } from "./fakeTurns";
 
 type OnEvent = (e: StreamEvent) => void;
 
@@ -32,12 +33,15 @@ const deleteAgentThread = vi.fn();
 const archiveNote = vi.fn();
 const unarchiveNote = vi.fn();
 
+const turns = turnsOver(streamEvents);
+
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
   return {
     ...real,
     streamEvents,
-    api: { ...real.api, agentThreads, agentThread, agentThreadStart, aiApply, aiDiscard, aiModels, aiProviders, agents: agentsList, app, renameAgentThread, deleteAgentThread, archiveNote, unarchiveNote },
+    streamTurn: turns.streamTurn,
+    api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, agentThreads, agentThread, agentThreadStart, aiApply, aiDiscard, aiModels, aiProviders, agents: agentsList, app, renameAgentThread, deleteAgentThread, archiveNote, unarchiveNote },
   };
 });
 vi.mock("../inApp", () => ({ appInfo: async () => null }));
@@ -46,6 +50,7 @@ const { AgentChat } = await import("./AgentChat");
 const { ChatPanel } = await import("./ChatPanel");
 const { newConversation, setAgent, turnsFromThread } = await import("./store");
 const { refreshAgents } = await import("../agents");
+const { hasNewReply, liveTurn, resetRunning } = await import("./running");
 
 const PROVIDERS = {
   default_provider: "anthropic",
@@ -423,5 +428,125 @@ describe("the AI panel's agent picker", () => {
     await send("Sort my inbox");
     expect(agentThreadStart).toHaveBeenCalledWith("triage");
     expect(live!.body).toMatchObject({ agent: "triage", thread: "01JNEW" });
+  });
+});
+
+describe("turns in the background (agents G17)", () => {
+  afterEach(() => resetRunning());
+
+  /** Thread 01JTHREAD with turn `turn` running on it since `startedMs`. */
+  function running(turn: string, startedMs: number): AgentThread {
+    const t = thread();
+    return {
+      ...t,
+      running: true,
+      turn,
+      started_ms: startedMs,
+      // The turn's question, and a round the server already wrote, which reading the turn again
+      // brings back.
+      messages: [
+        ...t.messages!,
+        { role: "user", content: [{ type: "text", text: "More please." }] },
+        { role: "assistant", content: [{ type: "text", text: "Partial" }] },
+      ],
+    };
+  }
+
+  const ROOF = thread({
+    id: "01JOLDER",
+    title: "Roof",
+    pending: 0,
+    messages: [{ role: "user", content: [{ type: "text", text: "Slate?" }] }],
+    proposals: [],
+  });
+
+  it("leaves a turn running when another thread is opened, and follows it again on return with the activity line", async () => {
+    agentThread.mockImplementation(async (_agent: string, id: string) => (id === "01JOLDER" ? ROOF : thread()));
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = within(screen.getByRole("complementary", { name: "Threads" }));
+    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    const convo = () => within(screen.getByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(convo().getByText("Tidy my list.")).toBeTruthy());
+    await send("More please.");
+    const { turn } = await turns.aiTurnStart.mock.results[0]!.value;
+    live!.onEvent({ event: "text", data: { delta: "Partial" } });
+    // Another thread can be opened while it answers: reading stops, the turn runs on.
+    const roof = list.getByRole("button", { name: /^Roof/ });
+    expect(roof).not.toBeDisabled();
+    fireEvent.click(roof);
+    await waitFor(() => expect(convo().getByText("Slate?")).toBeTruthy());
+    expect(turns.aiTurnStop).not.toHaveBeenCalled();
+    expect(screen.queryByText("Stopped.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+
+    // Back on the running thread: the thread before the turn, then the turn read from its start.
+    agentThread.mockImplementation(async (_agent: string, id: string) => (id === "01JTHREAD" ? running(turn, Date.now() - 5_000) : ROOF));
+    live = null;
+    fireEvent.click(list.getByRole("button", { name: /^Groceries/ }));
+    await waitFor(() => expect(live).not.toBeNull());
+    expect(turns.streamTurn).toHaveBeenLastCalledWith(turn, 0, expect.any(Function), expect.any(AbortSignal));
+    expect(convo().getByText("Tidy my list.")).toBeTruthy();
+    expect(convo().getAllByText("More please.")).toHaveLength(1);
+    expect(convo().queryByText("Partial")).toBeNull();
+    const line = () => document.querySelector(".ai-activity");
+    expect(line()).toHaveTextContent(/Thinking… [5-9]s/);
+    live!.onEvent({ event: "text", data: { delta: "Partial" } });
+    await waitFor(() => expect(convo().getByText("Partial")).toBeTruthy());
+    expect(line()).toHaveTextContent(/Writing…/);
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    live!.onEvent({ event: "done", data: { stop: "end_turn", messages: [] } });
+    live!.end();
+    await waitFor(() => expect(line()).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeTruthy());
+  });
+
+  it("stops a running thread's turn on the server with Stop", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = within(screen.getByRole("complementary", { name: "Threads" }));
+    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await waitFor(() => expect(screen.getByText("Tidy my list.")).toBeTruthy());
+    await send("More please.");
+    const { turn } = await turns.aiTurnStart.mock.results[0]!.value;
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(screen.getByText("Stopped.")).toBeTruthy());
+    expect(turns.aiTurnStop).toHaveBeenCalledWith(turn);
+  });
+
+  it("marks a running thread with a spinner, and one that answered while closed with New reply until opened", async () => {
+    agentThreads.mockResolvedValue({
+      threads: [
+        { id: "01JTHREAD", title: "Groceries", pending: 1, running: true, turn: "turn-x", started_ms: Date.now() },
+        { id: "01JOLDER", title: "Roof", pending: 0 },
+      ],
+    });
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = within(screen.getByRole("complementary", { name: "Threads" }));
+    const groceries = () => list.getByRole("button", { name: /^Groceries/ });
+    await waitFor(() => expect(within(groceries()).getByRole("img", { name: "Running" })).toBeTruthy());
+    expect(within(list.getByRole("button", { name: /^Roof/ })).queryByRole("img", { name: "Running" })).toBeNull();
+
+    // The live stream says the turn ended: the list reads again, and the reply is new.
+    agentThreads.mockResolvedValue({
+      threads: [
+        { id: "01JTHREAD", title: "Groceries", pending: 1 },
+        { id: "01JOLDER", title: "Roof", pending: 0 },
+      ],
+    });
+    liveTurn({ agent: "triage", thread: "01JTHREAD", turn: "turn-x", running: false });
+    await waitFor(() => expect(within(groceries()).getByRole("img", { name: "New reply" })).toBeTruthy());
+    expect(within(groceries()).queryByRole("img", { name: "Running" })).toBeNull();
+
+    fireEvent.click(groceries());
+    await waitFor(() => expect(within(groceries()).queryByRole("img", { name: "New reply" })).toBeNull());
+    expect(hasNewReply("01JTHREAD")).toBe(false);
+  });
+
+  it("gives no New reply to a thread whose turn ends while it is open", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = within(screen.getByRole("complementary", { name: "Threads" }));
+    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await waitFor(() => expect(screen.getByText("Tidy my list.")).toBeTruthy());
+    liveTurn({ agent: "triage", thread: "01JTHREAD", turn: null, running: false });
+    expect(hasNewReply("01JTHREAD")).toBe(false);
   });
 });

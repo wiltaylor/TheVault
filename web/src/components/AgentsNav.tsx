@@ -2,7 +2,8 @@
 // Assistant first, each opening its agent screen in the active pane. In the web app a "+" creates
 // one from a name and opens it, and each agent's ⋯ menu (or a right-click) opens, disables or
 // enables, and deletes it. Assistant is built in: it has no Disable or Delete. In the apps the
-// list is read only.
+// list is read only. An agent with a turn running on one of its threads shows a spinner, read as
+// "Running" (agents G17).
 
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import type { AgentSummary } from "../api";
@@ -21,6 +22,7 @@ import {
   setAgentsOpen,
   setCreatingAgent,
 } from "../agents";
+import { RunningMark } from "../ai/RunningMark";
 import { errorText } from "../pages/TypeEditor";
 import { isActiveLink } from "../workspace/links";
 import { activePane } from "../workspace/model";
@@ -152,6 +154,9 @@ export function AgentsNav(props: { onNavigate: () => void }) {
           >
             <TypeIcon name={a().error ? "triangle-alert" : a().icon || AGENT_ICON} size={16} />
             <span>{agentLabel(a())}</span>
+            <Show when={(a().running ?? 0) > 0}>
+              <RunningMark />
+            </Show>
             <Show when={disabled()}>
               <span class="visually-hidden"> (disabled)</span>
             </Show>

@@ -4,11 +4,15 @@
 // transcript for each turn, so a turn sends only the new message, and keeps each proposal's
 // outcome, so a reopened thread shows its pending cards. Against a server without threads the
 // conversation lives in this tab's memory and each turn sends the whole transcript. The chat
-// runs on the home server, which holds the credentials and runs the note tools. In the web app a
-// turn streams from POST /api/ai/chat. In the desktop and Android apps, whose webviews get whole
-// bodies from the embedded server, a turn starts with POST /api/ai/chat/turns, which the
-// embedded server forwards, and its events are polled from the embedded server's
-// GET /api/app/ai/turns/{turn}, which reads the turn's stream from the home server. Edits come
+// runs on the home server, which holds the credentials and runs the note tools. Every client
+// starts a turn with POST /api/ai/chat/turns, and the turn runs there until it ends or is
+// stopped, whoever reads it (agents G17): switching threads or agents, closing the panel or the
+// tab only stops reading. Returning to a thread whose turn runs reads that turn again from its
+// first event, over the thread as it stood before the turn. In the web app the events stream
+// from GET /api/ai/chat/turns/{turn}/events?after=<n>; in the desktop and Android apps, whose
+// webviews get whole bodies from the embedded server, they are polled from the embedded server's
+// GET /api/app/ai/turns/{turn}?after=<n>, which reads the turn's stream from the home server.
+// Edits come
 // back as proposals the user applies with POST /api/ai/apply, on the home server in every
 // client, or, for the kinds the agent lets go ahead without asking, as `applied` events for
 // changes already made. In an app such a change reaches the device's copy with a sync round,
@@ -17,7 +21,7 @@
 
 import { createContext, createRoot, createSignal, useContext } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { ASSISTANT, agents } from "../agents";
+import { ASSISTANT, agents, refreshAgents } from "../agents";
 import {
   type AgentThread,
   type AiApplied,
@@ -28,12 +32,13 @@ import {
   type StoredProposal,
   type StreamEvent,
   api,
-  streamEvents,
+  streamTurn,
 } from "../api";
 import { noteChangedElsewhere, noteWritten } from "../changes";
 import { appInfo } from "../inApp";
 import { reloadDefinitions } from "../session";
 import { refreshSync } from "../sync/store";
+import { bumpTurns } from "./running";
 
 /** One piece of a transcript message, as the server's `ai::Content`. */
 export type Content =
@@ -251,6 +256,8 @@ export interface ChatState {
   agent: string;
   /** The thread the conversation is, once its first message started one (agents G7). */
   thread: string | null;
+  /** The running turn this conversation follows, by its id in the turns form (agents G17). */
+  turn: string | null;
   /** While a thread is being read. */
   loading: boolean;
 }
@@ -371,28 +378,40 @@ function activityAfter(e: StreamEvent, d: Record<string, unknown>): Activity | n
 }
 
 /**
- * A turn in the turns form, as the apps run it (ai D23): started on the home server through the
- * embedded server, its events polled from the embedded server until the turn ends. Aborting
- * `signal` stops the turn on the home server.
+ * Poll turn `turn`'s events after the first `after` from the embedded server, as the apps read
+ * them (ai D23), until the turn's stream ends. Aborting `signal` stops reading; the turn runs on.
  */
-async function pollTurn(body: unknown, onEvent: (e: StreamEvent) => void, signal: AbortSignal) {
-  const turn = await api.aiTurnStart(body);
-  const stopTurn = () => void api.aiTurnStop(turn).catch(() => undefined);
-  if (signal.aborted) stopTurn();
-  signal.addEventListener("abort", stopTurn, { once: true });
-  let after = 0;
-  try {
-    for (;;) {
-      signal.throwIfAborted();
-      const got = await api.aiTurnPoll(turn, after, signal);
-      signal.throwIfAborted();
-      for (const e of got.events) onEvent(e);
-      after = got.next;
-      if (got.done) return;
-    }
-  } finally {
-    signal.removeEventListener("abort", stopTurn);
+async function pollTurn(turn: string, after: number, onEvent: (e: StreamEvent) => void, signal: AbortSignal) {
+  let at = after;
+  for (;;) {
+    signal.throwIfAborted();
+    const got = await api.aiTurnPoll(turn, at, signal);
+    signal.throwIfAborted();
+    for (const e of got.events) onEvent(e);
+    at = got.next;
+    if (got.done) return;
   }
+}
+
+/** The events that end a turn. */
+const TERMINAL = new Set(["done", "error", "refusal"]);
+
+/** How often a turn's stream that broke off is read again before the conversation gives up. */
+export const REATTACH_TRIES = 5;
+
+/** How often a thread a trigger runs on is read again until its run ends (agents G17). */
+export const WATCH_MS = 2_000;
+
+/**
+ * Where the turn running on a thread began: after the last message the user asked, so the
+ * messages from there on are the running turn's, which reading the turn again brings back.
+ */
+export function turnStart(messages: readonly ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role === "user" && !(m.content ?? []).some((c) => c.type === "tool_result")) return i + 1;
+  }
+  return 0;
 }
 
 /** How long the app waits for the sync round that brings a change made on the server. */
@@ -590,11 +609,17 @@ export function createChatSession(options: ChatOptions = {}) {
       model: null,
       agent: options.agent ?? ASSISTANT,
       thread: null,
+      turn: null,
       loading: false,
     });
   /** The transcript so far, sent with each turn. Append-only. */
   let transcript: ChatMessage[] = [];
+  /** Reads the followed turn's events; aborting it only stops reading (agents G17). */
   let controller: AbortController | null = null;
+  /** Set by Stop, so the turn's end says it was stopped. */
+  let stopping = false;
+  /** A re-read turn's proposals as the thread holds them, by id, so their cards keep their state. */
+  let replay = new Map<string, StoredProposal>();
   /** Each conversation's turns write only while it is the current one. */
   let generation = 0;
 
@@ -628,18 +653,31 @@ export function createChatSession(options: ChatOptions = {}) {
     setChat("model", model);
   }
 
-  /** Forget the conversation and stop a turn in flight. */
-  function newConversation() {
+  /**
+   * Stop following the turn in flight. One on a thread runs on (agents G17); one without a
+   * thread, which nothing keeps, is stopped.
+   */
+  function letGo() {
     generation++;
+    if (chat.turn && !chat.thread) void api.aiTurnStop(chat.turn).catch(() => undefined);
     controller?.abort();
     controller = null;
-    transcript = [];
-    outcomes.clear();
-    setChat({ turns: [], streaming: false, activity: null, startedAt: null, thread: null, loading: false });
   }
 
-  /** Stop the turn in flight: the request is aborted, and the server stops when it sees that. */
+  /** Start afresh. A turn in flight on a thread runs on, and its thread shows it when opened. */
+  function newConversation() {
+    letGo();
+    transcript = [];
+    replay = new Map();
+    outcomes.clear();
+    setChat({ turns: [], streaming: false, activity: null, startedAt: null, thread: null, turn: null, loading: false });
+  }
+
+  /** Stop the turn in flight: on the server, the only way to end it early (agents G17). */
   function stop() {
+    if (!chat.streaming) return;
+    stopping = true;
+    if (chat.turn) void api.aiTurnStop(chat.turn).catch(() => undefined);
     controller?.abort();
   }
 
@@ -689,11 +727,16 @@ export function createChatSession(options: ChatOptions = {}) {
       }
       case "proposal":
       case "type_proposal":
-      case "taxonomy_proposal":
-        push(eventPart(e.event, d)!);
+      case "taxonomy_proposal": {
+        // A re-read turn's proposal, applied or discarded meanwhile, shows as it stands.
+        const stored = replay.get(String(d.id));
+        push((stored && storedPart(stored)) || eventPart(e.event, d)!);
         break;
+      }
       case "applied": {
         push(eventPart(e.event, d)!);
+        // A re-read turn's change was settled when it was made.
+        if (replay.has(String(d.id))) break;
         if (d.op === "download") break;
         const applied = d as unknown as Applied;
         // Open views of the note or type take the change, as after a write of this client's own.
@@ -782,6 +825,8 @@ export function createChatSession(options: ChatOptions = {}) {
     // The proposals acted on since the last message, shown ahead of the question (ai D29).
     const lines = [...outcomes.values()];
     outcomes.clear();
+    replay = new Map();
+    stopping = false;
     setChat(
       produce((c) => {
         c.turns.push({ role: "user", text: question, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
@@ -793,7 +838,6 @@ export function createChatSession(options: ChatOptions = {}) {
     );
     const ctl = new AbortController();
     controller = ctl;
-    const each = (e: StreamEvent) => mine === generation && onEvent(e);
     try {
       const thread = wantsThread() ? await startThread() : chat.thread;
       if (mine !== generation) return;
@@ -812,18 +856,130 @@ export function createChatSession(options: ChatOptions = {}) {
         ...(named ? { agent: chat.agent } : {}),
         ...(thread ? { thread } : {}),
       };
-      if (await appInfo().catch(() => null)) await pollTurn(body, each, ctl.signal);
-      else await streamEvents("/api/ai/chat", body, each, ctl.signal);
-    } catch (e) {
-      if (mine !== generation) return;
-      if (ctl.signal.aborted) push({ kind: "notice", notice: "stopped", text: "Stopped." });
-      else push({ kind: "notice", notice: "error", text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      if (mine === generation) {
-        controller = null;
-        setChat({ streaming: false, activity: null, startedAt: null });
-        options.onChange?.();
+      const started = await api.aiTurnStart(body);
+      if (mine !== generation || ctl.signal.aborted) {
+        // Let go before the turn started: one without a thread is stopped; Stop stops any.
+        if (!thread || ctl.signal.aborted) void api.aiTurnStop(started.turn).catch(() => undefined);
+        if (mine !== generation) return;
+        ctl.signal.throwIfAborted();
       }
+      setChat({ turn: started.turn, ...(started.started_ms ? { startedAt: started.started_ms } : {}) });
+      changed();
+      if ((await follow(started.turn, mine, ctl)) === "gone" && thread) await reload(thread, mine);
+    } catch (e) {
+      ended(e, mine, ctl);
+    } finally {
+      settled(mine);
+    }
+  }
+
+  /** The thread list and the sidebar read again: a turn started or ended (agents G17). */
+  function changed() {
+    options.onChange?.();
+    bumpTurns();
+    void refreshAgents();
+  }
+
+  /** Show why the followed turn ended early, unless the conversation let it go. */
+  function ended(e: unknown, mine: number, ctl: AbortController) {
+    if (mine !== generation) return;
+    if (ctl.signal.aborted || stopping) push({ kind: "notice", notice: "stopped", text: "Stopped." });
+    else if (e instanceof ApiError && e.body.error === "thread_busy")
+      push({ kind: "notice", notice: "busy", text: "Still answering: this thread's last question is still being answered. Wait for it, or open the thread to follow it." });
+    else push({ kind: "notice", notice: "error", text: e instanceof Error ? e.message : String(e) });
+  }
+
+  /** The followed turn is over, or this conversation stopped following it. */
+  function settled(mine: number) {
+    if (mine !== generation) return;
+    controller = null;
+    stopping = false;
+    setChat({ streaming: false, activity: null, startedAt: null, turn: null });
+    changed();
+  }
+
+  /**
+   * Read turn `turn`'s events into the conversation until the turn ends, reading again from the
+   * last event seen when the stream breaks off. "gone" when the server no longer keeps the
+   * turn's events, so the thread note is the one record of it.
+   */
+  async function follow(turn: string, mine: number, ctl: AbortController): Promise<"ended" | "gone"> {
+    let seen = 0;
+    let over = false;
+    const each = (e: StreamEvent) => {
+      if (mine !== generation) return;
+      seen++;
+      if (TERMINAL.has(e.event)) over = true;
+      onEvent(e);
+    };
+    const app = await appInfo().catch(() => null);
+    for (let tries = 0; ; tries++) {
+      try {
+        if (app) await pollTurn(turn, seen, each, ctl.signal);
+        else await streamTurn(turn, seen, each, ctl.signal);
+      } catch (e) {
+        if (ctl.signal.aborted) throw e;
+        if (e instanceof ApiError && (e.status === 404 || e.status === 410)) return "gone";
+        if (e instanceof ApiError || tries >= REATTACH_TRIES) throw e;
+      }
+      // A stream that ended without the turn's end broke off, or the turn was stopped.
+      if (over || mine !== generation) return "ended";
+      ctl.signal.throwIfAborted();
+      if (tries >= REATTACH_TRIES) return "ended";
+      await sleep(500 * (tries + 1));
+      ctl.signal.throwIfAborted();
+    }
+  }
+
+  /** Show thread `id` as the server keeps it. */
+  async function reload(id: string, mine: number) {
+    const t = await api.agentThread(chat.agent, id);
+    if (mine !== generation) return;
+    transcript = (t.messages ?? []) as ChatMessage[];
+    setChat({ turns: turnsFromThread(t) });
+  }
+
+  /**
+   * Follow the turn running on thread `t` (agents G17): the thread as it stood before the turn,
+   * then the turn's events from the first, so what it said while nobody watched shows again. A
+   * trigger's run has no turn to read: the thread is read again until the run ends.
+   */
+  async function attach(t: AgentThread, mine: number) {
+    const messages = (t.messages ?? []) as ChatMessage[];
+    const before = t.turn ? messages.slice(0, turnStart(messages)) : messages;
+    transcript = before;
+    replay = new Map((t.proposals ?? []).map((p) => [String(p.data.id), p]));
+    setChat({
+      turns: [...turnsFromThread({ ...t, messages: before }), ...(t.turn ? [{ role: "assistant" as const, parts: [] }] : [])],
+      loading: false,
+      streaming: true,
+      activity: { step: "thinking" },
+      startedAt: t.started_ms ?? Date.now(),
+      turn: t.turn ?? null,
+    });
+    const ctl = new AbortController();
+    controller = ctl;
+    try {
+      if (t.turn) {
+        if ((await follow(t.turn, mine, ctl)) === "gone") await reload(t.id, mine);
+        return;
+      }
+      for (;;) {
+        await sleep(WATCH_MS);
+        if (mine !== generation) return;
+        ctl.signal.throwIfAborted();
+        const now = await api.agentThread(chat.agent, t.id);
+        if (mine !== generation) return;
+        if (!now.running) {
+          transcript = (now.messages ?? []) as ChatMessage[];
+          setChat({ turns: turnsFromThread(now) });
+          return;
+        }
+      }
+    } catch (e) {
+      ended(e, mine, ctl);
+    } finally {
+      settled(mine);
     }
   }
 
@@ -834,7 +990,10 @@ export function createChatSession(options: ChatOptions = {}) {
     setChat("agent", name);
   }
 
-  /** Open thread `id` of the agent: its turns as they were, its pending proposals open again. */
+  /**
+   * Open thread `id` of the agent: its turns as they were, its pending proposals open again, and
+   * a turn running on it followed (agents G17).
+   */
   async function openThread(id: string) {
     newConversation();
     const mine = generation;
@@ -842,6 +1001,10 @@ export function createChatSession(options: ChatOptions = {}) {
     try {
       const t = await api.agentThread(chat.agent, id);
       if (mine !== generation) return;
+      if (t.running) {
+        await attach(t, mine);
+        return;
+      }
       transcript = (t.messages ?? []) as ChatMessage[];
       setChat({ turns: turnsFromThread(t), loading: false });
     } catch (e) {
@@ -1068,10 +1231,9 @@ export function createChatSession(options: ChatOptions = {}) {
     discarded(p.proposal);
   }
 
-    /** Stop the turn in flight and let the conversation go. */
+    /** Let the conversation go. A turn in flight on a thread runs on (agents G17). */
     function close() {
-      generation++;
-      controller?.abort();
+      letGo();
       dispose();
     }
 

@@ -41,6 +41,14 @@ pub enum LiveEvent {
     /// The app builds the server hands out (`/api/clients`) changed: a build was published,
     /// replaced or removed. `clients` is every build listed now.
     ClientsUpdated { clients: Vec<ClientBuild> },
+    /// A chat turn on an agent's thread started or ended (agents G17). `turn` is the turn's id
+    /// in the turns form, `None` for a turn with no id (an agent trigger's run).
+    AiTurn {
+        agent: String,
+        thread: String,
+        turn: Option<String>,
+        running: bool,
+    },
 }
 
 /// One app build in a [`LiveEvent::ClientsUpdated`].
@@ -66,6 +74,7 @@ impl LiveEvent {
             LiveEvent::DeviceCommand { .. } => "device.command",
             LiveEvent::DeviceSettings { .. } => "device.settings",
             LiveEvent::ClientsUpdated { .. } => "clients.updated",
+            LiveEvent::AiTurn { .. } => "ai_turn",
         }
     }
 }

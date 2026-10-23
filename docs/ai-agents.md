@@ -41,6 +41,8 @@ The note tools leave threads out unless the agent's `permissions.types` names `a
 
 Each thread in the Chat tab has a ⋯ menu, also opened by a right-click, with Rename, Archive or Unarchive, and Delete. These are ordinary note changes, authored by you: Delete moves the thread note to the trash, where it can be restored. Archived threads are hidden from the list until **Show archived**, at its foot, lists them dimmed. An archived thread still opens, and sending a message in it takes it out of the archive. When the chat panel's thread is archived or deleted elsewhere, its next message starts a new thread.
 
+A turn runs on the server until it ends or you press **Stop**, whether or not anything shows it. Opening another thread, choosing another agent in the panel, closing the panel or the tab only stops showing it; the turn goes on writing to its thread. A running thread shows a small spinner beside its title in the Chat tab, and the agent shows one in the sidebar; opening the thread shows the answer so far and follows the rest, with the activity line counting from when the turn started. A thread that answered while it was not open shows a dot, "New reply", until you open it. One thread runs one turn at a time ("Still answering" while it does), and an agent runs at most 4 turns at once across its threads, trigger runs included. [The turns form](ai.md#the-turns-form) describes the routes.
+
 ## Triggers
 
 A `trigger` block runs the agent on its own. Each run starts a new thread, titled with the trigger's name and the local date and time, whose first message is the trigger's `prompt`.

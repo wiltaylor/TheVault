@@ -70,9 +70,12 @@ impl scheduler::AgentRunner for TriggerRunner {
 
     fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str) -> scheduler::TurnReport {
         let w = self.writer.clone();
+        // Open clients show the thread running while the run goes (agents G17).
+        crate::ai_turns::publish(&w, &agent.name, thread, None, true);
         let done = self
             .handle
             .block_on(ai_chat::run_unattended(w, agent, thread, prompt));
+        crate::ai_turns::publish(&self.writer, &agent.name, thread, None, false);
         scheduler::TurnReport {
             outcome: done
                 .ended

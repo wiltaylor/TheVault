@@ -822,14 +822,10 @@ fn the_ai_routes_go_to_the_home_server_with_the_device_token_and_stream_through(
         .collect();
     assert_eq!(text, "Polled answer here.");
     assert_eq!(events.last().unwrap()["event"], "done", "{events:?}");
-    // Read to the end, the turn is gone on both sides.
-    let gone = device.call(
-        "GET",
-        &format!("/api/app/ai/turns/{turn}?after=0"),
-        None,
-        404,
-    );
-    assert_eq!(gone["error"], "unknown_turn", "{gone}");
+    // Read to the end, the turn is kept a while (agents G17): another reader polls it again from
+    // its first event.
+    let again = device.poll(&turn);
+    assert_eq!(again, events);
 
     // Stopping a turn is forwarded too.
     fake.push(

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../api";
+import { turnsOver } from "./fakeTurns";
 
 // The activity line above the chat box (ai D30): while a turn runs, a spinner, the current
 // step's verb from the last event and the seconds since the turn started; gone when the turn
@@ -21,9 +22,11 @@ const aiModels = vi.fn();
 const aiProviders = vi.fn();
 const app = vi.fn(async () => null);
 
+const turns = turnsOver(streamEvents);
+
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, api: { ...real.api, aiModels, aiProviders, app } };
+  return { ...real, streamEvents, streamTurn: turns.streamTurn, api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiModels, aiProviders, app } };
 });
 
 const { ChatPanel, activeLabel } = await import("./ChatPanel");
@@ -32,7 +35,8 @@ const { newConversation } = await import("./store");
 async function ask(m: ReturnType<typeof render>) {
   fireEvent.input(m.getByLabelText("Ask AI"), { target: { value: "What did I decide?" } });
   fireEvent.click(m.getByRole("button", { name: "Send" }));
-  await waitFor(() => expect(live).not.toBeNull());
+  // Real timers even under fake ones: the turn starts after a few hops that change no DOM.
+  await vi.waitFor(() => expect(live).not.toBeNull());
 }
 
 /** The activity line's status region: the verb alone. */

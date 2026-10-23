@@ -6,6 +6,8 @@ import { createSignal } from "solid-js";
 import { api } from "../api";
 import { needsServer } from "../inApp";
 import { noteChangedElsewhere } from "../changes";
+import { refreshAgents } from "../agents";
+import { bumpTurns, liveTurn } from "../ai/running";
 import { connectLive } from "../live";
 import {
   type ListState,
@@ -128,6 +130,8 @@ export function startPolling(): () => void {
         // Whatever changed while the stream was down was not announced.
         void refreshNotifications();
         noteChangedElsewhere(null);
+        bumpTurns();
+        void refreshAgents();
       }
     },
     down: poll,
@@ -135,6 +139,11 @@ export function startPolling(): () => void {
       if (name === "note.changed") {
         const { id, version } = (data ?? {}) as { id?: unknown; version?: unknown };
         if (typeof id === "string" && typeof version === "string") noteChangedElsewhere({ id, version });
+      }
+      else if (name === "ai_turn") {
+        // A chat turn on an agent's thread started or ended (agents G17).
+        liveTurn(data);
+        void refreshAgents();
       }
       else if (name.startsWith("notification.") && data && typeof data === "object") {
         liveNotification({ name, data } as NotificationEvent);

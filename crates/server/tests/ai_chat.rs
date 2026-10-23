@@ -1940,15 +1940,30 @@ fn a_turn_started_with_post_turns_streams_the_same_events_as_post_chat() {
         last(&streamed, "done")["messages"],
         last(&posted, "done")["messages"]
     );
-    // The turn is over and forgotten.
-    assert_eq!(
-        api.turn_events(&reader, turn).status(),
-        StatusCode::NOT_FOUND
-    );
+    // The turn is over and kept a while (agents G17): read again, it replays, and after `n` it
+    // starts with the event after the `n`th.
+    let again = read_events(api.turn_events(&reader, turn), |_| false);
+    assert_eq!(shape(&again), shape(&streamed));
+    let n = streamed
+        .iter()
+        .position(|(e, _)| e == "tool_result")
+        .unwrap()
+        + 1;
+    let res = api
+        .client
+        .get(
+            api.server
+                .url(&format!("/api/ai/chat/turns/{turn}/events?after={n}")),
+        )
+        .bearer_auth(&reader)
+        .send()
+        .unwrap();
+    let rest = read_events(res, |_| false);
+    assert_eq!(rest, streamed[n..].to_vec());
 }
 
 #[test]
-fn a_turn_is_read_only_by_its_caller_and_only_once() {
+fn a_turn_is_read_only_by_its_caller_by_any_number_of_readers() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     api.anthropic(&fake);
@@ -1963,9 +1978,10 @@ fn a_turn_is_read_only_by_its_caller_and_only_once() {
     let first = api.turn_events(&api.token(), &turn);
     assert_eq!(first.status(), StatusCode::OK);
     let second = api.turn_events(&api.token(), &turn);
-    assert_eq!(second.status(), StatusCode::CONFLICT);
+    assert_eq!(second.status(), StatusCode::OK);
     let events = read_events(first, |_| false);
     assert_eq!(events.last().unwrap().0, "done", "{events:?}");
+    assert_eq!(shape(&read_events(second, |_| false)), shape(&events));
 }
 
 #[test]
