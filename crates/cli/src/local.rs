@@ -84,7 +84,7 @@ pub fn init(dir: &Path, starter: bool, password_stdin: bool) -> Result<Value, Fa
     Ok(out)
 }
 
-/// `vault passwd`: replace the login password.
+/// `vault passwd`: replace the login password. [`State::set_password`] ends every browser session.
 pub fn passwd(vault: &Path, password_stdin: bool) -> Result<Value, Fail> {
     let state = open_state(vault)?;
     let password = read_password(password_stdin)?;

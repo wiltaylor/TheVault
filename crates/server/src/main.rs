@@ -75,6 +75,10 @@ fn main() -> anyhow::Result<()> {
             .context("opening state.db")?;
     let key = secret_key(&state.vault_id().context("reading the vault id")?)?;
     let state = state.with_key(key);
+    // Login and each check remove expired sessions too; this clears those no one came back to.
+    state
+        .prune_sessions()
+        .context("removing expired sessions")?;
     let handlers = script::Handlers::new(script::Limits::default());
     // Note event triggers hear of each change once it is durable (agents G10).
     let (hooks, triggers) = scheduler::TriggerHooks::wrap(handlers.hooks());

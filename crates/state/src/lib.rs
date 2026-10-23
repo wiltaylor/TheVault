@@ -1,7 +1,7 @@
 //! `.vault/state.db`: version history, trash, the change feed devices sync from, encrypted secrets,
-//! API tokens, paired devices and their base versions, task and agent trigger run logs, the calls
-//! of agents answered, the queue of `after_*` handler jobs, the user's notifications, and the
-//! shipped defaults and upgrade steps the vault has had.
+//! API tokens, password-login sessions, paired devices and their base versions, task and agent
+//! trigger run logs, the calls of agents answered, the queue of `after_*` handler jobs, the user's
+//! notifications, and the shipped defaults and upgrade steps the vault has had.
 //!
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
@@ -18,6 +18,7 @@ mod notifications;
 mod pins;
 mod runs;
 mod secrets;
+mod sessions;
 mod shipped;
 
 use std::path::{Path, PathBuf};
@@ -46,6 +47,7 @@ pub use notifications::{
 pub use pins::{PinEntry, PinKind, PinNode};
 pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{SecretInfo, SecretKey, key_file_path};
+pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck};
 pub use shipped::ShippedRecord;
 
 /// Errors from `state.db`.
@@ -135,7 +137,7 @@ pub struct State {
     events: Events,
 }
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -401,6 +403,19 @@ CREATE TABLE IF NOT EXISTS agent_calls (
 );
 ";
 
+/// What version 16 adds: password-login sessions, so a restart keeps the browser signed in.
+/// `id_hash` is the SHA-256 hex of the session id; the id itself lives only in the cookie.
+const SCHEMA_V16: &str = "
+CREATE TABLE IF NOT EXISTS sessions (
+    id_hash      TEXT PRIMARY KEY,
+    created_ms   INTEGER NOT NULL,
+    last_seen_ms INTEGER NOT NULL,
+    expires_ms   INTEGER NOT NULL,
+    user_agent   TEXT
+);
+CREATE INDEX IF NOT EXISTS sessions_expires ON sessions (expires_ms);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -498,7 +513,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=14 => {
+        0..=15 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -554,6 +569,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 14 {
                 tx.execute_batch(SCHEMA_V15)?;
+            }
+            if version <= 15 {
+                tx.execute_batch(SCHEMA_V16)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

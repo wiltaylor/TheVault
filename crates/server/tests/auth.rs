@@ -462,3 +462,163 @@ fn login_sets_a_session_cookie_that_authorises_reads() {
     expect(api.req("POST", "/api/logout", auth).send().unwrap(), 204);
     expect(api.req("GET", "/api/notes", auth).send().unwrap(), 401);
 }
+
+/// The clock `--test-clock` starts the session expiry tests at.
+const CLOCK_START: &str = "2026-03-01T09:00:00Z";
+
+const THIRTY_DAYS: u64 = 30 * 24 * 60 * 60;
+
+impl Api {
+    fn start_with_clock() -> Api {
+        Api {
+            server: TestServer::start_with_args(
+                seed,
+                &[
+                    std::ffi::OsStr::new("--test-clock"),
+                    std::ffi::OsStr::new(CLOCK_START),
+                ],
+            ),
+            client: Client::new(),
+        }
+    }
+
+    fn advance(&self, by: &str) {
+        let res = self
+            .req("POST", "/api/test/clock", self.admin())
+            .json(&json!({ "advance": by }))
+            .send()
+            .unwrap();
+        expect(res, 200);
+    }
+
+    /// Log in and return the `name=value` of the session cookie.
+    fn session(&self) -> String {
+        let res = self.login(testkit::PASSWORD);
+        let cookie = cookie_pair(&res);
+        assert_eq!(max_age(&res), THIRTY_DAYS);
+        expect(res, 200);
+        cookie
+    }
+
+    fn notes(&self, cookie: &str) -> Response {
+        self.req("GET", "/api/notes", Auth::Cookie(cookie))
+            .send()
+            .unwrap()
+    }
+
+    fn state_db(&self) -> std::path::PathBuf {
+        self.server.vault_path().join(".vault/state.db")
+    }
+}
+
+/// The `Max-Age` of a `Set-Cookie` header, in seconds.
+fn max_age(res: &Response) -> u64 {
+    let set = res.headers()[SET_COOKIE].to_str().unwrap();
+    set.split(';')
+        .find_map(|part| part.trim().strip_prefix("Max-Age="))
+        .unwrap_or_else(|| panic!("no Max-Age in {set}"))
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn a_session_survives_a_server_restart_until_logout() {
+    let mut api = Api::start();
+    let cookie = api.session();
+    expect(api.notes(&cookie), 200);
+
+    api.server.restart();
+    expect(api.notes(&cookie), 200);
+
+    expect(
+        api.req("POST", "/api/logout", Auth::Cookie(&cookie))
+            .send()
+            .unwrap(),
+        204,
+    );
+    expect(api.notes(&cookie), 401);
+    api.server.restart();
+    expect(api.notes(&cookie), 401);
+}
+
+#[test]
+fn state_db_never_holds_the_session_cookie_value() {
+    let api = Api::start();
+    let cookie = api.session();
+    expect(api.notes(&cookie), 200);
+    let id = cookie.strip_prefix("tv_session=").unwrap().as_bytes();
+    let dir = api.state_db().parent().unwrap().to_owned();
+    let mut files = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if !path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("state.db")
+        {
+            continue;
+        }
+        files += 1;
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(
+            !bytes.windows(id.len()).any(|w| w == id),
+            "{} holds the session id",
+            path.display()
+        );
+    }
+    assert!(files > 0);
+}
+
+#[test]
+fn a_session_in_use_renews_after_an_hour_and_an_idle_one_expires() {
+    let api = Api::start_with_clock();
+    let cookie = api.session();
+    let idle = api.session();
+
+    // Within the hour the cookie is not sent again.
+    api.advance("PT59M");
+    let res = api.notes(&cookie);
+    assert!(res.headers().get(SET_COOKIE).is_none());
+    expect(res, 200);
+
+    // Past the hour it is, with a fresh 30 days.
+    api.advance("PT2M");
+    let res = api.notes(&cookie);
+    assert_eq!(cookie_pair(&res), cookie);
+    assert_eq!(max_age(&res), THIRTY_DAYS);
+    expect(res, 200);
+    let res = api.notes(&cookie);
+    assert!(res.headers().get(SET_COOKIE).is_none());
+    expect(res, 200);
+
+    // 30 days after login the idle session is gone; the renewed one still works.
+    api.advance("P29DT23H");
+    expect(api.notes(&idle), 401);
+    expect(api.notes(&cookie), 200);
+}
+
+#[test]
+fn changing_the_password_logs_every_browser_out() {
+    let api = Api::start();
+    let first = api.session();
+    let second = api.session();
+    expect(api.notes(&first), 200);
+
+    // What `vault passwd` does, against the running server's state.db.
+    state::State::open(&api.state_db(), None)
+        .unwrap()
+        .set_password("a new password")
+        .unwrap();
+
+    expect(api.notes(&first), 401);
+    expect(api.notes(&second), 401);
+    expect(api.login(testkit::PASSWORD), 401);
+    let fresh = {
+        let res = api.login("a new password");
+        let cookie = cookie_pair(&res);
+        expect(res, 200);
+        cookie
+    };
+    expect(api.notes(&fresh), 200);
+}

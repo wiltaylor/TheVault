@@ -299,7 +299,7 @@ The CLI adds no behaviour of its own except these, as SPEC.md allows (D25, D28, 
 | `vault commands` | Lists every command |
 | `vault skill [--raw]` | Prints the bundled agent skill document |
 | `vault init [--starter] [--password-stdin]` | Creates a vault folder, its key file and its password (D37, OQ-S2, OQ-S3) |
-| `vault passwd` | Changes the login password (OQ-S3) |
+| `vault passwd` | Changes the login password and logs every browser out (OQ-S3) |
 | `vault reindex` | Rebuilds the index from the files and reports invalid files (D28) |
 | `vault backup [--include-key]` | Writes one archive of the vault files and `state.db` (D25, OQ-S2) |
 | `vault restore-backup` | Unpacks a backup into a new folder |

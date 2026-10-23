@@ -1,14 +1,14 @@
 //! Who is calling, and what they may do (D11).
 //!
 //! The browser logs in with the vault's password and gets a session cookie; a session is the
-//! owner and may do everything. Agents send `Authorization: Bearer <secret>` for an API token,
+//! owner and may do everything. Sessions are kept in `state.db`, so a restart keeps the browser
+//! signed in; one lasts 30 days from the last visit, and changing the password ends them all. Agents send `Authorization: Bearer <secret>` for an API token,
 //! which carries one [`Scope`]. [`authenticate`] runs before every route: it looks up what the
 //! route needs with [`required_scope`], answers 401 when the request carries no valid credentials
 //! and 403 when they do not reach that scope, and otherwise hands the handler a [`Caller`].
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{FromRequestParts, Request, State};
@@ -29,8 +29,8 @@ pub const OWNER_SESSION: &str = "owner";
 /// The cookie holding a browser session's id.
 pub const SESSION_COOKIE: &str = "tv_session";
 
-/// How long a session lasts after login.
-const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// How long a session lasts after login, and after each renewal while it is in use.
+const SESSION_TTL: Duration = Duration::from_millis(state::SESSION_TTL_MS as u64);
 
 /// Paths whose non-read requests need `write`: notes and assets, batches and upserts of notes,
 /// and notifications (D11). Any other change needs `admin`, so a new endpoint is admin-only until it is listed here.
@@ -210,51 +210,38 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     }
 }
 
-/// Live browser sessions, by id. They are kept in memory, so restarting the server logs the
-/// browser out.
+/// Browser sessions, kept in `state.db` (see [`state::State::create_session`]), so restarting
+/// the server keeps the browser signed in.
 pub struct Sessions {
     writer: Arc<Writer>,
-    live: Mutex<HashMap<String, u128>>,
 }
 
 impl Sessions {
     pub fn new(writer: Arc<Writer>) -> Sessions {
-        Sessions {
-            writer,
-            live: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn live(&self) -> std::sync::MutexGuard<'_, HashMap<String, u128>> {
-        self.live.lock().unwrap_or_else(|e| e.into_inner())
+        Sessions { writer }
     }
 
     /// Starts a session and returns its id.
-    fn start(&self) -> String {
-        let id = state::random_hex(32);
-        let now = now_ms();
-        let mut live = self.live();
-        live.retain(|_, expires| *expires > now);
-        live.insert(id.clone(), now + SESSION_TTL.as_millis());
-        id
+    async fn start(&self, user_agent: Option<String>) -> Result<String, ApiError> {
+        blocking(self.writer.clone(), move |w| {
+            w.state()
+                .create_session(user_agent.as_deref())
+                .map(|(id, _)| id)
+        })
+        .await
     }
 
-    fn is_live(&self, id: &str) -> bool {
-        self.live()
-            .get(id)
-            .is_some_and(|expires| *expires > now_ms())
+    /// Whether session `id` is live, and whether checking it renewed it.
+    async fn check(&self, id: String) -> Result<Option<state::SessionCheck>, ApiError> {
+        blocking(self.writer.clone(), move |w| w.state().check_session(&id)).await
     }
 
-    fn end(&self, id: &str) {
-        self.live().remove(id);
+    async fn end(&self, id: String) -> Result<(), ApiError> {
+        blocking(self.writer.clone(), move |w| {
+            w.state().end_session(&id).map(drop)
+        })
+        .await
     }
-}
-
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
 }
 
 fn unauthorized() -> ApiError {
@@ -269,6 +256,8 @@ fn unauthorized() -> ApiError {
 struct Granted {
     author: Author,
     scope: Scope,
+    /// The id of a session this request renewed, whose cookie the response sends again.
+    renewed: Option<String>,
 }
 
 /// The credentials a request carries. A bearer token wins over a session cookie; a bad one is
@@ -290,15 +279,16 @@ async fn identify(sessions: &Arc<Sessions>, headers: &HeaderMap) -> Result<Grant
         return Ok(Granted {
             author: Author::Token(token.name),
             scope: token.scope,
+            renewed: None,
         });
     }
-    match session_id(headers) {
-        Some(id) if sessions.is_live(&id) => Ok(Granted {
-            author: Author::Session(OWNER_SESSION.to_owned()),
-            scope: Scope::Admin,
-        }),
-        _ => Err(unauthorized()),
-    }
+    let id = session_id(headers).ok_or_else(unauthorized)?;
+    let check = sessions.check(id.clone()).await?.ok_or_else(unauthorized)?;
+    Ok(Granted {
+        author: Author::Session(OWNER_SESSION.to_owned()),
+        scope: Scope::Admin,
+        renewed: check.renewed.then_some(id),
+    })
 }
 
 /// The session id in the request's cookies.
@@ -345,7 +335,16 @@ pub async fn authenticate(
     }
     req.extensions_mut().insert(Caller(granted.author));
     req.extensions_mut().insert(GrantedScope(granted.scope));
-    next.run(req).await
+    let mut res = next.run(req).await;
+    // A renewed session's cookie goes out again with a fresh Max-Age, so the browser keeps it as
+    // long as the server does. A response that sets the cookie itself, such as logout, wins.
+    if let Some(id) = granted.renewed
+        && !res.headers().contains_key(header::SET_COOKIE)
+    {
+        res.headers_mut()
+            .insert(header::SET_COOKIE, session_cookie(&id, SESSION_TTL));
+    }
+    res
 }
 
 /// Middleware for [`crate::owner_router`]: every request is the owner's session.
@@ -373,6 +372,7 @@ fn session_cookie(value: &str, max_age: Duration) -> HeaderValue {
 /// `POST /api/login`: check the password and start a session (OQ-S3).
 pub async fn login(
     State(sessions): State<Arc<Sessions>>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<Response, ApiError> {
     let ok = blocking(sessions.writer.clone(), move |w| {
@@ -386,7 +386,11 @@ pub async fn login(
             "wrong password",
         ));
     }
-    let id = sessions.start();
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let id = sessions.start(user_agent).await?;
     let mut res = Json(json!({ "expires_in": SESSION_TTL.as_secs() })).into_response();
     res.headers_mut()
         .insert(header::SET_COOKIE, session_cookie(&id, SESSION_TTL));
@@ -394,14 +398,17 @@ pub async fn login(
 }
 
 /// `POST /api/logout`: end the request's session and clear its cookie.
-pub async fn logout(State(sessions): State<Arc<Sessions>>, headers: HeaderMap) -> Response {
+pub async fn logout(
+    State(sessions): State<Arc<Sessions>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     if let Some(id) = session_id(&headers) {
-        sessions.end(&id);
+        sessions.end(id).await?;
     }
     let mut res = StatusCode::NO_CONTENT.into_response();
     res.headers_mut()
         .insert(header::SET_COOKIE, session_cookie("", Duration::ZERO));
-    res
+    Ok(res)
 }
 
 #[cfg(test)]

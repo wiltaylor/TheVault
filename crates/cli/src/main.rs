@@ -295,7 +295,7 @@ enum Command {
         #[arg(long)]
         password_stdin: bool,
     },
-    /// Change the login password of the vault folder.
+    /// Change the login password of the vault folder, logging every browser out.
     Passwd {
         #[arg(long)]
         password_stdin: bool,

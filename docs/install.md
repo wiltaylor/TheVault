@@ -64,11 +64,15 @@ The container runs as uid 1000. If it cannot write to `/data`, it stops and says
 1. Open `http://<server>:8080` in a browser. `THEVAULT_PORT` in `.env` sets the port.
 2. Enter the password from `VAULT_PASSWORD` and log in.
 
+The browser stays logged in for 30 days from your last visit, so a browser you use at least once a month never asks again. The server keeps its sessions in `state.db`, so restarting or upgrading the container does not log you out. Logging out ends that browser's session at once.
+
 To change the password later, run this and type the new password twice:
 
 ```sh
 docker compose exec thevault vault passwd
 ```
+
+Changing the password logs every browser out. Log in again with the new password.
 
 ## Pair your phone
 

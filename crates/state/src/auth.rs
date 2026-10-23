@@ -1,5 +1,5 @@
 //! API tokens (D11), the one-time install codes that give an AI agent one, and the login
-//! password (OQ-S3).
+//! password (OQ-S3). Setting the password ends every session (see [`crate::sessions`]).
 //!
 //! An agent install code is stored as a hash, like a pairing code, and names the token it makes:
 //! `agent-<name>` with the scope chosen when the code was issued. Redeeming it works once and
@@ -235,7 +235,8 @@ impl State {
         Ok(Some((info, secret)))
     }
 
-    /// Sets or replaces the login password, stored as an Argon2id hash.
+    /// Sets or replaces the login password, stored as an Argon2id hash, and ends every
+    /// password-login session, so a new password logs every browser out.
     pub fn set_password(&self, password: &str) -> Result<()> {
         let mut raw = [0u8; 16];
         random_bytes(&mut raw);
@@ -244,11 +245,15 @@ impl State {
             .hash_password(password.as_bytes(), &salt)
             .map_err(|e| Error::PasswordHash(e.to_string()))?
             .to_string();
-        self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO password (id, hash) VALUES (1, ?1)
              ON CONFLICT (id) DO UPDATE SET hash = excluded.hash",
             [hash],
         )?;
+        tx.execute("DELETE FROM sessions", [])?;
+        tx.commit()?;
         Ok(())
     }
 
