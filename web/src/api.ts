@@ -542,6 +542,19 @@ export interface AiTestResult {
   error: { kind: string; message: string } | null;
 }
 
+/** The Brave Search card's state (ai D26): whether the API key is stored, never the key. */
+export interface BraveStatus {
+  configured: boolean;
+}
+
+/** How the Brave Search card's Test went: the number of results for "TheVault", or Brave's error. */
+export interface BraveTestResult {
+  ok: boolean;
+  count: number | null;
+  ms: number;
+  error: { kind: string; message: string } | null;
+}
+
 /** A secret's name and times. No response ever carries its value (D10). */
 export interface Secret {
   name: string;
@@ -1245,6 +1258,12 @@ export const api = {
   /** Save what the Google sync pulls. */
   googleSaveSettings: (settings: GoogleSettings) =>
     request<GoogleStatus>("PUT", "/api/integrations/google/settings", settings),
+  /** Whether the Brave Search API key is stored (ai D26). */
+  braveStatus: () => request<BraveStatus>("GET", "/api/integrations/brave"),
+  /** Store the Brave Search API key; an empty key deletes it. */
+  bravePutKey: (key: string) => request<BraveStatus>("PUT", "/api/integrations/brave/key", { key }),
+  /** Search Brave once for "TheVault" with the stored key. */
+  braveTest: () => request<BraveTestResult>("POST", "/api/integrations/brave/test"),
   /** Settings > AI: each provider's sign-in and default model (ai D7). */
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
   /**

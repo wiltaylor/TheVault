@@ -32,6 +32,9 @@
 //! Settings > Integrations > Google signs in with the user's own OAuth client under
 //! `/api/integrations/google` (google-sync D1, D18).
 //!
+//! Settings > Integrations > Brave Search stores the key the chat's `web_search` tool uses under
+//! `/api/integrations/brave` (ai D26).
+//!
 //! Settings > AI stores the provider keys and signs in with ChatGPT under
 //! `/api/integrations/ai`, and `/api/ai/models` lists a provider's models (ai D6, D8, D15).
 //!
@@ -62,6 +65,7 @@ mod apps;
 mod assets;
 mod auth;
 mod batch;
+mod brave;
 mod defs;
 mod devices;
 mod error;
@@ -297,7 +301,10 @@ fn build() -> Built {
         .get("/api/secrets", tasks::secrets)
         .get("/api/secrets/{name}", tasks::secret)
         .put("/api/secrets/{name}", tasks::put_secret)
-        .delete("/api/secrets/{name}", tasks::delete_secret);
+        .delete("/api/secrets/{name}", tasks::delete_secret)
+        .get("/api/integrations/brave", brave::status)
+        .put("/api/integrations/brave/key", brave::put_key)
+        .post("/api/integrations/brave/test", brave::test);
     let tasks = Routes::new()
         .get("/api/tasks", tasks::list)
         .get("/api/tasks/{name}", tasks::read)

@@ -12,7 +12,8 @@
 //! and the caller's scope allows the write (`write` for notes, `admin` for types), the tool makes
 //! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
 //! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
-//! the trash (ai D21). Events:
+//! the trash (ai D21). With a Brave Search key stored, `web_search` searches the web
+//! (`crate::brave`, ai D26). Events:
 //!
 //! | Event | Data |
 //! |---|---|
@@ -219,6 +220,8 @@ struct Setup {
     system: String,
     /// The changes the tools make themselves this turn.
     direct: Direct,
+    /// Brave Search, when its key is stored: `web_search` is offered only then (ai D26).
+    web_search: Option<crate::brave::Search>,
 }
 
 /// The kinds of change the tools make themselves rather than propose (ai D22): those whose
@@ -296,6 +299,7 @@ fn setup(
         cred,
         system,
         direct: Direct::of(settings.confirm, scope),
+        web_search: crate::brave::Search::load(state),
     })
 }
 
@@ -373,7 +377,10 @@ impl Turn {
                     return;
                 }
             };
-        let tools = tool_specs();
+        let mut tools = tool_specs();
+        if setup.web_search.is_some() {
+            tools.push(crate::brave::tool_spec());
+        }
         let mut added: Vec<Message> = Vec::new();
         // The images read_asset has sent this turn (ai D19).
         let mut images_sent = 0usize;
@@ -536,6 +543,30 @@ impl Turn {
                         content: cut(&read.content, RESULT_LIMIT),
                         is_error: read.is_error,
                         parts: read.parts,
+                    });
+                    continue;
+                }
+                // web_search (ai D26): only offered, and so only run, with a Brave key.
+                if c.name == "web_search"
+                    && c.error.is_none()
+                    && let Some(search) = &setup.web_search
+                {
+                    let got = crate::brave::web_search(search, &c.input).await;
+                    if !self
+                        .out
+                        .send(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::ToolResult {
+                        id: c.id,
+                        content: cut(&got.content, RESULT_LIMIT),
+                        is_error: got.is_error,
+                        parts: Vec::new(),
                     });
                     continue;
                 }
@@ -739,7 +770,7 @@ fn assistant(content: Vec<Content>, state: Option<ProviderState>) -> Message {
     }
 }
 
-fn tool(name: &str, description: &str, properties: Value) -> ToolSpec {
+pub(crate) fn tool(name: &str, description: &str, properties: Value) -> ToolSpec {
     let required: Vec<&String> = properties
         .as_object()
         .map(|o| o.keys().collect())

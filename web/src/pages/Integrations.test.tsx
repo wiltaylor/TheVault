@@ -10,13 +10,30 @@ const googleDisconnect = vi.fn();
 const runTask = vi.fn();
 const taskRun = vi.fn();
 const googleSaveSettings = vi.fn();
+const braveStatus = vi.fn();
+const bravePutKey = vi.fn();
+const braveTest = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, googleStatus, googleStart, googleFinish, googleDisconnect, googleSaveSettings, runTask, taskRun },
+  return {
+    ...real,
+    api: {
+      ...real.api,
+      googleStatus,
+      googleStart,
+      googleFinish,
+      googleDisconnect,
+      googleSaveSettings,
+      runTask,
+      taskRun,
+      braveStatus,
+      bravePutKey,
+      braveTest,
+    },
   };
 });
 
-const { GoogleCard, GoogleCallback, redirectMode } = await import("./Integrations");
+const { BraveCard, GoogleCard, GoogleCallback, redirectMode } = await import("./Integrations");
 const M = await import("../workspace/model");
 const { PaneRouter } = await import("../workspace/pane");
 const { resetWorkspace, workspace } = await import("../workspace/store");
@@ -413,6 +430,56 @@ describe("GoogleSettingsForm", () => {
     await screen.findByRole("form", { name: "Google sync settings" });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect((await screen.findByRole("alert")).textContent).toContain("YYYY-MM-DD");
+  });
+});
+
+describe("BraveCard", () => {
+  it("saves a key it never shows back, links to Brave's dashboard, and removes it", async () => {
+    braveStatus.mockResolvedValue({ configured: false });
+    bravePutKey.mockResolvedValueOnce({ configured: true }).mockResolvedValueOnce({ configured: false });
+    const ok = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(() => <BraveCard />);
+
+    const link = await screen.findByRole("link", { name: /Brave Search API key/ });
+    expect(link.getAttribute("href")).toBe("https://api-dashboard.search.brave.com/");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    const input = screen.getByLabelText("API key") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    expect(input.placeholder).toBe("Paste a key");
+    expect(screen.queryByRole("button", { name: "Test" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove key" })).toBeNull();
+
+    fireEvent.input(input, { target: { value: " BSA-key " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bravePutKey).toHaveBeenCalledWith("BSA-key"));
+    await waitFor(() => expect(input.placeholder).toBe("set"));
+    expect(input.value).toBe("");
+    expect(screen.getByText("A key is set. Paste another to replace it.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove key" }));
+    await waitFor(() => expect(bravePutKey).toHaveBeenLastCalledWith(""));
+    await waitFor(() => expect(input.placeholder).toBe("Paste a key"));
+    expect(ok).toHaveBeenCalled();
+    ok.mockRestore();
+  });
+
+  it("tests the stored key and shows the result count or Brave's error", async () => {
+    braveStatus.mockResolvedValue({ configured: true });
+    braveTest
+      .mockResolvedValueOnce({ ok: true, count: 7, ms: 120, error: null })
+      .mockResolvedValueOnce({
+        ok: false,
+        count: null,
+        ms: 30,
+        error: { kind: "auth", message: "Brave answered 401 Unauthorized: The provided subscription token is invalid." },
+      });
+    render(() => <BraveCard />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Test" }));
+    expect((await screen.findByRole("status")).textContent).toContain("7 results");
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("subscription token is invalid");
+    expect(braveTest).toHaveBeenCalledTimes(2);
   });
 });
 

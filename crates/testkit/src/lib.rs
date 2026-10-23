@@ -3,7 +3,8 @@
 //! [`FakeGoogle`]. The AI providers' fakes are [`FakeAnthropic`], [`FakeOpenAi`] (API key and
 //! ChatGPT plan) and [`FakeSiwc`] (the Sign in with ChatGPT server); point
 //! `ai_settings.endpoints` `anthropic`, `openai` (and `chatgpt` for the plan) and `chatgpt_auth`
-//! at their `base_url()`s.
+//! at their `base_url()`s. [`FakeBrave`] is the Brave Search API; point `brave_settings.endpoint`
+//! at its `base_url()`.
 //!
 //! ```no_run
 //! let server = testkit::TestServer::start();
@@ -24,6 +25,7 @@
 //! A server gets 120 seconds to start. Set `TESTKIT_START_TIMEOUT_SECS` to change that.
 
 pub mod fake_anthropic;
+pub mod fake_brave;
 pub mod fake_google;
 mod fake_http;
 mod fake_images;
@@ -34,6 +36,7 @@ mod standin;
 pub use fake_anthropic::{
     AnthropicMessage, AnthropicReply, DEFAULT_ANTHROPIC_KEY, FakeAnthropic, FakeAnthropicBuilder,
 };
+pub use fake_brave::{BRAVE_SEARCH_PATH, BraveReply, BraveResult, DEFAULT_BRAVE_KEY, FakeBrave};
 pub use fake_images::FakeImage;
 pub use fake_openai::{
     DEFAULT_OPENAI_KEY, Ending, FakeOpenAi, FakeOpenAiBuilder, OpenAiReply, OpenAiResponse,
@@ -49,7 +52,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -96,6 +99,8 @@ pub struct TestServer {
     /// The secret key file the server reads, when the testkit wrote it.
     key_file: Option<PathBuf>,
     admin_token: String,
+    /// Every line the server has written to stderr, across restarts.
+    stderr: Arc<Mutex<Vec<String>>>,
 }
 
 impl TestServer {
@@ -197,7 +202,8 @@ impl TestServer {
         key_file: Option<PathBuf>,
         admin_token: String,
     ) -> Self {
-        let (child, addr) = spawn(&command, binary, vault.path());
+        let stderr = Arc::new(Mutex::default());
+        let (child, addr) = spawn(&command, binary, vault.path(), &stderr);
         let server = TestServer {
             child,
             command,
@@ -207,6 +213,7 @@ impl TestServer {
             _config: config,
             key_file,
             admin_token,
+            stderr,
         };
         server.wait_healthy();
         server
@@ -217,7 +224,7 @@ impl TestServer {
     pub fn restart(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let (child, addr) = spawn(&self.command, &self.binary, self.vault.path());
+        let (child, addr) = spawn(&self.command, &self.binary, self.vault.path(), &self.stderr);
         self.child = child;
         self.addr = addr;
         self.wait_healthy();
@@ -236,6 +243,15 @@ impl TestServer {
     /// The server process's id, for a test that watches its memory.
     pub fn pid(&self) -> u32 {
         self.child.id()
+    }
+
+    /// Every line the server has written to its stderr so far, such as its trail lines. The lines
+    /// still reach the test's own stderr as well.
+    pub fn stderr_lines(&self) -> Vec<String> {
+        self.stderr
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// The address the server is listening on.
@@ -330,7 +346,13 @@ impl Drop for TestServer {
 }
 
 /// Starts the server `command` builds on `vault` and a random port, and reads back the address.
-fn spawn(command: &dyn Fn() -> Command, binary: &Path, vault: &Path) -> (Child, SocketAddr) {
+/// Its stderr is copied to this process's stderr and kept, line by line, in `lines`.
+fn spawn(
+    command: &dyn Fn() -> Command,
+    binary: &Path,
+    vault: &Path,
+    lines: &Arc<Mutex<Vec<String>>>,
+) -> (Child, SocketAddr) {
     let mut child = command()
         .arg("--vault")
         .arg(vault)
@@ -338,9 +360,26 @@ fn spawn(command: &dyn Fn() -> Command, binary: &Path, vault: &Path) -> (Child, 
         .arg("127.0.0.1:0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|e| panic!("start {}: {e}", binary.display()));
+    if let Some(stderr) = child.stderr.take() {
+        let lines = lines.clone();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            let mut line = Vec::new();
+            while matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+                // Straight to the stream, not eprint!, so the test harness does not capture it.
+                let _ = std::io::stderr().write_all(&line);
+                let text = String::from_utf8_lossy(&line);
+                lines
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(text.trim_end_matches(['\r', '\n']).to_owned());
+                line.clear();
+            }
+        });
+    }
     match read_listen_line(&mut child) {
         Ok(addr) => (child, addr),
         Err(e) => {

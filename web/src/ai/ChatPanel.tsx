@@ -61,6 +61,8 @@ export function stepLabel(name: string, input: Json): string {
       return "Read the type file format";
     case "propose_type_change":
       return `Checked a change to type ${s("name")}`;
+    case "web_search":
+      return `Searched the web for “${s("query")}”`;
     default:
       return `Called ${name}`;
   }
@@ -75,6 +77,7 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
     if (props.part.isError) return "failed";
     if (props.part.asset) return props.part.asset.filename;
     if (TYPE_TOOLS.has(props.part.name)) return "done";
+    if (props.part.links) return `${props.part.links.length} found`;
     return `${props.part.notes.length} found`;
   };
   // The image a read_asset step read, from the asset's own URL: the stream never carries its bytes (ai D19).
@@ -98,6 +101,20 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
       </summary>
       <Show when={props.part.message}>
         <p class="muted">{props.part.message}</p>
+      </Show>
+      {/* A web_search step's results link out, in a new tab (ai D26). */}
+      <Show when={props.part.links?.length}>
+        <ul>
+          <For each={props.part.links}>
+            {(l) => (
+              <li>
+                <a href={l.url} target="_blank" rel="noopener noreferrer">
+                  {l.title}
+                </a>
+              </li>
+            )}
+          </For>
+        </ul>
       </Show>
       <Show when={props.part.notes.length}>
         <ul>

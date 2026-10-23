@@ -102,6 +102,12 @@ export const TYPE_CHANGED = "This type changed since the proposal, so it was not
  * A change the AI made itself, its confirmation turned off in Settings > AI (ai D22): a note's,
  * with its new version (for a delete, the version that went to the trash), or a type's.
  */
+/** A web page a `web_search` step found, from its `tool_result` summary (ai D26). */
+export interface WebLink {
+  title: string;
+  url: string;
+}
+
 export type Applied =
   | { id: string; op: NoteOp; note_id: string; title: Json; version: string }
   | { id: string; op: "type_change" | "type_create"; type_name: string };
@@ -109,7 +115,7 @@ export type Applied =
 export type Part =
   | { kind: "text"; text: string }
   | { kind: "applied"; applied: Applied }
-  | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string; asset?: AssetRef }
+  | { kind: "tool"; id: string; name: string; input: Json; done: boolean; isError: boolean; notes: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[] }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
@@ -252,7 +258,7 @@ function onEvent(e: StreamEvent) {
       const i = lastTurn();
       const at = state.chat.turns[i]?.parts.findIndex((p) => p.kind === "tool" && p.id === d.id) ?? -1;
       if (at < 0) break;
-      const summary = (d.summary ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef };
+      const summary = (d.summary ?? {}) as { notes?: NoteRef[]; message?: string; asset?: AssetRef; links?: WebLink[] };
       state.setChat(
         "turns",
         i,
@@ -265,6 +271,10 @@ function onEvent(e: StreamEvent) {
           p.notes = (summary.notes ?? []).filter((n) => n && typeof n.id === "string").map((n) => ({ id: n.id, title: String(n.title ?? n.id) }));
           if (summary.message) p.message = summary.message;
           if (summary.asset && typeof summary.asset.id === "string") p.asset = summary.asset;
+          if (Array.isArray(summary.links))
+            p.links = summary.links
+              .filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url))
+              .map((l) => ({ url: l.url, title: String(l.title || l.url) }));
         }),
       );
       break;

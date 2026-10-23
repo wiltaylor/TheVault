@@ -540,6 +540,21 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/integrations/brave",
+        "Settings > Integrations > Brave Search: whether the API key is stored, never the key",
+    ),
+    (
+        "PUT",
+        "/api/integrations/brave/key",
+        "Store the Brave Search API key; an empty key deletes it",
+    ),
+    (
+        "POST",
+        "/api/integrations/brave/test",
+        "Search Brave for TheVault with the stored key and report the result count or the error",
+    ),
+    (
+        "GET",
         "/api/integrations/ai",
         "Settings > AI: the default provider and each provider's sign-in and default model, never a key or token",
     ),

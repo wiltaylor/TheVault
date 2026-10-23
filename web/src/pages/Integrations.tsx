@@ -1,6 +1,14 @@
 import { A, useLocation, useNavigate } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
-import { type GoogleRedirect, type GoogleSettings, type GoogleSide, type GoogleStatus, api, waitForRun } from "../api";
+import {
+  type BraveStatus,
+  type GoogleRedirect,
+  type GoogleSettings,
+  type GoogleSide,
+  type GoogleStatus,
+  api,
+  waitForRun,
+} from "../api";
 import { ChipPicker } from "../components/ChipPicker";
 import { Spinner } from "../components/SyncStatus";
 import { errorText } from "./TypeEditor";
@@ -14,6 +22,9 @@ import { errorText } from "./TypeEditor";
 // "Syncing…" while the card polls the status every few seconds (ticket 113). Run now answers as
 // soon as the run starts; the card then reads the run until it ends and says how it went, while
 // its other buttons stay free (ticket 115).
+//
+// The Brave Search card (ai D26) stores the API key the AI chat's web_search tool uses: the key is
+// never shown back, only whether one is set; Test searches once for "TheVault".
 
 /** How often the card reads the status again while a side is running. */
 export const POLL_MS = 3000;
@@ -469,6 +480,145 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
   );
 }
 
+/** Where a Brave Search API key comes from. */
+export const BRAVE_DASHBOARD = "https://api-dashboard.search.brave.com/";
+
+/** The request in flight on the Brave card. */
+type BraveAction = "save" | "remove" | "test";
+
+/** The Brave Search card: the key the AI chat's web_search tool uses (ai D26). */
+export function BraveCard() {
+  const [status, setStatus] = createSignal<BraveStatus | null>(null);
+  const [key, setKey] = createSignal("");
+  const [error, setError] = createSignal<string | null>(null);
+  const [notice, setNotice] = createSignal<string | null>(null);
+  const [pending, setPending] = createSignal<BraveAction | null>(null);
+  const busy = () => pending() !== null;
+  const doing = (a: BraveAction) => pending() === a;
+  const set = () => !!status()?.configured;
+
+  onMount(async () => {
+    try {
+      setStatus(await api.braveStatus());
+    } catch (e) {
+      setError(errorText(e));
+    }
+  });
+
+  async function act(action: BraveAction, f: () => Promise<string | null>) {
+    setError(null);
+    setNotice(null);
+    setPending(action);
+    try {
+      setNotice(await f());
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  function save(ev: SubmitEvent) {
+    ev.preventDefault();
+    const k = key().trim();
+    if (!k) {
+      setError("Paste the Brave Search API key first.");
+      return;
+    }
+    void act("save", async () => {
+      setStatus(await api.bravePutKey(k));
+      setKey("");
+      return "Saved. The AI chat can search the web.";
+    });
+  }
+
+  function remove() {
+    if (!confirm("Remove the Brave Search API key? TheVault forgets it, and the AI chat stops searching the web.")) return;
+    void act("remove", async () => {
+      setStatus(await api.bravePutKey(""));
+      setKey("");
+      return "Removed. The AI chat no longer searches the web.";
+    });
+  }
+
+  function test() {
+    void act("test", async () => {
+      const r = await api.braveTest();
+      if (!r.ok) throw new Error(r.error?.message ?? "The test search failed.");
+      return `Test search worked: ${r.count ?? 0} result${r.count === 1 ? "" : "s"} for “TheVault” in ${r.ms} ms.`;
+    });
+  }
+
+  return (
+    <section class="field-card brave-card" aria-label="Brave Search">
+      <header>
+        <h2>Brave Search</h2>
+        <p class="muted">Lets the AI chat search the web, with your own Brave Search API key.</p>
+      </header>
+      <Show when={status()}>
+        <form class="admin-form" aria-label="Brave Search key" onSubmit={save}>
+          <p>
+            <a href={BRAVE_DASHBOARD} target="_blank" rel="noopener noreferrer">
+              Get a Brave Search API key
+            </a>
+          </p>
+          <div class="form-grid">
+            <label for="brave-key">API key</label>
+            <input
+              id="brave-key"
+              type="password"
+              autocomplete="off"
+              placeholder={set() ? "set" : "Paste a key"}
+              value={key()}
+              onInput={(e) => setKey(e.currentTarget.value)}
+            />
+          </div>
+          <Show when={set()}>
+            <p class="muted">A key is set. Paste another to replace it.</p>
+          </Show>
+          <div class="actions">
+            <button
+              type="submit"
+              class="primary"
+              disabled={busy() || !key().trim()}
+              aria-busy={doing("save") ? "true" : undefined}
+            >
+              <Busy on={doing("save")} />
+              Save
+            </button>
+            <Show when={set()}>
+              <button type="button" disabled={busy()} aria-busy={doing("test") ? "true" : undefined} onClick={test}>
+                <Busy on={doing("test")} />
+                Test
+              </button>
+              <button
+                type="button"
+                class="danger"
+                disabled={busy()}
+                aria-busy={doing("remove") ? "true" : undefined}
+                onClick={remove}
+              >
+                <Busy on={doing("remove")} />
+                Remove key
+              </button>
+            </Show>
+          </div>
+        </form>
+      </Show>
+      <Show when={error()}>
+        <p class="error" role="alert">
+          {error()}
+        </p>
+      </Show>
+      <Show when={notice()}>
+        <p class="muted" role="status">
+          {notice()}
+        </p>
+      </Show>
+    </section>
+  );
+}
+
 /** Settings > Integrations. */
 export function Integrations() {
   return (
@@ -477,6 +627,7 @@ export function Integrations() {
         <h1>Integrations</h1>
       </header>
       <GoogleCard />
+      <BraveCard />
     </section>
   );
 }

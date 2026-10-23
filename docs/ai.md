@@ -116,6 +116,7 @@ A call sends the provider the prompt and any text the caller includes:
 - A script sends what it passes to `ai::complete` or `ai::chat`, which can include note content.
 - The AI panel sends the conversation and the results of the note tools the model calls, such as the notes it searches and reads, and the attachments it reads with `read_asset`: an image itself, a PDF's or text file's text.
 - The Test button sends only "Reply with OK."
+- With a Brave Search key stored, a `web_search` call sends Brave the query the model wrote; see [Web search](#web-search).
 
 Nothing else from the vault is sent. Responses API requests set `store: false`, so OpenAI keeps no stored response for later reuse. Chat Completions requests, which go only to a custom API URL, carry no such field; the service's own policy decides what it keeps. Each provider's own data policy applies to what it receives.
 
@@ -169,10 +170,21 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `get_type` | Reads one type file's WCL, with its fields and templates |
 | `type_format` | The type-file sections of the vault format, so the model knows the vocabulary |
 | `propose_type_change` | Checks a whole new type file, for an existing type or a new name, and shows it to you; writes it only when confirmation is off; never deletes a type |
+| `web_search` | Searches the web with Brave Search, 1 to 10 results; offered only with a Brave Search key. See [Web search](#web-search) |
 
 A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 12 calls to the model; after that the panel says it stopped, and asking again goes on.
 
 Stop ends the answer at once: the server stops calling the model when the panel goes away. New conversation forgets the conversation. Conversations live in the browser tab, or the app's window, only and are not saved in the vault.
+
+### Web search
+
+With a Brave Search API key stored in Settings > Integrations > Brave Search ([Web search with Brave Search](brave.md)), the model is offered `web_search { query, count }`. Without a key the tool is not in the model's tool list at all.
+
+- `count` is 1 to 10; a missing one means 5. A query over 400 characters is refused.
+- The model gets `[{ title, url, description, age? }]`, with Brave's HTML tags, such as `<strong>`, stripped from the titles and descriptions.
+- A Brave error is an error result for the model, with Brave's message and a `kind`: `rate_limit` for 429, `auth` for 401, 403 and 422.
+- The panel shows the step as "Searched the web for “<query>”", with the result titles linking out in a new tab.
+- Each search writes its own `brave:` line to the server log, which never holds the query; the turn's `ai:` trail line is unchanged.
 
 ### Attachments
 

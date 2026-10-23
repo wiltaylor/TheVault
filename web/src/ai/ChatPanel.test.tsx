@@ -124,6 +124,30 @@ describe("ChatPanel", () => {
     expect(m.getByRole("link", { name: "Shopping list" })).toHaveAttribute("href", "/notes/01JA");
   });
 
+  it("shows a web_search step with its results linking out", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await askIt(m);
+    emit("tool", { id: "w1", name: "web_search", input: { query: "slate roof", count: 5 } });
+    emit("tool_result", {
+      id: "w1",
+      is_error: false,
+      summary: {
+        notes: [],
+        links: [
+          { title: "Slate roofs", url: "https://example.com/slate" },
+          { title: "Bad", url: "javascript:alert(1)" },
+        ],
+      },
+    });
+    await waitFor(() => expect(m.getByText("Searched the web for “slate roof”")).toBeInTheDocument());
+    expect(m.getByText("(1 found)")).toBeInTheDocument();
+    const link = m.getByRole("link", { name: "Slate roofs" });
+    expect(link).toHaveAttribute("href", "https://example.com/slate");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(m.queryByRole("link", { name: "Bad" })).toBeNull();
+  });
+
   it("shows a read_asset step's image as a thumbnail from the asset's URL", async () => {
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await askIt(m);
