@@ -59,9 +59,15 @@ importers:
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
+      dompurify:
+        specifier: ^3.4.17
+        version: 3.4.17
       lucide:
         specifier: ^1.56.0
         version: 1.56.0
+      marked:
+        specifier: ^18.1.1
+        version: 18.1.1
       mermaid:
         specifier: ^12.1.0
         version: 12.1.0
@@ -1638,6 +1644,11 @@ packages:
 
   marked@16.4.2:
     resolution: {integrity: sha512-TI3V8YYWvkVf3KJe1dRkpnjs68JUPyEa5vjKrp1XEEJUAOaQc+Qj+L1qWbPd0SJuAdQkFU0h73sXXqwDYxsiDA==}
+    engines: {node: '>= 20'}
+    hasBin: true
+
+  marked@18.1.1:
+    resolution: {integrity: sha512-zEGgrtUG8crk+TrMacJSVABU4DYDDkS8uqgU3ohrn/2fW9C2AEfUrO3m6IhpIpQpl7YcVpiXXC9cSMWDANT3dg==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -3755,6 +3766,8 @@ snapshots:
   mapbox-to-css-font@3.2.1: {}
 
   marked@16.4.2: {}
+
+  marked@18.1.1: {}
 
   mdn-data@2.27.1: {}
 

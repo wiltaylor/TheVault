@@ -41,7 +41,7 @@ const { newConversation, transcriptNow, forgetApp } = await import("./store");
 const { forgetAppInfo } = await import("../inApp");
 const { generalActions } = await import("../palette/actions");
 const { changes, onNoteChangedElsewhere } = await import("../changes");
-const { parseBlocks, parseInline } = await import("./markdown");
+const { renderMarkdown } = await import("./markdown");
 const { blockLines, lineDiff } = await import("./diff");
 
 const STATUS = {
@@ -385,19 +385,56 @@ describe("ChatPanel in the desktop and Android apps", () => {
 });
 
 describe("markdown", () => {
-  it("reads blocks and inline marks", () => {
-    expect(parseBlocks("# Title\n\nOne\ntwo\n\n- a\n- b\n\n```\ncode\n```")).toEqual([
-      { kind: "h", level: 1, text: "Title" },
-      { kind: "p", text: "One two" },
-      { kind: "ul", items: ["a", "b"] },
-      { kind: "code", text: "code" },
+  const dom = (text: string) => {
+    const div = document.createElement("div");
+    div.innerHTML = renderMarkdown(text);
+    return div;
+  };
+
+  it("renders headings, paragraphs, nested and task lists, quotes, rules and code", () => {
+    const d = dom("# Title\n\nOne **two** ~~three~~\n\n- a\n  - b\n- [x] done\n\n> quoted *text*\n\n---\n\n```\ncode\n```");
+    expect(d.querySelector("h1")?.textContent).toBe("Title");
+    expect(d.querySelector("strong")?.textContent).toBe("two");
+    expect(d.querySelector("del")?.textContent).toBe("three");
+    expect(d.querySelector("ul ul li")?.textContent).toBe("b");
+    expect((d.querySelector("input[type=checkbox]") as HTMLInputElement).disabled).toBe(true);
+    expect(d.querySelector("blockquote em")?.textContent).toBe("text");
+    expect(d.querySelector("hr")).not.toBeNull();
+    expect(d.querySelector("pre code")?.textContent).toBe("code\n");
+  });
+
+  it("renders a table in a scrolling box", () => {
+    const d = dom("| Game | Year |\n|---|---:|\n| Hades II | 2025 |\n| Elden Ring | 2022 |");
+    const table = d.querySelector(".ai-md-table > table")!;
+    expect([...table.querySelectorAll("th")].map((th) => th.textContent)).toEqual(["Game", "Year"]);
+    expect([...table.querySelectorAll("tbody tr")].map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent))).toEqual([
+      ["Hades II", "2025"],
+      ["Elden Ring", "2022"],
     ]);
-    expect(parseInline("see [Roof](/notes/01J) and `x`")).toEqual([
-      { kind: "text", text: "see " },
-      { kind: "link", href: "/notes/01J", children: [{ kind: "text", text: "Roof" }] },
-      { kind: "text", text: " and " },
-      { kind: "code", text: "x" },
-    ]);
+  });
+
+  it("keeps app and web links, drops unsafe ones, and opens other sites in a new tab", () => {
+    const d = dom("[Roof](/notes/01J) [site](https://example.org) [bad](javascript:alert(1)) <script>alert(1)</script><b onclick=\"x()\">b</b>");
+    const links = [...d.querySelectorAll("a")];
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["/notes/01J", "https://example.org"]);
+    expect(links[0]!.getAttribute("target")).toBeNull();
+    expect(links[1]!.getAttribute("target")).toBe("_blank");
+    expect(links[1]!.getAttribute("rel")).toContain("noopener");
+    expect(d.textContent).toContain("bad");
+    expect(d.querySelector("script")).toBeNull();
+    expect(d.innerHTML).not.toContain("onclick");
+  });
+
+  it("shows the vault's images and only the alt text of another site's", () => {
+    const d = dom("![cover](/api/assets/01ABC) ![remote](https://tracker.example/pixel.png)");
+    const imgs = [...d.querySelectorAll("img")];
+    expect(imgs.map((i) => i.getAttribute("src"))).toEqual(["/api/assets/01ABC"]);
+    expect(d.textContent).toContain("remote");
+  });
+
+  it("renders an unfinished answer as it streams", () => {
+    const d = dom("Here:\n\n```\nhalf");
+    expect(d.querySelector("pre code")?.textContent).toContain("half");
   });
 });
 
