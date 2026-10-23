@@ -508,6 +508,8 @@ export interface AiConfirm {
   types: boolean;
   /** Downloading files from the web into the vault as assets (ai D27). */
   downloads: boolean;
+  /** Changing, creating and deleting taxonomies (ai D31). */
+  taxonomies: boolean;
 }
 
 /** A model a provider offers now (ai D6). */
@@ -534,6 +536,7 @@ export interface AiProviders {
 export type AiApplied =
   | { op: "update" | "create" | "archive" | "unarchive" | "delete"; note_id: string; version: string }
   | { op: "type_change" | "type_create"; type_name: string }
+  | { op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes: number }
   | { op: "download"; asset_id: string; filename: string; media_type?: string; size?: number; url?: string };
 
 /** A poll of a chat turn's events through an app's embedded server (ai D23). */

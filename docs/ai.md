@@ -172,6 +172,11 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `get_type` | Reads one type file's WCL, with its fields and templates |
 | `type_format` | The type-file sections of the vault format, so the model knows the vocabulary |
 | `propose_type_change` | Checks a whole new type file, for an existing type or a new name, and shows it to you; writes it only when confirmation is off; never deletes a type |
+| `list_taxonomies` | Every taxonomy's name, label, description, whether it is open (notes may add terms), whether it is built in, and its term count |
+| `get_taxonomy` | Reads one taxonomy file's WCL, with every term as a path such as `Doing/Blocked` |
+| `taxonomy_format` | The taxonomy-file sections of the vault format, and the `taxonomy` field kind |
+| `propose_taxonomy_change` | Checks a whole new taxonomy file, for an existing taxonomy or a new name, with its term `renames`, and shows it to you; writes it only when confirmation is off. See [Apply a taxonomy change](#apply-a-taxonomy-change) |
+| `propose_taxonomy_delete` | Checks that a taxonomy exists and nothing uses it, and shows the delete to you; deletes it only when confirmation is off |
 | `web_search` | Searches the web with Brave Search, 1 to 10 results; offered only with a Brave Search key. See [Web search](#web-search) |
 | `fetch_url` | Reads a web page or file for the model; never a change. See [Read pages and download files](#read-pages-and-download-files) |
 | `download_asset` | Downloads a file into the vault as an asset, at most 25 MiB; stores it only when [confirmation is off](#changes-the-ai-makes) |
@@ -268,7 +273,7 @@ When you select Apply, Apply all or Discard on a card, the panel notes the outco
 - The lines go as a separate text block at the start of the user message, so every provider sees them, and the conversation stays append-only.
 - The panel shows them above your message, collapsed, as **Applied changes**, not as your words.
 - Each card counts once: a card that failed and then applied sends only the applied line, and the lines are not sent again with the message after.
-- Other outcome words: `archive of note <id> now at version <v>`, `unarchive of note <id> ...`, `delete of note <id>: moved to the trash`, `change to type <name>` and `created type <name>`.
+- Other outcome words: `archive of note <id> now at version <v>`, `unarchive of note <id> ...`, `delete of note <id>: moved to the trash`, `change to type <name>`, `created type <name>`, `changed taxonomy <name>` (with `, its renames moving <n> notes` when they moved any), `created taxonomy <name>`, `deleted taxonomy <name>`, and for a discard or failure `change to taxonomy <name>`, `new taxonomy <name>` and `delete of taxonomy <name>`.
 
 ### Apply a type change
 
@@ -278,6 +283,17 @@ When you ask to change a type, such as "add a due date to tasks" or "put the sta
 - Discard drops it. Nothing is written.
 
 Applying a type change needs `admin`, as the type editor does. A device token has `write` only, so in the desktop and Android apps the card answers "Apply type changes in the web app." Built-in types allow what the type routes allow for them.
+
+### Apply a taxonomy change
+
+When you ask to change a taxonomy, such as "rename Todo to Open in the status taxonomy" or "add a size taxonomy", the model reads it and proposes a whole new taxonomy file with a list of renames, each an old term path and its new one. A renamed or moved term takes its children with it. The server checks the proposal as `PUT /api/taxonomies/{name}` would, without writing: WCL that does not check, a rename of a term the taxonomy lacks, and a file that drops a term some note holds without renaming it all go back to the model with the issues and the notes concerned. A new name proposes a new taxonomy. The card shows the file's lines removed and added, the renames, and how many notes they move:
+
+- Apply sends it to the home server, which checks the taxonomy file is still the one the proposal was made against. If it changed since, the card says "This taxonomy changed since the proposal" and nothing is written. Otherwise the server writes it as `PUT /api/taxonomies/{name}` does, with the renames, rewriting every note that holds a renamed term in the same commit.
+- Discard drops it. Nothing is written.
+
+The model can also propose deleting a taxonomy. A taxonomy a type's field uses cannot be deleted: the model is told which types and notes use it, and no card appears. Apply on a delete card deletes the file as `DELETE /api/taxonomies/{name}` does. The cards link to Settings > Taxonomies.
+
+Applying a taxonomy change needs `admin`, as the taxonomy editor does; in the desktop and Android apps the card answers "Apply taxonomy changes in the web app."
 
 ### The system prompt
 
@@ -292,7 +308,7 @@ Scripts do not use this prompt: a script's `ai` call passes its own `system`.
 
 ### Changes the AI makes
 
-By default every change the model asks for waits for you as a proposal. The **Changes the AI makes** card in Settings > AI has five switches, all on by default:
+By default every change the model asks for waits for you as a proposal. The **Changes the AI makes** card in Settings > AI has six switches, all on by default:
 
 | Switch | Covers |
 |---|---|
@@ -301,12 +317,14 @@ By default every change the model asks for waits for you as a proposal. The **Ch
 | Ask before moving notes to the trash | `propose_delete` |
 | Ask before changing types | `propose_type_change`, changed and new types |
 | Ask before downloading files into the vault | `download_asset`; see [Read pages and download files](#read-pages-and-download-files) |
+| Ask before changing taxonomies | `propose_taxonomy_change` and `propose_taxonomy_delete`, changed, new and deleted taxonomies |
 
 Each switch saves when you change it. With a switch off, the tool makes that kind of change itself, right after checking it, through the same writes Apply uses:
 
 - An edit is written at the version the model read. If the note changed since, nothing is written and the model is told of the conflict, so it reads the note again.
 - A delete moves the note to the trash, where you can restore it. The AI never empties the trash or deletes a note for good, whatever the switches say.
 - A type change is planned and applied as one commit, as `POST /api/types/{name}/change` does; a new type is written as `PUT /api/types/{name}` does.
+- A taxonomy change is written with its renames as `PUT /api/taxonomies/{name}` does, and a delete as `DELETE /api/taxonomies/{name}` does.
 
 ### Internet switches
 
@@ -322,9 +340,9 @@ With a switch off, the tool is left out of the tool list, so the model never see
 
 A change that does not check, or that fails, writes nothing and goes back to the model as an error. The model is told the change was made, with the note's new version.
 
-The panel shows each change made this way as a short card, such as "Edited Shopping", "Created Reading list", "Archived Old plan", "Moved Scratch to the trash" or "Changed type task", linking to the note, the trash or the type. A note or type open in a pane shows the change at once, unless you have unsaved edits in it.
+The panel shows each change made this way as a short card, such as "Edited Shopping", "Created Reading list", "Archived Old plan", "Moved Scratch to the trash", "Changed type task" or "Changed taxonomy status", linking to the note, the trash, the type or Settings > Taxonomies. A note or type open in a pane shows the change at once, unless you have unsaved edits in it.
 
-The change is written as whoever asked: the signed-in user in the web app, or the token's name for an API caller. It is in the note's history under that name like any other write; the trail line is the same as for any chat call. The switches never widen a caller's rights: a caller whose scope cannot make the write still gets a proposal. Notes need `write`, types need `admin`, so a `read` token always gets proposals, and a `write` token gets proposals for type changes.
+The change is written as whoever asked: the signed-in user in the web app, or the token's name for an API caller. It is in the note's history under that name like any other write; the trail line is the same as for any chat call. The switches never widen a caller's rights: a caller whose scope cannot make the write still gets a proposal. Notes need `write`, types and taxonomies need `admin`, so a `read` token always gets proposals, and a `write` token gets proposals for type and taxonomy changes.
 
 ### Refusals and errors
 
@@ -332,7 +350,7 @@ When the provider refuses a request, the answer stops where it was and the panel
 
 ### The chat route
 
-`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal with `POST /api/ai/apply` needs `write`, and `admin` for a type proposal. A change the chat makes itself, its confirmation off, needs the same scope from the chat's caller; without it the chat proposes instead. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
+`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal with `POST /api/ai/apply` needs `write`, and `admin` for a type or taxonomy proposal. A change the chat makes itself, its confirmation off, needs the same scope from the chat's caller; without it the chat proposes instead. The body is `{ provider?, model?, messages, note_id? }`, where `messages` is the conversation so far ending with the new question. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
 
 | Event | Data |
 |---|---|
@@ -341,7 +359,8 @@ When the provider refuses a request, the answer stops where it was and the panel
 | `tool_result` | `{ id, summary, is_error }`; `summary.notes` lists the ids and titles returned, never note bodies; for `read_asset`, `summary.asset` is `{ id, filename, media_type, size, kind }`, never the file's bytes or text; for `find_assets`, `summary.assets` is the `[{ id, filename, media_type, size, created }]` it returned and `summary.total` how many matched; for `fetch_url` and `download_asset`, `summary.web` is `{ url, host, media_type, size, kind }`, with a page's `title` or a download's `filename` (and `asset_id` once stored), never the content |
 | `proposal` | A note change, by `op`, to apply with `POST /api/ai/apply`. `update`: `{ id, op, note_id, title, base_version, before, after, ops }`, an edit. `create`: `{ id, op, type, title, after }`, a new note. `archive` and `unarchive`: `{ id, op, note_id, title, base_version }`. `delete`: `{ id, op, note_id, title, base_version }`, a move to the trash. `download`: `{ id, op, url, filename, media_type, size }`, a file to store as an asset (`media_type` and `size` may be null). A proposal without `op` is an `update` |
 | `type_proposal` | `{ id, name, exists, before, after, issues }`: `before` is the type file as stored (null for a new type), `after` the checked type file in canonical form, `issues` the warnings the check found |
-| `applied` | A change the tool made itself, its confirmation off, sent in place of the proposal. For a note, `{ id, op, note_id, title, version }`, where `op` is `update`, `create`, `archive`, `unarchive` or `delete` and `version` is the note's new version (for a delete, the version that went to the trash). For a type, `{ id, op, type_name }`, where `op` is `type_change` or `type_create`. For a download, `{ id, op, asset_id, filename, media_type, size, url }` |
+| `taxonomy_proposal` | A taxonomy change to apply with `POST /api/ai/apply`, `kind` always `taxonomy`. `create` and `change`: `{ id, kind, op, name, exists, before, after, renames, issues, affected }`, where `before` is the file as stored (null for a new taxonomy), `after` the checked file in canonical form, `renames` the `[{ from, to }]` term paths and `affected` how many notes they rewrite. `delete`: `{ id, kind, op, name, before }` |
+| `applied` | A change the tool made itself, its confirmation off, sent in place of the proposal. For a note, `{ id, op, note_id, title, version }`, where `op` is `update`, `create`, `archive`, `unarchive` or `delete` and `version` is the note's new version (for a delete, the version that went to the trash). For a type, `{ id, op, type_name }`, where `op` is `type_change` or `type_create`. For a taxonomy, `{ id, op, taxonomy_name, notes }`, where `op` is `taxonomy_change`, `taxonomy_create` or `taxonomy_delete` and `notes` the number of notes its renames rewrote. For a download, `{ id, op, asset_id, filename, media_type, size, url }` |
 | `usage` | `{ provider, model, input, output }` for one model call |
 | `refusal` | `{ provider, model, category, explanation, messages }`; the last event |
 | `error` | `{ kind, message, messages }`; the last event |
@@ -365,12 +384,13 @@ In the desktop and Android apps the embedded server forwards these routes to the
 
 ### Applying a change
 
-`POST /api/ai/apply` takes a `proposal` or `type_proposal` event's data, as the chat sent it, and applies it on the server as the caller, through the same code the chat uses when [confirmation is off](#changes-the-ai-makes). A type proposal is told apart by its WCL `after` text.
+`POST /api/ai/apply` takes a `proposal`, `type_proposal` or `taxonomy_proposal` event's data, as the chat sent it, and applies it on the server as the caller, through the same code the chat uses when [confirmation is off](#changes-the-ai-makes). A taxonomy proposal is told apart by its `kind`, `taxonomy`, and a type proposal by its WCL `after` text.
 
 - A note change is written at its `base_version`: an update, an archive or unarchive, or a delete, which moves the note to the trash. A create makes the note. It needs `write`. A note that changed since is a 409 `conflict`, and nothing is written.
 - A type change needs `admin`; without it the answer is 403 `needs_admin`, "Apply type changes in the web app." A type file that changed since the proposal is a 409 `stale`.
+- A taxonomy change or delete needs `admin`; without it the answer is 403 `needs_admin`, "Apply taxonomy changes in the web app." A taxonomy file that changed since the proposal is a 409 `stale`. The write refuses as the taxonomy routes do: a dropped term notes hold is a 409 `term_in_use`, a taxonomy in use a 409 `taxonomy_in_use`, and nothing is written.
 - A download needs `write`. The server downloads `url` through the guarded client and stores it as a new asset called `filename`, answering `{ op: "download", asset_id, filename, media_type, size, url }`. An address the local-network rule refuses is a 403 `local_network`, a file over 25 MiB a 413 `too_large`, and a fetch that fails a 502 `fetch_failed`; nothing is stored.
-- It answers `{ op, note_id, version }` for a note, with the note's new version (for a delete, the version that went to the trash), and `{ op, type_name }` for a type, where `op` is `type_change` or `type_create`.
+- It answers `{ op, note_id, version }` for a note, with the note's new version (for a delete, the version that went to the trash), `{ op, type_name }` for a type, where `op` is `type_change` or `type_create`, and `{ op, taxonomy_name, notes }` for a taxonomy, where `op` is `taxonomy_change`, `taxonomy_create` or `taxonomy_delete` and `notes` is how many notes its renames rewrote.
 - Anything that is not a change the chat proposes is a 400.
 
 ## API
@@ -379,8 +399,8 @@ Settings > AI uses these routes. Every route under `/api/integrations/ai` needs 
 
 | Method and path | Does |
 |---|---|
-| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`, and for OpenAI the `api` its calls use, `responses` or `chat_completions` (always `responses` without a URL); the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types, downloads }`, with every switch filled |
-| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types?, downloads? }, urls?: { anthropic?, openai? }, openai_api? }`; an empty string clears a value, an empty `system_prompt` means the default, an empty URL the official API, and an empty `openai_api` the Responses API. Another `openai_api` than `responses` or `chat_completions` is a 400. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
+| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`, and for OpenAI the `api` its calls use, `responses` or `chat_completions` (always `responses` without a URL); the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types, downloads, taxonomies }`, with every switch filled |
+| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types?, downloads?, taxonomies? }, urls?: { anthropic?, openai? }, openai_api? }`; an empty string clears a value, an empty `system_prompt` means the default, an empty URL the official API, and an empty `openai_api` the Responses API. Another `openai_api` than `responses` or `chat_completions` is a 400. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
 | `PUT /api/integrations/ai/{anthropic\|openai}/key` | Stores `{ key }`; an empty key deletes it |
 | `POST /api/integrations/ai/{provider}/test` | Sends the test request to `{ model }` or the default model, and answers `{ ok, model, ms, text, api, error }`. On OpenAI with a custom URL it detects and saves the API type as above, and `api` names the one the answer came over; otherwise `api` is null |
 | `POST /api/integrations/ai/chatgpt/start` | Answers `{ auth_url }`, the ChatGPT sign-in page |

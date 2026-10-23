@@ -303,6 +303,9 @@ pub struct Confirm {
     /// `download_asset`, which stores a file from the web as an asset (ai D27).
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub downloads: bool,
+    /// `propose_taxonomy_change` and `propose_taxonomy_delete` (ai D31).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub taxonomies: bool,
 }
 
 impl Default for Confirm {
@@ -313,6 +316,7 @@ impl Default for Confirm {
             delete: true,
             types: true,
             downloads: true,
+            taxonomies: true,
         }
     }
 }
@@ -330,6 +334,7 @@ impl Confirm {
             "delete": self.delete,
             "types": self.types,
             "downloads": self.downloads,
+            "taxonomies": self.taxonomies,
         })
     }
 }

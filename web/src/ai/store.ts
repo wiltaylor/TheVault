@@ -111,6 +111,34 @@ export interface TypeProposal {
 /** As a note proposal's: `stale` when the type changed since the proposal. */
 export type TypeProposalState = ProposalState;
 
+/** A term renamed or moved by a taxonomy proposal, old path to new (ai D31). */
+export interface TermRename {
+  from: string;
+  to: string;
+}
+
+/** A taxonomy change the model proposed, checked by the server but not written (ai D31). */
+export type TaxonomyProposal =
+  | {
+      id: string;
+      kind: "taxonomy";
+      op: "create" | "change";
+      name: string;
+      /** Whether the taxonomy existed when proposed; a new name proposes a new taxonomy. */
+      exists: boolean;
+      /** The taxonomy file as stored when proposed; null for a new taxonomy. */
+      before: string | null;
+      after: string;
+      renames: TermRename[];
+      issues: { at?: string; message: string; severity?: string }[];
+      /** How many notes the renames rewrite. */
+      affected: number;
+    }
+  | { id: string; kind: "taxonomy"; op: "delete"; name: string; before: string };
+
+/** What the card says when the taxonomy changed after the proposal (ai D31). */
+export const TAXONOMY_CHANGED = "This taxonomy changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
+
 /** What the card says when the type changed after the proposal (ai D18). */
 export const TYPE_CHANGED = "This type changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
 
@@ -126,7 +154,8 @@ export interface WebLink {
 
 export type Applied =
   | { id: string; op: NoteOp; note_id: string; title: Json; version: string }
-  | { id: string; op: "type_change" | "type_create"; type_name: string };
+  | { id: string; op: "type_change" | "type_create"; type_name: string }
+  | { id: string; op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes?: number };
 
 /** A file the model asked to download into the vault as an asset (ai D27). */
 export interface DownloadProposal {
@@ -168,6 +197,7 @@ export type Part =
     }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
+  | { kind: "taxonomy_proposal"; proposal: TaxonomyProposal; state: ProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
 
 export interface Turn {
@@ -306,6 +336,20 @@ function proposalDone(p: Proposal, done: AiApplied): string {
 const typeWhat = (p: TypeProposal) => (p.exists ? `change to type ${p.name}` : `new type ${p.name}`);
 const downloadWhat = (p: DownloadProposal) => `download of ${p.url}`;
 
+/** What a taxonomy proposal is, for an outcome line (ai D31). */
+function taxonomyWhat(p: TaxonomyProposal): string {
+  if (p.op === "delete") return `delete of taxonomy ${p.name}`;
+  return p.exists ? `change to taxonomy ${p.name}` : `new taxonomy ${p.name}`;
+}
+
+/** What an applied taxonomy proposal did, for an outcome line. */
+function taxonomyDone(p: TaxonomyProposal, done: AiApplied): string {
+  if (p.op === "delete") return `deleted taxonomy ${p.name}`;
+  if (!p.exists) return `created taxonomy ${p.name}`;
+  const notes = "notes" in done && typeof done.notes === "number" ? done.notes : 0;
+  return `changed taxonomy ${p.name}${notes ? `, its renames moving ${notes} ${notes === 1 ? "note" : "notes"}` : ""}`;
+}
+
 export function setProvider(provider: string | null, model: string | null) {
   state.setChat({ provider, model });
 }
@@ -426,6 +470,20 @@ function onEvent(e: StreamEvent) {
     case "type_proposal":
       push({ kind: "type_proposal", proposal: { ...(d as unknown as TypeProposal), issues: Array.isArray(d.issues) ? (d.issues as TypeProposal["issues"]) : [] }, state: "open" });
       break;
+    case "taxonomy_proposal": {
+      const p =
+        d.op === "delete"
+          ? (d as unknown as TaxonomyProposal)
+          : ({
+              ...d,
+              op: d.exists ? "change" : "create",
+              renames: Array.isArray(d.renames) ? d.renames : [],
+              issues: Array.isArray(d.issues) ? d.issues : [],
+              affected: typeof d.affected === "number" ? d.affected : 0,
+            } as unknown as TaxonomyProposal);
+      push({ kind: "taxonomy_proposal", proposal: p, state: "open" });
+      break;
+    }
     case "applied": {
       if (d.op === "download") {
         const asset = d as unknown as DownloadedAsset & { url?: string };
@@ -441,7 +499,7 @@ function onEvent(e: StreamEvent) {
       const applied = d as unknown as Applied;
       push({ kind: "applied", applied });
       // Open views of the note or type take the change, as after a write of this client's own.
-      void settle(applied.op === "type_change" || applied.op === "type_create" ? "type" : "note");
+      void settle(applied.op === "type_change" || applied.op === "type_create" ? "type" : applied.op.startsWith("taxonomy_") ? "taxonomy" : "note");
       break;
     }
     case "refusal": {
@@ -549,7 +607,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * or type take it. In an app the change reaches the device's copy only by sync, so the app asks
  * its embedded server for a round first and waits for it to end (ai D23).
  */
-export async function settle(kind: "note" | "type") {
+export async function settle(kind: "note" | "type" | "taxonomy") {
   if (await appInfo().catch(() => null)) {
     const asked = Date.now();
     try {
@@ -563,10 +621,11 @@ export async function settle(kind: "note" | "type") {
       // The sync icon shows why; the change arrives with a later round.
     }
     void refreshSync();
-    if (kind === "note") noteChangedElsewhere(null);
+    if (kind !== "type") noteChangedElsewhere(null);
   }
-  if (kind === "type") await reloadDefinitions().catch(() => undefined);
-  else noteWritten();
+  if (kind !== "note") await reloadDefinitions().catch(() => undefined);
+  // A taxonomy's renames rewrite the notes holding its terms (ai D31).
+  if (kind !== "type") noteWritten();
 }
 
 function setProposal(turn: number, part: number, patch: { state: ProposalState; error?: string; created?: string }) {
@@ -617,7 +676,7 @@ export async function applyProposal(turn: number, part: number) {
 
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
-  return (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "download") && (p.state === "open" || p.state === "failed");
+  return (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "download") && (p.state === "open" || p.state === "failed");
 }
 
 function setDownload(turn: number, part: number, patch: { state: ProposalState; error?: string; asset?: DownloadedAsset }) {
@@ -676,9 +735,10 @@ export async function applyAll(turn: number) {
     if (!p || !pending(p)) continue;
     if (p.kind === "proposal") await applyProposal(turn, i);
     else if (p.kind === "download") await applyDownload(turn, i);
+    else if (p.kind === "taxonomy_proposal") await applyTaxonomyProposal(turn, i);
     else await applyTypeProposal(turn, i);
     const after = state.chat.turns[turn]?.parts[i];
-    if (!after || (after.kind !== "proposal" && after.kind !== "type_proposal" && after.kind !== "download") || after.state !== "applied") return;
+    if (!after || !("state" in after) || after.state !== "applied") return;
   }
 }
 
@@ -730,4 +790,48 @@ export function discardTypeProposal(turn: number, part: number) {
   if (p?.kind !== "type_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
   setTypeProposal(turn, part, { state: "discarded" });
   record(p.proposal.id, `[Discarded by the user: ${typeWhat(p.proposal)}]`);
+}
+
+function setTaxonomyProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
+  state.setChat(
+    "turns",
+    turn,
+    "parts",
+    part,
+    produce((p) => {
+      if (p.kind !== "taxonomy_proposal") return;
+      p.state = patch.state;
+      p.error = patch.error;
+    }),
+  );
+}
+
+/**
+ * Apply a taxonomy proposal with POST /api/ai/apply, on the home server (ai D31): the new file
+ * with its renames, which move the notes holding the renamed terms, or the delete. The server
+ * first re-reads the taxonomy and writes nothing when it changed since the proposal (a 409). It
+ * needs admin: from an app, the server answers that it is done in the web app.
+ */
+export async function applyTaxonomyProposal(turn: number, part: number) {
+  const p = state.chat.turns[turn]?.parts[part];
+  if (p?.kind !== "taxonomy_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+  setTaxonomyProposal(turn, part, { state: "applying" });
+  try {
+    const done = await api.aiApply(p.proposal);
+    setTaxonomyProposal(turn, part, { state: "applied" });
+    record(p.proposal.id, `[Applied by the user: ${taxonomyDone(p.proposal, done)}]`);
+    await settle("taxonomy");
+  } catch (e) {
+    const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
+    const error = stale ? TAXONOMY_CHANGED : e instanceof Error ? e.message : String(e);
+    setTaxonomyProposal(turn, part, { state: stale ? "stale" : "failed", error });
+    record(p.proposal.id, `[Failed to apply: ${taxonomyWhat(p.proposal)}: ${error}]`);
+  }
+}
+
+export function discardTaxonomyProposal(turn: number, part: number) {
+  const p = state.chat.turns[turn]?.parts[part];
+  if (p?.kind !== "taxonomy_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+  setTaxonomyProposal(turn, part, { state: "discarded" });
+  record(p.proposal.id, `[Discarded by the user: ${taxonomyWhat(p.proposal)}]`);
 }

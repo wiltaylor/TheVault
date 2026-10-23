@@ -324,3 +324,77 @@ fn a_type_change_to_a_list_of_terms_adds_the_values_notes_hold() {
     );
     assert!(places(root).contains("term \"depot\""));
 }
+
+#[test]
+fn checking_a_taxonomy_change_or_delete_reports_what_it_would_do_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let w = setup(root);
+    let saved = w
+        .create(
+            "site",
+            &wcl("title = \"A\"\nstatus = \"Todo\"\n"),
+            &author(),
+        )
+        .unwrap();
+    let before = std::fs::read_to_string(root.join("taxonomies/status.wcl")).unwrap();
+    let renamed = "label = \"Status\"\n\nterm \"Open\"\n\nterm \"Done\"\n";
+    let renames = BTreeMap::from([("Todo".to_owned(), "Open".to_owned())]);
+
+    let check = w.check_taxonomy("status", renamed, &renames).unwrap();
+    assert!(check.exists);
+    assert_eq!(check.notes, std::slice::from_ref(&saved.id));
+    assert!(check.wcl.contains("term \"Open\""), "{}", check.wcl);
+    // Nothing moved: the file and the note are as they were.
+    assert_eq!(
+        std::fs::read_to_string(root.join("taxonomies/status.wcl")).unwrap(),
+        before
+    );
+    assert!(w.read(&saved.id).unwrap().wcl.contains("\"Todo\""));
+
+    // Dropping a held term without a rename is refused, as the write refuses it.
+    let err = w
+        .check_taxonomy("status", renamed, &BTreeMap::new())
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::InUse {
+                code: "term_in_use",
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    // Invalid WCL is refused.
+    assert!(
+        w.check_taxonomy("status", "term {", &BTreeMap::new())
+            .is_err()
+    );
+
+    // A new name checks as a create, and is not written.
+    let new = w
+        .check_taxonomy(
+            "size",
+            "label = \"Size\"\n\nterm \"Big\"\n",
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(!new.exists);
+    assert!(!root.join("taxonomies/size.wcl").exists());
+
+    // A taxonomy a type uses cannot be deleted; the check says so and deletes nothing.
+    let err = w.check_delete_taxonomy("status").unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::InUse {
+                code: "taxonomy_in_use",
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    assert!(root.join("taxonomies/status.wcl").exists());
+    assert!(w.check_delete_taxonomy("nope").is_err());
+}

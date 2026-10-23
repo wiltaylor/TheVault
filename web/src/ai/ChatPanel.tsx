@@ -10,6 +10,7 @@ import { Spinner } from "../components/SyncStatus";
 import { blockLines, lineDiff } from "./diff";
 import { DownloadCard } from "./DownloadCard";
 import { Markdown } from "./markdown";
+import { TaxonomyProposalCard } from "./TaxonomyProposalCard";
 import { TypeProposalCard } from "./TypeProposalCard";
 import {
   type Applied,
@@ -65,6 +66,16 @@ export function stepLabel(name: string, input: Json): string {
       return "Read the type file format";
     case "propose_type_change":
       return `Checked a change to type ${s("name")}`;
+    case "list_taxonomies":
+      return "Listed the taxonomies";
+    case "get_taxonomy":
+      return `Read taxonomy ${s("name")}`;
+    case "taxonomy_format":
+      return "Read the taxonomy file format";
+    case "propose_taxonomy_change":
+      return `Checked a change to taxonomy ${s("name")}`;
+    case "propose_taxonomy_delete":
+      return `Checked a delete of taxonomy ${s("name")}`;
     case "web_search":
       return `Searched the web for “${s("query")}”`;
     case "fetch_url":
@@ -111,6 +122,16 @@ export function activeLabel(name: string, input: Json): string {
       return "Reading the type file format";
     case "propose_type_change":
       return "Checking a type change";
+    case "list_taxonomies":
+      return "Listing the taxonomies";
+    case "get_taxonomy":
+      return "Reading a taxonomy";
+    case "taxonomy_format":
+      return "Reading the taxonomy file format";
+    case "propose_taxonomy_change":
+      return "Checking a taxonomy change";
+    case "propose_taxonomy_delete":
+      return "Checking a taxonomy delete";
     case "web_search":
       return "Searching the web";
     case "fetch_url":
@@ -122,8 +143,18 @@ export function activeLabel(name: string, input: Json): string {
   }
 }
 
-/** The type tools (ai D18), whose steps return no notes. */
-const TYPE_TOOLS = new Set(["list_types", "get_type", "type_format", "propose_type_change"]);
+/** The type and taxonomy tools (ai D18, D31), whose steps return no notes. */
+const TYPE_TOOLS = new Set([
+  "list_types",
+  "get_type",
+  "type_format",
+  "propose_type_change",
+  "list_taxonomies",
+  "get_taxonomy",
+  "taxonomy_format",
+  "propose_taxonomy_change",
+  "propose_taxonomy_delete",
+]);
 
 /** The host of `url`, or `url` itself when it is not a URL. */
 export function hostOf(url: string): string {
@@ -416,6 +447,14 @@ const DID: Record<NoteOp, string> = {
 };
 
 type AppliedNote = Extract<Applied, { note_id: string }>;
+type AppliedTaxonomy = Extract<Applied, { taxonomy_name: string }>;
+
+/** What an applied taxonomy change did (ai D31). */
+const TAXONOMY_DID: Record<AppliedTaxonomy["op"], string> = {
+  taxonomy_change: "Changed taxonomy",
+  taxonomy_create: "Created taxonomy",
+  taxonomy_delete: "Deleted taxonomy",
+};
 
 /**
  * A change the AI made itself, its confirmation off in Settings > AI (ai D22): what it did,
@@ -431,9 +470,15 @@ export function AppliedCard(props: { applied: Applied }) {
     const x = a();
     return "type_name" in x ? x.type_name : "";
   };
+  const taxonomy = (): AppliedTaxonomy | undefined => {
+    const x = a();
+    return "taxonomy_name" in x ? x : undefined;
+  };
   const title = (n: { title: Json; note_id: string }) => (typeof n.title === "string" && n.title ? n.title : n.note_id);
   const label = () => {
     const n = note();
+    const x = taxonomy();
+    if (x) return `${TAXONOMY_DID[x.op]} ${x.taxonomy_name}`;
     if (!n) return `${a().op === "type_create" ? "Created" : "Changed"} type ${typeName()}`;
     return n.op === "delete" ? `Moved ${title(n)} to the trash` : `${DID[n.op]} ${title(n)}`;
   };
@@ -443,10 +488,24 @@ export function AppliedCard(props: { applied: Applied }) {
         <Show
           when={note()}
           fallback={
-            <>
-              {a().op === "type_create" ? "Created type " : "Changed type "}
-              <a href={`/types/${encodeURIComponent(typeName())}`}>{typeName()}</a>
-            </>
+            <Show
+              when={taxonomy()}
+              fallback={
+                <>
+                  {a().op === "type_create" ? "Created type " : "Changed type "}
+                  <a href={`/types/${encodeURIComponent(typeName())}`}>{typeName()}</a>
+                </>
+              }
+            >
+              {(x) => (
+                <>
+                  {TAXONOMY_DID[x().op]}{" "}
+                  <a href={x().op === "taxonomy_delete" ? "/settings/taxonomies" : `/settings/taxonomies/${encodeURIComponent(x().taxonomy_name)}`}>
+                    {x().taxonomy_name}
+                  </a>
+                </>
+              )}
+            </Show>
           }
         >
           {(n) => (
@@ -481,7 +540,7 @@ function ApplyAll(props: { turn: number; parts: Part[] }) {
         <button
           type="button"
           class="primary"
-          disabled={busy() || props.parts.some((p) => (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "download") && p.state === "applying")}
+          disabled={busy() || props.parts.some((p) => "state" in p && p.state === "applying")}
           onClick={async () => {
             setBusy(true);
             try {
@@ -667,6 +726,7 @@ export function ChatPanel(props: { noteId: () => string }) {
                         <Match when={part.kind === "tool" && part}>{(p) => <ToolStep part={p()} />}</Match>
                         <Match when={part.kind === "proposal" && part}>{(p) => <ProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
+                        <Match when={part.kind === "taxonomy_proposal" && part}>{(p) => <TaxonomyProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "applied" && part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
                         <Match when={part.kind === "download" && part}>{(p) => <DownloadCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>

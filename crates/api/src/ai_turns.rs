@@ -18,10 +18,11 @@
 //!
 //! `POST /api/ai/apply` applies a change the chat proposed, its body the `proposal` or
 //! `type_proposal` event's data as the client received it (a type proposal is told apart by its
-//! WCL `after` text), through [`ai_chat::apply_change`], the code the confirmation switches use
-//! (ai D22), as the caller, version-checked against its `base_version`. It needs `write`, and
-//! `admin` for a type change: without it, 403 `needs_admin`. It answers `{op, note_id, version}`
-//! for a note and `{op, type_name}` for a type.
+//! WCL `after` text), or a `taxonomy_proposal`'s (its `kind` is `taxonomy`, ai D31), through
+//! [`ai_chat::apply_change`], the code the confirmation switches use (ai D22), as the caller,
+//! version-checked against its `base_version`. It needs `write`, and `admin` for a type or
+//! taxonomy change: without it, 403 `needs_admin`. It answers `{op, note_id, version}` for a
+//! note, `{op, type_name}` for a type and `{op, taxonomy_name, notes}` for a taxonomy.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,6 +51,9 @@ pub const MAX_TURNS: usize = 4;
 
 /// The message of a type change applied without `admin`.
 pub const NEEDS_ADMIN_MESSAGE: &str = "Apply type changes in the web app.";
+
+/// The 403 a taxonomy change without `admin` answers (ai D31).
+pub const NEEDS_ADMIN_TAXONOMY_MESSAGE: &str = "Apply taxonomy changes in the web app.";
 
 /// The turns started and not yet over or read to the end, by id.
 #[derive(Default)]
@@ -208,18 +212,24 @@ pub async fn apply(
             "send the proposal as the chat sent it",
         ));
     }
-    // A type proposal's `after` is the type file's WCL text; a note proposal's is a note.
-    let event = if change["after"].is_string() && change.get("op").is_none() {
+    // A taxonomy proposal says so in `kind` (ai D31); a type proposal's `after` is the type
+    // file's WCL text; a note proposal's is a note.
+    let event = if change["kind"] == "taxonomy" {
+        "taxonomy_proposal"
+    } else if change["after"].is_string() && change.get("op").is_none() {
         "type_proposal"
     } else {
         "proposal"
     };
-    if event == "type_proposal" && !scope.allows(Scope::Admin) {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "needs_admin",
-            NEEDS_ADMIN_MESSAGE,
-        ));
+    if !scope.allows(Scope::Admin) {
+        let message = match event {
+            "type_proposal" => Some(NEEDS_ADMIN_MESSAGE),
+            "taxonomy_proposal" => Some(NEEDS_ADMIN_TAXONOMY_MESSAGE),
+            _ => None,
+        };
+        if let Some(message) = message {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_admin", message));
+        }
     }
     let w = a.writer.clone();
     tokio::task::spawn_blocking(move || ai_chat::apply_change(&w, &author, event, &change))

@@ -47,7 +47,7 @@ function status(over: Partial<Record<"anthropic" | "openai" | "chatgpt", object>
     system_prompt: DEFAULT_PROMPT,
     default_system_prompt: DEFAULT_PROMPT,
     system_prompt_custom: false,
-    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true },
+    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true },
     web: { search: true, read: true, download: true },
   };
 }
@@ -337,9 +337,10 @@ describe("the Changes the AI makes card", () => {
     "Ask before moving notes to the trash",
     "Ask before changing types",
     "Ask before downloading files into the vault",
+    "Ask before changing taxonomies",
   ];
 
-  it("shows the five switches on by default and says the trash is never emptied", async () => {
+  it("shows the six switches on by default and says the trash is never emptied", async () => {
     aiStatus.mockResolvedValue(status());
     render(() => <Ai />);
     await screen.findByRole("region", { name: "Changes the AI makes" });
@@ -351,7 +352,7 @@ describe("the Changes the AI makes card", () => {
 
   it("saves one switch as a partial confirm and shows the answer", async () => {
     aiStatus.mockResolvedValue(status());
-    const off = { ...status(), confirm: { notes: true, archive: true, delete: false, types: true, downloads: true } };
+    const off = { ...status(), confirm: { notes: true, archive: true, delete: false, types: true, downloads: true, taxonomies: true } };
     aiSaveSettings.mockResolvedValue(off);
     render(() => <Ai />);
     await screen.findByRole("region", { name: "Changes the AI makes" });
@@ -371,6 +372,18 @@ describe("the Changes the AI makes card", () => {
     fireEvent.click(downloads);
     await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ confirm: { downloads: false } }));
     await waitFor(() => expect(downloads.checked).toBe(false));
+  });
+
+  it("saves the taxonomies switch (ai D31)", async () => {
+    aiStatus.mockResolvedValue(status());
+    aiSaveSettings.mockResolvedValue({ ...status(), confirm: { ...status().confirm, taxonomies: false } });
+    render(() => <Ai />);
+    await screen.findByRole("region", { name: "Changes the AI makes" });
+    const taxonomies = changes().getByRole("switch", { name: "Ask before changing taxonomies" }) as HTMLInputElement;
+    expect(taxonomies.checked).toBe(true);
+    fireEvent.click(taxonomies);
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ confirm: { taxonomies: false } }));
+    await waitFor(() => expect(taxonomies.checked).toBe(false));
   });
 
   it("shows the Internet switches on and saves one as a partial web (ai D28)", async () => {

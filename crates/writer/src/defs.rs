@@ -19,6 +19,15 @@ use crate::{
     note_path, pairs, time, type_path,
 };
 
+/// What [`Writer::check_taxonomy`] found: the taxonomy file as the write would store it, whether
+/// the taxonomy exists, and the ids of the notes its renames would rewrite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaxonomyCheck {
+    pub wcl: String,
+    pub exists: bool,
+    pub notes: Vec<String>,
+}
+
 /// Why a script would not compile in one of the ways the vault runs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptProblem {
@@ -90,18 +99,12 @@ fn rename_term(path: &str, renames: &BTreeMap<String, String>) -> Option<String>
 }
 
 impl Writer {
-    /// Replace or delete definition files and reload the schema from them, writing `notes` in the
-    /// same commit. Refused when the definitions would not check.
-    fn commit_definitions(
-        &self,
-        mut inner: MutexGuard<'_, Inner>,
-        files: Vec<(String, Option<String>)>,
-        notes: Vec<NoteChange>,
-        author: &Author,
-    ) -> Result<Vec<Saved>> {
+    /// The schema the definition files would load as with `files` replaced or deleted; refused
+    /// when they would not check.
+    fn definitions_schema(&self, files: &[(String, Option<String>)]) -> Result<Schema> {
         let mut types = self.definitions("types")?;
         let mut taxonomies = self.definitions("taxonomies")?;
-        for (path, text) in &files {
+        for (path, text) in files {
             let (list, stem) = if let Some(stem) = path.strip_prefix("types/") {
                 (&mut types, stem)
             } else if let Some(stem) = path.strip_prefix("taxonomies/") {
@@ -115,8 +118,19 @@ impl Writer {
                 list.push((stem.to_owned(), text.clone()));
             }
         }
-        let schema = Schema::from_sources(&pairs(&types), &pairs(&taxonomies))
-            .map_err(Error::InvalidType)?;
+        Schema::from_sources(&pairs(&types), &pairs(&taxonomies)).map_err(Error::InvalidType)
+    }
+
+    /// Replace or delete definition files and reload the schema from them, writing `notes` in the
+    /// same commit. Refused when the definitions would not check.
+    fn commit_definitions(
+        &self,
+        mut inner: MutexGuard<'_, Inner>,
+        files: Vec<(String, Option<String>)>,
+        notes: Vec<NoteChange>,
+        author: &Author,
+    ) -> Result<Vec<Saved>> {
+        let schema = self.definitions_schema(&files)?;
         let changes: Vec<Change> = files
             .into_iter()
             .map(|(path, text)| match text {
@@ -273,6 +287,40 @@ impl Writer {
     ) -> Result<(String, Vec<Saved>)> {
         let _w = self.write_lock();
         let inner = self.lock();
+        let (path, text, changes) = self.plan_taxonomy(&inner, name, source, renames)?;
+        let saved =
+            self.commit_definitions(inner, vec![(path.clone(), Some(text))], changes, author)?;
+        Ok((self.vault.read_text(&path)?, saved))
+    }
+
+    /// Check a [`Writer::put_taxonomy`] without writing anything (ai D31): the same refusals, and
+    /// the stored text and the notes a rename would rewrite.
+    pub fn check_taxonomy(
+        &self,
+        name: &str,
+        source: &str,
+        renames: &BTreeMap<String, String>,
+    ) -> Result<TaxonomyCheck> {
+        let inner = self.lock();
+        let exists = inner.schema.taxonomy(name).is_some();
+        let (path, text, changes) = self.plan_taxonomy(&inner, name, source, renames)?;
+        self.definitions_schema(&[(path, Some(text.clone()))])?;
+        Ok(TaxonomyCheck {
+            wcl: text,
+            exists,
+            notes: changes.into_iter().map(|c| c.id).collect(),
+        })
+    }
+
+    /// The taxonomy file `source` as `name` would store it and the note rewrites its `renames`
+    /// make, or the refusal [`Writer::put_taxonomy`] gives.
+    fn plan_taxonomy(
+        &self,
+        inner: &Inner,
+        name: &str,
+        source: &str,
+        renames: &BTreeMap<String, String>,
+    ) -> Result<(String, String, Vec<NoteChange>)> {
         check_name("taxonomy", name)?;
         let path = taxonomy_path(name);
         let text = store::canonical(source, &path)?;
@@ -305,7 +353,7 @@ impl Writer {
             if fields.is_empty() {
                 continue;
             }
-            for id in self.ids_of_type(&inner, &ty.name)? {
+            for id in self.ids_of_type(inner, &ty.name)? {
                 let file = note_path(&ty.name, &id);
                 let mut doc = Input::Wcl(self.vault.read_text(&file)?).parse(&file)?;
                 let mut changed = false;
@@ -348,9 +396,7 @@ impl Writer {
                 by: stranded,
             });
         }
-        let saved =
-            self.commit_definitions(inner, vec![(path.clone(), Some(text))], changes, author)?;
-        Ok((self.vault.read_text(&path)?, saved))
+        Ok((path, text, changes))
     }
 
     /// Delete taxonomy `name`, unless a type's field uses it. The refusal lists those fields,
@@ -358,6 +404,27 @@ impl Writer {
     pub fn delete_taxonomy(&self, name: &str) -> Result<()> {
         let _w = self.write_lock();
         let inner = self.lock();
+        self.deletable_taxonomy(&inner, name)?;
+        let author = Author::Session(crate::ADOPTED_BY.to_owned());
+        self.commit_definitions(
+            inner,
+            vec![(taxonomy_path(name), None)],
+            Vec::new(),
+            &author,
+        )?;
+        Ok(())
+    }
+
+    /// Check a [`Writer::delete_taxonomy`] without deleting anything (ai D31): the same refusals.
+    pub fn check_delete_taxonomy(&self, name: &str) -> Result<()> {
+        let inner = self.lock();
+        self.deletable_taxonomy(&inner, name)?;
+        self.definitions_schema(&[(taxonomy_path(name), None)])?;
+        Ok(())
+    }
+
+    /// Refuse deleting taxonomy `name` when it is missing or in use.
+    fn deletable_taxonomy(&self, inner: &Inner, name: &str) -> Result<()> {
         if inner.schema.taxonomy(name).is_none() {
             return Err(missing_taxonomy(name));
         }
@@ -376,7 +443,7 @@ impl Writer {
             for field in &fields {
                 by.push(format!("{} (field {field})", type_path(&ty.name)));
             }
-            for id in self.ids_of_type(&inner, &ty.name)? {
+            for id in self.ids_of_type(inner, &ty.name)? {
                 let file = note_path(&ty.name, &id);
                 let doc = Input::Wcl(self.vault.read_text(&file)?).parse(&file)?;
                 for (field, value) in &doc.fields {
@@ -401,13 +468,6 @@ impl Writer {
                 by,
             });
         }
-        let author = Author::Session(crate::ADOPTED_BY.to_owned());
-        self.commit_definitions(
-            inner,
-            vec![(taxonomy_path(name), None)],
-            Vec::new(),
-            &author,
-        )?;
         Ok(())
     }
 

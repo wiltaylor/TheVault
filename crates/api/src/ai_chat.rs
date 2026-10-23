@@ -7,9 +7,10 @@
 //!
 //! The answer is a server-sent event stream. The server runs the tool loop, at most
 //! [`MAX_ROUNDS`] model calls per user turn, over read-only tools; `propose_edit`,
-//! `propose_create`, `propose_archive`, `propose_delete` and `propose_type_change` check a change
-//! and hand it to the user (ai D14, D18, D20). When Settings > AI turns a kind's confirmation off
-//! and the caller's scope allows the write (`write` for notes, `admin` for types), the tool makes
+//! `propose_create`, `propose_archive`, `propose_delete`, `propose_type_change`,
+//! `propose_taxonomy_change` and `propose_taxonomy_delete` check a change and hand it to the user
+//! (ai D14, D18, D20, D31). When Settings > AI turns a kind's confirmation off and the caller's
+//! scope allows the write (`write` for notes, `admin` for types and taxonomies), the tool makes
 //! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
 //! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
 //! the trash (ai D21). With a Brave Search key stored, `web_search` searches the web
@@ -22,7 +23,8 @@
 //! | `tool_result` | `{id, summary, is_error}`: `summary` holds the ids and titles returned (`notes`), never bodies, a `message` on an error, for `read_asset` the `asset` read (id, filename, media type, size, kind), never its bytes, and for `fetch_url` and `download_asset` the `web` address read (url, host, media type, size, kind, and a page's title or a download's filename and asset id), never its content (ai D27) |
 //! | `proposal` | a note change for the user to apply, by `op` (ai D14, D20): `update` `{id, op, note_id, title, base_version, before, after, ops}`; `create` `{id, op, type, title, after}`; `archive`, `unarchive` and `delete` `{id, op, note_id, title, base_version}`; and a file to store, `download` `{id, op, url, filename, media_type, size}` (ai D27) |
 //! | `type_proposal` | `{id, name, exists, before, after, issues}`: a type file's new WCL for the user to apply (ai D18) |
-//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
+//! | `taxonomy_proposal` | a taxonomy change for the user to apply (ai D31), `kind` always `taxonomy`: `create` and `change` `{id, kind, op, name, exists, before, after, renames, issues, affected}`, `renames` a list of `{from, to}` term paths and `affected` the number of notes they rewrite; `delete` `{id, kind, op, name, before}` |
+//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
 //! | `error` | `{kind, message, messages}`: the turn failed; ends the stream |
@@ -57,6 +59,7 @@ use state::{Author, Scope};
 use tokio::sync::{mpsc, watch};
 use writer::{Input, Op, TypeChange, Writer, doc_to_json};
 
+use crate::ai_taxonomies::apply_taxonomy;
 use crate::auth::{Caller, GrantedScope};
 use crate::events::HEARTBEAT;
 use crate::{ApiError, ai_assets};
@@ -239,6 +242,8 @@ struct Direct {
     types: bool,
     /// `download_asset` stores the file at once (ai D27).
     downloads: bool,
+    /// Taxonomy changes and deletes (ai D31).
+    taxonomies: bool,
 }
 
 impl Direct {
@@ -250,6 +255,7 @@ impl Direct {
             delete: !confirm.delete && write,
             types: !confirm.types && scope.allows(Scope::Admin),
             downloads: !confirm.downloads && write,
+            taxonomies: !confirm.taxonomies && scope.allows(Scope::Admin),
         }
     }
 
@@ -257,6 +263,7 @@ impl Direct {
     fn covers(self, event: &str, p: &Value) -> bool {
         match event {
             "type_proposal" => self.types,
+            "taxonomy_proposal" => self.taxonomies,
             "proposal" => match p["op"].as_str().unwrap_or("update") {
                 "update" | "create" => self.notes,
                 "archive" | "unarchive" => self.archive,
@@ -331,17 +338,17 @@ enum Called {
 }
 
 /// A tool's answer.
-struct ToolOut {
-    content: String,
-    is_error: bool,
-    summary: Value,
+pub(crate) struct ToolOut {
+    pub(crate) content: String,
+    pub(crate) is_error: bool,
+    pub(crate) summary: Value,
     /// An event sent before the result, its name and data: a proposal for the user to act on,
     /// or the change the tool made (ai D22).
-    proposal: Option<(&'static str, Value)>,
+    pub(crate) proposal: Option<(&'static str, Value)>,
 }
 
 impl ToolOut {
-    fn error(message: impl Into<String>) -> ToolOut {
+    pub(crate) fn error(message: impl Into<String>) -> ToolOut {
         let message = message.into();
         ToolOut {
             content: json!({ "error": message }).to_string(),
@@ -926,6 +933,47 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         ),
         tool(
+            "list_taxonomies",
+            "List every taxonomy: its name, label, description, whether it is open (notes may add terms), whether it is built in, and how many terms it holds.",
+            json!({}),
+        ),
+        tool(
+            "get_taxonomy",
+            "Read one taxonomy: its taxonomy file's WCL text as stored, and every term as a path from its root, such as `Active/In progress`.",
+            json!({ "name": { "type": "string", "description": "The taxonomy's name, such as `status`." } }),
+        ),
+        tool(
+            "taxonomy_format",
+            "The vocabulary of taxonomy files: the label, description, open taxonomies and nested terms, and the taxonomy field kind. Read it before proposing a taxonomy change.",
+            json!({}),
+        ),
+        tool(
+            "propose_taxonomy_change",
+            "Propose a taxonomy file for the user to apply: a change to an existing taxonomy, or a new taxonomy under a new name. Renaming or moving a term needs a rename entry, so the notes holding it move with it; dropping a term a note holds is refused. It is checked as the taxonomy write would check it, and the user sees a diff of the WCL and applies or discards it. When the user lets taxonomy changes go ahead without asking, it is written at once and the result says applied.",
+            json!({
+                "name": { "type": "string", "description": "The taxonomy's name: an existing taxonomy to change, or a new name to create one." },
+                "wcl": { "type": "string", "description": "The whole new taxonomy file as WCL text, with every term it keeps." },
+                "renames": {
+                    "type": "array",
+                    "description": "Terms renamed or moved, old path to new path; empty when none are. A term's children move with it.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "from": { "type": "string", "description": "The term's path now." },
+                            "to": { "type": "string", "description": "Its path in the new file." },
+                        },
+                        "required": ["from", "to"],
+                        "additionalProperties": false,
+                    },
+                },
+            }),
+        ),
+        tool(
+            "propose_taxonomy_delete",
+            "Propose deleting a taxonomy for the user to apply. A taxonomy a type's field uses cannot be deleted: change those types first. When the user lets taxonomy changes go ahead without asking, it is deleted at once and the result says applied.",
+            json!({ "name": { "type": "string", "description": "The taxonomy's name." } }),
+        ),
+        tool(
             "propose_create",
             "Propose a new note for the user to create. It is checked, and the user sees the new note and creates or discards it. When the user lets note changes go ahead without asking, it is created at once and the result says applied, with its id and version.",
             json!({
@@ -998,7 +1046,7 @@ fn notes_of(rows: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-fn str_arg<'a>(input: &'a Value, name: &str) -> Result<&'a str, ToolOut> {
+pub(crate) fn str_arg<'a>(input: &'a Value, name: &str) -> Result<&'a str, ToolOut> {
     input[name]
         .as_str()
         .map(str::trim)
@@ -1074,6 +1122,17 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
         }
         "delete" => "The note was moved to the trash, where the user can restore it.".to_owned(),
         "type_create" => format!("The type {name} was created."),
+        "taxonomy_create" | "taxonomy_change" | "taxonomy_delete" => {
+            let name = done["taxonomy_name"].as_str().unwrap_or_default();
+            match op.as_str() {
+                "taxonomy_create" => format!("The taxonomy {name} was created."),
+                "taxonomy_delete" => format!("The taxonomy {name} was deleted."),
+                _ => format!(
+                    "The taxonomy {name} was changed; {} notes were rewritten for its renames.",
+                    done["notes"].as_u64().unwrap_or(0)
+                ),
+            }
+        }
         _ => format!("The type {name} was changed."),
     };
     let mut content = done.clone();
@@ -1100,7 +1159,7 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
 pub enum ApplyError {
     /// The change is not one a chat proposes, or lacks a member it needs.
     Invalid(String),
-    /// The type changed since the proposal.
+    /// The type or taxonomy changed since the proposal.
     Stale(String),
     /// The write refused it: a conflict, a validation failure, a missing note.
     Write(writer::Error),
@@ -1147,7 +1206,8 @@ impl From<ApplyError> for ApiError {
 }
 
 /// Apply a chat change as `author`, through the writer calls the panel's Apply reaches (ai D22).
-/// `event` is `proposal` or `type_proposal`, and `p` its data as the client receives it:
+/// `event` is `proposal`, `type_proposal` or `taxonomy_proposal`, and `p` its data as the client
+/// receives it:
 ///
 /// - `update`: the note `note_id` replaced by `after` at `base_version`;
 /// - `create`: a new note of `type` from `after`;
@@ -1157,10 +1217,14 @@ impl From<ApplyError> for ApiError {
 ///   through the guarded fetcher (ai D27), answering `{op, asset_id, filename, media_type,
 ///   size, url}`. It waits for the download, so call this off the async threads;
 /// - a type proposal: `after` as the type `name`, when the type file is still `before`; a new
-///   type through the type write, a change planned and then applied as one commit.
+///   type through the type write, a change planned and then applied as one commit;
+/// - a taxonomy proposal (ai D31): when the taxonomy file is still `before`, `after` as the
+///   taxonomy `name` with its `renames`, or for `op` `delete` the taxonomy deleted.
 ///
-/// Returns `{op, note_id, version}` for a note and `{op, type_name}` for a type (`type_create` or
-/// `type_change`). A failure writes nothing.
+/// Returns `{op, note_id, version}` for a note, `{op, type_name}` for a type (`type_create` or
+/// `type_change`) and `{op, taxonomy_name, notes}` for a taxonomy (`taxonomy_create`,
+/// `taxonomy_change` or `taxonomy_delete`, `notes` the number rewritten). A failure writes
+/// nothing.
 pub fn apply_change(
     w: &Writer,
     author: &Author,
@@ -1193,6 +1257,9 @@ pub fn apply_change(
         let plan = w.plan_type_change(name, &change)?;
         w.apply_type_change(name, &change, &plan.token, author)?;
         return Ok(json!({ "op": "type_change", "type_name": name }));
+    }
+    if event == "taxonomy_proposal" {
+        return apply_taxonomy(w, author, p);
     }
     if event != "proposal" {
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
@@ -1295,6 +1362,11 @@ fn propose_or_read(w: &Writer, author: &Author, call: &ToolCall) -> ToolOut {
         "get_type" => get_type(w, input),
         "type_format" => Ok(type_format()),
         "propose_type_change" => propose_type(w, &call.id, input),
+        "list_taxonomies" => Ok(crate::ai_taxonomies::list(w)),
+        "get_taxonomy" => crate::ai_taxonomies::get(w, input),
+        "taxonomy_format" => Ok(crate::ai_taxonomies::format()),
+        "propose_taxonomy_change" => crate::ai_taxonomies::propose_change(w, &call.id, input),
+        "propose_taxonomy_delete" => crate::ai_taxonomies::propose_delete(w, &call.id, input),
         other => Err(ToolOut::error(format!("there is no tool {other:?}"))),
     };
     result.unwrap_or_else(|e| e)
@@ -1603,7 +1675,7 @@ fn get_type(w: &Writer, input: &Value) -> Result<ToolOut, ToolOut> {
 }
 
 /// The vault format document, embedded at build time.
-const VAULT_FORMAT: &str = include_str!("../../../docs/vault-format.md");
+pub(crate) const VAULT_FORMAT: &str = include_str!("../../../docs/vault-format.md");
 
 /// The sections of `docs/vault-format.md` a type file is written from: type files to handlers,
 /// and the content blocks a template's tabs hold.

@@ -74,7 +74,7 @@ pub use builtin::{
 };
 pub use contacts::{CONTACTS_SOURCE, UPSERT_CONTACT, contact_link_key};
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
-pub use defs::ScriptProblem;
+pub use defs::{ScriptProblem, TaxonomyCheck};
 pub use devices::{
     COMMAND_TTL_MS, DEFAULT_ANDROID_DEVICE_FILE, DEFAULT_DEVICE_SCRIPTS, MAX_COMMAND_PAYLOAD,
     command_json, default_device_file, default_device_script, device_file_path,
