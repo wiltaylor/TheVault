@@ -123,8 +123,9 @@ fn trigger_json(t: &Trigger) -> Value {
     }
 }
 
-/// What a note may call the agent by (agents G16): `null` when it has no mention trigger or is
-/// disabled, else `{types}`, the types whose notes may call it, `null` for every type.
+/// What a note may call the agent by (agents G16): `null` when it is disabled, else `{types}`,
+/// the types whose notes may call it, `null` for every type (also when it has no mention trigger,
+/// since every enabled agent can be called).
 fn mention_json(a: &Agent) -> Value {
     if !a.enabled {
         return Value::Null;
@@ -138,8 +139,9 @@ fn mention_json(a: &Agent) -> Value {
             types.extend(m.types.iter().map(String::as_str));
         }
     }
+    // No mention trigger of its own: every type may call it (agents G16).
     if types.is_empty() {
-        return Value::Null;
+        return json!({ "types": null });
     }
     types.sort_unstable();
     types.dedup();

@@ -16,7 +16,7 @@ if (!Range.prototype.getClientRects) {
 }
 
 const AGENTS: AgentSummary[] = [
-  { name: "assistant", label: "Assistant", built_in: true, mention: null },
+  { name: "assistant", label: "Assistant", built_in: true, mention: { types: null } },
   { name: "clerk", label: "Clerk", icon: "pen", built_in: false, enabled: true, mention: { types: null } },
   { name: "owl", label: "Night owl", built_in: false, enabled: true, mention: { types: ["memo"] } },
   { name: "sleepy", label: "Sleepy", built_in: false, enabled: false, mention: { types: null } },
@@ -33,10 +33,11 @@ afterEach(() => vi.restoreAllMocks());
 describe("callableAgents", () => {
   it("keeps the enabled agents the note's type may call, by the start of their name or label", () => {
     const names = (type: string | undefined, q = "") => callableAgents(AGENTS, type, q).map((a) => a.name);
-    expect(names("memo")).toEqual(["clerk", "owl"]);
-    expect(names("task")).toEqual(["clerk"]);
+    // Every enabled agent can be called; Assistant has no mention trigger and answers any type.
+    expect(names("memo")).toEqual(["assistant", "clerk", "owl"]);
+    expect(names("task")).toEqual(["assistant", "clerk"]);
     // With no type known, only the agents every type may call.
-    expect(names(undefined)).toEqual(["clerk"]);
+    expect(names(undefined)).toEqual(["assistant", "clerk"]);
     // A conversation calls only an agent whose trigger names its type.
     expect(names("agent_thread")).toEqual([]);
     expect(names("memo", "ni")).toEqual(["owl"]);
@@ -58,10 +59,10 @@ describe("the @ picker", () => {
     r.editor().commands.focus("end");
     r.editor().commands.insertMentionPicker("@");
     const asks = await r.findAllByTestId("mention-agent");
-    // Outside a note the type is not known: only Clerk, whom every type may call.
-    expect(asks.map((a) => a.textContent)).toEqual(["Ask Clerk @clerk"]);
+    // Outside a note the type is not known: only the agents every type may call.
+    expect(asks.map((a) => a.textContent)).toEqual(["Ask Assistant @assistant", "Ask Clerk @clerk"]);
     expect(asks[0]).toHaveAttribute("aria-selected", "true");
-    fireEvent.mouseDown(asks[0]!);
+    fireEvent.mouseDown(asks[1]!);
     await waitFor(() => expect(r.onChange).toHaveBeenCalled());
     expect(r.onChange.mock.lastCall![0]).toEqual([{ kind: "paragraph", fields: { text: "@clerk " } }]);
     expect(r.queryByTestId("mention-picker")).toBeNull();

@@ -420,5 +420,36 @@ fn a_type_the_trigger_leaves_out_calls_no_one() {
         .clone();
     assert_eq!(clerk["mention"], json!({ "types": ["memo"] }));
     let assistant = &agents["agents"][0];
-    assert_eq!(assistant["mention"], Value::Null);
+    assert_eq!(
+        assistant["mention"],
+        json!({ "types": null }),
+        "every enabled agent can be called"
+    );
+}
+
+#[test]
+fn an_agent_with_no_mention_trigger_is_called_too() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    // No trigger at all: the agent answers a call from any type through the implicit trigger.
+    api.agent("helper", "label = \"Helper\"\n");
+    let id = api.note("memo", "Shed", &["@helper what paint lasts outdoors?"]);
+    fake.push(AnthropicMessage::text("Oil-based enamel."));
+    api.advance("PT6S");
+
+    let threads = api.threads("helper");
+    assert_eq!(threads.len(), 1, "{threads:?}");
+    let thread = threads[0]["id"].as_str().unwrap();
+    assert_eq!(
+        api.paragraphs(&id),
+        [format!(
+            "[@Helper](/agents/helper/chat?thread={thread}) what paint lasts outdoors?"
+        )]
+    );
+    assert_eq!(
+        first_messages(&fake),
+        [format!(
+            "you what paint lasts outdoors?\nCalled from note {id} (type memo, title \"Shed\"); the call was replaced with a link to this thread."
+        )]
+    );
 }

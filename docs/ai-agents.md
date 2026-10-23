@@ -85,7 +85,7 @@ Note events fire on the home server only, after the change is written. A change 
 
 ### Calls from notes
 
-A trigger with `mention = true` lets a note call the agent. Write `@` and the agent's name in a note, such as `@clerk list what to buy`, or type `@` in the editor and choose **Ask <label>**, which the picker lists before the notes for each agent the note's type may call. The label calls the agent too when it is one word. `type` limits which note types may call it, and `prompt`, which is optional here, is added before what the note says.
+Every enabled agent can be called from a note. Write `@` and the agent's name in a note, such as `@clerk list what to buy`, or type `@` in the editor and choose **Ask <label>**, which the picker lists before the notes for each agent the note's type may call. The label calls the agent too when it is one word. An agent with no mention trigger answers a call from any note type except its own threads. A trigger with `mention = true` adds to that: `type` limits which note types may call the agent, and `prompt`, which is optional here, is added before what the note says. With mention triggers that name types, only those types may call it.
 
 ```wcl
 trigger asked {
@@ -153,7 +153,7 @@ The Triggers tab shows each trigger's last 20 runs, with a link to each run's th
 
 | Method and path | Scope | Does |
 |---|---|---|
-| `GET /api/agents` | read | Every agent's summary, Assistant first, and the tools `permissions.tools` may name. A summary's `mention` is `null`, or `{ types }` for an enabled agent with a mention trigger: the types whose notes may call it, `null` for every type |
+| `GET /api/agents` | read | Every agent's summary, Assistant first, and the tools `permissions.tools` may name. A summary's `mention` is `null` for a disabled agent, else `{ types }`: the types whose notes may call it, `null` for every type (also for an agent with no mention trigger) |
 | `GET /api/agents/{name}` | read | The parsed agent and its WCL |
 | `PUT /api/agents/{name}` | admin | Writes the agent from WCL, `{ wcl }`, or the JSON form `GET` answers |
 | `DELETE /api/agents/{name}` | admin | Deletes the agent file; its threads stay |

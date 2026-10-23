@@ -2177,7 +2177,7 @@ A `trigger` block is labelled with its name and holds a `prompt`, the first user
 | `schedule` | string | none | A five-field cron expression, read as a task file's `schedule` is |
 | `timezone` | string | `"UTC"` | With `schedule` only. The IANA time zone the schedule is read in |
 | `on` | list of `create`, `update` and `delete` | none | With no `schedule`. The note changes that start a run. At least one, each at most once |
-| `mention` | `true` | none | With no `schedule` or `on` (agents G16). The agent answers a call, `@<name>` written in a note. Only `true` is allowed: leave the trigger out to answer no calls |
+| `mention` | `true` | none | With no `schedule` or `on` (agents G16). Adds to how the agent answers a call, `@<name>` written in a note: a `prompt` before what the note says, or a `type` limit. Only `true` is allowed. An enabled agent with no mention trigger still answers calls from every type except `agent_thread`, through an implicit trigger named `mention` |
 | `type` | type name, or list of type names | every type | With `on` or `mention`. The note types the trigger fires for, or whose notes may call the agent. Each must exist when the file is saved |
 | `where` | string | every note | With `on` only. A condition in the query language, such as `processed != true`, checked against the note after the change, or before it for a delete |
 

@@ -312,15 +312,16 @@ impl AgentPlan {
         out
     }
 
-    /// The agents a note of `type_name` may call, each with the mention trigger it answers by.
-    /// A trigger with no `type` is not called from an `agent_thread` note.
+    /// The agents a note of `type_name` may call, each with the mention trigger it answers by:
+    /// every enabled agent, through its own mention trigger or the implicit one when it has none
+    /// (agents G16). A trigger with no `type` is not called from an `agent_thread` note.
     fn callees(&self, type_name: &str) -> Vec<(Agent, Trigger)> {
         self.agents
             .values()
             .filter_map(|a| {
                 let t = a.mention_trigger(type_name)?;
                 let named = matches!(&t.when, TriggerWhen::Mention(m) if !m.types.is_empty());
-                (type_name != writer::AGENT_THREAD_TYPE || named).then(|| (a.clone(), t.clone()))
+                (type_name != writer::AGENT_THREAD_TYPE || named).then(|| (a.clone(), t))
             })
             .collect()
     }

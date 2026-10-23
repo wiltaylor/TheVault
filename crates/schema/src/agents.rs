@@ -235,6 +235,9 @@ pub enum When {
 }
 
 /// A mention trigger (agents G16): `mention = true`, with `type`. The agent answers a call,
+/// The name of the mention trigger an agent with none of its own answers calls by (agents G16).
+pub const IMPLICIT_MENTION: &str = "mention";
+
 /// `@<name>` written in a note of one of `types`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Mention {
@@ -339,11 +342,25 @@ impl Agent {
         self.triggers.iter().find(|t| t.name == name)
     }
 
-    /// The first mention trigger a note of `type_name` may call the agent by (agents G16).
-    pub fn mention_trigger(&self, type_name: &str) -> Option<&Trigger> {
-        self.triggers
-            .iter()
-            .find(|t| matches!(&t.when, When::Mention(m) if m.allows(type_name)))
+    /// The mention trigger a note of `type_name` calls the agent by (agents G16): the first of
+    /// its mention triggers that allows the type. An agent with no mention trigger answers a call
+    /// from any type through an implicit one named `mention`, with no prompt and no type limit, so
+    /// every agent can be called; a mention trigger only adds a prompt or limits the types.
+    pub fn mention_trigger(&self, type_name: &str) -> Option<Trigger> {
+        let mut any = false;
+        for t in &self.triggers {
+            if let When::Mention(m) = &t.when {
+                any = true;
+                if m.allows(type_name) {
+                    return Some(t.clone());
+                }
+            }
+        }
+        (!any).then(|| Trigger {
+            name: IMPLICIT_MENTION.to_owned(),
+            prompt: String::new(),
+            when: When::Mention(Mention { types: Vec::new() }),
+        })
     }
 
     /// Read agent `name` from the text of `agents/<name>.wcl`. Every problem is reported at once.
