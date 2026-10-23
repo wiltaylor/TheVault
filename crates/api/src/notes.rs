@@ -115,12 +115,7 @@ fn event_name(e: Event) -> &'static str {
 }
 
 fn author_json(a: &Author) -> Value {
-    let (kind, name) = match a {
-        Author::Session(n) => ("session", n),
-        Author::Token(n) => ("token", n),
-        Author::Handler(n) => ("handler", n),
-        Author::Task(n) => ("task", n),
-    };
+    let (kind, name) = a.parts();
     json!({ "kind": kind, "name": name })
 }
 

@@ -1,6 +1,6 @@
 # Vault file format
 
-This document defines the WCL vocabulary of every file in a vault: notes, types with their templates and handlers, taxonomies, scheduled tasks, device files, and the content, ink and canvas blocks that notes and templates contain. It settles OQ-S1 and overrides the illustrative note example in `docs/plans/thevault-prd/SPEC.md`.
+This document defines the WCL vocabulary of every file in a vault: notes, types with their templates and handlers, taxonomies, scheduled tasks, agents, device files, and the content, ink and canvas blocks that notes and templates contain. It settles OQ-S1 and overrides the illustrative note example in `docs/plans/thevault-prd/SPEC.md`.
 
 The `store`, `schema`, `writer`, `index`, `query`, `script`, `scheduler`, `api`, `cli` and `web` components all read and write this format, and S3 expected files use it. When this document and the code disagree, the code is wrong.
 
@@ -24,6 +24,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 - [Canvas](#canvas)
 - [Taxonomy files](#taxonomy-files)
 - [Task files](#task-files)
+- [Agent files](#agent-files)
 - [Device files](#device-files)
 - [Shipped defaults and upgrades](#shipped-defaults-and-upgrades)
 - [Validating vault files](#validating-vault-files)
@@ -36,6 +37,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 | Type | `types/<type>.wcl` | `schema/common.wcl` plus `schema/type.wcl` | `vault/types/specimen.wcl` |
 | Taxonomy | `taxonomies/<taxonomy>.wcl` | `schema/taxonomy.wcl` | `vault/taxonomies/status.wcl` |
 | Task | `tasks/<task>.wcl` | `schema/task.wcl` | `vault/tasks/daily_digest.wcl` |
+| Agent | `agents/<agent>.wcl` | `schema/agent.wcl` | `vault/agents/inbox_triage.wcl` |
 | Device file | `devices/<platform>.wcl` | `schema/device.wcl` | `vault/devices/android.wcl` |
 | Canvas | A `canvas` content block, or a `canvas` field value in a note | `schema/common.wcl` | `vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` |
 
@@ -50,6 +52,8 @@ The example vault under `docs/vault-format/vault/` is self-consistent: its notes
 | Type name | `[a-z][a-z0-9_]*`, at most 64 characters | The file stem of `types/<type>.wcl`, and the folder name under `notes/` |
 | Taxonomy name | Same rule as a type name | The file stem of `taxonomies/<taxonomy>.wcl` |
 | Task name | Same rule as a type name | The file stem of `tasks/<task>.wcl` |
+| Agent name | Same rule as a type name | The file stem of `agents/<agent>.wcl` |
+| Trigger name | Same rule as a type name | The label of a `trigger` block in an agent file |
 | Script name | Same rule as a type name | The file stem of `scripts/<script>.ws` |
 | Device platform | `linux` or `android` | The file stem of `devices/<platform>.wcl` |
 | Field name | Same rule as a type name. `title`, `created`, `updated` and `archived` are reserved | The label of a `field` block |
@@ -2139,6 +2143,81 @@ read_paths    = ["/srv/inbox"]
 write_paths   = ["/srv/exports"]
 ```
 
+## Agent files
+
+`agents/<agent>.wcl` defines one agent (agents G1): an AI chat with its own model, system prompt, permissions and triggers. Agent files are definitions like types and tasks: they are in backups, they sync to devices, and changing one needs `admin`. Every item is optional, so an empty file is an agent with every default.
+
+| Item | Form | Default | Meaning |
+|------|------|---------|---------|
+| `label` | string | the agent name | Display name. Not blank |
+| `description` | string | none | Help text |
+| `icon` | icon name | none | An icon from the type icon set, such as `"bot"` |
+| `enabled` | bool | `true` | `false` keeps the file but runs no trigger and refuses new turns |
+| `provider` | `anthropic`, `openai` or `chatgpt` | the Settings > AI default | The AI provider |
+| `model` | string | the provider's default model | The model id. Not blank |
+| `effort` | `low`, `medium`, `high`, `xhigh` or `max` | the provider's default | How hard the model thinks |
+| `system_prompt` | string | the shipped chat prompt | At most 32000 characters. Not blank |
+| `permissions { ... }` | block | everything allowed | At most one. See below |
+| `trigger <name> { ... }` | block | none | Runs the agent on a schedule or on note changes. Names are unique in the file |
+
+The `permissions` block holds the agent's own permissions (agents G4). Nothing is inherited from Settings > AI.
+
+| Item | Form | Default | Meaning |
+|------|------|---------|---------|
+| `tools` | list of tool names | every tool the server offers | The chat tools the agent may use, such as `"search_notes"` or `"propose_edit"`. The server refuses a name it has no tool for when the file is saved. `[]` allows none |
+| `types` | list of type names | every type | The note types the agent may read and change. Each must exist when the file is saved. `[]` allows none |
+| `confirm { ... }` | block | every switch `true` | The confirmation switches of ai D22: `notes`, `archive`, `delete`, `types`, `downloads` and `taxonomies`, each a bool. `true` means the agent proposes the change for the user to apply; `false` means it makes the change itself. A switch left out is `true` |
+| `web { ... }` | block | every switch `true` | The internet switches of ai D28: `search`, `read` and `download`, each a bool. A tool switched off is not offered. A switch left out is `true` |
+
+A `trigger` block is labelled with its name and holds a `prompt`, the first user message of each run (a string, not blank, at most 32000 characters), and either a schedule or a note event, never both.
+
+| Item | Form | Default | Meaning |
+|------|------|---------|---------|
+| `schedule` | string | none | A five-field cron expression, read as a task file's `schedule` is |
+| `timezone` | string | `"UTC"` | With `schedule` only. The IANA time zone the schedule is read in |
+| `on` | list of `create`, `update` and `delete` | none | With no `schedule`. The note changes that start a run. At least one, each at most once |
+| `type` | type name, or list of type names | every type | With `on` only. The note types the trigger fires for. Each must exist when the file is saved |
+| `where` | string | every note | With `on` only. A condition in the query language, such as `processed != true`, checked against the note after the change, or before it for a delete |
+
+```wcl
+label         = "Inbox triage"
+description   = "Files new email."
+icon          = "bot"
+provider      = "anthropic"
+effort        = "medium"
+system_prompt = "You file email into the right projects. Be brief."
+
+permissions {
+  tools = ["search_notes", "query_notes", "get_note", "propose_edit"]
+  types = ["email"]
+
+  confirm {
+    notes = false
+  }
+
+  web {
+    search = false
+  }
+}
+
+trigger nightly {
+  schedule = "0 2 * * *"
+  timezone = "Australia/Melbourne"
+  prompt   = "Summarise the email that came in today."
+}
+
+trigger new_email {
+  on     = ["create"]
+  type   = "email"
+  where  = "processed != true"
+  prompt = "File this email."
+}
+```
+
+The vault ships one agent, `agents/assistant.wcl`, labelled "Assistant": the chat panel's default (agents G6). It names no provider, model or system prompt, so it follows Settings > AI, and it allows every tool and type and has no triggers. It can be edited like any agent, but it cannot be deleted, and `enabled = false` is refused for it. A server that does not find it writes it on start, as it does the other shipped files (see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades)).
+
+Agent files raised the format version to 2 (D27): an app from before them cannot sync the `agents/` folder, so it stops syncing and asks to be updated.
+
 ## Device files
 
 `devices/<platform>.wcl` says what a paired device of the platform does with its device events, and which commands it accepts from server scripts (D5, D22). The platform is `linux` or `android`. Device events happen on the device and their handlers run there; note events and scheduled tasks stay on the server. A platform with no file runs no device handlers and accepts no commands.
@@ -2200,7 +2279,7 @@ Each script captures an item once, by its `device_ref`, archived notes included.
 
 ## Shipped defaults and upgrades
 
-The app ships defaults into every vault: the built-in types (and the `person` type the phone data types reference), the built-in taxonomy `gmail_label`, the default device file `devices/android.wcl`, the five default device scripts `scripts/device_*.ws`, and the Google sync's paused tasks `tasks/google_calendar.wcl` and `tasks/google_gmail.wcl` with their scripts `scripts/google_calendar.ws` and `scripts/google_gmail.ws`, and the `event` type's write-back script `scripts/google_event.ws` (google-sync D19). On every start the home server brings them up to date, and a device's local vault does the same when the app opens it. The code is `crates/writer/src/shipped.rs`.
+The app ships defaults into every vault: the built-in types (and the `person` type the phone data types reference), the built-in taxonomy `gmail_label`, the default device file `devices/android.wcl`, the five default device scripts `scripts/device_*.ws`, and the Google sync's paused tasks `tasks/google_calendar.wcl` and `tasks/google_gmail.wcl` with their scripts `scripts/google_calendar.ws` and `scripts/google_gmail.ws`, and the `event` type's write-back script `scripts/google_event.ws` (google-sync D19), and the built-in agent `agents/assistant.wcl` (agents G6). On every start the home server brings them up to date, and a device's local vault does the same when the app opens it. The code is `crates/writer/src/shipped.rs`.
 
 1. **Upgrade steps.** One-time upgrades for changes that are not additive, such as a field rename with a migration script. Each has an id, runs once per vault in the order the app lists them, and is recorded in `state.db` once it succeeds. A step that fails stops the server from starting and runs again on the next start. A step that cannot run yet, such as one that needs the secrets key on a server started without its key file, is logged and not recorded: it runs again on the next start, and the server starts. Steps run first, so the seeding below never adds a field under the name a step is about to rename it to. Only the home server runs them; a device takes their results through sync. The steps are:
 
@@ -2214,7 +2293,7 @@ The app ships defaults into every vault: the built-in types (and the `person` ty
 2. **Built-in taxonomies and types.** A built-in taxonomy the vault lacks is added whole, before the types that use it; one the vault has is never changed. A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` or `card` template places an added field, the vault's template of the same name gains that slot, after the nearest slot the shipped template puts before it, else before the nearest slot it puts after it, or at the end of its first tab. A vault type without that template gains none. Slots inside `columns` and `column` count, so a slot the shipped template puts after `from` in a column lands after `from` in the vault's column. Nothing else in either template changes: a vault from before 0.1.13 gains `processed` on `email` and `message` with its slot on their pages and on their cards, and an old starter vault's `person` card gains `photo` before the title. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
 
    A vault type that holds a built-in's name is the built-in only in one of two cases. Either `state.db` records that the server wrote it (the server records each built-in type it adds, in the shipped-file table under the type file's path, such as `types/event.wcl`), or it matches the built-in's identity: it declares the built-in's key field as a single string field. The key fields are `device_ref` for `message` and `call`, `thread_ref` for `conversation` and `email_thread`, `gmail_ref` for `email` and `google_ref` for `event`. Each is the field the phone or the Google sync captures a note once by, and every version the app shipped declares it. A type found by its identity is recorded on that start, so it stays the built-in whatever the user changes in it later. `dailynote` and `fleeting` are always the built-in. Any other type holding a built-in's name, such as an `event` type with unrelated fields made before `event` was a built-in, is the user's own: the server leaves it as it is, adds no shipped field to it, does not mark it built-in, lets it be deleted, and logs one line on each start saying it skipped the built-in because a type of the user's holds the name. Once the user deletes or renames it, the next start adds the built-in in its place.
-3. **Missing files.** Each default device script, the default device file and each shipped task and its script the vault lacks is written, the scripts before the device file or task that names them. A deleted one comes back on the next start; pause a shipped task to stop it. That changes nothing on a device: a vault with no `devices/android.wcl` runs the same built-in default, and a script the device file names cannot be deleted while it does.
+3. **Missing files.** Each default device script, the default device file, each shipped task and its script, and the built-in agent the vault lacks is written, the scripts before the device file or task that names them. A deleted one comes back on the next start; pause a shipped task to stop it. That changes nothing on a device: a vault with no `devices/android.wcl` runs the same built-in default, and a script the device file names cannot be deleted while it does.
 4. **Newer shipped files.** `state.db` records the content hash of each shipped device file, task or script the server writes. The app carries the hash of every version of each that it has ever shipped. On start, a file whose content is still a version the app shipped, or still what the server wrote, is replaced by the current shipped version, so a vault that skipped releases is upgraded too. A file the user changed is left alone. When a newer shipped version exists than the one the user changed, the server adds one notification under the bell that names the file and says a newer version exists. It adds no other for that version, on any later start. A file the user changed with no record of what the server wrote, as in a vault from before these records, counts as based on an older version. A device's local vault never adds the notification, since the home server does.
 
    A task file's top-level `paused` field is the user's pause switch, set by Connect and Disconnect in Settings > Integrations and by pausing a task in Settings > Scheduled, so the comparison ignores it (google-sync D19). The hash of a task file, both the shipped versions' hashes and the one `state.db` records, is taken over its canonical form with `paused` removed. Pausing or unpausing a shipped task therefore leaves it unedited: the next start changes nothing and adds no notification, and a newer shipped version still replaces it. The replacement takes the vault file's `paused` value in place of the shipped one, or has no `paused` when the vault file has none, so an upgrade never pauses or unpauses a task. Any other change to a task file, such as its `schedule`, `timeout` or `allow_domains`, is an edit, and the file is kept as above.
@@ -2239,6 +2318,7 @@ A vault file is checked in three layers. Each catches what the one before cannot
 | `type.wcl` | The `@document` of a type file, with `field`, `template`, `tab` and `handler` |
 | `taxonomy.wcl` | The `@document` of a taxonomy file |
 | `task.wcl` | The `@document` of a task file |
+| `agent.wcl` | The `@document` of an agent file, with `permissions` and `trigger` |
 | `device.wcl` | The `@document` of a device file, with `handler` and `command` |
 | `notes/<type>.wcl` | A generated `@document` for the notes of one type |
 

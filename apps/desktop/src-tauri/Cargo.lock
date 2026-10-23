@@ -4518,6 +4518,9 @@ dependencies = [
 name = "schema"
 version = "0.1.12"
 dependencies = [
+ "chrono",
+ "chrono-tz",
+ "croner",
  "query-syntax",
  "store",
  "thiserror 2.0.21",

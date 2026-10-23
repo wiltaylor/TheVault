@@ -74,7 +74,7 @@ pub use builtin::{
 };
 pub use contacts::{CONTACTS_SOURCE, UPSERT_CONTACT, contact_link_key};
 pub use daily::{DAILY_DATE_FIELD, DAILY_TYPE, DEFAULT_DAILY_TYPE, day_title, parse_day};
-pub use defs::{ScriptProblem, TaxonomyCheck};
+pub use defs::{ScriptProblem, TaxonomyCheck, agent_path};
 pub use devices::{
     COMMAND_TTL_MS, DEFAULT_ANDROID_DEVICE_FILE, DEFAULT_DEVICE_SCRIPTS, MAX_COMMAND_PAYLOAD,
     command_json, default_device_file, default_device_script, device_file_path,
@@ -182,6 +182,9 @@ pub enum Error {
     /// but not deleted.
     #[error("{0:?} is built in: it can be customised but not deleted")]
     BuiltInType(String),
+    /// The built-in agent (agents G6) cannot be deleted or disabled. Carries the whole message.
+    #[error("{0}")]
+    BuiltIn(String),
     /// A client chose an id for a new note or asset that is already in use, or that a note in
     /// the trash or the history once had.
     #[error("id {0} is already taken")]

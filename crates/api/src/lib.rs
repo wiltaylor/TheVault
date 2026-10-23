@@ -56,6 +56,7 @@
 //!
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
+mod agent_files;
 mod agents;
 mod ai_assets;
 mod ai_chat;
@@ -262,6 +263,10 @@ fn build() -> Built {
         .get("/api/scripts/{name}", defs::script)
         .put("/api/scripts/{name}", defs::put_script)
         .delete("/api/scripts/{name}", defs::delete_script)
+        .get("/api/agents", agent_files::list)
+        .get("/api/agents/{name}", agent_files::read)
+        .put("/api/agents/{name}", agent_files::put)
+        .delete("/api/agents/{name}", agent_files::delete)
         .get("/api/assets", assets::list)
         .post_up_to("/api/assets", assets::MAX_UPLOAD, assets::upload)
         .post("/api/assets/cleanup", assets::cleanup)

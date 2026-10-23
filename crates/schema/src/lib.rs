@@ -1,11 +1,12 @@
 //! Type, field, relationship, taxonomy and template definitions, note validation and schema-change planning.
 //!
 //! This is the semantic layer of `docs/vault-format.md` "Validating vault files": what WCL cannot
-//! express. [`TypeDef::parse`] and [`Taxonomy::parse`] check one definition file each, and
-//! [`Schema::new`] checks the rules between them: reference targets and inverses, and the
-//! taxonomies fields name. [`Schema::validate_note`] checks a note against its type, the notes it
+//! express. [`TypeDef::parse`], [`Taxonomy::parse`] and [`Agent::parse`] check one definition
+//! file each, and [`Schema::new`] checks the rules between them: reference targets and inverses,
+//! and the taxonomies fields name. [`Schema::validate_note`] checks a note against its type, the notes it
 //! references and the terms it holds.
 
+mod agents;
 mod blocks;
 mod change;
 mod devices;
@@ -21,6 +22,11 @@ mod types;
 use std::collections::BTreeMap;
 use std::fmt;
 
+pub use agents::{
+    AGENT_EFFORTS, AGENT_PROMPT_MAX, AGENT_PROVIDERS, ASSISTANT_AGENT, Agent, CONFIRM_SWITCHES,
+    Confirm as AgentConfirm, NoteEvent, Permissions as AgentPermissions, Schedule, TRIGGER_OPS,
+    Trigger, WEB_SWITCHES, Web as AgentWeb, When as TriggerWhen, parse_cron,
+};
 pub use blocks::{
     ADMONITION_KINDS, ARROWS, AdmonitionPreset, CANVAS_HEIGHT_DEFAULT, CANVAS_HEIGHT_MAX,
     CANVAS_HEIGHT_MIN, CARD_BLOCK_KINDS, COLUMNS_MAX, COLUMNS_MIN, CONTENT_KINDS, CONTROL_KINDS,

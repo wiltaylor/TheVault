@@ -8,7 +8,9 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// The version of the vault file format in `docs/vault-format.md`. A device refuses to sync with a
 /// server whose format is newer than it knows, since it could write notes the server reads wrong
 /// (D27). Raise it with any change an older reader would misread.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// 2: agent files, `agents/<name>.wcl` (agents G1), a synced folder an older device refuses.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Who made a change (D13, D30).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,16 +23,20 @@ pub enum Author {
     Handler(String),
     /// A named scheduled task (D10).
     Task(String),
+    /// A named agent (agents G11): every change an agent's tools make, whether it applies them
+    /// itself or the user applies its proposal. Its writes never fire note event triggers.
+    Agent(String),
 }
 
 impl Author {
-    /// The author's kind (`session`, `token`, `handler` or `task`) and name.
+    /// The author's kind (`session`, `token`, `handler`, `task` or `agent`) and name.
     pub fn parts(&self) -> (&'static str, &str) {
         match self {
             Author::Session(n) => ("session", n),
             Author::Token(n) => ("token", n),
             Author::Handler(n) => ("handler", n),
             Author::Task(n) => ("task", n),
+            Author::Agent(n) => ("agent", n),
         }
     }
 
@@ -41,6 +47,7 @@ impl Author {
             "token" => Some(Author::Token(name)),
             "handler" => Some(Author::Handler(name)),
             "task" => Some(Author::Task(name)),
+            "agent" => Some(Author::Agent(name)),
             _ => None,
         }
     }
@@ -85,5 +92,26 @@ impl Archived {
             Archived::Include => "1".to_owned(),
             Archived::Only => format!("{column} = 1"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_author_round_trips_through_its_parts() {
+        for a in [
+            Author::Session("owner".into()),
+            Author::Token("ci".into()),
+            Author::Handler("memo.after_create".into()),
+            Author::Task("digest".into()),
+            Author::Agent("assistant".into()),
+        ] {
+            let (kind, name) = a.parts();
+            assert_eq!(Author::from_parts(kind, name.to_owned()), Some(a.clone()));
+        }
+        assert_eq!(Author::Agent("triage".into()).parts(), ("agent", "triage"));
+        assert_eq!(Author::from_parts("robot", "x".into()), None);
     }
 }

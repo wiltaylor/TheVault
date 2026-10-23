@@ -302,9 +302,9 @@ export interface Page {
   total: number;
 }
 
-/** Who wrote a version or deleted a note: the owner's session, a token, or a handler's script. */
+/** Who wrote a version or deleted a note: the owner's session, a token, a handler's script, a task or an agent. */
 export interface Author {
-  kind: "session" | "token" | "handler" | "task";
+  kind: "session" | "token" | "handler" | "task" | "agent";
   name: string;
 }
 

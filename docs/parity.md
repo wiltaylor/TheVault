@@ -281,6 +281,10 @@ The listing has 86 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/tasks/{name}` | `vault task get` | Tasks | |
 | `PUT /api/tasks/{name}` | `vault task put` | Tasks | |
 | `DELETE /api/tasks/{name}` | `vault task delete` | Tasks | |
+| `GET /api/agents` | none | not used yet | Gap: the Agents sidebar section is ticket 171; no CLI command |
+| `GET /api/agents/{name}` | none | not used yet | Gap: the agent screen is ticket 171; no CLI command |
+| `PUT /api/agents/{name}` | none | not used yet | Gap: the agent screen is ticket 171; no CLI command |
+| `DELETE /api/agents/{name}` | none | not used yet | Gap: the agent screen is ticket 171; no CLI command |
 | `GET /api/cron` | none | Scheduled editor, schedule preview | Gap: no CLI command (noticed while adding notifications; not filed) |
 | `GET /api/tasks/{name}/runs` | `vault task history` | Tasks | |
 | `GET /api/tasks/{name}/runs/{id}` | `vault task show-run` | Tasks, Integrations | Run now reads the run it started until it ends |

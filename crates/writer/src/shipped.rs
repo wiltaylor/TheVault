@@ -19,7 +19,7 @@
 //!    built-in's name that is not the built-in ([`Writer::is_built_in`]), such as the user's own
 //!    `event`, is skipped with one line in the log, and a built-in type found by its identity
 //!    rather than by a record is recorded in `state.db` as the server's (ticket 104).
-//! 3. **Missing device files, tasks and scripts.** Each file of [`SHIPPED_FILES`] the vault lacks
+//! 3. **Missing device files, tasks, scripts and agents.** Each file of [`SHIPPED_FILES`] the vault lacks
 //!    is written, the scripts before the device file or task that names them.
 //! 4. **Shipped file upgrades.** A file of [`SHIPPED_FILES`] whose content is still a version the
 //!    app shipped is replaced by the current one. A file the user changed is left alone, and the
@@ -64,8 +64,9 @@ pub struct ShippedFile {
 }
 
 /// The shipped files: the default device scripts, then the device file that names them, then the
-/// Google sync's scripts, each before the task that names it (google-sync D19).
-pub const SHIPPED_FILES: [ShippedFile; 11] = [
+/// Google sync's scripts, each before the task that names it (google-sync D19), then the built-in
+/// agent (agents G6).
+pub const SHIPPED_FILES: [ShippedFile; 12] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -158,6 +159,12 @@ pub const SHIPPED_FILES: [ShippedFile; 11] = [
             "87423adde9c434f260c4d07f2cb1196cb7d89a91411c783838391cf2434c9e1d",
             "dc7c8f91ab0b2c8bdda7e31ccd2422b4edc628f0beb7a11b7dbb45c52fe15b7b",
         ],
+    },
+    // The built-in agent, the chat panel's default (agents G6).
+    ShippedFile {
+        path: "agents/assistant.wcl",
+        source: include_str!("../defaults/agents/assistant.wcl"),
+        hashes: &["8662bc8dbbf4601e72392d38c20a4cd01fdf554b0bf90d3b1a083557d64dc7ba"],
     },
 ];
 
@@ -1443,6 +1450,7 @@ mod tests {
         paths.push(crate::defs::script_path("google_gmail"));
         paths.push(crate::defs::task_path("google_gmail"));
         paths.push(crate::defs::script_path("google_event"));
+        paths.push(crate::agent_path(schema::ASSISTANT_AGENT));
         let shipped: Vec<String> = SHIPPED_FILES.iter().map(|f| f.path.to_owned()).collect();
         assert_eq!(shipped, paths);
         for (name, source) in crate::DEFAULT_DEVICE_SCRIPTS {

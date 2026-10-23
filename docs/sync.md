@@ -25,7 +25,7 @@ Each note and each synced file appears in the feed at most once, at its latest c
 Each entry has `seq`, `at` (milliseconds since the epoch) and `kind`. It shows the note or file as it is when the page is read:
 
 - `kind: "note"`: `id`, `type`, `version` and `wcl`, with `deleted: false` and `trashed: false`. For a deleted note, `deleted` is `true`, `wcl` is `null`, and `trashed` is `true` when the note is in the trash, with its `type` and the `version` it had when it was deleted. Restoring a note from the trash puts it in the feed again as a live note.
-- `kind` is `type`, `taxonomy`, `script`, `task` or `device` for the files under `types/`, `taxonomies/`, `scripts/`, `tasks/` and `devices/`: `path`, `name` and `text`, or `deleted: true` with `text: null`. Templates are part of their type file, so a template change appears as a change to its type.
+- `kind` is `type`, `taxonomy`, `script`, `task`, `device` or `agent` for the files under `types/`, `taxonomies/`, `scripts/`, `tasks/`, `devices/` and `agents/`: `path`, `name` and `text`, or `deleted: true` with `text: null`. Templates are part of their type file, so a template change appears as a change to its type.
 
 Assets are not in the feed. A device fetches them when it needs them (D19).
 
@@ -73,6 +73,7 @@ The device token is never widened to `admin`. In the apps, Settings hides the Se
 | `/api/query`, `/api/query/parse`, `/api/query/text`, `/api/search`, `/api/flagged`, `/api/schema` | The local index of the note files | Locally |
 | `/api/types`, templates, `/api/taxonomies`, `/api/scripts`, `/api/device-files` | Definition files | Locally. Edits made in an app stay on the device until the server's version replaces them (D20). |
 | `GET /api/tasks/{name}`, `PUT` and `DELETE /api/tasks/{name}`, `GET /api/cron` | Task files; the cron preview is a computation | Locally |
+| `GET /api/agents`, `GET /api/agents/{name}` | Agent files (agents G1) | Locally. `PUT` and `DELETE /api/agents/{name}` need `admin`: 403 `needs_web_app`, so the agent screen is read-only in the apps (agents G2). |
 | `/api/assets` and below | Asset files | Locally. Android fetches an asset it does not hold from the server first (D19). |
 | `/api/trash` and its restore | The local trash, kept in step by the change feed's deletes | Locally |
 | `/api/pins` and below | The local `state.db` | Locally. Pins are kept per device and are not synced. |

@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::sync::MutexGuard;
 
-use schema::{Doc, DocBlock, FieldKind, Invalid, Issue, Schema, Taxonomy, Value};
+use schema::{Agent, Doc, DocBlock, FieldKind, Invalid, Issue, Schema, Taxonomy, Value};
 use state::Author;
 use store::Change;
 use wcl_lang::ast::{Expr, Item, Source};
@@ -55,6 +55,11 @@ pub fn taxonomy_path(name: &str) -> String {
 /// The vault path of task `name`.
 pub fn task_path(name: &str) -> String {
     format!("tasks/{name}.wcl")
+}
+
+/// The vault path of agent `name` (agents G1).
+pub fn agent_path(name: &str) -> String {
+    format!("agents/{name}.wcl")
 }
 
 /// The vault path of script `name`.
@@ -681,6 +686,111 @@ impl Writer {
         Ok(())
     }
 
+    // ---- agents ---------------------------------------------------------------------------
+
+    /// Every `agents/<name>.wcl` with a valid name, parsed, sorted by name. A file that does not
+    /// parse is listed with its problems.
+    pub fn agents(&self) -> Result<Vec<(String, std::result::Result<Agent, Invalid>)>> {
+        let mut files: Vec<_> = self
+            .definitions("agents")?
+            .into_iter()
+            .filter(|(n, _)| schema::is_name(n))
+            .collect();
+        files.sort();
+        Ok(files
+            .into_iter()
+            .map(|(name, text)| {
+                let agent = Agent::parse(&name, &text);
+                (name, agent)
+            })
+            .collect())
+    }
+
+    /// The text of `agents/<name>.wcl`.
+    pub fn read_agent(&self, name: &str) -> Result<String> {
+        check_name("agent", name)?;
+        match self.vault.read_text(&agent_path(name)) {
+            Err(store::Error::NotFound(_)) => Err(missing_agent(name)),
+            other => Ok(other?),
+        }
+    }
+
+    /// Agent `name`, parsed. A file that does not parse is [`Error::Invalid`].
+    pub fn agent(&self, name: &str) -> Result<Agent> {
+        let text = self.read_agent(name)?;
+        Agent::parse(name, &text).map_err(Error::Invalid)
+    }
+
+    /// Check `source` as `agents/<name>.wcl` without writing it: the file alone, against the
+    /// vault's types, and by `check`, which the caller uses for what only it knows, such as the
+    /// tool names the server offers. Returns the canonical text and the agent.
+    pub fn check_agent(
+        &self,
+        name: &str,
+        source: &str,
+        check: impl FnOnce(&Agent) -> Vec<Issue>,
+    ) -> Result<(String, Agent)> {
+        let inner = self.lock();
+        self.plan_agent(&inner, name, source, check)
+    }
+
+    fn plan_agent(
+        &self,
+        inner: &Inner,
+        name: &str,
+        source: &str,
+        check: impl FnOnce(&Agent) -> Vec<Issue>,
+    ) -> Result<(String, Agent)> {
+        check_name("agent", name)?;
+        let path = agent_path(name);
+        let text = store::canonical(source, &path)?;
+        let agent = Agent::parse(name, &text).map_err(Error::Invalid)?;
+        let mut issues = agent.check(&inner.schema);
+        issues.extend(check(&agent));
+        if issues.iter().any(|i| !i.is_warning()) {
+            return Err(Error::Invalid(Invalid { file: path, issues }));
+        }
+        if agent.is_built_in() && !agent.enabled {
+            return Err(Error::BuiltIn(format!(
+                "{} is built in and cannot be disabled.",
+                agent.label
+            )));
+        }
+        Ok((text, agent))
+    }
+
+    /// Create or replace `agents/<name>.wcl` in canonical form, checked as
+    /// [`Writer::check_agent`] checks it. The built-in agent cannot be disabled.
+    pub fn put_agent(
+        &self,
+        name: &str,
+        source: &str,
+        check: impl FnOnce(&Agent) -> Vec<Issue>,
+    ) -> Result<(String, Agent)> {
+        let mut inner = self.lock();
+        let (text, agent) = self.plan_agent(&inner, name, source, check)?;
+        let generation = self.commit(vec![Change::write(agent_path(name), text.as_bytes())])?;
+        inner.index.advance(generation)?;
+        Ok((text, agent))
+    }
+
+    /// Delete `agents/<name>.wcl`. The built-in agent cannot be deleted.
+    pub fn delete_agent(&self, name: &str) -> Result<()> {
+        let mut inner = self.lock();
+        let text = self.read_agent(name)?;
+        if name == schema::ASSISTANT_AGENT {
+            let label = Agent::parse(name, &text)
+                .map(|a| a.label)
+                .unwrap_or_else(|_| "Assistant".to_owned());
+            return Err(Error::BuiltIn(format!(
+                "{label} is built in and cannot be deleted."
+            )));
+        }
+        let generation = self.commit(vec![Change::delete(agent_path(name))])?;
+        inner.index.advance(generation)?;
+        Ok(())
+    }
+
     // ---- canvases -------------------------------------------------------------------------
 
     /// Canvas `name` of note `id` as WCL, with the note's version. `name` is a canvas field, or
@@ -808,6 +918,10 @@ fn missing_script(name: &str) -> Error {
 
 fn missing_task(name: &str) -> Error {
     Error::Missing(format!("there is no task {name:?}"))
+}
+
+fn missing_agent(name: &str) -> Error {
+    Error::Missing(format!("there is no agent {name:?}"))
 }
 
 fn missing_canvas(id: &str, name: &str) -> Error {

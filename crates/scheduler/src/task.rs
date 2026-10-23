@@ -275,14 +275,7 @@ pub fn preview(
 }
 
 fn parse_cron(s: &str) -> Result<Cron, String> {
-    if s.split_whitespace().count() != 5 {
-        return Err(format!(
-            "{s:?} is not a five-field cron expression: minute, hour, day of month, month, day of week"
-        ));
-    }
-    Cron::new(s)
-        .parse()
-        .map_err(|e| format!("{s:?} is not a valid cron expression: {e}"))
+    schema::parse_cron(s)
 }
 
 /// A DNS name or an IP address, without a scheme, port or path, or `*` for any host.

@@ -72,6 +72,9 @@ done
 for f in "$vault"/tasks/*.wcl; do
   check "$f" "$schema/task.wcl"
 done
+for f in "$vault"/agents/*.wcl; do
+  check "$f" "$schema/agent.wcl"
+done
 for f in "$vault"/devices/*.wcl; do
   check "$f" "$schema/device.wcl"
 done

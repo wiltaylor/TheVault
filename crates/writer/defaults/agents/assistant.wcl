@@ -1,0 +1,3 @@
+label       = "Assistant"
+description = "The chat panel's assistant. It uses the default provider and model in Settings > AI."
+icon        = "sparkles"

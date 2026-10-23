@@ -15,12 +15,13 @@ use crate::{Error, Result, Writer};
 
 /// The folders whose files devices sync: folder, file extension, and the kind the feed names.
 /// A type file holds its templates, so a template change is a change to its type.
-pub const SYNCED_FILES: [(&str, &str, &str); 5] = [
+pub const SYNCED_FILES: [(&str, &str, &str); 6] = [
     ("types", ".wcl", "type"),
     ("taxonomies", ".wcl", "taxonomy"),
     ("scripts", ".ws", "script"),
     ("tasks", ".wcl", "task"),
     ("devices", ".wcl", "device"),
+    ("agents", ".wcl", "agent"),
 ];
 
 /// The feed's kind and the name of synced file `path`, such as `("type", "memo")` for
@@ -125,6 +126,10 @@ mod tests {
         assert_eq!(
             synced_file("devices/android.wcl"),
             Some(("device", "android"))
+        );
+        assert_eq!(
+            synced_file("agents/assistant.wcl"),
+            Some(("agent", "assistant"))
         );
         for other in [
             "notes/memo/01JB8Z4K2MQ7V3X9T5R6W8Y2ZA.wcl",

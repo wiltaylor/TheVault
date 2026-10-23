@@ -162,6 +162,7 @@ impl From<Error> for ApiError {
                 StatusCode::CONFLICT,
                 json!({ "error": "built_in_type", "type": t }),
             ),
+            Error::BuiltIn(_) => (StatusCode::BAD_REQUEST, json!({ "error": "built_in" })),
             Error::TypeInUse(t) => (
                 StatusCode::CONFLICT,
                 json!({ "error": "type_in_use", "type": t }),

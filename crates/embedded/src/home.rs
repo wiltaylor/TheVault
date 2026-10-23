@@ -101,7 +101,8 @@ pub(crate) enum Route {
     /// `GET /api/app/ai/turns/{turn}`: the turn's events so far, for a webview that cannot read
     /// a stream.
     AppAiTurn { turn: String },
-    /// Credentials that need `admin`, which a device token never has.
+    /// Credentials, and changes to agent files, that need `admin`, which a device token never
+    /// has (agents G2).
     NeedsWebApp,
 }
 
@@ -172,6 +173,16 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         || under(path, "/api/secrets")
         || under(path, "/api/integrations/ai")
         || under(path, "/api/ai")
+    {
+        return Route::NeedsWebApp;
+    }
+    // An agent file is a definition the device only reads: a change made here would never reach
+    // the home server (agents G2).
+    if matches!(*method, Method::PUT | Method::DELETE)
+        && path
+            .strip_prefix("/api/agents/")
+            .and_then(segment)
+            .is_some()
     {
         return Route::NeedsWebApp;
     }
@@ -834,6 +845,16 @@ mod tests {
         assert_eq!(route(&post, "/api/tasks/noop/run"), Route::Forward);
         assert_eq!(route(&Method::PUT, "/api/tasks/noop"), Route::Local);
         assert_eq!(route(&get, "/api/cron"), Route::Local);
+        assert_eq!(route(&get, "/api/agents"), Route::Local);
+        assert_eq!(route(&get, "/api/agents/assistant"), Route::Local);
+        assert_eq!(
+            route(&Method::PUT, "/api/agents/assistant"),
+            Route::NeedsWebApp
+        );
+        assert_eq!(
+            route(&Method::DELETE, "/api/agents/triage"),
+            Route::NeedsWebApp
+        );
         assert_eq!(
             route(&get, &format!("/api/notes/{id}/history")),
             Route::History

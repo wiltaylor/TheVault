@@ -11,6 +11,7 @@ export function authorText(a: Author): string {
   if (a.kind === "session") return "you";
   if (a.kind === "token") return `token ${a.name}`;
   if (a.kind === "task") return `scheduled script ${a.name}`;
+  if (a.kind === "agent") return `agent ${a.name}`;
   return `handler ${a.name}`;
 }
 

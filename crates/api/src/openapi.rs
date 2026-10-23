@@ -483,6 +483,26 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/secrets/{name}", "Delete a secret"),
     (
         "GET",
+        "/api/agents",
+        "Every agent's summary, the built-in Assistant first",
+    ),
+    (
+        "GET",
+        "/api/agents/{name}",
+        "Read an agent: its parsed definition and its WCL",
+    ),
+    (
+        "PUT",
+        "/api/agents/{name}",
+        "Create or replace an agent from WCL or the JSON form",
+    ),
+    (
+        "DELETE",
+        "/api/agents/{name}",
+        "Delete an agent; the built-in Assistant cannot be deleted",
+    ),
+    (
+        "GET",
         "/api/tasks",
         "Every scheduled task with its next run and latest run",
     ),

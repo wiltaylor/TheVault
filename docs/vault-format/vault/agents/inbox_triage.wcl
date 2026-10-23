@@ -1,0 +1,32 @@
+label         = "Inbox triage"
+description   = "Files new email."
+icon          = "bot"
+provider      = "anthropic"
+effort        = "medium"
+system_prompt = "You file email into the right projects. Be brief."
+
+permissions {
+  tools = ["search_notes", "query_notes", "get_note", "propose_edit"]
+  types = ["email"]
+
+  confirm {
+    notes = false
+  }
+
+  web {
+    search = false
+  }
+}
+
+trigger nightly {
+  schedule = "0 2 * * *"
+  timezone = "Australia/Melbourne"
+  prompt   = "Summarise the email that came in today."
+}
+
+trigger new_email {
+  on     = ["create"]
+  type   = "email"
+  where  = "processed != true"
+  prompt = "File this email."
+}
