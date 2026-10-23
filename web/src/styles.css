@@ -1,4 +1,40 @@
+/* JetBrains Mono Nerd Font (OFL, web/public/fonts/JetBrainsMono-OFL.txt), the no-ligature "Mono"
+   build: every glyph one cell wide, with the Nerd Font icons, so shell commands and their output
+   line up as they do in a terminal. */
+@font-face {
+  font-family: "JetBrainsMono Nerd Font Mono";
+  src: url("/fonts/JetBrainsMonoNLNerdFontMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrainsMono Nerd Font Mono";
+  src: url("/fonts/JetBrainsMonoNLNerdFontMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrainsMono Nerd Font Mono";
+  src: url("/fonts/JetBrainsMonoNLNerdFontMono-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrainsMono Nerd Font Mono";
+  src: url("/fonts/JetBrainsMonoNLNerdFontMono-BoldItalic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
+  --mono: "JetBrainsMono Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --bg: #f8fafc;
   --panel: #ffffff;
   --ink: #0f172a;
@@ -817,7 +853,7 @@ a {
 }
 
 .block-code .cm-scroller {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 0.85rem;
 }
 
@@ -1076,7 +1112,7 @@ button.field-image-placeholder:disabled {
 
 .mermaid-source {
   width: 100%;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 0.85rem;
 }
 
@@ -1393,7 +1429,7 @@ mark {
 }
 
 .mention-hint kbd {
-  font-family: var(--mono, ui-monospace, monospace);
+  font-family: var(--mono);
   font-size: 0.95em;
 }
 
@@ -2221,7 +2257,7 @@ a.button {
 }
 
 .query-view-settings textarea {
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
 }
 
 .query-editor {
@@ -2235,7 +2271,7 @@ a.button {
 }
 
 .query-editor textarea {
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   resize: vertical;
 }
 
@@ -3182,7 +3218,7 @@ button.link {
 }
 
 .token-secret input {
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   min-width: min(32rem, 100%);
 }
 
@@ -3218,7 +3254,7 @@ button.link {
 }
 
 .pair-code-text {
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   font-size: 1.75rem;
   letter-spacing: 0.15em;
   margin: 0.5rem 0;
@@ -3247,7 +3283,7 @@ button.link {
 
 .google-card #google-pasted {
   width: 100%;
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
 }
 
 .google-steps {
@@ -3289,14 +3325,14 @@ button.link {
 
 .ai-card #chatgpt-pasted {
   width: 100%;
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
 }
 
 /* The chat system prompt (ai D17). */
 .ai-card .ai-system-prompt {
   width: 100%;
   box-sizing: border-box;
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   font-size: 0.85rem;
   resize: vertical;
 }
@@ -3392,7 +3428,7 @@ button.link {
 
 .device-card textarea {
   width: 100%;
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
 }
 
 .device-exclusions {
@@ -4870,12 +4906,12 @@ h1.note-title {
 }
 
 .field-ref.unknown {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 0.9em;
 }
 
 .field-ref-chip {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 0.85em;
   color: var(--accent);
   background: var(--accent-soft);
@@ -5182,7 +5218,7 @@ h1.note-title {
 .suggest-hint {
   color: var(--muted);
   font-size: 0.8rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
 }
 
 .suggest-empty {
@@ -5268,7 +5304,7 @@ h1.note-title {
 }
 
 .template-hint kbd {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   border: 1px solid var(--line);
   border-radius: 0.25rem;
   padding: 0 0.25rem;
@@ -5316,7 +5352,7 @@ h1.note-title {
 }
 
 .block-code .code-filename {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   color: var(--ink);
 }
 
@@ -5391,7 +5427,7 @@ h1.note-title {
 .block-code .code-fields input {
   flex: 1;
   min-width: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
 }
 
 .block-code .code-fields select {
@@ -6067,7 +6103,7 @@ input.canvas-caption-input {
 
 .pane-menu-list kbd,
 .pane-menu-keys dt {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 0.75rem;
   color: var(--muted);
 }
@@ -8701,7 +8737,7 @@ button.toast-action {
 /* Settings > Scheduled: the list of scheduled scripts and their one-screen editor. */
 .scheduled-editor .mono,
 .scheduled-page code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
 }
 
 .scheduled-editor .field-card .form-grid {
@@ -9354,7 +9390,7 @@ button.toast-action {
 .agent-tab .ai-system-prompt {
   width: 100%;
   box-sizing: border-box;
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   font-size: 0.85rem;
   resize: vertical;
 }
@@ -9425,7 +9461,7 @@ button.toast-action {
 }
 
 .agent-where {
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
 }
 
 .agent-trigger-runs h4 {
