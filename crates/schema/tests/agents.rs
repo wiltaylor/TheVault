@@ -214,7 +214,7 @@ fn an_empty_tool_or_type_list_allows_none() {
 
 #[test]
 fn a_bad_name_is_refused() {
-    for name in ["Triage", "1st", "has-dash", "", &"a".repeat(65)] {
+    for name in ["Triage", "1st", "has-dash", "", &"a".repeat(65), "calls"] {
         assert_eq!(
             issues(name, "")
                 .iter()

@@ -235,6 +235,10 @@ pub enum When {
 }
 
 /// A mention trigger (agents G16): `mention = true`, with `type`. The agent answers a call,
+/// Names an agent cannot take, because a route under `/api/agents/` already has them (agents G19:
+/// `GET /api/agents/calls/{call}`).
+pub const RESERVED_AGENT_NAMES: &[&str] = &["calls"];
+
 /// The name of the mention trigger an agent with none of its own answers calls by (agents G16).
 pub const IMPLICIT_MENTION: &str = "mention";
 
@@ -378,6 +382,11 @@ impl Agent {
                 format!(
                     "{name:?} is not a valid agent name: use [a-z][a-z0-9_]*, at most 64 characters"
                 ),
+            ));
+        } else if RESERVED_AGENT_NAMES.contains(&name) {
+            issues.push(Issue::new(
+                "name",
+                format!("{name:?} is reserved: /api/agents/{name} is a route of its own"),
             ));
         }
         let mut r = Reader {
