@@ -1,11 +1,13 @@
 // The agent screen, `/agents/<name>` (agents G5): one agent as tabs. Chat, the default, holds its
-// threads (agents G7, `ai/AgentChat.tsx`). Settings holds its
+// threads (agents G7, `ai/AgentChat.tsx`); `?thread=<id>` opens one. Settings holds its
 // label, icon, model and system prompt; Permissions its own tools, confirmation and internet
-// switches and note types (agents G4); File its WCL. Settings and Permissions edit one draft, so
-// moving between them keeps unsaved changes, and either tab's Save writes the whole agent. In the
+// switches and note types (agents G4); Triggers its schedules and note events with their last runs
+// (agents G9 to G12, `AgentTriggers.tsx`); File its WCL. Settings, Permissions and Triggers edit
+// one draft, so moving between them keeps unsaved changes, and each tab's Save writes the whole
+// agent. In the
 // apps the screen is read only: agent files need `admin`, which a device token never has (G2).
 
-import { useNavigate, useParams } from "@solidjs/router";
+import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import {
   For,
   type JSX,
@@ -47,6 +49,7 @@ import { Spinner } from "../components/SyncStatus";
 import { appInfo } from "../inApp";
 import { types } from "../session";
 import { usePane } from "../workspace/pane";
+import { TriggersTab } from "./AgentTriggers";
 import { modelLabel } from "./Ai";
 import { errorText } from "./TypeEditor";
 
@@ -81,6 +84,8 @@ export interface AgentTabProps {
   ai: AiStatus | null;
   /** A prefix for element ids, unique to this screen. */
   id: string;
+  /** The thread the address names (`?thread=<id>`), for the Chat tab to open. */
+  thread: string | null;
 }
 
 /**
@@ -88,14 +93,19 @@ export interface AgentTabProps {
  * add it here.
  */
 export const AGENT_TABS: { id: string; label: string; render: (p: AgentTabProps) => JSX.Element }[] = [
-  { id: "chat", label: "Chat", render: (p) => <AgentChat agent={p.agent.name} label={agentLabel(p.agent)} /> },
+  {
+    id: "chat",
+    label: "Chat",
+    render: (p) => <AgentChat agent={p.agent.name} label={agentLabel(p.agent)} thread={p.thread} />,
+  },
   { id: "settings", label: "Settings", render: (p) => <SettingsTab {...p} /> },
   { id: "permissions", label: "Permissions", render: (p) => <PermissionsTab {...p} /> },
+  { id: "triggers", label: "Triggers", render: (p) => <TriggersTab {...p} /> },
   { id: "file", label: "File", render: (p) => <FileTab {...p} /> },
 ];
 
 /** A Save button with its spinner, and the result of the last save below it. */
-function SaveBar(props: { dirty: boolean; readOnly: boolean; save: () => Promise<void>; label?: string }) {
+export function SaveBar(props: { dirty: boolean; readOnly: boolean; save: () => Promise<void>; label?: string }) {
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
@@ -483,6 +493,7 @@ function FileTab(p: AgentTabProps) {
 /** The agent screen. */
 export function AgentScreen() {
   const params = useParams();
+  const [search] = useSearchParams();
   const navigate = useNavigate();
   const pane = usePane();
   const uid = createUniqueId();
@@ -617,6 +628,10 @@ export function AgentScreen() {
                   return ai() ?? null;
                 },
                 id: uid,
+                get thread() {
+                  const t = search.thread;
+                  return (Array.isArray(t) ? t[0] : t) || null;
+                },
               })}
             </div>
           </>

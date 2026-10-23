@@ -1,7 +1,9 @@
 // The agent screen (agents G5): the Settings tab (the live model list, the system prompt with the
 // shipped text as its placeholder, one Save of the whole agent), the Permissions tab (the tool
 // checklist, the confirmation and internet switches, the note types), the File tab (the WCL,
-// saved with the form's checks), Assistant always enabled, and a read-only screen in the apps.
+// saved with the form's checks), the Triggers tab (schedules with their next runs, note events,
+// the last runs linking to their threads, the tools a run is offered), Assistant always enabled,
+// and a read-only screen in the apps.
 
 import { Route, Router } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
@@ -18,9 +20,29 @@ const taxonomies = vi.fn();
 const appInfo = vi.fn();
 const agentThreads = vi.fn();
 const aiProviders = vi.fn();
+const agentRuns = vi.fn();
+const agentThread = vi.fn();
+const cron = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, agent, agents: agentsList, putAgent, aiStatus, aiModels, types, taxonomies, agentThreads, aiProviders } };
+  return {
+    ...real,
+    api: {
+      ...real.api,
+      agent,
+      agents: agentsList,
+      putAgent,
+      aiStatus,
+      aiModels,
+      types,
+      taxonomies,
+      agentThreads,
+      aiProviders,
+      agentRuns,
+      agentThread,
+      cron,
+    },
+  };
 });
 vi.mock("../inApp", () => ({ appInfo }));
 
@@ -123,6 +145,36 @@ beforeEach(async () => {
   appInfo.mockResolvedValue(null);
   agentThreads.mockResolvedValue({ threads: [] });
   aiProviders.mockResolvedValue({ default_provider: "anthropic", providers: status().providers, confirm: status().confirm });
+  agentRuns.mockResolvedValue({
+    tools: ["search_notes", "get_note", "propose_edit"],
+    triggers: [
+      {
+        name: "nightly",
+        kind: "schedule",
+        runs: [
+          { id: 2, thread: "01JRUN2", started: 1767578400000, ended: 1767578403000, outcome: "failed", message: "Anthropic is unavailable" },
+          { id: 1, thread: "01JRUN1", started: 1767492000000, ended: 1767492002000, outcome: "succeeded", message: null },
+        ],
+      },
+    ],
+  });
+  agentThread.mockResolvedValue({
+    id: "01JRUN2",
+    title: "nightly 2026-01-05 02:00",
+    agent: "inbox_triage",
+    version: "t1",
+    pending: 0,
+    last_activity: null,
+    messages: [{ role: "user", content: [{ type: "text", text: "Tidy up." }] }],
+    steps: {},
+    proposals: [],
+  });
+  cron.mockImplementation(async (schedule: string, timezone: string) => ({
+    schedule,
+    timezone,
+    text: "Every day at 02:00",
+    next: [1767578400000, 1767664800000],
+  }));
   await refreshAgents();
   await reloadDefinitions();
 });
@@ -156,7 +208,7 @@ function sent(): Record<string, unknown> {
 describe("the agent screen", () => {
   it("has Chat, Settings, Permissions and File tabs, Chat first", async () => {
     await open("/agents/inbox_triage");
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Settings", "Permissions", "File"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Settings", "Permissions", "Triggers", "File"]);
     expect(screen.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("region", { name: "Chat" })).toBeTruthy();
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeTruthy();
@@ -329,6 +381,63 @@ describe("the Permissions tab", () => {
       confirm: { notes: false, archive: true, delete: true, types: true, downloads: true, taxonomies: true },
       web: { search: true, read: false, download: true },
     });
+  });
+});
+
+describe("the Triggers tab", () => {
+  it("shows a schedule with its next runs and its last runs, each linking to its thread", async () => {
+    await open("/agents/inbox_triage/triggers");
+    const t = within(await screen.findByRole("region", { name: "Triggers" }));
+    expect((t.getByLabelText("Schedule") as HTMLInputElement).value).toBe("0 2 * * *");
+    expect(await t.findByText("Every day at 02:00")).toBeTruthy();
+    expect(cron).toHaveBeenCalledWith("0 2 * * *", "UTC");
+    expect(within(t.getByRole("list", { name: "Next runs" })).getAllByRole("listitem")).toHaveLength(2);
+    const runs = within(await t.findByRole("list", { name: "Last runs" }));
+    const items = runs.getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Failed");
+    expect(items[0]).toHaveTextContent("Anthropic is unavailable");
+    expect(within(items[0]!).getByRole("link", { name: "Open thread" })).toHaveAttribute(
+      "href",
+      "/agents/inbox_triage/chat?thread=01JRUN2",
+    );
+    expect(items[1]).toHaveTextContent("Succeeded");
+    expect(t.getByText(/a run is offered only the tools that need no confirmation/).parentElement).toHaveTextContent(
+      "Search notes, Read a note, Edit notes.",
+    );
+    expect(agentRuns).toHaveBeenCalledWith("inbox_triage");
+  });
+
+  it("adds a note event trigger and saves it with the agent", async () => {
+    await open("/agents/inbox_triage/triggers");
+    const t = within(await screen.findByRole("region", { name: "Triggers" }));
+    fireEvent.click(t.getByRole("button", { name: "Add a note event" }));
+    const card = within(t.getByRole("group", { name: "Trigger on_change" }));
+    fireEvent.click(card.getByRole("checkbox", { name: "Changed" }));
+    fireEvent.click(card.getByRole("checkbox", { name: "Email" }));
+    fireEvent.input(card.getByLabelText("Where"), { target: { value: "processed != true" } });
+    fireEvent.input(card.getByLabelText("Prompt"), { target: { value: "File this email." } });
+    fireEvent.change(card.getByLabelText("Name"), { target: { value: "new_email" } });
+    fireEvent.click(t.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect(sent().triggers).toEqual([
+      triage().triggers[0],
+      { name: "new_email", kind: "event", on: ["create", "update"], type: ["email"], where: "processed != true", prompt: "File this email." },
+    ]);
+  });
+
+  it("removes a trigger", async () => {
+    await open("/agents/inbox_triage/triggers");
+    const t = within(await screen.findByRole("region", { name: "Triggers" }));
+    fireEvent.click(t.getByRole("button", { name: "Remove trigger" }));
+    expect(t.getByText("No triggers yet.")).toBeTruthy();
+    fireEvent.click(t.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent().triggers).toEqual([]));
+  });
+
+  it("opens a run's thread in the Chat tab", async () => {
+    await open("/agents/inbox_triage/chat?thread=01JRUN2");
+    await waitFor(() => expect(agentThread).toHaveBeenCalledWith("inbox_triage", "01JRUN2"));
   });
 });
 

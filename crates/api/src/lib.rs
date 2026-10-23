@@ -57,6 +57,7 @@
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
 mod agent_files;
+mod agent_runs;
 mod agent_threads;
 mod agents;
 mod ai_assets;
@@ -268,6 +269,7 @@ fn build() -> Built {
         .get("/api/agents/{name}", agent_files::read)
         .put("/api/agents/{name}", agent_files::put)
         .delete("/api/agents/{name}", agent_files::delete)
+        .get("/api/agents/{name}/runs", agent_runs::list)
         .get("/api/agents/{name}/threads", agent_threads::list)
         .post("/api/agents/{name}/threads", agent_threads::start)
         .get("/api/agents/{name}/threads/{id}", agent_threads::read)
@@ -406,6 +408,9 @@ pub fn router(
     clients: Option<PathBuf>,
 ) -> Router {
     let sessions = Arc::new(auth::Sessions::new(writer.clone()));
+    // Only the server runs agent triggers (agents G10): the embedded app servers come through
+    // `owner_router`, which installs no runner.
+    scheduler.set_agent_runner(Arc::new(agent_runs::TriggerRunner::new(writer.clone())));
     assemble(writer, scheduler, test_clock, sessions.clone(), clients)
         .layer(middleware::from_fn_with_state(sessions, auth::authenticate))
 }

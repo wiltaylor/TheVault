@@ -154,6 +154,13 @@ describe("the Chat tab", () => {
     expect(live!.body.messages).toHaveLength(1);
   });
 
+  it("opens the thread a trigger run links to", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" thread="01JTHREAD" />);
+    await waitFor(() => expect(agentThread).toHaveBeenCalledWith("triage", "01JTHREAD"));
+    const convo = within(await screen.findByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
+  });
+
   it("reopens a thread with its turns and its pending card, and records Apply in the thread", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
     const list = within(screen.getByRole("complementary", { name: "Threads" }));

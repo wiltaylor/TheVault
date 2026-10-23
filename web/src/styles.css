@@ -9228,6 +9228,44 @@ button.toast-action {
   font-size: 0.85rem;
 }
 
+.agent-trigger {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.agent-check-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.agent-where {
+  font-family: ui-monospace, monospace;
+}
+
+.agent-trigger-runs h4 {
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+}
+
+.agent-run-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-run-message {
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+
 .ai-agent-link {
   padding: 0.5rem 0.75rem;
   border-radius: 0.4rem;

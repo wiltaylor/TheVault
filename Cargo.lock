@@ -2702,6 +2702,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "croner",
+ "query",
  "schema",
  "script",
  "serde_json",

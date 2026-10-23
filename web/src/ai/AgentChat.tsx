@@ -26,9 +26,9 @@ export function pendingLabel(n: number): string {
 
 /**
  * The Chat tab of agent `agent`, whose display name is `label`. The agent screen mounts it at
- * `/agents/<name>`.
+ * `/agents/<name>`; `thread`, from `?thread=<id>`, opens that thread, as a trigger run's link does.
  */
-export function AgentChat(props: { agent: string; label?: string }) {
+export function AgentChat(props: { agent: string; label?: string; thread?: string | null }) {
   const [threads, setThreads] = createSignal<AgentThreadSummary[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [loaded, setLoaded] = createSignal(false);
@@ -58,6 +58,14 @@ export function AgentChat(props: { agent: string; label?: string }) {
         setThreads([]);
         setLoaded(false);
         void refresh();
+      },
+    ),
+  );
+  createEffect(
+    on(
+      () => props.thread,
+      (thread) => {
+        if (thread && session.chat.thread !== thread) void session.openThread(thread);
       },
     ),
   );

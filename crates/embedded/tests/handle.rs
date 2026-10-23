@@ -394,3 +394,43 @@ async fn runs_no_scheduler_and_no_after_handlers() {
     let refused = d.json("POST", "/api/tasks/noop/run", None, 503).await;
     assert_eq!(refused["error"], "not_paired", "{refused}");
 }
+
+#[tokio::test]
+async fn runs_no_agent_triggers() {
+    let vault = tempfile::tempdir().unwrap();
+    seed(vault.path());
+    std::fs::create_dir_all(vault.path().join("agents")).unwrap();
+    std::fs::write(
+        vault.path().join("agents/watcher.wcl"),
+        "label = \"Watcher\"\n\ntrigger every_minute {\n  schedule = \"* * * * *\"\n  prompt = \"Look.\"\n}\n\ntrigger new_report {\n  on = [\"create\", \"update\"]\n  type = \"report\"\n  prompt = \"Read it.\"\n}\n",
+    )
+    .unwrap();
+    let server = Embedded::open(Config {
+        vault: vault.path().to_owned(),
+        web: None,
+        secret_key: None,
+    })
+    .unwrap();
+    let d = Device {
+        server,
+        _vault: vault,
+        _web: tempfile::tempdir().unwrap(),
+    };
+    let note = d.create("report", json!({ "title": "Q3" })).await;
+    d.update(s(&note["id"]), json!({ "title": "Q3 final" }))
+        .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // The triggers are the home server's: their runs are read there, and nothing ran here or
+    // started a thread.
+    let runs = d.json("GET", "/api/agents/watcher/runs", None, 503).await;
+    assert_eq!(runs["error"], "not_paired", "{runs}");
+    let w = d.server.writer();
+    for t in ["every_minute", "new_report"] {
+        assert!(w.state().agent_runs("watcher", t, 20).unwrap().is_empty());
+    }
+    let threads = w.list(Some(writer::AGENT_THREAD_TYPE)).unwrap();
+    assert!(threads.is_empty(), "{threads:?}");
+    let names = thread_names();
+    assert!(!names.iter().any(|n| n == "agent-runs"), "{names:?}");
+}

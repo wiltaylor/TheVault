@@ -20,13 +20,17 @@
 //! Time comes from a [`state::Clock`]. The server uses the system clock and calls
 //! [`Scheduler::start`] to tick in the background; tests use a [`TestClock`] they move by hand and
 //! call [`Scheduler::tick`] after each move (S7).
+//!
+//! Beside the tasks, the scheduler runs agent triggers (agents G9 to G12): schedules and note
+//! events that start unattended agent runs through an [`AgentRunner`] (see [`agents`]).
 
+pub mod agents;
 mod describe;
 mod task;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -34,6 +38,10 @@ use script::{Host, Job, Kind};
 use state::{Clock, RunOutcome, TaskRun};
 use writer::Writer;
 
+pub use agents::{
+    AgentJob, AgentRunner, DEBOUNCE_MS, MAX_PER_HOUR, MAX_QUEUED, MAX_RUNNING, TriggerBinding,
+    TriggerHooks, TurnReport,
+};
 pub use describe::describe;
 pub use task::{MAX_RETRIES, TaskDef, parse_duration, preview, with_paused};
 
@@ -129,6 +137,7 @@ struct Slot {
 struct Plan {
     slots: BTreeMap<String, Slot>,
     stopped: bool,
+    agents: agents::AgentPlan,
 }
 
 /// The longest the background loop sleeps before looking at the clock again.
@@ -141,6 +150,8 @@ pub struct Scheduler {
     clock: Arc<dyn Clock>,
     plan: Mutex<Plan>,
     wake: Condvar,
+    /// Runs agent triggers; only the server sets one.
+    runner: OnceLock<Arc<dyn AgentRunner>>,
 }
 
 impl Scheduler {
@@ -157,6 +168,7 @@ impl Scheduler {
             clock,
             plan: Mutex::new(Plan::default()),
             wake: Condvar::new(),
+            runner: OnceLock::new(),
         });
         s.reload()?;
         Ok(s)
@@ -264,11 +276,15 @@ impl Scheduler {
         })
     }
 
-    /// Run every firing and retry due at the clock's time now, and wait for them to end. Returns
-    /// the runs, in task name order.
+    /// Run every firing and retry due at the clock's time now, and the agent trigger runs due,
+    /// and wait for them to end. Returns the task runs, in task name order.
     pub fn tick(&self) -> Vec<TaskRun> {
         let due = self.take_due();
+        let starts = self.agent_starts();
         thread::scope(|s| {
+            for job in starts {
+                s.spawn(move || self.agent_work(job));
+            }
             let handles: Vec<_> = due
                 .into_iter()
                 .map(|(def, attempt)| s.spawn(move || self.run(&def, attempt)))
@@ -371,6 +387,10 @@ impl Scheduler {
                 let s = self.clone();
                 thread::spawn(move || s.run(&def, attempt));
             }
+            for job in self.agent_starts() {
+                let s = self.clone();
+                thread::spawn(move || s.agent_work(job));
+            }
             let plan = self.plan();
             if plan.stopped {
                 return;
@@ -385,6 +405,7 @@ impl Scheduler {
                     [s.next_fire.filter(|_| !paused), s.retry.map(|(_, at)| at)]
                 })
                 .flatten()
+                .chain(plan.agents.next_due(now))
                 .min();
             let sleep = next.map_or(MAX_SLEEP, |at| {
                 Duration::from_millis(u64::try_from(at - now).unwrap_or(0)).min(MAX_SLEEP)

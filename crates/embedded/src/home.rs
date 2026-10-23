@@ -210,6 +210,16 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     if path == "/api/tasks" && get {
         return Route::ForwardOrLocal;
     }
+    // Agent triggers run only on the home server (agents G10), so their runs are read there.
+    if get
+        && path
+            .strip_prefix("/api/agents/")
+            .and_then(|rest| rest.strip_suffix("/runs"))
+            .and_then(segment)
+            .is_some()
+    {
+        return Route::Forward;
+    }
     if let Some(rest) = path.strip_prefix("/api/tasks/") {
         let mut parts = rest.split('/');
         let is_runs = matches!(
@@ -865,6 +875,7 @@ mod tests {
         assert_eq!(route(&get, "/api/tasks"), Route::ForwardOrLocal);
         assert_eq!(route(&get, "/api/tasks/noop"), Route::Local);
         assert_eq!(route(&get, "/api/tasks/noop/runs"), Route::Forward);
+        assert_eq!(route(&get, "/api/agents/triage/runs"), Route::Forward);
         assert_eq!(route(&get, "/api/tasks/noop/runs/7"), Route::Forward);
         assert_eq!(route(&post, "/api/tasks/noop/run"), Route::Forward);
         assert_eq!(route(&Method::PUT, "/api/tasks/noop"), Route::Local);

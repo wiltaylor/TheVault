@@ -2215,6 +2215,8 @@ trigger new_email {
 }
 ```
 
+How triggers run, what an unattended run may do, and their limits are in [AI agents in the vault](ai-agents.md#triggers).
+
 The vault ships one agent, `agents/assistant.wcl`, labelled "Assistant": the chat panel's default (agents G6). It names no provider, model or system prompt, so it follows Settings > AI, and it allows every tool and type and has no triggers. It can be edited like any agent, but it cannot be deleted, and `enabled = false` is refused for it. A server that does not find it writes it on start, as it does the other shipped files (see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades)).
 
 Agent files raised the format version to 2 (D27): an app from before them cannot sync the `agents/` folder, so it stops syncing and asks to be updated.

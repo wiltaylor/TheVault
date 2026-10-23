@@ -13,6 +13,7 @@ A single-user, self-hosted note app: a Rust server, a SolidJS web client, deskto
 - [Handing out the apps from your server](docs/clients.md)
 - [Connecting an AI agent](docs/agents.md)
 - [AI providers: Anthropic, OpenAI and ChatGPT](docs/ai.md)
+- [AI agents in the vault: threads, permissions and triggers](docs/ai-agents.md)
 - [Web search with Brave Search](docs/brave.md)
 - [The Linux desktop app](docs/desktop.md)
 - [Releasing the Android app](docs/android-release.md)

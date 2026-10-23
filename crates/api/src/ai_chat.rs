@@ -40,7 +40,9 @@
 //! results. They are never edited afterwards. A comment goes out every [`HEARTBEAT`]. When the
 //! client goes away the loop stops, and the provider call in flight is dropped, which closes its
 //! connection. The turns form (`crate::ai_turns`, ai D23) runs its turns through the same
-//! [`start`], and `POST /api/ai/apply` applies a proposal with [`apply_change`].
+//! [`start`], and `POST /api/ai/apply` applies a proposal with [`apply_change`]. An agent
+//! trigger's run (`crate::agent_runs`, agents G12) is a turn with no client, [`run_unattended`],
+//! offered no change tool whose confirmation switch is on.
 
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -110,6 +112,16 @@ pub struct ChatBody {
     thread: Option<String>,
 }
 
+/// What an unattended turn (an agent trigger's run, agents G12) reports: how it ended and its
+/// trail lines.
+#[derive(Debug, Default)]
+pub(crate) struct Unattended {
+    pub(crate) ended: Option<Result<(), String>>,
+    pub(crate) log: Vec<String>,
+}
+
+type Report = Arc<std::sync::Mutex<Unattended>>;
+
 /// The one HTTP client chat calls share.
 fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -129,6 +141,124 @@ pub async fn chat(
     Ok(sse(receive(rx)))
 }
 
+/// Run one unattended turn of agent `agent` on its thread `thread`, whose user message is
+/// `prompt`, and wait for it to end (agents G12). The agent is the caller, with `write` scope,
+/// and `admin` when its permissions allow a type or taxonomy change; the turn is offered no
+/// change tool whose confirmation switch is on, so nothing waits for a user.
+pub(crate) async fn run_unattended(
+    w: Arc<Writer>,
+    agent: &Agent,
+    thread: &str,
+    prompt: &str,
+) -> Unattended {
+    let report: Report = Arc::default();
+    let body = ChatBody {
+        provider: None,
+        model: None,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![Content::text(prompt)],
+            provider_state: None,
+        }],
+        note_id: None,
+        agent: Some(agent.name.clone()),
+        thread: Some(thread.to_owned()),
+    };
+    let author = Author::Agent(agent.name.clone());
+    let (_stop, never) = watch::channel(false);
+    let started = start_with(
+        w,
+        author,
+        unattended_scope(agent),
+        body,
+        never,
+        Some(report.clone()),
+    )
+    .await;
+    match started {
+        Ok((mut rx, _)) => while rx.recv().await.is_some() {},
+        Err(e) => {
+            return Unattended {
+                ended: Some(Err(e.body["message"]
+                    .as_str()
+                    .unwrap_or("the turn could not start")
+                    .to_owned())),
+                log: Vec::new(),
+            };
+        }
+    }
+    let mut r = std::mem::take(&mut *report.lock().unwrap_or_else(|e| e.into_inner()));
+    if r.ended.is_none() {
+        r.ended = Some(Err("the turn stopped before it ended".to_owned()));
+    }
+    r
+}
+
+/// The scope an unattended run of `agent` has: `write` for notes, and `admin` when its
+/// permissions allow a type or taxonomy change (agents G12).
+pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
+    let p = &agent.permissions;
+    let admin = [
+        "propose_type_change",
+        "propose_taxonomy_change",
+        "propose_taxonomy_delete",
+    ]
+    .iter()
+    .any(|t| p.allows_tool(t));
+    if admin { Scope::Admin } else { Scope::Write }
+}
+
+/// The confirmation switch that governs change tool `name`, or `None` for a tool that changes
+/// nothing.
+fn change_switch(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "propose_edit" | "propose_create" => "notes",
+        "propose_archive" => "archive",
+        "propose_delete" => "delete",
+        "propose_type_change" => "types",
+        "propose_taxonomy_change" | "propose_taxonomy_delete" => "taxonomies",
+        "download_asset" => "downloads",
+        _ => return None,
+    })
+}
+
+/// The tools a turn offers: those the internet switches leave (ai D28), `web_search` only with a
+/// Brave key (ai D26), only those the agent may use (agents G4), and, unattended, no change tool
+/// that would only propose (agents G12).
+fn turn_tools(
+    web: ai::Web,
+    brave: bool,
+    allowed: Option<&[String]>,
+    unattended: Option<Direct>,
+) -> Vec<ToolSpec> {
+    let mut tools = offered_tools(web);
+    if web.search && brave {
+        tools.push(crate::brave::tool_spec());
+    }
+    if let Some(allowed) = allowed {
+        tools.retain(|t| allowed.contains(&t.name));
+    }
+    if let Some(direct) = unattended {
+        tools.retain(|t| change_switch(&t.name).is_none_or(|s| direct.makes(s)));
+    }
+    tools
+}
+
+/// The tools an unattended run of `agent` is offered, by name (agents G12).
+pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
+    let direct = Direct::of(confirm_of(agent), unattended_scope(agent));
+    let brave = crate::brave::Search::load(w.state()).is_some();
+    turn_tools(
+        web_of(agent),
+        brave,
+        agent.permissions.tools.as_deref(),
+        Some(direct),
+    )
+    .into_iter()
+    .map(|t| t.name)
+    .collect()
+}
+
 /// Check `body` and start its turn, which sends its events to the receiver returned and stops
 /// when the receiver goes or `stop` turns true. The flag returned turns false when the turn is
 /// over. Both chat forms start their turns here.
@@ -138,6 +268,18 @@ pub(crate) async fn start(
     scope: Scope,
     body: ChatBody,
     stop: watch::Receiver<bool>,
+) -> Result<(mpsc::Receiver<Event>, Arc<AtomicBool>), ApiError> {
+    start_with(w, author, scope, body, stop, None).await
+}
+
+/// [`start`], for an unattended turn when `report` is given.
+async fn start_with(
+    w: Arc<Writer>,
+    author: Author,
+    scope: Scope,
+    body: ChatBody,
+    stop: watch::Receiver<bool>,
+    report: Option<Report>,
 ) -> Result<(mpsc::Receiver<Event>, Arc<AtomicBool>), ApiError> {
     let provider = match body.provider.as_deref().map(str::trim) {
         Some(p) if !p.is_empty() => Some(p.parse::<Provider>().map_err(ApiError::bad_request)?),
@@ -176,6 +318,7 @@ pub(crate) async fn start(
         images: ai_assets::Images::default(),
         agent_name: named.then(|| prepared.agent.name.clone()),
         log: prepared.log.map(std::sync::Mutex::new),
+        report,
     };
     let agent = prepared.agent;
     let history = prepared.history;
@@ -484,6 +627,19 @@ impl Direct {
         }
     }
 
+    /// Whether changes under confirmation switch `switch` are made rather than proposed.
+    fn makes(self, switch: &str) -> bool {
+        match switch {
+            "notes" => self.notes,
+            "archive" => self.archive,
+            "delete" => self.delete,
+            "types" => self.types,
+            "downloads" => self.downloads,
+            "taxonomies" => self.taxonomies,
+            _ => false,
+        }
+    }
+
     /// Whether the change in event `event` with data `p` is made rather than proposed.
     fn covers(self, event: &str, p: &Value) -> bool {
         match event {
@@ -639,6 +795,8 @@ struct Turn {
     agent_name: Option<String>,
     /// The thread the turn writes to (agents G7).
     log: Option<std::sync::Mutex<ThreadLog>>,
+    /// For an unattended turn (agents G12): how it ended and its trail lines.
+    report: Option<Report>,
 }
 
 impl Turn {
@@ -655,6 +813,13 @@ impl Turn {
             .await;
         // What the turn added before it stopped, the client gone or not.
         self.persist(&added).await;
+    }
+
+    /// Keep what an unattended turn reports.
+    fn report(&self, f: impl FnOnce(&mut Unattended)) {
+        if let Some(r) = &self.report {
+            f(&mut r.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        }
     }
 
     fn log(&self) -> Option<std::sync::MutexGuard<'_, ThreadLog>> {
@@ -771,14 +936,13 @@ impl Turn {
                 return;
             }
         };
-        let mut tools = offered_tools(setup.web);
-        if setup.web.search && setup.web_search.is_some() {
-            tools.push(crate::brave::tool_spec());
-        }
         // Only the tools the agent may use (agents G4); a call naming another is not run.
-        if let Some(allowed) = &setup.tools {
-            tools.retain(|t| allowed.contains(&t.name));
-        }
+        let tools = turn_tools(
+            setup.web,
+            setup.web_search.is_some(),
+            setup.tools.as_deref(),
+            self.report.is_some().then_some(setup.direct),
+        );
         let offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         // The images read_asset has sent this turn (ai D19).
         let mut images_sent = 0usize;
@@ -805,17 +969,16 @@ impl Turn {
                 c = self.call(&setup.cred, &req) => c,
             };
             let trail = |usage: Usage, outcome: Outcome| {
-                eprintln!(
-                    "{}",
-                    ai::trail_line(
-                        setup.provider,
-                        &setup.model,
-                        usage,
-                        outcome,
-                        began.elapsed(),
-                        setup.cred.custom_host.as_deref(),
-                    )
+                let line = ai::trail_line(
+                    setup.provider,
+                    &setup.model,
+                    usage,
+                    outcome,
+                    began.elapsed(),
+                    setup.cred.custom_host.as_deref(),
                 );
+                eprintln!("{line}");
+                self.report(|r| r.log.push(line));
             };
             let (text, calls, stop, state) = match called {
                 Called::Gone => return,
@@ -1163,6 +1326,7 @@ impl Turn {
 
     async fn done(&self, stop: &Stop, added: &[Message]) {
         self.persist(added).await;
+        self.report(|r| r.ended = Some(Ok(())));
         self.out
             .send("done", json!({ "stop": stop.as_str(), "messages": added }))
             .await;
@@ -1170,6 +1334,7 @@ impl Turn {
 
     async fn failed(&self, e: &AiError, added: &[Message]) {
         self.persist(added).await;
+        self.report(|r| r.ended = Some(Err(e.message.clone())));
         self.out
             .send(
                 "error",
@@ -1210,10 +1375,11 @@ impl Turn {
         }
         content.push(Content::Notice {
             kind: "refusal".into(),
-            text: notice,
+            text: notice.clone(),
         });
         added.push(assistant(content, None));
         self.persist(added).await;
+        self.report(|r| r.ended = Some(Err(notice.clone())));
         self.out
             .send(
                 "refusal",

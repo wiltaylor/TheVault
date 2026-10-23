@@ -503,6 +503,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/agents/{name}/runs",
+        "The agent's trigger runs: {tools, triggers: [{name, kind, runs}]}, the last 20 runs of each trigger and the tools a trigger run is offered",
+    ),
+    (
+        "GET",
         "/api/agents/{name}/threads",
         "The agent's threads, newest activity first: {threads: [{id, title, origin, last_activity, pending}]}",
     ),

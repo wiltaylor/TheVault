@@ -9,6 +9,7 @@ publish.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 chrono-tz = "0.10"
 croner = "2"
+query.workspace = true
 schema.workspace = true
 script.workspace = true
 state.workspace = true

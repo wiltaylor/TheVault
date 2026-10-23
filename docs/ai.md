@@ -305,6 +305,8 @@ The agent screen's **Chat** tab, at `/agents/<name>`, lists the agent's threads,
 
 The note tools leave threads out unless an agent's `permissions.types` names `agent_thread`, so an agent does not read chats back as vault content. A turn by an agent other than the Assistant authors its changes as that agent, and so does applying its proposal.
 
+An agent can also run on its own, on a schedule or when notes change, each run in a new thread. [AI agents in the vault](ai-agents.md) covers agent files, permissions, triggers, their limits and why an agent's changes never set off a trigger.
+
 ### The system prompt
 
 The system prompt is the Assistant's (agents G6): edit it in the Assistant's agent screen, under Settings, where **Use the shipped prompt** goes back to the prompt TheVault ships. Every other agent has its own. The prompt can be at most 32,000 characters. A vault from before agents moves the prompt it had in Settings > AI to the Assistant on its first start.

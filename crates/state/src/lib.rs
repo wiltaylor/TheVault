@@ -1,10 +1,11 @@
 //! `.vault/state.db`: version history, trash, the change feed devices sync from, encrypted secrets,
-//! API tokens, paired devices and their base versions, task run logs, the queue of `after_*`
-//! handler jobs, the user's notifications, and the shipped defaults and upgrade steps the vault
-//! has had.
+//! API tokens, paired devices and their base versions, task and agent trigger run logs, the queue
+//! of `after_*` handler jobs, the user's notifications, and the shipped defaults and upgrade steps
+//! the vault has had.
 //!
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
+mod agent_runs;
 mod auth;
 mod changes;
 mod commands;
@@ -24,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
+pub use agent_runs::{AgentRun, AgentRunId, AgentRunOutcome};
 pub use auth::{AgentCode, Scope, TokenInfo};
 pub use changes::{ChangeKey, ChangePage, Journaled};
 pub use commands::{
@@ -131,7 +133,7 @@ pub struct State {
     events: Events,
 }
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -369,6 +371,22 @@ CREATE TABLE IF NOT EXISTS agent_codes (
 );
 ";
 
+/// What version 14 adds: the runs of agent triggers (agents G12).
+const SCHEMA_V14: &str = "
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent      TEXT NOT NULL,
+    trigger    TEXT NOT NULL,
+    thread     TEXT,
+    started_ms INTEGER NOT NULL,
+    ended_ms   INTEGER,
+    outcome    TEXT NOT NULL,
+    message    TEXT,
+    log        TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS agent_runs_trigger ON agent_runs (agent, trigger, id);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -466,7 +484,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=12 => {
+        0..=13 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -516,6 +534,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 12 {
                 tx.execute_batch(SCHEMA_V13)?;
+            }
+            if version <= 13 {
+                tx.execute_batch(SCHEMA_V14)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

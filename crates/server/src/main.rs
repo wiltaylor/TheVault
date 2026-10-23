@@ -76,11 +76,13 @@ fn main() -> anyhow::Result<()> {
     let key = secret_key(&state.vault_id().context("reading the vault id")?)?;
     let state = state.with_key(key);
     let handlers = script::Handlers::new(script::Limits::default());
+    // Note event triggers hear of each change once it is durable (agents G10).
+    let (hooks, triggers) = scheduler::TriggerHooks::wrap(handlers.hooks());
     let writer = Arc::new(
         writer::Writer::open(vault, state)
             .context("loading the vault")?
             .with_clock(clock.clone())
-            .with_hooks(handlers.hooks()),
+            .with_hooks(hooks),
     );
     writer
         .upgrade_shipped_defaults(writer::Upkeep::Home)
@@ -96,12 +98,22 @@ fn main() -> anyhow::Result<()> {
     ));
     let scheduler =
         Scheduler::new(writer.clone(), host, clock).context("loading the scheduled tasks")?;
+    triggers.bind(&scheduler);
+    let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
+    // In the runtime, so agent trigger runs use it (agents G12).
+    let app = {
+        let _entered = runtime.enter();
+        api::router(
+            writer.clone(),
+            scheduler.clone(),
+            test_clock.clone(),
+            Some(clients.clone()),
+        )
+    };
     if test_clock.is_none() {
         scheduler.start();
     }
-    let app = api::router(writer.clone(), scheduler, test_clock, Some(clients.clone()));
 
-    let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
     // Paired devices hear about notifications and their commands by push (D4, D9).
     let _push = {
         let _entered = runtime.enter();

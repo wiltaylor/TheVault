@@ -476,6 +476,23 @@ export interface Agent extends AgentForm {
   wcl: string;
 }
 
+/** One run of an agent trigger (agents G12), times in milliseconds since the epoch. */
+export interface AgentRun {
+  id: number;
+  /** The thread the run wrote, once it had one. */
+  thread: string | null;
+  started: number;
+  ended: number | null;
+  outcome: "running" | "succeeded" | "failed";
+  message: string | null;
+}
+
+/** An agent's trigger runs: the tools a trigger run is offered, and each trigger's last runs. */
+export interface AgentRuns {
+  tools: string[];
+  triggers: { name: string; kind: "schedule" | "event"; runs: AgentRun[] }[];
+}
+
 /** A cron schedule in words and the next times it fires, as the scheduler reads it. */
 export interface CronPreview {
   schedule: string;
@@ -1347,6 +1364,8 @@ export const api = {
   putAgent: (name: string, body: Partial<AgentForm> | { wcl: string }) => request<Agent>("PUT", `/api/agents/${enc(name)}`, body),
   /** Delete an agent; its threads stay. Assistant is a 400 `built_in`. */
   deleteAgent: (name: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}`),
+  /** The last runs of each of the agent's triggers, and the tools a trigger run is offered (agents G12). */
+  agentRuns: (name: string) => request<AgentRuns>("GET", `/api/agents/${enc(name)}/runs`),
   /** The agent's threads, newest activity first (agents G7). */
   agentThreads: (name: string) => request<{ threads: AgentThreadSummary[] }>("GET", `/api/agents/${enc(name)}/threads`),
   /** Start a thread with the agent. */

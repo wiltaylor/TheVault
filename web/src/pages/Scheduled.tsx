@@ -49,14 +49,14 @@ function browserZone(): string {
 }
 
 /** Every IANA time zone the browser knows, for the time zone picker. */
-function zones(): string[] {
+export function zones(): string[] {
   const all =
     (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];
   return all.includes("UTC") ? all : ["UTC", ...all];
 }
 
 /** A time in milliseconds as the task's time zone reads it. */
-function inZone(ms: number, zone: string): string {
+export function inZone(ms: number, zone: string): string {
   const opts: Intl.DateTimeFormatOptions = {
     weekday: "short",
     year: "numeric",
@@ -77,7 +77,7 @@ function duration(run: TaskRun): string {
 }
 
 /** A run's outcome as a badge: failed runs stand out. */
-function Outcome(props: { outcome: TaskRun["outcome"] }) {
+export function Outcome(props: { outcome: TaskRun["outcome"] }) {
   return (
     <span class={`outcome outcome-${props.outcome}`} data-outcome={props.outcome}>
       {{ running: "Running", succeeded: "Succeeded", failed: "Failed" }[props.outcome]}
