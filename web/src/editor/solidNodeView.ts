@@ -8,6 +8,10 @@
 //   input, a button, a list of choices), so typing into it never reaches the editor. Events on
 //   the rest of the node still reach ProseMirror, so clicking selects the node and it can be
 //   dragged.
+// - ProseMirror makes the node's element draggable, so a press and drag anywhere inside it would
+//   start the browser's drag of the whole block and cancel the pointer. A drag that began on an
+//   interactive element (panning a map, say) is refused; one begun on the rest still moves the
+//   block, and dragged text or images inside the component start their own drag as before.
 // - `ignoreMutation` ignores every DOM change inside the component. ProseMirror would otherwise
 //   read the component's re-renders as edits to the document and redraw the node.
 
@@ -37,6 +41,23 @@ export function isInteractive(dom: HTMLElement, target: EventTarget | null): boo
   if (!(target instanceof Element) || !dom.contains(target)) return false;
   const hit = target.closest(INTERACTIVE);
   return hit !== null && dom.contains(hit);
+}
+
+/**
+ * Refuse the browser's drag of the node's element `dom` when the press that began it landed on an
+ * interactive element: ProseMirror makes the element draggable, and its drag would cancel the
+ * pointer the element inside is following.
+ */
+export function refuseInteractiveDrags(dom: HTMLElement) {
+  let pressedInteractive = false;
+  const onPress = (e: Event) => {
+    pressedInteractive = isInteractive(dom, e.target);
+  };
+  dom.addEventListener("pointerdown", onPress, true);
+  dom.addEventListener("mousedown", onPress, true);
+  dom.addEventListener("dragstart", (e) => {
+    if (e.target === dom && pressedInteractive) e.preventDefault();
+  });
 }
 
 /** The Solid owner of the component that made each editor, whose context node views see. */
@@ -98,6 +119,8 @@ export function solidNodeView(Component: (props: SolidNodeViewProps) => JSX.Elem
         view.dispatch(tr);
       },
     };
+
+    refuseInteractiveDrags(dom);
 
     let dispose = () => {};
     createRoot((d) => {

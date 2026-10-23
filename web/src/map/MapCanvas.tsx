@@ -113,6 +113,9 @@ export function MapCanvas(props: {
       data-map={props.map.kind}
       role="region"
       aria-label={props.label}
+      // In a note's editor the map sits in a block node ProseMirror can select and drag: a press
+      // on the map is the map's, to pan it or move a pin, not the editor's.
+      data-node-view-interactive=""
     >
       <div ref={target} class="map-target" data-testid="map-target" />
       <Show when={error()}>

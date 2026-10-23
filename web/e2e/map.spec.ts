@@ -600,3 +600,142 @@ test("a location field's map is resized from its handle and keeps the height for
   await page.getByRole("separator", { name: "Spot map height" }).dblclick();
   await expect(page.getByRole("region", { name: "Spot map" })).toHaveCSS("height", "256px");
 });
+
+/** Drag across `map` from a point away from its pins, with the mouse or a finger, and let go. */
+async function pan(page: Page, map: Locator, dx: number, dy: number, input: "mouse" | "touch") {
+  await map.scrollIntoViewIfNeeded();
+  const b = (await map.getByTestId("map-target").boundingBox())!;
+  const from = { x: Math.round(b.x + b.width / 4), y: Math.round(b.y + b.height / 4) };
+  // OpenLayers starts the pan on the first move, which so takes no part in it: make it a short one.
+  const path = [
+    { x: from.x + 2, y: from.y },
+    ...Array.from({ length: 12 }, (_, i) => ({ x: from.x + 2 + (dx * (i + 1)) / 12, y: from.y + (dy * (i + 1)) / 12 })),
+  ];
+  if (input === "mouse") {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    for (const p of path) await page.mouse.move(p.x, p.y);
+    // Held still before letting go, so the pan does not glide on (OpenLayers' kinetic pan).
+    await page.waitForTimeout(250);
+    await page.mouse.up();
+  } else {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [from] });
+    for (const p of path) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [p] });
+    await page.waitForTimeout(250);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await cdp.detach();
+  }
+}
+
+/** Dragging `map` 120 px right and 60 px down moves what it shows by as much. */
+async function expectPans(page: Page, map: Locator, input: "mouse" | "touch" = "mouse") {
+  const before = await frame(map);
+  await pan(page, map, 120, 60, input);
+  await expect
+    .poll(async () => {
+      const after = await frame(map);
+      const x = (before.center[0] - after.center[0]) / before.resolution;
+      const y = (after.center[1] - before.center[1]) / before.resolution;
+      return Math.hypot(x - 120, y - 60);
+    })
+    .toBeLessThanOrEqual(3);
+}
+
+test("dragging a map view in a note's content pans it", async ({ page, admin, baseURL }) => {
+  const place = await ensurePlace(admin);
+  const tag = token();
+  await create(admin, place, { title: `Adelaide ${tag}`, tag, spot: { lat: -34.9285, lng: 138.6007 } });
+  const note = await mapPage(admin, `Pan ${tag}`, `from ${place} where tag == "${tag}"`, "spot");
+
+  await standIn(page, baseURL!);
+  await logIn(page, `/notes/${note.id}`);
+  const map = page.getByTestId("query-view").getByTestId("map");
+  await expect(map.getByTestId("map-pin")).toHaveCount(1);
+  await expectPans(page, map);
+  // Again, now that the block is selected.
+  await expectPans(page, map);
+});
+
+test("dragging a location field's map pans it", async ({ page, admin, baseURL }) => {
+  const place = await ensurePlace(admin);
+  const note = await create(admin, place, { title: `Broome ${token()}`, spot: { lat: -17.9614, lng: 122.2359 } });
+
+  await standIn(page, baseURL!);
+  await logIn(page, `/notes/${note.id}`);
+  const map = page.getByRole("region", { name: "Spot map" });
+  await expect(map.getByTestId("map-pin")).toHaveCount(1);
+  await expectPans(page, map);
+  // A pan is not a pick: the point stays.
+  await expect(page.getByTestId("save-status")).not.toHaveText("Saving…");
+  expect((await fields(admin, note.id)).spot).toEqual({ lat: -17.9614, lng: 122.2359 });
+});
+
+test("dragging a map view a template places on a note pans it", async ({ page, admin, baseURL }) => {
+  const place = await ensurePlace(admin);
+  const tag = token();
+  await create(admin, place, { title: `Alice Springs ${tag}`, tag, spot: { lat: -23.698, lng: 133.8807 } });
+  const atlas = `atlas_${tag}`;
+  await putType(
+    admin,
+    atlas,
+    `label  = "Atlas"
+plural = "Atlases"
+
+template default {
+  tab "Main" {
+    slot "title"
+    query_view {
+      query = "from ${place} where tag == \\"${tag}\\""
+
+      view map {
+        kind     = "map"
+        location = "spot"
+      }
+    }
+  }
+}
+`,
+  );
+  const note = await create(admin, atlas, { title: `Atlas ${tag}` });
+
+  await standIn(page, baseURL!);
+  await logIn(page, `/notes/${note.id}`);
+  const map = page.getByTestId("query-view").getByTestId("map");
+  await expect(map.getByTestId("map-pin")).toHaveCount(1);
+  await expectPans(page, map);
+
+  // And in the template's editor, where the view is a block of the template's content.
+  await page.goto(`/settings/types/${atlas}/templates`);
+  const editing = page.getByRole("textbox", { name: "Main content" }).getByTestId("query-view").getByTestId("map");
+  await expect(editing.getByTestId("map-pin")).toHaveCount(1);
+  await expectPans(page, editing);
+});
+
+test.describe("on a phone", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test("a finger drags a map view in a note's content to pan it", async ({ page, admin, baseURL }) => {
+    const place = await ensurePlace(admin);
+    const tag = token();
+    await create(admin, place, { title: `Hobart ${tag}`, tag, spot: { lat: -42.8821, lng: 147.3272 } });
+    const note = await mapPage(admin, `Phone pan ${tag}`, `from ${place} where tag == "${tag}"`, "spot");
+
+    await standIn(page, baseURL!);
+    await logIn(page, `/notes/${note.id}`);
+    const map = page.getByTestId("query-view").getByTestId("map");
+    await expect(map.getByTestId("map-pin")).toHaveCount(1);
+    await expectPans(page, map, "touch");
+  });
+
+  test("a finger drags a location field's map to pan it", async ({ page, admin, baseURL }) => {
+    const place = await ensurePlace(admin);
+    const note = await create(admin, place, { title: `Albany ${token()}`, spot: { lat: -35.0269, lng: 117.8837 } });
+
+    await standIn(page, baseURL!);
+    await logIn(page, `/notes/${note.id}`);
+    const map = page.getByRole("region", { name: "Spot map" });
+    await expect(map.getByTestId("map-pin")).toHaveCount(1);
+    await expectPans(page, map, "touch");
+  });
+});
