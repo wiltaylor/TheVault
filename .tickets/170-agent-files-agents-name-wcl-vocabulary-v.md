@@ -4,8 +4,8 @@ title: 'Agent files: agents/<name>.wcl vocabulary, validation, writer and /api/a
   routes'
 plan: agents
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Agent files: agents/<name>.wcl vocabulary, validation, writer and /api/agents routes
@@ -17,3 +17,11 @@ Spec: /home/wil/dev/TheVault/.scratch/plans/agents/SPEC.md, G1, G2 and the G4 pe
 ### 2026-10-23T03:32:14Z — wil
 
 Design change (user, 2026-10-23): ship a built-in agents/assistant.wcl (SPEC G6): no provider, model or system_prompt, all tools and types, no triggers; DELETE and enabled=false are refused with 400 built_in. Add tests for both refusals and for a fresh vault and an upgraded vault getting the file.
+
+### 2026-10-23T03:52:15Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T03:52:15Z — wil
+
+Status set to done.
