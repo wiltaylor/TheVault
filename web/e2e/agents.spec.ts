@@ -29,6 +29,8 @@ test("an agent created from the sidebar takes a model and prompt and is listed",
   await expect(pane.getByRole("heading", { name: label })).toBeVisible();
   await expect(agentsNav(page).getByRole("link", { name: label })).toBeVisible();
 
+  // The screen opens on Chat; the model and prompt are on Settings.
+  await pane.getByRole("tab", { name: "Settings" }).click();
   const settings = pane.getByRole("region", { name: "Settings" });
   await settings.getByLabel("Provider").selectOption("openai");
   const model = settings.getByLabel("Model");
@@ -50,6 +52,7 @@ test("an agent created from the sidebar takes a model and prompt and is listed",
   await page.reload();
   await expect(agentsNav(page).getByRole("link", { name: label })).toBeVisible();
   await agentsNav(page).getByRole("link", { name: label }).click();
+  await activePane(page).getByRole("tab", { name: "Settings" }).click();
   const again = activePane(page).getByRole("region", { name: "Settings" });
   await expect(again.getByLabel("Model")).toHaveValue("gpt-e2e");
   await expect(again.getByLabel("System prompt")).toHaveValue("You sort the inbox. Be brief.");

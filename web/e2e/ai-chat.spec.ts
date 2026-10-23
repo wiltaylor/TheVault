@@ -226,15 +226,17 @@ test("with notes confirmation off, an edit asked for in the AI panel shows in th
         default_provider: "anthropic",
         models: { anthropic: "claude-opus-5" },
         endpoints: { anthropic: fake.base_url },
-        confirm: { notes: false },
       }),
     ],
   ]) {
     const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
     expect(res.ok(), await res.text()).toBe(true);
   }
-  const status = (await (await admin.get("/api/integrations/ai")).json()) as { confirm: Record<string, boolean> };
-  expect(status.confirm).toEqual({ notes: false, archive: true, delete: true, types: true });
+  // The chat's confirmation switches are Assistant's (agents G6); the settings route still writes them there.
+  const put = await admin.put("/api/integrations/ai/settings", { data: { confirm: { notes: false } } });
+  expect(put.ok(), await put.text()).toBe(true);
+  const providers = (await (await admin.get("/api/ai/providers")).json()) as { confirm: Record<string, boolean> };
+  expect(providers.confirm).toMatchObject({ notes: false, archive: true, delete: true, types: true });
   const title = `Errands ${Date.now().toString(36)}`;
   const created = await admin.post("/api/notes?type=note", { data: { note: shopping(title, ["Post office"]) } });
   expect(created.status(), await created.text()).toBe(201);
@@ -262,6 +264,9 @@ test("with notes confirmation off, an edit asked for in the AI panel shows in th
   const after = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { version: string; note: unknown };
   expect(after.version).not.toBe(note.version);
   expect(JSON.stringify(after.note)).toContain("Pharmacy");
+  // Assistant is shared by every test on this server: ask before edits again.
+  const back = await admin.put("/api/integrations/ai/settings", { data: { confirm: { notes: true } } });
+  expect(back.ok(), await back.text()).toBe(true);
 });
 
 // In the desktop and Android apps (ai D23) the panel runs a turn in the turns form and polls the
