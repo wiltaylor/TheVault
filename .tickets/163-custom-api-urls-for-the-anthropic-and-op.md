@@ -3,8 +3,8 @@ id: '163'
 title: Custom API URLs for the Anthropic and OpenAI providers
 plan: ai
 blocked_by: []
-status: todo
-verified: unknown
+status: done
+verified: verified
 ---
 
 # Custom API URLs for the Anthropic and OpenAI providers
@@ -20,3 +20,11 @@ Acceptance criteria:
 - ./dev just check passes.
 
 ## Worklog
+
+### 2026-10-23T01:11:18Z — wil
+
+Verified set to verified.
+
+### 2026-10-23T01:11:18Z — wil
+
+Status set to done.
