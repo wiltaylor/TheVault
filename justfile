@@ -39,6 +39,18 @@ server-run vault='.scratch/dev-vault' listen='127.0.0.1:8080': (require-tool "ca
 	mkdir -p {{vault}}
 	cargo run -p server --bin vault-server -- --vault {{vault}} --listen {{listen}}
 
+# Run this checkout as a whole: build the web client, create the vault folder on first use (password and --starter content; the secret key beside it as <vault>.key unless VAULT_SECRET_KEY_FILE names one), then serve the vault and the web client
+[group('rust')]
+dev vault='.scratch/dev-vault' listen='0.0.0.0:8787' password='devpass': web-build (require-tool "cargo")
+	#!/usr/bin/env bash
+	set -euo pipefail
+	export VAULT_SECRET_KEY_FILE="${VAULT_SECRET_KEY_FILE:-{{vault}}.key}"
+	if [ ! -e '{{vault}}/.vault/state.db' ]; then
+		printf '%s\n' '{{password}}' | cargo run -q -p cli --bin vault -- init '{{vault}}' --starter --password-stdin
+	fi
+	echo "Serving {{vault}} on http://{{listen}}"
+	cargo run -p server --bin vault-server -- --vault '{{vault}}' --listen '{{listen}}' --web web/dist
+
 # Run the S6 benchmark: generate a seeded vault, time reindex, query, search, open and save, and write target/bench/report.md
 [group('rust')]
 bench notes='1000000' seed='42' samples='200': (require-tool "cargo")
