@@ -152,7 +152,7 @@ The panel shows in the web app and in the desktop and Android apps. The chat alw
 
 ### Ask a question
 
-Type a question and press Enter (Shift+Enter adds a line). The answer streams in as the model writes it. When a note is open beside the panel, the model knows its id, type and title, so "this note" means that note.
+Type a question and press Enter (Shift+Enter adds a line). The answer streams in as the model writes it. While the turn runs, a line just above the message box shows a spinner, what the model is doing now and the seconds since you asked, such as "Thinking… 4s", "Searching notes… 7s", "Reading a web page… 12s" or "Writing… 15s". It goes when the answer ends, fails or is stopped. With reduced motion the spinner is a still dot, and a screen reader hears each new step but not the seconds. When a note is open beside the panel, the model knows its id, type and title, so "this note" means that note.
 
 To answer, the model calls note tools on the server. Each call shows as a step above the answer, such as “Searched for “roof””, with links to the notes it found or read. The answer links the notes it relies on; a click opens one in the active pane.
 

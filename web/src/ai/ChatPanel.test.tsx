@@ -290,6 +290,21 @@ describe("ChatPanel in the desktop and Android apps", () => {
     expect(aiProviders).toHaveBeenCalled();
   });
 
+  it("shows the activity line from polled events too (ai D30)", async () => {
+    let finish: (v: unknown) => void = () => undefined;
+    aiTurnPoll
+      .mockResolvedValueOnce({ events: [{ event: "tool", data: { id: "t1", name: "search_notes", input: { text: "roof" } } }], next: 1, done: false })
+      .mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    fireEvent.input(m.getByLabelText("Ask AI"), { target: { value: "Hi" } });
+    fireEvent.click(m.getByRole("button", { name: "Send" }));
+    const status = () => m.container.querySelector(".ai-activity [role=status]");
+    await waitFor(() => expect(status()).toHaveTextContent("Searching notes…"));
+    finish({ events: [{ event: "done", data: { stop: "end_turn", messages: [] } }], next: 2, done: true });
+    await waitFor(() => expect(m.getByRole("button", { name: "Send" })).toBeInTheDocument());
+    expect(status()).toBeNull();
+  });
+
   it("stops the turn on the server", async () => {
     aiTurnPoll.mockImplementation(
       (_turn: string, _after: number, signal?: AbortSignal) =>

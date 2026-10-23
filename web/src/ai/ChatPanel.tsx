@@ -3,9 +3,10 @@
 // conversation lives in this tab's memory (store.ts); New conversation forgets it. It shows in
 // the web app and in the desktop and Android apps, whose chat runs on the home server.
 
-import { For, Match, Show, Switch, createSignal, onMount } from "solid-js";
+import { For, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
 import { type AiModel, type AiProvider, type AiProviders, type Json, type NoteDoc, api, assetUrl } from "../api";
 import { formatValue } from "../components/Render";
+import { Spinner } from "../components/SyncStatus";
 import { blockLines, lineDiff } from "./diff";
 import { DownloadCard } from "./DownloadCard";
 import { Markdown } from "./markdown";
@@ -72,6 +73,52 @@ export function stepLabel(name: string, input: Json): string {
       return `Download from ${hostOf(s("url"))}`;
     default:
       return `Called ${name}`;
+  }
+}
+
+/**
+ * What a tool step is doing while it runs, for the activity line (ai D30): the step's words, as
+ * `stepLabel` gives them once done, in the present.
+ */
+export function activeLabel(name: string, input: Json): string {
+  const o = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  switch (name) {
+    case "search_notes":
+      return "Searching notes";
+    case "query_notes":
+      return "Querying notes";
+    case "get_note":
+      return "Reading a note";
+    case "backlinks":
+      return "Looking up backlinks";
+    case "read_asset":
+      return "Reading a file";
+    case "find_assets":
+      return "Looking for files";
+    case "propose_edit":
+      return "Checking an edit";
+    case "propose_create":
+      return "Checking a new note";
+    case "propose_archive":
+      return o.archived === false ? "Checking an unarchive" : "Checking an archive";
+    case "propose_delete":
+      return "Checking a delete";
+    case "list_types":
+      return "Listing the types";
+    case "get_type":
+      return "Reading a type";
+    case "type_format":
+      return "Reading the type file format";
+    case "propose_type_change":
+      return "Checking a type change";
+    case "web_search":
+      return "Searching the web";
+    case "fetch_url":
+      return "Reading a web page";
+    case "download_asset":
+      return "Checking a download";
+    default:
+      return `Running ${name}`;
   }
 }
 
@@ -462,6 +509,34 @@ function Notice(props: { part: Extract<Part, { kind: "notice" }> }) {
   );
 }
 
+/**
+ * The activity line above the message box while a turn runs (ai D30): a spinner, or a still dot
+ * when motion is reduced, the current step's verb, and the seconds since the turn started. Only
+ * the verb is in the polite status region, so a screen reader hears each step, not each second.
+ */
+function ActivityLine() {
+  const [now, setNow] = createSignal(Date.now());
+  const timer = setInterval(() => setNow(Date.now()), 1000);
+  onCleanup(() => clearInterval(timer));
+  const verb = () => {
+    const a = chat.activity;
+    if (!a || a.step === "thinking") return "Thinking";
+    if (a.step === "writing") return "Writing";
+    return activeLabel(a.name, a.input);
+  };
+  const seconds = () => Math.max(0, Math.floor((now() - (chat.startedAt ?? now())) / 1000));
+  return (
+    <div class="ai-activity">
+      <Spinner />
+      <span class="ai-activity-dot" aria-hidden="true" />
+      <span role="status" aria-live="polite">
+        {verb()}…
+      </span>{" "}
+      <span class="ai-activity-time">{seconds()}s</span>
+    </div>
+  );
+}
+
 /** The providers in the order Settings > AI shows them. */
 const PROVIDERS: AiProvider[] = ["anthropic", "openai", "chatgpt"];
 
@@ -623,6 +698,10 @@ export function ChatPanel(props: { noteId: () => string }) {
           send();
         }}
       >
+        {/* Inside the form, which stays at the panel's foot, so the line sits right above the box. */}
+        <Show when={chat.streaming && chat.activity}>
+          <ActivityLine />
+        </Show>
         <textarea
           aria-label="Ask AI"
           placeholder="Ask about your notes"

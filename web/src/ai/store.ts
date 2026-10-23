@@ -183,9 +183,20 @@ export interface Turn {
   parts: Part[];
 }
 
+/**
+ * What a running turn is doing now, for the activity line above the message box (ai D30): from
+ * the last event, thinking before any event and after a tool result, a tool's step after its
+ * `tool` event, writing after a `text` delta.
+ */
+export type Activity = { step: "thinking" } | { step: "writing" } | { step: "tool"; name: string; input: Json };
+
 export interface ChatState {
   turns: Turn[];
   streaming: boolean;
+  /** The running turn's step; null when no turn runs. */
+  activity: Activity | null;
+  /** When the running turn started, in milliseconds since the epoch. */
+  startedAt: number | null;
   /** The provider and model the next turn uses; null for Settings > AI's defaults. */
   provider: string | null;
   model: string | null;
@@ -207,7 +218,7 @@ export function refusalText(provider: string | null, model: string | null, categ
 }
 
 const state = createRoot(() => {
-  const [chat, setChat] = createStore<ChatState>({ turns: [], streaming: false, provider: null, model: null });
+  const [chat, setChat] = createStore<ChatState>({ turns: [], streaming: false, activity: null, startedAt: null, provider: null, model: null });
   const [app, setApp] = createSignal<AppInfo | null>(null);
   return { chat, setChat, app, setApp };
 });
@@ -310,7 +321,7 @@ export function newConversation() {
   controller = null;
   transcript = [];
   outcomes.clear();
-  state.setChat({ turns: [], streaming: false });
+  state.setChat({ turns: [], streaming: false, activity: null, startedAt: null });
 }
 
 /** Stop the turn in flight: the request is aborted, and the server stops when it sees that. */
@@ -342,8 +353,28 @@ function noticesOf(data: { messages?: unknown }): Part[] {
   return out;
 }
 
+/** The activity line's step after event `e` (ai D30); undefined leaves it as it is. */
+function activityAfter(e: StreamEvent, d: Record<string, unknown>): Activity | null | undefined {
+  switch (e.event) {
+    case "text":
+      return { step: "writing" };
+    case "tool":
+      return { step: "tool", name: String(d.name), input: (d.input ?? null) as Json };
+    case "tool_result":
+      return { step: "thinking" };
+    case "done":
+    case "error":
+    case "refusal":
+      return null;
+    default:
+      return undefined;
+  }
+}
+
 function onEvent(e: StreamEvent) {
   const d = (e.data ?? {}) as Record<string, unknown>;
+  const next = activityAfter(e, d);
+  if (next !== undefined) state.setChat("activity", next);
   switch (e.event) {
     case "text": {
       const delta = String(d.delta ?? "");
@@ -453,6 +484,8 @@ export async function ask(text: string, noteId?: string) {
       c.turns.push({ role: "user", text: question, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
       c.turns.push({ role: "assistant", parts: [] });
       c.streaming = true;
+      c.activity = { step: "thinking" };
+      c.startedAt = Date.now();
     }),
   );
   const ctl = new AbortController();
@@ -474,7 +507,7 @@ export async function ask(text: string, noteId?: string) {
   } finally {
     if (mine === generation) {
       controller = null;
-      state.setChat("streaming", false);
+      state.setChat({ streaming: false, activity: null, startedAt: null });
     }
   }
 }
