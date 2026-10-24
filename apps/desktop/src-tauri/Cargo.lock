@@ -109,6 +109,8 @@ dependencies = [
  "chrono",
  "clients",
  "futures-util",
+ "hyper",
+ "hyper-util",
  "image",
  "qrcode",
  "query",
