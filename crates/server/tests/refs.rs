@@ -510,3 +510,88 @@ fn deleting_a_target_with_cascade_trashes_the_referrers() {
     assert_eq!(res["referrers"][0]["id"], t2.as_str());
     assert!(api.file("task", &t2).is_some());
 }
+
+#[test]
+fn a_two_way_field_on_a_new_type_gives_a_type_with_notes_the_other_side() {
+    let api = Api::start();
+    // person already has notes, and no field for the other side.
+    let ann = api.create("person", "title = \"Ann\"\n");
+    let club = format!(
+        "label = \"Club\"\nfield members {{\n  kind = \"reference\"\n  target = \"person\"\n  relation = \"two_way\"\n  inverse = \"clubs\"\n  multiple = true\n}}\n{TEMPLATE}"
+    );
+    let res = api
+        .client
+        .put(api.server.url("/api/types/club"))
+        .header(CONTENT_TYPE, WCL)
+        .body(club)
+        .send()
+        .unwrap();
+    expect(res, 200);
+
+    // The person type now has `clubs`, though its file does not.
+    let types = expect(
+        api.client.get(api.server.url("/api/types")).send().unwrap(),
+        200,
+    );
+    let person = types["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "person")
+        .unwrap()
+        .clone();
+    let clubs = person["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "clubs")
+        .unwrap_or_else(|| panic!("no clubs field: {person}"));
+    assert_eq!(clubs["implied"], true, "{clubs}");
+    assert_eq!(clubs["kind"], "reference");
+    assert_eq!(clubs["target"], "club");
+    assert_eq!(clubs["relation"], "two_way");
+    assert_eq!(clubs["inverse"], "members");
+    assert_eq!(clubs["multiple"], true);
+    let file = expect(
+        api.client
+            .get(api.server.url("/api/types/person"))
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert!(!file["wcl"].as_str().unwrap().contains("clubs"), "{file}");
+
+    // Linking from the club writes the person's side in the same commit, and back again.
+    let chess = api.create(
+        "club",
+        &format!("title = \"Chess\"\nmembers = [\"{ann}\"]\n"),
+    );
+    assert_eq!(api.refs("person", &ann, "clubs"), [chess.as_str()]);
+    let go = api.create("club", "title = \"Go\"\n");
+    api.update(
+        &ann,
+        &format!("title = \"Ann\"\nclubs = [\"{chess}\", \"{go}\"]\n"),
+    );
+    assert_eq!(api.refs("club", &go, "members"), [ann.as_str()]);
+
+    // A change to the person type that leaves `clubs` out of its file removes nothing: the
+    // field is still implied, and Ann keeps her clubs.
+    let current = file["wcl"].as_str().unwrap();
+    let renamed = current.replacen("label = \"Person\"", "label = \"Member\"", 1);
+    assert_ne!(renamed, current);
+    let change = |body: Value| {
+        api.client
+            .post(api.server.url("/api/types/person/change"))
+            .json(&body)
+            .send()
+            .unwrap()
+    };
+    let plan = expect(change(json!({ "wcl": renamed })), 200);
+    assert_eq!(plan["removed"], json!([]), "{plan}");
+    assert_eq!(plan["changes"], json!([]), "{plan}");
+    expect(change(json!({ "wcl": renamed, "plan": plan["plan"] })), 200);
+    assert_eq!(
+        sorted(api.refs("person", &ann, "clubs")),
+        sorted(vec![chess.clone(), go.clone()])
+    );
+}

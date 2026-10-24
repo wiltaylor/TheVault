@@ -412,8 +412,8 @@ pub async fn apply(
             "send the proposal as the chat sent it",
         ));
     }
-    // A taxonomy or agent proposal says so in `kind` (ai D31, agents G20); a type proposal's `after` is the type
-    // file's WCL text; a note proposal's is a note.
+    // A taxonomy or agent proposal says so in `kind` (ai D31, agents G20), as does a type delete; a
+    // type proposal's `after` is the type file's WCL text; a note proposal's is a note.
     let event = if change["kind"] == "taxonomy" {
         "taxonomy_proposal"
     } else if change["kind"] == "agent" {
@@ -422,7 +422,9 @@ pub async fn apply(
         "skill_proposal"
     } else if change["kind"] == "agent_memory" {
         "agent_memory_proposal"
-    } else if change["after"].is_string() && change.get("op").is_none() {
+    } else if change["kind"] == "type"
+        || (change["after"].is_string() && change.get("op").is_none())
+    {
         "type_proposal"
     } else {
         "proposal"

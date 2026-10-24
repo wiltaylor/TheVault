@@ -144,9 +144,76 @@ pub struct Schema {
     taxonomies: BTreeMap<String, Taxonomy>,
 }
 
+/// Add to each target type the inverse field a `two_way` reference names and the target lacks.
+/// A second reference naming the same missing field gets nothing: the schema's check then
+/// reports that the field is not its inverse.
+fn imply_inverses(types: &mut [TypeDef]) {
+    let mut wanted: Vec<(String, FieldDef)> = Vec::new();
+    for t in types.iter() {
+        for f in &t.fields {
+            let Some(r) = f.reference() else { continue };
+            let (Relation::TwoWay, Some(target), Some(inverse)) =
+                (r.relation, r.target.as_deref(), r.inverse.as_deref())
+            else {
+                continue;
+            };
+            let Some(target_type) = types.iter().find(|x| x.name == target) else {
+                continue;
+            };
+            if target_type.field(inverse).is_some()
+                || wanted
+                    .iter()
+                    .any(|(on, w)| on == target && w.name == inverse)
+            {
+                continue;
+            }
+            wanted.push((
+                target.to_owned(),
+                FieldDef {
+                    name: inverse.to_owned(),
+                    label: inverse.to_owned(),
+                    description: Some(format!(
+                        "The other side of {}.{}, which names this field as its inverse.",
+                        t.name, f.name
+                    )),
+                    kind: FieldKind::Reference(Reference {
+                        target: Some(t.name.clone()),
+                        relation: Relation::TwoWay,
+                        inverse: Some(f.name.clone()),
+                        on_delete: OnDelete::Unlink,
+                    }),
+                    required: false,
+                    computed: false,
+                    hidden: false,
+                    multiple: true,
+                    term_list: false,
+                    default: None,
+                    labels: None,
+                    accept: Accept::Any,
+                    extra: Vec::new(),
+                    implied: true,
+                },
+            ));
+        }
+    }
+    for (on, field) in wanted {
+        if let Some(t) = types.iter_mut().find(|t| t.name == on) {
+            t.fields.push(field);
+        }
+    }
+}
+
 impl Schema {
     /// Check the definitions against each other and build the schema.
-    pub fn new(types: Vec<TypeDef>, taxonomies: Vec<Taxonomy>) -> Result<Schema, SchemaError> {
+    /// A `two_way` reference whose `inverse` names a field its target type lacks gets that field
+    /// on the target type: a `two_way` reference back, holding several notes, marked
+    /// [`FieldDef::implied`]. So one type file sets up both sides of a pair. Fields implied by an
+    /// earlier schema are dropped first, so the pairs of `types` alone decide them.
+    pub fn new(mut types: Vec<TypeDef>, taxonomies: Vec<Taxonomy>) -> Result<Schema, SchemaError> {
+        for t in &mut types {
+            t.fields.retain(|f| !f.implied);
+        }
+        imply_inverses(&mut types);
         let schema = Schema {
             types: types.into_iter().map(|t| (t.name.clone(), t)).collect(),
             taxonomies: taxonomies

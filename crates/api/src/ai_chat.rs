@@ -13,7 +13,7 @@
 //! The answer is a server-sent event stream. The server runs the tool loop, at most
 //! [`MAX_ROUNDS`] model calls per user turn, over read-only tools; `propose_edit`,
 //! `propose_create`, `propose_archive`, `propose_delete`, `propose_type_change`,
-//! `propose_taxonomy_change`, `propose_taxonomy_delete`, `propose_agent_change` and
+//! `propose_type_delete`, `propose_taxonomy_change`, `propose_taxonomy_delete`, `propose_agent_change` and
 //! `propose_agent_delete`, and the skill tools `propose_skill_change`, `propose_skill_file_change`,
 //! `propose_skill_file_delete` and `propose_skill_delete` (`crate::ai_skill_changes`, skills S9)
 //! check a change and hand it to the user (ai D14, D18, D20, D31, agents
@@ -36,7 +36,7 @@
 //! | `agent_proposal` | an agent change for the user to apply (agents G20), `kind` always `agent` and `proposer` the agent that proposed it: `create` and `change` `{id, kind, op, name, label, exists, before, after, issues, proposer}`; `delete` `{id, kind, op, name, label, before, proposer}` |
 //! | `agent_memory_proposal` | a change to another agent's memories for the user to apply (agents G21), `kind` always `agent_memory`: `{id, kind, op, memory_agent, agent_label, memory_id, base_version, title, text, before, proposer}`, `op` `create` (`memory_id`, `base_version` and `before` null), `change` (`title` and `text` the new ones, `before` `{title, text}`) or `delete` |
 //! | `skill_proposal` | a skill change for the user to apply (skills S9), `kind` always `skill`: `{id, kind, op, name, path?, exists, before, after, issues, base, proposer, ...}`, `op` `create`, `change`, `file`, `file_delete` or `delete` (`crate::ai_skill_changes`) |
-//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
+//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change`, `type_create` and `type_delete`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `skills_updated` | `{count, skills, message}`: first in an `update_skills` turn (skills S6), the new snapshot's skill count and names and the user message the server added, a notice and the text the model reads (`crate::ai_skills`) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
@@ -247,6 +247,7 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
     let p = &agent.permissions;
     let admin = [
         "propose_type_change",
+        "propose_type_delete",
         "propose_taxonomy_change",
         "propose_taxonomy_delete",
         "propose_agent_change",
@@ -265,7 +266,7 @@ fn change_switch(name: &str) -> Option<&'static str> {
         "propose_edit" | "propose_create" => "notes",
         "propose_archive" => "archive",
         "propose_delete" => "delete",
-        "propose_type_change" => "types",
+        "propose_type_change" | "propose_type_delete" => "types",
         "propose_taxonomy_change" | "propose_taxonomy_delete" => "taxonomies",
         "propose_agent_change" | "propose_agent_delete" => "agents",
         "propose_agent_memory_change" | "propose_agent_memory_delete" => "agent_memories",
@@ -1864,6 +1865,11 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         ),
         tool(
+            "propose_type_delete",
+            "Propose deleting a type for the user to apply. A built-in type cannot be deleted, nor a type that still has notes (delete or move them first), nor one another type's reference field targets (change that type first). When the user lets type changes go ahead without asking, it is deleted at once and the result says applied.",
+            json!({ "name": { "type": "string", "description": "The type's name." } }),
+        ),
+        tool(
             "list_taxonomies",
             "List every taxonomy: its name, label, description, whether it is open (notes may add terms), whether it is built in, and how many terms it holds.",
             json!({}),
@@ -2128,6 +2134,7 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
         }
         "delete" => "The note was moved to the trash, where the user can restore it.".to_owned(),
         "type_create" => format!("The type {name} was created."),
+        "type_delete" => format!("The type {name} was deleted."),
         "taxonomy_create" | "taxonomy_change" | "taxonomy_delete" => {
             let name = done["taxonomy_name"].as_str().unwrap_or_default();
             match op.as_str() {
@@ -2284,13 +2291,17 @@ pub fn apply_change(
     };
     if event == "type_proposal" {
         let name = member("name")?;
-        let after = member("after")?;
         let before = p["before"].as_str();
         if w.read_type(name).ok().as_deref() != before {
             return Err(ApplyError::Stale(format!(
                 "the type {name} changed since the proposal, so nothing was written"
             )));
         }
+        if p["op"] == "delete" {
+            w.delete_type(name)?;
+            return Ok(json!({ "op": "type_delete", "type_name": name }));
+        }
+        let after = member("after")?;
         if before.is_none() {
             w.put_type(name, after)?;
             return Ok(json!({ "op": "type_create", "type_name": name }));
@@ -2435,6 +2446,7 @@ fn propose_or_read(
         "get_type" => get_type(w, input),
         "type_format" => Ok(type_format()),
         "propose_type_change" => propose_type(w, &call.id, input),
+        "propose_type_delete" => propose_type_delete(w, &call.id, input),
         "list_taxonomies" => Ok(crate::ai_taxonomies::list(w)),
         "get_taxonomy" => crate::ai_taxonomies::get(w, input),
         "taxonomy_format" => Ok(crate::ai_taxonomies::format()),
@@ -2861,6 +2873,46 @@ fn propose_type(w: &Writer, call_id: &str, input: &Value) -> Result<ToolOut, Too
         "issues": issues,
     });
     Ok(type_out(content, names, Some(proposal)))
+}
+
+/// `propose_type_delete`: check the type can be deleted, without deleting it, and hand the
+/// delete to the user.
+fn propose_type_delete(w: &Writer, call_id: &str, input: &Value) -> Result<ToolOut, ToolOut> {
+    let name = str_arg(input, "name")?;
+    let before = w
+        .read_type(name)
+        .map_err(|e| ToolOut::error(e.to_string()))?;
+    w.check_delete_type(name).map_err(|e| {
+        let message = e.to_string();
+        let details = ApiError::from(e).body;
+        let mut out = ToolOut::error(message.clone());
+        out.content = json!({
+            "error": message,
+            "issues": details,
+            "message": "The delete was not proposed.",
+        })
+        .to_string();
+        out
+    })?;
+    let proposal = json!({
+        "id": call_id,
+        "kind": "type",
+        "op": "delete",
+        "name": name,
+        "exists": true,
+        "before": before,
+        "after": null,
+        "issues": [],
+    });
+    Ok(type_out(
+        json!({
+            "proposed": true,
+            "name": name,
+            "message": "The delete is shown to the user as a proposal. Nothing has been deleted: it awaits the user, who applies or discards it.",
+        }),
+        vec![json!(name)],
+        Some(proposal),
+    ))
 }
 
 /// What a proposal changes: each field whose value differs, then each top-level block (matched

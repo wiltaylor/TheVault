@@ -84,6 +84,8 @@ export function stepLabel(name: string, input: Json): string {
       return "Read the type file format";
     case "propose_type_change":
       return `Checked a change to type ${s("name")}`;
+    case "propose_type_delete":
+      return `Checked deleting type ${s("name")}`;
     case "list_taxonomies":
       return "Listed the taxonomies";
     case "get_taxonomy":
@@ -186,6 +188,8 @@ export function activeLabel(name: string, input: Json): string {
       return "Reading the type file format";
     case "propose_type_change":
       return "Checking a type change";
+    case "propose_type_delete":
+      return "Checking a type delete";
     case "list_taxonomies":
       return "Listing the taxonomies";
     case "get_taxonomy":
@@ -270,6 +274,7 @@ const TYPE_TOOLS = new Set([
   "get_type",
   "type_format",
   "propose_type_change",
+  "propose_type_delete",
   "list_taxonomies",
   "get_taxonomy",
   "taxonomy_format",
@@ -661,6 +666,15 @@ const DID: Record<NoteOp, string> = {
 type AppliedNote = Extract<Applied, { note_id: string }>;
 type AppliedTaxonomy = Extract<Applied, { taxonomy_name: string }>;
 
+type TypeOp = "type_change" | "type_create" | "type_delete";
+
+/** What an applied type change did, for its card. */
+const TYPE_DID: Record<TypeOp, string> = {
+  type_change: "Changed",
+  type_create: "Created",
+  type_delete: "Deleted",
+};
+
 /** What an applied taxonomy change did (ai D31). */
 const TAXONOMY_DID: Record<AppliedTaxonomy["op"], string> = {
   taxonomy_change: "Changed taxonomy",
@@ -782,7 +796,7 @@ function ChangeAppliedCard(props: { applied: Applied }) {
     const g = agent();
     if (g) return `${AGENT_DID[g.op]} ${g.agent_name}`;
     if (x) return `${TAXONOMY_DID[x.op]} ${x.taxonomy_name}`;
-    if (!n) return `${a().op === "type_create" ? "Created" : "Changed"} type ${typeName()}`;
+    if (!n) return `${TYPE_DID[a().op as TypeOp]} type ${typeName()}`;
     return n.op === "delete" ? `Moved ${title(n)} to the trash` : `${DID[n.op]} ${title(n)}`;
   };
   return (
@@ -798,8 +812,10 @@ function ChangeAppliedCard(props: { applied: Applied }) {
                   when={agent()}
                   fallback={
                     <>
-                      {a().op === "type_create" ? "Created type " : "Changed type "}
-                      <a href={`/types/${encodeURIComponent(typeName())}`}>{typeName()}</a>
+                      {`${TYPE_DID[a().op as TypeOp]} type `}
+                      <Show when={a().op !== "type_delete"} fallback={<strong>{typeName()}</strong>}>
+                        <a href={`/types/${encodeURIComponent(typeName())}`}>{typeName()}</a>
+                      </Show>
                     </>
                   }
                 >

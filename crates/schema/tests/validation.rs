@@ -1780,3 +1780,63 @@ fn the_reference_type_from_a_newer_release_loads_with_one_warning_per_unknown_at
     let wrong = include_str!("../../../docs/vault-format/invalid/type-wrong-form.wcl");
     assert!(TypeDef::parse("wrong", wrong).is_err());
 }
+
+#[test]
+fn a_two_way_reference_implies_its_missing_inverse_on_the_target_type() {
+    let tpl = "template default {\n  tab \"T\" {\n    slot \"title\"\n  }\n}\n";
+    let project = format!(
+        "label = \"Project\"\nfield tasks {{\n  kind = \"reference\"\n  target = \"task\"\n  relation = \"two_way\"\n  inverse = \"project\"\n  multiple = true\n}}\n{tpl}"
+    );
+    let task = format!("label = \"Task\"\n{tpl}");
+    let schema = Schema::from_sources(&[("project", &project), ("task", &task)], &[]).unwrap();
+    let implied = schema.type_def("task").unwrap().field("project").unwrap();
+    assert!(implied.implied);
+    assert!(implied.multiple);
+    let r = implied.reference().unwrap();
+    assert_eq!(r.target.as_deref(), Some("project"));
+    assert_eq!(r.relation, Relation::TwoWay);
+    assert_eq!(r.inverse.as_deref(), Some("tasks"));
+    assert!(
+        !schema
+            .type_def("project")
+            .unwrap()
+            .field("tasks")
+            .unwrap()
+            .implied
+    );
+
+    // Rebuilt from its own types, as a writer does, the schema implies the field once.
+    let types: Vec<TypeDef> = schema.types().cloned().collect();
+    let again = Schema::new(types, Vec::new()).unwrap();
+    let fields = &again.type_def("task").unwrap().fields;
+    assert_eq!(fields.iter().filter(|f| f.name == "project").count(), 1);
+
+    // Without the reference, the implied field goes with it.
+    let mut types: Vec<TypeDef> = again.types().cloned().collect();
+    for t in &mut types {
+        if t.name == "project" {
+            t.fields.retain(|f| f.name != "tasks");
+        }
+    }
+    let without = Schema::new(types, Vec::new()).unwrap();
+    assert!(without.type_def("task").unwrap().field("project").is_none());
+
+    // Written out on the target type, the field is the file's own and must match.
+    let task_own = format!(
+        "label = \"Task\"\nfield project {{\n  kind = \"reference\"\n  target = \"project\"\n  relation = \"two_way\"\n  inverse = \"tasks\"\n}}\n{tpl}"
+    );
+    let schema = Schema::from_sources(&[("project", &project), ("task", &task_own)], &[]).unwrap();
+    let own = schema.type_def("task").unwrap().field("project").unwrap();
+    assert!(!own.implied);
+    assert!(!own.multiple);
+    let task_wrong = format!("label = \"Task\"\nfield project {{\n  kind = \"string\"\n}}\n{tpl}");
+    let e = Schema::from_sources(&[("project", &project), ("task", &task_wrong)], &[])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains(
+            "task.project must be a two_way reference to project whose inverse is \"tasks\""
+        ),
+        "{e}"
+    );
+}

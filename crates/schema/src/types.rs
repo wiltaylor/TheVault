@@ -242,6 +242,9 @@ pub struct FieldDef {
     /// Attributes this version does not know, kept as written so an editor that rewrites the
     /// field can keep them (see [`TypeDef::warnings`]).
     pub extra: Vec<(String, Value)>,
+    /// Not in the type file: the other side of a `two_way` reference on another type whose
+    /// `inverse` names a field this type lacks, which the schema adds (see [`crate::Schema::new`]).
+    pub implied: bool,
 }
 
 /// The `accept` of an asset field.
@@ -291,6 +294,7 @@ pub(crate) fn title_field() -> FieldDef {
         labels: None,
         accept: Accept::Any,
         extra: Vec::new(),
+        implied: false,
     }
 }
 
@@ -760,6 +764,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
             Accept::Any
         },
         extra: unknown(d, &items, &["default"]),
+        implied: false,
     };
     if let Some(v) = &def.default {
         let path = format!("{at}.default");

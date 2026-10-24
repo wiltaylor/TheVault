@@ -162,9 +162,14 @@ export interface TypeProposal {
   name: string;
   /** Whether the type existed when proposed; a new name proposes a new type. */
   exists: boolean;
+  /** `delete` for a proposed delete of the type; absent for a new or changed type. */
+  op?: "delete";
+  /** `type` on a proposed delete, so the apply knows it for a type's. */
+  kind?: "type";
   /** The type file as stored when proposed; null for a new type. */
   before: string | null;
-  after: string;
+  /** The new type file; null for a delete. */
+  after: string | null;
   /** Warnings the check found, such as an attribute this version ignores. */
   issues: { at?: string; message: string; severity?: string }[];
 }
@@ -299,7 +304,7 @@ export interface WebLink {
 
 export type Applied =
   | { id: string; op: NoteOp; note_id: string; title: Json; version: string }
-  | { id: string; op: "type_change" | "type_create"; type_name: string }
+  | { id: string; op: "type_change" | "type_create" | "type_delete"; type_name: string }
   | { id: string; op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes?: number }
   | { id: string; op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string }
   | { id: string; op: "agent_memory_create" | "agent_memory_change" | "agent_memory_delete"; memory_id: string; memory_agent: string; version?: string }
@@ -460,7 +465,8 @@ function proposalDone(p: Proposal, done: AiApplied): string {
   }
 }
 
-const typeWhat = (p: TypeProposal) => (p.exists ? `change to type ${p.name}` : `new type ${p.name}`);
+const typeWhat = (p: TypeProposal) =>
+  p.op === "delete" ? `delete of type ${p.name}` : p.exists ? `change to type ${p.name}` : `new type ${p.name}`;
 const downloadWhat = (p: DownloadProposal) =>
   p.source === "browser" ? `save of ${p.path ?? ""} from the browser box` : `download of ${p.url}`;
 
@@ -1027,7 +1033,7 @@ function createConversation(agent: string, id: string | null) {
           break;
         }
         void settle(
-          applied.op === "type_change" || applied.op === "type_create"
+          applied.op === "type_change" || applied.op === "type_create" || applied.op === "type_delete"
             ? "type"
             : applied.op.startsWith("taxonomy_")
               ? "taxonomy"
@@ -1470,11 +1476,13 @@ function createConversation(agent: string, id: string | null) {
     try {
       await api.aiApply(p.proposal);
       setTypeProposal(turn, part, { state: "applied" });
-      record(p.proposal.id, `[Applied by the user: ${p.proposal.exists ? typeWhat(p.proposal) : `created type ${p.proposal.name}`}]`);
+      const done = p.proposal.op === "delete" ? `deleted type ${p.proposal.name}` : p.proposal.exists ? typeWhat(p.proposal) : `created type ${p.proposal.name}`;
+      record(p.proposal.id, `[Applied by the user: ${done}]`);
       await settle("type");
       notify();
     } catch (e) {
-      const stale = e instanceof ApiError && e.status === 409;
+      // A type delete the type's notes now refuse is a 409 too, with its own reason.
+      const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
       const error = stale ? TYPE_CHANGED : e instanceof Error ? e.message : String(e);
       setTypeProposal(turn, part, { state: stale ? "stale" : "failed", error });
       record(p.proposal.id, `[Failed to apply: ${typeWhat(p.proposal)}: ${error}]`);

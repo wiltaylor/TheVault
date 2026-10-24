@@ -557,6 +557,19 @@ export function TypeEditor() {
                       )}
                     </For>
                   </select>
+                  <label for={id("several")}>Holds several notes</label>
+                  <input
+                    id={id("several")}
+                    type="checkbox"
+                    checked={f().multiple}
+                    disabled={f().relation === "peer"}
+                    onChange={(e) =>
+                      set((x) => {
+                        x.multiple = e.currentTarget.checked;
+                        x.default = undefined;
+                      })
+                    }
+                  />
                   <label for={id("relation")}>Relation</label>
                   <select
                     id={id("relation")}
@@ -586,6 +599,10 @@ export function TypeEditor() {
                     <datalist id={id("inverse-list")}>
                       <For each={targetFields()}>{(t) => <option value={t.name} />}</For>
                     </datalist>
+                    <p class="muted hint">
+                      The field on {f().target || "the target type"} that holds the other side. When it has no field by that
+                      name, it gets one on save: a two-way reference back that holds several notes.
+                    </p>
                   </Show>
                   <label for={id("on_delete")}>When the target is deleted</label>
                   <select
@@ -607,8 +624,13 @@ export function TypeEditor() {
                     id={id("scalar")}
                     onChange={(e) =>
                       set((x) => {
-                        const v = e.currentTarget.value as FieldModel["items"];
-                        if (x.kind === "list") x.items = v;
+                        const v = e.currentTarget.value as FieldModel["items"] | "reference";
+                        // A list of notes is a reference field that holds several notes.
+                        if (v === "reference") {
+                          x.kind = "reference";
+                          x.multiple = true;
+                          x.items = "string";
+                        } else if (x.kind === "list") x.items = v;
                         else if (v !== "taxonomy") x.values = v;
                         x.default = undefined;
                       })
@@ -621,6 +643,9 @@ export function TypeEditor() {
                         </option>
                       )}
                     </For>
+                    <Show when={f().kind === "list"}>
+                      <option value="reference">Notes (references)</option>
+                    </Show>
                   </select>
                 </Show>
                 <Show when={isTermList(f())}>{taxonomySelect()}</Show>

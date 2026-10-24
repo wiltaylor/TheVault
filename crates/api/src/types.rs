@@ -100,6 +100,10 @@ fn field_json(f: &FieldDef) -> Value {
         "multiple": f.multiple,
         "compound": f.kind.is_compound(),
     });
+    // The other side of a two-way reference that the type file does not hold (`Schema::new`).
+    if f.implied {
+        out["implied"] = json!(true);
+    }
     if let Some(default) = &f.default {
         let doc = Doc {
             fields: vec![("default".to_owned(), default.clone())],

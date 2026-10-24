@@ -246,6 +246,7 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["get_type", "Read a type"],
       ["type_format", "Read the type file format"],
       ["propose_type_change", "Change types"],
+      ["propose_type_delete", "Delete types"],
     ],
   },
   {

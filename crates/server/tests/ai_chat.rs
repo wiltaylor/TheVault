@@ -323,7 +323,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 44);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 45);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
@@ -2338,4 +2338,108 @@ fn find_assets_matches_file_names_newest_first_and_keeps_to_its_limit() {
         summary["summary"]["assets"][1]["filename"],
         "Elden-Ring-Cover.jpg"
     );
+}
+
+impl Api {
+    /// Write `types/<name>.wcl` with the types API.
+    fn put_type(&self, name: &str, wcl: &str) {
+        let res = self
+            .client
+            .put(self.server.url(&format!("/api/types/{name}")))
+            .bearer_auth(self.token())
+            .header("content-type", "text/plain")
+            .body(wcl.to_owned())
+            .send()
+            .unwrap();
+        assert!(res.status().is_success(), "{}", res.text().unwrap());
+    }
+}
+
+#[test]
+fn a_type_delete_is_proposed_applied_or_refused_while_the_type_has_notes() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let book = MEMO.replace("\"Memo\"", "\"Book\"");
+    api.put_type("book", &book);
+
+    // A type that has notes is refused, with the notes named.
+    api.memo("Groceries", "Milk");
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_type_delete",
+        json!({ "name": "memo" }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let content = result_json(&fake, true);
+    assert_eq!(content["issues"]["error"], "type_in_use", "{content}");
+    assert!(api.type_wcl("memo").is_some());
+
+    // A built-in type is refused too.
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    propose_one(
+        &api,
+        &fake,
+        "propose_type_delete",
+        json!({ "name": "dailynote" }),
+    );
+    let content = result_json(&fake, true);
+    assert_eq!(content["issues"]["error"], "built_in_type", "{content}");
+
+    // An empty type is proposed, written only when the user applies it.
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_type_delete",
+        json!({ "name": "book" }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "type_proposal", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let p = last(&events, "type_proposal").clone();
+    assert_eq!(p["kind"], "type");
+    assert_eq!(p["op"], "delete");
+    assert_eq!(p["name"], "book");
+    assert_eq!(p["after"], Value::Null);
+    assert!(api.type_wcl("book").is_some());
+    let (status, done) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done, json!({ "op": "type_delete", "type_name": "book" }));
+    assert_eq!(api.type_wcl("book"), None);
+
+    // Applied again, the type is gone: nothing to delete.
+    let (status, done) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::CONFLICT, "{done}");
+    assert_eq!(done["error"], "stale", "{done}");
+
+    // With type changes let through, the delete happens at once.
+    api.put_type("book", &book);
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    api.confirm(json!({ "types": false }));
+    let events = propose_one(
+        &api,
+        &fake,
+        "propose_type_delete",
+        json!({ "name": "book" }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "applied", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let a = last(&events, "applied");
+    assert_eq!(a["op"], "type_delete");
+    assert_eq!(a["type_name"], "book");
+    assert_eq!(api.type_wcl("book"), None);
 }

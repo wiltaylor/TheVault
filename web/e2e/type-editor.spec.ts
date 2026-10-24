@@ -150,3 +150,33 @@ test("saving keeps attributes this version does not know, and select options kee
   expect(file).toMatch(/^\s+width = 2$/m);
   expect(file).toMatch(/^\s+option_labels = \["By car", "By air", ""\]$/m);
 });
+
+test("a list of notes is a reference that holds several, and two-way gives the target type the other side", async ({ page, admin }) => {
+  const t = token();
+  const crew = `crew_${t}`;
+  const tool = `tool_${t}`;
+  await putType(admin, crew, TWO_FIELDS("box"));
+  await putType(admin, tool, `label = "Tool"\n\ntemplate default {\n  tab "Main" {\n    slot "title"\n  }\n}\n`);
+  await logIn(page, `/settings/types/${crew}/edit`);
+
+  await page.getByRole("button", { name: "Add field" }).click();
+  const added = page.getByTestId("field-row-2");
+  await added.getByLabel("Name", { exact: true }).fill("tools");
+  await added.getByLabel("Kind", { exact: true }).selectOption("list");
+  await added.getByLabel("Item kind").selectOption({ label: "Notes (references)" });
+  await expect(added.getByLabel("Kind", { exact: true })).toHaveValue("reference");
+  await expect(added.getByLabel("Holds several notes")).toBeChecked();
+  await added.getByLabel("Target type").selectOption(tool);
+  await added.getByLabel("Relation").selectOption("two_way");
+  await added.getByLabel("Inverse field").fill("crews");
+  await page.getByRole("button", { name: "Preview changes" }).click();
+  await page.getByRole("button", { name: "Apply changes" }).click();
+
+  await expect.poll(() => typeFile(admin, crew)).toMatch(/inverse\s*=\s*"crews"/);
+  const fieldOf = async (type: string, field: string) => {
+    const types = (await (await admin.get("/api/types")).json()) as { types: { name: string; fields: Record<string, unknown>[] }[] };
+    return types.types.find((x) => x.name === type)!.fields.find((f) => f.name === field);
+  };
+  expect(await fieldOf(crew, "tools")).toMatchObject({ kind: "reference", target: tool, relation: "two_way", inverse: "crews", multiple: true });
+  expect(await fieldOf(tool, "crews")).toMatchObject({ kind: "reference", target: crew, relation: "two_way", inverse: "tools", multiple: true, implied: true });
+});

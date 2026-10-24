@@ -11,7 +11,7 @@ const CONTEXT = 2;
 type Row = DiffLine | { type: "skip"; count: number };
 
 /** The WCL diff of `before` and `after`, unchanged runs beyond `CONTEXT` lines folded. */
-export function wclDiff(before: string | null, after: string): Row[] {
+export function wclDiff(before: string | null, after: string | null): Row[] {
   const lines = (s: string | null) => (s ? s.replace(/\n$/, "").split("\n") : []);
   const all = lineDiff(lines(before), lines(after));
   const near = all.map((_, i) => all.slice(Math.max(0, i - CONTEXT), i + CONTEXT + 1).some((l) => l.type !== "same"));
@@ -31,12 +31,14 @@ export function wclDiff(before: string | null, after: string): Row[] {
 export function TypeProposalCard(props: { part: Extract<Part, { kind: "type_proposal" }>; turn: number; index: number }) {
   const session = useChatSession();
   const p = () => props.part.proposal;
-  const label = () => (p().exists ? `Proposed change to type ${p().name}` : `Proposed new type ${p().name}`);
+  const deleting = () => p().op === "delete";
+  const what = () => (deleting() ? "Proposed delete of type " : p().exists ? "Proposed change to type " : "Proposed new type ");
+  const label = () => `${what()}${p().name}`;
   const open = () => props.part.state === "open" || props.part.state === "failed" || props.part.state === "applying";
   return (
     <section class="ai-proposal" aria-label={label()}>
       <p class="ai-proposal-head">
-        {p().exists ? "Proposed change to type " : "Proposed new type "}
+        {what()}
         <a href={`/types/${encodeURIComponent(p().name)}`}>{p().name}</a>
       </p>
       <pre class="ai-diff-lines">
@@ -70,7 +72,7 @@ export function TypeProposalCard(props: { part: Extract<Part, { kind: "type_prop
         <Match when={open()}>
           <div class="ai-proposal-actions">
             <button type="button" class="primary" disabled={props.part.state === "applying"} onClick={() => void session.applyTypeProposal(props.turn, props.index)}>
-              Apply
+              {deleting() ? "Delete" : "Apply"}
             </button>
             <button type="button" disabled={props.part.state === "applying"} onClick={() => session.discardTypeProposal(props.turn, props.index)}>
               Discard

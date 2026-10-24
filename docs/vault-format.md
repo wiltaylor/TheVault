@@ -790,7 +790,7 @@ A link to another note by ULID (D4, D5).
 The relations:
 
 - `one_way` is stored only on this note.
-- `two_way` is stored on both notes. The `inverse` field must be a `two_way` reference field on the target type whose own `inverse` names this field. Either side may be single or `multiple`. The writer updates both files in one commit.
+- `two_way` is stored on both notes. The `inverse` field must be a `two_way` reference field on the target type whose own `inverse` names this field. Either side may be single or `multiple`. The writer updates both files in one commit. When the target type has no field by the `inverse` name, the schema gives it one: a `two_way` reference back to this type, `multiple`, whose `inverse` is this field. The target's type file does not hold it, so one type file sets up both sides; `GET /api/types` lists it with `implied: true`, and the properties sidebar shows it. Writing the field into the target's type file makes it that file's own, single or `multiple` as written, and the target's notes keep their values. A field another type's reference already gets this way is not given again: a second `two_way` reference naming the same missing field is refused as not its inverse.
 - `peer` is a symmetric group. The field must be `multiple` and its `target` must be this type. Every member stores the list of the other members, so adding a note to one member's list adds it to every member's list.
 
 `on_delete` is read from the field on the note that holds the reference. Take a note A whose field points at note B, and delete B:

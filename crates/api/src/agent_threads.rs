@@ -190,7 +190,9 @@ pub fn proposal_what(event: &str, d: &Value) -> String {
     let s = |k: &str| d[k].as_str().unwrap_or_default().to_owned();
     match event {
         "type_proposal" => {
-            if d["exists"] == true {
+            if d["op"] == "delete" {
+                format!("delete of type {}", s("name"))
+            } else if d["exists"] == true {
                 format!("change to type {}", s("name"))
             } else {
                 format!("new type {}", s("name"))
@@ -242,7 +244,9 @@ fn proposal_done(event: &str, d: &Value, done: &Value) -> String {
     let version = s(done, "version");
     match event {
         "type_proposal" => {
-            if d["exists"] == true {
+            if d["op"] == "delete" {
+                format!("deleted type {}", s(d, "name"))
+            } else if d["exists"] == true {
                 format!("change to type {}", s(d, "name"))
             } else {
                 format!("created type {}", s(d, "name"))

@@ -39,6 +39,11 @@ export interface FieldDef {
   hidden?: boolean;
   multiple: boolean;
   compound: boolean;
+  /**
+   * Not in the type file: the other side of another type's two-way reference whose inverse names a
+   * field this type lacks, which the schema adds. Saving the type writes it out.
+   */
+  implied?: boolean;
   default?: Json;
   options?: string[];
   /** `select`: one label per option, index-aligned; an empty label shows the value. */

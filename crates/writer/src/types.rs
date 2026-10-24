@@ -239,11 +239,36 @@ impl Writer {
     /// Delete type `name`. A type that still has notes is not deleted, nor is a built-in type
     /// ([`Writer::is_built_in`]); a user's own type holding a built-in's name is.
     pub fn delete_type(&self, name: &str) -> Result<()> {
+        self.not_built_in(name)?;
+        let _w = self.write_lock();
+        let mut inner = self.lock();
+        let schema = self.schema_without(&inner, name)?;
+        let generation = self.commit(vec![Change::delete(type_path(name))])?;
+        install(&mut inner, schema)?;
+        inner.index.advance(generation)?;
+        Ok(())
+    }
+
+    /// Whether [`Writer::delete_type`] would delete type `name`, refusing it the same way,
+    /// without deleting it: for a proposal that should not reach the user only to fail.
+    pub fn check_delete_type(&self, name: &str) -> Result<()> {
+        self.not_built_in(name)?;
+        let inner = self.lock();
+        self.schema_without(&inner, name).map(|_| ())
+    }
+
+    /// Refuse a built-in type ([`Writer::is_built_in`]). It reads the schema, so it runs before
+    /// the caller takes the lock.
+    fn not_built_in(&self, name: &str) -> Result<()> {
         if self.is_built_in(name) {
             return Err(Error::BuiltInType(name.to_owned()));
         }
-        let _w = self.write_lock();
-        let mut inner = self.lock();
+        Ok(())
+    }
+
+    /// The schema with type `name` gone, refusing an unknown type, one that still has notes, and
+    /// one whose removal leaves the other types invalid. The caller has refused a built-in type.
+    fn schema_without(&self, inner: &Inner, name: &str) -> Result<Schema> {
         if inner.schema.type_def(name).is_none() {
             return Err(Error::UnknownType(name.to_owned()));
         }
@@ -260,11 +285,7 @@ impl Writer {
             .filter(|t| t.name != name)
             .cloned()
             .collect();
-        let schema = rebuild_schema(&inner.schema, types)?;
-        let generation = self.commit(vec![Change::delete(type_path(name))])?;
-        install(&mut inner, schema)?;
-        inner.index.advance(generation)?;
-        Ok(())
+        rebuild_schema(&inner.schema, types)
     }
 
     /// Every note that holds items its type does not describe, in id order (D6).
@@ -338,7 +359,13 @@ impl Writer {
             Some(renamed) => parse_type(name, &renamed)?,
             None => (new, text),
         };
-        let rules = FieldChanges::new(old, &new, &change.renames)
+        // A field the schema implied is not in the old file either: the new file may write it out,
+        // which adds it, or leave it implied, which changes nothing.
+        let explicit = TypeDef {
+            fields: old.fields.iter().filter(|f| !f.implied).cloned().collect(),
+            ..old.clone()
+        };
+        let rules = FieldChanges::new(&explicit, &new, &change.renames)
             .map_err(|e| Error::InvalidType(SchemaError(vec![e])))?;
         let others = FieldRename {
             this_is_type: false,

@@ -297,7 +297,7 @@ pub struct Confirm {
     /// `propose_delete`, which moves a note to the trash; nothing ever purges (ai D21).
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub delete: bool,
-    /// `propose_type_change`.
+    /// `propose_type_change` and `propose_type_delete`.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub types: bool,
     /// `download_asset`, which stores a file from the web as an asset (ai D27).
