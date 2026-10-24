@@ -78,6 +78,10 @@ const TOOLS = [
   "propose_archive",
   "propose_delete",
   "propose_edit",
+  "remember",
+  "recall",
+  "update_memory",
+  "forget",
   "draft_email",
   "draft_sms",
   "draft_event",
@@ -351,7 +355,7 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByText(/they replace Settings > AI for this agent/)).toBeTruthy();
     const groups = p.getAllByRole("group").map((g) => g.querySelector(":scope > legend")?.textContent).filter(Boolean);
-    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Types", "Taxonomies", "Agents", "Outbox", "Assets", "Internet"]);
+    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Memory", "Types", "Taxonomies", "Agents", "Outbox", "Assets", "Internet"]);
     const web = p.getByRole("checkbox", { name: /Search the web/ });
     expect(web).toBeChecked();
     fireEvent.click(web);
@@ -371,6 +375,27 @@ describe("the Permissions tab", () => {
     fireEvent.click(get);
     fireEvent.click(p.getByRole("button", { name: "Save" }));
     await waitFor(() => expect((sent().permissions as { tools: unknown }).tools).toBeNull());
+  });
+
+  it("lists the memory tools in a Memory group and saves an agent without them", async () => {
+    await open();
+    const p = await tab("Permissions");
+    const group = p.getAllByRole("group").find((g) => g.querySelector(":scope > legend")?.textContent === "Memory")!;
+    const names = Array.from(group.querySelectorAll("label")).map((l) => l.textContent?.trim());
+    expect(names).toEqual([
+      "Remember things remember",
+      "Recall its memories recall",
+      "Change its memories update_memory",
+      "Forget memories forget",
+    ]);
+    fireEvent.click(p.getByRole("checkbox", { name: /Remember things/ }));
+    fireEvent.click(p.getByRole("checkbox", { name: /Forget memories/ }));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    const tools = (sent().permissions as { tools: string[] }).tools;
+    expect(tools).toContain("recall");
+    expect(tools).not.toContain("remember");
+    expect(tools).not.toContain("forget");
   });
 
   it("lists the agent tools in an Agents group and saves Ask before changing agents", async () => {

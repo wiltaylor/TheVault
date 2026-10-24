@@ -73,6 +73,7 @@ fn lists_every_type_with_its_fields_and_templates() {
     assert_eq!(
         names,
         [
+            "agent_memory",
             "agent_thread",
             "call",
             "conversation",

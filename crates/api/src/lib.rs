@@ -61,6 +61,7 @@
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
 mod agent_files;
+mod agent_memory;
 mod agent_runs;
 mod agent_threads;
 mod agents;

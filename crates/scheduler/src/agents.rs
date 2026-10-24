@@ -6,8 +6,8 @@
 //! server (never on the embedded app servers, which install no runner):
 //!
 //! - A change authored by an agent never fires a trigger, so an agent's own writes never loop
-//!   back into it (agents G11). Neither does a change to an `agent_thread` note, unless the
-//!   trigger names that type.
+//!   back into it (agents G11). Neither does a change to an `agent_thread` or `agent_memory`
+//!   note, unless the trigger names that type.
 //! - A change matches a trigger by `on` and `type`, then by `where`, a query condition read
 //!   against the note after the change, or before it for a delete.
 //! - Changes to one note within [`DEBOUNCE_MS`] coalesce into one run with the last change, which
@@ -58,6 +58,12 @@ pub const MAX_QUEUED: usize = 50;
 pub const MAX_PER_HOUR: usize = 60;
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
+
+/// Whether `type_name` is a type the agents keep for themselves, `agent_thread` or
+/// `agent_memory`, whose changes set off only a trigger that names the type (agents G7, G21).
+fn is_agent_type(type_name: &str) -> bool {
+    type_name == writer::AGENT_THREAD_TYPE || type_name == writer::AGENT_MEMORY_TYPE
+}
 
 /// What a turn of an unattended run reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,7 +195,7 @@ impl AgentPlan {
             for t in &a.triggers {
                 if let TriggerWhen::NoteEvent(e) = &t.when
                     && e.matches(op, type_name)
-                    && (type_name != writer::AGENT_THREAD_TYPE || !e.types.is_empty())
+                    && (!is_agent_type(type_name) || !e.types.is_empty())
                 {
                     out.push((a, t));
                 }
@@ -295,14 +301,15 @@ impl AgentPlan {
 
     /// The agents a note of `type_name` may call, each with the mention trigger it answers by:
     /// every enabled agent, through its own mention trigger or the implicit one when it has none
-    /// (agents G16). A trigger with no `type` is not called from an `agent_thread` note.
+    /// (agents G16). A trigger with no `type` is not called from an `agent_thread` or
+    /// `agent_memory` note.
     fn callees(&self, type_name: &str) -> Vec<(Agent, Trigger)> {
         self.agents
             .values()
             .filter_map(|a| {
                 let t = a.mention_trigger(type_name)?;
                 let named = matches!(&t.when, TriggerWhen::Mention(m) if !m.types.is_empty());
-                (type_name != writer::AGENT_THREAD_TYPE || named).then(|| (a.clone(), t))
+                (!is_agent_type(type_name) || named).then(|| (a.clone(), t))
             })
             .collect()
     }

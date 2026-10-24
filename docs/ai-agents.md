@@ -118,6 +118,31 @@ Each thread in the Chat tab has a ⋯ menu, also opened by a right-click, with R
 
 A turn runs on the server until it ends or you press **Stop**, whether or not anything shows it. Opening another thread, choosing another agent in the panel, closing the panel or the tab only stops showing it; the turn goes on writing to its thread. A running thread shows a small spinner beside its title in the Chat tab, and the agent shows one in the sidebar; opening the thread shows the answer so far and follows the rest, with the activity line counting from when the turn started. A thread that answered while it was not open shows a dot, "New reply", until you open it. One thread runs one turn at a time ("Still answering" while it does), and an agent runs at most 4 turns at once across its threads, trigger runs included. [The turns form](ai.md#the-turns-form) describes the routes.
 
+## Memory
+
+An agent keeps its own memories from one conversation to the next. Each memory is a note of the built-in type `agent_memory`, holding a short `title`, the agent's name in `agent`, and the memory's text in the content field `body`. Memory notes sync to the apps and keep their history like any note. Deleting an agent keeps its memories.
+
+Four chat tools reach only the agent's own memories:
+
+| Tool | Does |
+|---|---|
+| `remember {title, text}` | Creates a memory and answers its id |
+| `recall {query, limit}` | The agent's memories whose title or text holds every word of `query`, ignoring case, or all of them for an empty query, newest first, with their full text. `limit` is 1 to 50, 20 when `null` |
+| `update_memory {id, title, text}` | Changes a memory's title, text or both; `null` keeps a part. A memory of another agent's is refused |
+| `forget {id}` | Moves a memory to the trash, where you can restore it. A memory of another agent's is refused |
+
+They are ordinary tool names, so an agent has them only when its tools list allows them; on the Permissions tab they are the "Memory" group. They change nothing but the agent's own memory, so they need no confirmation, and a trigger run is offered them whatever its confirmation switches say. Their changes are authored by the agent, so they never fire a trigger. The person or token running a chat must be able to write notes for the agent to change its memory.
+
+Every turn's instructions gain a "Your memories" section after the agent's prompt, so the prompt itself stays the same from turn to turn for the provider's prompt caching. The section lists the agent's memories, newest first, one line each: `- <title> (<id>): <the first 200 characters of its text>`. The lines stop at 8,000 characters, with a last line saying how many more memories there are and that `recall` reads them. An agent with no memories gets no section.
+
+The note tools leave memories out unless the agent's `permissions.types` names `agent_memory`, as they do threads.
+
+| Limit | Value | Past it |
+|---|---|---|
+| A memory's title | 120 characters | `remember` and `update_memory` are refused |
+| A memory's text | 8,000 characters | `remember` and `update_memory` are refused |
+| Memories one agent holds | 500 | `remember` is refused, asking the agent to forget some or merge several into one |
+
 ## Triggers
 
 A `trigger` block runs the agent on its own. Each run starts a new thread, titled with the trigger's name and the local date and time, whose first message is the trigger's `prompt`.
@@ -154,7 +179,7 @@ File this email.
 Event: create of note 01JB8Z0Q6W4ZK3V9T1M5XH7N2C (type email, title "Invoice 42")
 ```
 
-A run starts once the note has been quiet for 30 seconds: several changes to one note within that time make one run, with the last change. A condition that no longer matches by then, or a note gone by then, starts nothing. A trigger with no `type` does not fire for `agent_thread` notes; name the type to watch threads.
+A run starts once the note has been quiet for 30 seconds: several changes to one note within that time make one run, with the last change. A condition that no longer matches by then, or a note gone by then, starts nothing. A trigger with no `type` does not fire for `agent_thread` or `agent_memory` notes; name the type to watch threads or memories.
 
 Note events fire on the home server only, after the change is written. A change made in the desktop or Android app fires when it reaches the server by sync. The apps themselves never run triggers.
 

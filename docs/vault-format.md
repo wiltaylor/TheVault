@@ -214,7 +214,7 @@ A release that adds an attribute is rolled out apps first. See [Releasing a form
 
 ### Built-in types
 
-Every vault has ten types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it, and adds to a built-in type the vault has every field its shipped default gained since: see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`. A type of the user's that merely holds a built-in's name is not the built-in: [Shipped defaults and upgrades](#shipped-defaults-and-upgrades), step 2, gives the rule.
+Every vault has eleven types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it, and adds to a built-in type the vault has every field its shipped default gained since: see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`. A type of the user's that merely holds a built-in's name is not the built-in: [Shipped defaults and upgrades](#shipped-defaults-and-upgrades), step 2, gives the rule.
 
 | Type | Label | For | Must keep |
 |------|-------|-----|-----------|
@@ -228,6 +228,7 @@ Every vault has ten types that the app relies on. The server writes each one's t
 | `event` | Event | One Google Calendar event, or one occurrence of a recurring one, written by the calendar sync (google-sync D15) | nothing |
 | `outbox` | Outbox item | One email, SMS or calendar invite waiting to be sent, or sent (outbox X1). What an agent drafts waits in Review for the user. See [The Outbox](#the-outbox) | nothing |
 | `agent_thread` | Agent thread | One conversation with an agent (agents G7): `agent`, the agent's name; `origin`, `user`, `trigger:<name>`, or `mention` for a call from a note; `last_activity`; the hidden `pending`, how many proposals wait for the user; the hidden `transcript`, a JSON string of `{ messages, steps, proposals }` the server resumes the conversation from; and the content field `body`, the conversation as readable text. Its list page shows the details view, newest activity first. The server writes threads as their turns run, authored by the agent | nothing |
+| `agent_memory` | Agent memory | One thing an agent remembers from one conversation to the next (agents G21): `title`, a short name of at most 120 characters; `agent`, the agent's name; and the content field `body`, the memory's text, at most 8,000 characters. An agent holds at most 500. Its list page shows the list view, last changed first. An agent writes its own memories, authored by the agent | nothing |
 
 A change that removes a "must keep" field, or changes its kind, is refused with `invalid_type`.
 

@@ -1,0 +1,35 @@
+label       = "Agent memory"
+plural      = "Agent memories"
+description = "Something an agent keeps in mind from one conversation to the next."
+icon        = "brain"
+colour      = "purple"
+
+field agent {
+  kind        = "string"
+  label       = "Agent"
+  description = "The name of the agent the memory belongs to."
+}
+
+field body {
+  kind  = "content"
+  label = "Memory"
+}
+
+template default {
+  tab "Memory" {
+    slot "agent"
+    slot "body"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "agent"
+  }
+}
+
+list_page {
+  view = "list"
+  sort = "updated desc"
+}

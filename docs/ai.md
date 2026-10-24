@@ -319,7 +319,7 @@ An agent can also run on its own, on a schedule or when notes change, each run i
 
 The system prompt is the Assistant's (agents G6): edit it in the Assistant's agent screen, under Settings, where **Use the shipped prompt** goes back to the prompt TheVault ships. Every other agent has its own. The prompt can be at most 32,000 characters. A vault from before agents moves the prompt it had in Settings > AI to the Assistant on its first start.
 
-The server adds the open note's id, type and title after your prompt, so the editable text never holds them. The tool list reaches the model through the tool definitions, so a custom prompt does not need to repeat it. The default prompt also summarises the query language and how to link notes; keep those parts if you want the model to go on doing both well.
+The server adds the agent's memories (see [Memory](ai-agents.md#memory)) and then the open note's id, type and title after your prompt, so the editable text never holds them. The tool list reaches the model through the tool definitions, so a custom prompt does not need to repeat it. The default prompt also summarises the query language and how to link notes; keep those parts if you want the model to go on doing both well.
 
 Scripts do not use this prompt: a script's `ai` call passes its own `system`.
 

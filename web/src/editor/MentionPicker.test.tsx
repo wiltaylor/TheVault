@@ -44,6 +44,8 @@ describe("callableAgents", () => {
     expect(names(undefined)).toEqual(["assistant", "clerk"]);
     // A conversation calls only an agent whose trigger names its type.
     expect(names("agent_thread")).toEqual([]);
+    // Nor does a memory.
+    expect(names("agent_memory")).toEqual([]);
     expect(names("memo", "ni")).toEqual(["owl"]);
     expect(names("memo", "OW")).toEqual(["owl"]);
     expect(names("memo", "x")).toEqual([]);

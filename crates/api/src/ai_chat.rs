@@ -75,7 +75,7 @@ use crate::agent_threads::{self, Busy, Stored, Thread};
 use crate::ai_taxonomies::apply_taxonomy;
 use crate::auth::{Caller, GrantedScope};
 use crate::events::HEARTBEAT;
-use crate::{ApiError, ai_assets};
+use crate::{ApiError, agent_memory, ai_assets};
 
 /// The most model calls one user turn makes (ai D14).
 pub const MAX_ROUNDS: usize = 12;
@@ -607,8 +607,9 @@ struct Setup {
 }
 
 /// The note types an agent's note tools reach (agents G4): those its `permissions.types` names,
-/// or every type. Agent threads are left out unless the list names `agent_thread`, so an agent
-/// does not read chats back as vault content (agents G7).
+/// or every type. Agent threads and agent memories are left out unless the list names their type,
+/// so an agent does not read chats back as vault content (agents G7), and reaches memories only
+/// through its memory tools (agents G21).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Limits {
     types: Option<Vec<String>>,
@@ -624,7 +625,7 @@ impl Limits {
     /// Whether the agent may read and change notes of type `name`.
     pub(crate) fn allows(&self, name: &str) -> bool {
         match &self.types {
-            None => name != agent_threads::THREAD_TYPE,
+            None => name != agent_threads::THREAD_TYPE && name != agent_memory::MEMORY_TYPE,
             Some(t) => t.iter().any(|n| n == name),
         }
     }
@@ -776,6 +777,11 @@ fn setup(
         .to_owned();
     if !system.ends_with('\n') {
         system.push('\n');
+    }
+    // The agent's memories follow its prompt, so the prompt itself stays a stable prefix for
+    // prompt caching (agents G21).
+    if let Some(memories) = agent_memory::prompt_section(w, &agent.name) {
+        system.push_str(&memories);
     }
     if let Some(id) = note_id
         .map(|s| s.trim().to_owned())
@@ -1733,6 +1739,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
     ]
     .into_iter()
+    .chain(agent_memory::tool_specs())
     .chain(crate::ai_outbox::tool_specs())
     .chain(crate::ai_web::tool_specs())
     .collect()
@@ -1813,6 +1820,10 @@ fn run_tool(
     agent: &Agent,
     call: &ToolCall,
 ) -> ToolOut {
+    // The memory tools reach only the agent's own memories, and write as the agent (agents G21).
+    if call.error.is_none() && agent_memory::is_memory_tool(&call.name) {
+        return agent_memory::run(w, scope, &agent.name, &call.name, &call.input);
+    }
     if call.error.is_none() && crate::ai_outbox::is_draft_tool(&call.name) {
         return crate::ai_outbox::draft(w, scope, agent, limits, &call.name, &call.input);
     }

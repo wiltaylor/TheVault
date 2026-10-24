@@ -180,14 +180,14 @@ pub fn agent_calls(text: &str) -> Vec<AgentCall> {
                     continue;
                 }
                 if let Some((close, end)) = link_at(text, i) {
-                    let href = unescape(&text[close + 2..end - 1]);
+                    let href = unescape_markup(&text[close + 2..end - 1]);
                     if let Some((agent, call)) = parse_agent_call(&href) {
                         out.push(AgentCall {
                             start: i,
                             end,
                             agent,
                             call,
-                            label: unescape(&text[i + 1..close]),
+                            label: unescape_markup(&text[i + 1..close]),
                         });
                     }
                     i = end;
@@ -201,8 +201,9 @@ pub fn agent_calls(text: &str) -> Vec<AgentCall> {
     out
 }
 
-/// `s` with each backslash escape of a markup character read as the character.
-fn unescape(s: &str) -> String {
+/// `s` with each backslash escape of a markup character read as the character: the inverse of
+/// [`escape_markup`].
+pub fn unescape_markup(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {

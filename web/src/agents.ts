@@ -116,6 +116,9 @@ export function agentNameFrom(text: string): string {
 /** The type of the conversations with agents, which a trigger with no `type` is not called from. */
 export const AGENT_THREAD_TYPE = "agent_thread";
 
+/** The type of the agents' memories (agents G21), which a trigger with no `type` is not called from either. */
+export const AGENT_MEMORY_TYPE = "agent_memory";
+
 /**
  * The agents a note of `type` may call by writing `@<name>` (agents G16), as the mention picker
  * offers them: each enabled agent with a mention trigger for the type, whose name or label
@@ -126,7 +129,7 @@ export function callableAgents(list: readonly AgentSummary[], type: string | und
   return list.filter((a) => {
     const m = a.mention;
     if (!m || a.enabled === false || a.error) return false;
-    const allowed = m.types === null ? type !== AGENT_THREAD_TYPE : type !== undefined && m.types.includes(type);
+    const allowed = m.types === null ? type !== AGENT_THREAD_TYPE && type !== AGENT_MEMORY_TYPE : type !== undefined && m.types.includes(type);
     if (!allowed) return false;
     return q === "" || a.name.toLowerCase().startsWith(q) || agentLabel(a).toLowerCase().startsWith(q);
   });
@@ -205,6 +208,15 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["propose_create", "Create notes"],
       ["propose_archive", "Archive notes"],
       ["propose_delete", "Move notes to the trash"],
+    ],
+  },
+  {
+    group: "Memory",
+    tools: [
+      ["remember", "Remember things"],
+      ["recall", "Recall its memories"],
+      ["update_memory", "Change its memories"],
+      ["forget", "Forget memories"],
     ],
   },
   {

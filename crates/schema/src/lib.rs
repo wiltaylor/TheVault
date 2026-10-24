@@ -44,7 +44,7 @@ pub use encoding::{
 };
 pub use inline::{
     AGENT_CALL_SCHEME, AgentCall, MARKUP_ITEMS, Placeholder, agent_calls, escape_markup,
-    markup_item, parse_agent_call, placeholder_at, placeholders,
+    markup_item, parse_agent_call, placeholder_at, placeholders, unescape_markup,
 };
 pub use note::{NoteLookup, NoteReport};
 pub use queryviews::{FieldRename, VIEW_FIELD_ITEMS, query_view_issues, reads_type};
