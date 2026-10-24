@@ -65,7 +65,7 @@ Each entry has a dotted kind, a category, an actor, a one-line summary, an optio
 | `automation` | `task.run.start`, `task.run.end` | A scheduled task run starts and ends, with the run id, the task, the attempt and the outcome. |
 | `automation` | `agent.run`, `agent.run.skipped` | An agent trigger or call run ended, or was skipped over the hourly limit. |
 | `automation` | `handler.failed` | A handler failed: a `before_*` handler that rejected a write, or an `after_*` job that failed or was not run. |
-| `outbox` | `outbox.drafted`, `outbox.approved`, `outbox.rejected`, `outbox.sending`, `outbox.sent`, `outbox.failed` | An Outbox item reached that status, with its kind and recipients, not its body. |
+| `outbox` | `outbox.drafted`, `outbox.ready`, `outbox.sending`, `outbox.sent`, `outbox.failed` | An Outbox item was drafted, marked ready, claimed for sending, sent (the write that records `sent_at`) or failed, with its kind and recipients, not its body. A sent item then leaves the Outbox, and a draft deleted (rejected) is a `note.delete`. |
 | `sync` | `task.run.start`, `task.run.end` | A run of the Google Gmail or Calendar sync (the `google_gmail` and `google_calendar` tasks), with its outcome. |
 | `sync` | `sync.round` | A device finished a sync round that moved or held something: pushed, pulled, merged and conflict counts and the held notes. The app reports it with `POST /api/devices/{id}/sync-rounds`. |
 | `auth` | `auth.login`, `auth.login_failed`, `auth.token_created`, `auth.token_revoked`, `auth.device_paired`, `auth.device_revoked` | Password sign-ins and failed sign-ins, API tokens made or revoked (an agent install code makes one too), devices paired or removed. |

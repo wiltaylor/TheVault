@@ -119,19 +119,19 @@ When you connect, TheVault records the scopes Google granted in the `google_sett
 
 ## Sending email from the Outbox
 
-TheVault sends an email only when an Outbox item of kind `email` becomes `approved`. That happens when you select **Send** on an item you wrote, or **Approve and send** on an item an agent drafted. An agent's drafts wait in Review for you. The exception is an agent whose permissions turn on **Send from the Outbox without review**: its items go straight to `approved`. That switch is off for every agent unless you turn it on.
+TheVault sends an email only when an Outbox item of kind `email` becomes `ready`. That happens when you select **Ready** on a draft, whether you wrote it or an agent drafted it. An agent's drafts wait in the Draft tab for you. The exception is an agent whose permissions turn on **Send from the Outbox without review**: its items are created `ready`. That switch is off for every agent unless you turn it on.
 
-The home server sends the item through Gmail as your connected address. An item approved in the desktop or Android app is sent once the approval syncs to the server.
+The home server sends the item through Gmail as your connected address. An item marked ready in the desktop or Android app is sent once the change syncs to the server.
 
 1. The item's status moves to **Sending**.
 2. TheVault builds the message from the item: To, Cc, Bcc, Subject, the body as plain text and as HTML, and the attachments. A reply carries `In-Reply-To` and `References` from the email it answers, and joins that email's Gmail thread.
 3. TheVault sends the message with `messages.send`. A message of 4.5 MB or more is sent through Gmail's upload endpoint instead.
-4. The item's status moves to **Sent**, with the time and Gmail's message id.
-5. TheVault imports the sent copy from Gmail as an email note and links it to the item as its sent copy. The `google_gmail` sync also links any copy that did not arrive at once, whatever labels it syncs.
+4. The item records the send, with the time and Gmail's message id.
+5. TheVault imports the sent copy from Gmail as an email note, and the item leaves the Outbox for good: the copy is the record of what was sent. The `google_gmail` sync also imports any copy that did not arrive at once, whatever labels it syncs. An item whose copy never arrives is removed 24 hours after the send.
 
 Attachments come to at most 25 MB together, Gmail's limit, and at most 16 MB each, the most a script can read. An item over either limit fails before anything is sent, and the error says which limit it hit.
 
-When a send fails, the item's status moves to **Failed** with the reason, such as Gmail's error message. Fix the item and approve it again to retry.
+When a send fails, the item's status moves to **Failed** with the reason, such as Gmail's error message, and it is listed in the Outbox's Error tab. Fix the item and select **Retry**.
 
 ### Reconnect to send
 

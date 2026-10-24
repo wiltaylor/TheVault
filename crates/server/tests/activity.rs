@@ -693,9 +693,9 @@ fn an_outbox_send_records_each_status_with_its_recipient_and_not_its_body() {
         } }),
     );
     let id = item["id"].as_str().unwrap().to_owned();
-    // The user approves it: the send handler moves it to sending in the same write.
+    // The user marks it ready: the send handler moves it to sending.
     let mut note = api.get(&format!("/api/notes/{id}"));
-    note["note"]["fields"]["status"] = json!("approved");
+    note["note"]["fields"]["status"] = json!("ready");
     api.send(
         "PUT",
         &format!("/api/notes/{id}"),
@@ -737,7 +737,7 @@ fn an_outbox_send_records_each_status_with_its_recipient_and_not_its_body() {
         got,
         [
             ("outbox.drafted", "token:admin".to_owned()),
-            ("outbox.approved", "token:admin".to_owned()),
+            ("outbox.ready", "token:admin".to_owned()),
             ("outbox.sending", "handler:outbox_send".to_owned()),
             ("outbox.sent", "handler:outbox_send".to_owned()),
         ]

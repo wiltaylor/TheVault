@@ -135,18 +135,19 @@ describe("ChatPanel", () => {
       is_error: false,
       summary: {
         notes: [{ id: "01JITEM", title: "Lunch" }],
-        draft: { note_id: "01JITEM", kind: "email", status: "review", title: "Lunch", to: ["Ann Lee"] },
+        draft: { note_id: "01JITEM", kind: "email", status: "draft", title: "Lunch", to: ["Ann Lee"] },
       },
     });
     const card = await m.findByRole("group", { name: "Outbox draft" });
-    expect(card).toHaveTextContent("Drafted an email to Ann Lee for review");
-    expect(within(card).getByRole("link", { name: "Review it in the Outbox" })).toHaveAttribute("href", "/outbox?item=01JITEM");
+    expect(card).toHaveTextContent("Drafted an email to Ann Lee");
+    expect(card).not.toHaveTextContent("for review");
+    expect(within(card).getByRole("link", { name: "Open it in the Outbox" })).toHaveAttribute("href", "/outbox?item=01JITEM");
     // An agent that sends without review says so; a failed draft stays a step.
     emit("tool", { id: "d2", name: "draft_sms", input: {} });
     emit("tool_result", {
       id: "d2",
       is_error: false,
-      summary: { notes: [], draft: { note_id: "01JSMS", kind: "sms", status: "approved", title: "SMS to Bob", to: ["Bob"] } },
+      summary: { notes: [], draft: { note_id: "01JSMS", kind: "sms", status: "ready", title: "SMS to Bob", to: ["Bob"] } },
     });
     await waitFor(() => expect(m.getAllByRole("group", { name: "Outbox draft" })).toHaveLength(2));
     expect(m.getAllByRole("group", { name: "Outbox draft" })[1]).toHaveTextContent("Drafted an SMS to Bob, sending without review");

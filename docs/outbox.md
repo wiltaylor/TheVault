@@ -1,40 +1,49 @@
 # The Outbox
 
-The Outbox holds the emails, SMS messages and calendar invites that TheVault sends for you. Each one is an Outbox item, a note of the built-in `outbox` type. What an agent drafts waits in the Outbox until you approve it. What you write yourself is sent when you select **Ready**.
+The Outbox holds the emails, SMS messages and calendar invites that TheVault is about to send for you. Each one is an Outbox item, a note of the built-in `outbox` type. An item is a draft until you select **Ready**, whether you wrote it or an agent drafted it. Once it is sent, it leaves the Outbox: what was sent is kept as a regular email, message or event note.
 
-Open it from **Outbox** in the side menu, under **Inbox**. The number beside it counts the items waiting for your review. The desktop and Android apps show the same page. Everything you do there writes the item's note, which syncs to the home server, and the home server does the sending.
+Open it from **Outbox** in the side menu, under **Inbox**. The number beside it counts the drafts agents made, which wait for you. The desktop and Android apps show the same page. Everything you do there writes the item's note, which syncs to the home server, and the home server does the sending.
+
+## Statuses
+
+An item has one of four statuses:
+
+| Status | Meaning |
+|---|---|
+| `draft` | Not sent. It waits for you to select **Ready**. |
+| `ready` | You selected **Ready**. The home server sends it next. |
+| `sending` | The home server is sending it, or it was sent and TheVault waits for the sent copy. |
+| `failed` | The send failed. The item shows the reason. |
+
+There is no sent status. When a send succeeds and the sent copy is in the vault, TheVault removes the item for good: it is not moved to the trash, and its history is removed with it. The sent copy is the record of what was sent, and the Log keeps an `outbox.sent` entry with the kind and the recipients. An item whose copy does not come back within 24 hours of the send is removed anyway.
 
 ## The page
 
-The page has a tab for each stage of an item:
+The page has three tabs:
 
 | Tab | What it lists |
 |---|---|
-| **Review** | Items an agent drafted, waiting for you to approve or reject them. |
-| **Drafts** | Items you started and have not sent. |
-| **Sending** | Approved items that the server is sending. An SMS item shows **Waiting for phone** while the phone has not yet sent it. |
-| **Sent** | Items that were sent, with a **Sent copy** link once the copy comes back. |
-| **Failed** | Items whose send failed, with the reason. |
-| **Rejected** | Items you rejected. |
+| **Draft** | Items not sent yet: the ones you started and the ones agents drafted. |
+| **Ready** | Items marked ready and items being sent. An SMS item shows **Waiting for phone** while the phone has not sent it yet. |
+| **Error** | Items whose send failed, with the reason. |
 
-Each item shows a preview of what will be sent and who drafted it:
+Each item shows a preview of what will be sent:
 
 - An email shows To, Cc, Bcc, Subject, the email it replies to, the body and the attachments.
 - An SMS shows the text as a bubble, with the number and the phone that sends it.
 - A calendar invite shows each field it sets. For a change to an existing event, each field shows its value now beside the new value.
 
+Beside the item's kind, a small chip shows its status. An item an agent drafted has a second chip, **AI**. Point at it to see which agent drafted the item. The items you drafted have no second chip.
+
 The actions depend on the item's status:
 
 | Status | Actions |
 |---|---|
-| Review | **Approve and send**, **Edit**, **Reject** |
 | Draft | **Ready**, **Edit**, **Delete** |
-| Failed | **Retry**, **Edit** |
-| Rejected | **Edit**, **Delete** |
+| Ready, sending | None |
+| Failed | **Retry**, **Edit**, **Delete** |
 
-**Edit** opens the item's note, where you can change any field before you send it. **Delete** moves the item to the trash. **Approve all**, at the top of the Review tab, approves every item in Review after you confirm. The confirm says how many items it sends.
-
-**Ready** takes a draft out of Drafts and sends it. The Ready, Approve and send, Reject and Retry buttons are also on the item's own note page.
+**Ready** sends the draft. **Retry** sends a failed item again. **Edit** opens the item's note, where you can change any field before you send it. **Delete** moves the item to the trash, where you can restore it. To reject a draft an agent made, delete it.
 
 ## The item's page
 
@@ -44,11 +53,11 @@ An item's note page is one form for its kind, with no tabs:
 - An SMS shows the number and the phone that sends it, then the text.
 - A calendar invite shows the event it changes, When, location, calendar and attendees, then the description.
 
-The status is shown at the top and cannot be chosen from a list. The buttons beside the save status move the item: **Ready** on a draft, **Approve and send** and **Reject** on an item in Review, **Retry** on a failed one. Who drafted the item shows below the form, with when it was sent, its sent copy and the reason it failed once it has them.
+The status is shown at the top as a chip, with the **AI** chip beside it for an agent's draft, and cannot be chosen from a list. The buttons beside the save status act on the item: **Ready** and **Delete** on a draft, **Retry** and **Delete** on a failed item. The reason a send failed shows below the form.
 
 ## Writing an item
 
-Select **New email**, **New SMS** or **New event** on the Outbox page. TheVault creates a draft and opens it. Fill in the fields, then select **Ready** on the note page or in the Drafts tab.
+Select **New email**, **New SMS** or **New event** on the Outbox page. TheVault creates a draft and opens it. Fill in the fields, then select **Ready** on the note page or in the Draft tab.
 
 On an email note:
 
@@ -59,7 +68,7 @@ On an email note:
 On an SMS message note:
 
 - **Reply** starts an SMS draft to the other person: the sender of a message you received, the recipient of one you sent. When the phone gave a name rather than a number, the number comes from the person's note, their mobile number first.
-- **Reply all** shows in a conversation with several people. The phone cannot send a group message, so it starts one SMS draft for each other number and opens the Drafts tab.
+- **Reply all** shows in a conversation with several people. The phone cannot send a group message, so it starts one SMS draft for each other number and opens the Draft tab.
 - **Forward** starts an SMS draft with no number and the text `Fwd:` and the message.
 
 Each of these creates a draft and opens it, and the device is left empty, so the vault's Android phone sends it.
@@ -68,33 +77,33 @@ Each of these creates a draft and opens it, and the device is left empty, so the
 
 Your direct edits of an event note do not go through the Outbox. They write back to Google Calendar at once, as before, without emailing the attendees.
 
-## Who may approve
+## Who may send
 
 The writer checks every change to an Outbox item by who makes it:
 
-- You may make any change, such as sending a draft, approving or rejecting an item in Review, or retrying a failed one.
-- An agent creates items in Review. It may change only the draft and Review items it drafted, and it never approves, sends or rejects one. Turning off an agent's note confirmations does not change this.
-- The send handler and the sync tasks only move an approved item through Sending to Sent or Failed.
+- You may make any change, such as marking a draft ready or retrying a failed item.
+- An agent creates items as drafts. It may change only the drafts it made, and they stay drafts: it never marks an item ready. Turning off an agent's note confirmations does not change this.
+- The send handler and the sync tasks only move a ready item to sending and then to failed, and remove an item once it was sent.
 
-The exception is an agent whose **Send from the Outbox without review** permission is on: its items are approved as they are created, so they are sent without your review. The permission is off for every agent until you turn it on, on the agent screen's Permissions tab. An agent cannot give another agent this permission unless it has it itself. `docs/ai-agents.md` describes the agent tools that draft items, and `docs/vault-format.md`, "The Outbox", gives the full rules.
+The exception is an agent whose **Send from the Outbox without review** permission is on: its items are created ready, so they are sent without waiting for you. The permission is off for every agent until you turn it on, on the agent screen's Permissions tab. An agent cannot give another agent this permission unless it has it itself. `docs/ai-agents.md` describes the agent tools that draft items, and `docs/vault-format.md`, "The Outbox", gives the full rules.
 
 ## How each kind is sent
 
-The home server sends an item when it becomes approved. The embedded servers in the apps never send: an item approved in an app is sent once the approval syncs to the home server.
+The home server sends an item when it becomes ready. The embedded servers in the apps never send: an item marked ready in an app is sent once the change syncs to the home server.
 
 ### Email
 
 Email goes through Gmail, as the Google account connected in **Settings > Integrations**. TheVault needs Google's `gmail.send` permission for this. A connection made before TheVault could send lacks it: the Google card then says **Reconnect Google in Settings > Integrations to send email.**, and email items fail with that message until you connect again.
 
-Once Gmail has sent the email, TheVault imports Gmail's sent copy as an email note and links it as the item's sent copy. `docs/google.md`, "Sending email from the Outbox", gives the details and the size limits.
+Once Gmail has sent the email, TheVault imports Gmail's sent copy as an email note and removes the item. When the copy cannot be fetched at once, the next Gmail sync imports it. `docs/google.md`, "Sending email from the Outbox", gives the details and the size limits.
 
 ### Calendar invites
 
-A calendar invite goes through Google Calendar. TheVault creates the event note, or changes the event the item names, and Google Calendar emails the attendees. The event note is the item's sent copy.
+A calendar invite goes through Google Calendar. TheVault creates the event note, or changes the event the item names, and Google Calendar emails the attendees. The event note is the sent copy.
 
 - A new event takes the item's title, **When**, location, attendees, calendar and description. It needs a title and a time. An empty calendar means the default calendar of the Google settings.
 - A change sets each field the item holds on the event and leaves the rest as they are. It cannot move an event to another calendar.
-- The item is **Sent** once Google Calendar has taken the event, with Google's event id. When Google refuses it, the item is **Failed** with Google's message. **Retry** sends it again, and a new event that failed reuses the event note the first try made.
+- The item is removed once Google Calendar has taken the event. When Google refuses it, the item is **Failed** with Google's message. **Retry** sends it again, and a new event that failed reuses the event note the first try made.
 - When the change asks for nothing the event does not already hold, nothing is sent and the item fails and says so.
 
 Only a write from the Outbox emails the attendees. Your direct edits of an event note write back without emailing anyone.
@@ -105,14 +114,19 @@ An SMS is sent by your Android phone. The phone must be paired with the vault, a
 
 The server queues a `send_sms` command for the phone, and the item shows **Waiting for phone** until the phone takes it and sends the message. An SMS carries text only: the body's paragraphs, one per line, without formatting.
 
-- The phone waits up to 60 seconds for Android to say whether the message went. When it went, the item is **Sent**, and its sent reference becomes the phone's id of the sent message (`sms:<id>`).
+- The phone waits up to 60 seconds for Android to say whether the message went. When it went, the item records the send, and its sent reference becomes the phone's id of the sent message (`sms:<id>`).
 - When Android reports an error, such as no service, the item is **Failed** with Android's result code. When Android says nothing within 60 seconds, the item is **Failed** too, because the phone cannot tell whether the message went. Check the phone's messages before you select **Retry**.
-- The phone's record of the sent message comes back as a message note, linked as the item's sent copy. The link is made by the phone's id of the message. An older app that does not report the id still marks the item **Sent**. Its copy is linked by number and text, to an outgoing SMS sent within 10 minutes of the item.
+- The phone's record of the sent message comes back as a message note, and the item is then removed. The copy is found by the phone's id of the message. An older app that does not report the id still records the send; its copy is found by number and text, an outgoing SMS sent within 10 minutes of the item.
+- When the copy never comes back, the item stays **Sending** and is removed 24 hours after the send.
 - A command the phone never takes expires after a day, and the item stays **Sending**. Open the phone app so that it checks for commands.
 
 ## Notifications
 
 The bell tells you when the Outbox needs you:
 
-- When an agent drafts items into Review, you get one notification for its turn or run, such as **Clerk drafted 3 items for review**. It opens the Outbox. Items drafted later in the same turn raise the count in place while the notification is unread.
+- When an agent drafts items, you get one notification for its turn or run, such as **Clerk drafted 3 items**. It opens the Draft tab. Items drafted later in the same turn raise the count in place while the notification is unread.
 - When a send fails, you get **Could not send** and the item's title, with the reason. It opens the item.
+
+## Upgrading a vault
+
+A vault from before these four statuses is moved to them once, by upgrade step `0009_outbox_statuses`, when the server starts: an item in Review becomes a draft, an approved one becomes ready, a rejected one moves to the trash, and a sent one is removed, since its copy is already in the vault. Drafts, items being sent and failed items stay as they are. A vault whose `outbox` type has status options you changed is left alone.

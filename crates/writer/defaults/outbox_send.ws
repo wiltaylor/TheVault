@@ -4,31 +4,38 @@ use secrets
 use json
 use regex
 
-// Sends the Outbox's approved items (outbox X3, X4). The `outbox` type runs this after every
-// create and update of one of its notes, on the home server only: an approval made in an app
+// Sends the Outbox's ready items (outbox X3, X4, X14). The `outbox` type runs this after every
+// create and update of one of its notes, on the home server only: an item marked ready in an app
 // syncs to the server, whose handler sends it.
 //
-// A run acts only on an item that is `approved` now. It claims the item by setting it `sending`
-// against the version it read, so a second run for the same approval finds it changed and stops.
-// Then it sends the item by its `kind`:
+// A run acts on an item that is `ready` now. It claims the item by setting it `sending` against
+// the version it read, so a second run for the same item finds it changed and stops. Then it
+// sends the item by its `kind`:
 //
 // - `email`: through Gmail (`send_email`). Gmail's answer is recorded at once: `sent_ref` (the
-//   Gmail message id), `sent_at` and `status = sent`. The `google_gmail` script's `copy_sent`
-//   handler then imports the sent copy as an `email` note and links it as `result`.
+//   Gmail message id) and `sent_at`. The `google_gmail` script's `copy_sent` handler then imports
+//   the sent copy as an `email` note and links it as `result`.
 // - `event`: a calendar invite or change (`send_event`, outbox X5), written into the event note
 //   with `send_updates = "all"`. The event's write-back sends it to Google, which emails the
-//   attendees, and marks the item `sent` or `failed`.
+//   attendees, and records the send or marks the item `failed`.
 // - `sms`: through the phone (`send_sms`, outbox X6).
 //
 // Each kind's function answers a `Sent`: `done` when the item was sent and its `sent_ref` is
 // final, or not `done` when another part of the vault finishes it later (the calendar write-back
 // for an event, the device command's result for an SMS), with any `sent_ref` known so far. An
-// `Err` sets the item `failed` with the message in `error`; the user retries by approving it
+// `Err` sets the item `failed` with the message in `error`; the user retries by marking it ready
 // again.
 //
+// A sent item leaves the Outbox (outbox X14): its copy is a regular email, message or event. A
+// run for an item that is `sending` with `sent_at` (the send happened) and `result` (the copy
+// is linked) removes it for good with `vault::delete`, which for a handler purges it from the
+// trash and its history too. So whichever part of the vault links the copy, the Gmail sync, the
+// calendar write-back or the phone's capture syncing in, the item goes. One whose copy never
+// comes is removed by the server's sweep 24 hours after the send.
+//
 // The run's own writes are authored `handler outbox_send`, which the writer allows to move an
-// item from approved to sending and from sending to sent or failed, and to write `sent_ref`,
-// `result`, `error` and `sent_at` (outbox X2).
+// item from ready to sending and from sending to failed, to write `sent_ref`, `result`, `error`
+// and `sent_at`, and to remove a sending item (outbox X2).
 
 // ---- limits ---------------------------------------------------------------------------------
 
@@ -160,7 +167,11 @@ fn after_update(note: Value) -> Result[(), string] {
 }
 
 fn handle(note: Value) -> Result[(), string] {
-    if text_of(fields_of(note), "status") != "approved" {
+    let status = text_of(fields_of(note), "status")
+    if status == "sending" {
+        return settle(text_of(note, "id"))
+    }
+    if status != "ready" {
         return Ok(())
     }
     let id = text_of(note, "id")
@@ -169,7 +180,7 @@ fn handle(note: Value) -> Result[(), string] {
         Err(_) => return Ok(()),
     }
     let fields = fields_of(item)
-    if text_of(fields, "status") != "approved" {
+    if text_of(fields, "status") != "ready" {
         return Ok(())
     }
     // Claim the item against the version read, so it is sent once.
@@ -201,6 +212,24 @@ fn handle(note: Value) -> Result[(), string] {
     }
 }
 
+// Remove item `id` once it was sent and its copy is linked (outbox X14). An item already gone,
+// or changed since it was read, is left: a later run, or the sweep, removes it.
+fn settle(id: string) -> Result[(), string] {
+    let item = match vault::get(id) {
+        Ok(n) => n,
+        Err(_) => return Ok(()),
+    }
+    let fields = fields_of(item)
+    if text_of(fields, "status") != "sending" || text_of(fields, "sent_at") == "" || text_of(fields, "result") == "" {
+        return Ok(())
+    }
+    match vault::delete(id, text_of(item, "version")) {
+        Ok(_) => vault::log("Item " + id + " was sent, and its copy is " + text_of(fields, "result") + ", so it leaves the Outbox."),
+        Err(e) => vault::log("Item " + id + " was not removed yet: " + e),
+    }
+    Ok(())
+}
+
 // Record what the kind's function answered.
 fn record_sent(id: string, sent: Sent) -> Result[(), string] {
     let f: Map[string, Value] = #{}
@@ -208,7 +237,6 @@ fn record_sent(id: string, sent: Sent) -> Result[(), string] {
         f["sent_ref"] = Value::String(sent.sent_ref)
     }
     if sent.done {
-        f["status"] = Value::String("sent")
         f["sent_at"] = Value::String(rfc3339(vault::now()))
     }
     if sent.result != "" {
@@ -225,8 +253,9 @@ fn record_sent(id: string, sent: Sent) -> Result[(), string] {
 
 // A calendar invite or change: write the event note, authored by this handler, with the event's
 // one-shot `send_updates = "all"`. The `event` type's write-back (`google_event.ws`) then sends
-// it to Google with sendUpdates=all, so Google emails the attendees, and sets this item `sent`,
-// with the Google event id as `sent_ref`, or `failed` with Google's message. So the answer is
+// it to Google with sendUpdates=all, so Google emails the attendees, and records the send on this
+// item, with the Google event id as `sent_ref`, so it leaves the Outbox, or sets it `failed` with
+// Google's message. So the answer is
 // not `done`, and its `result` is the event note.
 //
 // A new event (no `event`) is created from the item's title, `when`, `location`,
@@ -344,9 +373,9 @@ fn description_block(blocks: List[Value]) -> Value {
 
 // An SMS: queue `send_sms` for the item's device (empty for the vault's one phone with SMS
 // sending on) with `{ to, body, outbox }`, recording the command id as `sent_ref` with
-// `done = false`. The phone's result for the command marks the item sent, with the phone's id of
-// the sent message, or failed (the command result route); the phone's capture of the sent message
-// links the copy as `result`. A device whose SMS sending switch is off refuses the command, and
+// `done = false`. The phone's result for the command records the send, with the phone's id of the
+// sent message, or marks the item failed (the command result route); the phone's capture of the
+// sent message links the copy as `result`, and the item then leaves the Outbox. A device whose SMS sending switch is off refuses the command, and
 // the item fails with that.
 fn send_sms(item: Value) -> Result[Sent, string] {
     let fields = fields_of(item)

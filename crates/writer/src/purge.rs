@@ -8,7 +8,11 @@
 
 use std::collections::BTreeSet;
 
-use state::TrashEntry;
+use state::{Author, TrashEntry};
+
+/// Who empties the trash: only the signed-in user purges (ai D21).
+static OWNER: std::sync::LazyLock<Author> =
+    std::sync::LazyLock::new(|| Author::Session("owner".to_owned()));
 
 use crate::asset_use::ulids_in;
 use crate::{Asset, Error, Result, Writer};
@@ -27,7 +31,7 @@ impl Writer {
     pub fn empty_trash(&self) -> Result<Purged> {
         let _w = self.write_lock();
         let entries = self.state.list_trash()?;
-        self.purge_locked(entries)
+        self.purge_locked(entries, &OWNER)
     }
 
     /// Purge note `id` from the trash for good. A note not in the trash is
@@ -38,10 +42,12 @@ impl Writer {
             .state
             .trash_entry(id)?
             .ok_or_else(|| Error::NotInTrash(id.to_owned()))?;
-        self.purge_locked(vec![entry])
+        self.purge_locked(vec![entry], &OWNER)
     }
 
-    fn purge_locked(&self, entries: Vec<TrashEntry>) -> Result<Purged> {
+    /// Purge `entries` for good, recorded as `author`: the signed-in user emptying the trash, or
+    /// the server removing a sent Outbox item (outbox X14). The caller holds the write lock.
+    pub(crate) fn purge_locked(&self, entries: Vec<TrashEntry>, author: &Author) -> Result<Purged> {
         let mut named = BTreeSet::new();
         let mut notes = Vec::with_capacity(entries.len());
         for e in entries {
@@ -49,7 +55,6 @@ impl Writer {
                 continue;
             }
             self.state.unpin(&e.note_id)?;
-            // Only the signed-in user purges (ai D21).
             let title = crate::Input::Wcl(e.content.clone())
                 .parse(&crate::note_path(&e.note_type, &e.note_id))
                 .ok()
@@ -59,7 +64,7 @@ impl Writer {
                         .map(str::to_owned)
                 });
             self.record_note(
-                &state::Author::Session("owner".to_owned()),
+                author,
                 crate::activity::NoteAct::Purge,
                 &e.note_id,
                 &e.note_type,

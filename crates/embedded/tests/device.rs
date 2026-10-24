@@ -1778,10 +1778,10 @@ fn message_id(d: &Device, device_ref: &str) -> String {
 #[test]
 fn a_sent_sms_is_linked_as_the_copy_of_the_outbox_item_with_its_device_ref() {
     let d = Device::open();
-    // The home server marked the item sent with the phone's id of the message.
+    // The home server recorded the send with the phone's id of the message.
     let item = outbox_sms(
         &d,
-        json!({ "title": "SMS to Ann", "kind": "sms", "status": "sent", "phone": "+61400000002", "sent_ref": "sms:900" }),
+        json!({ "title": "SMS to Ann", "kind": "sms", "status": "sending", "phone": "+61400000002", "sent_ref": "sms:900", "sent_at": "2026-10-19T22:30:00Z" }),
         "Bins out",
     );
     d.send(
@@ -1796,7 +1796,8 @@ fn a_sent_sms_is_linked_as_the_copy_of_the_outbox_item_with_its_device_ref() {
     let copy = message_id(&d, "sms:900");
     let f = d.fields(&item);
     assert_eq!(f["result"], copy.as_str(), "{f}");
-    assert_eq!(f["status"], "sent");
+    // Linked and nothing else: the home server removes the item once the link syncs to it.
+    assert_eq!(f["status"], "sending");
     assert_eq!(f["sent_ref"], "sms:900");
 }
 
@@ -1852,7 +1853,7 @@ fn a_sent_sms_is_linked_by_number_text_and_time_while_its_item_waits_for_the_pho
     let copy = message_id(&d, "sms:3");
     let f = d.fields(&ann);
     assert_eq!(f["result"], copy.as_str(), "{f}");
-    // The handler links the copy and nothing else: the home server marks the item sent.
+    // The handler links the copy and nothing else: the home server removes the item.
     assert_eq!(f["status"], "sending");
     assert_eq!(f["sent_ref"], "01CMDANN");
     assert!(d.fields(&bob).get("result").is_none());

@@ -1,6 +1,6 @@
 label       = "Outbox item"
 plural      = "Outbox"
-description = "An email, SMS or calendar invite waiting to be sent. What an agent drafts waits in Review until you approve it."
+description = "An email, SMS or calendar invite waiting to be sent. What an agent drafts waits in Draft until you mark it Ready. Once sent, the item leaves the Outbox and its copy is a regular email, message or event."
 icon        = "send"
 colour      = "orange"
 
@@ -14,7 +14,7 @@ field kind {
 field status {
   kind    = "select"
   label   = "Status"
-  options = ["draft", "review", "approved", "sending", "sent", "failed", "rejected"]
+  options = ["draft", "ready", "sending", "failed"]
   default = "draft"
 }
 
@@ -216,7 +216,6 @@ template default {
     }
     columns {
       column {
-        slot "drafted_by"
         slot "sent_at" {
           when = "!empty(sent_at)"
         }
@@ -238,7 +237,6 @@ template card {
     slot "title"
     slot "kind"
     slot "status"
-    slot "drafted_by"
   }
 }
 

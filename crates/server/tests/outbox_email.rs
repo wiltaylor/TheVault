@@ -1,6 +1,6 @@
-//! S1 with the fake Google server: the shipped `outbox` type's `outbox_send` handler sending an
-//! approved email item through Gmail, and the sent copy coming back as an `email` note linked as
-//! the item's `result` (outbox X2, X3, X4).
+//! S1 with the fake Google server: the shipped `outbox` type's `outbox_send` handler sending a
+//! ready email item through Gmail, and the sent copy coming back as a regular `email` note, after
+//! which the item leaves the Outbox for good (outbox X2, X3, X4, X14).
 
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
@@ -138,6 +138,42 @@ impl Api {
         self.note(id)["note"]["fields"].clone()
     }
 
+    /// Whether note `id` is gone for good: not in the vault and not in the trash.
+    fn gone(&self, id: &str) -> bool {
+        let status = self
+            .req("GET", &format!("/api/notes/{id}"))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16();
+        let trash = expect(self.req("GET", "/api/trash").send().unwrap(), 200);
+        let trashed = trash["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == id);
+        status == 404 && !trashed
+    }
+
+    /// The Outbox activity entries of item `id`, oldest first, as their kinds.
+    fn outbox_activity(&self, id: &str) -> Vec<String> {
+        let page = expect(
+            self.req("GET", "/api/activity?category=outbox&limit=200")
+                .send()
+                .unwrap(),
+            200,
+        );
+        let mut kinds: Vec<String> = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["subject"] == id)
+            .map(|e| e["kind"].as_str().unwrap().to_owned())
+            .collect();
+        kinds.reverse();
+        kinds
+    }
+
     /// Change fields of note `id` as the user would.
     fn edit(&self, id: &str, changes: Value) {
         let mut note = self.note(id);
@@ -200,12 +236,12 @@ fn paragraph(text: &str) -> Value {
     json!({ "kind": "paragraph", "fields": { "text": text } })
 }
 
-/// An email item, approved by the user so it sends at once, with `extra` fields.
+/// An email item, marked ready by the user so it sends at once, with `extra` fields.
 fn email(extra: Value, body: Vec<Value>) -> Value {
     let mut fields = json!({
         "title": "Lunch",
         "kind": "email",
-        "status": "approved",
+        "status": "ready",
         "to": ["Ann Example <ann@example.com>"],
         "subject": "Lunch on Friday?",
     });
@@ -223,7 +259,7 @@ fn bytes(n: usize, seed: u8) -> Vec<u8> {
 }
 
 #[test]
-fn an_approved_email_goes_out_as_rfc822_and_its_copy_comes_back_linked() {
+fn a_ready_email_goes_out_as_rfc822_and_leaves_the_outbox_once_its_copy_comes_back() {
     let api = Api::start();
     let pdf = bytes(3000, 7);
     let asset = api.upload("menu.pdf", pdf.clone());
@@ -286,24 +322,25 @@ fn an_approved_email_goes_out_as_rfc822_and_its_copy_comes_back_linked() {
     // Every line of the message is short, as MIME needs.
     assert!(sent.raw.split("\r\n").all(|l| l.len() <= 998));
 
-    let f = api.fields(&id);
-    assert_eq!(f["status"], "sent", "{f}");
-    assert_eq!(f["sent_ref"], sent.id.as_str());
-    assert!(f["sent_at"].as_str().unwrap().ends_with('Z'), "{f}");
-    assert!(f.get("error").is_none_or(Value::is_null), "{f}");
-    // The copy is imported at once and linked.
+    // The copy is imported at once, and the item, sent, leaves the Outbox for good: the copy is
+    // a regular email note.
     let copies = api.copies(&sent.id);
     assert_eq!(copies.len(), 1, "{copies:#?}");
-    assert_eq!(f["result"], copies[0]["id"]);
     let copy = api.fields(copies[0]["id"].as_str().unwrap());
     assert_eq!(copy["title"], "Lunch on Friday?");
     assert_eq!(copy["from_raw"], DEFAULT_ACCOUNT);
     assert_eq!(copy["labels"], json!(["system/SENT"]));
+    assert!(api.gone(&id));
+    assert!(api.query("from outbox include archived").is_empty());
+    // The log keeps the send.
+    assert_eq!(
+        api.outbox_activity(&id),
+        ["outbox.ready", "outbox.sending", "outbox.sent"]
+    );
 
     // The Gmail task, whose labels do not include SENT, finds nothing more to import.
     api.run_gmail();
     assert_eq!(api.copies(&sent.id).len(), 1);
-    assert_eq!(api.fields(&id)["result"], copies[0]["id"]);
     assert_eq!(api.google.sent_messages().len(), 1);
 }
 
@@ -375,8 +412,12 @@ fn headers_that_are_not_ascii_go_as_encoded_words() {
     assert!(sent.raw.is_ascii());
     assert_eq!(sent.text.as_deref(), Some("Ça va ?\r\n"));
     // The copy decodes them again.
-    let result = api.fields(&id)["result"].as_str().unwrap().to_owned();
-    assert_eq!(api.fields(&result)["title"], "Café at 1?");
+    let copies = api.copies(&sent.id);
+    assert_eq!(
+        api.fields(copies[0]["id"].as_str().unwrap())["title"],
+        "Café at 1?"
+    );
+    assert!(api.gone(&id));
 }
 
 #[test]
@@ -410,7 +451,7 @@ fn a_message_over_4_5_mb_goes_through_the_upload_endpoint() {
         sent.attachments,
         [("scan.png".to_owned(), "image/png".to_owned(), big)]
     );
-    assert_eq!(api.fields(&id)["status"], "sent");
+    assert!(api.gone(&id));
 }
 
 #[test]
@@ -430,10 +471,10 @@ fn attachments_over_25_mb_are_refused_before_sending() {
     assert!(error.contains("over the 25 MB Gmail sends"), "{error}");
     assert!(api.google.sent_messages().is_empty());
 
-    // The user removes one and retries: failed -> approved.
-    api.edit(&id, json!({ "attachments": [a], "status": "approved" }));
+    // The user removes one and retries: failed -> ready.
+    api.edit(&id, json!({ "attachments": [a], "status": "ready" }));
     api.settle();
-    assert_eq!(api.fields(&id)["status"], "sent");
+    assert!(api.gone(&id));
     assert_eq!(api.sent().attachments.len(), 1);
 }
 
@@ -478,30 +519,25 @@ fn a_gmail_error_fails_the_item_with_its_message() {
     );
     assert!(f.get("sent_ref").is_none_or(Value::is_null), "{f}");
 
+    // A failed item stays in the Outbox, with its error, until the user retries it.
+    assert_eq!(api.outbox_activity(&id).last().unwrap(), "outbox.failed");
     api.google.set_send_error(None);
-    api.edit(&id, json!({ "status": "approved" }));
+    api.edit(&id, json!({ "status": "ready" }));
     api.settle();
-    let f = api.fields(&id);
-    assert_eq!(f["status"], "sent");
-    assert!(f.get("error").is_none_or(Value::is_null), "{f}");
+    assert!(api.gone(&id));
 }
 
 #[test]
-fn an_item_without_recipients_fails_and_a_draft_or_review_item_is_not_sent() {
+fn an_item_without_recipients_fails_and_a_draft_is_not_sent() {
     let api = Api::start();
     let draft = api.create(
         "outbox",
         email(json!({ "status": "draft" }), vec![paragraph("Hi.")]),
     );
-    let review = api.create(
-        "outbox",
-        email(json!({ "status": "review" }), vec![paragraph("Hi.")]),
-    );
-    api.edit(&review, json!({ "subject": "Lunch, Friday?" }));
+    api.edit(&draft, json!({ "subject": "Lunch, Friday?" }));
     api.settle();
     assert!(api.google.sent_messages().is_empty());
     assert_eq!(api.fields(&draft)["status"], "draft");
-    assert_eq!(api.fields(&review)["status"], "review");
 
     let none = api.create("outbox", email(json!({ "to": [] }), vec![paragraph("Hi.")]));
     api.settle();
@@ -524,21 +560,23 @@ fn the_gmail_task_imports_a_sent_copy_once_whatever_the_label_settings() {
         "subject": "Sent earlier",
         "text": "Sent while the copy could not be fetched.",
     }));
-    // An item sent before its copy arrived: the user records it as sent, which runs no copy.
+    // An item sent before its copy arrived: the user records the send, which runs no copy.
     let id = api.create(
         "outbox",
         json!({ "fields": {
-            "title": "Sent earlier", "kind": "email", "status": "sent", "sent_ref": copy,
-            "to": ["ann@example.com"],
+            "title": "Sent earlier", "kind": "email", "status": "sending", "sent_ref": copy,
+            "sent_at": "2026-10-23T10:00:00Z", "to": ["ann@example.com"],
         } }),
     );
     api.settle();
     assert!(api.copies(&copy).is_empty());
+    assert_eq!(api.fields(&id)["status"], "sending");
 
     api.run_gmail();
     let copies = api.copies(&copy);
     assert_eq!(copies.len(), 1, "{copies:#?}");
-    assert_eq!(api.fields(&id)["result"], copies[0]["id"]);
+    // Linked, the item leaves the Outbox.
+    assert!(api.gone(&id));
     api.run_gmail();
     assert_eq!(api.copies(&copy).len(), 1);
     // The label settings are untouched: INBOX mail only.

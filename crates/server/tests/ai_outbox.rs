@@ -1,8 +1,8 @@
 //! S1 with the fake Anthropic provider: the chat's Outbox tools (outbox X9, X11). `draft_email`,
-//! `draft_sms` and `draft_event` create Outbox items as the agent, in Review, or approved only
+//! `draft_sms` and `draft_event` create Outbox items as the agent, as drafts, or ready only
 //! for an agent with `send_without_review`; a person note id resolves to the person's email or
 //! phone; the tools need a caller with `write`; they are ordinary tool names in an agent's tools
-//! list and are offered to unattended runs; the agent cannot then approve its own item, even
+//! list and are offered to unattended runs; the agent cannot then make its own item ready, even
 //! with note confirmation off; and an agent cannot give another agent the bypass it lacks.
 
 use std::io::{BufRead, BufReader};
@@ -273,7 +273,7 @@ fn email_input(to: Value) -> Value {
 }
 
 #[test]
-fn the_draft_tools_create_items_for_review_resolving_people() {
+fn the_draft_tools_create_drafts_resolving_people() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     let ann = api.note(
@@ -288,7 +288,7 @@ fn the_draft_tools_create_items_for_review_resolving_people() {
         assert!(tools.contains(&t.to_owned()), "{t}: {tools:?}");
     }
     let r = last_result(&fake, false);
-    assert_eq!(r["status"], "review", "{r}");
+    assert_eq!(r["status"], "draft", "{r}");
     assert!(
         r["message"].as_str().unwrap().contains("has not been sent"),
         "{r}"
@@ -296,7 +296,7 @@ fn the_draft_tools_create_items_for_review_resolving_people() {
     let id = r["id"].as_str().unwrap();
     let f = api.fields(id);
     assert_eq!(f["kind"], "email");
-    assert_eq!(f["status"], "review");
+    assert_eq!(f["status"], "draft");
     assert_eq!(f["drafted_by"], "assistant");
     assert_eq!(f["to"], json!(["ann@example.com"]));
     assert_eq!(f["title"], "Lunch on Friday?");
@@ -307,7 +307,7 @@ fn the_draft_tools_create_items_for_review_resolving_people() {
     let summary = &last(&events, "tool_result")["summary"];
     assert_eq!(summary["draft"]["note_id"], id, "{summary}");
     assert_eq!(summary["draft"]["kind"], "email");
-    assert_eq!(summary["draft"]["status"], "review");
+    assert_eq!(summary["draft"]["status"], "draft");
     assert_eq!(summary["draft"]["to"], json!(["Ann Lee"]));
 
     // An SMS to a person goes to their first phone number.
@@ -320,7 +320,7 @@ fn the_draft_tools_create_items_for_review_resolving_people() {
     let r = last_result(&fake, false);
     let f = api.fields(r["id"].as_str().unwrap());
     assert_eq!(f["kind"], "sms");
-    assert_eq!(f["status"], "review");
+    assert_eq!(f["status"], "draft");
     assert_eq!(f["phone"], "+61 400 000 001");
     assert_eq!(f["title"], "SMS to Ann Lee");
 
@@ -338,7 +338,7 @@ fn the_draft_tools_create_items_for_review_resolving_people() {
     let r = last_result(&fake, false);
     let f = api.fields(r["id"].as_str().unwrap());
     assert_eq!(f["kind"], "event");
-    assert_eq!(f["status"], "review");
+    assert_eq!(f["status"], "draft");
     assert_eq!(f["title"], "Planning");
     assert_eq!(
         f["attendees_raw"],
@@ -404,7 +404,7 @@ fn only_an_agent_with_send_without_review_drafts_approved_items() {
         email_input(json!(["ann@example.com"])),
     );
     let r = last_result(&fake, false);
-    assert_eq!(r["status"], "review");
+    assert_eq!(r["status"], "draft");
     assert_eq!(api.fields(r["id"].as_str().unwrap())["drafted_by"], "clerk");
 
     api.one(
@@ -414,25 +414,25 @@ fn only_an_agent_with_send_without_review_drafts_approved_items() {
         email_input(json!(["ann@example.com"])),
     );
     let r = last_result(&fake, false);
-    assert_eq!(r["status"], "approved", "{r}");
+    assert_eq!(r["status"], "ready", "{r}");
     assert!(r["message"].as_str().unwrap().contains("without review"));
-    // The send handler takes it from approved; with no Google account it fails.
+    // The send handler takes it from ready; with no Google account it fails.
     let f = api.fields(r["id"].as_str().unwrap());
     assert_eq!(f["drafted_by"], "sender");
     assert!(
-        ["approved", "sending", "failed"].contains(&f["status"].as_str().unwrap()),
+        ["ready", "sending", "failed"].contains(&f["status"].as_str().unwrap()),
         "{f}"
     );
 }
 
 #[test]
-fn an_agent_cannot_approve_its_own_draft() {
+fn an_agent_cannot_make_its_own_draft_ready() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
 
     // Clerk lets note changes go ahead without asking, so its edit is written at once, and the
-    // writer refuses the approval.
+    // writer refuses making it ready.
     api.one(
         &fake,
         Some("clerk"),
@@ -442,7 +442,7 @@ fn an_agent_cannot_approve_its_own_draft() {
     let id = last_result(&fake, false)["id"].as_str().unwrap().to_owned();
     let note = api.note_json(&id);
     let mut doc = note["note"].clone();
-    doc["fields"]["status"] = json!("approved");
+    doc["fields"]["status"] = json!("ready");
     api.one(
         &fake,
         Some("clerk"),
@@ -451,9 +451,9 @@ fn an_agent_cannot_approve_its_own_draft() {
     );
     let r = last_result(&fake, true);
     assert!(r.to_string().contains("status"), "{r}");
-    assert_eq!(api.fields(&id)["status"], "review");
+    assert_eq!(api.fields(&id)["status"], "draft");
 
-    // Assistant, run by the user with note confirmation off, cannot approve its draft either:
+    // Assistant, run by the user with note confirmation off, cannot make its draft ready either:
     // a change made without the user's Apply to an Outbox item is the agent's.
     api.send(
         "PUT",
@@ -469,7 +469,7 @@ fn an_agent_cannot_approve_its_own_draft() {
     let id = last_result(&fake, false)["id"].as_str().unwrap().to_owned();
     let note = api.note_json(&id);
     let mut doc = note["note"].clone();
-    doc["fields"]["status"] = json!("approved");
+    doc["fields"]["status"] = json!("ready");
     api.one(
         &fake,
         None,
@@ -477,7 +477,7 @@ fn an_agent_cannot_approve_its_own_draft() {
         json!({ "id": id, "base_version": note["version"], "note": doc.to_string() }),
     );
     last_result(&fake, true);
-    assert_eq!(api.fields(&id)["status"], "review");
+    assert_eq!(api.fields(&id)["status"], "draft");
 }
 
 #[test]

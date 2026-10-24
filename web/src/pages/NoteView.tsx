@@ -50,7 +50,8 @@ import { offerPlaceholders, replacePlaceholderInDoc, resolvePlaceholder } from "
 import { PlaceholdersInert } from "../components/PlaceholderLink";
 import { ArchiveIcon, TrashIcon, TypeIcon, UnarchiveIcon } from "../components/Icon";
 import { NoteOutboxActions } from "../outbox/NoteActions";
-import { OUTBOX, STATUS_TEXT, statusOf } from "../outbox/model";
+import { OutboxChips } from "../outbox/Chips";
+import { OUTBOX } from "../outbox/model";
 
 /** How long after the last change a note saves itself. */
 export const AUTOSAVE_MS = 1500;
@@ -914,6 +915,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                       setFields({ status, ...extra });
                       flush();
                     }}
+                    onDelete={() => void remove()}
                   />
                 </Show>
                 <Show when={props.newType}>
@@ -1209,16 +1211,14 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     // A field holding another field's labels is edited with that field, not on its own.
     if (t && labelFields(t).has(p.name)) return null;
     const f = t ? slotField(t, p.name) : undefined;
-    // An Outbox item's status is shown, not chosen: the note page's Outbox buttons move it (outbox X13).
+    // An Outbox item's status is shown, not chosen: the note page's Outbox buttons move it (outbox
+    // X13). Beside it, "AI" when an agent drafted the item (outbox X14).
     if (t?.name === OUTBOX && p.name === "status") {
-      const status = () => statusOf(shown().fields);
       return (
         <Show when={slotShows(p.when)}>
           <div class="field property outbox-status-field" data-field="status" data-testid="field-status">
             <span class="field-label">{p.label ?? f?.label ?? "Status"}</span>
-            <span class="badge outbox-status" data-status={status()}>
-              {STATUS_TEXT[status()] ?? status()}
-            </span>
+            <OutboxChips fields={shown().fields} />
           </div>
         </Show>
       );

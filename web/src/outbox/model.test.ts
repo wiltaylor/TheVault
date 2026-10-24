@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NoteDoc } from "../api";
-import { addressOf, bodyText, changeDraft, draftedByText, eventChanges, newDraft, replyDraft, replySubject, statusQuery } from "./model";
+import { TABS, addressOf, bodyText, changeDraft, draftingAgent, eventChanges, newDraft, replyDraft, replySubject, statusQuery, tabByKey, tabOf } from "./model";
 
 const EMAIL: NoteDoc = {
   fields: { title: "Lunch on Friday", from_raw: "Ada Lovelace <ada@example.com>", sent: "2026-10-20T09:30:00Z" },
@@ -18,8 +18,18 @@ const EMAIL: NoteDoc = {
 
 describe("the Outbox model", () => {
   it("queries each tab's statuses, newest change first", () => {
-    expect(statusQuery(["review"])).toBe('from outbox where status == "review" sort updated desc, id desc');
-    expect(statusQuery(["approved", "sending"])).toBe('from outbox where status == "approved" || status == "sending" sort updated desc, id desc');
+    expect(statusQuery(["draft"])).toBe('from outbox where status == "draft" sort updated desc, id desc');
+    expect(statusQuery(["ready", "sending"])).toBe('from outbox where status == "ready" || status == "sending" sort updated desc, id desc');
+  });
+
+  it("has three tabs, Draft, Ready and Error, found by their keys and the older ones", () => {
+    expect(TABS.map((t) => t.label)).toEqual(["Draft", "Ready", "Error"]);
+    expect(tabOf("sending")).toBe(1);
+    expect(tabOf("failed")).toBe(2);
+    expect(tabByKey("draft")).toBe(0);
+    expect(tabByKey("drafts")).toBe(0);
+    expect(tabByKey("error")).toBe(2);
+    expect(tabByKey("review")).toBe(-1);
   });
 
   it("starts each new draft as the user's, with a body for email and SMS", () => {
@@ -73,9 +83,10 @@ describe("the Outbox model", () => {
     ]);
   });
 
-  it("reads the body as plain text and who drafted an item", () => {
+  it("reads the body as plain text and which agent drafted an item", () => {
     expect(bodyText(EMAIL)).toBe("Shall we meet at **noon**?\nAda");
-    expect(draftedByText({ drafted_by: "user" })).toBe("You");
-    expect(draftedByText({ drafted_by: "clerk" }, (n) => (n === "clerk" ? "Clerk" : undefined))).toBe("Clerk");
+    expect(draftingAgent({ drafted_by: "user" })).toBeNull();
+    expect(draftingAgent({})).toBeNull();
+    expect(draftingAgent({ drafted_by: "clerk" })).toBe("clerk");
   });
 });

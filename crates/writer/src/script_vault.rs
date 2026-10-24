@@ -176,7 +176,19 @@ impl Vault for Writer {
             .map_err(err)
     }
 
+    /// A handler or a task deleting an Outbox item removes it for good, as sent (outbox X14):
+    /// [`Writer::remove_sent_outbox`], which refuses an item that is not `sending`. An empty
+    /// `version` takes the item as it is now.
     fn delete(&self, id: &str, version: &str, author: &Author) -> Result<Json, String> {
+        let outbox = matches!(author, Author::Handler(_) | Author::Task(_))
+            && self.locate(id).map_err(err)?.as_deref() == Some(crate::builtin::OUTBOX_TYPE);
+        if outbox {
+            let base = Some(version).filter(|v| !v.is_empty());
+            return self
+                .remove_sent_outbox(id, base, author)
+                .map(saved)
+                .map_err(err);
+        }
         Writer::delete(self, id, Some(version), author)
             .map(saved)
             .map_err(err)

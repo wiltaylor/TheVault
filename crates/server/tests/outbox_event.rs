@@ -114,6 +114,23 @@ impl Api {
         self.note(id)["note"]["fields"].clone()
     }
 
+    /// Whether note `id` is gone for good: not in the vault and not in the trash.
+    fn gone(&self, id: &str) -> bool {
+        let status = self
+            .req("GET", &format!("/api/notes/{id}"))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16();
+        let trash = expect(self.req("GET", "/api/trash").send().unwrap(), 200);
+        let trashed = trash["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == id);
+        status == 404 && !trashed
+    }
+
     /// Change fields of note `id` as the user would, then let its handlers finish.
     fn edit(&self, id: &str, changes: Value) {
         let mut note = self.note(id);
@@ -180,9 +197,9 @@ fn paragraph(text: &str) -> Value {
     json!({ "kind": "paragraph", "fields": { "text": text } })
 }
 
-/// An event item approved by the user, so it sends at once.
+/// An event item marked ready by the user, so it sends at once.
 fn invite(fields: Value, description: Option<&str>) -> Value {
-    let mut f = json!({ "kind": "event", "status": "approved" });
+    let mut f = json!({ "kind": "event", "status": "ready" });
     for (k, v) in fields.as_object().unwrap() {
         f[k] = v.clone();
     }
@@ -213,7 +230,7 @@ fn assert_no_send_updates(note: &Value) {
 }
 
 #[test]
-fn an_approved_new_event_is_inserted_with_send_updates_and_the_item_becomes_sent() {
+fn a_ready_new_event_is_inserted_with_send_updates_and_the_item_leaves_the_outbox() {
     let api = Api::start();
     let item = api.create(
         "outbox",
@@ -257,12 +274,8 @@ fn an_approved_new_event_is_inserted_with_send_updates_and_the_item_becomes_sent
     // The one-shot field is cleared by the write-back.
     assert_no_send_updates(&event);
 
-    let f = api.fields(&item);
-    assert_eq!(f["status"], "sent", "{f:#}");
-    assert_eq!(f["sent_ref"], insert.id.as_str());
-    assert_eq!(f["result"], event_id.as_str());
-    assert!(f["sent_at"].as_str().unwrap().ends_with('Z'), "{f}");
-    assert!(f.get("error").is_none_or(Value::is_null), "{f}");
+    // Sent, the item leaves the Outbox: the event note is the regular copy.
+    assert!(api.gone(&item));
 
     // A direct edit of the event afterwards emails no one.
     api.edit(&event_id, json!({ "location": "Room 5" }));
@@ -270,7 +283,6 @@ fn an_approved_new_event_is_inserted_with_send_updates_and_the_item_becomes_sent
     assert_eq!(patch.method, "PATCH");
     assert_eq!(patch.send_updates, None);
     assert_eq!(patch.body, json!({ "location": "Room 5" }));
-    assert_eq!(api.fields(&item)["status"], "sent");
 }
 
 #[test]
@@ -328,10 +340,7 @@ fn a_change_item_patches_only_its_non_empty_fields_with_send_updates() {
         "2026-03-05T11:00:00Z"
     );
     assert_no_send_updates(&event);
-    let f = api.fields(&item);
-    assert_eq!(f["status"], "sent", "{f:#}");
-    assert_eq!(f["sent_ref"], "standup");
-    assert_eq!(f["result"], event_id.as_str());
+    assert!(api.gone(&item));
 
     // The next direct edit emails no one again.
     api.edit(event_id, json!({ "location": "Room 2" }));
@@ -379,7 +388,7 @@ fn a_google_error_fails_the_item_with_its_message_and_a_retry_reuses_the_event()
 
     // The user retries once Google takes writes again.
     api.google.fail_calendar_writes(None);
-    api.edit(&item, json!({ "status": "approved", "error": null }));
+    api.edit(&item, json!({ "status": "ready", "error": null }));
 
     let insert = api.one_write_after(1);
     assert_eq!(insert.method, "POST");
@@ -389,10 +398,7 @@ fn a_google_error_fails_the_item_with_its_message_and_a_retry_reuses_the_event()
     let event = api.note(&event_id);
     assert_eq!(event["note"]["fields"]["google_ref"], insert.id.as_str());
     assert_no_send_updates(&event);
-    let f = api.fields(&item);
-    assert_eq!(f["status"], "sent", "{f:#}");
-    assert_eq!(f["sent_ref"], insert.id.as_str());
-    assert_eq!(f["result"], event_id.as_str());
+    assert!(api.gone(&item));
 }
 
 #[test]

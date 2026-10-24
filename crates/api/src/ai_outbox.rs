@@ -1,8 +1,8 @@
 //! The chat's Outbox tools (outbox X9): `draft_email`, `draft_sms` and `draft_event`.
 //!
 //! Each creates one Outbox item, written as the agent whose turn it is (`Author::Agent`, the
-//! built-in Assistant included), so the writer's X2 rules decide what it may be: `review`, or
-//! `approved` when the agent's `permissions.outbox.send_without_review` is on. Drafting is not a
+//! built-in Assistant included), so the writer's X2 rules decide what it may be: `draft`, or
+//! `ready` when the agent's `permissions.outbox.send_without_review` is on (outbox X14). Drafting is not a
 //! change the chat's Apply confirms, since the Outbox is the review, so the tools are offered to
 //! unattended runs too. They need a caller with `write`. A person note id given for an address
 //! resolves to the person's first email or phone number when drafted.
@@ -26,7 +26,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
     vec![
         tool(
             "draft_email",
-            "Draft an email into the Outbox. It is not sent: it waits in the Outbox for the user to review, approve and send, unless this agent may send without review, when it is sent at once. Answers the Outbox item's id and status.",
+            "Draft an email into the Outbox. It is not sent: it waits in the Outbox's Draft tab until the user marks it Ready, unless this agent may send without review, when it is sent at once. Answers the Outbox item's id and status.",
             json!({
                 "to": list("Each recipient: an email address, or a person note's id, which becomes that person's first email address."),
                 "cc": list("Cc recipients, as for to; empty for none."),
@@ -39,7 +39,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "draft_sms",
-            "Draft an SMS into the Outbox, for the user's phone to send. It is not sent: it waits in the Outbox for the user to review and approve, unless this agent may send without review. Answers the Outbox item's id and status.",
+            "Draft an SMS into the Outbox, for the user's phone to send. It is not sent: it waits in the Outbox's Draft tab until the user marks it Ready, unless this agent may send without review. Answers the Outbox item's id and status.",
             json!({
                 "to": { "type": "string", "description": "A phone number, or a person note's id, which becomes that person's first phone number." },
                 "body": { "type": "string", "description": "The text of the message." },
@@ -48,7 +48,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "draft_event",
-            "Draft a calendar invite into the Outbox: a new Google Calendar event, or a change to an existing event note, which emails its attendees once sent. It is not sent: it waits in the Outbox for the user to review and approve, unless this agent may send without review. For a change, an empty field leaves that part of the event as it is. Answers the Outbox item's id and status.",
+            "Draft a calendar invite into the Outbox: a new Google Calendar event, or a change to an existing event note, which emails its attendees once sent. It is not sent: it waits in the Outbox's Draft tab until the user marks it Ready, unless this agent may send without review. For a change, an empty field leaves that part of the event as it is. Answers the Outbox item's id and status.",
             json!({
                 "event": { "type": "string", "description": "The id of the event note to change; empty for a new event." },
                 "title": { "type": "string", "description": "The event's title; empty to keep a changed event's title." },
@@ -375,10 +375,10 @@ fn event(w: &Writer, limits: &Limits, input: &Value) -> Result<Drafted, ToolOut>
     })
 }
 
-/// Create the item as `agent`: `review`, or `approved` when it may send without review.
+/// Create the item as `agent`: `draft`, or `ready` when it may send without review.
 fn create(w: &Writer, agent: &Agent, d: Drafted) -> ToolOut {
     let bypass = agent.permissions.outbox.send_without_review;
-    let status = if bypass { "approved" } else { "review" };
+    let status = if bypass { "ready" } else { "draft" };
     let mut fields = d.fields;
     fields["status"] = json!(status);
     fields["drafted_by"] = json!(agent.name);
@@ -406,14 +406,14 @@ fn create(w: &Writer, agent: &Agent, d: Drafted) -> ToolOut {
     };
     let message = if bypass {
         format!(
-            "The {what} is in the Outbox as approved: this agent may send without review, so it is \
+            "The {what} is in the Outbox as ready: this agent may send without review, so it is \
              being sent now. Item id {}.",
             saved.id
         )
     } else {
         format!(
-            "The {what} is in the Outbox for the user to review (item id {}). It has not been \
-             sent: it is sent only when the user approves it there.",
+            "The {what} is in the Outbox as a draft for the user (item id {}). It has not been \
+             sent: it is sent only when the user marks it Ready there.",
             saved.id
         )
     };

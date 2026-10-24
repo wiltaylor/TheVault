@@ -525,7 +525,7 @@ export interface AgentPermissions {
 
 /** An agent's Outbox switches (outbox X2). */
 export interface AgentOutbox {
-  /** The agent's drafts are approved at once and sent, without waiting in Review. */
+  /** The agent's drafts are created ready and sent at once, without waiting in Draft. */
   send_without_review: boolean;
 }
 

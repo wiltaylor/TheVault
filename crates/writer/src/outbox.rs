@@ -1,29 +1,33 @@
-//! Who may move an Outbox item from one status to another (outbox X2).
+//! Who may move an Outbox item from one status to another (outbox X2, X14).
+//!
+//! An item is `draft`, `ready`, `sending` or `failed`. Once sent it leaves the Outbox: its copy is
+//! a regular `email`, `message` or `event` note, and the item is removed for good
+//! ([`Writer::remove_sent_outbox`]).
 //!
 //! Every write of a note of the built-in `outbox` type passes [`Writer::check_outbox`] in
 //! [`Writer::prepare_put_as`], which knows the write's author and the note's current content, so
 //! the rules hold for every way in: the notes API, the chat and agents, sync from the apps, and
 //! scripts.
 //!
-//! - The user (a session or an API token) may make any change, such as `draft -> approved`
-//!   (Send), `review -> approved | rejected` and the retry `failed -> approved`.
-//! - An agent may create an item only as `review`, or as `approved` when its
+//! - The user (a session or an API token) may make any change, such as `draft -> ready` (Ready)
+//!   and the retry `failed -> ready`.
+//! - An agent may create an item only as `draft`, or as `ready` when its
 //!   `permissions.outbox.send_without_review` is on. It may change an item only while the item
-//!   is `draft` or `review` and only when it drafted it, and only to `draft` or `review`. It never
-//!   writes `sent_ref`, `result`, `error` or `sent_at`. Its confirmation switches do not change
-//!   this.
+//!   is `draft` and only when it drafted it, and the item stays `draft`. It never writes
+//!   `sent_ref`, `result`, `error` or `sent_at`. Its confirmation switches do not change this.
 //! - A handler or a scheduled task (the send handlers and the syncs) may move an item
-//!   `approved -> sending`, `sending -> sent` and `sending -> failed`, and write `sent_ref`,
-//!   `result`, `error` and `sent_at`, and nothing else. It creates no items.
+//!   `ready -> sending` and `sending -> failed`, write `sent_ref`, `result`, `error` and
+//!   `sent_at`, and remove a `sending` item once it was sent, and nothing else. It creates no
+//!   items.
 //!
 //! An item an agent or the user creates without `drafted_by` gets the agent's name or `user`; an
-//! agent's item without a `status` is `review`.
+//! agent's item without a `status` is `draft`.
 //!
 //! Notifications (outbox X10), made once a write is committed:
 //!
-//! - An agent putting items into Review gets one notification per turn, "<Agent> drafted <n>
-//!   items for review", linking to `/outbox`. The items of one turn share it: each one more
-//!   raises the count in place while the notification is unread, until the turn ends
+//! - An agent drafting items gets one notification per turn, "<Agent> drafted <n> items",
+//!   linking to the Outbox's Draft tab. The items of one turn share it: each one more raises the
+//!   count in place while the notification is unread, until the turn ends
 //!   ([`Writer::end_outbox_drafts`]) or the agent drafts nothing for [`DRAFT_BATCH_MS`].
 //! - An item a handler, a task or a device (an API token) moves to `failed` gets "Could not send <title>",
 //!   with the error, linking to the item.
@@ -33,7 +37,7 @@ use state::{Author, NewNotification};
 
 use std::collections::HashMap;
 
-use crate::{Error, Result, Writer};
+use crate::{Error, Event, Input, NoteChange, Result, Saved, Writer, first, note_path};
 
 /// Who drafted an item the user made.
 pub const DRAFTED_BY_USER: &str = "user";
@@ -45,11 +49,14 @@ pub const SEND_FIELDS: [&str; 4] = ["sent_ref", "result", "error", "sent_at"];
 const KEPT: [&str; 3] = ["created", "updated", "archived"];
 
 /// The status transitions a handler or a task may make.
-const SEND_TRANSITIONS: [(&str, &str); 3] = [
-    ("approved", "sending"),
-    ("sending", "sent"),
-    ("sending", "failed"),
-];
+const SEND_TRANSITIONS: [(&str, &str); 2] = [("ready", "sending"), ("sending", "failed")];
+
+/// Where the Outbox lists drafts: the drafts notification links there.
+pub const DRAFT_TAB_URL: &str = "/outbox?tab=draft";
+
+/// How long a sent item whose copy has not come back stays in the Outbox before the sweep
+/// removes it anyway ([`Writer::sweep_outbox`]), in milliseconds: 24 hours.
+pub const SENT_KEEP_MS: i64 = 24 * 60 * 60 * 1000;
 
 fn text<'a>(doc: &'a Doc, name: &str) -> Option<&'a str> {
     doc.field(name).and_then(Value::as_str)
@@ -103,6 +110,8 @@ pub(crate) struct ItemChange {
     kind: String,
     /// Who it goes to: addresses or a number, never the body.
     recipients: Vec<String>,
+    /// Whether this write recorded the send: `sent_at` set where it was empty.
+    sent_now: bool,
 }
 
 /// The strings of list field `name`.
@@ -133,10 +142,14 @@ impl ItemChange {
                 "event" => strings(doc, "attendees_raw"),
                 _ => strings(doc, "to"),
             },
+            sent_now: text(doc, "sent_at").is_some_and(|s| !s.is_empty())
+                && old
+                    .and_then(|o| text(o, "sent_at"))
+                    .is_none_or(str::is_empty),
         }
     }
 
-    /// Whether the write put the item into Review.
+    /// Whether the write put the item into `status`.
     fn entered(&self, status: &str) -> bool {
         self.status == status && self.was.as_deref() != Some(status)
     }
@@ -152,11 +165,11 @@ fn clip(s: &str, max: usize) -> String {
     out
 }
 
-/// "<label> drafted <n> item(s) for review".
+/// "<label> drafted <n> item(s)".
 fn drafted_title(label: &str, count: usize) -> String {
     let items = if count == 1 { "item" } else { "items" };
     clip(
-        &format!("{label} drafted {count} {items} for review"),
+        &format!("{label} drafted {count} {items}"),
         state::MAX_TITLE,
     )
 }
@@ -170,7 +183,7 @@ impl Writer {
         }
         for item in items {
             match &item.author {
-                Author::Agent(name) if item.entered("review") => self.count_draft(name),
+                Author::Agent(name) if item.entered("draft") => self.count_draft(name),
                 // A send handler, a sync task, or a device reporting its command's result.
                 Author::Handler(_) | Author::Task(_) | Author::Token(_)
                     if item.entered("failed") =>
@@ -182,23 +195,23 @@ impl Writer {
         }
     }
 
-    /// The activity entry of an Outbox item's new status (activity Y2): drafted, approved,
-    /// rejected, sending, sent or failed, with its kind and recipients but not its body.
+    /// The activity entry of an Outbox item's new status (activity Y2): drafted, ready, sending,
+    /// sent (the write that records `sent_at`) or failed, with its kind and recipients but not
+    /// its body.
     fn record_outbox(&self, item: &ItemChange) {
-        if item.was.as_deref() == Some(item.status.as_str()) {
+        let (act, verb) = if item.sent_now && item.status == "sending" {
+            ("sent", "Sent")
+        } else if item.was.as_deref() == Some(item.status.as_str()) {
             return;
-        }
-        let (act, verb) = match item.status.as_str() {
-            "draft" | "review" if item.was.as_deref().is_none_or(|w| w != "draft") => {
-                ("drafted", "Drafted")
+        } else {
+            match item.status.as_str() {
+                "draft" if item.was.is_none() => ("drafted", "Drafted"),
+                "draft" => return,
+                "ready" => ("ready", "Ready to send"),
+                "sending" => ("sending", "Sending"),
+                "failed" => ("failed", "Could not send"),
+                _ => return,
             }
-            "draft" | "review" => return,
-            "approved" => ("approved", "Approved"),
-            "rejected" => ("rejected", "Rejected"),
-            "sending" => ("sending", "Sending"),
-            "sent" => ("sent", "Sent"),
-            "failed" => ("failed", "Could not send"),
-            _ => return,
         };
         let to = if item.recipients.is_empty() {
             String::new()
@@ -274,9 +287,9 @@ impl Writer {
         }
         let n = NewNotification {
             title: drafted_title(&label, 1),
-            body: Some("They wait in the Outbox until you approve them.".to_owned()),
+            body: Some("They wait in the Outbox's Draft tab until you mark them Ready.".to_owned()),
             note_id: None,
-            url: Some("/outbox".to_owned()),
+            url: Some(DRAFT_TAB_URL.to_owned()),
             source: format!("agent:{name}"),
         };
         match self.state().add_notification(&n) {
@@ -314,7 +327,7 @@ impl Writer {
     }
 
     /// Fill in what an item's author leaves out, before the type's defaults: `drafted_by` for the
-    /// user's and an agent's new items, and `status = review` for an agent's.
+    /// user's and an agent's new items, and `status = draft` for an agent's.
     pub(crate) fn fill_outbox(&self, doc: &mut Doc, is_new: bool, author: &Author) {
         if !is_new {
             return;
@@ -328,7 +341,7 @@ impl Writer {
             set(doc, "drafted_by", drafted_by);
         }
         if matches!(author, Author::Agent(_)) && doc.field("status").is_none() {
-            set(doc, "status", "review");
+            set(doc, "status", "draft");
         }
     }
 
@@ -355,6 +368,106 @@ impl Writer {
         }
     }
 
+    /// Remove Outbox item `id`, which was sent, for good (outbox X14): it is deleted and purged
+    /// from the trash with its history, authored as `author`, the send handler, a sync or the
+    /// server. Its copy is a regular note, and the activity log keeps the `outbox.sent` entry
+    /// the send recorded. This is the server's own lifecycle, not the user emptying the trash.
+    ///
+    /// Only an item still `sending` is removed (or, for the upgrade from the old statuses, one
+    /// that is `sent`); `base`, when given, is the version it must be at. An item already gone
+    /// is [`Error::NotFound`].
+    pub fn remove_sent_outbox(
+        &self,
+        id: &str,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
+        let _w = self.write_lock();
+        let inner = self.lock();
+        let (type_name, old) = self.existing(id)?;
+        let path = note_path(&type_name, id);
+        let built_in = type_name == crate::builtin::OUTBOX_TYPE
+            && inner
+                .schema
+                .type_def(&type_name)
+                .is_some_and(|t| self.is_built_in_def(t));
+        let doc = Input::Wcl(old.clone()).parse(&path)?;
+        let status = text(&doc, "status").unwrap_or("");
+        if !built_in || !matches!(status, "sending" | "sent") {
+            return Err(Error::Invalid(Invalid {
+                file: path,
+                issues: vec![Issue::new(
+                    "status",
+                    format!(
+                        "only an Outbox item that was sent is removed, and this one is {status:?}"
+                    ),
+                )],
+            }));
+        }
+        if let Some(base) = base {
+            self.check_base(id, &type_name, &old, Some(base))?;
+        }
+        let change = NoteChange {
+            id: id.to_owned(),
+            type_name,
+            event: Event::Delete,
+            doc: None,
+        };
+        let saved = self
+            .apply(inner, vec![change], &|| Ok(()), author)
+            .map(first)?;
+        if let Some(entry) = self.state.trash_entry(id)? {
+            self.purge_locked(vec![entry], author)?;
+        }
+        Ok(saved)
+    }
+
+    /// Remove every sent Outbox item still waiting for its copy after [`SENT_KEEP_MS`] (outbox
+    /// X14): `sending` with `sent_ref` and `sent_at` set, sent that long before `now_ms`, and an
+    /// item whose copy is linked (`result`) that a handler did not remove. The home server's
+    /// scheduler calls this as it ticks. Answers how many items it removed; one that cannot be
+    /// removed is logged and left for the next sweep.
+    pub fn sweep_outbox(&self, now_ms: i64) -> usize {
+        use script_core::Vault as _;
+        let rows = match self.query(
+            &format!(
+                "from {} include archived where status == \"sending\"",
+                crate::builtin::OUTBOX_TYPE
+            ),
+            10_000,
+        ) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("outbox: the sweep could not read the Outbox: {e}");
+                return 0;
+            }
+        };
+        let author = Author::Task(crate::shipped::SERVER_AUTHOR.to_owned());
+        let mut removed = 0;
+        for row in rows {
+            let fields = &row["fields"];
+            let field = |k: &str| fields[k].as_str().unwrap_or("");
+            let Some(sent) = schema::parse_datetime(field("sent_at")) else {
+                continue;
+            };
+            let sent_ms = (sent * 1000.0) as i64;
+            let linked = !field("result").is_empty();
+            let stale = !field("sent_ref").is_empty() && now_ms - sent_ms >= SENT_KEEP_MS;
+            if !linked && !stale {
+                continue;
+            }
+            let Some(id) = row["id"].as_str() else {
+                continue;
+            };
+            match self.remove_sent_outbox(id, None, &author) {
+                Ok(_) => removed += 1,
+                Err(Error::NotFound(_)) => {}
+                Err(e) => eprintln!("outbox: the sweep could not remove sent item {id}: {e}"),
+            }
+        }
+        removed
+    }
+
     /// Whether agent `name` has `permissions.outbox.send_without_review` on. An agent whose file
     /// is gone or does not parse has not.
     fn may_send_without_review(&self, name: &str) -> bool {
@@ -363,7 +476,7 @@ impl Writer {
     }
 }
 
-/// The X2 rule for one write, as the message of the issue that refuses it.
+/// The X2 rule for one write, as the message of the issue that refuses it (outbox X14).
 fn outbox_rule(
     doc: &Doc,
     old: Option<&Doc>,
@@ -384,18 +497,18 @@ fn outbox_rule(
                         ));
                     }
                     match status {
-                        "review" => {}
-                        "approved" if bypass(name) => {}
-                        "approved" => {
+                        "draft" => {}
+                        "ready" if bypass(name) => {}
+                        "ready" => {
                             return Err(format!(
-                                "{label} may not send without review: its items start as review \
-                                 until the user approves them (turn on Send from the Outbox \
+                                "{label} may not send without review: its items start as draft \
+                                 until the user marks them ready (turn on Send from the Outbox \
                                  without review for the agent to allow it)"
                             ));
                         }
                         other => {
                             return Err(format!(
-                                "{label} creates Outbox items as review, not {other:?}"
+                                "{label} creates Outbox items as draft, not {other:?}"
                             ));
                         }
                     }
@@ -407,10 +520,10 @@ fn outbox_rule(
                     Ok(())
                 }
                 Some(old) => {
-                    if !matches!(was, "draft" | "review") {
+                    if was != "draft" {
                         return Err(format!(
-                            "{label} may change an Outbox item only while it is draft or review, \
-                             and this one is {was}"
+                            "{label} may change an Outbox item only while it is draft, and this \
+                             one is {was}"
                         ));
                     }
                     if text(old, "drafted_by") != Some(name.as_str()) {
@@ -418,10 +531,10 @@ fn outbox_rule(
                             "{label} may change only the Outbox items it drafted"
                         ));
                     }
-                    if !matches!(status, "draft" | "review") {
+                    if status != "draft" {
                         return Err(format!(
-                            "{label} may not set an Outbox item to {status}: only the user \
-                             approves or rejects an item"
+                            "{label} may not set an Outbox item to {status}: only the user marks \
+                             an item ready"
                         ));
                     }
                     let (fields, _) = changed(old, doc);
@@ -447,8 +560,8 @@ fn outbox_rule(
             };
             if was != status && !SEND_TRANSITIONS.contains(&(was, status)) {
                 return Err(format!(
-                    "{label} may move an Outbox item only from approved to sending, and from \
-                     sending to sent or failed, not from {was} to {status}"
+                    "{label} may move an Outbox item only from ready to sending, and from \
+                     sending to failed, not from {was} to {status}"
                 ));
             }
             let (fields, blocks) = changed(old, doc);

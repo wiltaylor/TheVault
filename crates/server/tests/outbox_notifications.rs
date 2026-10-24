@@ -208,16 +208,16 @@ fn an_agent_run_that_drafts_items_leaves_one_notification_counting_them() {
     api.advance("PT31S");
     assert_eq!(fake.message_requests().len(), 3);
 
-    let review = api.send(
+    let drafts = api.send(
         "POST",
         "/api/query",
-        json!({ "query": "from outbox where status == \"review\"", "page_size": 10 }),
+        json!({ "query": "from outbox where status == \"draft\"", "page_size": 10 }),
     );
-    assert_eq!(review["total"], 3, "{review:#}");
+    assert_eq!(drafts["total"], 3, "{drafts:#}");
     let items = api.notifications();
     assert_eq!(items.len(), 1, "{items:#?}");
-    assert_eq!(items[0]["title"], "Clerk drafted 3 items for review");
-    assert_eq!(items[0]["url"], "/outbox");
+    assert_eq!(items[0]["title"], "Clerk drafted 3 items");
+    assert_eq!(items[0]["url"], "/outbox?tab=draft");
     assert_eq!(items[0]["note"], Value::Null);
     assert_eq!(items[0]["source"], "agent:clerk");
 
@@ -231,15 +231,15 @@ fn an_agent_run_that_drafts_items_leaves_one_notification_counting_them() {
     api.advance("PT31S");
     let items = api.notifications();
     assert_eq!(items.len(), 2, "{items:#?}");
-    assert_eq!(items[0]["title"], "Clerk drafted 1 item for review");
-    assert_eq!(items[1]["title"], "Clerk drafted 3 items for review");
+    assert_eq!(items[0]["title"], "Clerk drafted 1 item");
+    assert_eq!(items[1]["title"], "Clerk drafted 3 items");
 
     // What the user drafts and edits notifies nothing.
     let mine = api.create(
         "outbox",
         json!({ "fields": { "title": "Mine", "kind": "email", "to": ["bo@example.com"] } }),
     );
-    api.edit(&mine, json!({ "status": "review" }));
+    api.edit(&mine, json!({ "subject": "Mine, edited" }));
     assert_eq!(api.notifications().len(), 2);
 }
 
@@ -297,8 +297,8 @@ fn a_chat_turn_that_drafts_leaves_one_notification_for_the_turn() {
     chat();
     let items = api.notifications();
     assert_eq!(items.len(), 1, "{items:#?}");
-    assert_eq!(items[0]["title"], "Assistant drafted 3 items for review");
-    assert_eq!(items[0]["url"], "/outbox");
+    assert_eq!(items[0]["title"], "Assistant drafted 3 items");
+    assert_eq!(items[0]["url"], "/outbox?tab=draft");
 
     // Read, it stays as it is; the next turn's draft is a notification of its own.
     api.send(
@@ -314,8 +314,8 @@ fn a_chat_turn_that_drafts_leaves_one_notification_for_the_turn() {
     chat();
     let items = api.notifications();
     assert_eq!(items.len(), 2, "{items:#?}");
-    assert_eq!(items[0]["title"], "Assistant drafted 1 item for review");
-    assert_eq!(items[1]["title"], "Assistant drafted 3 items for review");
+    assert_eq!(items[0]["title"], "Assistant drafted 1 item");
+    assert_eq!(items[1]["title"], "Assistant drafted 3 items");
 }
 
 #[test]
@@ -353,7 +353,7 @@ fn a_failed_send_leaves_one_notification_linking_to_the_item() {
     );
     api.settle();
     assert!(api.notifications().is_empty(), "a draft notifies nothing");
-    api.edit(&id, json!({ "status": "approved" }));
+    api.edit(&id, json!({ "status": "ready" }));
     api.settle();
     let fields = api.get(&format!("/api/notes/{id}"))["note"]["fields"].clone();
     assert_eq!(fields["status"], "failed", "{fields:#}");
@@ -366,7 +366,7 @@ fn a_failed_send_leaves_one_notification_linking_to_the_item() {
     assert_eq!(items[0]["source"], "outbox");
 
     // Retried and failed again: one more.
-    api.edit(&id, json!({ "status": "approved" }));
+    api.edit(&id, json!({ "status": "ready" }));
     api.settle();
     assert_eq!(api.notifications().len(), 2);
 }

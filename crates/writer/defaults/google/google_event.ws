@@ -25,8 +25,9 @@ use regex
 //
 // The Outbox (outbox X5) writes an invite or change into the note with the hidden one-shot
 // field `send_updates = "all"`. The insert or PATCH then carries `sendUpdates=all`, so Google
-// emails the attendees, and the write-back clears the field and marks the Outbox items sending
-// this event `sent`, or `failed` with Google's message. A direct edit leaves the field unset,
+// emails the attendees, and the write-back clears the field and records the send on the Outbox
+// items sending this event, which then leave the Outbox (outbox X14), or marks them `failed` with
+// Google's message. A direct edit leaves the field unset,
 // so Google emails no one.
 //
 // The settings are the JSON object in the `google_settings` secret: `default_calendar`, and the
@@ -569,8 +570,8 @@ fn body_for(ctx: Ctx, fields: Map[string, Value], blocks: List[Value], values: M
 // values in each field group the note still holds as `basis`, what was sent. A group the user
 // changed again since keeps the user's value, for the next run to send. `google_ref` and
 // `calendar` are set when not "", and `clear_series` removes `series`. The write clears the
-// Outbox's one-shot `send_updates`; when it was set, the Outbox items sending this event are
-// marked sent (outbox X5).
+// Outbox's one-shot `send_updates`; when it was set, the send is recorded on the Outbox items
+// sending this event (outbox X5, X14).
 fn write_back(ctx: Ctx, id: string, basis: Map[string, string], event: Value, google_ref: string, calendar: string, clear_series: bool) -> Result[(), string] {
     let google = synced(event)
     let tries = 0
@@ -776,8 +777,8 @@ fn push(id: string, created: bool) -> Result[string, string] {
 }
 
 // Send the change to note `id`, then settle the Outbox items that asked for it (outbox X5). When
-// the note holds `send_updates`, the change came from the Outbox: a write-back marks its items
-// sent; a Google error marks them failed with Google's message and leaves `send_updates` set, so
+// the note holds `send_updates`, the change came from the Outbox: a write-back records the send
+// on its items, which then leave the Outbox (outbox X14); a Google error marks them failed with Google's message and leaves `send_updates` set, so
 // that a retry sends it again; a run that sent nothing marks them failed with the reason and
 // clears `send_updates`.
 fn run(id: string, created: bool) -> Result[(), string] {
@@ -843,18 +844,18 @@ fn now_text() -> string {
     date_of_days(secs / 86400) + fmt("T{:02}:{:02}:{:02}Z", rest / 3600, (rest / 60) % 60, rest % 60)
 }
 
-// Mark the items sending event note `id` sent, as Google event `google_id`.
+// Record the send of the items sending event note `id`, as Google event `google_id`, with the
+// note as their copy. The `outbox_send` handler then removes them (outbox X14).
 fn sent_items(id: string, google_id: string) {
     for item in sending_items(id) {
         let f = #{
-            "status": Value::String("sent"),
             "sent_ref": Value::String(google_id),
             "sent_at": Value::String(now_text()),
             "result": Value::String(id),
         }
         match vault::patch(item, Value::Map(f), "") {
             Ok(_) => vault::log("Outbox item " + item + " was sent as " + google_id + "."),
-            Err(e) => vault::log("Outbox item " + item + " was not marked sent: " + e),
+            Err(e) => vault::log("Outbox item " + item + " was not recorded as sent: " + e),
         }
     }
 }

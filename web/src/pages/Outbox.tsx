@@ -1,45 +1,22 @@
-// The Outbox (outbox X7, X8, X13): emails, SMS and calendar invites before and after they are sent,
-// in tabs by status. What an agent drafts waits in Review until it is approved; what the user
-// composes sends on Ready. Every action writes the item's note, which syncs, and the server's
-// `outbox_send` handler sends what becomes `approved`.
+// The Outbox (outbox X7, X8, X13, X14): emails, SMS and calendar invites waiting to be sent, in
+// three tabs: Draft, Ready (ready and sending) and Error. What an agent drafts waits in Draft, as
+// what the user composes does, until the user marks it Ready. Every action writes the item's note,
+// which syncs, and the server's `outbox_send` handler sends what becomes `ready`. A sent item
+// leaves the Outbox: its copy is a regular email, message or event.
 
 import { useNavigate, useSearchParams } from "@solidjs/router";
 import { For, type JSX, Show, createEffect, createMemo, createResource, createSignal, onCleanup } from "solid-js";
 import { type Device, type Json, type Note, type Row, api } from "../api";
-import { agentLabel, agents } from "../agents";
 import { changes, onNoteChangedElsewhere } from "../changes";
 import { showToast } from "../components/Toasts";
 import { noteTitle } from "../editor/titles";
+import { OutboxChips } from "../outbox/Chips";
 import { createDraft, setItemStatus } from "../outbox/actions";
-import {
-  type Kind,
-  STATUS_TEXT,
-  type Status,
-  TABS,
-  bodyText,
-  draftedByText,
-  eventChanges,
-  kindOf,
-  newDraft,
-  statusOf,
-  statusQuery,
-  str,
-  strs,
-  tabOf,
-} from "../outbox/model";
+import { type Kind, type Status, TABS, bodyText, eventChanges, kindOf, newDraft, statusOf, statusQuery, str, strs, tabByKey, tabOf } from "../outbox/model";
 import { refreshOutboxCount } from "../outbox/store";
 import { errorText } from "./TypeEditor";
 
 const PAGE = 50;
-
-/** The most items Approve all sends at once. */
-const APPROVE_ALL_MAX = 500;
-
-/** The label of agent `name`, as the sidebar knows it. */
-function labelOf(name: string): string | undefined {
-  const a = agents().find((x) => x.name === name);
-  return a ? agentLabel(a) : undefined;
-}
 
 export function Outbox() {
   const navigate = useNavigate();
@@ -47,9 +24,9 @@ export function Outbox() {
   const [params] = useSearchParams();
   const focus = () => (typeof params.item === "string" ? params.item : "");
   const [tab, setTab] = createSignal(0);
-  // `?tab=`: a tab by its key, as SMS Reply all opens Drafts when it made several.
+  // `?tab=`: a tab by its key, as SMS Reply all and the drafts notification open Draft.
   createEffect(() => {
-    const at = TABS.findIndex((t) => t.key === params.tab);
+    const at = tabByKey(params.tab);
     if (at >= 0) setTab(at);
   });
   createEffect(() => {
@@ -62,9 +39,7 @@ export function Outbox() {
   });
   const [limit, setLimit] = createSignal(PAGE);
   const [error, setError] = createSignal<string | null>(null);
-  const [confirming, setConfirming] = createSignal<number | null>(null);
-  const [busy, setBusy] = createSignal(false);
-  // Changes made elsewhere: an agent's drafts, a send finishing, an approval in the apps.
+  // Changes made elsewhere: an agent's drafts, a send finishing, an item marked ready in the apps.
   const [elsewhere, setElsewhere] = createSignal(0);
   onCleanup(onNoteChangedElsewhere(() => setElsewhere((n) => n + 1)));
   // Items acted on, hidden until the list loads again without them.
@@ -127,28 +102,6 @@ export function Outbox() {
       navigate(`/notes/${made.id}`);
     });
 
-  /** Approve every item in Review, once the confirm is answered. */
-  async function approveAll() {
-    setBusy(true);
-    await run(null, async () => {
-      const all = await api.query(statusQuery(["review"]), null, APPROVE_ALL_MAX);
-      let failed = 0;
-      for (const r of all.rows) {
-        hide(r.id);
-        try {
-          await setItemStatus(r.id, "approved");
-        } catch {
-          failed++;
-        }
-      }
-      const sent = all.rows.length - failed;
-      showToast(`Approved ${sent} ${sent === 1 ? "item" : "items"} to send`);
-      if (failed) throw new Error(`${failed} ${failed === 1 ? "item" : "items"} could not be approved. They stay in Review.`);
-    });
-    setBusy(false);
-    setConfirming(null);
-  }
-
   function onTabKey(e: KeyboardEvent) {
     if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
     e.preventDefault();
@@ -201,13 +154,6 @@ export function Outbox() {
             {errorText(page.error)}
           </p>
         </Show>
-        <Show when={current().key === "review" && rows().length > 0}>
-          <div class="outbox-bulk">
-            <button type="button" class="primary" disabled={busy()} onClick={() => setConfirming(page.latest?.total ?? rows().length)}>
-              Approve all
-            </button>
-          </div>
-        </Show>
         <Show when={page.latest}>
           <Show when={rows().length > 0} fallback={<p class="muted inbox-empty">{emptyText(current().key)}</p>}>
             <ul class="inbox-list outbox-list" aria-label={`${current().label} items`}>
@@ -217,9 +163,8 @@ export function Outbox() {
                     row={r}
                     focused={r.id === focus()}
                     devices={devices() ?? []}
-                    onApprove={() => void move(r, "approved", statusOf(r.fields) === "review" ? "Approved" : "Sending")}
-                    onReject={() => void move(r, "rejected", "Rejected")}
-                    onRetry={() => void move(r, "approved", "Sending again", { error: undefined })}
+                    onReady={() => void move(r, "ready", "Sending")}
+                    onRetry={() => void move(r, "ready", "Sending again", { error: undefined })}
                     onDelete={() => void remove(r)}
                   />
                 )}
@@ -233,72 +178,19 @@ export function Outbox() {
           </Show>
         </Show>
       </div>
-      <Show when={confirming()}>
-        {(n) => <ApproveAllDialog count={n()} busy={busy()} onCancel={() => setConfirming(null)} onConfirm={() => void approveAll()} />}
-      </Show>
     </section>
   );
 }
 
 function emptyText(tab: string): string {
   switch (tab) {
-    case "review":
-      return "Nothing waits for review. What an agent drafts waits here until you approve it.";
-    case "drafts":
-      return "There are no drafts. Start one with New email, New SMS or New event.";
-    case "sending":
-      return "Nothing is being sent.";
-    case "sent":
-      return "Nothing has been sent from the Outbox yet.";
-    case "failed":
-      return "No sends failed.";
+    case "draft":
+      return "There are no drafts. Start one with New email, New SMS or New event; what an agent drafts waits here too.";
+    case "ready":
+      return "Nothing is waiting to be sent. Once sent, an item leaves the Outbox and its copy is a regular email, message or event.";
     default:
-      return "No items were rejected.";
+      return "No sends failed.";
   }
-}
-
-/** The confirm before Approve all, naming how many items it sends. */
-function ApproveAllDialog(props: { count: number; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
-  let dialog!: HTMLDivElement;
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      props.onCancel();
-    }
-  };
-  createEffect(() => dialog?.querySelector<HTMLButtonElement>("button.primary")?.focus());
-  const items = () => `${props.count} ${props.count === 1 ? "item" : "items"}`;
-  return (
-    <div
-      class="capture-backdrop"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) props.onCancel();
-      }}
-    >
-      <div
-        ref={dialog}
-        class="capture-dialog trash-purge-dialog"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="approve-all-heading"
-        aria-describedby="approve-all-summary"
-        onKeyDown={onKey}
-      >
-        <header class="capture-head">
-          <h2 id="approve-all-heading">Approve all</h2>
-        </header>
-        <p id="approve-all-summary">Approve and send {items()} in Review? Each is sent as it is drafted.</p>
-        <div class="actions">
-          <button type="button" onClick={props.onCancel}>
-            Cancel
-          </button>
-          <button type="button" class="primary" disabled={props.busy} onClick={props.onConfirm}>
-            Approve and send {items()}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 /** Whether the phone still has the SMS item's `send_sms` command to run (outbox X6). */
@@ -317,8 +209,7 @@ function OutboxItem(props: {
   /** The item the page was opened on, scrolled to and marked. */
   focused?: boolean;
   devices: readonly Device[];
-  onApprove: () => void;
-  onReject: () => void;
+  onReady: () => void;
   onRetry: () => void;
   onDelete: () => void;
 }) {
@@ -335,13 +226,13 @@ function OutboxItem(props: {
     () => {
       const f = fields();
       const ref = str(f, "sent_ref");
-      return kind() === "sms" && ref && (status() === "approved" || status() === "sending")
+      return kind() === "sms" && ref && !str(f, "sent_at") && (status() === "ready" || status() === "sending")
         ? { ref, device: str(f, "device"), devices: props.devices }
         : null;
     },
     ({ ref, device, devices }) => waitingForPhone(ref, device, devices),
   );
-  const statusText = () => (waiting() ? "Waiting for phone" : STATUS_TEXT[status()] ?? status());
+  const statusText = () => (waiting() ? "Waiting for phone" : undefined);
   return (
     <li
       class="inbox-item outbox-item"
@@ -360,10 +251,7 @@ function OutboxItem(props: {
         </a>
         <p class="muted inbox-meta">
           <span class="outbox-kind">{{ email: "Email", sms: "SMS", event: "Calendar invite" }[kind()]}</span>
-          <span>Drafted by {draftedByText(fields(), labelOf)}</span>
-          <span class="inbox-processed-badge outbox-status" data-status={status()}>
-            {statusText()}
-          </span>
+          <OutboxChips fields={fields()} statusText={statusText()} />
         </p>
         <Show when={note()}>
           {(n) => (
@@ -392,13 +280,8 @@ function OutboxItem(props: {
         </Show>
       </div>
       <div class="inbox-actions">
-        <Show when={status() === "review"}>
-          <button type="button" class="primary" onClick={props.onApprove}>
-            Approve and send
-          </button>
-        </Show>
         <Show when={status() === "draft"}>
-          <button type="button" class="primary" onClick={props.onApprove}>
+          <button type="button" class="primary" onClick={props.onReady}>
             Ready
           </button>
         </Show>
@@ -407,17 +290,10 @@ function OutboxItem(props: {
             Retry
           </button>
         </Show>
-        <Show when={status() === "draft" || status() === "review" || status() === "failed" || status() === "rejected"}>
+        <Show when={status() === "draft" || status() === "failed"}>
           <a href={href()} class="button">
             Edit
           </a>
-        </Show>
-        <Show when={status() === "review"}>
-          <button type="button" onClick={props.onReject}>
-            Reject
-          </button>
-        </Show>
-        <Show when={status() === "draft" || status() === "rejected"}>
           <button type="button" class="danger" onClick={props.onDelete}>
             Delete
           </button>

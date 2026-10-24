@@ -74,6 +74,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "0120b5326e2e611d79c56abd62b705851c7762f376d813bcadfa5b2d67e8cb64",
             "cacc4fa862ca2b36215187e1ff71632930e357f8ee926f6faca3896280819b80",
             "ded1600480a80faf0bd741b9c26ef831f4ed53acc2c8e402beb4dba4ab4bc002",
+            "9043adfca3f50b16e3c73812302569b85bbdca0059641d9e7ba6d66df160d696",
         ],
     },
     ShippedFile {
@@ -142,6 +143,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "a4f144978e8d41264463826d12ca54bb75e765b0401b1e9bdc8a74204f7c54b8",
             "25bb9e337bdb15c08a696f5b96a2416ac078aafd43afd51673799528a188cd84",
             "b4782f4a6b52f51dedc82f1269f290d8a8fdad7404667526089afdee0b63b1aa",
+            "72d25f21d756250ca02dc77802c24ed1b417138c99ed2644e0b8b387092fbb0a",
         ],
     },
     ShippedFile {
@@ -161,6 +163,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "87423adde9c434f260c4d07f2cb1196cb7d89a91411c783838391cf2434c9e1d",
             "dc7c8f91ab0b2c8bdda7e31ccd2422b4edc628f0beb7a11b7dbb45c52fe15b7b",
             "0d9a17a114dfdc774cef98bca4ec1b885218afeece1b4e52d8fc0bcaf3d4b573",
+            "fc7f4cad0874863f6b121722b89c43034211cd5e8d0563e9ad5dc072766b4868",
         ],
     },
     // The Outbox's send handler, named by the shipped `outbox` type's handlers (outbox X3).
@@ -171,6 +174,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "48d6e8cc94b6bcac9a858a539391d2e9e3e8e8bbe96d4bda2b039632399ab461",
             "bc27a3a0c03cc59ac5a20539e639d3d6845b69ad377f57d26e333f6aefe40ab8",
             "b353fb621d71e67501b22f64043170277f2373769912b026267161198a57b0dc",
+            "f12e9fd3756b775fd84b7ab739ffd4e6e2e69a0160dcc5a96d5a5bc45551fab4",
         ],
     },
     // The built-in agent, the chat panel's default (agents G6).
@@ -239,7 +243,180 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0008_outbox_template",
         run: outbox_template,
     },
+    UpgradeStep {
+        id: "0009_outbox_statuses",
+        run: outbox_statuses,
+    },
 ];
+
+/// The `outbox` type as ticket 194 shipped it, whose status options, description and templates
+/// step `0009_outbox_statuses` replaces.
+const OUTBOX_TYPE_3A489B0: &str = include_str!("../defaults/old/outbox_3a489b0.wcl");
+
+/// The `status` options of the `outbox` type before outbox X14.
+const OLD_OUTBOX_STATUSES: [&str; 7] = [
+    "draft", "review", "approved", "sending", "sent", "failed", "rejected",
+];
+
+/// The position in `ast` of the item `pick` finds.
+fn item_at(ast: &Source, pick: &dyn Fn(&Item) -> bool) -> Option<usize> {
+    ast.items.iter().position(pick)
+}
+
+/// Replace the item `pick` finds in `ast` with the one it finds in `shipped` when it is, in
+/// canonical form, the one it finds in `old`. Answers whether it replaced it.
+fn replace_shipped_item(
+    ast: &mut Source,
+    old: &Source,
+    shipped: &Source,
+    pick: &dyn Fn(&Item) -> bool,
+) -> bool {
+    let (Some(at), Some(old_at), Some(new_at)) = (
+        item_at(ast, pick),
+        item_at(old, pick),
+        item_at(shipped, pick),
+    ) else {
+        return false;
+    };
+    let vault = canonical_item(&ast.items[at]);
+    if vault == canonical_item(&shipped.items[new_at])
+        || vault != canonical_item(&old.items[old_at])
+    {
+        return false;
+    }
+    ast.items[at] = shipped.items[new_at].clone();
+    true
+}
+
+/// An Outbox item's status under the statuses of outbox X14: `review` is `draft`, `approved` is
+/// `ready`. A `sent` item that the step could not remove waits as `sending` for the sweep, and a
+/// `rejected` one it could not move to the trash is a `draft`.
+fn new_outbox_status(doc: &mut Doc) {
+    let status = doc.field("status").and_then(DocValue::as_str).unwrap_or("");
+    let new = match status {
+        "review" | "rejected" => "draft",
+        "approved" => "ready",
+        "sent" => "sending",
+        _ => return,
+    };
+    doc.fields.retain(|(n, _)| n != "status");
+    doc.fields
+        .push(("status".to_owned(), DocValue::Str(new.to_owned())));
+}
+
+/// Step `0009_outbox_statuses` (outbox X14): an Outbox item is `draft`, `ready`, `sending` or
+/// `failed`, and a sent one leaves the Outbox. When the vault's built-in `outbox` type still has
+/// the seven statuses it shipped with, every `rejected` item is moved to the trash and every
+/// `sent` item (whose copy is a regular note already) is removed for good, then the type's
+/// `status` options become the four, with every other item moved (`review -> draft`,
+/// `approved -> ready`) in the same commit, authored as the server. The type's description and
+/// its `default` and `card` templates (which no longer show `drafted_by`) are replaced by the
+/// shipped ones too when they are still the ones ticket 194 shipped. A type whose options the
+/// user changed is left alone, with one line in the log.
+fn outbox_statuses(w: &Writer) -> Result<()> {
+    let name = OUTBOX_TYPE;
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(name) else {
+        return Ok(());
+    };
+    if !w.is_built_in_def(ty) {
+        eprintln!(
+            "step 0009_outbox_statuses skipped type {name:?}: a type of the user's holds the name"
+        );
+        return Ok(());
+    }
+    let options = match ty.field("status").map(|f| &f.kind) {
+        Some(schema::FieldKind::Select { options, .. }) => options.clone(),
+        _ => Vec::new(),
+    };
+    if options != OLD_OUTBOX_STATUSES {
+        if options != ["draft", "ready", "sending", "failed"] {
+            eprintln!(
+                "step 0009_outbox_statuses left type {name:?} as it is: its status options are \
+                 not the ones TheVault shipped"
+            );
+        }
+        return Ok(());
+    }
+    let author = Author::Task(SERVER_AUTHOR.to_owned());
+    // Rejected items go to the trash, where they can be restored; sent ones leave for good.
+    let rows = script_core::Vault::query(
+        w,
+        &format!("from {name} include archived where status == \"rejected\" || status == \"sent\""),
+        100_000,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("step 0009_outbox_statuses could not read the Outbox: {e}");
+        Vec::new()
+    });
+    for row in rows {
+        let (Some(id), Some(status)) = (row["id"].as_str(), row["fields"]["status"].as_str())
+        else {
+            continue;
+        };
+        let id = id.to_owned();
+        let done = if status == "sent" {
+            w.remove_sent_outbox(&id, None, &author).map(|_| ())
+        } else {
+            w.current_version(&id)
+                .and_then(|v| w.delete(&id, v.as_deref(), &author).map(|_| ()))
+        };
+        if let Err(e) = done {
+            eprintln!("step 0009_outbox_statuses could not take {status} item {id} out: {e}");
+        }
+    }
+    let path = type_path(name);
+    let old: Source = store::parse_data_only(OUTBOX_TYPE_3A489B0, &path)?;
+    let shipped: Source = store::parse_data_only(DEFAULT_OUTBOX_TYPE, &path)?;
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    let status_field = |i: &Item| block(i, "field").and_then(label) == Some("status");
+    let Some(at) = item_at(&ast, &status_field) else {
+        return Ok(());
+    };
+    let Some(Item::Block(field)) = ast.items.get_mut(at) else {
+        return Ok(());
+    };
+    let shipped_options = item_at(&shipped, &status_field).and_then(|i| match &shipped.items[i] {
+        Item::Block(b) => b
+            .items
+            .iter()
+            .find(|i| matches!(i, Item::Field(f) if f.name == "options"))
+            .cloned(),
+        _ => None,
+    });
+    let (Some(options_at), Some(new_options)) = (
+        field
+            .items
+            .iter()
+            .position(|i| matches!(i, Item::Field(f) if f.name == "options")),
+        shipped_options,
+    ) else {
+        return Ok(());
+    };
+    field.items[options_at] = new_options;
+    replace_shipped_item(
+        &mut ast,
+        &old,
+        &shipped,
+        &|i| matches!(i, Item::Field(f) if f.name == "description"),
+    );
+    for template in ["default", "card"] {
+        replace_shipped_item(&mut ast, &old, &shipped, &|i| {
+            block(i, "template").and_then(label) == Some(template)
+        });
+    }
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
+    let native = NativeMigration {
+        script: SERVER_AUTHOR,
+        function: "0009_outbox_statuses",
+        run: new_outbox_status,
+    };
+    w.apply_native_type_change(name, &change, &native, &author)?;
+    Ok(())
+}
 
 /// The `outbox` type as ticket 180 shipped it, whose `default` template step
 /// `0008_outbox_template` replaces.

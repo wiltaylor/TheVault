@@ -1,0 +1,248 @@
+label       = "Outbox item"
+plural      = "Outbox"
+description = "An email, SMS or calendar invite waiting to be sent. What an agent drafts waits in Review until you approve it."
+icon        = "send"
+colour      = "orange"
+
+field kind {
+  kind    = "select"
+  label   = "Kind"
+  options = ["email", "sms", "event"]
+  default = "email"
+}
+
+field status {
+  kind    = "select"
+  label   = "Status"
+  options = ["draft", "review", "approved", "sending", "sent", "failed", "rejected"]
+  default = "draft"
+}
+
+field drafted_by {
+  kind        = "string"
+  label       = "Drafted by"
+  description = "user, or the name of the agent that drafted the item."
+}
+
+field error {
+  kind        = "string"
+  label       = "Error"
+  description = "Why the last send failed."
+}
+
+field sent_at {
+  kind  = "datetime"
+  label = "Sent at"
+}
+
+field sent_ref {
+  kind        = "string"
+  label       = "Sent reference"
+  description = "The sent copy's id: the Gmail message id, the Google event id, or the phone's message id (the device command id while it waits)."
+  hidden      = true
+}
+
+field result {
+  kind        = "reference"
+  label       = "Sent copy"
+  description = "The email, message or event note of what was sent, once it came back."
+  target      = "*"
+}
+
+field to {
+  kind        = "list"
+  label       = "To"
+  description = "Email addresses."
+  items       = "string"
+}
+
+field cc {
+  kind        = "list"
+  label       = "Cc"
+  description = "Email addresses."
+  items       = "string"
+}
+
+field bcc {
+  kind        = "list"
+  label       = "Bcc"
+  description = "Email addresses."
+  items       = "string"
+}
+
+field subject {
+  kind  = "string"
+  label = "Subject"
+}
+
+field in_reply_to {
+  kind        = "reference"
+  label       = "In reply to"
+  description = "The email note this one answers, so it joins its thread."
+  target      = "*"
+}
+
+field attachments {
+  kind     = "asset"
+  label    = "Attachments"
+  multiple = true
+}
+
+field phone {
+  kind        = "string"
+  label       = "Phone number"
+  description = "The number the SMS goes to."
+}
+
+field device {
+  kind        = "string"
+  label       = "Device"
+  description = "The id of the phone that sends the SMS. Empty is the vault's one Android device with SMS sending on."
+}
+
+field event {
+  kind        = "reference"
+  label       = "Event"
+  description = "The event note to change. Empty for a new event."
+  target      = "*"
+}
+
+field when {
+  kind  = "date_range"
+  label = "When"
+  of    = "date_or_datetime"
+}
+
+field location {
+  kind  = "string"
+  label = "Location"
+}
+
+field attendees_raw {
+  kind        = "list"
+  label       = "Attendees"
+  description = "Each attendee's email address."
+  items       = "string"
+}
+
+field calendar {
+  kind        = "string"
+  label       = "Calendar"
+  description = "The id of the Google calendar. Empty is the default calendar."
+}
+
+field description {
+  kind  = "content"
+  label = "Description"
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+handler "after_create" {
+  script        = "outbox_send"
+  allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_account"]
+}
+
+handler "after_update" {
+  script        = "outbox_send"
+  allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_account"]
+}
+
+handler "after_update" {
+  script        = "google_gmail"
+  function      = "copy_sent"
+  allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings"]
+}
+
+template default {
+  tab "Outbox item" {
+    slot "status"
+    columns {
+      column {
+        slot "to" {
+          when = "kind == \"email\""
+        }
+        slot "cc" {
+          when = "kind == \"email\""
+        }
+        slot "bcc" {
+          when = "kind == \"email\""
+        }
+        slot "phone" {
+          when = "kind == \"sms\""
+        }
+        slot "event" {
+          when = "kind == \"event\""
+        }
+        slot "when" {
+          when = "kind == \"event\""
+        }
+        slot "location" {
+          when = "kind == \"event\""
+        }
+      }
+      column {
+        slot "subject" {
+          when = "kind == \"email\""
+        }
+        slot "in_reply_to" {
+          when = "kind == \"email\""
+        }
+        slot "device" {
+          when = "kind == \"sms\""
+        }
+        slot "calendar" {
+          when = "kind == \"event\""
+        }
+        slot "attendees_raw" {
+          when = "kind == \"event\""
+        }
+      }
+    }
+    slot "body" {
+      when = "kind != \"event\""
+    }
+    slot "description" {
+      when = "kind == \"event\""
+    }
+    slot "attachments" {
+      when = "kind == \"email\""
+    }
+    columns {
+      column {
+        slot "drafted_by"
+        slot "sent_at" {
+          when = "!empty(sent_at)"
+        }
+      }
+      column {
+        slot "result" {
+          when = "!empty(result)"
+        }
+        slot "error" {
+          when = "!empty(error)"
+        }
+      }
+    }
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "kind"
+    slot "status"
+    slot "drafted_by"
+  }
+}
+
+list_page {
+  view = "list"
+  sort = "updated desc"
+}

@@ -11,7 +11,7 @@ export const NAV: { href: string; label: string; icon: () => JSX.Element; badge?
   { href: "/daily", label: "Daily notes", icon: CalendarIcon },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/inbox", label: "Inbox", icon: InboxIcon, badge: inboxCount },
-  // The items an agent drafted, waiting for review (outbox X7).
+  // The drafts an agent made, waiting on the user (outbox X7, X14).
   { href: "/outbox", label: "Outbox", icon: OutboxIcon, badge: outboxCount },
   // What happened in the vault, the AI's work above all (activity Y4).
   { href: "/log", label: "Log", icon: LogIcon },

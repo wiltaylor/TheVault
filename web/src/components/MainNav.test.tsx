@@ -1,8 +1,8 @@
 import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// The sidebar's Outbox link (outbox X7): under Inbox, with a badge counting the items in Review;
-// and the Log under Outbox (activity Y4).
+// The sidebar's Outbox link (outbox X7, X14): under Inbox, with a badge counting the drafts agents
+// made, which wait on the user; and the Log under Outbox (activity Y4).
 
 const query = vi.fn();
 vi.mock("../api", async (orig) => {
@@ -21,7 +21,7 @@ afterEach(() => {
 const link = (name: RegExp) => screen.getByRole("link", { name });
 
 describe("the main links", () => {
-  it("put Outbox under Inbox, counting the items waiting for review", async () => {
+  it("put Outbox under Inbox, counting the agents' drafts", async () => {
     query.mockImplementation((q: string) => Promise.resolve({ rows: [], next: null, total: q.startsWith("from outbox") ? 3 : 0 }));
     render(() => (
       <ul>
@@ -32,7 +32,7 @@ describe("the main links", () => {
     expect(link(/^Outbox/).querySelector(".nav-badge")).toBeNull();
     await refreshOutboxCount();
     await waitFor(() => expect(link(/^Outbox/).querySelector(".nav-badge")?.textContent).toBe("3"));
-    expect(query).toHaveBeenCalledWith('from outbox where status == "review"', null, 1);
+    expect(query).toHaveBeenCalledWith('from outbox where status == "draft" && drafted_by != "user"', null, 1);
     expect(link(/^Outbox/).querySelector(".nav-badge")?.getAttribute("title")).toBe("3 waiting");
   });
 

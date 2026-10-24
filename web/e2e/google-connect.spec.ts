@@ -173,7 +173,18 @@ async function itemFields(admin: APIRequestContext, id: string): Promise<Record<
   return ((await (await admin.get(`/api/notes/${id}`)).json()) as { note: { fields: Record<string, unknown> } }).note.fields;
 }
 
-test("an email composed in the Outbox is sent through Gmail and shows in Sent with its copy linked", async ({ page, admin }) => {
+/** The status `GET /api/notes/{id}` answers: 404 once the note is gone. */
+async function noteStatus(admin: APIRequestContext, id: string): Promise<number> {
+  return (await admin.get(`/api/notes/${id}`)).status();
+}
+
+/** The ids of the email notes titled `title`. */
+async function emailsTitled(admin: APIRequestContext, title: string): Promise<string[]> {
+  const res = await admin.post("/api/query", { data: { query: `from email include archived where title == "${title}"`, page_size: 10 } });
+  return ((await res.json()) as { rows: { id: string }[] }).rows.map((r) => r.id);
+}
+
+test("an email composed in the Outbox is sent through Gmail, leaves the Outbox and its copy is a regular email", async ({ page, admin }) => {
   const subject = `Outbox lunch ${Date.now().toString(36)}`;
   for (const [name, value] of [
     ["google_client_id", "fake-client-id.apps.googleusercontent.com"],
@@ -221,26 +232,27 @@ test("an email composed in the Outbox is sent through Gmail and shows in Sent wi
     await expect(page.getByTestId("save-status")).toHaveText("Saved");
 
     await page.getByRole("button", { name: "Ready", exact: true }).click();
-    await expect.poll(() => itemFields(admin, id), { timeout: 30_000 }).toMatchObject({ status: "sent", to: ["ada@example.com"], subject });
-    await expect.poll(async () => (await itemFields(admin, id)).result, { timeout: 30_000 }).toBeTruthy();
-    const fields = await itemFields(admin, id);
-    expect(fields.sent_ref).toBeTruthy();
-    const copy = fields.result as string;
+    // Sent, with its copy back from Gmail, the item leaves the Outbox for good (outbox X14).
+    await expect.poll(() => noteStatus(admin, id), { timeout: 30_000 }).toBe(404);
+    const copies = await emailsTitled(admin, subject);
+    expect(copies).toHaveLength(1);
+    const copy = copies[0]!;
+    expect(await itemFields(admin, copy)).toMatchObject({ labels: ["system/SENT"] });
+    const trash = (await (await admin.get("/api/trash")).json()) as { notes: { id: string }[] };
+    expect(trash.notes.map((n) => n.id)).not.toContain(id);
 
-    // The Outbox lists it under Sent, linking to the copy.
+    // The Outbox has three tabs, and the sent email is in none of them.
     await outbox.click();
-    await page.getByRole("tab", { name: "Sent" }).click();
-    const item = page
-      .getByRole("list", { name: "Sent items" })
-      .getByRole("listitem")
-      .filter({ has: page.getByRole("link", { name: subject, exact: true }) });
-    await expect(item).toBeVisible();
-    await expect(item.getByLabel("Email preview")).toContainText("ada@example.com");
-    await expect(item.getByLabel("Email preview")).toContainText("Shall we meet at noon?");
-    const link = item.getByRole("link", { name: /^Sent copy/ });
-    await expect(link).toHaveAttribute("href", `/notes/${copy}`);
-    await link.click();
-    await expect(page).toHaveURL(new RegExp(`/notes/${copy}$`));
+    const tabs = page.getByRole("tablist", { name: "Outbox" });
+    await expect(tabs.getByRole("tab")).toHaveText(["Draft", "Ready", "Error"]);
+    for (const tab of ["Draft", "Ready", "Error"]) {
+      await tabs.getByRole("tab", { name: tab }).click();
+      await expect(tabs.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByRole("link", { name: subject, exact: true })).toHaveCount(0);
+    }
+
+    // The copy is a regular email note.
+    await page.goto(`/notes/${copy}`);
     await expect(page.getByRole("textbox", { name: "Title" })).toHaveText(subject);
     // The copy is an email note, so it offers Reply and Forward; Forward drafts it to no one.
     await expect(page.getByRole("button", { name: "Reply", exact: true })).toBeVisible();

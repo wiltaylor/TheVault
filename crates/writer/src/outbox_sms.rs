@@ -4,18 +4,21 @@
 //! and records the command's id as the item's `sent_ref`, leaving the item `sending`. The phone
 //! sends the text, waits for Android to say whether it went, and reports the command `done` with
 //! `{ device_ref: "sms:<_id>" }` (the sent row in the phone's SMS store) or `failed` with the
-//! reason. [`Writer::finish_outbox_sms`] then sets the item `sent`, with `sent_ref` the
-//! `device_ref` and `sent_at` now, or `failed` with the error, and links the sent copy as
-//! `result` when it has reached the vault already:
+//! reason. [`Writer::finish_outbox_sms`] then records the send, with `sent_ref` the
+//! `device_ref` and `sent_at` now, or sets the item `failed` with the error, and when the sent
+//! copy has reached the vault already links it as `result` and removes the item for good, since
+//! a sent item leaves the Outbox (outbox X14). The copy is found:
 //!
 //! - by its `device_ref`, the `message` note the phone's capture of the sent SMS made;
 //! - when the phone is an older app, which reports no `device_ref`, by the outgoing SMS to that
 //!   number with that text sent within [`COPY_WINDOW_MS`].
 //!
-//! A copy that arrives later is linked by the phone's capture (`device_messages.ws`).
+//! A copy that arrives later is linked by the phone's capture (`device_messages.ws`), and the
+//! server's `outbox_send` handler then removes the item; one that never arrives leaves the item
+//! `sending` until the sweep removes it 24 hours after the send ([`Writer::sweep_outbox`]).
 //!
 //! The writes are authored `handler outbox_send`, so the X2 rules hold: only an item still
-//! `sending` for this command moves, and only to `sent` or `failed`.
+//! `sending` for this command changes, and only to `failed` or by recording the send.
 
 use script_core::Vault as _;
 use serde_json::{Value as Json, json};
@@ -150,7 +153,7 @@ impl Writer {
         }
         let now = self.now_ms();
         let device_ref = result["device_ref"].as_str().filter(|r| !r.is_empty());
-        let mut set = json!({ "status": "sent", "sent_at": time::utc(now), "error": null });
+        let mut set = json!({ "sent_at": time::utc(now), "error": null });
         let copy = match device_ref {
             Some(r) => {
                 set["sent_ref"] = json!(r);
@@ -162,10 +165,17 @@ impl Writer {
                 now,
             )?,
         };
-        if let Some(copy) = copy {
+        if let Some(copy) = &copy {
             set["result"] = json!(copy);
         }
-        self.patch(item, set, version, &author)?;
+        let saved = self.patch(item, set, version, &author)?;
+        if copy.is_some() {
+            let version = saved["version"].as_str().unwrap_or_default();
+            match self.remove_sent_outbox(item, Some(version), &author) {
+                Ok(_) | Err(crate::Error::NotFound(_)) => {}
+                Err(e) => return Err(e.to_string()),
+            }
+        }
         Ok(())
     }
 

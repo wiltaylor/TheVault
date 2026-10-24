@@ -9012,24 +9012,45 @@ button.toast-action {
   }
 }
 
-/* The Outbox (outbox X7): tabs by status, and each item's preview by kind. */
+/* The Outbox (outbox X7, X14): tabs by status, and each item's preview by kind. */
 .outbox-tabs {
   margin: 0.75rem 0 1rem;
 }
 
-.outbox-bulk {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 0.75rem;
+/* An item's compact chips, the same in the list and on its page: the status, and AI beside it for
+   an agent's draft. They add no height to the line they sit on. */
+.outbox-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  vertical-align: middle;
 }
 
-.outbox-status[data-status="review"] {
+.outbox-chip {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.3;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.outbox-status[data-status="draft"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
 
 .outbox-status[data-status="failed"] {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
+}
+
+.outbox-ai-chip {
+  background: color-mix(in srgb, var(--palette-purple) 14%, transparent);
+  color: var(--palette-purple);
 }
 
 .outbox-preview {

@@ -427,7 +427,7 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
   );
 }
 
-/** What a draft card says (outbox X9): what was drafted, for whom, and that it waits for review. */
+/** What a draft card says (outbox X9, X14): what was drafted, for whom, and that it waits in Draft. */
 export function draftText(d: DraftRef): string {
   const to = d.to.join(", ");
   const what =
@@ -436,7 +436,7 @@ export function draftText(d: DraftRef): string {
       : d.kind === "event"
         ? `a calendar invite “${d.title}”${to ? ` for ${to}` : ""}`
         : `an email to ${to}`;
-  return d.status === "approved" ? `Drafted ${what}, sending without review` : `Drafted ${what} for review`;
+  return d.status === "ready" ? `Drafted ${what}, sending without review` : `Drafted ${what}`;
 }
 
 /** The compact card of a draft step (outbox X9): what it drafted, linking to the Outbox item. */
@@ -445,7 +445,7 @@ function DraftCard(props: { draft: DraftRef }) {
     <div class="ai-draft" role="group" aria-label="Outbox draft">
       <span>{draftText(props.draft)}</span>{" "}
       <a href={outboxItemHref(props.draft.note_id)}>
-        {props.draft.status === "approved" ? "Open the item" : "Review it in the Outbox"}
+        {props.draft.status === "ready" ? "Open the item" : "Open it in the Outbox"}
       </a>
     </div>
   );

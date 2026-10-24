@@ -1,6 +1,7 @@
-//! The built-in `outbox` type and who may move its items between statuses (outbox X1, X2): the
-//! user any way, an agent only into Review (or approved with `send_without_review`) and only its
-//! own drafts, and the send handlers and syncs only along approved, sending, sent or failed.
+//! The built-in `outbox` type and who may move its items between statuses (outbox X1, X2, X14):
+//! the user any way, an agent only as a draft (or ready with `send_without_review`) and only its
+//! own drafts, and the send handlers and syncs only along ready, sending or failed, removing an
+//! item once it was sent.
 
 use std::path::Path;
 
@@ -155,6 +156,30 @@ fn every_vault_has_the_outbox_type() {
 }
 
 #[test]
+fn the_outbox_has_four_statuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let schema = w.schema();
+    let ty = schema.type_def(OUTBOX_TYPE).unwrap();
+    match &ty.field("status").unwrap().kind {
+        schema::FieldKind::Select { options, .. } => {
+            assert_eq!(options, &["draft", "ready", "sending", "failed"]);
+        }
+        other => panic!("status is {other:?}"),
+    }
+    // The old statuses are not values the type takes.
+    for gone in ["review", "approved", "sent", "rejected"] {
+        assert!(
+            matches!(
+                create(&w, &user(), email(json!({ "status": gone }))),
+                Err(Error::Invalid(_))
+            ),
+            "{gone}"
+        );
+    }
+}
+
+#[test]
 fn the_user_makes_any_change() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
@@ -162,10 +187,8 @@ fn the_user_makes_any_change() {
     let f = fields(&w, &id);
     assert_eq!(f["status"], "draft");
     assert_eq!(f["drafted_by"], "user");
-    // Send, then everything else the user may do.
-    for next in [
-        "approved", "failed", "approved", "review", "rejected", "draft", "sent",
-    ] {
+    // Ready, then everything else the user may do.
+    for next in ["ready", "failed", "ready", "draft", "sending", "draft"] {
         edit(&w, &id, &user(), json!({ "status": next })).unwrap();
         assert_eq!(status(&w, &id), next);
     }
@@ -175,38 +198,38 @@ fn the_user_makes_any_change() {
         &w,
         &id,
         &token,
-        json!({ "status": "approved", "subject": "Lunch?" }),
+        json!({ "status": "ready", "subject": "Lunch?" }),
     )
     .unwrap();
     // The user may create an item ready to send.
-    let ready = create(&w, &user(), email(json!({ "status": "approved" }))).unwrap();
-    assert_eq!(status(&w, &ready), "approved");
+    let ready = create(&w, &user(), email(json!({ "status": "ready" }))).unwrap();
+    assert_eq!(status(&w, &ready), "ready");
 }
 
 #[test]
-fn an_agent_creates_items_for_review() {
+fn an_agent_creates_drafts() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
     let id = create(&w, &agent("drafter"), email(json!({}))).unwrap();
     let f = fields(&w, &id);
-    assert_eq!(f["status"], "review");
+    assert_eq!(f["status"], "draft");
     assert_eq!(f["drafted_by"], "drafter");
-    let named = create(&w, &agent("drafter"), email(json!({ "status": "review" }))).unwrap();
-    assert_eq!(status(&w, &named), "review");
+    let named = create(&w, &agent("drafter"), email(json!({ "status": "draft" }))).unwrap();
+    assert_eq!(status(&w, &named), "draft");
 
     let m = refused(create(
         &w,
         &agent("drafter"),
-        email(json!({ "status": "approved" })),
+        email(json!({ "status": "ready" })),
     ));
     assert!(m.contains("may not send without review"), "{m}");
-    for other in ["draft", "sending", "sent", "failed", "rejected"] {
+    for other in ["sending", "failed"] {
         let m = refused(create(
             &w,
             &agent("drafter"),
             email(json!({ "status": other })),
         ));
-        assert!(m.contains("creates Outbox items as review"), "{other}: {m}");
+        assert!(m.contains("creates Outbox items as draft"), "{other}: {m}");
     }
     let m = refused(create(
         &w,
@@ -223,31 +246,31 @@ fn an_agent_creates_items_for_review() {
 }
 
 #[test]
-fn only_an_agent_with_send_without_review_creates_approved_items() {
+fn only_an_agent_with_send_without_review_creates_ready_items() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    let id = create(&w, &agent("sender"), email(json!({ "status": "approved" }))).unwrap();
-    assert_eq!(status(&w, &id), "approved");
-    // Still review when it says nothing.
+    let id = create(&w, &agent("sender"), email(json!({ "status": "ready" }))).unwrap();
+    assert_eq!(status(&w, &id), "ready");
+    // Still a draft when it says nothing.
     let id = create(&w, &agent("sender"), email(json!({}))).unwrap();
-    assert_eq!(status(&w, &id), "review");
+    assert_eq!(status(&w, &id), "draft");
     // Turning off the note confirmations does not loosen the rule (ai D22).
     let m = refused(create(
         &w,
         &agent("careless"),
-        email(json!({ "status": "approved" })),
+        email(json!({ "status": "ready" })),
     ));
     assert!(m.contains("may not send without review"), "{m}");
     // Nor does an agent with no file.
     refused(create(
         &w,
         &agent("ghost"),
-        email(json!({ "status": "approved" })),
+        email(json!({ "status": "ready" })),
     ));
 }
 
 #[test]
-fn an_agent_edits_only_its_own_drafts_and_never_approves() {
+fn an_agent_edits_only_its_own_drafts_and_never_makes_them_ready() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
     let id = create(&w, &agent("drafter"), email(json!({}))).unwrap();
@@ -259,9 +282,8 @@ fn an_agent_edits_only_its_own_drafts_and_never_approves() {
     )
     .unwrap();
     edit(&w, &id, &agent("drafter"), json!({ "status": "draft" })).unwrap();
-    edit(&w, &id, &agent("drafter"), json!({ "status": "review" })).unwrap();
 
-    for next in ["approved", "rejected", "sending", "sent", "failed"] {
+    for next in ["ready", "sending", "failed"] {
         let m = refused(edit(&w, &id, &agent("drafter"), json!({ "status": next })));
         assert!(m.contains("may not set an Outbox item to"), "{next}: {m}");
     }
@@ -292,28 +314,28 @@ fn an_agent_edits_only_its_own_drafts_and_never_approves() {
     ));
     assert!(m.contains("only the Outbox items it drafted"), "{m}");
 
-    // Once the user approves, the agent cannot touch it, even with the bypass.
+    // Once the user marks it ready, the agent cannot touch it, even with the bypass.
     let own = create(&w, &agent("sender"), email(json!({}))).unwrap();
-    edit(&w, &own, &user(), json!({ "status": "approved" })).unwrap();
+    edit(&w, &own, &user(), json!({ "status": "ready" })).unwrap();
     let m = refused(edit(&w, &own, &agent("sender"), json!({ "subject": "x" })));
-    assert!(m.contains("only while it is draft or review"), "{m}");
+    assert!(m.contains("only while it is draft"), "{m}");
     let m = refused(edit(
         &w,
         &own,
         &agent("sender"),
-        json!({ "status": "review" }),
+        json!({ "status": "draft" }),
     ));
-    assert!(m.contains("this one is approved"), "{m}");
-    // And the bypass covers creating only: never approving an existing item.
-    let review = create(&w, &agent("sender"), email(json!({}))).unwrap();
-    refused(edit(
+    assert!(m.contains("this one is ready"), "{m}");
+    // And the bypass covers creating only: never making an existing draft ready.
+    let draft = create(&w, &agent("sender"), email(json!({}))).unwrap();
+    let m = refused(edit(
         &w,
-        &review,
+        &draft,
         &agent("sender"),
-        json!({ "status": "approved" }),
+        json!({ "status": "ready" }),
     ));
-    // Nor archiving one that is sent.
-    edit(&w, &own, &user(), json!({ "status": "sent" })).unwrap();
+    assert!(m.contains("only the user marks"), "{m}");
+    // Nor archiving one that is ready.
     let note = w.read(&own).unwrap();
     refused(w.set_archived(&own, true, Some(&note.version), &agent("sender")));
 }
@@ -322,7 +344,7 @@ fn an_agent_edits_only_its_own_drafts_and_never_approves() {
 fn the_send_handlers_and_syncs_move_items_along_the_send() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    let id = create(&w, &user(), email(json!({ "status": "approved" }))).unwrap();
+    let id = create(&w, &user(), email(json!({ "status": "ready" }))).unwrap();
     edit(
         &w,
         &id,
@@ -330,22 +352,23 @@ fn the_send_handlers_and_syncs_move_items_along_the_send() {
         json!({ "status": "sending", "error": null }),
     )
     .unwrap();
+    // The send is recorded on the item, which stays sending until its copy is linked.
     edit(
         &w,
         &id,
         &handler(),
-        json!({ "status": "sent", "sent_ref": "m1", "sent_at": "2026-10-23T10:00:00Z" }),
+        json!({ "sent_ref": "m1", "sent_at": "2026-10-23T10:00:00Z" }),
     )
     .unwrap();
     // The Gmail task links the copy without changing the status.
     let copy = create(&w, &user(), email(json!({}))).unwrap();
     edit(&w, &id, &task(), json!({ "result": copy })).unwrap();
     let f = fields(&w, &id);
-    assert_eq!(f["status"], "sent");
+    assert_eq!(f["status"], "sending");
     assert_eq!(f["sent_ref"], "m1");
     assert_eq!(f["result"], copy.as_str());
 
-    let failing = create(&w, &user(), email(json!({ "status": "approved" }))).unwrap();
+    let failing = create(&w, &user(), email(json!({ "status": "ready" }))).unwrap();
     edit(&w, &failing, &handler(), json!({ "status": "sending" })).unwrap();
     edit(
         &w,
@@ -355,43 +378,112 @@ fn the_send_handlers_and_syncs_move_items_along_the_send() {
     )
     .unwrap();
     // Retry is the user's.
-    let m = refused(edit(
-        &w,
-        &failing,
-        &handler(),
-        json!({ "status": "approved" }),
-    ));
-    assert!(m.contains("not from failed to approved"), "{m}");
-    edit(&w, &failing, &user(), json!({ "status": "approved" })).unwrap();
+    let m = refused(edit(&w, &failing, &handler(), json!({ "status": "ready" })));
+    assert!(m.contains("not from failed to ready"), "{m}");
+    edit(&w, &failing, &user(), json!({ "status": "ready" })).unwrap();
 }
 
 #[test]
 fn the_send_handlers_and_syncs_change_nothing_else() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    let review = create(&w, &agent("drafter"), email(json!({}))).unwrap();
+    let draft = create(&w, &agent("drafter"), email(json!({}))).unwrap();
     for by in [handler(), task()] {
-        let m = refused(edit(&w, &review, &by, json!({ "status": "approved" })));
-        assert!(m.contains("only from approved to sending"), "{m}");
-        refused(edit(&w, &review, &by, json!({ "status": "rejected" })));
+        let m = refused(edit(&w, &draft, &by, json!({ "status": "ready" })));
+        assert!(m.contains("only from ready to sending"), "{m}");
+        let m = refused(edit(&w, &draft, &by, json!({ "status": "sending" })));
+        assert!(m.contains("not from draft to sending"), "{m}");
     }
-    let draft = create(&w, &user(), email(json!({}))).unwrap();
-    let m = refused(edit(&w, &draft, &handler(), json!({ "status": "sending" })));
-    assert!(m.contains("not from draft to sending"), "{m}");
-    let approved = create(&w, &user(), email(json!({ "status": "approved" }))).unwrap();
-    refused(edit(&w, &approved, &handler(), json!({ "status": "sent" })));
+    let ready = create(&w, &user(), email(json!({ "status": "ready" }))).unwrap();
+    refused(edit(&w, &ready, &handler(), json!({ "status": "failed" })));
     let m = refused(edit(
         &w,
-        &approved,
+        &ready,
         &handler(),
         json!({ "status": "sending", "subject": "Changed" }),
     ));
     assert!(m.contains("not subject"), "{m}");
-    let m = refused(create(
-        &w,
-        &handler(),
-        email(json!({ "status": "approved" })),
-    ));
+    let m = refused(create(&w, &handler(), email(json!({ "status": "ready" }))));
     assert!(m.contains("may not create Outbox items"), "{m}");
     refused(create(&w, &task(), email(json!({}))));
+}
+
+/// Item `id` moved to `sending` by the send handler, with its send recorded at `sent_at`.
+fn sent(w: &Writer, id: &str, sent_at: &str) {
+    edit(w, id, &handler(), json!({ "status": "sending" })).unwrap();
+    edit(
+        w,
+        id,
+        &handler(),
+        json!({ "sent_ref": "m1", "sent_at": sent_at }),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_sent_item_is_removed_for_good() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let id = create(&w, &user(), email(json!({ "status": "ready" }))).unwrap();
+    // Only an item that was sent is removed: not a draft, a ready or a failed one.
+    let m = refused(w.remove_sent_outbox(&id, None, &handler()));
+    assert!(m.contains("only an Outbox item that was sent"), "{m}");
+    sent(&w, &id, "2026-10-23T10:00:00Z");
+    let copy = create(&w, &user(), email(json!({}))).unwrap();
+    edit(&w, &id, &task(), json!({ "result": copy })).unwrap();
+    w.remove_sent_outbox(&id, None, &handler()).unwrap();
+    // Gone from the vault, the trash and the history: its copy is the regular note.
+    assert!(matches!(w.read(&id), Err(Error::NotFound(_))));
+    assert!(w.trash().unwrap().iter().all(|t| t.note_id != id));
+    assert!(w.state().current_version(&id).unwrap().is_none());
+    assert!(w.read(&copy).is_ok());
+    assert!(matches!(
+        w.remove_sent_outbox(&id, None, &handler()),
+        Err(Error::NotFound(_))
+    ));
+    // A note of another type is never removed this way.
+    refused(w.remove_sent_outbox(&copy, None, &handler()));
+}
+
+#[test]
+fn the_sweep_removes_sent_items_after_a_day() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let sent_at = "2026-10-23T10:00:00Z";
+    let at = 1_792_749_600_000; // 2026-10-23T10:00:00Z
+    let waiting = create(&w, &user(), email(json!({ "status": "ready" }))).unwrap();
+    sent(&w, &waiting, sent_at);
+    let linked = create(&w, &user(), email(json!({ "status": "ready" }))).unwrap();
+    sent(&w, &linked, sent_at);
+    let copy = create(&w, &user(), email(json!({}))).unwrap();
+    edit(&w, &linked, &task(), json!({ "result": copy })).unwrap();
+    // Still waiting for the phone: no send recorded, so it stays however long it waits.
+    let unsent = create(&w, &user(), email(json!({ "status": "ready" }))).unwrap();
+    edit(
+        &w,
+        &unsent,
+        &handler(),
+        json!({ "status": "sending", "sent_ref": "cmd1" }),
+    )
+    .unwrap();
+    let failed = create(&w, &user(), email(json!({ "status": "ready" }))).unwrap();
+    edit(&w, &failed, &handler(), json!({ "status": "sending" })).unwrap();
+    edit(
+        &w,
+        &failed,
+        &handler(),
+        json!({ "status": "failed", "error": "no" }),
+    )
+    .unwrap();
+
+    // An hour on, only the item whose copy is linked goes.
+    assert_eq!(w.sweep_outbox(at + 60 * 60 * 1000), 1);
+    assert!(w.read(&linked).is_err());
+    assert!(w.read(&waiting).is_ok());
+    // A day on, the one whose copy never came goes too.
+    assert_eq!(w.sweep_outbox(at + writer::outbox::SENT_KEEP_MS), 1);
+    assert!(w.read(&waiting).is_err());
+    assert!(w.trash().unwrap().is_empty());
+    assert_eq!(status(&w, &unsent), "sending");
+    assert_eq!(status(&w, &failed), "failed");
 }

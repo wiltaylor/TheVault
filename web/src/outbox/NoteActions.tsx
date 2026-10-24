@@ -1,6 +1,6 @@
-// The note page's Outbox buttons (outbox X8, X13): Reply, Reply all and Forward on an email or an
-// SMS message, Propose a change on an event, and on an Outbox item itself the moves its status
-// may make: Ready on a draft, Approve and send and Reject on one in review, Retry on a failed one.
+// The note page's Outbox buttons (outbox X8, X13, X14): Reply, Reply all and Forward on an email
+// or an SMS message, Propose a change on an event, and on an Outbox item itself what its status
+// allows: Ready on a draft, Retry on a failed one, and Delete on both.
 
 import { useNavigate } from "@solidjs/router";
 import { Show, createResource, createSignal } from "solid-js";
@@ -10,6 +10,7 @@ import { typeDef } from "../session";
 import { errorText } from "../pages/TypeEditor";
 import { conversationPeople, createDraft, googleAccount, smsReplyDrafts } from "./actions";
 import {
+  DRAFT_TAB_HREF,
   EMAIL,
   EVENT,
   MESSAGE,
@@ -26,9 +27,6 @@ import {
   strs,
 } from "./model";
 
-/** Where the Outbox lists drafts, opened when one action makes several. */
-const DRAFTS_TAB = "/outbox?tab=drafts";
-
 export function NoteOutboxActions(props: {
   id: string;
   type: string;
@@ -36,13 +34,15 @@ export function NoteOutboxActions(props: {
   disabled?: boolean;
   /** Set the open item's status, through the note page's own save. */
   setStatus: (status: Status, extra?: Record<string, undefined>) => void;
+  /** Move the open item to the trash, as the note page's own delete does. */
+  onDelete?: () => void;
 }) {
   const navigate = useNavigate();
   const [busy, setBusy] = createSignal(false);
   // The Outbox is a built-in type; a vault that has it removed offers none of these.
   const hasOutbox = () => !!typeDef(OUTBOX);
 
-  /** Create the drafts `make` builds and open the one made, or the Drafts tab for several. */
+  /** Create the drafts `make` builds and open the one made, or the Draft tab for several. */
   async function draft(make: () => NoteDoc[] | Promise<NoteDoc[]>) {
     setBusy(true);
     try {
@@ -52,7 +52,7 @@ export function NoteOutboxActions(props: {
       if (made.length === 1) navigate(`/notes/${made[0]!.id}`);
       else if (made.length > 1) {
         showToast(`${made.length} SMS drafts made`);
-        navigate(DRAFTS_TAB);
+        navigate(DRAFT_TAB_HREF);
       }
     } catch (e) {
       showToast(errorText(e));
@@ -109,14 +109,13 @@ export function NoteOutboxActions(props: {
       </Show>
       <Show when={props.type === OUTBOX}>
         <Show when={status() === "draft"}>
-          <Button label="Ready" primary onClick={() => props.setStatus("approved")} />
-        </Show>
-        <Show when={status() === "review"}>
-          <Button label="Approve and send" primary onClick={() => props.setStatus("approved")} />
-          <Button label="Reject" onClick={() => props.setStatus("rejected")} />
+          <Button label="Ready" primary onClick={() => props.setStatus("ready")} />
         </Show>
         <Show when={status() === "failed"}>
-          <Button label="Retry" primary onClick={() => props.setStatus("approved", { error: undefined })} />
+          <Button label="Retry" primary onClick={() => props.setStatus("ready", { error: undefined })} />
+        </Show>
+        <Show when={props.onDelete && (status() === "draft" || status() === "failed")}>
+          <Button label="Delete" name="Delete this item" onClick={() => props.onDelete?.()} />
         </Show>
       </Show>
     </Show>

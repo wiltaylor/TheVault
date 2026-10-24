@@ -269,8 +269,9 @@ fn item_text(item: Value) -> string {
 // Link message note `message`, an SMS the phone sent, as the sent copy (`result`) of the Outbox
 // item it came from: the item whose `sent_ref` is the message's `device_ref`, as the phone
 // reported it; or, while the item still waits for the phone's report (or the phone is an older
-// app that reports none), the SMS item still sending or sent with no copy, to the same number,
-// saying the same, approved within ten minutes of the message.
+// app that reports none), the SMS item still sending with no copy, to the same number, saying
+// the same, sent within ten minutes of the message. The home server's `outbox_send` handler then
+// removes the item, since a sent item leaves the Outbox (outbox X14).
 fn link_outbox(message: string, device_ref: string, number: string, body: string, sent: string) -> Result[(), string] {
     if message == "" {
         return Ok(())
@@ -292,7 +293,7 @@ fn link_outbox(message: string, device_ref: string, number: string, body: string
     if at < 0 || said == "" || number == "" {
         return Ok(())
     }
-    let rows = vault::query("from outbox where kind == \"sms\" && (status == \"sending\" || status == \"sent\") sort updated desc limit 20")?
+    let rows = vault::query("from outbox where kind == \"sms\" && status == \"sending\" sort updated desc limit 20")?
     for row in rows {
         let f = row.get("fields").unwrap_or(Value::Null)
         if text_of(f, "result") != "" || !same_number(text_of(f, "phone"), number) {

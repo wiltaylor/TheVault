@@ -106,7 +106,7 @@ export interface DraftRef {
   note_id: string;
   /** `email`, `sms` or `event`. */
   kind: string;
-  /** `review`, or `approved` for an agent that sends without review. */
+  /** `draft`, or `ready` for an agent that sends without review (outbox X14). */
   status: string;
   title: string;
   /** Who it goes to, by name where a person note named them. */

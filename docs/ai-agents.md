@@ -30,7 +30,7 @@ An agent's permissions are its own: nothing is inherited from Settings > AI.
 - **Confirmation switches** (`permissions.confirm`): with a switch on, a change of that kind is a proposal you apply or discard; with it off, the agent makes the change itself. See [Changes the AI makes](ai.md#changes-the-ai-makes).
 - **Internet switches** (`permissions.web`): which web tools the agent is given at all. See [Internet switches](ai.md#internet-switches).
 - **Note types** (`permissions.types`): the types the agent may read and change. Search, query, backlinks and asset results leave out notes of other types, reading one is refused with "This agent may not read <type> notes.", and every change to one is refused.
-- **Outbox** (`permissions.outbox.send_without_review`, off by default): "Send from the Outbox without review". Off, what the agent drafts waits in the Outbox for you. On, its drafts are approved at once and sent. See [Drafting into the Outbox](#drafting-into-the-outbox).
+- **Outbox** (`permissions.outbox.send_without_review`, off by default): "Send from the Outbox without review". Off, what the agent drafts waits in the Outbox's Draft tab for you. On, its drafts are created ready and sent at once. See [Drafting into the Outbox](#drafting-into-the-outbox).
 - **Browser automation** (`permissions.browser`, off by default): the browser box tools. See [Driving the browser box](#driving-the-browser-box).
 
 In a chat, the person or token running it still caps what the agent can change: an agent never writes more than its caller could.
@@ -71,12 +71,14 @@ An agent drafts emails, SMS messages and calendar invites with three chat tools.
 | `draft_sms` | An SMS for the phone to send: `to` (a number or a person note id), `body` and `device` (empty for the vault's one Android device with SMS sending on) |
 | `draft_event` | A calendar invite: a new event, or with `event` a change to an existing event note. `title`, `when`, `location`, `attendees`, `description` and `calendar`; for a change an empty value keeps that part. Sent, Google emails the attendees |
 
-A person note id resolves to the person's first email address or phone number when the item is drafted; the agent must be allowed to read person notes. Items are written as the agent, the Assistant included, so the Outbox review rules hold:
+A person note id resolves to the person's first email address or phone number when the item is drafted; the agent must be allowed to read person notes. Items are written as the agent, the Assistant included, so the Outbox rules hold:
 
-- an item is created in Review, and only an agent with "Send from the Outbox without review" on creates it approved, so it is sent at once;
-- an agent can change only its own items while they are in Draft or Review, and never approves, sends or rejects one, by these tools or by `propose_edit`. Its confirmation switches do not change this: with "Ask before creating and editing notes" off, an edit that approves an item is still refused.
+- an item is created as a draft (`status` `draft`), and only an agent with "Send from the Outbox without review" on creates it ready (`ready`), so it is sent at once. The tool answers the status;
+- an agent can change only its own drafts, and they stay drafts: it never marks an item ready or sends one, by these tools or by `propose_edit`. Its confirmation switches do not change this: with "Ask before creating and editing notes" off, an edit that marks an item ready is still refused.
 
-Drafting is not a change the chat asks you to apply, since the Outbox is the review, so the tools have no confirmation switch and unattended runs are offered them. They need a caller with `write`: a read-only token's chat gets an error. The chat shows each draft as a compact card, such as "Drafted an email to Ann Lee for review", linking to the item.
+On the Outbox page and the item's page an agent's draft carries an **AI** chip beside its status. Once sent, an item leaves the Outbox and its copy is a regular email, message or event note.
+
+Drafting is not a change the chat asks you to apply, since the Outbox is where you check a draft, so the tools have no confirmation switch and unattended runs are offered them. They need a caller with `write`: a read-only token's chat gets an error. The chat shows each draft as a compact card, such as "Drafted an email to Ann Lee", linking to the item.
 
 ## Driving the browser box
 
@@ -259,7 +261,7 @@ A trigger run has no one present to apply a proposal, so it is offered only:
 
 - the read tools the agent's permissions allow,
 - the change tools whose confirmation switch is off for the agent, and
-- the Outbox draft tools, since what they draft waits in the Outbox for review.
+- the Outbox draft tools, since what they draft waits in the Outbox for you.
 
 A change tool whose switch is on is left out of the run's tool list, so nothing is left pending. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types, taxonomies and agents only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
 

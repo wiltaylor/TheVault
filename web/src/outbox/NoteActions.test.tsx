@@ -146,7 +146,7 @@ describe("the note page's Outbox buttons", () => {
     expect(drafted().fields).toMatchObject({ kind: "sms", title: "SMS to Bo", phone: "+61400000002" });
   });
 
-  it("Reply all in a group conversation drafts one SMS per other number and opens the Drafts tab", async () => {
+  it("Reply all in a group conversation drafts one SMS per other number and opens the Draft tab", async () => {
     notes["01ADA"] = person("Ada", ["+61400000001"]);
     notes["01BO"] = person("Bo", ["+61400000002"]);
     notes["01CY"] = person("Cy", ["+61 400 000 003"]);
@@ -154,7 +154,7 @@ describe("the note page's Outbox buttons", () => {
     const doc = sms({ direction: "in", from: "01ADA", from_raw: "+61400000001", to_raw: ["+61400000002"], conversation: "01CONV" });
     render(() => <NoteOutboxActions id="01MSG" type="message" doc={doc} setStatus={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Reply all" }));
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/outbox?tab=drafts"));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/outbox?tab=draft"));
     expect(createNote).toHaveBeenCalledTimes(3);
     expect(createNote.mock.calls.map((c) => [(c[1] as NoteDoc).fields.title, (c[1] as NoteDoc).fields.phone])).toEqual([
       ["SMS to Ada", "+61400000001"],
@@ -183,31 +183,35 @@ describe("the note page's Outbox buttons", () => {
     });
   });
 
-  it("Ready on a draft item approves it; Approve and send or Reject on one in review; Retry on a failed one", () => {
+  it("Ready and Delete on a draft item; Retry and Delete on a failed one; nothing to approve or reject", () => {
     const setStatus = vi.fn();
+    const onDelete = vi.fn();
     const doc = (status: string): NoteDoc => ({ fields: { title: "x", kind: "email", status }, blocks: [] });
-    const r = render(() => <NoteOutboxActions id="01ITEM" type="outbox" doc={doc("draft")} setStatus={setStatus} />);
+    const r = render(() => <NoteOutboxActions id="01ITEM" type="outbox" doc={doc("draft")} setStatus={setStatus} onDelete={onDelete} />);
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve and send" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Ready" }));
-    expect(setStatus).toHaveBeenCalledWith("approved");
+    expect(setStatus).toHaveBeenCalledWith("ready");
+    fireEvent.click(screen.getByRole("button", { name: "Delete this item" }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
     r.unmount();
-    const r2 = render(() => <NoteOutboxActions id="01ITEM" type="outbox" doc={doc("review")} setStatus={setStatus} />);
-    expect(screen.queryByRole("button", { name: "Ready" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Approve and send" }));
-    expect(setStatus).toHaveBeenLastCalledWith("approved");
-    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
-    expect(setStatus).toHaveBeenLastCalledWith("rejected");
-    r2.unmount();
-    render(() => <NoteOutboxActions id="01ITEM" type="outbox" doc={doc("failed")} setStatus={setStatus} />);
+    const r2 = render(() => <NoteOutboxActions id="01ITEM" type="outbox" doc={doc("failed")} setStatus={setStatus} onDelete={onDelete} />);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(setStatus).toHaveBeenLastCalledWith("approved", { error: undefined });
+    expect(setStatus).toHaveBeenLastCalledWith("ready", { error: undefined });
     expect(screen.queryByRole("button", { name: "Ready" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Delete this item" }));
+    expect(onDelete).toHaveBeenCalledTimes(2);
+    r2.unmount();
+    // Ready or sending, it is on its way: nothing to do.
+    for (const status of ["ready", "sending"]) {
+      const r3 = render(() => <NoteOutboxActions id="01ITEM" type="outbox" doc={doc(status)} setStatus={setStatus} onDelete={onDelete} />);
+      expect(screen.queryAllByRole("button")).toHaveLength(0);
+      r3.unmount();
+    }
   });
 
-  it("offers nothing on a sent item, or without the Outbox type", () => {
-    render(() => <NoteOutboxActions id="01ITEM" type="outbox" doc={{ fields: { status: "sent" }, blocks: [] }} setStatus={vi.fn()} />);
-    expect(screen.queryAllByRole("button")).toHaveLength(0);
-    cleanup();
+  it("offers nothing without the Outbox type", () => {
     hasOutbox = false;
     render(() => <NoteOutboxActions id="01EMAIL" type="email" doc={EMAIL} setStatus={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();

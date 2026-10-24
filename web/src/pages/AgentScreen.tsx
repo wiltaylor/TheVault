@@ -438,7 +438,7 @@ function PermissionsTab(p: AgentTabProps) {
         </div>
         <h3>Outbox</h3>
         <p class="muted">
-          What the agent drafts with the Outbox tools waits in the Outbox for you to review, approve and send.
+          What the agent drafts with the Outbox tools waits in the Outbox's Draft tab until you mark it Ready.
         </p>
         <div class="ai-confirm">
           <label class="ai-confirm-switch">

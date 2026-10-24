@@ -1,7 +1,7 @@
-// The Outbox (outbox X7, X8): emails, SMS and calendar invites waiting to be sent. Items are
+// The Outbox (outbox X7, X8, X14): emails, SMS and calendar invites waiting to be sent. Items are
 // notes of the built-in `outbox` type (crates/writer/defaults/outbox.wcl); the writer checks who
 // may move an item from one status to another, and the server's `outbox_send` handler sends what
-// becomes `approved`.
+// becomes `ready`. A sent item leaves the Outbox: its copy is a regular email, message or event.
 
 import type { Block, Json, NoteDoc } from "../api";
 import { escapeText } from "../editor/markup";
@@ -16,31 +16,34 @@ export const MESSAGE = "message";
 
 export type Kind = "email" | "sms" | "event";
 
-export type Status = "draft" | "review" | "approved" | "sending" | "sent" | "failed" | "rejected";
+export type Status = "draft" | "ready" | "sending" | "failed";
 
 /** What each status says on an item, on the Outbox page and the item's own page. */
 export const STATUS_TEXT: Record<Status, string> = {
   draft: "Draft",
-  review: "Waiting for review",
-  approved: "Approved",
+  ready: "Ready",
   sending: "Sending",
-  sent: "Sent",
-  failed: "Failed",
-  rejected: "Rejected",
+  failed: "Error",
 };
 
 /** Who drafted an item the user made. */
 export const DRAFTED_BY_USER = "user";
 
-/** The Outbox page's tabs, each the statuses it lists. */
+/** The Outbox page's tabs, each the statuses it lists (outbox X14). */
 export const TABS: readonly { key: string; label: string; statuses: readonly Status[] }[] = [
-  { key: "review", label: "Review", statuses: ["review"] },
-  { key: "drafts", label: "Drafts", statuses: ["draft"] },
-  { key: "sending", label: "Sending", statuses: ["approved", "sending"] },
-  { key: "sent", label: "Sent", statuses: ["sent"] },
-  { key: "failed", label: "Failed", statuses: ["failed"] },
-  { key: "rejected", label: "Rejected", statuses: ["rejected"] },
+  { key: "draft", label: "Draft", statuses: ["draft"] },
+  { key: "ready", label: "Ready", statuses: ["ready", "sending"] },
+  { key: "error", label: "Error", statuses: ["failed"] },
 ];
+
+/** The Outbox's Draft tab, opened when one action makes several drafts. */
+export const DRAFT_TAB_HREF = "/outbox?tab=draft";
+
+/** The index in [`TABS`] of the tab `key` names, also as the older links name it, or -1. */
+export function tabByKey(key: unknown): number {
+  const k = key === "drafts" ? "draft" : key === "failed" ? "error" : key;
+  return TABS.findIndex((t) => t.key === k);
+}
 
 /** The query of the items in `statuses`, newest change first. */
 export function statusQuery(statuses: readonly Status[]): string {
@@ -61,8 +64,8 @@ export function tabOf(status: string): number {
   );
 }
 
-/** The items waiting for the user's review: the side menu's badge counts them. */
-export const REVIEW_QUERY = `from ${OUTBOX} where status == "review"`;
+/** The drafts an agent made, which wait on the user: the side menu's badge counts them. */
+export const AGENT_DRAFTS_QUERY = `from ${OUTBOX} where status == "draft" && drafted_by != "${DRAFTED_BY_USER}"`;
 
 /** A field's value as text, empty when it holds none. */
 export function str(fields: Record<string, Json>, name: string): string {
@@ -86,11 +89,10 @@ export function statusOf(fields: Record<string, Json>): Status {
   return (str(fields, "status") || "draft") as Status;
 }
 
-/** Who drafted an item, in words: "You" or the agent's name. */
-export function draftedByText(fields: Record<string, Json>, label?: (name: string) => string | undefined): string {
+/** The agent that drafted an item, or null when the user did. */
+export function draftingAgent(fields: Record<string, Json>): string | null {
   const by = str(fields, "drafted_by");
-  if (!by || by === DRAFTED_BY_USER) return "You";
-  return label?.(by) ?? by;
+  return by && by !== DRAFTED_BY_USER ? by : null;
 }
 
 /** The blocks of content field `name`. */

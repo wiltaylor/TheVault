@@ -139,10 +139,16 @@ struct Plan {
     slots: BTreeMap<String, Slot>,
     stopped: bool,
     agents: agents::AgentPlan,
+    /// When the Outbox was last swept of sent items (outbox X14).
+    swept_ms: Option<i64>,
 }
 
 /// The longest the background loop sleeps before looking at the clock again.
 const MAX_SLEEP: Duration = Duration::from_secs(30);
+
+/// How often the Outbox is swept of sent items whose copy never came, in milliseconds: every ten
+/// minutes ([`Writer::sweep_outbox`], outbox X14).
+const OUTBOX_SWEEP_MS: i64 = 10 * 60 * 1000;
 
 /// Runs the vault's scheduled tasks.
 pub struct Scheduler {
@@ -280,6 +286,7 @@ impl Scheduler {
     /// Run every firing and retry due at the clock's time now, and the agent trigger runs due,
     /// and wait for them to end. Returns the task runs, in task name order.
     pub fn tick(&self) -> Vec<TaskRun> {
+        self.sweep_outbox();
         let due = self.take_due();
         let starts = self.agent_starts();
         thread::scope(|s| {
@@ -382,8 +389,29 @@ impl Scheduler {
         self.wake.notify_all();
     }
 
+    /// Sweep the Outbox of sent items (outbox X14), at most every [`OUTBOX_SWEEP_MS`]. The
+    /// scheduler runs only on the home server, so only the home server removes them.
+    fn sweep_outbox(&self) {
+        let now = self.clock.now_ms();
+        {
+            let mut plan = self.plan();
+            if plan
+                .swept_ms
+                .is_some_and(|at| now >= at && now - at < OUTBOX_SWEEP_MS)
+            {
+                return;
+            }
+            plan.swept_ms = Some(now);
+        }
+        let removed = self.writer.sweep_outbox(now);
+        if removed > 0 {
+            eprintln!("outbox: removed {removed} sent items");
+        }
+    }
+
     fn background(self: Arc<Self>) {
         loop {
+            self.sweep_outbox();
             for (def, attempt) in self.take_due() {
                 let s = self.clone();
                 thread::spawn(move || s.run(&def, attempt));
