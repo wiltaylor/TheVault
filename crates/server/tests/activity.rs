@@ -579,6 +579,14 @@ fn a_trigger_run_records_its_turn_the_agents_edit_and_the_run() {
     assert_eq!(run["detail"]["trigger"], "opened");
     assert_eq!(run["subject"], thread);
     assert_eq!(find(&by_agent, "ai.turn.end")["detail"]["outcome"], "done");
+    // The agent writing its thread note as the turn ran is not logged as a note edit: the turn's
+    // own entries say what happened.
+    assert!(
+        !by_agent
+            .iter()
+            .any(|e| e["category"] == "notes" && e["subject"] == thread),
+        "{by_agent:#?}"
+    );
 }
 
 #[test]

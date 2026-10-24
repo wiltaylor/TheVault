@@ -103,6 +103,9 @@ impl Writer {
         title: Option<&str>,
         version: &str,
     ) {
+        if Self::told_elsewhere(by, act, type_name) {
+            return;
+        }
         let tail = match act {
             NoteAct::Delete => " to the trash",
             NoteAct::Restore => " from the trash",
@@ -121,6 +124,23 @@ impl Writer {
             entry = entry.coalescing();
         }
         self.state.record_activity(entry);
+    }
+
+    /// Note writes the log already shows as AI activity, left out so they do not flood it: an
+    /// agent's writes of its thread notes as each turn runs (the turn's own `ai.*` entries say what
+    /// happened, agents G7), and every create, update and delete of a memory (`ai.memory` records
+    /// each, from the agent's tools, the Memory tab and other agents alike, agents G21). The user's
+    /// own archive, delete and restore of a thread are still recorded.
+    fn told_elsewhere(by: &Author, act: NoteAct, type_name: &str) -> bool {
+        match type_name {
+            crate::AGENT_MEMORY_TYPE => {
+                matches!(act, NoteAct::Create | NoteAct::Update | NoteAct::Delete)
+            }
+            crate::AGENT_THREAD_TYPE => {
+                matches!(by, Author::Agent(_)) && matches!(act, NoteAct::Create | NoteAct::Update)
+            }
+            _ => false,
+        }
     }
 
     /// Record the definition files a commit changed: `(path, existed, exists)` each. Notes and
