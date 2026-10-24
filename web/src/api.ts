@@ -287,6 +287,47 @@ export interface NotificationPage {
   unread: number;
 }
 
+/** The activity log's categories (activity Y1). */
+export type ActivityCategory = "ai" | "notes" | "definitions" | "automation" | "outbox" | "sync" | "auth";
+
+/**
+ * One entry of the activity log (activity Y1): what happened, who did it and what it is about.
+ * `summary` is one line and never holds message text or secret values.
+ */
+export interface ActivityItem {
+  /** A ULID, which is also the order. */
+  id: string;
+  at_ms: number;
+  /** Dotted, such as `note.update` or `ai.tool`. */
+  kind: string;
+  category: ActivityCategory | string;
+  /** The `Author` kind: session, token, handler, task, agent, device or server. */
+  actor_kind: string;
+  actor: string;
+  summary: string;
+  /** What the entry links to: `note`, `type`, `taxonomy`, `agent`, `thread`, `task_run`, `outbox`, `device`. */
+  subject_kind: string | null;
+  subject: string | null;
+  /** Small JSON: the tool name and its argument summary, tokens, outcome, version. */
+  detail: Record<string, Json> | null;
+}
+
+/** A page of the activity log, newest first; `next` is the `before` of the next older page. */
+export interface ActivityPage {
+  items: ActivityItem[];
+  next: string | null;
+}
+
+/** The activity log's filters (activity Y3). `actor` is `<kind>:<name>`, such as `agent:assistant`. */
+export interface ActivityFilter {
+  category?: string | null;
+  actor?: string | null;
+  kind?: string | null;
+  q?: string | null;
+  before?: string | null;
+  limit?: number | null;
+}
+
 /** A stored pinned entry, as the folder and move endpoints return it. */
 export interface PinEntry {
   kind: "note" | "folder";
@@ -1418,6 +1459,16 @@ export const api = {
     if (opts.unread) q.set("unread", "true");
     const qs = q.toString();
     return request<NotificationPage>("GET", `/api/notifications${qs ? `?${qs}` : ""}`);
+  },
+  /** A page of the activity log, newest first (activity Y3). Needs `admin`. */
+  activity: (f: ActivityFilter = {}) => {
+    const q = new URLSearchParams();
+    for (const key of ["category", "actor", "kind", "q", "before", "limit"] as const) {
+      const v = f[key];
+      if (v !== undefined && v !== null && v !== "") q.set(key, String(v));
+    }
+    const qs = q.toString();
+    return request<ActivityPage>("GET", `/api/activity${qs ? `?${qs}` : ""}`);
   },
   readNotification: (id: string) =>
     request<AppNotification & { unread: number }>("POST", `/api/notifications/${enc(id)}/read`),

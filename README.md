@@ -10,6 +10,7 @@ A single-user, self-hosted note app: a Rust server, a SolidJS web client, deskto
 
 - [Install TheVault with Docker Compose](docs/install.md)
 - [Capturing to the inbox: text, images, the camera, the pen, Send to and sharing](docs/capture.md)
+- [The activity log: what happened in the vault, and what the AI did](docs/activity.md)
 - [Connecting Gmail and Google Calendar](docs/google.md)
 - [Handing out the apps from your server](docs/clients.md)
 - [Connecting an AI agent](docs/agents.md)

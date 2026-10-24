@@ -47,6 +47,7 @@ const NAMES: [RegExp, string, string?][] = [
   [/^\/archive/, "Archive"],
   [/^\/agents\//, "Agent"],
   [/^\/outbox/, "Outbox", "send"],
+  [/^\/log/, "Log", "scroll-text"],
   [/^\/browser-box/, "Browser", "monitor"],
 ];
 

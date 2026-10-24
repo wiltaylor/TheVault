@@ -9,6 +9,7 @@ import { noteChangedElsewhere } from "../changes";
 import { refreshAgents } from "../agents";
 import { callsSaved } from "../agentCalls";
 import { bumpTurns, liveTurn } from "../ai/running";
+import { activityResync, liveActivity } from "../activity/live";
 import { connectLive } from "../live";
 import {
   type ListState,
@@ -133,6 +134,7 @@ export function startPolling(): () => void {
         noteChangedElsewhere(null);
         bumpTurns();
         void refreshAgents();
+        activityResync();
       }
     },
     down: poll,
@@ -147,6 +149,10 @@ export function startPolling(): () => void {
         // A chat turn on an agent's thread started or ended (agents G17).
         liveTurn(data);
         void refreshAgents();
+      }
+      else if (name === "activity") {
+        // A new entry of the activity log (activity Y3).
+        liveActivity(data);
       }
       else if (name.startsWith("notification.") && data && typeof data === "object") {
         liveNotification({ name, data } as NotificationEvent);

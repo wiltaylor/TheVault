@@ -64,10 +64,13 @@ describe("connectLive", () => {
     last().emit("notification.created", '{"id":"A","unread":1}');
     last().emit("note.changed", '{"id":"N","type":"task","version":"v2","deleted":false}');
     last().emit("notification.read", "not json");
+    // A new entry of the activity log (activity Y3).
+    last().emit("activity", '{"item":{"id":"01K","kind":"note.update"}}');
     expect(calls).toEqual([
       "open",
       'notification.created {"id":"A","unread":1}',
       'note.changed {"id":"N","type":"task","version":"v2","deleted":false}',
+      'activity {"item":{"id":"01K","kind":"note.update"}}',
     ]);
   });
 

@@ -9,6 +9,7 @@ import { AssetView } from "./pages/AssetView";
 import { DailyNotes } from "./pages/DailyNotes";
 import { Devices } from "./pages/Devices";
 import { Inbox } from "./pages/Inbox";
+import { Log } from "./pages/Log";
 import { Outbox } from "./pages/Outbox";
 import { Ai } from "./pages/Ai";
 import { AgentScreen } from "./pages/AgentScreen";
@@ -72,6 +73,7 @@ export function paneRoutes() {
       <Route path="/search" component={Search} />
       <Route path="/inbox" component={Inbox} />
       <Route path="/outbox" component={Outbox} />
+      <Route path="/log" component={Log} />
       <Route path="/browser-box" component={BrowserBox} />
       <Route path="*" component={() => <p class="error">There is no page here.</p>} />
     </>

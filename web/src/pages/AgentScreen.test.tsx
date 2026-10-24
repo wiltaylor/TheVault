@@ -262,6 +262,12 @@ describe("the agent screen", () => {
     expect(agent).toHaveBeenCalledWith("inbox_triage");
   });
 
+  it("links to the agent's AI activity in the Log with Show in log (activity Y5)", async () => {
+    await open("/agents/inbox_triage");
+    const link = screen.getByRole("link", { name: "Show in log" });
+    expect(link.getAttribute("href")).toBe("/log?category=ai&actor=agent:inbox_triage");
+  });
+
   it("opens the tab the address names", async () => {
     await open("/agents/inbox_triage/permissions");
     expect(screen.getByRole("tab", { name: "Permissions" })).toHaveAttribute("aria-selected", "true");

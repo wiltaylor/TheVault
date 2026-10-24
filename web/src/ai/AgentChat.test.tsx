@@ -269,6 +269,17 @@ describe("thread actions", () => {
     expect(list.queryByText("Groceries")).toBeNull();
   });
 
+  it("links a thread's menu to the agent's AI activity in the Log (activity Y5)", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = await rows();
+    const menu = openMenu(list, "Groceries");
+    expect(menu.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Rename", "Archive", "Show in log", "Delete"]);
+    const link = menu.getByRole("menuitem", { name: "Show in log" });
+    expect(link.getAttribute("href")).toBe("/log?category=ai&actor=agent:triage");
+    fireEvent.click(link);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
   it("opens a thread's menu on right-click", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
     const list = await rows();

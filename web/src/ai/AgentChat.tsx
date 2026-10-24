@@ -4,7 +4,8 @@
 // conversation view as the AI panel. A thread is a note the server keeps, so reopening one shows
 // its turns as they were and its pending proposals with Apply and Discard again. The first
 // message of a new thread starts it. Each thread's ⋯ menu (or a right-click) renames it inline,
-// archives or unarchives it, and deletes it to the trash (agents G15): ordinary note writes,
+// archives or unarchives it, opens the agent's AI activity in the Log (activity Y5), and deletes
+// it to the trash (agents G15): ordinary note writes,
 // authored by the user. Archived threads are hidden until "Show archived" lists them, dimmed.
 // Turns run on the server in the background (agents G17): any thread can be opened while one
 // answers, a running thread shows a spinner, read as "Running", and one that answered while it
@@ -14,6 +15,7 @@
 // tab and the panel each choose their thread by themselves, and the tab sends no open note.
 
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
+import { logHref } from "../activity/model";
 import { type AgentThreadSummary, api } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { NameInput } from "../components/PinnedTree";
@@ -196,6 +198,9 @@ export function AgentChat(props: { agent: string; label?: string; thread?: strin
         <button type="button" role="menuitem" onClick={() => setArchived(t(), !t().archived)}>
           {t().archived ? "Unarchive" : "Archive"}
         </button>
+        <a role="menuitem" href={logHref(props.agent)} onClick={() => setMenu(null)}>
+          Show in log
+        </a>
         <button type="button" role="menuitem" class="danger" onClick={() => remove(t())}>
           Delete
         </button>

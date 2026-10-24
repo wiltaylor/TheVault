@@ -5,7 +5,7 @@
 // switches and note types (agents G4); Triggers its schedules and note events with their last runs
 // (agents G9 to G12, `AgentTriggers.tsx`); File its WCL. Settings, Permissions and Triggers edit
 // one draft, so moving between them keeps unsaved changes, and each tab's Save writes the whole
-// agent. In the
+// agent. Show in log opens the agent's AI activity in the Log (activity Y5). In the
 // apps the rest of the screen is read only: agent files need `admin`, which a device token never
 // has (G2).
 
@@ -45,6 +45,7 @@ import {
   api,
 } from "../api";
 import { AgentChat } from "../ai/AgentChat";
+import { logHref } from "../activity/model";
 import { IconPicker } from "../components/IconPicker";
 import { TypeIcon } from "../components/Icon";
 import { Spinner } from "../components/SyncStatus";
@@ -634,6 +635,9 @@ export function AgentScreen() {
               <Show when={!v().a.enabled}>
                 <span class="agent-badge agent-badge-off">Disabled</span>
               </Show>
+              <a class="agent-log-link" href={logHref(v().a.name)}>
+                <TypeIcon name="scroll-text" size={16} /> Show in log
+              </a>
             </header>
             <Show when={v().a.description}>
               <p class="muted">{v().a.description}</p>

@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@solidjs/testing-library";
 import { createResource } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import * as M from "./model";
-import { PaneRouter } from "./pane";
+import { PaneRouter, locationTitle } from "./pane";
 import { goPane, navigatePane, resetWorkspace, workspace } from "./store";
 
 afterEach(cleanup);
@@ -58,4 +58,9 @@ it("each pane routes over its own history", async () => {
   navigatePane(b, "/x/20");
   expect(await screen.findByText("page 20")).toBeTruthy();
   expect(window.location.pathname).toBe("/x/20");
+});
+
+it("names the Log pane Log, with the scroll icon (activity Y4)", () => {
+  expect(locationTitle("/log")).toEqual({ title: "Log", icon: "scroll-text" });
+  expect(locationTitle("/log?category=ai&actor=agent:triage")).toEqual({ title: "Log", icon: "scroll-text" });
 });
