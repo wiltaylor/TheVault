@@ -405,7 +405,7 @@ pub async fn apply(
     State(a): State<Arc<Ai>>,
     Caller(author): Caller,
     Extension(GrantedScope(scope)): Extension<GrantedScope>,
-    Json(change): Json<Value>,
+    Json(mut change): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     if !change.is_object() {
         return Err(ApiError::bad_request(
@@ -438,7 +438,13 @@ pub async fn apply(
             _ => None,
         };
         if let Some(message) = message {
-            return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_admin", message));
+            // An agent's proposal waiting in its thread is the user's to apply from an app, whose
+            // token has `write`: the change applied is the one the thread holds, not the body, so
+            // a caller without `admin` applies only what an agent proposed.
+            match waiting_in_thread(&a.writer, event, &change) {
+                Some(stored) => change = stored,
+                None => return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_admin", message)),
+            }
         }
     }
     let w = a.writer.clone();
@@ -529,6 +535,19 @@ fn apply_as_agent(
 pub struct Discard {
     id: String,
     thread: String,
+}
+
+/// The proposal `change` names, as its thread holds it, when it is an `event` proposal still
+/// waiting for the user there.
+fn waiting_in_thread(w: &writer::Writer, event: &str, change: &Value) -> Option<Value> {
+    let thread = change["thread"].as_str().filter(|s| !s.is_empty())?;
+    let id = change["id"].as_str().filter(|s| !s.is_empty())?;
+    let t = agent_threads::Thread::read(w, thread).ok()?;
+    t.transcript
+        .proposals
+        .iter()
+        .find(|p| p.id() == id && p.event == event && p.waits())
+        .map(|p| p.data.clone())
 }
 
 /// `POST /api/ai/discard` (read): the user discarded a proposal of a thread, recorded there so

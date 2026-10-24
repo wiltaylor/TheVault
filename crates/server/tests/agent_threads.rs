@@ -854,3 +854,58 @@ fn the_chat_settings_are_the_assistants_and_providers_answers_them() {
     assert_eq!(a["permissions"]["web"]["read"], true);
     assert_eq!(a["system_prompt"], "Be brief.");
 }
+
+#[test]
+fn an_app_applies_an_agents_type_proposal_from_its_thread_as_the_thread_holds_it() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    // An app's token has `write`, never `admin`.
+    let app = api.token_of("phone", "write");
+    let thread = api.thread("assistant");
+    let changed = MEMO.replace("tab \"Main\"", "tab \"Details\"");
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_t",
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": changed }),
+    ));
+    fake.push(AnthropicMessage::text("A change for you."));
+    let events = api.chat_as(
+        &app,
+        json!({ "agent": "assistant", "thread": thread, "messages": [user("Rename the tab.")] }),
+    );
+    let proposal = events_named(&events, "type_proposal")[0].clone();
+    assert_eq!(proposal["thread"], thread.as_str());
+    let type_file = || {
+        api.get("/api/types/memo")["wcl"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+
+    // The body sent is not what is applied: the thread's copy is.
+    let mut tampered = proposal.clone();
+    tampered["after"] = json!(MEMO.replace("tab \"Main\"", "tab \"Mine\""));
+    let res = api.request_as(&app, "POST", "/api/ai/apply", Some(tampered));
+    assert_eq!(res.status(), StatusCode::OK);
+    let done: Value = res.json().unwrap();
+    assert_eq!(done, json!({ "op": "type_change", "type_name": "memo" }));
+    assert!(type_file().contains("tab \"Details\""), "{}", type_file());
+    let t = api.read_thread("assistant", &thread);
+    assert_eq!(t["proposals"][0]["status"], "applied", "{t}");
+
+    // Applied, it no longer waits: a second apply needs admin.
+    let res = api.request_as(&app, "POST", "/api/ai/apply", Some(proposal.clone()));
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let err: Value = res.json().unwrap();
+    assert_eq!(err["error"], "needs_admin");
+
+    // A change no thread holds needs admin as before.
+    let mut loose = proposal;
+    loose["thread"] = Value::Null;
+    loose["id"] = json!("toolu_other");
+    loose["before"] = json!(type_file());
+    loose["after"] = json!(MEMO);
+    let res = api.request_as(&app, "POST", "/api/ai/apply", Some(loose));
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(type_file().contains("tab \"Details\""));
+}
