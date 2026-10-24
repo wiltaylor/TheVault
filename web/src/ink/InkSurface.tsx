@@ -77,9 +77,9 @@ function readTouchDraws(): boolean {
   }
 }
 
-const [touchDraws, setTouchDrawsSignal] = createSignal(readTouchDraws());
+const [deviceTouchDraws, setTouchDrawsSignal] = createSignal(readTouchDraws());
 
-function setTouchDraws(on: boolean) {
+function setDeviceTouchDraws(on: boolean) {
   setTouchDrawsSignal(on);
   try {
     localStorage.setItem(TOUCH_DRAWS_KEY, on ? "on" : "off");
@@ -118,8 +118,25 @@ let surfaces = 0;
  * drawing is edited and every finished stroke, erase, undo or settled view reports the whole new
  * block.
  */
-export function InkSurface(props: { block: Block | undefined; label: string; onChange?: (block: Block) => void }) {
+export function InkSurface(props: {
+  block: Block | undefined;
+  label: string;
+  onChange?: (block: Block) => void;
+  /**
+   * Fill the height of the box the surface stands in, with no height handle, as the capture
+   * dialog's pen does (capture K2). The drawing's `height` is left as it is.
+   */
+  fill?: boolean;
+  /**
+   * Whether the mouse and one finger start out drawing here, whatever the device's choice says.
+   * The toggle then changes this surface only.
+   */
+  touchDraws?: boolean;
+}) {
   const id = `ink-${++surfaces}`;
+  const [ownTouchDraws, setOwnTouchDraws] = createSignal(props.touchDraws ?? false);
+  const touchDraws = () => (props.touchDraws === undefined ? deviceTouchDraws() : ownTouchDraws());
+  const setTouchDraws = (on: boolean) => (props.touchDraws === undefined ? setDeviceTouchDraws(on) : setOwnTouchDraws(on));
   const ink = createMemo(() => inkOf(props.block));
   const editing = () => !!props.onChange;
   const [mode, setMode] = createSignal<Mode>("pen");
@@ -143,7 +160,7 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
   // The height while the bottom handle is dragged. Strokes keep their coordinates: a taller view
   // shows more of the plane, a shorter one less.
   const [heightPreview, setHeightPreview] = createSignal<number | null>(null);
-  const viewHeight = () => heightPreview() ?? ink().height;
+  const viewHeight = () => (props.fill ? box().height || ink().height : (heightPreview() ?? ink().height));
   const viewWidth = () => box().width || ink().width || NEW_WIDTH;
 
   // The view as panned and zoomed here, until it is saved and comes back in the block.
@@ -518,7 +535,7 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
   }
 
   return (
-    <div class="ink" data-testid="ink">
+    <div class="ink" classList={{ "ink-fill": !!props.fill }} data-testid="ink">
       <div class="ink-stage">
         <Show when={props.onChange}>
           <div class="ink-controls" ref={controls} data-node-view-interactive="" data-testid="ink-controls">
@@ -691,7 +708,7 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
           data-zoom={view().zoom}
           width="100%"
           // The box is border-box: its 1px border on each side, around the view's height.
-          height={viewHeight() + 2}
+          height={props.fill ? "100%" : viewHeight() + 2}
           viewBox={`${view().x} ${view().y} ${viewWidth() / view().zoom} ${viewHeight() / view().zoom}`}
           preserveAspectRatio="xMinYMin meet"
           onPointerDown={onPointerDown}
@@ -736,7 +753,7 @@ export function InkSurface(props: { block: Block | undefined; label: string; onC
             {(s) => <path class={`ink-stroke ink-live ink-${s().tool}`} d={strokePath(s(), false)} fill={fillOf(s())} />}
           </Show>
         </svg>
-        <Show when={props.onChange}>
+        <Show when={props.onChange && !props.fill}>
           <HeightHandle
             label={`${props.label} height`}
             height={ink().height}

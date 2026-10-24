@@ -8473,7 +8473,104 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   background: var(--changed);
 }
 
+/* Send to (capture K3): a small select under the text. */
+.capture-send-to {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  align-self: flex-start;
+  font-size: 0.85rem;
+}
+
+.capture-send-to select {
+  font: inherit;
+  padding: 0.2rem 0.4rem;
+}
+
+/* The desktop camera preview (capture K1). */
+.capture-camera {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.capture-camera-frame {
+  display: flex;
+  justify-content: center;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: #000;
+}
+
+.capture-camera-video {
+  display: block;
+  max-width: 100%;
+  max-height: 40vh;
+}
+
+.capture-camera-video[hidden] {
+  display: none;
+}
+
+.capture-drawing {
+  background: var(--bg);
+}
+
+.capture-drawing-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The pen (capture K2): the ink drawing over the dialog, most of the screen on a desktop. */
+.capture-pen {
+  position: fixed;
+  inset: calc(4vh + var(--safe-top)) calc(4vw + var(--safe-right)) calc(4vh + var(--safe-bottom)) calc(4vw + var(--safe-left));
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--panel);
+  box-shadow: 0 20px 48px rgb(0 0 0 / 0.35);
+}
+
+.capture-pen-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.capture-pen-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.capture-pen-stage {
+  flex: 1;
+  min-height: 0;
+}
+
+.ink.ink-fill {
+  height: 100%;
+  margin: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.ink-fill .ink-stage {
+  height: 100%;
+}
+
 @media (max-width: 600px) {
+  .capture-pen {
+    inset: 0;
+    padding: calc(0.5rem + var(--safe-top)) calc(0.5rem + var(--safe-right)) calc(0.5rem + var(--safe-bottom)) calc(0.5rem + var(--safe-left));
+    border: none;
+    border-radius: 0;
+  }
+
   .capture-backdrop {
     align-items: flex-end;
     padding: 0;

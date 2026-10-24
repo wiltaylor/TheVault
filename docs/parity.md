@@ -52,7 +52,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Delete a note in the trash forever, after a confirm | `pages/Trash.tsx` (Delete forever), in a browser only | `DELETE /api/trash/{id}` | none, see below | Explained: as Empty the trash (ai D21) |
 | Open today's daily note, or another day's | `DailyNotes.tsx` | `POST /api/daily/{date}` (today), `GET /api/daily/{date}` (other days) | `vault daily open <date>`, `vault daily get <date>` | |
 | Create the daily note for another day | `DailyNotes.tsx` (Create note for this day) | `POST /api/daily/{date}` | `vault daily open <date>` | |
-| Capture a fleeting note (text, pasted, dropped or attached images) | `capture/CaptureModal.tsx` (+ button, sidebar Capture, Ctrl+Shift+K) | `POST /api/assets`, then `POST /api/notes?type=fleeting` | `vault asset upload <file>`, then `vault put --type fleeting` | |
+| Capture a fleeting note (text, pasted, dropped or attached images, camera photos, pen drawings, Send to an agent) | `capture/CaptureModal.tsx` (+ button, sidebar Capture, Ctrl+Shift+K) | `POST /api/assets`, then `POST /api/notes?type=fleeting` | `vault asset upload <file>`, then `vault put --type fleeting` (an `ink` block and an `agent:<name>?call=<ULID>` link in `body`) | |
 | Count the inbox in the sidebar | `capture/store.ts` | `POST /api/query` (`from fleeting where !processed`) | `vault query 'from fleeting where !processed'` | |
 | List the inbox | `Inbox.tsx` | `POST /api/query`, `GET /api/notes/{id}` per item | `vault query 'from fleeting where !processed sort created desc'` | |
 | Mark a fleeting note done, or undo it | `Inbox.tsx` (Done, toast Undo, Back to inbox) | `GET /api/notes/{id}`, `PUT /api/notes/{id}` | `vault get <id>`, `vault put <id> --base <version>` | |

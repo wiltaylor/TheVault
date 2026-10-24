@@ -85,6 +85,19 @@ describe("captureDoc", () => {
     });
   });
 
+  it("puts drawings after the text, then the call to an agent", () => {
+    const ink = { kind: "ink", fields: { height: 400 }, blocks: [] };
+    const call = { agent: "assistant", label: "Assistant", call: "01JB9A0C3D4E5F6G7H8J9K0M1N" };
+    const doc = captureDoc(FLEETING, "Look", [], NOW, { drawings: [ink], call });
+    expect(doc.blocks[0]!.blocks).toEqual([
+      { kind: "paragraph", fields: { text: "Look" } },
+      ink,
+      { kind: "paragraph", fields: { text: "[@Assistant Process this capture](agent:assistant?call=01JB9A0C3D4E5F6G7H8J9K0M1N)" } },
+    ]);
+    expect(captureDoc(FLEETING, "", [], NOW, { drawings: [ink] }).fields.title).toBe("Drawing 2026-10-14 09:05");
+    expect(captureDoc(FLEETING, "", ["A1"], NOW, { drawings: [ink] }).fields.title).toBe("Image 2026-10-14 09:05");
+  });
+
   it("knows when there is nothing to save", () => {
     expect(hasContent("", 0)).toBe(false);
     expect(hasContent("  \n", 0)).toBe(false);
