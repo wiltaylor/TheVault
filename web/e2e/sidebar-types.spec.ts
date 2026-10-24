@@ -104,3 +104,27 @@ test("uploaded files are listed among the types as Images and files, opening the
   await expect(page).toHaveURL(/\/assets$/);
   await expect(entry).toHaveClass(/active/);
 });
+
+test("a type or agent made elsewhere shows in an open page's sidebar without a reload", async ({ page, admin }) => {
+  const t = token();
+  await logIn(page, "/daily");
+  const types = typesNav(page);
+  await types.getByRole("button", { name: "Types" }).click();
+  await expect(types.getByRole("link").filter({ hasText: "Tasks" })).toBeVisible();
+  const agents = page.getByRole("navigation", { name: "Agents" });
+  const agentsToggle = agents.getByRole("button", { name: "Agents", exact: true });
+  if ((await agentsToggle.getAttribute("aria-expanded")) === "false") await agentsToggle.click();
+
+  // Written through the API, as an agent, a script or another device would.
+  await putType(admin, `live_${t}`, `Live things ${t}`);
+  await expect(types.getByRole("link").filter({ hasText: `Live things ${t}` })).toBeVisible();
+  const agent = `live_${t}`;
+  const res = await admin.put(`/api/agents/${agent}`, { data: { wcl: `label = "Live agent ${t}"\n` } });
+  expect(res.status(), await res.text()).toBe(200);
+  await expect(agents.getByRole("link").filter({ hasText: `Live agent ${t}` })).toBeVisible();
+
+  const del = await admin.delete(`/api/types/live_${t}`);
+  expect(del.status(), await del.text()).toBe(200);
+  await expect(types.getByRole("link").filter({ hasText: `Live things ${t}` })).toHaveCount(0);
+  await admin.delete(`/api/agents/${agent}`);
+});

@@ -4,6 +4,7 @@
 
 import { createRoot, createSignal } from "solid-js";
 import { ApiError, type Skill, type SkillFile, type SkillSummary, api } from "./api";
+import { keepSame } from "./keepSame";
 
 /** The icon a skill shows. */
 export const SKILL_ICON = "book-open";
@@ -50,7 +51,7 @@ export const skillsVersion = store.version;
 export async function refreshSkills(): Promise<void> {
   try {
     const l = await api.skills();
-    store.setList([...l].sort((a, b) => a.name.localeCompare(b.name)));
+    store.setList((prev) => keepSame(prev, [...l].sort((a, b) => a.name.localeCompare(b.name)), (s) => s.name));
     store.setError(null);
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {

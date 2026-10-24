@@ -431,6 +431,7 @@ impl Embedded {
             .map_or_else(SyncReport::unpaired, |s| s.report());
         let mut out = report.to_json(&Waiting::of(self.queue()));
         out["progress"] = sync_status::progress_json(&self.sync_progress().snapshot());
+        out["definitions"] = self.writer().definition_changes().into();
         out
     }
 

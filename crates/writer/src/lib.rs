@@ -483,6 +483,9 @@ pub struct Writer {
     staging: Mutex<Option<Vec<(NoteChange, Author)>>>,
     /// Each agent's open notification of the Outbox items it drafted this turn (outbox X10).
     drafts: Mutex<HashMap<String, outbox::DraftBatch>>,
+    /// How many synced files besides notes this writer has changed since it opened, written here
+    /// or pulled from the home server. See [`Writer::definition_changes`].
+    definitions: std::sync::atomic::AtomicU64,
 }
 
 /// Rounds of step 5 and step 6 one write may take before it is refused. Each round runs handlers
@@ -526,6 +529,7 @@ impl Writer {
             }),
             staging: Mutex::new(None),
             drafts: Mutex::new(HashMap::new()),
+            definitions: std::sync::atomic::AtomicU64::new(0),
         })
     }
 

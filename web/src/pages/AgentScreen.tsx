@@ -642,9 +642,11 @@ export function AgentScreen() {
     setDraftSignal(agentForm(a));
   }
 
-  // Read the agent, and again after the sidebar changes one.
+  // Read the agent, and again after the sidebar changes one or it changes elsewhere. A change
+  // elsewhere leaves unsaved edits alone.
   createEffect(
-    on([() => params.name, agentsVersion], ([name]) => {
+    on([() => params.name, agentsVersion], ([name], prev) => {
+      if (prev && prev[0] === name && dirty()) return;
       setError(null);
       api
         .agent(name!)

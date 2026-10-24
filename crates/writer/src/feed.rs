@@ -125,7 +125,36 @@ impl Writer {
         let generation = self.vault.commit(files)?;
         self.state.journal_files(&synced)?;
         self.record_definitions(&existed);
+        self.announce_definitions(&synced);
         Ok(generation)
+    }
+
+    /// Tell open clients which synced files changed, and count them for
+    /// [`Writer::definition_changes`]. `synced` is `(path, exists)` of each.
+    pub(crate) fn announce_definitions(&self, synced: &[(String, bool)]) {
+        for (path, exists) in synced {
+            let Some((kind, name)) = synced_file(path) else {
+                continue;
+            };
+            self.definitions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.state
+                .events()
+                .publish(state::LiveEvent::DefinitionChanged {
+                    kind: kind.to_owned(),
+                    name: name.to_owned(),
+                    deleted: !exists,
+                });
+        }
+    }
+
+    /// How many synced files besides notes (types, taxonomies, scripts, tasks, device files,
+    /// agents and skills' files) this writer has changed since it opened, through its own writes
+    /// or a sync round's [`Writer::apply_remote_files`]. A client that has no event stream, such
+    /// as the web client in an app, compares it between two looks to learn that its types, agents
+    /// or skills are out of date.
+    pub fn definition_changes(&self) -> u64 {
+        self.definitions.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// `(path, existed, exists)` of each synced change, before it is committed.
@@ -153,6 +182,7 @@ impl Writer {
         let generation = self.vault.commit_with_hook(files, hook)?;
         self.state.journal_files(&synced)?;
         self.record_definitions(&existed);
+        self.announce_definitions(&synced);
         Ok(generation)
     }
 }

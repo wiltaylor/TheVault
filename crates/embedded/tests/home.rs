@@ -629,6 +629,9 @@ fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
     // Idle after a round, nothing queued: green, with the time and the server.
     fake.set(SyncPhase::Synced, None, Some(1_700_000_000_000));
     let out = device.call("GET", "/api/app/sync", None, 200);
+    let definitions = out["definitions"]
+        .as_u64()
+        .expect("a count of definition changes");
     assert_eq!(
         out,
         json!({
@@ -646,6 +649,7 @@ fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
             "warning": null,
             // No round has run on this device: no progress yet (ticket 144).
             "progress": null,
+            "definitions": definitions,
         })
     );
 
@@ -665,12 +669,37 @@ fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
     let out = device.call("GET", "/api/app/sync", None, 200);
     assert_eq!(out["state"], "syncing", "{out}");
 
-    // The round pushed the write: green again.
+    // A type made on the server meanwhile.
+    let res = Client::new()
+        .put(server.url("/api/types/idea"))
+        .bearer_auth(server.admin_token())
+        .header("content-type", "text/plain")
+        .body("label = \"Idea\"\n\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n")
+        .send()
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+
+    // The round pushed the write and pulled the type: green again, and the count of definition
+    // changes moved, so the web client reads its types again.
     device.sync();
     fake.set(SyncPhase::Synced, None, Some(1_700_000_100_000));
     let out = device.call("GET", "/api/app/sync", None, 200);
     assert_eq!(out["state"], "synced", "{out}");
     assert_eq!(out["queued"], 0, "{out}");
+    // This is the device's first round, so it pulls every definition with the new type.
+    assert!(out["definitions"].as_u64().unwrap() > definitions, "{out}");
+    let pulled = out["definitions"].as_u64().unwrap();
+    let res = Client::new()
+        .put(server.url("/api/types/idea"))
+        .bearer_auth(server.admin_token())
+        .header("content-type", "text/plain")
+        .body("label = \"Big idea\"\n\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n")
+        .send()
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    device.sync();
+    let out = device.call("GET", "/api/app/sync", None, 200);
+    assert_eq!(out["definitions"], pulled + 1, "{out}");
 
     // The server cannot be reached, or wants a newer app: red, with the reason.
     fake.set(

@@ -13,6 +13,7 @@ export const LIVE_EVENTS = [
   "notification.dismissed",
   "notification.cleared",
   "note.changed",
+  "definition.changed",
   "device.command",
   "device.settings",
   "ai_turn",

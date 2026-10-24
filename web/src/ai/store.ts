@@ -618,11 +618,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * its embedded server for a round first and waits for it to end (ai D23).
  */
 export async function settle(kind: "note" | "type" | "taxonomy" | "agent") {
-  // An agent change shows in the sidebar's list and any open agent screen (agents G20).
-  if (kind === "agent") {
-    await agentsChanged().catch(() => undefined);
-    return;
-  }
   if (await appInfo().catch(() => null)) {
     const asked = Date.now();
     try {
@@ -636,7 +631,12 @@ export async function settle(kind: "note" | "type" | "taxonomy" | "agent") {
       // The sync icon shows why; the change arrives with a later round.
     }
     void refreshSync();
-    if (kind !== "type") noteChangedElsewhere(null);
+    if (kind !== "type" && kind !== "agent") noteChangedElsewhere(null);
+  }
+  // An agent change shows in the sidebar's list and any open agent screen (agents G20).
+  if (kind === "agent") {
+    await agentsChanged().catch(() => undefined);
+    return;
   }
   if (kind !== "note") await reloadDefinitions().catch(() => undefined);
   // A taxonomy's renames rewrite the notes holding its terms (ai D31).

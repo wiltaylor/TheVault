@@ -43,7 +43,7 @@ test.describe("on a phone drawn edge to edge", () => {
   test.use({ viewport: { width: 390, height: HEIGHT }, hasTouch: true, isMobile: true });
 
   for (const theme of ["light", "dark"] as const) {
-    test(`the top bar, the + button and a toast sit inside the safe area (${theme})`, async ({ page }) => {
+    test(`the top bar and a toast sit inside the safe area (${theme})`, async ({ page }) => {
       await bridge(page, theme);
       await logIn(page, "/daily");
 
@@ -54,8 +54,6 @@ test.describe("on a phone drawn edge to edge", () => {
 
       const bar = await box(page, ".topbar");
       expect(bar.y).toBeGreaterThanOrEqual(TOP);
-      const fab = await box(page, ".capture-fab");
-      expect(fab.y + fab.height).toBeLessThanOrEqual(HEIGHT - BOTTOM);
       await shot(page, `edge-${theme}.png`);
 
       // The left drawer opens under the top bar, not under the status bar.
@@ -67,7 +65,8 @@ test.describe("on a phone drawn edge to edge", () => {
       await expect(page.locator(".menu-open")).toHaveCount(0);
 
       // A capture's toast stays above the gesture bar.
-      await page.getByRole("button", { name: "Quick capture" }).click();
+      await page.locator(".topbar .menu-button").first().click();
+      await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Capture" }).click();
       const dialog = page.getByRole("dialog", { name: "Capture" });
       const sheet = await box(page, ".capture-dialog");
       expect(sheet.y).toBeGreaterThanOrEqual(TOP);
@@ -85,8 +84,5 @@ test.describe("on a phone drawn edge to edge", () => {
     await logIn(page, "/daily");
     const bar = await box(page, ".topbar");
     expect(bar.y).toBe(0);
-    const fab = await box(page, ".capture-fab");
-    // 1.25rem from the bottom edge, as before.
-    expect(Math.round(HEIGHT - (fab.y + fab.height))).toBe(20);
   });
 });

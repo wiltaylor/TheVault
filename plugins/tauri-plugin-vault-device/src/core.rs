@@ -1004,6 +1004,7 @@ fn follow_events(core: Weak<Core>) {
                 Seen::NoteChanged(change) => live::is_news(core.server().queue(), &change),
                 // The round takes the new settings first, then catches up the contacts.
                 Seen::DeviceSettings(device) => device == link.device_id,
+                Seen::DefinitionChanged => true,
             };
             if news {
                 core.nudge(REMOTE_SETTLE);

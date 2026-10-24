@@ -158,6 +158,8 @@ impl Writer {
         let _w = self.write_lock();
         let mut store_changes = Vec::new();
         let mut skills = std::collections::BTreeSet::new();
+        // The files written outside a commit, announced once the schema is in place.
+        let mut direct = Vec::new();
         for (path, text) in files {
             let Some((kind, name)) = synced_file(path) else {
                 return Err(Error::BadRequest(format!("{path:?} is not a synced file")));
@@ -198,6 +200,7 @@ impl Writer {
             }
             self.state
                 .journal_files(&[(path.clone(), text.is_some())])?;
+            direct.push((path.clone(), text.is_some()));
         }
         let mut inner = self.lock();
         if !store_changes.is_empty() {
@@ -207,14 +210,16 @@ impl Writer {
         for name in &skills {
             self.vault.prune_skill_folder(name)?;
         }
-        match Schema::load(&self.vault) {
+        let loaded = match Schema::load(&self.vault) {
             Ok(schema) => {
                 inner.index.set_schema(&schema)?;
                 inner.schema = schema;
-                Ok(true)
+                true
             }
-            Err(_) => Ok(false),
-        }
+            Err(_) => false,
+        };
+        self.announce_definitions(&direct);
+        Ok(loaded)
     }
 }
 

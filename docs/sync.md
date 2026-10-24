@@ -30,6 +30,8 @@ Each entry has `seq`, `at` (milliseconds since the epoch) and `kind`. It shows t
 
 Assets are not in the feed. A device fetches them when it needs them (D19).
 
+Every change to a synced file besides a note also publishes `definition.changed` with `{kind, name, deleted}` on `GET /api/events`, to every caller, with the feed's `kind` and `name`: a type, its templates and views (`type`), a taxonomy, a script, a task, a device file, an agent, or a skill's file (`skill`, named by its skill). An open browser reads its types, agents or skills again when one arrives, and the apps run a round to pull the change.
+
 Changing a note always moves it in the feed, including a browser save that merges into the version before it. Files are journaled after each commit. The server also checks the files on disk each time it opens the vault. That check covers files that existed before the feed did, files added outside the server, and a crash between a commit and its journal entry.
 
 ## Versions and bases
@@ -110,7 +112,7 @@ Restoring is always a local write, so it works like any edit and syncs. A versio
 
 `GET /api/events` through the embedded server streams the home server's events with the device's own `note.changed` in place of the server's: a note changes on the device when the device writes or pulls it, under a version id of its own, so the server's `note.changed` would name versions the device does not hold. SSE ids are left out, since the two sources do not count together. The stream ends when the server's ends, and offline the request answers 503.
 
-The app shells answer their webview's custom scheme with whole bodies (Tauri cannot stream a custom scheme response), so both shells answer `/api/events` with 503 `no_stream` at once rather than hold a stream to the home server open that could never be answered. The web client then polls the bell every 30 seconds and on focus, as it does whenever the stream is down. The desktop app's tray and the Android app's sync each follow the home server's stream themselves.
+The app shells answer their webview's custom scheme with whole bodies (Tauri cannot stream a custom scheme response), so both shells answer `/api/events` with 503 `no_stream` at once rather than hold a stream to the home server open that could never be answered. The web client then polls the bell every 30 seconds and on focus, as it does whenever the stream is down. For definitions it watches the sync status instead: `GET /api/app/sync` carries `definitions`, how many synced files besides notes the device's vault has changed since the app started, and when a round pulls a type, taxonomy, agent or skill the count moves and the web client reads its types, agents and skills again. The desktop app's tray and the Android app's sync each follow the home server's stream themselves.
 
 ### Notifications made on the device
 
@@ -169,7 +171,7 @@ The Android app runs one Rust core per process, shared by its webview and by the
 
 - when the app opens or returns to the foreground;
 - 1.5 seconds after the last local write, including a share from another app;
-- while the app is in the foreground, 1 second after the home server's event stream (`GET /api/events`, followed with the device token) reports a `note.changed` for a version the phone does not hold, 1 second after it reports a `device.settings` for this phone, and 1 second after the stream (re)connects. The stream reconnects with a pause that grows from 1 to 30 seconds, and closes within a heartbeat (15 seconds) once the app leaves the foreground. The echo of the phone's own pushed write is not news and runs no round;
+- while the app is in the foreground, 1 second after the home server's event stream (`GET /api/events`, followed with the device token) reports a `note.changed` for a version the phone does not hold, 1 second after it reports a `device.settings` for this phone or a `definition.changed`, and 1 second after the stream (re)connects. The stream reconnects with a pause that grows from 1 to 30 seconds, and closes within a heartbeat (15 seconds) once the app leaves the foreground. The echo of the phone's own pushed write is not news and runs no round;
 - in the background, when a `note.changed` or `device.settings` push arrives over UnifiedPush: the app schedules the same prompt round a background capture schedules (`SyncWorker.soon`);
 - every 15 minutes in the background through WorkManager, while the phone has a network. A server that cannot be reached is retried later. A server newer than the app stops background sync until the app is updated (D27).
 

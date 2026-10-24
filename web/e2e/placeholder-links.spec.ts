@@ -265,8 +265,9 @@ test("a placeholder in a version shown from history only shows", async ({ page, 
 });
 
 test("Ask <Label> commits a call in one go, shown as a chip that opens the agent", async ({ page, admin }) => {
-  // The agent is disabled once the page has listed it, so the server records the call without a
-  // run, and no run of it fails in this shared vault.
+  // The agent is disabled once it is picked, so the server records the call without a run, and
+  // no run of it fails in this shared vault. Disabled before, it would not be offered: the page
+  // follows agent changes as they happen.
   const tok = token();
   const name = `caller_${tok}`;
   const label = `Caller${tok}`;
@@ -274,12 +275,12 @@ test("Ask <Label> commits a call in one go, shown as a chip that opens the agent
   expect((await put(`label = "${label}"\n`)).ok()).toBe(true);
   const note = await createNote(admin, "task", `Call ${tok}`);
   const doc = await editBody(page, note.id);
-  expect((await put(`label = "${label}"\nenabled = false\n`)).ok()).toBe(true);
 
   await page.keyboard.type(`@${name}`);
   await page.getByTestId("mention-agent").filter({ hasText: `Ask ${label}` }).click();
   const box = page.getByRole("textbox", { name: `Ask ${label}…` });
   await expect(box).toBeFocused();
+  expect((await put(`label = "${label}"\nenabled = false\n`)).ok()).toBe(true);
   await expect(box).toHaveAttribute("placeholder", `What should ${label} do?`);
   await box.fill("tidy this");
   await box.press("Enter");

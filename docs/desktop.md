@@ -45,7 +45,7 @@ One thread runs the sync rounds of `crates/sync` with every asset kept locally (
 - when the app starts;
 - every 60 seconds;
 - 0.75 seconds after a write reaches the local vault, so a burst of saves syncs once;
-- 1 second after the live link's event stream reports a `note.changed` for a note version the local vault does not hold, and 1 second after the stream reconnects, so a change made in the browser or on another device shows within seconds. The echo of the app's own pushed write is not news and runs no round;
+- 1 second after the live link's event stream reports a `note.changed` for a note version the local vault does not hold or a `definition.changed` (a type, agent, skill or other definition), and 1 second after the stream reconnects, so a change made in the browser or on another device shows within seconds. The echo of the app's own pushed write is not news and runs no round;
 - when the server answers again: while it does not, the app checks every 3 seconds;
 - when the user clicks Sync now in the sync icon's details.
 

@@ -3,7 +3,7 @@
 import { createSignal } from "solid-js";
 import { ASSISTANT, callableAgents } from "../agents";
 import { type AgentSummary, api } from "../api";
-import { onNoteWritten } from "../changes";
+import { onNoteChangedElsewhere, onNoteWritten } from "../changes";
 import { FLEETING, INBOX_QUERY } from "./model";
 
 const [open, setOpen] = createSignal(false);
@@ -77,3 +77,5 @@ export async function refreshInboxCount(): Promise<void> {
 }
 
 onNoteWritten(() => void refreshInboxCount());
+// A capture or a processed note on another device, or by an agent, moves the count too.
+onNoteChangedElsewhere(() => void refreshInboxCount());

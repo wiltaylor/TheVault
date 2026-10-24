@@ -1122,6 +1122,11 @@ export interface AppSync {
   stuck_assets?: StuckAsset[];
   /** When a round last succeeded, in milliseconds since the epoch. */
   last_ok_ms: number | null;
+  /**
+   * How many types, taxonomies, agents, skills' files and other synced files besides notes the
+   * device's vault has changed since the app started. It goes up when a round pulls one.
+   */
+  definitions?: number;
   /** When the last round ended, succeeded or not. */
   last_attempt_ms?: number | null;
   /** Why the last round failed, or what a round that finished could not do, such as an asset that would not upload. */

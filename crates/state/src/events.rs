@@ -37,6 +37,14 @@ pub enum LiveEvent {
         deleted: bool,
         token: Option<String>,
     },
+    /// A synced file besides a note was written or deleted: a type (with its templates and
+    /// views), a taxonomy, a script, a task, a device file, an agent or a skill's file. `kind` and
+    /// `name` are the change feed's, such as `type` and `memo`; a skill file names its skill.
+    DefinitionChanged {
+        kind: String,
+        name: String,
+        deleted: bool,
+    },
     /// A command was queued for a device.
     DeviceCommand { device: String, id: String },
     /// A device's settings changed in Settings > Devices, so the device should take them again.
@@ -78,6 +86,7 @@ impl LiveEvent {
             LiveEvent::NotificationDismissed { .. } => "notification.dismissed",
             LiveEvent::NotificationCleared { .. } => "notification.cleared",
             LiveEvent::NoteChanged { .. } => "note.changed",
+            LiveEvent::DefinitionChanged { .. } => "definition.changed",
             LiveEvent::DeviceCommand { .. } => "device.command",
             LiveEvent::DeviceSettings { .. } => "device.settings",
             LiveEvent::ClientsUpdated { .. } => "clients.updated",

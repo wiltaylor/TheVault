@@ -1,11 +1,13 @@
 // The app's sync status, kept fresh while the page runs in the desktop or Android app: asked of the
 // embedded server's `GET /api/app/sync` every few seconds, every second while a round runs or
 // changes wait, at once after each note write this client makes, and when the window comes back.
-// In a browser nothing is asked: there is no app sync to show.
+// When its count of definition changes moves, a round pulled a type, agent or skill, and the
+// lists the app holds are read again. In a browser nothing is asked: there is no app sync to show.
 
 import { createSignal } from "solid-js";
 import { type AppSync, api } from "../api";
 import { onNoteWritten } from "../changes";
+import { definitionsChanged } from "../definitions";
 
 /** How often the status is asked while it is green or red. */
 export const IDLE_MS = 3000;
@@ -35,7 +37,10 @@ export function refreshSync(): Promise<void> {
     .appSync()
     .then(
       (s) => {
+        // A round pulled a type, agent or skill: the app has no live stream to say so.
+        const before = status()?.definitions;
         setStatus(s);
+        if (before !== undefined && s.definitions !== undefined && s.definitions !== before) void definitionsChanged(null);
       },
       () => {},
     )

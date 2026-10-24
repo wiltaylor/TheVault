@@ -9,6 +9,7 @@
 //! | `notification.dismissed` | `{id, unread}` |
 //! | `notification.cleared` | `{cleared, unread}` |
 //! | `note.changed` | `{id, type, version, deleted}` |
+//! | `definition.changed` | `{kind, name, deleted}`: a synced file besides a note changed, such as a type (`kind` `type`), a taxonomy, a script, a task, a device file, an agent or a skill's file (`kind` `skill`, `name` the skill's) |
 //! | `device.command` | `{device, id}` |
 //! | `device.settings` | `{device}` |
 //! | `clients.updated` | `{clients: [{kind, arch, version, build}]}`: every app build listed now |
@@ -56,6 +57,11 @@ fn sse(seq: u64, event: &LiveEvent) -> Event {
             deleted,
             ..
         } => json!({ "id": id, "type": type_name, "version": version, "deleted": deleted }),
+        LiveEvent::DefinitionChanged {
+            kind,
+            name,
+            deleted,
+        } => json!({ "kind": kind, "name": name, "deleted": deleted }),
         LiveEvent::DeviceCommand { device, id } => json!({ "device": device, "id": id }),
         LiveEvent::DeviceSettings { device } => json!({ "device": device }),
         LiveEvent::ClientsUpdated { clients } => json!({

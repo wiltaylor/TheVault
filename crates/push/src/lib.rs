@@ -84,6 +84,7 @@ pub fn message(event: &LiveEvent) -> Option<Message> {
         ),
         // Coalesced by the dispatcher instead: see [`Changes`].
         LiveEvent::NoteChanged { .. }
+        | LiveEvent::DefinitionChanged { .. }
         | LiveEvent::DeviceSettings { .. }
         | LiveEvent::ClientsUpdated { .. }
         | LiveEvent::AiTurn { .. }

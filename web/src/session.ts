@@ -3,6 +3,7 @@
 import { createSignal } from "solid-js";
 import { ApiError, api, type Taxonomy, type TypeDef } from "./api";
 import { onNoteWritten } from "./changes";
+import { keepSame } from "./keepSame";
 
 export type SessionState = "checking" | "in" | "out";
 
@@ -36,11 +37,14 @@ export async function refreshSession(): Promise<void> {
   }
 }
 
-/** Load the types and taxonomies again, after an editor changed them. */
+/**
+ * Load the types and taxonomies again, after an editor changed them or they changed elsewhere.
+ * The ones that did not change stay the same objects, so views of them are left alone.
+ */
 export async function reloadDefinitions(): Promise<void> {
   const [t, x] = await Promise.all([api.types(), api.taxonomies()]);
-  setTypes(t);
-  setTaxonomies([...x].sort((a, b) => a.name.localeCompare(b.name)));
+  setTypes((prev) => keepSame(prev, t, (d) => d.name));
+  setTaxonomies((prev) => keepSame(prev, [...x].sort((a, b) => a.name.localeCompare(b.name)), (d) => d.name));
 }
 
 // Terms picked for an open taxonomy that it did not hold. The save that holds them adds them on

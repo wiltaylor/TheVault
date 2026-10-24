@@ -323,6 +323,10 @@ impl Task {
                     for change in events.iter().filter_map(NoteChanged::of) {
                         self.shell.server_changed(Some(change));
                     }
+                    // A type, agent or other definition changed: the next round pulls it.
+                    if events.iter().any(|e| e.name == sync::live::DEFINITION_CHANGED) {
+                        self.shell.server_changed(None);
+                    }
                     if events.iter().any(|e| e.name == CLIENTS_UPDATED) {
                         self.shell.clients_updated();
                     }

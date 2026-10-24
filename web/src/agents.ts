@@ -4,6 +4,7 @@
 import { createRoot, createSignal } from "solid-js";
 import { type Agent, type AgentForm, type AgentSummary, type AiConfirm, type AiWeb, api } from "./api";
 import { appInfo } from "./inApp";
+import { keepSame } from "./keepSame";
 
 /** The built-in agent the chat panel uses by default (agents G6). */
 export const ASSISTANT = "assistant";
@@ -90,7 +91,7 @@ export async function refreshAgents(): Promise<void> {
   store.setReadOnly((await appInfo()) !== null);
   try {
     const l = await api.agents();
-    store.setList(l.agents);
+    store.setList((prev) => keepSame(prev, l.agents, (a) => a.name));
     store.setTools(l.tools ?? []);
     store.setError(null);
     clearTimeout(runningPoll);

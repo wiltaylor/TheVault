@@ -92,12 +92,11 @@ async function fleeting(admin: APIRequestContext, title: string, body: string, i
   return (await res.json()) as { id: string; version: string };
 }
 
-test("Ctrl+Shift+K and the sidebar open the capture dialog from any page; a wide screen has no + button", async ({ page }) => {
+test("Ctrl+Shift+K and the sidebar open the capture dialog from any page; there is no floating + button", async ({ page }) => {
   await logIn(page, "/daily");
   for (const path of ["/daily", "/search", "/trash", "/settings/types", "/types/task"]) {
     await page.goto(path);
-    // The floating + is the phone's capture; on a wide screen with a mouse it is hidden.
-    await expect(page.getByRole("button", { name: "Quick capture" })).toBeHidden();
+    await expect(page.getByRole("button", { name: "Quick capture" })).toHaveCount(0);
     await page.keyboard.press("Control+Shift+K");
     await expect(dialog(page)).toBeVisible();
     await expect(captureText(page)).toBeFocused();
@@ -286,16 +285,11 @@ test("the fleeting note type can be edited but has no delete button", async ({ p
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
-  test("the + stays clear of the drawers and the dialog is a full-width sheet", async ({ page, admin }) => {
+  test("there is no floating + and the dialog is a full-width sheet", async ({ page, admin }) => {
     await logIn(page, "/daily");
-    const plus = page.getByRole("button", { name: "Quick capture" });
-    await expect(plus).toBeVisible();
-    const box = (await plus.boundingBox())!;
-    expect(box.x + box.width).toBeLessThanOrEqual(390);
-    expect(box.y + box.height).toBeLessThanOrEqual(844);
+    await expect(page.getByRole("button", { name: "Quick capture" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Menu" }).click();
-    await expect(plus).toBeHidden();
     await expect(inboxLink(page)).toBeVisible();
     await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Capture" }).click();
     await expect(dialog(page)).toBeVisible();
@@ -307,7 +301,6 @@ test.describe("on a phone", () => {
     await captureText(page).fill(title);
     await dialog(page).getByRole("button", { name: "Save" }).click();
     await expect(dialog(page)).toHaveCount(0);
-    await expect(plus).toBeVisible();
     await page.goto("/inbox");
     await expect(inboxItem(page, title)).toBeVisible();
     const res = await admin.post("/api/query", { data: { query: `from fleeting where title == "${title}"`, page_size: 1 } });

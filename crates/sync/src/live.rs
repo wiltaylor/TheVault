@@ -104,6 +104,9 @@ impl NoteChanged {
     }
 }
 
+/// The event the server sends when a synced file besides a note changed.
+pub const DEFINITION_CHANGED: &str = "definition.changed";
+
 /// The device whose settings `event` says changed, when it is a `device.settings` with the data
 /// it should carry.
 pub fn settings_changed(event: &Event) -> Option<String> {
@@ -132,6 +135,9 @@ pub enum Seen {
     NoteChanged(NoteChanged),
     /// The settings of the device with this id changed on the server.
     DeviceSettings(String),
+    /// A synced file besides a note changed on the server: a type, a taxonomy, a script, a task,
+    /// a device file, an agent or a skill's file. The device pulls it in the next round.
+    DefinitionChanged,
 }
 
 /// Hold `GET /api/events` open on `remote`'s server and hand each [`Seen`] to `on`, until the
@@ -190,6 +196,8 @@ pub fn follow(
                 on(Seen::NoteChanged(change));
             } else if let Some(device) = settings_changed(&event) {
                 on(Seen::DeviceSettings(device));
+            } else if event.name == DEFINITION_CHANGED {
+                on(Seen::DefinitionChanged);
             }
         }
     }

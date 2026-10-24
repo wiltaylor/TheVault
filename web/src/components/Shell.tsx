@@ -561,18 +561,6 @@ export function Shell() {
           </Show>
         </main>
         <RightSidebar shown={rightShown()} />
-        <button
-          type="button"
-          class="capture-fab"
-          hidden={captureOpen()}
-          aria-label="Quick capture"
-          title="Capture a fleeting note (Ctrl+Shift+K)"
-          onClick={openCapture}
-        >
-          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </button>
         <Show when={captureOpen()}>
           <CaptureModal />
         </Show>

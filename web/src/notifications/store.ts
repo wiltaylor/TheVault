@@ -10,6 +10,7 @@ import { refreshAgents } from "../agents";
 import { callsSaved } from "../agentCalls";
 import { bumpTurns, liveTurn } from "../ai/running";
 import { activityResync, liveActivity } from "../activity/live";
+import { definitionsChanged } from "../definitions";
 import { connectLive } from "../live";
 import {
   type ListState,
@@ -133,7 +134,7 @@ export function startPolling(): () => void {
         void refreshNotifications();
         noteChangedElsewhere(null);
         bumpTurns();
-        void refreshAgents();
+        void definitionsChanged(null);
         activityResync();
       }
     },
@@ -144,6 +145,11 @@ export function startPolling(): () => void {
         if (typeof id === "string" && typeof version === "string") noteChangedElsewhere({ id, version });
         // A save may have carried a call of an agent the server has now seen (agents G19).
         callsSaved();
+      }
+      else if (name === "definition.changed") {
+        // A type, taxonomy, agent or skill changed on the server.
+        const { kind } = (data ?? {}) as { kind?: unknown };
+        void definitionsChanged(typeof kind === "string" ? kind : null);
       }
       else if (name === "ai_turn") {
         // A chat turn on an agent's thread started or ended (agents G17).

@@ -8446,59 +8446,6 @@ body.columns-edge-drop .prosemirror-dropcursor-inline {
   text-align: center;
 }
 
-.capture-fab {
-  position: fixed;
-  right: calc(1.25rem + var(--safe-right));
-  bottom: calc(1.25rem + var(--safe-bottom));
-  z-index: 900;
-  width: 3.25rem;
-  height: 3.25rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-ink);
-  box-shadow: 0 6px 18px rgb(15 23 42 / 0.28);
-  transition: transform 0.1s ease-out;
-}
-
-.capture-fab[hidden] {
-  display: none;
-}
-
-.capture-fab:hover {
-  transform: scale(1.06);
-}
-
-.capture-fab:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  outline-offset: 3px;
-}
-
-/* Beside an open right sidebar, the button stays over the workspace. */
-@media (min-width: 601px) {
-  .capture-fab {
-    right: calc(var(--right-col) + 1.25rem + var(--safe-right));
-  }
-}
-
-/* The button is the phone's quick capture. On a wide screen with a mouse it is out of place:
-   capture from the sidebar's Capture, the command palette or Ctrl+Shift+K instead. */
-@media (min-width: 601px) and (pointer: fine) {
-  .capture-fab {
-    display: none;
-  }
-}
-
-/* A drawer open on a narrow screen keeps its own controls clear. */
-.menu-open .capture-fab,
-.right-open .capture-fab {
-  display: none;
-}
-
 .capture-backdrop {
   position: fixed;
   inset: 0;

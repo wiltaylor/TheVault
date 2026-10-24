@@ -1,6 +1,6 @@
 # Capturing to the inbox
 
-The capture dialog saves a quick thought as a fleeting note in the **Inbox**. Open it from **Capture** in the side menu, the command palette, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd>, or the round **+** button on a phone. The desktop app also has a global **Quick capture** shortcut (see [The Linux desktop app](desktop.md#quick-capture-and-the-global-hotkey)).
+The capture dialog saves a quick thought as a fleeting note in the **Inbox**. Open it from **Capture** in the side menu, the command palette, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd>. The desktop app also has a global **Quick capture** shortcut (see [The Linux desktop app](desktop.md#quick-capture-and-the-global-hotkey)).
 
 A capture holds any mix of text, images, photos and drawings. **Save**, or <kbd>Ctrl</kbd>+<kbd>Enter</kbd>, writes it as one `fleeting` note: the first line of text is the title, the text and the drawings go in the note's body, and images and photos go in its **Images** field. A capture with no text is titled `Image <date and time>`, or `Drawing <date and time>` when it holds only drawings. <kbd>Esc</kbd> closes the dialog, and asks first when there is something to lose.
 

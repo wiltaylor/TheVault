@@ -303,6 +303,59 @@ fn every_notification_event_and_note_change_arrives_in_order() {
 }
 
 #[test]
+fn a_type_or_agent_change_arrives_as_definition_changed_for_any_token() {
+    let api = Api::start();
+    // Not only admin callers: a device or app token keeps its types and agents up to date too.
+    let read = api.call(
+        "POST",
+        "/api/tokens",
+        Some(json!({ "name": "reader", "scope": "read" })),
+        201,
+    )["secret"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stream = Stream::open(
+        api.client
+            .get(api.server.url("/api/events"))
+            .header(AUTHORIZATION, format!("Bearer {read}"))
+            .send()
+            .unwrap(),
+    );
+
+    let put = |path: &str, body: String| {
+        let res = api
+            .req("PUT", path)
+            .header(CONTENT_TYPE, "text/plain")
+            .body(body)
+            .send()
+            .unwrap();
+        assert_eq!(res.status().as_u16(), 200, "PUT {path}");
+    };
+    put("/api/types/idea", TASK.replace("Task", "Idea"));
+    put("/api/types/idea", TASK.replace("Task", "Big idea"));
+    put("/api/agents/triage", "label = \"Triage\"\n".to_owned());
+    api.call("DELETE", "/api/types/idea", None, 200);
+
+    for (kind, name, deleted) in [
+        ("type", "idea", false),
+        ("type", "idea", false),
+        ("agent", "triage", false),
+        ("type", "idea", true),
+    ] {
+        let f = stream.next();
+        assert_eq!(
+            (f.event.as_str(), &f.data),
+            (
+                "definition.changed",
+                &json!({ "kind": kind, "name": name, "deleted": deleted })
+            )
+        );
+    }
+    stream.assert_quiet();
+}
+
+#[test]
 fn an_open_stream_does_not_stop_the_server_shutting_down_on_sigint() {
     stops_gracefully_with_a_stream_open("INT");
 }
