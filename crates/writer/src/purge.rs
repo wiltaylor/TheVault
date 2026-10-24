@@ -49,6 +49,23 @@ impl Writer {
                 continue;
             }
             self.state.unpin(&e.note_id)?;
+            // Only the signed-in user purges (ai D21).
+            let title = crate::Input::Wcl(e.content.clone())
+                .parse(&crate::note_path(&e.note_type, &e.note_id))
+                .ok()
+                .and_then(|d| {
+                    d.field("title")
+                        .and_then(schema::Value::as_str)
+                        .map(str::to_owned)
+                });
+            self.record_note(
+                &state::Author::Session("owner".to_owned()),
+                crate::activity::NoteAct::Purge,
+                &e.note_id,
+                &e.note_type,
+                title.as_deref(),
+                &e.version,
+            );
             named.extend(ulids_in(&e.content).into_iter().map(str::to_owned));
             notes.push(e);
         }

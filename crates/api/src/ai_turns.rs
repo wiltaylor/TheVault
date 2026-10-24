@@ -476,6 +476,13 @@ fn apply_as_agent(
         None => caller,
     };
     let result = ai_chat::apply_change(w, &author, event, change);
+    crate::ai_activity::applied(
+        w,
+        &author,
+        event,
+        change,
+        result.as_ref().err().map(ToString::to_string).as_deref(),
+    );
     if let (Some(thread), Some(id)) = (change["thread"].as_str(), change["id"].as_str()) {
         let recorded = match &result {
             Ok(done) => agent_threads::record_outcome(
@@ -520,11 +527,14 @@ pub struct Discard {
 /// changes nothing else.
 pub async fn discard(
     State(a): State<Arc<Ai>>,
+    Caller(author): Caller,
     Json(b): Json<Discard>,
 ) -> Result<Json<Value>, ApiError> {
     let w = a.writer.clone();
     let t = crate::blocking(w, move |w| {
-        agent_threads::record_outcome(w, &b.thread, &b.id, Status::Discarded, None, None)
+        let t = agent_threads::record_outcome(w, &b.thread, &b.id, Status::Discarded, None, None)?;
+        crate::ai_activity::discarded(w, &author, &t.id, &b.id, &t.agent);
+        Ok::<_, ApiError>(t)
     })
     .await?;
     Ok(Json(

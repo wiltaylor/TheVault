@@ -85,16 +85,25 @@ impl Stream {
         Stream { frames }
     }
 
+    /// The next event but the activity log's, which `tests/activity.rs` covers (activity Y3).
     fn next(&self) -> Frame {
-        self.frames
-            .recv_timeout(WAIT)
-            .expect("an event within the wait")
+        loop {
+            let f = self
+                .frames
+                .recv_timeout(WAIT)
+                .expect("an event within the wait");
+            if f.event != "activity" {
+                return f;
+            }
+        }
     }
 
-    /// Nothing more arrives within a short wait.
+    /// Nothing more but activity log entries arrives within a short wait.
     fn assert_quiet(&self) {
-        if let Ok(f) = self.frames.recv_timeout(Duration::from_millis(500)) {
-            panic!("unexpected event {f:?}");
+        while let Ok(f) = self.frames.recv_timeout(Duration::from_millis(500)) {
+            if f.event != "activity" {
+                panic!("unexpected event {f:?}");
+            }
         }
     }
 }

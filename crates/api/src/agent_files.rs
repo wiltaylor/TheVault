@@ -31,7 +31,7 @@ use serde_json::{Value, json};
 use writer::Writer;
 
 use crate::defs::{body, text_or_json};
-use crate::{ApiError, blocking};
+use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
@@ -394,6 +394,7 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
 /// `PUT /api/agents/{name}`: create or replace an agent file.
 pub async fn put(
     State(w): Shared,
+    Caller(by): Caller,
     Path(name): Path<String>,
     headers: HeaderMap,
     raw: Bytes,
@@ -416,13 +417,25 @@ pub async fn put(
                 .to_wcl()
         }
     };
-    let (wcl, agent) = blocking(w, move |w| w.put_agent(&name, &source, unknown_tools)).await?;
+    let (wcl, agent) = blocking(w, move |w| {
+        let _acting = writer::acting_as(&by);
+        w.put_agent(&name, &source, unknown_tools)
+    })
+    .await?;
     Ok(agent_response(&headers, &agent, wcl))
 }
 
 /// `DELETE /api/agents/{name}`.
-pub async fn delete(State(w): Shared, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+pub async fn delete(
+    State(w): Shared,
+    Caller(by): Caller,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, ApiError> {
     let n = name.clone();
-    blocking(w, move |w| w.delete_agent(&n)).await?;
+    blocking(w, move |w| {
+        let _acting = writer::acting_as(&by);
+        w.delete_agent(&n)
+    })
+    .await?;
     Ok(Json(json!({ "name": name, "deleted": true })))
 }

@@ -3043,6 +3043,7 @@ dependencies = [
  "argon2",
  "chacha20poly1305",
  "rusqlite",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror",

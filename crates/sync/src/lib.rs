@@ -54,6 +54,9 @@
 //! asset files done out of those to do, the asset bytes as they arrive, and about how long is
 //! left ([`progress`], ticket 144).
 //! 7. **Bases** again, now for what is still queued.
+//! 8. **Report.** `POST /api/devices/{id}/sync-rounds` with what the round pushed, pulled and
+//!    held, for the server's activity log; a round that did nothing is not reported, and the
+//!    report failing does not fail the round.
 //!
 //! Before the round an app asks the version gate ([`gate`]) whether to run it at all: with a
 //! server newer than the app and a build of the app published, the app updates itself first.
@@ -674,7 +677,44 @@ impl Engine {
         self.sync_assets(&mut report)?;
         self.report_bases()?;
         report.stuck = self.queue.asset_failures()?;
+        self.report_round(&report);
         Ok(report)
+    }
+
+    /// Tell the server what the round did, for its activity log (activity Y2). A round that moved
+    /// and held nothing is not reported, and a server that does not take the report, such as one
+    /// older than the activity log, does not fail the round.
+    fn report_round(&self, report: &Report) {
+        let idle = report.pushed.is_empty()
+            && report.pulled == 0
+            && report.conflicts.is_empty()
+            && report.assets_sent == 0
+            && report.assets_failed == 0
+            && report.notifications_pushed == 0
+            && report.held.is_empty();
+        if idle {
+            return;
+        }
+        let held: Vec<Json> = report
+            .held
+            .iter()
+            .take(20)
+            .map(|h| json!({ "note": h.note_id, "asset": h.asset_id, "reason": h.reason }))
+            .collect();
+        let path = format!("/api/devices/{}/sync-rounds", self.home.remote().device_id);
+        let body = json!({
+            "pushed": report.pushed.len(),
+            "merged": report.merged.len(),
+            "conflicts": report.conflicts.len(),
+            "pulled": report.pulled,
+            "assets_sent": report.assets_sent,
+            "assets_failed": report.assets_failed,
+            "notifications_pushed": report.notifications_pushed,
+            "held": held,
+        });
+        if let Err(e) = self.home.post_json(&path, &body) {
+            eprintln!("sync: the round was not reported to the server: {e}");
+        }
     }
 
     /// Move the notifications made on the device, such as by a device script's `vault::notify`,

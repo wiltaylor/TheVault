@@ -270,7 +270,29 @@ pub fn create(
         "blocks": [body_of(&text)],
     });
     let saved = w.create(MEMORY_TYPE, &Input::Json(doc), author)?;
-    read(w, &saved.id)
+    let m = read(w, &saved.id)?;
+    record(w, author, "remember", &m);
+    Ok(m)
+}
+
+/// The `ai.memory` entry of a memory change (activity Y2): its title, never its text.
+fn record(w: &Writer, author: &Author, op: &str, m: &Memory) {
+    let verb = match op {
+        "remember" => "Remembered",
+        "update" => "Updated the memory",
+        _ => "Forgot",
+    };
+    let title = state::one_line(&m.title, 120);
+    w.state().record_activity(
+        state::NewActivity::new(
+            "ai.memory",
+            "ai",
+            author,
+            format!("{verb} \"{title}\" of {}", m.agent),
+        )
+        .subject("note", &m.id)
+        .detail(json!({ "op": op, "agent": m.agent, "memory": m.id, "title": title })),
+    );
 }
 
 /// Change memory `id`: its title and its text, `None` leaving a part as it is. With `base`, the
@@ -310,7 +332,9 @@ pub fn update(
     }
     let base = base.unwrap_or(&n.version);
     w.update(id, &Input::Json(doc), Some(base), author)?;
-    read(w, id)
+    let m = read(w, id)?;
+    record(w, author, "update", &m);
+    Ok(m)
 }
 
 /// Move memory `id` to the trash, where the user can restore it. With `base`, the memory must
@@ -318,6 +342,7 @@ pub fn update(
 pub fn forget(w: &Writer, id: &str, base: Option<&str>, author: &Author) -> Result<(), ApiError> {
     let m = read(w, id)?;
     w.delete(id, Some(base.unwrap_or(&m.version)), author)?;
+    record(w, author, "forget", &m);
     Ok(())
 }
 

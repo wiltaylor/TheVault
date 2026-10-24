@@ -79,6 +79,10 @@ fn main() -> anyhow::Result<()> {
     state
         .prune_sessions()
         .context("removing expired sessions")?;
+    // The activity log keeps 90 days and 200 000 entries (activity Y1).
+    if let Err(e) = state.prune_activity() {
+        eprintln!("activity log: pruning failed: {e}");
+    }
     let handlers = script::Handlers::new(script::Limits::default());
     // Note event triggers hear of each change once it is durable (agents G10).
     let (hooks, triggers) = scheduler::TriggerHooks::wrap(handlers.hooks());

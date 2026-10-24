@@ -99,6 +99,23 @@ pub(crate) struct ItemChange {
     was: Option<String>,
     status: String,
     error: String,
+    /// `email`, `sms` or `event`.
+    kind: String,
+    /// Who it goes to: addresses or a number, never the body.
+    recipients: Vec<String>,
+}
+
+/// The strings of list field `name`.
+fn strings(doc: &Doc, name: &str) -> Vec<String> {
+    match doc.field(name) {
+        Some(Value::List(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        Some(Value::Str(s)) if !s.is_empty() => vec![s.clone()],
+        _ => Vec::new(),
+    }
 }
 
 impl ItemChange {
@@ -110,6 +127,12 @@ impl ItemChange {
             was: old.map(|o| text(o, "status").unwrap_or("").to_owned()),
             status: text(doc, "status").unwrap_or("").to_owned(),
             error: text(doc, "error").unwrap_or("").trim().to_owned(),
+            kind: text(doc, "kind").unwrap_or("email").to_owned(),
+            recipients: match text(doc, "kind").unwrap_or("email") {
+                "sms" => strings(doc, "phone"),
+                "event" => strings(doc, "attendees_raw"),
+                _ => strings(doc, "to"),
+            },
         }
     }
 
@@ -143,6 +166,9 @@ impl Writer {
     /// cannot be stored is logged, never failing the write.
     pub(crate) fn outbox_notifications(&self, items: &[ItemChange]) {
         for item in items {
+            self.record_outbox(item);
+        }
+        for item in items {
             match &item.author {
                 Author::Agent(name) if item.entered("review") => self.count_draft(name),
                 // A send handler, a sync task, or a device reporting its command's result.
@@ -154,6 +180,57 @@ impl Writer {
                 _ => {}
             }
         }
+    }
+
+    /// The activity entry of an Outbox item's new status (activity Y2): drafted, approved,
+    /// rejected, sending, sent or failed, with its kind and recipients but not its body.
+    fn record_outbox(&self, item: &ItemChange) {
+        if item.was.as_deref() == Some(item.status.as_str()) {
+            return;
+        }
+        let (act, verb) = match item.status.as_str() {
+            "draft" | "review" if item.was.as_deref().is_none_or(|w| w != "draft") => {
+                ("drafted", "Drafted")
+            }
+            "draft" | "review" => return,
+            "approved" => ("approved", "Approved"),
+            "rejected" => ("rejected", "Rejected"),
+            "sending" => ("sending", "Sending"),
+            "sent" => ("sent", "Sent"),
+            "failed" => ("failed", "Could not send"),
+            _ => return,
+        };
+        let to = if item.recipients.is_empty() {
+            String::new()
+        } else {
+            let shown: Vec<&str> = item.recipients.iter().take(3).map(String::as_str).collect();
+            let more = item.recipients.len().saturating_sub(3);
+            let more = if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            };
+            format!(" to {}{more}", shown.join(", "))
+        };
+        let summary = format!(
+            "{verb} {} {}{to}",
+            item.kind,
+            crate::activity::quoted(Some(&item.title))
+        );
+        let mut detail = serde_json::json!({
+            "kind": item.kind,
+            "status": item.status,
+            "was": item.was,
+            "to": item.recipients.iter().take(20).collect::<Vec<_>>(),
+        });
+        if item.status == "failed" && !item.error.is_empty() {
+            detail["error"] = state::one_line(&item.error, 300).into();
+        }
+        self.state.record_activity(
+            state::NewActivity::new(format!("outbox.{act}"), "outbox", &item.author, summary)
+                .subject("outbox", &item.id)
+                .detail(detail),
+        );
     }
 
     /// End agent `name`'s turn: the next item it drafts starts a new notification. Agent runs and

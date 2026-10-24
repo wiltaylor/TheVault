@@ -187,6 +187,9 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         || under(path, "/api/integrations/ai")
         || under(path, "/api/integrations/browser")
         || under(path, "/api/ai")
+        // The activity log needs `admin` (activity Y3), and the device's own `state.db` logs only
+        // its local writes, not the vault's activity: the log is the web app's.
+        || under(path, "/api/activity")
     {
         return Route::NeedsWebApp;
     }
@@ -851,6 +854,7 @@ mod tests {
         assert_eq!(route(&get, "/api/clients/latest/apk"), Route::Forward);
         assert_eq!(route(&get, "/api/events"), Route::Events);
         assert_eq!(route(&get, "/api/tokens"), Route::NeedsWebApp);
+        assert_eq!(route(&get, "/api/activity"), Route::NeedsWebApp);
         assert_eq!(route(&Method::PUT, "/api/secrets/k"), Route::NeedsWebApp);
         // The device holds no AI credentials (ai D16): Settings > AI is the web app's, and the
         // chat is the home server's (ai D23).

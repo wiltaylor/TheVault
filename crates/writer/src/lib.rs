@@ -30,6 +30,7 @@
 //! [`Writer::stage_delete`]: it is checked like any write, runs its own `before_*` handlers, and
 //! joins the write in progress, so it commits with it or not at all (D30).
 
+mod activity;
 mod asset_use;
 mod assets;
 mod batch;
@@ -64,6 +65,7 @@ use schema::{Doc, Invalid, Issue, NoteLookup, NoteReport, Schema, TypeDef};
 use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, CommitStep, Vault};
 
+pub use activity::{Acting, acting_as};
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
@@ -1360,12 +1362,19 @@ impl Writer {
                 None => Change::delete(path),
             });
         }
-        let generation = match inner.commit_hook.as_mut() {
-            Some(hook) => self.commit_with_hook(files, &mut **hook)?,
-            None => self.commit(files)?,
+        let generation = {
+            let _acting = activity::acting_as(author);
+            match inner.commit_hook.as_mut() {
+                Some(hook) => self.commit_with_hook(files, &mut **hook)?,
+                None => self.commit(files)?,
+            }
         };
 
         let mut saved = Vec::with_capacity(rendered.len());
+        // What each note's activity entry says (activity Y2), and the titles of the notes
+        // deleted, read before the index forgets them.
+        let mut acts = Vec::with_capacity(rendered.len());
+        let mut gone_titles = HashMap::new();
         let mut updates = Vec::with_capacity(rendered.len());
         let mut people = Vec::new();
         let mut items = Vec::new();
@@ -1415,6 +1424,22 @@ impl Writer {
                         };
                         items.push(outbox::ItemChange::new(&id, by, was.as_ref(), &doc));
                     }
+                    let act = if flips.contains(&id) {
+                        if note::is_archived(&doc) {
+                            activity::NoteAct::Archive
+                        } else {
+                            activity::NoteAct::Unarchive
+                        }
+                    } else {
+                        match event {
+                            Event::Create if self.state.trash_entry(&id)?.is_some() => {
+                                activity::NoteAct::Restore
+                            }
+                            Event::Create => activity::NoteAct::Create,
+                            _ => activity::NoteAct::Update,
+                        }
+                    };
+                    acts.push((by.clone(), act, id.clone()));
                     let v = if flips.contains(&id) {
                         self.state
                             .record_distinct_version(&id, &type_name, by, &text)?
@@ -1437,6 +1462,8 @@ impl Writer {
                     });
                 }
                 _ => {
+                    gone_titles.insert(id.clone(), indexed_title(&inner.index, &id));
+                    acts.push((by.clone(), activity::NoteAct::Delete, id.clone()));
                     let entry = self.state.trash_note(&id, by)?;
                     updates.push(Update::Delete { id: id.clone() });
                     saved.push(Saved {
@@ -1457,6 +1484,13 @@ impl Writer {
         }
         inner.index.update(&inner.schema, &updates)?;
         inner.index.advance(generation)?;
+        for ((by, act, id), s) in acts.iter().zip(&saved) {
+            let title = match gone_titles.remove(id) {
+                Some(title) => title,
+                None => indexed_title(&inner.index, id),
+            };
+            self.record_note(by, *act, id, &s.type_name, title.as_deref(), &s.version);
+        }
         self.announce(&saved, &|id| match authors.get(id).unwrap_or(author) {
             Author::Token(name) => Some(name.clone()),
             _ => None,
@@ -1639,6 +1673,16 @@ impl NoteLookup for Lookup<'_> {
 
 /// `notes/<type>/<id>.wcl`.
 /// The vault path of type `name`'s definition.
+/// The title `index` holds for note `id`.
+fn indexed_title(index: &Index, id: &str) -> Option<String> {
+    index
+        .connection()
+        .query_row("SELECT title FROM notes WHERE id = ?1", [id], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok()
+}
+
 pub fn type_path(name: &str) -> String {
     format!("types/{name}.wcl")
 }

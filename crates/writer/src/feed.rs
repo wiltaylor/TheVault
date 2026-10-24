@@ -92,9 +92,25 @@ impl Writer {
     /// Commit `files` and journal the synced ones in the change feed. Returns the generation.
     pub(crate) fn commit(&self, files: Vec<Change>) -> Result<u64> {
         let synced = synced_changes(&files);
+        let existed = self.existed(&synced);
         let generation = self.vault.commit(files)?;
         self.state.journal_files(&synced)?;
+        self.record_definitions(&existed);
         Ok(generation)
+    }
+
+    /// `(path, existed, exists)` of each synced change, before it is committed.
+    fn existed(&self, synced: &[(String, bool)]) -> Vec<(String, bool, bool)> {
+        synced
+            .iter()
+            .map(|(path, exists)| {
+                (
+                    path.clone(),
+                    self.vault.root().join(path).is_file(),
+                    *exists,
+                )
+            })
+            .collect()
     }
 
     /// [`Writer::commit`] calling `hook` at each step.
@@ -104,8 +120,10 @@ impl Writer {
         hook: &mut dyn FnMut(CommitStep) -> ControlFlow<()>,
     ) -> Result<u64> {
         let synced = synced_changes(&files);
+        let existed = self.existed(&synced);
         let generation = self.vault.commit_with_hook(files, hook)?;
         self.state.journal_files(&synced)?;
+        self.record_definitions(&existed);
         Ok(generation)
     }
 }

@@ -52,6 +52,9 @@ pub enum LiveEvent {
         turn: Option<String>,
         running: bool,
     },
+    /// An entry was added to the activity log, or a coalesced `note.update` entry counted another
+    /// edit, keeping its id (activity Y3).
+    Activity { item: crate::Activity },
 }
 
 /// One app build in a [`LiveEvent::ClientsUpdated`].
@@ -79,6 +82,7 @@ impl LiveEvent {
             LiveEvent::DeviceSettings { .. } => "device.settings",
             LiveEvent::ClientsUpdated { .. } => "clients.updated",
             LiveEvent::AiTurn { .. } => "ai_turn",
+            LiveEvent::Activity { .. } => "activity",
         }
     }
 }

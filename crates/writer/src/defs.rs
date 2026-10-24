@@ -144,6 +144,7 @@ impl Writer {
             })
             .collect();
         if notes.is_empty() {
+            let _acting = crate::acting_as(author);
             let generation = self.commit(changes)?;
             inner.index.set_schema(&schema)?;
             inner.index.advance(generation)?;

@@ -165,6 +165,7 @@ impl Writer {
         worked: Worked,
         author: &Author,
     ) -> Result<(TypePlan, Vec<Saved>)> {
+        let _acting = crate::acting_as(author);
         let Worked {
             plan,
             schema,

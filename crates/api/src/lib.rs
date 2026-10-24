@@ -16,7 +16,7 @@
 //! `/api/openapi.json` lists every endpoint.
 //!
 //! Notifications for the user, from scripts, agents and the server, live under
-//! `/api/notifications`. `/api/events` streams notification and note changes to open clients as
+//! `/api/notifications`. `/api/activity` pages the activity log, admin only (activity Y3). `/api/events` streams notification and note changes to open clients as
 //! they happen (D4).
 //!
 //! The desktop and Android apps pair under `/api/devices`, each getting a `write` token bound to
@@ -60,11 +60,13 @@
 //!
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
+mod activity;
 mod agent_files;
 mod agent_memory;
 mod agent_runs;
 mod agent_threads;
 mod agents;
+mod ai_activity;
 mod ai_agents;
 mod ai_assets;
 mod ai_browser;
@@ -244,6 +246,7 @@ fn build() -> Built {
         .delete("/api/pins/folders/{id}", pins::delete_folder)
         .post("/api/pins/move", pins::move_entry)
         .get("/api/events", events::stream)
+        .get("/api/activity", activity::list)
         .post("/api/ai/chat", ai_chat::chat)
         .get("/api/notifications", notifications::list)
         .post("/api/notifications", notifications::create)
@@ -328,6 +331,7 @@ fn build() -> Built {
             devices::command_result,
         )
         .post("/api/devices/{id}/event-failures", devices::event_failure)
+        .post("/api/devices/{id}/sync-rounds", devices::sync_round)
         .get("/api/device-files", devices::files)
         .get("/api/device-files/{platform}", devices::file)
         .put("/api/device-files/{platform}", devices::put_file)

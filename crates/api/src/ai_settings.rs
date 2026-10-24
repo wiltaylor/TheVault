@@ -350,6 +350,7 @@ pub struct WebBody {
 /// `PUT /api/integrations/ai/settings`.
 pub async fn put_settings(
     State(a): Shared,
+    crate::Caller(by): crate::Caller,
     Json(b): Json<SettingsBody>,
 ) -> Result<Json<Value>, ApiError> {
     let default = match b.default_provider.as_deref().map(str::trim) {
@@ -382,6 +383,7 @@ pub async fn put_settings(
     let confirm = b.confirm;
     let web = b.web;
     blocking_w(&a, move |w| {
+        let _acting = writer::acting_as(&by);
         let s = w.state();
         let mut settings = Settings::load(s).map_err(api_error)?;
         for (p, url) in urls {

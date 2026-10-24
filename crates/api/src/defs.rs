@@ -103,13 +103,18 @@ pub async fn template(
 /// `PUT /api/types/{name}/templates/{template}`.
 pub async fn put_template(
     State(w): Shared,
+    Caller(by): Caller,
     Path((name, template)): Path<(String, String)>,
     headers: HeaderMap,
     raw: Bytes,
 ) -> Result<Response, ApiError> {
     let b: WclBody = body(&headers, &raw, |wcl| WclBody { wcl })?;
     let (n, t) = (name.clone(), template.clone());
-    let wcl = blocking(w, move |w| w.put_template(&n, &t, &b.wcl)).await?;
+    let wcl = blocking(w, move |w| {
+        let _acting = writer::acting_as(&by);
+        w.put_template(&n, &t, &b.wcl)
+    })
+    .await?;
     let json = json!({ "type": name, "name": template, "wcl": wcl });
     Ok(text_or_json(&headers, wcl, json))
 }
@@ -117,10 +122,15 @@ pub async fn put_template(
 /// `DELETE /api/types/{name}/templates/{template}`.
 pub async fn delete_template(
     State(w): Shared,
+    Caller(by): Caller,
     Path((name, template)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
     let (n, t) = (name.clone(), template.clone());
-    blocking(w, move |w| w.delete_template(&n, &t)).await?;
+    blocking(w, move |w| {
+        let _acting = writer::acting_as(&by);
+        w.delete_template(&n, &t)
+    })
+    .await?;
     Ok(Json(
         json!({ "type": name, "name": template, "deleted": true }),
     ))
@@ -197,10 +207,15 @@ pub async fn put_taxonomy(
 /// `DELETE /api/taxonomies/{name}`.
 pub async fn delete_taxonomy(
     State(w): Shared,
+    Caller(by): Caller,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let n = name.clone();
-    blocking(w, move |w| w.delete_taxonomy(&n).map_err(|e| in_use(w, e))).await?;
+    blocking(w, move |w| {
+        let _acting = writer::acting_as(&by);
+        w.delete_taxonomy(&n).map_err(|e| in_use(w, e))
+    })
+    .await?;
     Ok(Json(json!({ "name": name, "deleted": true })))
 }
 
@@ -246,6 +261,7 @@ pub(crate) fn problems_json(problems: &[writer::ScriptProblem]) -> Value {
 /// `PUT /api/scripts/{name}`.
 pub async fn put_script(
     State(w): Shared,
+    Caller(by): Caller,
     Path(name): Path<String>,
     headers: HeaderMap,
     raw: Bytes,
@@ -253,6 +269,7 @@ pub async fn put_script(
     let b: ScriptBody = body(&headers, &raw, |source| ScriptBody { source })?;
     let n = name.clone();
     let (source, problems) = blocking(w, move |w| {
+        let _acting = writer::acting_as(&by);
         let source = w.put_script(&n, &b.source)?;
         let problems = w.script_problems(&n, &source)?;
         Ok::<_, writer::Error>((source, problems))
@@ -265,10 +282,15 @@ pub async fn put_script(
 /// `DELETE /api/scripts/{name}`.
 pub async fn delete_script(
     State(w): Shared,
+    Caller(by): Caller,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let n = name.clone();
-    blocking(w, move |w| w.delete_script(&n)).await?;
+    blocking(w, move |w| {
+        let _acting = writer::acting_as(&by);
+        w.delete_script(&n)
+    })
+    .await?;
     Ok(Json(json!({ "name": name, "deleted": true })))
 }
 

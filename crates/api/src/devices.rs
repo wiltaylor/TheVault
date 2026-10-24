@@ -259,6 +259,21 @@ pub async fn pair(State(w): Shared, Json(body): Json<PairBody>) -> Result<Respon
             capabilities: &capabilities,
             settings: &settings,
         })?;
+        state.record_activity(
+            state::NewActivity::by(
+                "auth.device_paired",
+                "auth",
+                "device",
+                &device.name,
+                format!("Paired the {} device {}", device.platform, device.name),
+            )
+            .subject("device", &device.id)
+            .detail(json!({
+                "device": device.id,
+                "platform": device.platform,
+                "with": if body.code.is_some() { "code" } else { "password" },
+            })),
+        );
         Ok((device, token, state.vault_id()?))
     })
     .await?;
@@ -420,8 +435,27 @@ pub async fn update(
 
 /// `DELETE /api/devices/{id}`: revoke a device. Its token stops working at once and its push
 /// endpoint is forgotten.
-pub async fn revoke(State(w): Shared, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
-    blocking(w, move |w| w.state().revoke_device(&id)).await?;
+pub async fn revoke(
+    State(w): Shared,
+    Caller(by): Caller,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    blocking(w, move |w| {
+        let name = w.state().device(&id).map(|d| d.name).unwrap_or_default();
+        w.state().revoke_device(&id)?;
+        w.state().record_activity(
+            state::NewActivity::new(
+                "auth.device_revoked",
+                "auth",
+                &by,
+                format!("Removed the device {name}"),
+            )
+            .subject("device", &id)
+            .detail(json!({ "device": id, "name": name })),
+        );
+        Ok::<_, state::Error>(())
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -807,6 +841,103 @@ pub async fn command_result(
     })
     .await?;
     Ok(Json(writer::command_json(&command)))
+}
+
+// ---- sync rounds ------------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct RoundHeld {
+    note: String,
+    #[serde(default)]
+    asset: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// What one sync round of a device did. Unknown members are ignored, so a newer app can say more.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct RoundBody {
+    pushed: u64,
+    merged: u64,
+    conflicts: u64,
+    pulled: u64,
+    assets_sent: u64,
+    assets_failed: u64,
+    notifications_pushed: u64,
+    held: Vec<RoundHeld>,
+}
+
+/// The most held notes a round's activity entry lists.
+const MAX_HELD_LISTED: usize = 20;
+
+/// `POST /api/devices/{id}/sync-rounds`: the device reports a sync round it finished, `{pushed,
+/// merged, conflicts, pulled, assets_sent, assets_failed, notifications_pushed, held: [{note,
+/// asset?, reason?}]}`, recorded in the activity log as `sync.round` (activity Y2). A round that
+/// moved nothing and held nothing is not recorded. Only the device itself or an admin may.
+/// Answers 204.
+pub async fn sync_round(
+    State(w): Shared,
+    Caller(author): Caller,
+    Extension(GrantedScope(scope)): Extension<GrantedScope>,
+    Path(id): Path<String>,
+    Json(body): Json<RoundBody>,
+) -> Result<StatusCode, ApiError> {
+    blocking(w, move |w| {
+        let device = w.state().device(&id)?;
+        own_or_admin(&device, &author, scope, "report its sync rounds")?;
+        let idle = body.pushed == 0
+            && body.pulled == 0
+            && body.conflicts == 0
+            && body.assets_sent == 0
+            && body.assets_failed == 0
+            && body.notifications_pushed == 0
+            && body.held.is_empty();
+        if idle {
+            return Ok::<_, ApiError>(());
+        }
+        let mut summary = format!(
+            "{} synced: pushed {}, pulled {}",
+            device.name, body.pushed, body.pulled
+        );
+        if body.conflicts > 0 {
+            summary.push_str(&format!(", {} conflicts", body.conflicts));
+        }
+        if !body.held.is_empty() {
+            summary.push_str(&format!(", {} held", body.held.len()));
+        }
+        let held: Vec<Value> = body
+            .held
+            .iter()
+            .take(MAX_HELD_LISTED)
+            .map(|h| {
+                json!({
+                    "note": state::one_line(&h.note, 40),
+                    "asset": h.asset.as_deref().map(|a| state::one_line(a, 40)),
+                    "reason": h.reason.as_deref().map(|r| state::one_line(r, 120)),
+                })
+            })
+            .collect();
+        w.state().record_activity(
+            state::NewActivity::by("sync.round", "sync", "device", &device.name, summary)
+                .subject("device", &device.id)
+                .detail(json!({
+                    "device": device.id,
+                    "pushed": body.pushed,
+                    "merged": body.merged,
+                    "conflicts": body.conflicts,
+                    "pulled": body.pulled,
+                    "assets_sent": body.assets_sent,
+                    "assets_failed": body.assets_failed,
+                    "notifications_pushed": body.notifications_pushed,
+                    "held_count": body.held.len(),
+                    "held": held,
+                })),
+        );
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---- device event failures ------------------------------------------------------------------

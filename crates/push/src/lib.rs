@@ -86,7 +86,8 @@ pub fn message(event: &LiveEvent) -> Option<Message> {
         LiveEvent::NoteChanged { .. }
         | LiveEvent::DeviceSettings { .. }
         | LiveEvent::ClientsUpdated { .. }
-        | LiveEvent::AiTurn { .. } => return None,
+        | LiveEvent::AiTurn { .. }
+        | LiveEvent::Activity { .. } => return None,
     };
     Some(Message {
         device,

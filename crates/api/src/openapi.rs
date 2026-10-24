@@ -299,6 +299,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/activity",
+        "The activity log, newest first (?category=, ?actor=, ?kind=, ?q=, ?before=, ?limit= up to 200): {items, next}; admin only",
+    ),
+    (
+        "GET",
         "/api/notifications",
         "Notifications, newest first (?unread=true, ?limit=, ?cursor=), with the unread count",
     ),
@@ -416,6 +421,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "POST",
         "/api/devices/{id}/event-failures",
         "Report a device event whose handler failed for good, as one notification from device:<id>",
+    ),
+    (
+        "POST",
+        "/api/devices/{id}/sync-rounds",
+        "Report a finished sync round (pushed, pulled, held), recorded in the activity log",
     ),
     (
         "GET",

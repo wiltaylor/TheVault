@@ -87,8 +87,14 @@ fn agent_memories_path(path: &str) -> bool {
     }
 }
 
-/// Paths that need `admin` even to read, because they disclose or hand out credentials.
-const ADMIN_PATHS: [&str; 3] = ["/api/tokens", "/api/secrets", "/api/integrations"];
+/// Paths that need `admin` even to read, because they disclose or hand out credentials, or, the
+/// activity log, show everything that happens in the vault (activity Y3).
+const ADMIN_PATHS: [&str; 4] = [
+    "/api/tokens",
+    "/api/secrets",
+    "/api/integrations",
+    "/api/activity",
+];
 
 /// The authenticated caller of a request, recorded as the author of what it writes (D13).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +142,13 @@ fn is_device_commands(path: &str) -> bool {
 fn is_device_event_failures(path: &str) -> bool {
     path.strip_prefix("/api/devices/")
         .and_then(|rest| rest.strip_suffix("/event-failures"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
+/// Whether `path` is `/api/devices/{id}/sync-rounds`, where a device reports a sync round.
+fn is_device_sync_rounds(path: &str) -> bool {
+    path.strip_prefix("/api/devices/")
+        .and_then(|rest| rest.strip_suffix("/sync-rounds"))
         .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
 
@@ -231,8 +244,8 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     {
         return Some(Scope::Read);
     }
-    // A device sets its own push endpoint and bases, reports on its own commands and its failed
-    // device events, and queues an import of its own history, with its `write` token; the
+    // A device sets its own push endpoint and bases, reports on its own commands, its failed
+    // device events and its sync rounds, and queues an import of its own history, with its `write` token; the
     // handler checks it is its own.
     // Renaming and deleting a thread are note edits (agents G7).
     if WRITE_PATHS.iter().any(|p| under(p))
@@ -243,6 +256,7 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
         || (method == Method::POST && is_device_command_result(path))
         || (method == Method::POST && is_device_commands(path))
         || (method == Method::POST && is_device_event_failures(path))
+        || (method == Method::POST && is_device_sync_rounds(path))
     {
         Some(Scope::Write)
     } else {
@@ -415,8 +429,28 @@ pub async fn login(
     headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<Response, ApiError> {
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let agent = user_agent.clone();
     let ok = blocking(sessions.writer.clone(), move |w| {
-        w.state().verify_password(&body.password)
+        let ok = w.state().verify_password(&body.password)?;
+        // Never the password itself (activity Y2).
+        let detail = json!({ "user_agent": agent.as_deref().map(|a| state::one_line(a, 200)) });
+        w.state().record_activity(if ok {
+            state::NewActivity::new(
+                "auth.login",
+                "auth",
+                &Author::Session(OWNER_SESSION.to_owned()),
+                "Signed in with the password",
+            )
+            .detail(detail)
+        } else {
+            state::NewActivity::server("auth.login_failed", "auth", "A password login failed")
+                .detail(detail)
+        });
+        Ok::<_, state::Error>(ok)
     })
     .await?;
     if !ok {
@@ -426,10 +460,6 @@ pub async fn login(
             "wrong password",
         ));
     }
-    let user_agent = headers
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
     let id = sessions.start(user_agent).await?;
     let mut res = Json(json!({ "expires_in": SESSION_TTL.as_secs() })).into_response();
     res.headers_mut()
@@ -503,6 +533,7 @@ mod tests {
             (Method::POST, "/api/queryx", Some(Scope::Admin)),
             (Method::GET, "/api/search", Some(Scope::Read)),
             (Method::GET, "/api/tokens", Some(Scope::Admin)),
+            (Method::GET, "/api/activity", Some(Scope::Admin)),
             (Method::GET, "/api/secrets/x", Some(Scope::Admin)),
             (Method::POST, "/api/something-new", Some(Scope::Admin)),
             (Method::POST, "/api/batch", Some(Scope::Write)),
@@ -563,6 +594,16 @@ mod tests {
             (
                 Method::POST,
                 "/api/devices/x/y/event-failures",
+                Some(Scope::Admin),
+            ),
+            (
+                Method::POST,
+                "/api/devices/x/sync-rounds",
+                Some(Scope::Write),
+            ),
+            (
+                Method::POST,
+                "/api/devices/x/y/sync-rounds",
                 Some(Scope::Admin),
             ),
             (Method::GET, "/api/device-files/android", Some(Scope::Read)),

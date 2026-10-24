@@ -29,7 +29,7 @@ use state::{RunOutcome, SecretInfo, TaskRun};
 use writer::Writer;
 
 use crate::defs::{body, text_or_json};
-use crate::{ApiError, blocking};
+use crate::{ApiError, Caller, blocking};
 
 type Tasks = State<Arc<Scheduler>>;
 
@@ -163,12 +163,14 @@ pub struct TaskBody {
 /// `PUT /api/tasks/{name}`: create or replace a task file.
 pub async fn put(
     State(s): Tasks,
+    Caller(by): Caller,
     Path(name): Path<String>,
     headers: HeaderMap,
     raw: Bytes,
 ) -> Result<Response, ApiError> {
     let b: TaskBody = body(&headers, &raw, |wcl| TaskBody { wcl })?;
     let (status, wcl) = on_scheduler(s, move |s| {
+        let _acting = writer::acting_as(&by);
         let wcl = s.put_task(&name, &b.wcl)?;
         Ok((s.status(&name)?, wcl))
     })
@@ -179,9 +181,17 @@ pub async fn put(
 }
 
 /// `DELETE /api/tasks/{name}`. The task's run history stays.
-pub async fn delete(State(s): Tasks, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+pub async fn delete(
+    State(s): Tasks,
+    Caller(by): Caller,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, ApiError> {
     let n = name.clone();
-    on_scheduler(s, move |s| s.delete_task(&n)).await?;
+    on_scheduler(s, move |s| {
+        let _acting = writer::acting_as(&by);
+        s.delete_task(&n)
+    })
+    .await?;
     Ok(Json(json!({ "name": name, "deleted": true })))
 }
 

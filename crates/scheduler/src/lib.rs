@@ -526,6 +526,33 @@ impl Scheduler {
     /// Run the script of `def` for the started run record `id`, and record how it ended.
     fn attempt(&self, def: &TaskDef, id: state::RunId) -> Result<TaskRun> {
         let state = self.writer.state();
+        let by = state::Author::Task(def.name.clone());
+        // The Google syncs are tasks; their runs are sync activity (activity Y2).
+        let category = match def.name.as_str() {
+            "google_gmail" | "google_calendar" => "sync",
+            _ => "automation",
+        };
+        let began = self.clock.now_ms();
+        let attempt = attempt_of(state, id);
+        let retry = if attempt > 1 {
+            format!(" (attempt {attempt})")
+        } else {
+            String::new()
+        };
+        state.record_activity(
+            state::NewActivity::new(
+                "task.run.start",
+                category,
+                &by,
+                format!("Task {} started{retry}", def.label),
+            )
+            .subject("task_run", id.to_string())
+            .detail(serde_json::json!({
+                "task": def.name,
+                "run": id,
+                "attempt": attempt,
+            })),
+        );
         let outcome = match self.writer.read_script(&def.script) {
             Ok(source) => {
                 let mut job = Job::new(Kind::Task, &def.script, &source, &def.function);
@@ -549,10 +576,35 @@ impl Scheduler {
             Err(e) => RunOutcome::Failed(e.to_string()),
         };
         state.finish_run(id, &outcome)?;
+        let (word, message) = match &outcome {
+            RunOutcome::Failed(m) => ("failed", Some(m.lines().next().unwrap_or("").trim())),
+            _ => ("succeeded", None),
+        };
+        let mut summary = format!("Task {} {word}", def.label);
+        if let Some(m) = message.filter(|m| !m.is_empty()) {
+            summary.push_str(&format!(": {m}"));
+        }
+        state.record_activity(
+            state::NewActivity::new("task.run.end", category, &by, summary)
+                .subject("task_run", id.to_string())
+                .detail(serde_json::json!({
+                    "task": def.name,
+                    "run": id,
+                    "attempt": attempt,
+                    "outcome": word,
+                    "error": message.map(|m| state::one_line(m, 300)),
+                    "ms": self.clock.now_ms().saturating_sub(began),
+                })),
+        );
         state
             .run(id)?
             .ok_or(Error::State(state::Error::UnknownRun(id)))
     }
+}
+
+/// Which attempt task run `id` is, 1 when it cannot be read.
+fn attempt_of(state: &state::State, id: state::RunId) -> u32 {
+    state.run(id).ok().flatten().map_or(1, |r| r.attempt)
 }
 
 /// `s` cut to at most `max` characters, ending in an ellipsis when cut.

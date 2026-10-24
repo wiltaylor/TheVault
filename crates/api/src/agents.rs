@@ -126,7 +126,27 @@ pub async fn redeem(
     Json(body): Json<RedeemBody>,
 ) -> Result<Response, ApiError> {
     let server_url = request_url(None, &headers)?;
-    let redeemed = blocking(w, move |w| w.state().redeem_agent_code(&body.code)).await?;
+    let redeemed = blocking(w, move |w| {
+        let redeemed = w.state().redeem_agent_code(&body.code)?;
+        if let Some((info, _)) = &redeemed {
+            w.state().record_activity(
+                state::NewActivity::new(
+                    "auth.token_created",
+                    "auth",
+                    &state::Author::Token(info.name.clone()),
+                    format!(
+                        "An install code made the {} token {}",
+                        info.scope.as_str(),
+                        info.name
+                    ),
+                )
+                .subject("token", &info.name)
+                .detail(json!({ "name": info.name, "scope": info.scope.as_str(), "with": "install_code" })),
+            );
+        }
+        Ok::<_, state::Error>(redeemed)
+    })
+    .await?;
     let Some((info, secret)) = redeemed else {
         return Err(ApiError::new(
             StatusCode::GONE,

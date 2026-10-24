@@ -190,6 +190,7 @@ pub async fn read(
 /// `{ "wcl": "..." }`.
 pub async fn put(
     State(w): Shared,
+    Caller(by): Caller,
     Path(name): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -207,6 +208,7 @@ pub async fn put(
     };
     let n = name.clone();
     let (wcl, warnings) = blocking(w, move |w| {
+        let _acting = writer::acting_as(&by);
         let wcl = w.put_type(&n, &source)?;
         let warnings = w
             .schema()
@@ -277,11 +279,18 @@ pub async fn change(
 }
 
 /// `DELETE /api/types/{name}`.
-pub async fn delete(State(w): Shared, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+pub async fn delete(
+    State(w): Shared,
+    Caller(by): Caller,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, ApiError> {
     let name2 = name.clone();
-    blocking(w, move |w| w.delete_type(&name2))
-        .await
-        .map_err(missing_type)?;
+    blocking(w, move |w| {
+        let _acting = writer::acting_as(&by);
+        w.delete_type(&name2)
+    })
+    .await
+    .map_err(missing_type)?;
     Ok(Json(json!({ "name": name, "deleted": true })))
 }
 

@@ -577,16 +577,23 @@ impl Scheduler {
             });
         }
         let mut starts = Vec::new();
+        let mut skipped = Vec::new();
         {
             let mut plan = self.plan();
             for job in jobs {
                 match plan.agents.admit(job.clone(), now) {
                     Admitted::Start(j) => starts.push(j),
                     Admitted::Queued => {}
-                    Admitted::Skipped(true) => tell.push(job),
-                    Admitted::Skipped(false) => {}
+                    Admitted::Skipped(true) => {
+                        skipped.push(job.clone());
+                        tell.push(job);
+                    }
+                    Admitted::Skipped(false) => skipped.push(job),
                 }
             }
+        }
+        for job in &skipped {
+            self.record_skipped(job);
         }
         for job in tell {
             self.notify_limit(&job);
@@ -673,7 +680,9 @@ impl Scheduler {
                 thread: None,
             };
             if self.plan().agents.over_limit(&agent.name, now) {
-                if let Admitted::Skipped(true) = self.plan().agents.admit(job.clone(), now) {
+                let admitted = self.plan().agents.admit(job.clone(), now);
+                self.record_skipped(&job);
+                if let Admitted::Skipped(true) = admitted {
                     tell.push(job);
                 }
                 record(None);
@@ -766,11 +775,59 @@ impl Scheduler {
         if let Err(e) = state.finish_agent_run(id, &outcome, &log.join("\n")) {
             eprintln!("agent {:?}: recording the run's end: {e}", agent.name);
         }
+        let (word, message) = match &outcome {
+            AgentRunOutcome::Failed(m) => ("failed", Some(m.as_str())),
+            _ => ("succeeded", None),
+        };
+        let mut summary = format!("{}\u{2019}s {} run {word}", agent.label, job.trigger);
+        if let Some(m) = message {
+            summary.push_str(&format!(": {}", m.lines().next().unwrap_or("").trim()));
+        }
+        let mut entry = state::NewActivity::new(
+            "agent.run",
+            "automation",
+            &Author::Agent(agent.name.clone()),
+            summary,
+        )
+        .detail(serde_json::json!({
+            "agent": agent.name,
+            "trigger": job.trigger,
+            "run": id,
+            "thread": thread,
+            "origin": if job.thread.is_some() { MENTION_ORIGIN.to_owned() } else { origin.clone() },
+            "outcome": word,
+            "error": message.map(|m| state::one_line(m, 300)),
+        }));
+        if let Some(t) = &thread {
+            entry = entry.subject("thread", t);
+        }
+        state.record_activity(entry);
         // What the run drafted into the Outbox has its notification; the next run starts another.
         self.writer.end_outbox_drafts(&agent.name);
         if let AgentRunOutcome::Failed(message) = &outcome {
             self.notify_agent_failure(&agent, &job.trigger, thread.as_deref(), message);
         }
+    }
+
+    /// The activity entry of a run skipped over the hourly limit (activity Y2).
+    fn record_skipped(&self, job: &AgentJob) {
+        self.writer.state().record_activity(
+            state::NewActivity::new(
+                "agent.run.skipped",
+                "automation",
+                &Author::Agent(job.agent.clone()),
+                format!(
+                    "{}\u{2019}s {} run skipped: {MAX_PER_HOUR} runs started in the last hour",
+                    job.agent, job.trigger
+                ),
+            )
+            .subject("agent", &job.agent)
+            .detail(serde_json::json!({
+                "agent": job.agent,
+                "trigger": job.trigger,
+                "limit": MAX_PER_HOUR,
+            })),
+        );
     }
 
     /// "<Agent>'s <trigger> run failed", linking to its thread.

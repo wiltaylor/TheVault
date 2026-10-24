@@ -355,6 +355,23 @@ async fn start_with(
             })??;
     let (tx, rx) = mpsc::channel::<Sent>(64);
     let named = prepared.named;
+    let actor = if named {
+        Author::Agent(prepared.agent.name.clone())
+    } else {
+        author.clone()
+    };
+    // An unattended turn runs on a thread its trigger or call opened (activity Y2).
+    let origin = match (&report, &prepared.origin) {
+        (Some(_), Some(o)) => o.clone(),
+        _ => "user".to_owned(),
+    };
+    let activity = crate::ai_activity::TurnActivity::new(
+        w.clone(),
+        actor,
+        &prepared.agent.name,
+        prepared.log.as_ref().map(|l| l.id.clone()),
+        &origin,
+    );
     let turn = Turn {
         writer: w,
         author: if named {
@@ -368,6 +385,7 @@ async fn start_with(
         agent_name: named.then(|| prepared.agent.name.clone()),
         log: prepared.log.map(std::sync::Mutex::new),
         report,
+        activity,
     };
     let agent = prepared.agent;
     let history = prepared.history;
@@ -388,6 +406,8 @@ struct Prepared {
     /// The messages the first request sends.
     history: Vec<Message>,
     log: Option<ThreadLog>,
+    /// The thread's origin, for the activity log.
+    origin: Option<String>,
 }
 
 /// The agent a turn runs as: the one named, or the built-in Assistant. A disabled agent takes
@@ -435,6 +455,7 @@ fn prepare(
             named: named.is_some(),
             history: messages,
             log: None,
+            origin: None,
         });
     };
     let thread = Thread::read(w, &id)?;
@@ -445,6 +466,7 @@ fn prepare(
         )));
     }
     let busy = Busy::take(&thread.id, &agent.name)?;
+    let origin = Some(thread.origin.clone());
     // Sending in an archived thread takes it out of the archive (agents G15).
     if thread.archived {
         w.set_archived(&thread.id, false, Some(&thread.version), author)?;
@@ -496,6 +518,7 @@ fn prepare(
         named: true,
         history,
         log: Some(log),
+        origin,
     })
 }
 
@@ -882,6 +905,8 @@ struct Turn {
     log: Option<std::sync::Mutex<ThreadLog>>,
     /// For an unattended turn (agents G12): how it ended and its trail lines.
     report: Option<Report>,
+    /// The turn's entries in the activity log (activity Y2).
+    activity: crate::ai_activity::TurnActivity,
 }
 
 impl Turn {
@@ -895,10 +920,13 @@ impl Turn {
     ) {
         let mut added = Vec::new();
         let name = agent.name.clone();
+        self.activity.start();
         self.rounds(agent, provider, model, history, note_id, &mut added)
             .await;
         // What the turn added before it stopped, the client gone or not.
         self.persist(&added).await;
+        // A turn that ended otherwise was stopped, or its client went away.
+        self.activity.end("stopped", None);
         // The items the turn drafted into Review share one notification, which the writer raised
         // as each was written (outbox X10); the agent's next turn starts another. The Outbox
         // tools draft as the agent, the Assistant included.
@@ -933,6 +961,15 @@ impl Turn {
         );
         if proposal && let Some(a) = &self.agent_name {
             data["agent"] = json!(a);
+        }
+        if name == "tool_result" {
+            self.activity.tool_answered(
+                data["id"].as_str().unwrap_or_default(),
+                &data["summary"],
+                data["is_error"] == true,
+            );
+        } else if proposal {
+            self.activity.change(name, &data);
         }
         if let Some(mut log) = self.log() {
             if name == "tool_result"
@@ -1075,6 +1112,12 @@ impl Turn {
                 );
                 eprintln!("{line}");
                 self.report(|r| r.log.push(line));
+                self.activity.called(
+                    setup.provider.as_str(),
+                    &setup.model,
+                    usage.input,
+                    usage.output,
+                );
             };
             let (text, calls, stop, state) = match called {
                 Called::Gone => return,
@@ -1170,6 +1213,7 @@ impl Turn {
             }
             let mut results = Vec::with_capacity(calls.len());
             for c in calls {
+                self.activity.tool_called(&c.id, &c.name, &c.input);
                 if !self
                     .out
                     .send(
@@ -1479,6 +1523,7 @@ impl Turn {
     }
 
     async fn done(&self, stop: &Stop, added: &[Message]) {
+        self.activity.end("done", Some(stop.as_str()));
         self.persist(added).await;
         self.report(|r| r.ended = Some(Ok(())));
         self.out
@@ -1487,6 +1532,7 @@ impl Turn {
     }
 
     async fn failed(&self, e: &AiError, added: &[Message]) {
+        self.activity.end("error", Some(e.kind.as_str()));
         self.persist(added).await;
         self.report(|r| r.ended = Some(Err(e.message.clone())));
         self.out
@@ -1532,6 +1578,8 @@ impl Turn {
             text: notice.clone(),
         });
         added.push(assistant(content, None));
+        self.activity
+            .end("refused", Some(category.as_deref().unwrap_or("refusal")));
         self.persist(added).await;
         self.report(|r| r.ended = Some(Err(notice.clone())));
         self.out
@@ -2058,6 +2106,8 @@ pub fn apply_change(
     event: &str,
     p: &Value,
 ) -> Result<Value, ApplyError> {
+    // A type, taxonomy or agent change is recorded as the author's (activity Y2).
+    let _acting = writer::acting_as(author);
     let member = |name: &str| {
         p[name]
             .as_str()

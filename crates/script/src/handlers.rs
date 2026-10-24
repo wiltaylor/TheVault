@@ -229,6 +229,36 @@ impl Handlers {
     }
 }
 
+/// The activity entry of a handler run that failed (activity Y2): the script, the event and the
+/// note, and the first line of the error.
+fn record_failure(
+    writer: &Writer,
+    script: &str,
+    event: &str,
+    type_name: &str,
+    id: &str,
+    message: &str,
+) {
+    let first = message.lines().next().unwrap_or("").trim();
+    let mut e = state::NewActivity::new(
+        "handler.failed",
+        "automation",
+        &Author::Handler(script.to_owned()),
+        format!("Handler {script} ({event} of {type_name}) failed: {first}"),
+    )
+    .detail(json!({
+        "script": script,
+        "event": event,
+        "type": type_name,
+        "note": id,
+        "error": state::one_line(message, 300),
+    }));
+    if !id.is_empty() {
+        e = e.subject("note", id);
+    }
+    writer.state().record_activity(e);
+}
+
 impl Shared {
     fn writer(&self) -> Result<Arc<Writer>, String> {
         bound(&self.binding)
@@ -286,7 +316,18 @@ impl Shared {
             let source = script_source(&writer, &h.script)?;
             let mut job = Job::new(Kind::Before, &h.script, &source, &h.function);
             job.args = vec![arg];
-            let returned = self.before.run(job).result.map_err(|e| e.to_string())?;
+            let returned = self.before.run(job).result.map_err(|e| {
+                let message = e.to_string();
+                record_failure(
+                    &writer,
+                    &h.script,
+                    &event,
+                    &change.type_name,
+                    &change.id,
+                    &message,
+                );
+                message
+            })?;
             if change.event != Event::Delete
                 && let Some(new) = returned_doc(returned, &doc, &change.type_name, &change.id)?
             {
@@ -329,6 +370,7 @@ impl Shared {
                 if links.len() > MAX_DEPTH {
                     let message = depth_error(&links);
                     eprintln!("handler not run: {message}");
+                    record_failure(&writer, &h.script, &event, &s.type_name, &s.id, &message);
                     if let Err(e) = writer.state().record_failed_job(&payload, &message) {
                         eprintln!("recording a failed handler job: {e}");
                     }
@@ -361,6 +403,16 @@ impl Shared {
                         let (outcome, log) = self.run_job(&writer, &job.payload);
                         if let Err(message) = &outcome {
                             eprintln!("after_* handler job {} failed: {message}", job.id);
+                            let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
+                            let s = |k: &str| p[k].as_str().unwrap_or_default().to_owned();
+                            record_failure(
+                                &writer,
+                                &s("script"),
+                                &s("event"),
+                                &s("type"),
+                                &s("id"),
+                                message,
+                            );
                         }
                         if let Err(e) = writer.state().finish_job(job.id, outcome, &log) {
                             eprintln!("recording handler job {}: {e}", job.id);

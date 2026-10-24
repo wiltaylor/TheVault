@@ -12,6 +12,7 @@ croner = "2"
 query.workspace = true
 schema.workspace = true
 script.workspace = true
+serde_json.workspace = true
 state.workspace = true
 thiserror.workspace = true
 writer.workspace = true

@@ -1,10 +1,11 @@
 //! `.vault/state.db`: version history, trash, the change feed devices sync from, encrypted secrets,
 //! API tokens, password-login sessions, paired devices and their base versions, task and agent
 //! trigger run logs, the calls of agents answered, the queue of `after_*` handler jobs, the user's
-//! notifications, and the shipped defaults and upgrade steps the vault has had.
+//! notifications, the shipped defaults and upgrade steps the vault has had, and the activity log.
 //!
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
+mod activity;
 mod agent_calls;
 mod agent_runs;
 mod auth;
@@ -22,11 +23,19 @@ mod sessions;
 mod shipped;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicI64;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
+pub use activity::{
+    Activity, ActivityFilter, ActivityPage, CATEGORIES as ACTIVITY_CATEGORIES,
+    COALESCE_MS as ACTIVITY_COALESCE_MS, MAX_DETAIL as ACTIVITY_MAX_DETAIL,
+    MAX_ENTRIES as ACTIVITY_MAX_ENTRIES, MAX_PAGE as ACTIVITY_MAX_PAGE,
+    MAX_SUMMARY as ACTIVITY_MAX_SUMMARY, NewActivity, RETENTION_MS as ACTIVITY_RETENTION_MS,
+    one_line,
+};
 pub use agent_calls::AgentCall;
 pub use agent_runs::{AgentRun, AgentRunId, AgentRunOutcome};
 pub use auth::{AgentCode, Scope, TokenInfo};
@@ -135,9 +144,11 @@ pub struct State {
     key: Option<SecretKey>,
     clock: Arc<dyn Clock>,
     events: Events,
+    /// When the activity log was last pruned (activity Y1).
+    activity_pruned: AtomicI64,
 }
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -416,6 +427,27 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS sessions_expires ON sessions (expires_ms);
 ";
 
+/// What version 17 adds: the activity log (activity Y1, Y6). `id` is a ULID, so it is also the
+/// order; `detail` is a small JSON object.
+const SCHEMA_V17: &str = "
+CREATE TABLE IF NOT EXISTS activity (
+    id           TEXT PRIMARY KEY,
+    at_ms        INTEGER NOT NULL,
+    kind         TEXT NOT NULL,
+    category     TEXT NOT NULL,
+    actor_kind   TEXT NOT NULL,
+    actor        TEXT NOT NULL,
+    summary      TEXT NOT NULL,
+    subject_kind TEXT,
+    subject      TEXT,
+    detail       TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS activity_at ON activity (at_ms);
+CREATE INDEX IF NOT EXISTS activity_category ON activity (category, id);
+CREATE INDEX IF NOT EXISTS activity_actor ON activity (actor_kind, actor, id);
+CREATE INDEX IF NOT EXISTS activity_subject ON activity (subject_kind, subject, id);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -439,11 +471,16 @@ impl State {
         // Overwrite deleted rows so pruned history and removed secrets do not linger on disk.
         conn.pragma_update(None, "secure_delete", true)?;
         migrate(&mut conn)?;
+        // The server prunes the activity log as it starts (activity Y1); recording prunes it
+        // again once a day after that. Other processes that open `state.db`, such as the CLI,
+        // leave it be.
+        let now = clock.now_ms();
         Ok(Self {
             conn: Mutex::new(conn),
             key,
             clock,
             events: Events::default(),
+            activity_pruned: AtomicI64::new(now),
         })
     }
 
@@ -513,7 +550,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=15 => {
+        0..=16 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -572,6 +609,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 15 {
                 tx.execute_batch(SCHEMA_V16)?;
+            }
+            if version <= 16 {
+                tx.execute_batch(SCHEMA_V17)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

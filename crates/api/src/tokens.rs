@@ -8,10 +8,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use state::{Scope, TokenInfo};
+use state::{NewActivity, Scope, TokenInfo};
 use writer::Writer;
 
-use crate::{ApiError, blocking};
+use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
@@ -48,10 +48,28 @@ pub struct CreateBody {
 }
 
 /// `POST /api/tokens`: create a token. The response is the only time its secret is shown.
-pub async fn create(State(w): Shared, Json(body): Json<CreateBody>) -> Result<Response, ApiError> {
+pub async fn create(
+    State(w): Shared,
+    Caller(by): Caller,
+    Json(body): Json<CreateBody>,
+) -> Result<Response, ApiError> {
     check_name(&body.name)?;
     let scope: Scope = body.scope.parse()?;
-    let (info, secret) = blocking(w, move |w| w.state().create_token(&body.name, scope)).await?;
+    let (info, secret) = blocking(w, move |w| {
+        let made = w.state().create_token(&body.name, scope)?;
+        w.state().record_activity(
+            NewActivity::new(
+                "auth.token_created",
+                "auth",
+                &by,
+                format!("Created the {} token {}", scope.as_str(), body.name),
+            )
+            .subject("token", &body.name)
+            .detail(json!({ "name": body.name, "scope": scope.as_str() })),
+        );
+        Ok::<_, state::Error>(made)
+    })
+    .await?;
     let mut out = token_json(&info);
     out["secret"] = Value::String(secret);
     Ok((StatusCode::CREATED, Json(out)).into_response())
@@ -65,7 +83,25 @@ pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
 }
 
 /// `DELETE /api/tokens/{name}`: revoke a token. Its secret stops working at once.
-pub async fn revoke(State(w): Shared, Path(name): Path<String>) -> Result<StatusCode, ApiError> {
-    blocking(w, move |w| w.state().revoke_token(&name)).await?;
+pub async fn revoke(
+    State(w): Shared,
+    Caller(by): Caller,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    blocking(w, move |w| {
+        w.state().revoke_token(&name)?;
+        w.state().record_activity(
+            NewActivity::new(
+                "auth.token_revoked",
+                "auth",
+                &by,
+                format!("Revoked the token {name}"),
+            )
+            .subject("token", &name)
+            .detail(json!({ "name": name })),
+        );
+        Ok::<_, state::Error>(())
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
