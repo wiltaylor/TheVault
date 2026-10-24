@@ -75,8 +75,16 @@ export function NoteOutboxActions(props: {
 
   const status = () => statusOf(props.doc.fields);
   const off = () => busy() || !!props.disabled;
-  const Button = (p: { label: string; primary?: boolean; onClick: () => void }) => (
-    <button type="button" class={p.primary ? "primary outbox-note-action" : "outbox-note-action"} disabled={off()} onClick={() => p.onClick()}>
+  // `name` is what a screen reader hears when the label alone is ambiguous on the page: the pane's
+  // history arrow is also called Forward.
+  const Button = (p: { label: string; name?: string; primary?: boolean; onClick: () => void }) => (
+    <button
+      type="button"
+      class={p.primary ? "primary outbox-note-action" : "outbox-note-action"}
+      aria-label={p.name}
+      disabled={off()}
+      onClick={() => p.onClick()}
+    >
       {p.label}
     </button>
   );
@@ -87,14 +95,14 @@ export function NoteOutboxActions(props: {
         <Show when={emailHasOthers()}>
           <Button label="Reply all" onClick={() => void draft(async () => [replyAllDraft(props.id, props.doc, await googleAccount())])} />
         </Show>
-        <Button label="Forward" onClick={() => void draft(() => [forwardDraft(props.doc)])} />
+        <Button label="Forward" name="Forward this email" onClick={() => void draft(() => [forwardDraft(props.doc)])} />
       </Show>
       <Show when={props.type === MESSAGE}>
         <Button label="Reply" onClick={() => void draft(() => smsReplyDrafts(props.doc, false))} />
         <Show when={messageHasOthers()}>
           <Button label="Reply all" onClick={() => void draft(() => smsReplyDrafts(props.doc, true))} />
         </Show>
-        <Button label="Forward" onClick={() => void draft(() => [smsForwardDraft(props.doc)])} />
+        <Button label="Forward" name="Forward this message" onClick={() => void draft(() => [smsForwardDraft(props.doc)])} />
       </Show>
       <Show when={props.type === EVENT}>
         <Button label="Propose a change" onClick={() => void draft(() => [changeDraft(props.id, props.doc)])} />

@@ -111,7 +111,7 @@ describe("the note page's Outbox buttons", () => {
 
   it("Forward on an email drafts it to no one with Fwd:, the forwarded header, the body and the attachments", async () => {
     render(() => <NoteOutboxActions id="01EMAIL" type="email" doc={GROUP_EMAIL} setStatus={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    fireEvent.click(screen.getByRole("button", { name: "Forward this email" }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("/notes/01DRAFT"));
     const doc = drafted();
     expect(doc.fields).toMatchObject({ kind: "email", status: "draft", to: [], subject: "Fwd: Re: Roof", attachments: ["assets/01ASSET/quote.pdf"] });
@@ -166,7 +166,7 @@ describe("the note page's Outbox buttons", () => {
   it("Forward on an SMS drafts one with no number and the text after Fwd:", async () => {
     const doc = sms({ direction: "in", from_raw: "+61400000001" }, "Gate code is 1234");
     render(() => <NoteOutboxActions id="01MSG" type="message" doc={doc} setStatus={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    fireEvent.click(screen.getByRole("button", { name: "Forward this message" }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("/notes/01DRAFT"));
     expect(drafted().fields).toMatchObject({ kind: "sms", status: "draft", drafted_by: "user", phone: "" });
     expect(drafted().blocks[0]!.blocks).toEqual([{ kind: "paragraph", fields: { text: "Fwd: Gate code is 1234" } }]);
@@ -211,6 +211,6 @@ describe("the note page's Outbox buttons", () => {
     hasOutbox = false;
     render(() => <NoteOutboxActions id="01EMAIL" type="email" doc={EMAIL} setStatus={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Forward" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Forward this/ })).toBeNull();
   });
 });
