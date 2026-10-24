@@ -5100,27 +5100,191 @@ h1.note-title {
 .type-chip[data-colour="pink"] { --chip-colour: var(--palette-pink); }
 .type-chip[data-colour="red"] { --chip-colour: var(--palette-red); }
 
-/* An asset field: its picker, then an Upload button. */
+/* An asset field: its files one to a row, then Add +. Dropping files on it uploads them. */
 .asset-input {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  min-width: 0;
+  border-radius: 0.5rem;
 }
 
-.asset-input > select {
-  flex: 1 1 12rem;
+.asset-input.dragging {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+  background: var(--accent-soft);
+}
+
+.asset-input > .error,
+.asset-input > .asset-progress {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.asset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
   min-width: 0;
 }
 
-/* Chips stay as wide as they are, so Upload sits right after the +. */
-.asset-input > .chip-picker {
-  flex: 0 1 auto;
+.asset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.2rem 0.3rem;
+  border-radius: 0.4rem;
 }
 
-.asset-input > .error {
-  flex-basis: 100%;
+.asset-row:hover {
+  background: var(--hover);
+}
+
+.asset-row-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  overflow: hidden;
+  border-radius: 0.3rem;
+  color: var(--muted);
+}
+
+.asset-row-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.asset-row-icon .pdf-thumb-button {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.asset-row-icon .pdf-thumb {
+  min-height: 0 !important;
+  max-height: 2rem;
+  overflow: hidden;
+}
+
+.asset-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-row.missing .asset-row-name {
+  color: var(--muted);
+  font-family: var(--mono, monospace);
+  font-size: 0.85rem;
+}
+
+.asset-row-size {
+  flex: none;
+  font-size: 0.8rem;
+}
+
+.asset-row-remove {
+  flex: none;
+  margin-left: auto;
+  padding: 0 0.4rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1.4;
+  border-radius: 0.3rem;
+}
+
+.asset-row-remove:hover,
+.asset-row-remove:focus-visible {
+  color: var(--danger);
+  background: var(--hover);
+}
+
+.asset-add {
+  position: relative;
+}
+
+.asset-add-button {
+  font-size: 0.85rem;
+  padding: 0.2rem 0.6rem;
+}
+
+.asset-add-menu {
+  left: 0;
+  right: auto;
+}
+
+.asset-add-replaces {
   margin: 0;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-chooser-search {
+  width: 100%;
+}
+
+.asset-chooser-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  overflow-y: auto;
+}
+
+.asset-chooser-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  background: none;
+  color: var(--ink);
+  text-align: left;
+}
+
+.asset-chooser-item:hover:not(:disabled),
+.asset-chooser-item:focus-visible {
+  border-color: var(--accent);
+}
+
+.asset-chooser-item.picked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.asset-chooser-item:disabled {
+  opacity: 0.6;
+}
+
+.asset-chooser-item .asset-row-size {
+  margin-left: auto;
+}
+
+.asset-chooser-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 /* The title runs as inline text; the chip and buttons follow its last word and wrap as one group. */

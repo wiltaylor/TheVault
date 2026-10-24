@@ -4,6 +4,7 @@ import { ApiError, type Block, type FieldDef, type Json, type Note, type NoteDoc
 import { clearActiveNote, setActiveNote } from "../archive";
 import { type Autosave, type SaveState, createAutosave } from "../autosave";
 import { CanvasSurface } from "../canvas/CanvasSurface";
+import { AssetInput } from "../components/AssetField";
 import { ConflictView } from "../components/ConflictView";
 import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { FieldInput, type RelatedFields, hasInput } from "../components/FieldInput";
@@ -1051,9 +1052,15 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     </ControlBindingContext.Provider>
   );
 
-  /** A field's value as read-only text: references by their notes' titles. */
+  /**
+   * A field's value read-only: references by their notes' titles, files of an asset field as its
+   * editor lists them (a single image as its thumbnail), anything else as text.
+   */
   function Display(p: { field: FieldDef; value: Json | undefined }) {
     const ids = () => (Array.isArray(p.value) ? p.value : [p.value]).filter((x) => typeof x === "string");
+    if (p.field.kind === "asset" && !(p.field.accept === "image" && !p.field.multiple)) {
+      return <AssetInput field={p.field} value={p.value} label={p.field.label} />;
+    }
     return (
       <Show when={p.value !== undefined} fallback={<span class="muted">—</span>}>
         <Show when={p.field.kind === "reference"} fallback={<FieldValue field={p.field} value={p.value} fields={shown().fields} />}>

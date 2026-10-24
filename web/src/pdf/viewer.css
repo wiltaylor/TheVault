@@ -258,11 +258,6 @@
   }
 }
 
-.asset-input > .pdf-thumbs {
-  flex-basis: 100%;
-  margin-top: 0;
-}
-
 .asset-file-cell {
   display: flex;
   align-items: center;

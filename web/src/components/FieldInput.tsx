@@ -1,13 +1,10 @@
 // Editors for every field kind a note page edits in place (D3, D7). Content, ink and canvas fields
 // have editors of their own; a computed field is never given one.
 
-import { For, Match, Show, Switch, createEffect, createResource, createSignal, on } from "solid-js";
-import { type Asset, type FieldDef, type Json, type Row, type Term, api } from "../api";
-import { FilePicker, upload } from "../blocks/MediaBlocks";
+import { For, Match, Show, Switch, createEffect, createSignal, on } from "solid-js";
+import { type FieldDef, type Json, type Row, type Term, api } from "../api";
 import { knowTitle, noteTitle } from "../editor/titles";
 import { MapCanvas } from "../map/MapCanvas";
-import { isPdfFile } from "../pdf/model";
-import { PdfThumbButton } from "../pdf/PdfPreview";
 import {
   LOCATION_MAP_HEIGHT,
   geoPoint,
@@ -17,6 +14,7 @@ import {
   setLocationMapHeight,
 } from "../map/model";
 import { taxonomyDef, typeDef } from "../session";
+import { AssetInput } from "./AssetField";
 import { ChipPicker, matches } from "./ChipPicker";
 import type { Suggestion } from "./Combobox";
 import { ImageField } from "./ImageField";
@@ -583,81 +581,6 @@ function LocationInput(props: FieldInputProps) {
           Clear
         </button>
       </div>
-    </div>
-  );
-}
-
-/** An asset field: pick an uploaded file, or upload a new one into the field. */
-function AssetInput(props: FieldInputProps) {
-  const [assets, { refetch }] = createResource(() => api.assets());
-  const [uploading, setUploading] = createSignal(false);
-  const [uploadError, setUploadError] = createSignal<string | null>(null);
-  const options = () => {
-    const list = (assets() ?? []).map((a) => ({ value: a.id, text: a.filename }));
-    // Keep a stored id the listing no longer has, so it is not silently dropped.
-    for (const id of asStrings(props.value)) {
-      if (!list.some((o) => o.value === id)) list.push({ value: id, text: id });
-    }
-    return list;
-  };
-  // The field's PDFs, each shown as a thumbnail that opens the viewer.
-  const pdfs = () => {
-    const byId = new Map((assets() ?? []).map((a) => [a.id, a]));
-    return asStrings(props.value)
-      .map((id) => byId.get(id))
-      .filter((a): a is Asset => !!a && isPdfFile(a.filename));
-  };
-  async function uploadInto(file: File) {
-    setUploading(true);
-    setUploadError(null);
-    try {
-      const a = await upload(file);
-      await refetch();
-      props.onChange(props.field.multiple ? [...asStrings(props.value), a.id] : a.id);
-    } catch (e) {
-      setUploadError(`Could not upload ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setUploading(false);
-    }
-  }
-  return (
-    <div class="asset-input">
-      <Show
-        when={!props.field.multiple}
-        fallback={
-          <Picker
-            {...props}
-            suggest={(text) => optionSuggestions(options(), text)}
-            chipText={(id) => options().find((o) => o.value === id)?.text ?? id}
-          />
-        }
-      >
-        <Choice
-          options={options()}
-          required={props.field.required}
-          value={props.value}
-          onChange={props.onChange}
-          label={props.label}
-          id={props.id}
-        />
-      </Show>
-      <FilePicker
-        label={`Upload a file to ${props.label}`}
-        text={uploading() ? "Uploading…" : "Upload"}
-        onFile={(file) => void uploadInto(file)}
-      />
-      <Show when={pdfs().length > 0}>
-        <div class="pdf-thumbs" data-testid="asset-pdf-thumbs">
-          <For each={pdfs()}>{(a) => <PdfThumbButton id={a.id} filename={a.filename} width={56} named />}</For>
-        </div>
-      </Show>
-      <Show when={uploadError()}>
-        {(e) => (
-          <p class="error" role="alert">
-            {e()}
-          </p>
-        )}
-      </Show>
     </div>
   );
 }

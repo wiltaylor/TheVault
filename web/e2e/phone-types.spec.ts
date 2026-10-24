@@ -77,8 +77,8 @@ test("a message's image attachment shows as a picture on its page and its card; 
   await expect(shown).toHaveCount(1);
   await expect(shown).toHaveAttribute("src", new RegExp(photo));
   await expect.poll(() => loaded(shown)).toBe(true);
-  // Every attachment, the picture too, stays in the field's chips; only the picture is drawn.
-  await expect(activePane(page).getByTestId("field-attachments").locator(".chip")).toHaveCount(2);
+  // Every attachment, the picture too, stays in the field's list; only the picture is drawn.
+  await expect(activePane(page).getByTestId("field-attachments").locator(".asset-row")).toHaveCount(2);
 
   // The type page shows it too, in the details view the message type opens in (lists L5).
   await page.goto("/types/message");
