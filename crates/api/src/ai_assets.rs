@@ -250,6 +250,15 @@ fn load_image(w: &Writer, id: &str, media: &str, images: &Images) -> Result<Imag
     if id.starts_with(crate::ai_browser::BROWSER_IMAGE) {
         return Err("it was read from the browser box in an earlier question".to_owned());
     }
+    // A skill's image is read from the skill again (skills S6).
+    if id.starts_with(crate::ai_skills::SKILL_IMAGE) {
+        let got = crate::ai_skills::load_image(w, id, media);
+        images
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_owned(), got.clone());
+        return got;
+    }
     let got = match w.asset_info(id) {
         Err(_) => Err(format!("asset {id} no longer exists")),
         Ok(a) if a.size > MAX_DECODE_BYTES => Err(format!(
@@ -333,6 +342,8 @@ pub fn hydrate(w: &Writer, messages: &mut [Message], images: &Images) {
                             "an image read from the browser box in an earlier question is not \
                              kept: read it again with browser_file to see it"
                                 .to_owned()
+                        } else if asset_id.starts_with(crate::ai_skills::SKILL_IMAGE) {
+                            format!("a skill's image could not be sent: {why}")
                         } else if w.asset_info(asset_id).is_err() {
                             format!("asset {asset_id} no longer exists")
                         } else {

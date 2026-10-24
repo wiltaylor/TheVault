@@ -1,6 +1,6 @@
 //! `POST /api/ai/chat`: the chat panel's conversation turn (ai D10, D11, D14).
 //!
-//! The body is `{ provider?, model?, messages, note_id?, agent?, thread? }`: the transcript so
+//! The body is `{ provider?, model?, messages, note_id?, agent?, thread?, update_skills? }`: the transcript so
 //! far, ending with the user's new message, in the neutral form of [`ai::Message`]. Provider and
 //! model default to Settings > AI's. The turn is run by `agent`, the built-in Assistant when it is
 //! absent (agents G4, G6): its provider and model when it names them, its prompt, effort, tools,
@@ -34,6 +34,7 @@
 //! | `agent_proposal` | an agent change for the user to apply (agents G20), `kind` always `agent` and `proposer` the agent that proposed it: `create` and `change` `{id, kind, op, name, label, exists, before, after, issues, proposer}`; `delete` `{id, kind, op, name, label, before, proposer}` |
 //! | `agent_memory_proposal` | a change to another agent's memories for the user to apply (agents G21), `kind` always `agent_memory`: `{id, kind, op, memory_agent, agent_label, memory_id, base_version, title, text, before, proposer}`, `op` `create` (`memory_id`, `base_version` and `before` null), `change` (`title` and `text` the new ones, `before` `{title, text}`) or `delete` |
 //! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
+//! | `skills_updated` | `{count, skills, message}`: first in an `update_skills` turn (skills S6), the new snapshot's skill count and names and the user message the server added, a notice and the text the model reads (`crate::ai_skills`) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
 //! | `error` | `{kind, message, messages}`: the turn failed; ends the stream |
@@ -115,6 +116,11 @@ pub struct ChatBody {
     /// `messages` holds only the user's new message, and writes the turn to it as it streams.
     #[serde(default)]
     thread: Option<String>,
+    /// `/update-skills` (skills S6): take a fresh snapshot of the skills the agent is offered
+    /// for the thread's system text. The turn's user message is the server's
+    /// ([`crate::ai_skills::UPDATED_TEXT`]); `messages` holds none of the user's.
+    #[serde(default)]
+    update_skills: bool,
 }
 
 impl ChatBody {
@@ -200,6 +206,7 @@ pub(crate) async fn run_unattended(
         note_id: None,
         agent: Some(agent.name.clone()),
         thread: Some(thread.to_owned()),
+        update_skills: false,
     };
     let author = Author::Agent(agent.name.clone());
     let (_stop, never) = watch::channel(false);
@@ -266,13 +273,16 @@ fn change_switch(name: &str) -> Option<&'static str> {
 /// The tools a turn offers: those the internet switches leave (ai D28), `web_search` only with a
 /// Brave key (ai D26), only those the agent may use (agents G4), the browser tools with
 /// `browser`, the agent's browser permission and a browser box, whatever its tools list says
-/// (browser B6), and, unattended, no change tool that would only propose (agents G12).
+/// (browser B6), the skill tools only when the agent uses skills, with
+/// `install_skill_in_browser` beside the browser tools (skills S6), and, unattended, no change
+/// tool that would only propose (agents G12).
 fn turn_tools(
     web: ai::Web,
     brave: bool,
     allowed: Option<&[String]>,
     unattended: Option<Direct>,
     browser: bool,
+    skills: bool,
 ) -> Vec<ToolSpec> {
     let mut tools = offered_tools(web);
     if web.search && brave {
@@ -281,8 +291,14 @@ fn turn_tools(
     if let Some(allowed) = allowed {
         tools.retain(|t| allowed.contains(&t.name));
     }
+    if !skills {
+        tools.retain(|t| !crate::ai_skills::is_skill_tool(&t.name));
+    }
     if browser {
         tools.extend(crate::ai_browser::tool_specs());
+        if skills {
+            tools.push(crate::ai_skills::install_spec());
+        }
     }
     if let Some(direct) = unattended {
         tools.retain(|t| change_switch(&t.name).is_none_or(|s| direct.makes(s)));
@@ -300,6 +316,7 @@ pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
         agent.permissions.tools.as_deref(),
         Some(direct),
         agent.permissions.browser && crate::ai_browser::BrowserBox::from_env().is_some(),
+        crate::ai_skills::uses_skills(agent),
     )
     .into_iter()
     .map(|t| t.name)
@@ -332,7 +349,7 @@ async fn start_with(
         Some(p) if !p.is_empty() => Some(p.parse::<Provider>().map_err(ApiError::bad_request)?),
         _ => None,
     };
-    if body.messages.is_empty() {
+    if body.messages.is_empty() && !body.update_skills {
         return Err(ApiError::bad_request(
             "send the conversation, ending with the user's message",
         ));
@@ -343,16 +360,16 @@ async fn start_with(
         note_id,
         agent,
         thread,
+        update_skills,
         ..
     } = body;
     let writer = w.clone();
     let by = author.clone();
-    let prepared =
-        tokio::task::spawn_blocking(move || prepare(&writer, &by, agent, thread, messages))
-            .await
-            .map_err(|e| {
-                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
-            })??;
+    let prepared = tokio::task::spawn_blocking(move || {
+        prepare(&writer, &by, agent, thread, messages, update_skills)
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
     let (tx, rx) = mpsc::channel::<Sent>(64);
     let named = prepared.named;
     let actor = if named {
@@ -386,6 +403,8 @@ async fn start_with(
         log: prepared.log.map(std::sync::Mutex::new),
         report,
         activity,
+        skills: prepared.skills,
+        skills_updated: prepared.skills_updated,
     };
     let agent = prepared.agent;
     let history = prepared.history;
@@ -408,6 +427,10 @@ struct Prepared {
     log: Option<ThreadLog>,
     /// The thread's origin, for the activity log.
     origin: Option<String>,
+    /// The skills the system text lists (skills S6).
+    skills: crate::ai_skills::Snapshot,
+    /// For a `/update-skills` turn, the `skills_updated` event's data.
+    skills_updated: Option<Value>,
 }
 
 /// The agent a turn runs as: the one named, or the built-in Assistant. A disabled agent takes
@@ -432,13 +455,15 @@ pub(crate) fn turn_agent(w: &Writer, name: Option<&str>) -> Result<Agent, ApiErr
 
 /// Load the turn's agent, and for a thread its transcript, which the user's new message joins
 /// at once, after the lines on the outcomes the model has not heard of (ai D29), so a closed tab
-/// loses nothing.
+/// loses nothing. The skills the system text lists are the thread's snapshot, taken on its
+/// first turn or fresh with `update_skills`, whose user message is the server's (skills S6).
 fn prepare(
     w: &Writer,
     author: &Author,
     agent: Option<String>,
     thread: Option<String>,
-    messages: Vec<Message>,
+    mut messages: Vec<Message>,
+    update_skills: bool,
 ) -> Result<Prepared, ApiError> {
     let named = agent
         .as_deref()
@@ -446,16 +471,44 @@ fn prepare(
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
     let agent = turn_agent(w, named.as_deref())?;
+    let browser = agent.permissions.browser && crate::ai_browser::BrowserBox::from_env().is_some();
+    let fresh = || crate::ai_skills::snapshot(w, &agent, browser);
+    let updated = |s: &crate::ai_skills::Snapshot| {
+        let message = Message {
+            role: Role::User,
+            content: vec![
+                Content::Notice {
+                    kind: crate::ai_skills::UPDATED_NOTICE.to_owned(),
+                    text: format!("Skills updated ({})", s.skills.len()),
+                },
+                Content::text(crate::ai_skills::UPDATED_TEXT),
+            ],
+            provider_state: None,
+        };
+        let names: Vec<&str> = s.skills.iter().map(|l| l.name.as_str()).collect();
+        let data = json!({ "count": names.len(), "skills": names, "message": message });
+        (message, data)
+    };
     let Some(id) = thread
         .map(|t| t.trim().to_owned())
         .filter(|t| !t.is_empty())
     else {
+        // With no thread, nothing keeps a snapshot: each turn lists the skills as they are.
+        let skills = fresh();
+        let mut skills_updated = None;
+        if update_skills {
+            let (message, data) = updated(&skills);
+            messages.push(message);
+            skills_updated = Some(data);
+        }
         return Ok(Prepared {
             agent,
             named: named.is_some(),
             history: messages,
             log: None,
             origin: None,
+            skills,
+            skills_updated,
         });
     };
     let thread = Thread::read(w, &id)?;
@@ -473,7 +526,18 @@ fn prepare(
     }
     let mut transcript = thread.transcript.clone();
     let lines = transcript.take_outcome_lines();
+    // The thread's snapshot, taken now on its first turn or when the user asked.
+    let skills = match transcript.skills.clone() {
+        Some(s) if !update_skills => s,
+        _ => fresh(),
+    };
+    let mut skills_updated = None;
     let mut new = messages;
+    if update_skills {
+        let (message, data) = updated(&skills);
+        new.push(message);
+        skills_updated = Some(data);
+    }
     if !lines.is_empty()
         && let Some(first) = new.iter_mut().find(|m| m.role == Role::User)
     {
@@ -489,7 +553,7 @@ fn prepare(
         })
         .unwrap_or_default();
     let unnamed = thread.title.trim().is_empty() || thread.title == agent_threads::DEFAULT_TITLE;
-    let title = if unnamed {
+    let title = if unnamed && !update_skills {
         agent_threads::title_of(&question)
     } else {
         None
@@ -500,6 +564,7 @@ fn prepare(
     agent_threads::save(w, &thread.id, &agent.label, None, |t| {
         t.transcript.messages = base.clone();
         t.transcript.take_outcome_lines();
+        t.transcript.skills = Some(skills.clone());
         if let Some(title) = &title {
             t.title = title.clone();
         }
@@ -519,6 +584,8 @@ fn prepare(
         history,
         log: Some(log),
         origin,
+        skills,
+        skills_updated,
     })
 }
 
@@ -784,6 +851,7 @@ fn setup(
     provider: Option<Provider>,
     model: Option<String>,
     note_id: Option<String>,
+    skills: Option<&str>,
 ) -> Result<Setup, AiError> {
     let state = w.state();
     let settings = Settings::load(state)?;
@@ -829,6 +897,11 @@ fn setup(
              title {title:?}. \"This note\" means it; read it with get_note.\n",
             n.type_name
         ));
+    }
+    // The skills come last, the thread's snapshot, so what comes before stays a stable prefix
+    // (skills S6).
+    if let Some(section) = skills {
+        system.push_str(section);
     }
     Ok(Setup {
         provider,
@@ -907,6 +980,10 @@ struct Turn {
     report: Option<Report>,
     /// The turn's entries in the activity log (activity Y2).
     activity: crate::ai_activity::TurnActivity,
+    /// The skills the system text lists (skills S6).
+    skills: crate::ai_skills::Snapshot,
+    /// For a `/update-skills` turn, the `skills_updated` event's data, sent first.
+    skills_updated: Option<Value>,
 }
 
 impl Turn {
@@ -921,6 +998,9 @@ impl Turn {
         let mut added = Vec::new();
         let name = agent.name.clone();
         self.activity.start();
+        if let Some(data) = self.skills_updated.clone() {
+            self.out.send("skills_updated", data).await;
+        }
         self.rounds(agent, provider, model, history, note_id, &mut added)
             .await;
         // What the turn added before it stopped, the client gone or not.
@@ -1052,8 +1132,18 @@ impl Turn {
     ) {
         let w = self.writer.clone();
         let scope = self.scope;
+        let skills = self.skills.section().map(str::to_owned);
+        let uses_skills = crate::ai_skills::uses_skills(&agent);
         let setup = match tokio::task::spawn_blocking(move || {
-            setup(&w, scope, &agent, provider, model, note_id)
+            setup(
+                &w,
+                scope,
+                &agent,
+                provider,
+                model,
+                note_id,
+                skills.as_deref(),
+            )
         })
         .await
         {
@@ -1075,6 +1165,7 @@ impl Turn {
             setup.tools.as_deref(),
             self.report.is_some().then_some(setup.direct),
             setup.browser.is_some(),
+            uses_skills,
         );
         let offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         // The images read_asset has sent this turn (ai D19).
@@ -1260,6 +1351,30 @@ impl Turn {
                     });
                     continue;
                 }
+                // The skill tools (skills S6): only offered, and so only run, when the agent
+                // uses skills.
+                if crate::ai_skills::is_skill_tool(&c.name) && c.error.is_none() {
+                    let read = self.skill_tool(&c, &setup, images_sent).await;
+                    if !read.parts.is_empty() {
+                        images_sent += 1;
+                    }
+                    if !self
+                        .emit(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": read.summary, "is_error": read.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::ToolResult {
+                        id: c.id,
+                        content: cut(&read.content, RESULT_LIMIT),
+                        is_error: read.is_error,
+                        parts: read.parts,
+                    });
+                    continue;
+                }
                 // web_search (ai D26): only offered, and so only run, with a Brave key.
                 if c.name == "web_search"
                     && c.error.is_none()
@@ -1290,7 +1405,12 @@ impl Turn {
                     && c.error.is_none()
                     && let Some(b) = &setup.browser
                 {
-                    let got = self.browser_tool(&c, b, &setup, images_sent).await;
+                    let got = if c.name == crate::ai_skills::INSTALL_TOOL {
+                        crate::ai_skills::install(self.writer.clone(), b, &setup.agent, &c.input)
+                            .await
+                    } else {
+                        self.browser_tool(&c, b, &setup, images_sent).await
+                    };
                     if !got.parts.is_empty() {
                         images_sent += 1;
                     }
@@ -1424,6 +1544,36 @@ impl Turn {
                 parts: Vec::new(),
                 summary: json!({ "notes": [], "message": e.to_string() }),
             })
+    }
+
+    /// `use_skill` or `read_skill_file`, with the turn's image count (skills S6).
+    async fn skill_tool(
+        &self,
+        call: &ToolCall,
+        setup: &Setup,
+        images_sent: usize,
+    ) -> ai_assets::Read {
+        let w = self.writer.clone();
+        let images = self.images.clone();
+        let input = call.input.clone();
+        let name = call.name.clone();
+        let agent = setup.agent.clone();
+        let browser = setup.browser.is_some();
+        let may_send = images_sent < ai_assets::IMAGE_LIMIT;
+        tokio::task::spawn_blocking(move || {
+            if name == "use_skill" {
+                crate::ai_skills::use_skill(&w, &agent, &input, browser)
+            } else {
+                crate::ai_skills::read_skill_file(&w, &agent, &input, may_send, &images)
+            }
+        })
+        .await
+        .unwrap_or_else(|e| ai_assets::Read {
+            content: json!({ "error": e.to_string() }).to_string(),
+            is_error: true,
+            parts: Vec::new(),
+            summary: json!({ "notes": [], "message": e.to_string() }),
+        })
     }
 
     /// `fetch_url` or `download_asset`, with the turn's image count (ai D27).
@@ -1800,6 +1950,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
     ]
     .into_iter()
+    .chain(crate::ai_skills::tool_specs())
     .chain(agent_memory::tool_specs())
     .chain(agent_memory::cross_tool_specs())
     .chain(crate::ai_outbox::tool_specs())

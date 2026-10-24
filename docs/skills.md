@@ -117,6 +117,14 @@ The **⋯** menu beside the skill's name holds:
 - **Export**: downloads the skill's folder as `<name>.zip`, ready to import into another vault or tool.
 - **Delete skill**: deletes the skill's folder after you confirm. No agent is offered it afterwards.
 
+## How agents use skills
+
+An agent is offered every valid skill, or only those its Permissions tab's **Skills** section names. Each turn's instructions end with an "Available skills" list of the offered skills' names and descriptions, so write the description to say what the skill does and when to use it: that is all the agent sees until it chooses the skill. Choosing it, the agent calls `use_skill` and reads the instructions and the file list, then reads the files the instructions point to with `read_skill_file`, by their paths in the skill.
+
+A conversation keeps the list it started with. After you add or change skills, type `/update-skills` in the chat box to give the open thread the current list; the conversation shows "Skills updated (<n>)".
+
+Scripts in a skill run only in the browser box: an agent with Browser automation copies the skill to `/work/skills/<name>` with `install_skill_in_browser` and runs them there with `browser_run`. Without the box, an agent can read the scripts but not run them. `allowed-tools` never grants a tool. See [Using skills](ai-agents.md#using-skills) for the details.
+
 ## In the apps
 
 The desktop and Android apps list the skills and open the skill screen, but only show them: there is no **+**, no Save and no file changes, and the screen says "Edit skills in the web app". Changing a skill needs `admin`, which an app's device token never has. **Export** and **Download** work in the apps.

@@ -107,6 +107,7 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         "web": web,
         "outbox": outbox,
         "browser": p.browser,
+        "skills": p.skills,
     })
 }
 
@@ -266,6 +267,9 @@ pub struct PermissionsForm {
     /// Browser automation (browser B6); absent is off.
     #[serde(default)]
     browser: bool,
+    /// The skills offered (skills S6); absent is every valid skill.
+    #[serde(default)]
+    skills: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -306,6 +310,7 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
     p.tools = f.permissions.tools;
     p.types = f.permissions.types;
     p.browser = f.permissions.browser;
+    p.skills = f.permissions.skills;
     for (k, on) in f.permissions.confirm {
         if !p.confirm.set(&k, on) {
             issues.push(Issue::new(

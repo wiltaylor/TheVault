@@ -330,9 +330,23 @@ export interface Turn {
    * sent ahead of the question and shown collapsed.
    */
   outcomes?: string[];
+  /**
+   * A user turn shown as a compact notice in place of a bubble: `/update-skills` (skills S6),
+   * "Skills updated (<n>)" once the server took the new list.
+   */
+  notice?: string;
   /** An assistant turn's answer, tool steps, proposals and notices, in the order they came. */
   parts: Part[];
 }
+
+/** What typed alone in the chat box takes a fresh list of the agent's skills (skills S6). */
+export const UPDATE_SKILLS = "/update-skills";
+
+/** The notice kind of the user message a `/update-skills` turn keeps. */
+export const SKILLS_UPDATED = "skills_updated";
+
+/** The user turn's notice while the server takes the new list of skills. */
+export const UPDATING_SKILLS = "Updating skills…";
 
 /**
  * What a running turn is doing now, for the activity line above the message box (ai D30): from
@@ -710,7 +724,10 @@ export function turnsFromThread(t: AgentThread): Turn[] {
       const texts = content.flatMap((c) => (c.type === "text" ? [c.text] : []));
       const lines = texts.filter(isOutcomeLines).flatMap((x) => x.split("\n").filter((l) => l.trim()));
       const words = texts.filter((x) => !isOutcomeLines(x)).join("\n\n");
-      turns.push({ role: "user", text: words, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
+      // A `/update-skills` turn shows its notice, not the text the model read (skills S6).
+      const skills = content.find((c) => c.type === "notice" && c.kind === SKILLS_UPDATED);
+      const notice = skills?.type === "notice" ? { text: "", notice: skills.text } : { text: words };
+      turns.push({ role: "user", ...notice, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
       continue;
     }
     const turn = answer();
@@ -952,6 +969,18 @@ function createConversation(agent: string, id: string | null) {
         appendMessages(d);
         for (const n of noticesOf(d)) push(n);
         break;
+      case "skills_updated": {
+        // The server's user message of a `/update-skills` turn (skills S6), which a conversation
+        // with no thread sends back as its own.
+        const message = d.message as ChatMessage | undefined;
+        if (message) transcript = [...transcript, message];
+        const notice = message?.content.find((c) => c.type === "notice" && c.kind === SKILLS_UPDATED);
+        const text = notice?.type === "notice" ? notice.text : `Skills updated (${Number(d.count ?? 0)})`;
+        let at = chat.turns.length - 1;
+        while (at >= 0 && chat.turns[at]!.role !== "user") at--;
+        if (at >= 0) setChat("turns", at, "notice", text);
+        break;
+      }
     }
   }
 
@@ -994,14 +1023,19 @@ function createConversation(agent: string, id: string | null) {
     const question = text.trim();
     if (!question || chat.streaming) return;
     const mine = ++generation;
+    // `/update-skills` alone takes a fresh list of skills and sends no message of the user's
+    // (skills S6); any other `/` text is sent as typed.
+    const updateSkills = text.trim() === UPDATE_SKILLS;
     // The proposals acted on since the last message, shown ahead of the question (ai D29).
     const lines = [...outcomes.values()];
+    const kept = [...outcomes.entries()];
     outcomes.clear();
     replay = new Map();
     stopping = false;
     setChat(
       produce((c) => {
-        c.turns.push({ role: "user", text: question, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
+        const asked = updateSkills ? { text: "", notice: UPDATING_SKILLS } : { text: question };
+        c.turns.push({ role: "user", ...asked, parts: [], ...(lines.length && !updateSkills ? { outcomes: lines } : {}) });
         c.turns.push({ role: "assistant", parts: [] });
         c.streaming = true;
         c.activity = { step: "thinking" };
@@ -1018,15 +1052,19 @@ function createConversation(agent: string, id: string | null) {
       const content: Content[] = [{ type: "text", text: question }];
       if (lines.length && !thread) content.unshift({ type: "text", text: lines.join("\n") });
       const user: ChatMessage = { role: "user", content };
-      transcript = [...transcript, user];
+      // A `/update-skills` turn's message is the server's: the outcome lines wait for the next
+      // message, except on a thread, where the server adds them to its message.
+      if (updateSkills && !thread) for (const [id, line] of kept) record(id, line);
+      if (!updateSkills) transcript = [...transcript, user];
       const named = thread || agent !== ASSISTANT;
       const body = {
         ...(o.provider ? { provider: o.provider } : {}),
         ...(o.model ? { model: o.model } : {}),
-        messages: thread ? [user] : transcript,
+        messages: updateSkills ? (thread ? [] : transcript) : thread ? [user] : transcript,
         ...(o.noteId ? { note_id: o.noteId } : {}),
         ...(named ? { agent } : {}),
         ...(thread ? { thread } : {}),
+        ...(updateSkills ? { update_skills: true } : {}),
       };
       const started = await api.aiTurnStart(body);
       if (mine !== generation || ctl.signal.aborted) {

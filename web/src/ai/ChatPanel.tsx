@@ -127,6 +127,12 @@ export function stepLabel(name: string, input: Json): string {
       return `Read ${s("path")} from the browser box`;
     case "browser_save":
       return `Saved ${s("path")} from the browser box`;
+    case "use_skill":
+      return `Used skill ${s("name")}`;
+    case "read_skill_file":
+      return `Read ${s("path")} from skill ${s("name")}`;
+    case "install_skill_in_browser":
+      return `Copied skill ${s("name")} into the browser box`;
     default:
       return `Called ${name}`;
   }
@@ -211,6 +217,12 @@ export function activeLabel(name: string, input: Json): string {
       return "Reading a file from the browser box";
     case "browser_save":
       return "Checking a file from the browser box";
+    case "use_skill":
+      return "Reading a skill";
+    case "read_skill_file":
+      return "Reading a skill's file";
+    case "install_skill_in_browser":
+      return "Copying a skill into the browser box";
     default:
       return `Running ${name}`;
   }
@@ -230,7 +242,7 @@ function browserStatus(b: BrowserRef): string {
   return b.media_type || "done";
 }
 
-/** The type, taxonomy and agent tools (ai D18, D31, agents G20), whose steps return no notes. */
+/** The type, taxonomy, agent and skill tools (ai D18, D31, agents G20, skills S6), whose steps return no notes. */
 const TYPE_TOOLS = new Set([
   "list_types",
   "get_type",
@@ -245,6 +257,10 @@ const TYPE_TOOLS = new Set([
   "get_agent",
   "propose_agent_change",
   "propose_agent_delete",
+  // The skill tools (skills S6) return no notes either.
+  "use_skill",
+  "read_skill_file",
+  "install_skill_in_browser",
 ]);
 
 /** The host of `url`, or `url` itself when it is not a URL. */
@@ -257,7 +273,8 @@ export function hostOf(url: string): string {
 }
 
 /** Whether a tool drives the browser box (browser B5). */
-const isBrowserTool = (name: string) => name === "browser_run" || name === "browser_file" || name === "browser_save";
+const isBrowserTool = (name: string) =>
+  name === "browser_run" || name === "browser_file" || name === "browser_save" || name === "install_skill_in_browser";
 
 /** The web tools (ai D27): their steps name the address read, linking out. */
 const WEB_TOOLS: Record<string, string> = { fetch_url: "Read", download_asset: "Download from" };
@@ -1042,6 +1059,14 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                   <ApplyAll turn={t()} parts={turn.parts} />
                 </>
               }>
+                {/* `/update-skills` shows as a compact notice, not a bubble (skills S6). */}
+                <Show when={turn.notice}>
+                  {(n) => (
+                    <p class="ai-notice ai-skills-updated" role="status">
+                      {n()}
+                    </p>
+                  )}
+                </Show>
                 {/* What the user did with proposals since the last message, sent ahead of it (ai D29). */}
                 <Show when={turn.outcomes?.length}>
                   <details class="ai-outcomes">
@@ -1051,7 +1076,9 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                     </ul>
                   </details>
                 </Show>
-                <p class="ai-question">{turn.text}</p>
+                <Show when={!turn.notice}>
+                  <p class="ai-question">{turn.text}</p>
+                </Show>
               </Show>
             </li>
           )}

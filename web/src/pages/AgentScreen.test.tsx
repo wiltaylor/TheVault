@@ -28,6 +28,7 @@ const agentMemories = vi.fn();
 const createAgentMemory = vi.fn();
 const updateAgentMemory = vi.fn();
 const deleteAgentMemory = vi.fn();
+const skillsList = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
   return {
@@ -50,6 +51,7 @@ vi.mock("../api", async (orig) => {
       createAgentMemory,
       updateAgentMemory,
       deleteAgentMemory,
+      skills: skillsList,
     },
   };
 });
@@ -95,6 +97,8 @@ const TOOLS = [
   "recall",
   "update_memory",
   "forget",
+  "use_skill",
+  "read_skill_file",
   "draft_email",
   "draft_sms",
   "draft_event",
@@ -210,9 +214,25 @@ beforeEach(async () => {
   createAgentMemory.mockImplementation(async (agent: string, title: string, text: string) => ({ ...TEA, id: "01JNEW", agent, title, text }));
   updateAgentMemory.mockImplementation(async (_agent: string, id: string, change: { title: string; text: string }) => ({ ...TEA, id, ...change }));
   deleteAgentMemory.mockResolvedValue({ deleted: true });
+  skillsList.mockResolvedValue([skill("pdf-forms"), skill("brand"), skill("broken", false)]);
   await refreshAgents();
   await reloadDefinitions();
 });
+
+function skill(name: string, valid = true) {
+  return {
+    name,
+    description: `The ${name} skill.`,
+    license: null,
+    compatibility: null,
+    metadata: {},
+    allowed_tools: null,
+    files: 1,
+    size: 100,
+    valid,
+    issues: valid ? [] : [{ at: "name", message: "does not match the folder", severity: "error" }],
+  };
+}
 
 const TEA = {
   id: "01JTEA",
@@ -394,7 +414,7 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByText(/they replace Settings > AI for this agent/)).toBeTruthy();
     const groups = p.getAllByRole("group").map((g) => g.querySelector(":scope > legend")?.textContent).filter(Boolean);
-    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Memory", "Types", "Taxonomies", "Agents", "Outbox", "Assets", "Internet"]);
+    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Memory", "Skills", "Types", "Taxonomies", "Agents", "Outbox", "Assets", "Internet"]);
     const web = p.getByRole("checkbox", { name: /Search the web/ });
     expect(web).toBeChecked();
     fireEvent.click(web);
@@ -502,6 +522,49 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByRole("switch", { name: "Send from the Outbox without review" })).toBeChecked();
     expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
+  });
+
+  it("offers all skills by default, and saves a chosen list from the vault's skills", async () => {
+    await open();
+    const p = await tab("Permissions");
+    const group = p.getAllByRole("group").find((g) => g.querySelector(":scope > legend")?.textContent === "Skills")!;
+    expect(Array.from(group.querySelectorAll("label")).map((l) => l.textContent?.trim())).toEqual([
+      "Use skills use_skill",
+      "Read skill files read_skill_file",
+    ]);
+    const radios = within(p.getByRole("radiogroup", { name: "Skills" }));
+    expect(radios.getByRole("radio", { name: "All skills" })).toBeChecked();
+    expect(p.queryByRole("group", { name: "Allowed skills" })).toBeNull();
+    fireEvent.click(radios.getByRole("radio", { name: "Only these skills" }));
+    const list = within(await p.findByRole("group", { name: "Allowed skills" }));
+    expect(list.getAllByRole("checkbox").map((c) => c.parentElement?.textContent?.trim())).toEqual([
+      "brand",
+      "broken (has errors)",
+      "pdf-forms",
+    ]);
+    expect(p.getByText("With no skill ticked, the agent is offered none.")).toBeTruthy();
+    fireEvent.click(list.getByRole("checkbox", { name: "pdf-forms" }));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { skills?: string[] }).skills).toEqual(["pdf-forms"]);
+  });
+
+  it("shows an agent's skill list, a name the vault lacks too, and sends none once All skills is chosen", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, skills: ["brand", "gone"] } }));
+    await open();
+    const p = await tab("Permissions");
+    const radios = within(p.getByRole("radiogroup", { name: "Skills" }));
+    expect(radios.getByRole("radio", { name: "Only these skills" })).toBeChecked();
+    const list = within(await p.findByRole("group", { name: "Allowed skills" }));
+    await waitFor(() => expect(list.getAllByRole("checkbox")).toHaveLength(4));
+    expect(list.getByRole("checkbox", { name: "brand" })).toBeChecked();
+    expect(list.getByRole("checkbox", { name: "pdf-forms" })).not.toBeChecked();
+    expect(list.getByRole("checkbox", { name: /gone/ })).toBeChecked();
+    expect(p.getByText("(not in the vault)")).toBeTruthy();
+    fireEvent.click(radios.getByRole("radio", { name: "All skills" }));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect("skills" in (sent().permissions as object)).toBe(false);
   });
 
   it("shows Browser automation off with its warning line, and saves it on", async () => {

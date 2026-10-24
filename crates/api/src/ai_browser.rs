@@ -66,7 +66,7 @@ pub const TOOLS: [&str; 3] = ["browser_run", "browser_file", "browser_save"];
 
 /// Whether `name` is one of the browser tools.
 pub fn is_browser_tool(name: &str) -> bool {
-    TOOLS.contains(&name)
+    TOOLS.contains(&name) || name == crate::ai_skills::INSTALL_TOOL
 }
 
 /// The browser box the server is configured with.
@@ -158,7 +158,7 @@ pub struct BrowserOut {
 }
 
 impl BrowserOut {
-    fn error(message: impl Into<String>) -> BrowserOut {
+    pub(crate) fn error(message: impl Into<String>) -> BrowserOut {
         let message = message.into();
         BrowserOut {
             content: json!({ "error": message }).to_string(),
@@ -327,6 +327,51 @@ pub async fn run(b: &BrowserBox, input: &Value) -> BrowserOut {
         command,
     ));
     out
+}
+
+/// Run `command` in the box for the server's own ends, such as copying a skill in
+/// (`crate::ai_skills`): `Ok` when it exits 0, else why not, with the end of its stderr.
+pub async fn run_quiet(b: &BrowserBox, command: &str, timeout: u64) -> Result<(), String> {
+    let url = b.url("/run", &[])?;
+    let timeout = timeout.clamp(1, MAX_TIMEOUT_S);
+    let res = b
+        .auth(http().post(url))
+        .timeout(Duration::from_secs(timeout + 30))
+        .json(&json!({ "command": command, "timeout_s": timeout }))
+        .send()
+        .await
+        .map_err(|e| unreachable(&e))?;
+    if res.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(
+            "the browser box is already running 4 commands; wait for one to finish and try again"
+                .to_owned(),
+        );
+    }
+    if !res.status().is_success() {
+        return Err(box_error(res).await);
+    }
+    let got: Value = res
+        .json()
+        .await
+        .map_err(|e| format!("the browser box answered something unreadable: {e}"))?;
+    if got["timed_out"] == true {
+        return Err(format!("the command was killed after {timeout} seconds"));
+    }
+    match got["exit"].as_i64() {
+        Some(0) => Ok(()),
+        exit => {
+            let stderr = cut_tail(got["stderr"].as_str().unwrap_or_default().trim(), 400);
+            Err(format!(
+                "it exited with {}{}",
+                exit.map_or("no code".to_owned(), |e| e.to_string()),
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr}")
+                }
+            ))
+        }
+    }
 }
 
 fn path_arg(input: &Value) -> Option<&str> {

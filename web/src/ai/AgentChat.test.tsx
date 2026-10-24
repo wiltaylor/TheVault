@@ -7,7 +7,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentThread, StreamEvent } from "../api";
+import type { AgentThread, Json, StreamEvent } from "../api";
 import { turnsOver } from "./fakeTurns";
 
 type OnEvent = (e: StreamEvent) => void;
@@ -80,6 +80,15 @@ const PROPOSAL = {
   ops: [{ op: "field", name: "title", before: "Groceries", after: "Groceries and more" }],
   agent: "triage",
   thread: "01JTHREAD",
+};
+
+/** The user message the server keeps for a `/update-skills` turn (skills S6). */
+const SKILLS_MSG: { role: "user"; content: Json[] } = {
+  role: "user",
+  content: [
+    { type: "notice", kind: "skills_updated", text: "Skills updated (2)" },
+    { type: "text", text: "The available skills changed; the list at the end of your instructions is current." },
+  ],
 };
 
 /** A stored thread: one question, a step, an edit proposal still pending, and the answer. */
@@ -348,6 +357,37 @@ describe("thread actions", () => {
 });
 
 describe("a stored thread as turns", () => {
+  it("sends /update-skills as a turn with no message on the thread, and shows Skills updated", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const list = within(screen.getByRole("complementary", { name: "Threads" }));
+    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    const convo = within(await screen.findByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
+    await send("/update-skills");
+    expect(live!.body).toMatchObject({ agent: "triage", thread: "01JTHREAD", update_skills: true });
+    expect(live!.body.messages).toEqual([]);
+    await waitFor(() => expect(convo.getByText("Updating skills…")).toBeTruthy());
+    live!.onEvent({ event: "skills_updated", data: { count: 2, skills: ["brand", "pdf-forms"], message: SKILLS_MSG } });
+    await waitFor(() => expect(convo.getByText("Skills updated (2)")).toBeTruthy());
+    // No user bubble, and not the text the model reads.
+    expect(convo.queryByText("/update-skills")).toBeNull();
+    expect(convo.queryByText(/The available skills changed/)).toBeNull();
+    live!.onEvent({ event: "text", data: { delta: "Noted." } });
+    live!.onEvent({ event: "done", data: { stop: "end_turn", messages: [] } });
+    live!.end();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument());
+    // Any other text starting with / is sent as typed.
+    live = null;
+    await send("/update-skills please");
+    expect(live!.body.update_skills).toBeUndefined();
+    expect(live!.body.messages).toEqual([{ role: "user", content: [{ type: "text", text: "/update-skills please" }] }]);
+  });
+
+  it("shows a stored /update-skills message as its notice", () => {
+    const turns = turnsFromThread(thread({ messages: [SKILLS_MSG, { role: "assistant", content: [{ type: "text", text: "Noted." }] }], proposals: [] }));
+    expect(turns[0]).toMatchObject({ role: "user", text: "", notice: "Skills updated (2)" });
+  });
+
   it("splits the outcome lines from the question and fills each step from its summary", () => {
     const turns = turnsFromThread(
       thread({

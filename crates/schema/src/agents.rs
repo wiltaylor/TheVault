@@ -106,6 +106,9 @@ pub struct Permissions {
     /// tools, offered when the server has a browser box. Absent means `false`, and it is
     /// independent of `tools`: an absent tools list does not include the browser tools.
     pub browser: bool,
+    /// The skills the agent is offered (skills S6), by name; `None` is every valid skill.
+    /// Written only when set: an app from before skills refuses a permission it does not know.
+    pub skills: Option<Vec<String>>,
 }
 
 impl Permissions {
@@ -121,6 +124,13 @@ impl Permissions {
         self.types
             .as_ref()
             .is_none_or(|t| t.iter().any(|n| n == name))
+    }
+
+    /// Whether the agent may be offered skill `name` (skills S6).
+    pub fn allows_skill(&self, name: &str) -> bool {
+        self.skills
+            .as_ref()
+            .is_none_or(|s| s.iter().any(|n| n == name))
     }
 
     fn is_default(&self) -> bool {
@@ -567,6 +577,10 @@ impl Agent {
             if p.browser {
                 field(&mut out, "  ", "browser", "true");
             }
+            // Likewise written only when set (skills S6).
+            if let Some(skills) = &p.skills {
+                field(&mut out, "  ", "skills", &list(skills));
+            }
             let off: Vec<_> = p
                 .confirm
                 .switches()
@@ -735,8 +749,20 @@ impl Reader<'_> {
         Some(p)
     }
 
-    /// A list of names, each matching [`is_name`] when `names`, each at most once.
+    /// A list of names, each matching [`is_name`], each at most once.
     fn names(&mut self, doc: &Doc, field: &str, at: &str, what: &str) -> Option<Vec<String>> {
+        self.names_by(doc, field, at, what, is_name)
+    }
+
+    /// A list of names, each passing `valid`, each at most once.
+    fn names_by(
+        &mut self,
+        doc: &Doc,
+        field: &str,
+        at: &str,
+        what: &str,
+        valid: fn(&str) -> bool,
+    ) -> Option<Vec<String>> {
         let v = doc.field(field)?;
         let before = self.c.errors();
         let items: Vec<String> = match v {
@@ -762,7 +788,7 @@ impl Reader<'_> {
         };
         let mut seen = HashSet::new();
         for i in &items {
-            if !is_name(i) {
+            if !valid(i) {
                 self.c.fail(at, format!("{i:?} is not a {what} name"));
             } else if !seen.insert(i.as_str()) {
                 self.c.fail(at, format!("{i:?} appears more than once"));
@@ -774,9 +800,9 @@ impl Reader<'_> {
     fn permissions(&mut self, d: &Doc) -> Permissions {
         self.known(
             d,
-            &["tools", "types", "browser"],
+            &["tools", "types", "browser", "skills"],
             "permissions.",
-            "is not a permission: use tools, types, browser, confirm { ... }, web { ... } or outbox { ... }",
+            "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... } or outbox { ... }",
         );
         let mut p = Permissions {
             tools: self.names(d, "tools", "permissions.tools", "tool"),
@@ -784,6 +810,13 @@ impl Reader<'_> {
             browser: self
                 .bool(d, "browser", "permissions.browser")
                 .unwrap_or(false),
+            skills: self.names_by(
+                d,
+                "skills",
+                "permissions.skills",
+                "skill",
+                crate::skills::is_skill_name,
+            ),
             ..Permissions::default()
         };
         let mut seen = HashSet::new();

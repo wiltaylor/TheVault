@@ -368,6 +368,14 @@
   background: color-mix(in srgb, var(--muted) 12%, transparent);
 }
 
+/* `/update-skills` (skills S6): a small centred line in place of the user's bubble. */
+.ai-skills-updated {
+  align-self: center;
+  margin: 0 auto;
+  color: var(--muted);
+  text-align: center;
+}
+
 .ai-notice-refusal,
 .ai-notice-error,
 .ai-error {

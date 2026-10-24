@@ -68,6 +68,10 @@ pub struct Transcript {
     /// Every proposal the agent made, and the changes it made itself, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proposals: Vec<Stored>,
+    /// The skills the thread's system text lists (skills S6): taken on its first turn and kept
+    /// until `/update-skills`. `None` for a thread from before skills, which takes one next turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<crate::ai_skills::Snapshot>,
 }
 
 /// One proposal of a thread and its outcome (agents G8).
@@ -412,6 +416,8 @@ impl Thread {
         v["messages"] = json!(self.transcript.messages);
         v["steps"] = Value::Object(self.transcript.steps.clone());
         v["proposals"] = json!(self.transcript.proposals);
+        // The skills the thread's system text lists, by name and description (skills S6).
+        v["skills"] = json!(self.transcript.skills.as_ref().map(|s| &s.skills));
         v
     }
 
@@ -650,8 +656,13 @@ pub fn render_body(t: &Transcript, label: &str) -> Option<Value> {
             speaker = Some(user);
         }
         let mut lines: Vec<String> = Vec::new();
+        // A `/update-skills` turn shows its notice, not the text the model reads.
+        let skills_updated = m.content.iter().any(
+            |c| matches!(c, Content::Notice { kind, .. } if kind == crate::ai_skills::UPDATED_NOTICE),
+        );
         for c in &m.content {
             match c {
+                Content::Text { .. } if skills_updated => {}
                 Content::Text { text } if user && is_outcome_lines(text) => {
                     lines.extend(text.lines().map(str::to_owned));
                 }

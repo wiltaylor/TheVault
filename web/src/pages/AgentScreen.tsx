@@ -21,6 +21,7 @@ import {
   createUniqueId,
   on,
   onCleanup,
+  onMount,
 } from "solid-js";
 import {
   AGENT_ICON,
@@ -51,6 +52,7 @@ import { TypeIcon } from "../components/Icon";
 import { Spinner } from "../components/SyncStatus";
 import { appInfo } from "../inApp";
 import { types } from "../session";
+import { refreshSkills, skills } from "../skills";
 import { usePane } from "../workspace/pane";
 import { MemoryTab } from "./AgentMemory";
 import { TriggersTab } from "./AgentTriggers";
@@ -371,6 +373,25 @@ function PermissionsTab(p: AgentTabProps) {
     const now = perms().types ?? [];
     setPerms({ types: on ? [...now.filter((t) => t !== name), name] : now.filter((t) => t !== name) });
   }
+  // The vault's skills (skills S6), and any the agent names that the vault no longer has.
+  onMount(() => void refreshSkills());
+  const skillRows = createMemo(() => {
+    const listed = skills().map((s) => ({ name: s.name, valid: s.valid, missing: false }));
+    const gone = (perms().skills ?? [])
+      .filter((n) => !listed.some((s) => s.name === n))
+      .map((name) => ({ name, valid: false, missing: true }));
+    return [...listed, ...gone].sort((a, b) => a.name.localeCompare(b.name));
+  });
+  // Every skill is no list at all, which the form leaves out, as agentForm does.
+  const setSkills = (list: string[] | null) =>
+    p.setDraft((d) => {
+      const { skills: _, ...rest } = d.permissions;
+      return { ...d, permissions: list === null ? rest : { ...rest, skills: list } };
+    });
+  function toggleSkill(name: string, on: boolean) {
+    const now = perms().skills ?? [];
+    setSkills(on ? [...now.filter((s) => s !== name), name] : now.filter((s) => s !== name));
+  }
   return (
     <section class="agent-tab" aria-label="Permissions">
       <p class="agent-perm-note">
@@ -473,6 +494,61 @@ function PermissionsTab(p: AgentTabProps) {
             Settings {">"} Integrations).
           </p>
         </div>
+        <h2>Skills</h2>
+        <p class="muted">
+          The skills listed at the end of the agent's instructions, which it reads with use_skill. A skill's allowed-tools
+          grants nothing: the tools above decide. A skill with errors is offered to no agent.
+        </p>
+        <div class="agent-types" role="radiogroup" aria-label="Skills">
+          <label class="agent-check">
+            <input
+              type="radio"
+              name={`${p.id}-skills`}
+              checked={(perms().skills ?? null) === null}
+              onChange={() => setSkills(null)}
+            />{" "}
+            All skills
+          </label>
+          <label class="agent-check">
+            <input
+              type="radio"
+              name={`${p.id}-skills`}
+              checked={(perms().skills ?? null) !== null}
+              onChange={() => setSkills([])}
+            />{" "}
+            Only these skills
+          </label>
+        </div>
+        <Show when={(perms().skills ?? null) !== null}>
+          <div class="agent-type-list" role="group" aria-label="Allowed skills">
+            <For each={skillRows()}>
+              {(s) => (
+                <label class="agent-check">
+                  <input
+                    type="checkbox"
+                    checked={perms().skills!.includes(s.name)}
+                    onChange={(e) => toggleSkill(s.name, e.currentTarget.checked)}
+                  />{" "}
+                  {s.name}
+                  <Show when={s.missing}>
+                    {" "}
+                    <span class="muted">(not in the vault)</span>
+                  </Show>
+                  <Show when={!s.missing && !s.valid}>
+                    {" "}
+                    <span class="muted">(has errors)</span>
+                  </Show>
+                </label>
+              )}
+            </For>
+          </div>
+          <Show when={skillRows().length === 0}>
+            <p class="muted">The vault has no skills yet: add them under Agents {">"} Skills in the sidebar.</p>
+          </Show>
+          <Show when={skillRows().length > 0 && perms().skills!.length === 0}>
+            <p class="muted">With no skill ticked, the agent is offered none.</p>
+          </Show>
+        </Show>
         <h2>Note types</h2>
         <div class="agent-types" role="radiogroup" aria-label="Note types">
           <label class="agent-check">

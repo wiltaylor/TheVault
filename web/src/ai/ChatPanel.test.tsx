@@ -318,6 +318,30 @@ describe("ChatPanel", () => {
     expect(m.getByRole("button", { name: "Send" })).toBeInTheDocument();
   });
 
+  it("sends /update-skills with the transcript and no message, keeping the server's message for the next turn", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await askIt(m, "/update-skills");
+    expect(live!.body).toMatchObject({ update_skills: true, messages: [] });
+    const convo = m.getByRole("list", { name: "Conversation" });
+    await waitFor(() => expect(convo).toHaveTextContent("Updating skills…"));
+    const message = {
+      role: "user",
+      content: [
+        { type: "notice", kind: "skills_updated", text: "Skills updated (3)" },
+        { type: "text", text: "The available skills changed; the list at the end of your instructions is current." },
+      ],
+    };
+    emit("skills_updated", { count: 3, skills: ["a", "b", "c"], message });
+    await waitFor(() => expect(within(convo).getByText("Skills updated (3)")).toHaveClass("ai-skills-updated"));
+    expect(convo).not.toHaveTextContent("/update-skills");
+    expect(convo.querySelector(".ai-question")).toBeNull();
+    const answer = { role: "assistant", content: [{ type: "text", text: "Noted." }] };
+    emit("done", { stop: "end_turn", messages: [answer] });
+    live!.end();
+    await waitFor(() => expect(m.getByRole("button", { name: "Send" })).toBeInTheDocument());
+    expect(transcriptNow()).toEqual([message, answer]);
+  });
+
   it("starts a new conversation", async () => {
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await askIt(m);

@@ -171,6 +171,21 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
                 .to_owned(),
         );
     }
+    // Skills (skills S6): only those this agent is offered itself; an absent list is every skill.
+    match (&bp.skills, &tp.skills) {
+        (Some(_), None) => problems.push(
+            "it would offer every skill, and this agent is offered only the skills its permissions list"
+                .to_owned(),
+        ),
+        (_, Some(skills)) => {
+            for s in skills.iter().filter(|s| !bp.allows_skill(s)) {
+                problems.push(format!(
+                    "it would offer the skill {s}, which this agent is not offered"
+                ));
+            }
+        }
+        (None, None) => {}
+    }
     problems
 }
 
@@ -184,7 +199,7 @@ fn escalation_error(name: &str, problems: &[String]) -> ToolOut {
     out.content = json!({
         "error": message,
         "problems": problems,
-        "message": "An agent may only give another agent tools, note types and switches it has itself. Propose a change within them, or ask the user to make it on the agent screen.",
+        "message": "An agent may only give another agent tools, note types, skills and switches it has itself. Propose a change within them, or ask the user to make it on the agent screen.",
     })
     .to_string();
     out
@@ -436,5 +451,20 @@ mod tests {
         assert!(p[0].contains("Browser automation"), "{p:?}");
         assert!(escalation(&driver, &driver).is_empty());
         assert!(escalation(&driver, &all).is_empty());
+    }
+
+    #[test]
+    fn escalation_refuses_skills_the_proposer_is_not_offered() {
+        let all = agent("");
+        let one = agent("permissions {\n  skills = [\"pdf-forms\"]\n}\n");
+        let two = agent("permissions {\n  skills = [\"pdf-forms\", \"brand\"]\n}\n");
+        assert!(escalation(&all, &one).is_empty());
+        assert!(escalation(&two, &one).is_empty());
+        let p = escalation(&one, &two);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("brand"), "{p:?}");
+        let p = escalation(&one, &all);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("every skill"), "{p:?}");
     }
 }

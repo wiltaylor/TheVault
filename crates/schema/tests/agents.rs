@@ -551,3 +551,44 @@ fn browser_automation_is_off_unless_the_file_turns_it_on() {
         ["permissions.browser"]
     );
 }
+
+#[test]
+fn skills_are_every_valid_skill_unless_the_file_lists_them() {
+    // An absent list offers every valid skill (skills S6), and is written as nothing, so an app
+    // from before skills still reads the file.
+    let a = Agent::parse("helper", "").unwrap();
+    assert!(a.permissions.skills.is_none());
+    assert!(a.permissions.allows_skill("pdf-forms"));
+    assert!(!a.to_wcl().contains("skills"));
+    let a = Agent::parse(
+        "filer",
+        "permissions {\n  skills = [\"pdf-forms\", \"brand-guide2\"]\n}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        a.permissions.skills.as_deref(),
+        Some(&["pdf-forms".to_owned(), "brand-guide2".to_owned()][..])
+    );
+    assert!(a.permissions.allows_skill("pdf-forms"));
+    assert!(!a.permissions.allows_skill("other"));
+    assert!(
+        a.to_wcl()
+            .contains("skills = [\"pdf-forms\", \"brand-guide2\"]"),
+        "{}",
+        a.to_wcl()
+    );
+    assert_eq!(Agent::parse("filer", &a.to_wcl()).unwrap(), a);
+    // An empty list offers none.
+    let a = Agent::parse("none", "permissions {\n  skills = []\n}\n").unwrap();
+    assert_eq!(a.permissions.skills.as_deref(), Some(&[][..]));
+    assert!(!a.permissions.allows_skill("pdf-forms"));
+    assert_eq!(Agent::parse("none", &a.to_wcl()).unwrap(), a);
+    assert_eq!(
+        at("permissions {\n  skills = [\"Bad_Name\"]\n}\n"),
+        ["permissions.skills"]
+    );
+    assert_eq!(
+        at("permissions {\n  skills = [\"a\", \"a\"]\n}\n"),
+        ["permissions.skills"]
+    );
+}

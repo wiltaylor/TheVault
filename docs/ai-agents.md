@@ -32,6 +32,7 @@ An agent's permissions are its own: nothing is inherited from Settings > AI.
 - **Note types** (`permissions.types`): the types the agent may read and change. Search, query, backlinks and asset results leave out notes of other types, reading one is refused with "This agent may not read <type> notes.", and every change to one is refused.
 - **Outbox** (`permissions.outbox.send_without_review`, off by default): "Send from the Outbox without review". Off, what the agent drafts waits in the Outbox's Draft tab for you. On, its drafts are created ready and sent at once. See [Drafting into the Outbox](#drafting-into-the-outbox).
 - **Browser automation** (`permissions.browser`, off by default): the browser box tools. See [Driving the browser box](#driving-the-browser-box).
+- **Skills** (`permissions.skills`): **All skills**, or **Only these skills** from the vault's skills. See [Using skills](#using-skills).
 
 In a chat, the person or token running it still caps what the agent can change: an agent never writes more than its caller could.
 
@@ -57,7 +58,8 @@ The confirmation switch is "Ask before changing agents" (`permissions.confirm.ag
 - a confirmation switch off that is on for the proposing agent;
 - an Internet switch on that is off for the proposing agent;
 - the Outbox switch `send_without_review` on when it is off for the proposing agent;
-- Browser automation on when the proposing agent does not have it.
+- Browser automation on when the proposing agent does not have it;
+- a skill the proposing agent is not offered. No skills list means every skill, so an agent with a list cannot write an agent without one.
 
 The whole new file is checked, not only what the change adds, so an agent with fewer permissions cannot edit a more powerful agent at all. An agent can never change or delete its own file: "An agent cannot change its own file." Deleting another agent needs only the tool and the switch. Each proposal records the agent that made it, and `POST /api/ai/apply` checks the change again against that agent as it is at the time of Apply, so an agent whose permissions were narrowed since cannot apply what it proposed before. Your own edits on the agent screen are never checked this way.
 
@@ -107,6 +109,22 @@ browser: exit=0 ms=812 timed_out=false cmd=playwright-cli snapshot
 Pages and command output are untrusted: a page can try to instruct the agent. The box holds no vault credentials, but whatever you sign in to in its browser is reachable by every agent with the switch.
 
 Agent files that hold `browser = true` are new: an app from before the browser box refuses an agent file holding it, as it does `permissions.outbox`. The file holds `browser` only when it is on, so turning the switch off makes the file readable by older apps again. A release ships the apps first (see [Releasing a format change](android-release.md#releasing-a-format-change)).
+
+## Using skills
+
+Skills are folders of instructions and files in the vault's `skills/` folder, in the open Agent Skills format; [Agent skills](skills.md) covers writing and importing them. An agent is offered the valid skills its **Skills** permission allows: every valid skill (no `skills` list in the file, the default) or only those named (`permissions.skills = ["pdf-forms"]`). A skill with errors is offered to no agent. `[]` offers none, and the agent gets no skill tools.
+
+The agent's system text ends with an "Available skills" section, after its prompt, its memories and the open note: each offered skill's name and description, and a line telling it to call `use_skill` before following one. When the agent has the browser box, the line says how to run a skill's scripts there; otherwise it says scripts can be read but not run.
+
+The list is a snapshot kept per thread, in the thread's transcript: taken on the thread's first turn and sent unchanged on every later turn, so adding or changing skills never changes a running conversation's instructions, and prompt caching holds. To give a thread the current list, type `/update-skills` alone in the chat box, in the panel or the Chat tab, in any client. The turn sends no message of yours: the server takes a fresh snapshot, tells the model "The available skills changed; the list at the end of your instructions is current.", and the conversation shows a small "Skills updated (<n>)" line instead of your bubble. Anything else starting with `/` is sent as typed. A thread from before skills takes its snapshot on its next turn; a conversation with no thread lists the skills as they are on each turn.
+
+| Tool | What it does |
+|------|--------------|
+| `use_skill {name}` | Activates a skill: answers its `SKILL.md` instructions, its file list with sizes and media types, its description, license, compatibility and metadata, and its `allowed-tools` with a note that they grant nothing |
+| `read_skill_file {name, path}` | Reads one file of the skill, its path from the skill's folder. Text, JSON, YAML, TOML and XML are its text cut at 40,000 characters; a PNG, JPEG, GIF or WebP image goes to the model as an image, scaled as [Attachments](ai.md#attachments) says and counting toward the 8 images per question; anything else is its path, media type and size. A path outside the skill, absolute or with `..`, is refused |
+| `install_skill_in_browser {name}` | Copies the skill's folder into the browser box at `/work/skills/<name>`, replacing what was there, through the box's exec service, file by file. Files starting with `#!` are made executable. The agent then runs its scripts with `browser_run` |
+
+`use_skill` and `read_skill_file` are ordinary tool names, the "Skills" group on the Permissions tab, and only read, so an unattended run is offered them. `install_skill_in_browser` comes with the browser tools: only with Browser automation on, a browser box, and skills offered. A skill not offered to the agent is refused by every tool. A skill's `allowed-tools` is shown and recorded but grants nothing: the agent's own permissions decide its tools. Each call is an `ai.skill` entry in the [activity log](activity.md).
 
 ## Threads
 

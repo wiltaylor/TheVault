@@ -169,6 +169,8 @@ export function agentForm(a: Agent): AgentForm {
       outbox: { send_without_review: a.permissions.outbox?.send_without_review ?? false },
       // Sent only when on, as the agent file holds it only then (browser B6).
       ...(a.permissions.browser ? { browser: true } : {}),
+      // Likewise only when the agent has a list (skills S6).
+      ...(a.permissions.skills ? { skills: [...a.permissions.skills] } : {}),
     },
     triggers: a.triggers.map((t) => ({ ...t })),
   };
@@ -227,6 +229,13 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["recall", "Recall its memories"],
       ["update_memory", "Change its memories"],
       ["forget", "Forget memories"],
+    ],
+  },
+  {
+    group: "Skills",
+    tools: [
+      ["use_skill", "Use skills"],
+      ["read_skill_file", "Read skill files"],
     ],
   },
   {

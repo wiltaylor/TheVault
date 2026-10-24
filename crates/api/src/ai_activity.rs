@@ -1,7 +1,8 @@
 //! What an AI chat turn records in the activity log (activity Y2): `ai.turn.start` and
 //! `ai.turn.end` (agent, provider, model, thread, origin; at the end the tokens, time and
 //! outcome), `ai.tool` for each tool call with a short summary of its arguments, `ai.browser` for
-//! each browser command with its exit code, and `ai.proposal` and `ai.applied` for the changes
+//! each browser command with its exit code, `ai.skill` for each `use_skill`, `read_skill_file`
+//! and `install_skill_in_browser` with the skill and file (skills S7), and `ai.proposal` and `ai.applied` for the changes
 //! the turn proposed or made. Model message text and the notes a tool writes are never copied:
 //! only names, ids, titles, query text, hosts and the first characters of a command.
 //!
@@ -252,7 +253,18 @@ impl TurnActivity {
             detail["error"] = json!(one_line(m, 200));
         }
         let mut line = format!("{name} {}", args_line(&args));
-        let kind = if let Some(b) = summary.get("browser").filter(|b| b.is_object()) {
+        let kind = if let Some(s) = summary.get("skill").filter(|s| s.is_object()) {
+            detail["skill"] = s["name"].clone();
+            if let Some(p) = s["path"].as_str() {
+                detail["path"] = json!(one_line(p, ARG_CHARS));
+            }
+            if let Some(n) = s["files"].as_u64() {
+                detail["files"] = json!(n);
+            }
+            "ai.skill"
+        } else if crate::ai_skills::is_skill_tool(&name) || name == crate::ai_skills::INSTALL_TOOL {
+            "ai.skill"
+        } else if let Some(b) = summary.get("browser").filter(|b| b.is_object()) {
             detail["exit"] = b["exit"].clone();
             detail["ms"] = b["ms"].clone();
             detail["timed_out"] = b["timed_out"].clone();
