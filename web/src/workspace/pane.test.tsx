@@ -64,3 +64,8 @@ it("names the Log pane Log, with the scroll icon (activity Y4)", () => {
   expect(locationTitle("/log")).toEqual({ title: "Log", icon: "scroll-text" });
   expect(locationTitle("/log?category=ai&actor=agent:triage")).toEqual({ title: "Log", icon: "scroll-text" });
 });
+
+it("names a skill screen's pane Skill (skills S5)", () => {
+  expect(locationTitle("/skills/pdf-forms")).toEqual({ title: "Skill", icon: "book-open" });
+  expect(locationTitle("/skills/pdf-forms/files")).toEqual({ title: "Skill", icon: "book-open" });
+});

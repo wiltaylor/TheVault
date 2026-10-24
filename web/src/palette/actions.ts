@@ -2,10 +2,11 @@
 // type's notes, open a settings section, and act on the workspace's panes, tabs and sidebars.
 
 import { AGENT_ICON, agentLabel, setAgentsOpen, setCreatingAgent } from "../agents";
-import type { AgentSummary, TypeDef } from "../api";
+import type { AgentSummary, SkillSummary, TypeDef } from "../api";
 import type { ActiveNote } from "../archive";
 import { openCapture } from "../capture/store";
 import { focusPanel, setLeftDrawer, toggleSidebar } from "../sidebars";
+import { SKILL_ICON, setCreatingSkill, skillHref } from "../skills";
 import { typeNavLabel } from "../sidebarTypes";
 import { toggleTheme } from "../theme";
 import * as M from "../workspace/model";
@@ -205,11 +206,19 @@ export function generalActions(opts: { phone: boolean; dark: boolean; androidApp
   return out;
 }
 
+/** Show the left sidebar with its Agents section open, in the drawer on a narrow screen. */
+function showAgentsSection() {
+  if (window.matchMedia?.("(max-width: 1024px)").matches) setLeftDrawer(true);
+  else toggleSidebar("left", true);
+  setAgentsOpen(true);
+}
+
 /**
  * "New agent", in the web app only, and "Open agent …" for each agent (agents G3). New agent
- * opens the left sidebar's name box for it, in the drawer on a narrow screen.
+ * opens the left sidebar's name box for it, in the drawer on a narrow screen. With `skills`,
+ * "New skill" (the web app only) and "Open skill …" for each skill, the same way (skills S4).
  */
-export function agentActions(list: readonly AgentSummary[], readOnly: boolean): Action[] {
+export function agentActions(list: readonly AgentSummary[], readOnly: boolean, skills: readonly SkillSummary[] = []): Action[] {
   const out: Action[] = [];
   if (!readOnly) {
     out.push({
@@ -219,9 +228,7 @@ export function agentActions(list: readonly AgentSummary[], readOnly: boolean): 
       keywords: ["Create agent", "Add agent", "AI agent"],
       icon: { type: AGENT_ICON },
       run: () => {
-        if (window.matchMedia?.("(max-width: 1024px)").matches) setLeftDrawer(true);
-        else toggleSidebar("left", true);
-        setAgentsOpen(true);
+        showAgentsSection();
         setCreatingAgent(true);
       },
     });
@@ -244,6 +251,29 @@ export function agentActions(list: readonly AgentSummary[], readOnly: boolean): 
       keywords: [label, a.name, `${label} agent`, "Agent"],
       icon: { type: a.icon || AGENT_ICON },
       href: `/agents/${encodeURIComponent(a.name)}`,
+    });
+  }
+  if (!readOnly) {
+    out.push({
+      id: "skill:new",
+      section: "Create",
+      label: "New skill",
+      keywords: ["Create skill", "Add skill", "Agent skill", "SKILL.md"],
+      icon: { type: SKILL_ICON },
+      run: () => {
+        showAgentsSection();
+        setCreatingSkill(true);
+      },
+    });
+  }
+  for (const s of skills) {
+    out.push({
+      id: `skill:${s.name}`,
+      section: "Go to",
+      label: `Open skill ${s.name}`,
+      keywords: [s.name, `${s.name} skill`, "Skill", ...(s.description ? [s.description.slice(0, 80)] : [])],
+      icon: { type: s.valid ? SKILL_ICON : "triangle-alert" },
+      href: skillHref(s.name),
     });
   }
   return out;

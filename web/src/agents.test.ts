@@ -32,9 +32,15 @@ describe("the palette's agent actions", () => {
     { name: "inbox_triage", label: "Inbox triage", built_in: false },
   ];
 
-  it("offers New agent, Open browser box and Open agent for each", () => {
+  it("offers New agent, Open browser box, Open agent for each, and New skill", () => {
     const actions = agentActions(list, false);
-    expect(actions.map((a) => a.label)).toEqual(["New agent", "Open browser box", "Open agent Assistant", "Open agent Inbox triage"]);
+    expect(actions.map((a) => a.label)).toEqual([
+      "New agent",
+      "Open browser box",
+      "Open agent Assistant",
+      "Open agent Inbox triage",
+      "New skill",
+    ]);
     expect(actions[1]!.href).toBe("/browser-box");
     expect(actions[3]!.href).toBe("/agents/inbox_triage");
     expect(actions[2]!.icon).toEqual({ type: "sparkles" });

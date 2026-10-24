@@ -10148,3 +10148,224 @@ button.toast-action {
   justify-content: center;
   padding: 0.75rem 0;
 }
+
+/* Skills beneath the agents in the left sidebar (skills S4) */
+.skills-nav-heading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0.4rem 0 0.1rem;
+  padding-left: 1.45rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.skills-nav-heading > span {
+  flex: 1;
+}
+
+.skills-nav-heading .pinned-add {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.skills-nav-empty {
+  margin: 0.15rem 0 0.25rem 1.45rem;
+  font-size: 0.85rem;
+}
+
+/* The skill screen (skills S5) */
+.skill-more {
+  position: relative;
+  margin-left: auto;
+}
+
+.skill-more .pin-menu a {
+  display: flex;
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.3rem;
+  color: var(--ink);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.skill-more .pin-menu a:hover,
+.skill-more .pin-menu a:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent);
+  outline: none;
+}
+
+.agent-badge-invalid {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.skill-tab .form-grid {
+  align-items: start;
+}
+
+.skill-tab .form-grid > label,
+.skill-tab .form-grid > span {
+  padding-top: 0.35rem;
+}
+
+.skill-tab .form-grid input,
+.skill-tab .form-grid textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.skill-note {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+}
+
+.skill-tab .warning {
+  color: var(--palette-yellow);
+}
+
+.skill-issues {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.85rem;
+}
+
+.skill-issues .error {
+  color: var(--danger);
+}
+
+.skill-field-issues {
+  margin-top: 0.25rem;
+}
+
+.skill-metadata {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.skill-metadata-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: 0.35rem;
+}
+
+.skill-add-row {
+  align-self: flex-start;
+}
+
+.skill-body-head,
+.skill-files-bar,
+.skill-file-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.skill-body-head label {
+  flex: 1;
+  font-weight: 600;
+}
+
+.skill-body-head button,
+.skill-files-bar button,
+.skill-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.skill-preview {
+  min-height: 10rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.skill-files {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .skill-files {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.skill-tree {
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.skill-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 0.3rem;
+}
+
+.skill-tree-row.open {
+  background: var(--accent-soft);
+}
+
+.skill-tree-name {
+  display: inline-flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.4rem;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-tree-size {
+  flex: none;
+  font-size: 0.75rem;
+}
+
+.skill-tree-action {
+  display: inline-flex;
+  padding: 0.2rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+}
+
+.skill-tree-action:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.skill-tree-action.danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.skill-file {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.skill-download {
+  margin-left: auto;
+}

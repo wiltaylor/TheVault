@@ -951,6 +951,79 @@ export interface NoteGraph {
   truncated: number;
 }
 
+/** One skill in `GET /api/skills` (skills S3): its frontmatter, its size, and whether it checks (skills S2). */
+export interface SkillSummary {
+  name: string;
+  description: string | null;
+  license: string | null;
+  compatibility: string | null;
+  metadata: Record<string, string> | null;
+  /** The frontmatter's `allowed-tools`, a space-separated string. Shown and recorded; it grants nothing. */
+  allowed_tools: string | null;
+  /** How many files the skill's folder holds, `SKILL.md` among them. */
+  files: number;
+  /** The folder's size in bytes. */
+  size: number;
+  /** A skill that fails validation is offered to no agent (skills S2). */
+  valid: boolean;
+  /** Errors, and warnings such as an unknown frontmatter key. `at` names the key, when there is one. */
+  issues: SkillIssue[];
+}
+
+/** A problem with a skill. A warning leaves it valid. */
+export interface SkillIssue {
+  at?: string | null;
+  message: string;
+  severity: "error" | "warning";
+}
+
+/** A file in a skill's folder, its path relative to the folder. */
+export interface SkillFile {
+  path: string;
+  size: number;
+  media_type: string;
+}
+
+/** `GET /api/skills/{name}` (skills S3): the frontmatter fields, the body and the file list. */
+export interface Skill extends Omit<SkillSummary, "files"> {
+  /** The Markdown after the frontmatter. */
+  body: string;
+  files: SkillFile[];
+}
+
+/** A request body sent as it is, with its own content type. */
+class RawBody {
+  constructor(
+    readonly body: Blob | string,
+    readonly type: string,
+  ) {}
+}
+
+/** A skill as the server answers it, with `allowed-tools` under either spelling and the optional parts filled in. */
+function skillOf<T extends SkillSummary | Skill>(raw: T): T {
+  const r = raw as T & { "allowed-tools"?: string | null };
+  return {
+    ...r,
+    description: r.description ?? null,
+    license: r.license ?? null,
+    compatibility: r.compatibility ?? null,
+    metadata: r.metadata ?? null,
+    allowed_tools: r.allowed_tools ?? r["allowed-tools"] ?? null,
+    valid: r.valid !== false,
+    issues: r.issues ?? [],
+  };
+}
+
+/** A skill file's address: the skill's name and each part of the path encoded. */
+export function skillFileUrl(name: string, path: string): string {
+  return `/api/skills/${enc(name)}/files/${path.split("/").map(enc).join("/")}`;
+}
+
+/** The address of a skill's folder as a zip (skills S3). */
+export function skillExportUrl(name: string): string {
+  return `/api/skills/${enc(name)}/export`;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -1208,7 +1281,12 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     headers: { Accept: "application/json" },
     ...(signal ? { signal } : {}),
   };
-  if (body instanceof Blob) {
+  if (body instanceof RawBody) {
+    init.headers = { ...init.headers, "Content-Type": body.type };
+    init.body = body.body;
+  } else if (body instanceof FormData) {
+    init.body = body;
+  } else if (body instanceof Blob) {
     init.headers = { ...init.headers, "Content-Type": "application/octet-stream" };
     init.body = body;
   } else if (body !== undefined) {
@@ -1721,6 +1799,46 @@ export const api = {
   assetTrash: async () => (await request<{ assets: TrashedAsset[] }>("GET", "/api/assets/trash")).assets,
   restoreAssets: (ids: string[]) =>
     request<{ restored: Asset[]; failed: { id: string; error: string }[] }>("POST", "/api/assets/trash/restore", { ids }),
+  /** Every skill in the vault (skills S3). */
+  skills: async () => {
+    const r = await request<{ skills: SkillSummary[] } | SkillSummary[]>("GET", "/api/skills");
+    return (Array.isArray(r) ? r : r.skills).map(skillOf);
+  },
+  /** One skill: its frontmatter, its body and its files. */
+  skill: async (name: string) => skillOf(await request<Skill>("GET", `/api/skills/${enc(name)}`)),
+  /** A skill file's bytes. */
+  skillFile: async (name: string, path: string): Promise<Blob> => {
+    const res = await send(skillFileUrl(name, path), { method: "GET", credentials: "same-origin" });
+    if (!res.ok) {
+      if (res.status === 401) onUnauthorized();
+      let body: ApiError["body"] = {};
+      try {
+        body = (await res.json()) as ApiError["body"];
+      } catch {
+        // Not JSON: the status says it.
+      }
+      throw new ApiError(res.status, body);
+    }
+    return res.blob();
+  },
+  /** Write the whole `SKILL.md` (admin). The server checks it first: a problem is a 400 with its issues. */
+  putSkill: (name: string, text: string) =>
+    request<unknown>("PUT", `/api/skills/${enc(name)}`, new RawBody(text, "text/markdown; charset=utf-8")),
+  /** Write a file under the skill's folder (admin). */
+  putSkillFile: (name: string, path: string, bytes: Blob) =>
+    request<unknown>("PUT", skillFileUrl(name, path), new RawBody(bytes, "application/octet-stream")),
+  deleteSkillFile: (name: string, path: string) => request<unknown>("DELETE", skillFileUrl(name, path)),
+  /** Delete the skill's folder (admin). */
+  deleteSkill: (name: string) => request<unknown>("DELETE", `/api/skills/${enc(name)}`),
+  /**
+   * Import a zipped skill (admin): one top-level folder, or `SKILL.md` at the root. It is named by
+   * its frontmatter `name`; an existing name is refused (409) unless `replace`.
+   */
+  importSkill: async (zip: Blob, filename: string, replace = false) => {
+    const form = new FormData();
+    form.append("file", zip, filename);
+    return skillOf(await request<Skill>("POST", `/api/skills/import${replace ? "?replace=true" : ""}`, form));
+  },
   /** Upload `file` as a new asset. The body is the file's bytes, unchanged. */
   uploadAsset: (file: File) =>
     request<Asset>("POST", `/api/assets?filename=${enc(file.name)}`, file),
