@@ -231,7 +231,91 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0006_assistant_settings",
         run: assistant_settings,
     },
+    UpgradeStep {
+        id: "0007_person_correspondence",
+        run: person_correspondence,
+    },
 ];
+
+/// The tab of the `person` type's default template that step `0007_person_correspondence` adds.
+const CORRESPONDENCE_TAB: &str = "Correspondence";
+
+/// Step `0007_person_correspondence`: the shipped `person` type's default template gained a
+/// Correspondence tab listing the person's SMS conversations and the email they sent or received,
+/// and the seeding only ever adds fields to a type the vault has. `person` is the starter's type
+/// rather than a built-in one, so it is recognised by the shape the earlier person steps give it:
+/// `emails` and `phones` list fields, which the conversation, message and email links match on. Such
+/// a `person` gains the shipped tab at the end of its `default` template, as one planned type
+/// change that edits no note, when that template has no tab of the name. Everything else in the
+/// file stays as it is, so a template the user edited keeps the edit.
+fn person_correspondence(w: &Writer) -> Result<()> {
+    let name = PERSON_TYPE;
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(name) else {
+        return Ok(());
+    };
+    let is_list = |field: &str| {
+        ty.field(field)
+            .is_some_and(|f| matches!(f.kind, schema::FieldKind::List { .. }))
+    };
+    if !(is_list("emails") && is_list("phones")) {
+        eprintln!(
+            "step 0007_person_correspondence skipped type {name:?}: it has no emails and phones lists"
+        );
+        return Ok(());
+    }
+    let path = type_path(name);
+    let shipped: Source = store::parse_data_only(DEFAULT_PERSON_TYPE, &path)?;
+    let Some(tab) = shipped
+        .items
+        .iter()
+        .filter_map(|i| block(i, "template"))
+        .find(|t| label(t) == Some("default"))
+        .and_then(|t| {
+            t.items
+                .iter()
+                .find(|i| block(i, "tab").is_some_and(|b| label(b) == Some(CORRESPONDENCE_TAB)))
+        })
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    let Some(default) = ast
+        .items
+        .iter_mut()
+        .filter_map(|i| block_mut(i, "template"))
+        .find(|t| label(t) == Some("default"))
+    else {
+        return Ok(());
+    };
+    if default
+        .items
+        .iter()
+        .any(|i| block(i, "tab").is_some_and(|b| label(b) == Some(CORRESPONDENCE_TAB)))
+    {
+        return Ok(());
+    }
+    default.items.push(tab);
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
+    let plan = w.plan_type_change(name, &change)?;
+    if !plan.changes.is_empty() {
+        eprintln!(
+            "step 0007_person_correspondence was not applied to type {name:?}: it would edit notes"
+        );
+        return Ok(());
+    }
+    w.apply_type_change(
+        name,
+        &change,
+        &plan.token,
+        &Author::Task(SERVER_AUTHOR.to_owned()),
+    )?;
+    Ok(())
+}
 
 /// The secret holding Settings > AI (crates/ai's `ai_settings`, ai D7).
 const AI_SETTINGS: &str = "ai_settings";

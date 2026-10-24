@@ -117,6 +117,26 @@ template default {
     slot "contact_note"
     slot "body"
   }
+  tab "Correspondence" {
+    query_view {
+      title = "Messages"
+      query = "from conversation where has(participants, this) sort updated desc"
+
+      view table {
+        kind    = "table"
+        columns = ["title", "channel"]
+      }
+    }
+    query_view {
+      title = "Email"
+      query = "from email where from == this || has(to, this) || has(cc, this) sort sent desc"
+
+      view table {
+        kind    = "table"
+        columns = ["sent", "from_raw", "title"]
+      }
+    }
+  }
 }
 
 template card {

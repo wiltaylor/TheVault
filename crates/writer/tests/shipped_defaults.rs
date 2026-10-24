@@ -118,7 +118,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "0003_event_google_handler",
             "0004_remove_google_sync",
             "0005_list_page_defaults",
-            "0006_assistant_settings"
+            "0006_assistant_settings",
+            "0007_person_correspondence"
         ]
     );
     let fields: Vec<&str> = done
@@ -461,7 +462,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
             "0003_event_google_handler",
             "0004_remove_google_sync",
             "0005_list_page_defaults",
-            "0006_assistant_settings"
+            "0006_assistant_settings",
+            "0007_person_correspondence"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
@@ -639,7 +641,8 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
                 "0003_event_google_handler",
                 "0004_remove_google_sync",
                 "0005_list_page_defaults",
-                "0006_assistant_settings"
+                "0006_assistant_settings",
+                "0007_person_correspondence"
             ],
             "{name}"
         );
@@ -681,7 +684,13 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
                 .filter(|l| !l.starts_with("labels = ") && !l.starts_with("accept = "))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(strip(&wcl), strip(&expect), "{name}");
+        // Step 0007 adds the Correspondence tab at the end of the default template.
+        assert!(wcl.contains("tab \"Correspondence\""), "{name}: {wcl}");
+        assert_eq!(
+            strip(&without_correspondence(&wcl)),
+            strip(&expect),
+            "{name}"
+        );
 
         // No note changed.
         assert_eq!(read(root, &note_path).unwrap(), note_before, "{name}");
@@ -782,10 +791,12 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0003_event_google_handler",
             "0004_remove_google_sync",
             "0005_list_page_defaults",
-            "0006_assistant_settings"
+            "0006_assistant_settings",
+            "0007_person_correspondence"
         ]
     );
-    assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 3);
+    // One more for step 0007's Correspondence tab on the person type.
+    assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 4);
     // The message type 0.1.6 had gains only `processed`.
     assert!(
         done.fields_added
@@ -1226,7 +1237,8 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
         [
             "0004_remove_google_sync",
             "0005_list_page_defaults",
-            "0006_assistant_settings"
+            "0006_assistant_settings",
+            "0007_person_correspondence"
         ]
     );
 
@@ -1317,7 +1329,8 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_ke
         [
             "0004_remove_google_sync",
             "0005_list_page_defaults",
-            "0006_assistant_settings"
+            "0006_assistant_settings",
+            "0007_person_correspondence"
         ]
     );
     assert!(w.schema().type_def("google_sync").is_none());
@@ -1344,7 +1357,11 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
         let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
         assert_eq!(
             done.steps,
-            ["0005_list_page_defaults", "0006_assistant_settings"]
+            [
+                "0005_list_page_defaults",
+                "0006_assistant_settings",
+                "0007_person_correspondence"
+            ]
         );
         assert!(w.schema().type_def("google_sync").is_some());
         assert_eq!(read(root, &note_path).unwrap(), note);
@@ -1984,4 +2001,101 @@ fn an_event_type_from_before_the_outbox_gains_send_updates_and_no_note_changes()
     assert!(field.hidden);
     assert_eq!(field.kind, schema::FieldKind::String);
     assert_eq!(read(root, &note_path).unwrap(), before);
+}
+
+/// `text` without its Correspondence tab (step 0007).
+fn without_correspondence(text: &str) -> String {
+    let Some(start) = text.find("  tab \"Correspondence\" {") else {
+        return text.to_owned();
+    };
+    let end = start + text[start..].find("\n  }\n").unwrap() + "\n  }\n".len();
+    // The canonical writer sets the tab off from the one before by a blank line.
+    let before = text[..start]
+        .strip_suffix("\n\n")
+        .map_or(&text[..start], |b| &text[..b.len() + 1]);
+    format!("{}{}", before, &text[end..])
+}
+
+/// The shipped `person` type as it was before its Correspondence tab, with a slot of the user's
+/// moved to the end of the default template's tab.
+fn person_before_correspondence() -> String {
+    let shipped = writer::DEFAULT_PERSON_TYPE;
+    assert!(
+        shipped.contains("  tab \"Correspondence\" {"),
+        "the shipped type has the tab"
+    );
+    let without = without_correspondence(shipped);
+    without.replacen("    slot \"birthday\"\n", "", 1).replacen(
+        "    slot \"body\"\n",
+        "    slot \"body\"\n    slot \"birthday\"\n",
+        1,
+    )
+}
+
+#[test]
+fn a_vault_whose_person_type_predates_the_correspondence_tab_gains_it_and_keeps_its_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(
+        root.join("types/person.wcl"),
+        person_before_correspondence(),
+    )
+    .unwrap();
+    let w = open(root);
+    let alex = w
+        .create("person", &writer::Input::Wcl(ALEX.into()), &author())
+        .unwrap();
+    let note_before = read(root, &format!("notes/person/{}.wcl", alex.id)).unwrap();
+
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert!(
+        done.steps.iter().any(|s| s == "0007_person_correspondence"),
+        "{:?}",
+        done.steps
+    );
+    let after = read(root, "types/person.wcl").unwrap();
+    assert!(after.contains("tab \"Correspondence\""), "{after}");
+    assert!(
+        after.contains("from conversation where has(participants, this) sort updated desc"),
+        "{after}"
+    );
+    assert!(
+        after.contains(
+            "from email where from == this || has(to, this) || has(cc, this) sort sent desc"
+        ),
+        "{after}"
+    );
+    // The user's edit stays: birthday after body in the Person tab.
+    let person_tab = &after
+        [after.find("tab \"Person\"").unwrap()..after.find("tab \"Correspondence\"").unwrap()];
+    assert!(
+        person_tab.find("slot \"body\"").unwrap() < person_tab.find("slot \"birthday\"").unwrap(),
+        "{person_tab}"
+    );
+    // No note changed.
+    assert_eq!(
+        read(root, &format!("notes/person/{}.wcl", alex.id)).unwrap(),
+        note_before
+    );
+    drop(w);
+
+    // The next start adds nothing: the step ran once, and the tab is there.
+    let w = open(root);
+    let again = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert!(
+        !again
+            .steps
+            .iter()
+            .any(|s| s == "0007_person_correspondence"),
+        "{:?}",
+        again.steps
+    );
+    assert_eq!(
+        read(root, "types/person.wcl")
+            .unwrap()
+            .matches("tab \"Correspondence\"")
+            .count(),
+        1
+    );
 }
