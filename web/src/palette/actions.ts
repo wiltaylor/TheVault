@@ -225,6 +225,15 @@ export function agentActions(list: readonly AgentSummary[], readOnly: boolean): 
         setCreatingAgent(true);
       },
     });
+    // The browser box's desktop in the active pane (browser B4); the web app only.
+    out.push({
+      id: "browser-box",
+      section: "Go to",
+      label: "Open browser box",
+      keywords: ["Browser box", "Desktop", "VNC", "Watch agent", "playwright"],
+      icon: { type: "monitor" },
+      href: "/browser-box",
+    });
   }
   for (const a of list) {
     const label = agentLabel(a);

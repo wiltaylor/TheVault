@@ -130,6 +130,27 @@ export function closePane(pane: string) {
   update((w) => M.closePane(w, pane));
 }
 
+/**
+ * Show `url` in a pane beside `pane`: the pane in the same tab that shows it already becomes
+ * active, else a new pane opens on `pane`'s right. The browser box's desktop opens this way from
+ * an agent's conversation (browser B4).
+ */
+export function openBeside(pane: string, url: string) {
+  const w = ws();
+  const tab = w.tabs.find((t) => M.panesOf(t.layout).includes(pane)) ?? w.tabs.find((t) => t.id === w.active);
+  const path = url.split("?")[0];
+  const shown = tab && M.panesOf(tab.layout).find((p) => p !== pane && M.location(w, p).split("?")[0] === path);
+  if (shown) {
+    activatePane(shown);
+    return;
+  }
+  if (!w.panes[pane]) {
+    openTab(url);
+    return;
+  }
+  update((x) => M.splitPane(x, pane, "right", url), "push");
+}
+
 export function splitPane(pane: string, edge: M.Edge) {
   update((w) => M.splitPane(w, pane, edge));
 }

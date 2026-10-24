@@ -710,8 +710,11 @@ export function BrowserCard() {
               </Show>
               <div class="actions">
                 <Show when={s().reachable}>
-                  <a class="button primary" href={BROWSER_DESKTOP} target="_blank" rel="noopener noreferrer">
+                  <a class="button primary" href="/browser-box">
                     Open desktop
+                  </a>
+                  <a class="button" href={BROWSER_DESKTOP} target="_blank" rel="noopener noreferrer">
+                    Open in a new tab
                   </a>
                 </Show>
                 <button

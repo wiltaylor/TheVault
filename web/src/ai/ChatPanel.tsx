@@ -15,7 +15,9 @@ import { TypeIcon } from "../components/Icon";
 import { formatValue } from "../components/Render";
 import { Spinner } from "../components/SyncStatus";
 import { activePane } from "../workspace/model";
-import { navigatePane, workspace } from "../workspace/store";
+import { navigatePane, openBeside, workspace } from "../workspace/store";
+import { paneAt, wantsNewTab } from "../workspace/events";
+import { BROWSER_BOX_PATH } from "../pages/BrowserBox";
 import { AgentProposalCard } from "./AgentProposalCard";
 import { blockLines, lineDiff } from "./diff";
 import { DownloadCard } from "./DownloadCard";
@@ -237,9 +239,6 @@ export function hostOf(url: string): string {
   }
 }
 
-/** The browser box's desktop through the server (browser B4), as the Integrations card opens it. */
-export const BROWSER_DESKTOP_URL = "/browser/vnc.html?autoconnect=1&resize=remote&path=browser/websockify";
-
 /** Whether a tool drives the browser box (browser B5). */
 const isBrowserTool = (name: string) => name === "browser_run" || name === "browser_file" || name === "browser_save";
 
@@ -303,15 +302,20 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
           <WebLabel name={props.part.name} input={props.part.input} />
         </Show>{" "}
         <span class="muted">({status()})</span>
-        {/* Watch what the agent does in the browser box's desktop; the web app only, as the apps cannot open it (browser B4). */}
+        {/* Watch what the agent does: the browser box's desktop in a pane beside this conversation
+            (browser B4); a Ctrl or middle click opens it in a background tab instead. The web app
+            only, as the apps cannot open the desktop. */}
         <Show when={isBrowserTool(props.part.name) && !inApp()}>
           <a
             class="ai-step-watch"
-            href={BROWSER_DESKTOP_URL}
-            target="_blank"
-            rel="noopener"
-            title="Open the browser box's desktop in a new tab"
-            onClick={(e) => e.stopPropagation()}
+            href={BROWSER_BOX_PATH}
+            title="Show the browser box's desktop beside this conversation"
+            onClick={(e) => {
+              if (wantsNewTab(e)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              openBeside(paneAt(e.currentTarget), BROWSER_BOX_PATH);
+            }}
           >
             Watch
           </a>

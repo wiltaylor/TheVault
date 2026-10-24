@@ -9594,3 +9594,39 @@ button.toast-action {
   border-radius: 0.4rem;
   background: var(--hover);
 }
+
+/* The browser box's desktop in a pane (browser B4): a slim bar, then the desktop filling the rest. */
+.browser-box {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 24rem;
+}
+
+.browser-box-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0 0.5rem;
+}
+
+.browser-box-bar h1 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.browser-box-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.browser-box-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 20rem;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 6px;
+  background: #000;
+}

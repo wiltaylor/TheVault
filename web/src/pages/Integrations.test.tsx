@@ -545,11 +545,14 @@ describe("BrowserCard", () => {
       });
     render(() => <BrowserCard />);
 
+    // Open desktop shows it in the app's pane; Open in a new tab gives it a browser tab of its own.
     const open = await screen.findByRole("link", { name: "Open desktop" });
-    expect(open.getAttribute("href")).toBe(BROWSER_DESKTOP);
+    expect(open.getAttribute("href")).toBe("/browser-box");
+    const tab = screen.getByRole("link", { name: "Open in a new tab" });
+    expect(tab.getAttribute("href")).toBe(BROWSER_DESKTOP);
     expect(BROWSER_DESKTOP).toBe("/browser/vnc.html?autoconnect=1&resize=remote&path=browser/websockify");
-    expect(open.getAttribute("target")).toBe("_blank");
-    expect(open.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(tab.getAttribute("target")).toBe("_blank");
+    expect(tab.getAttribute("rel")).toBe("noopener noreferrer");
     expect(screen.getByText("Running")).toBeTruthy();
     expect(screen.getByText("0.1.12")).toBeTruthy();
     expect(screen.getByText("0.1.22")).toBeTruthy();
@@ -558,6 +561,7 @@ describe("BrowserCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     expect((await screen.findByRole("alert")).textContent).toContain("connection refused");
     expect(screen.queryByRole("link", { name: "Open desktop" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open in a new tab" })).toBeNull();
     expect(browserStatus).toHaveBeenCalledTimes(2);
   });
 
