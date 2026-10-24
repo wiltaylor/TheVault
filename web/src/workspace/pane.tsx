@@ -37,7 +37,7 @@ export function setPaneTitle(pane: string, title: PageTitle | null) {
   setLiveTitles(pane, title ?? undefined);
 }
 
-const NAMES: [RegExp, string][] = [
+const NAMES: [RegExp, string, string?][] = [
   [/^\/daily/, "Daily notes"],
   [/^\/settings/, "Settings"],
   [/^\/search/, "Search"],
@@ -46,6 +46,8 @@ const NAMES: [RegExp, string][] = [
   [/^\/trash/, "Trash"],
   [/^\/archive/, "Archive"],
   [/^\/agents\//, "Agent"],
+  [/^\/outbox/, "Outbox", "send"],
+  [/^\/browser-box/, "Browser", "monitor"],
 ];
 
 /** A name for the page at `url`, from the location alone. Reactive: note titles load. */
@@ -75,7 +77,7 @@ export function locationTitle(url: string): PageTitle {
     const t = typeDef(list[1]!);
     return { title: t?.plural ?? list[1]!, icon: t?.icon ?? null };
   }
-  for (const [re, name] of NAMES) if (re.test(path)) return { title: name };
+  for (const [re, name, icon] of NAMES) if (re.test(path)) return icon ? { title: name, icon } : { title: name };
   if (path === "/") return { title: "Daily notes" };
   return { title: "Not found" };
 }

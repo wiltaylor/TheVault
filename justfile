@@ -58,7 +58,7 @@ dev vault='.scratch/dev-vault' listen='0.0.0.0:8787' password='devpass': web-bui
 	echo "Serving {{vault}} on http://{{listen}}"
 	cargo run -p server --bin vault-server -- --vault '{{vault}}' --listen '{{listen}}' --web web/dist
 
-# Start a browser box for `just dev` on 127.0.0.1 (desktop on :6080, commands on :7700), building the image when it is missing, and write its address and a fresh token to .scratch/dev.env, which `just dev` reads; runs on the host
+# Start a browser box for `just dev` with no published ports, as production runs it: the dev server reaches it on its container address (desktop :6080, commands :7700), and everyone else sees it only through the server's /browser/ behind the login. Builds the image when it is missing and writes the address and a fresh token to .scratch/dev.env, which `just dev` reads; runs on the host
 [group('docker')]
 dev-browser name='thevault-browser-dev' image='thevault-browser:local': (require-host-tool "docker") (require-host-tool "openssl")
 	#!/usr/bin/env bash
@@ -67,17 +67,18 @@ dev-browser name='thevault-browser-dev' image='thevault-browser:local': (require
 	token=$(openssl rand -hex 32)
 	docker rm -f '{{name}}' >/dev/null 2>&1 || true
 	docker run -d --name '{{name}}' --shm-size 1g -e BROWSER_TOKEN="$token" \
-		-p 127.0.0.1:7700:7700 -p 127.0.0.1:6080:6080 -v '{{name}}-home':/home/agent '{{image}}' >/dev/null
+		-v '{{name}}-home':/home/agent '{{image}}' >/dev/null
+	ip=$(docker inspect -f '{{{{range .NetworkSettings.Networks}}{{{{.IPAddress}}{{{{end}}' '{{name}}')
 	mkdir -p .scratch
 	touch .scratch/dev.env
 	chmod 600 .scratch/dev.env
 	grep -v '^VAULT_BROWSER_' .scratch/dev.env > .scratch/dev.env.new || true
-	printf 'VAULT_BROWSER_URL=http://127.0.0.1:7700\nVAULT_BROWSER_DESKTOP_URL=http://127.0.0.1:6080\nVAULT_BROWSER_TOKEN=%s\n' "$token" >> .scratch/dev.env.new
+	printf 'VAULT_BROWSER_URL=http://%s:7700\nVAULT_BROWSER_DESKTOP_URL=http://%s:6080\nVAULT_BROWSER_TOKEN=%s\n' "$ip" "$ip" "$token" >> .scratch/dev.env.new
 	mv .scratch/dev.env.new .scratch/dev.env
 	chmod 600 .scratch/dev.env
-	for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:7700/health >/dev/null 2>&1 && break; sleep 1; done
-	curl -fsS http://127.0.0.1:7700/health; echo
-	echo "Browser box {{name}} is up: desktop http://127.0.0.1:6080/vnc.html. Restart just dev to use it."
+	for _ in $(seq 1 30); do curl -fsS "http://$ip:7700/health" >/dev/null 2>&1 && break; sleep 1; done
+	curl -fsS "http://$ip:7700/health"; echo
+	echo "Browser box {{name}} is up on $ip with no published ports. Restart just dev, then open it in the app: Open browser box."
 
 # Run the S6 benchmark: generate a seeded vault, time reindex, query, search, open and save, and write target/bench/report.md
 [group('rust')]
