@@ -159,8 +159,14 @@ fn template_json(t: &Template) -> Value {
                 .items
                 .iter()
                 .map(|item| match item {
-                    TabItem::Slot { field, label, .. } => {
-                        json!({ "slot": field, "label": label })
+                    TabItem::Slot {
+                        field, label, when, ..
+                    } => {
+                        let mut out = json!({ "slot": field, "label": label });
+                        if let Some(w) = when {
+                            out["when"] = json!(w);
+                        }
+                        out
                     }
                     TabItem::Block(b) => json!({ "block": block_json(b) }),
                 })

@@ -346,11 +346,13 @@ pub struct Tab {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabItem {
-    /// Places a field, or `title`. `label` overrides the field's label here. `extra` holds the
-    /// attributes this version does not know, kept as written.
+    /// Places a field, or `title`. `label` overrides the field's label here. `when` is a
+    /// condition, as a tab's, under which the slot shows. `extra` holds the attributes this
+    /// version does not know, kept as written.
     Slot {
         field: String,
         label: Option<String>,
+        when: Option<String>,
         extra: Vec<(String, Value)>,
     },
     /// A fixed content block.
@@ -1080,12 +1082,17 @@ fn slot(
             format!("places {field:?} a second time in this template"),
         );
     }
-    let slot_items = [opt("label", Form::Str)];
+    let slot_items = [opt("label", Form::Str), opt("when", Form::Str)];
     c.attributes(&block.body, &slot_items, &[], at, "slots");
     c.only_blocks(&block.body, &[], at);
+    let when = string(&block.body, "when");
+    if let Some(w) = &when {
+        check_when(c, w, fields, &format!("{at}.when"));
+    }
     Some(TabItem::Slot {
         field: field.clone(),
         label: string(&block.body, "label"),
+        when,
         extra: unknown(&block.body, &slot_items, &[]),
     })
 }

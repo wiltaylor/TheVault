@@ -39,8 +39,8 @@ use wcl_lang::ast::{Block, Expr, Item, Source};
 
 use crate::builtin::{
     BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, DEFAULT_EMAIL_TYPE, DEFAULT_EVENT_TYPE,
-    DEFAULT_MESSAGE_TYPE, DEFAULT_PERSON_TYPE, EMAIL_TYPE, EVENT_TYPE, MESSAGE_TYPE, PERSON_TYPE,
-    TYPES_NEEDING_PERSON,
+    DEFAULT_MESSAGE_TYPE, DEFAULT_OUTBOX_TYPE, DEFAULT_PERSON_TYPE, EMAIL_TYPE, EVENT_TYPE,
+    MESSAGE_TYPE, OUTBOX_TYPE, PERSON_TYPE, TYPES_NEEDING_PERSON,
 };
 use crate::defs::taxonomy_path;
 use crate::types::{NativeMigration, TypeChange, rebuild_schema};
@@ -235,7 +235,92 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0007_person_correspondence",
         run: person_correspondence,
     },
+    UpgradeStep {
+        id: "0008_outbox_template",
+        run: outbox_template,
+    },
 ];
+
+/// The `outbox` type as ticket 180 shipped it, whose `default` template step
+/// `0008_outbox_template` replaces.
+const OUTBOX_TYPE_5E81292: &str = include_str!("../defaults/old/outbox_5e81292.wcl");
+
+/// The item of the `template default { ... }` block of `ast`.
+fn default_template_at(ast: &Source) -> Option<usize> {
+    ast.items
+        .iter()
+        .position(|i| block(i, "template").is_some_and(|t| label(t) == Some("default")))
+}
+
+/// `item` alone, in canonical form.
+fn canonical_item(item: &Item) -> String {
+    store::to_canonical(&Source {
+        items: vec![item.clone()],
+        trailing_trivia: Vec::new(),
+    })
+}
+
+/// Step `0008_outbox_template` (outbox X13): the shipped `outbox` type's default template became
+/// one form whose slots show by the item's kind, with the body under the email or SMS fields and
+/// the status shown rather than chosen, and the seeding never changes a template the vault has.
+/// When the vault's built-in `outbox` type still has the default template ticket 180 shipped,
+/// compared in canonical form, it is replaced by the shipped one, as one planned type change that
+/// edits no note; the rest of the file stays as it is. A template the user changed is left alone,
+/// with one line in the log.
+fn outbox_template(w: &Writer) -> Result<()> {
+    let name = OUTBOX_TYPE;
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(name) else {
+        return Ok(());
+    };
+    if !w.is_built_in_def(ty) {
+        eprintln!(
+            "step 0008_outbox_template skipped type {name:?}: a type of the user's holds the name"
+        );
+        return Ok(());
+    }
+    let path = type_path(name);
+    let old: Source = store::parse_data_only(OUTBOX_TYPE_5E81292, &path)?;
+    let shipped: Source = store::parse_data_only(DEFAULT_OUTBOX_TYPE, &path)?;
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    let (Some(old_at), Some(new_at), Some(at)) = (
+        default_template_at(&old),
+        default_template_at(&shipped),
+        default_template_at(&ast),
+    ) else {
+        return Ok(());
+    };
+    let vault = canonical_item(&ast.items[at]);
+    if vault == canonical_item(&shipped.items[new_at]) {
+        return Ok(());
+    }
+    if vault != canonical_item(&old.items[old_at]) {
+        eprintln!(
+            "step 0008_outbox_template left type {name:?} as it is: its default template is not \
+             the one TheVault shipped"
+        );
+        return Ok(());
+    }
+    ast.items[at] = shipped.items[new_at].clone();
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
+    let plan = w.plan_type_change(name, &change)?;
+    if !plan.changes.is_empty() {
+        eprintln!(
+            "step 0008_outbox_template was not applied to type {name:?}: it would edit notes"
+        );
+        return Ok(());
+    }
+    w.apply_type_change(
+        name,
+        &change,
+        &plan.token,
+        &Author::Task(SERVER_AUTHOR.to_owned()),
+    )?;
+    Ok(())
+}
 
 /// The tab of the `person` type's default template that step `0007_person_correspondence` adds.
 const CORRESPONDENCE_TAB: &str = "Correspondence";

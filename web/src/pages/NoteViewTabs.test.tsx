@@ -122,3 +122,44 @@ describe("conditional tabs on the note page", () => {
     expect(m.queryByText("Second text")).toBeNull();
   });
 });
+
+describe("conditional slots on the note page", () => {
+  const column = (slots: { field: string; when?: string }[]) => ({
+    kind: "column",
+    blocks: slots.map((s) => ({ kind: "slot", labels: [s.field], ...(s.when ? { fields: { when: s.when } } : {}) })),
+  });
+  const SLOTS: Tab[] = [
+    {
+      title: "Main",
+      items: [
+        { slot: "stage", label: null, when: "!done" },
+        { block: { kind: "columns", blocks: [column([{ field: "done" }]), column([{ field: "title" }])] } },
+      ],
+    },
+  ];
+
+  it("shows a slot only while its when holds, as the note is edited", async () => {
+    const m = mount(SLOTS, { stage: "idea", done: false });
+    await waitFor(() => expect(m.getByRole("combobox", { name: "Stage" })).toBeTruthy());
+    fireEvent.click(m.getByRole("checkbox", { name: "Done" }));
+    expect(m.queryByRole("combobox", { name: "Stage" })).toBeNull();
+    expect(updateNote).not.toHaveBeenCalled();
+  });
+
+  it("reads a when on a slot in a column too", async () => {
+    const tabs: Tab[] = [
+      {
+        title: "Main",
+        items: [
+          { slot: "done", label: null },
+          { block: { kind: "columns", blocks: [column([{ field: "stage", when: "done" }]), column([{ field: "title" }])] } },
+        ],
+      },
+    ];
+    const m = mount(tabs, { stage: "idea", done: false });
+    await waitFor(() => expect(m.getByRole("checkbox", { name: "Done" })).toBeTruthy());
+    expect(m.queryByRole("combobox", { name: "Stage" })).toBeNull();
+    fireEvent.click(m.getByRole("checkbox", { name: "Done" }));
+    expect(m.getByRole("combobox", { name: "Stage" })).toBeTruthy();
+  });
+});

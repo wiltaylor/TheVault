@@ -185,8 +185,12 @@ pub(crate) fn template_json(t: &Template) -> Value {
             let mut out = json!({
                 "title": tab.title,
                 "items": tab.items.iter().map(|item| match item {
-                    TabItem::Slot { field, label, extra } => {
+                    TabItem::Slot { field, label, when, extra } => {
                         let mut out = json!({ "slot": field, "label": label });
+                        // Only a conditional slot carries `when`, as only a conditional tab does.
+                        if let Some(w) = when {
+                            out["when"] = json!(w);
+                        }
                         with_extra(&mut out, extra);
                         out
                     }

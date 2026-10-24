@@ -1,6 +1,6 @@
 # The Outbox
 
-The Outbox holds the emails, SMS messages and calendar invites that TheVault sends for you. Each one is an Outbox item, a note of the built-in `outbox` type. What an agent drafts waits in the Outbox until you approve it. What you write yourself is sent when you select **Send**.
+The Outbox holds the emails, SMS messages and calendar invites that TheVault sends for you. Each one is an Outbox item, a note of the built-in `outbox` type. What an agent drafts waits in the Outbox until you approve it. What you write yourself is sent when you select **Ready**.
 
 Open it from **Outbox** in the side menu, under **Inbox**. The number beside it counts the items waiting for your review. The desktop and Android apps show the same page. Everything you do there writes the item's note, which syncs to the home server, and the home server does the sending.
 
@@ -28,19 +28,42 @@ The actions depend on the item's status:
 | Status | Actions |
 |---|---|
 | Review | **Approve and send**, **Edit**, **Reject** |
-| Draft | **Send**, **Edit**, **Delete** |
+| Draft | **Ready**, **Edit**, **Delete** |
 | Failed | **Retry**, **Edit** |
 | Rejected | **Edit**, **Delete** |
 
 **Edit** opens the item's note, where you can change any field before you send it. **Delete** moves the item to the trash. **Approve all**, at the top of the Review tab, approves every item in Review after you confirm. The confirm says how many items it sends.
 
-The Send, Approve and send and Retry buttons are also on the item's own note page.
+**Ready** takes a draft out of Drafts and sends it. The Ready, Approve and send, Reject and Retry buttons are also on the item's own note page.
+
+## The item's page
+
+An item's note page is one form for its kind, with no tabs:
+
+- An email shows To, Cc, Bcc, Subject and the email it replies to, then the body, then the attachments.
+- An SMS shows the number and the phone that sends it, then the text.
+- A calendar invite shows the event it changes, When, location, calendar and attendees, then the description.
+
+The status is shown at the top and cannot be chosen from a list. The buttons beside the save status move the item: **Ready** on a draft, **Approve and send** and **Reject** on an item in Review, **Retry** on a failed one. Who drafted the item shows below the form, with when it was sent, its sent copy and the reason it failed once it has them.
 
 ## Writing an item
 
-Select **New email**, **New SMS** or **New event** on the Outbox page. TheVault creates a draft and opens it. Fill in the fields, then select **Send** on the note page or in the Drafts tab.
+Select **New email**, **New SMS** or **New event** on the Outbox page. TheVault creates a draft and opens it. Fill in the fields, then select **Ready** on the note page or in the Drafts tab.
 
-- **Reply** on an email note starts a draft reply: To is the sender, Subject is `Re:` and the email's subject, and the body quotes the email. The reply joins the email's Gmail thread.
+On an email note:
+
+- **Reply** starts a draft reply: To is the sender, Subject is `Re:` and the email's subject, and the body quotes the email. The reply joins the email's Gmail thread.
+- **Reply all** starts the same reply to the sender and everyone in the email's To and Cc, leaving out your connected Google address and anyone listed twice. It shows only when the email went to someone besides you.
+- **Forward** starts a draft to no one yet: Subject is `Fwd:` and the email's subject, and the body holds a "Forwarded message" header with the email's From, Date, Subject and To, then the email quoted. The email's attachments are attached again. A forward starts a new Gmail thread.
+
+On an SMS message note:
+
+- **Reply** starts an SMS draft to the other person: the sender of a message you received, the recipient of one you sent. When the phone gave a name rather than a number, the number comes from the person's note, their mobile number first.
+- **Reply all** shows in a conversation with several people. The phone cannot send a group message, so it starts one SMS draft for each other number and opens the Drafts tab.
+- **Forward** starts an SMS draft with no number and the text `Fwd:` and the message.
+
+Each of these creates a draft and opens it, and the device is left empty, so the vault's Android phone sends it.
+
 - **Propose a change** on an event note starts a draft calendar invite for that event. Fill in only the fields to change. An empty field leaves that part of the event as it is.
 
 Your direct edits of an event note do not go through the Outbox. They write back to Google Calendar at once, as before, without emailing the attendees.

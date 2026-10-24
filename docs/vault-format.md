@@ -373,7 +373,7 @@ The `outbox` type holds what TheVault sends for the user: emails through Gmail, 
 
 An approved `event` item is sent by writing the event note, authored `handler outbox_send`, with the event's `send_updates = "all"`: a new note from the item's title and event fields when `event` is empty (or the note an earlier, failed try made, which is then the item's `result`), else the item's non-empty fields set on the `event` note. A change cannot move an event to another `calendar`. The item stays `sending` with `result` set to the event note until the event's write-back sends it to Google, then becomes `sent` with the Google event id in `sent_ref`, or `failed` with Google's message (outbox X5).
 
-`result`, `in_reply_to` and `event` take any type (`target = "*"`) so that the built-in type never ties a vault's own `email` or `event` type to it. The default template shows one tab for the item's kind, by [conditional tabs](#conditional-tabs) on `kind`, with a `dropdown` control on `status`, then a Message tab with `body` (not for events) and a Status tab. Its list page is the `list` view, newest `updated` first.
+`result`, `in_reply_to` and `event` take any type (`target = "*"`) so that the built-in type never ties a vault's own `email` or `event` type to it. The default template is one tab, so the page shows no tab bar: `status` first, then the fields of the item's kind by [conditional slots](#conditional-slots) on `kind` (To, Cc, Bcc, Subject and In reply to for an email; the number and device for an SMS; the event, When, location, calendar and attendees for an event), then `body` for an email or SMS or `description` for an event, then an email's `attachments`, and last `drafted_by`, with `sent_at`, `result` and `error` once they hold a value. The web client shows an Outbox item's `status` slot as text and never as a dropdown: the note page's Outbox buttons move it (outbox X13). Its list page is the `list` view, newest `updated` first. A vault whose `outbox` type still has the default template ticket 180 shipped, per kind tabs with a `dropdown` control on `status`, a Message tab and a Status tab, gets the current one from the upgrade step `0008_outbox_template`, which compares the two in canonical form and leaves a template the user changed as it is.
 
 Every write of an `outbox` note is checked against these rules by who makes it (outbox X2). A write that breaks one is refused as `invalid` with an issue at `status` that names the rule, whether it comes through the notes API, the chat, sync from an app, or a script:
 
@@ -1059,6 +1059,7 @@ A tab holds an optional `when` and an ordered mix of slots and content blocks:
 | `when` | string | Optional. A condition on the note shown, in the syntax of a query's `where` clause. The tab shows only for a note that meets it. See [Conditional tabs](#conditional-tabs) |
 | `slot "<field>"` | block | Places a field. `<field>` is a field of the type or `title`. A field appears at most once per template |
 | `label` inside a slot | string | Overrides the field's label in this template |
+| `when` inside a slot | string | Optional. A condition, as a tab's, under which the slot shows. See [Conditional slots](#conditional-slots) |
 | any [content block](#content-blocks) | block | Fixed content shown on every note. In a `query_view`, `this` is the note being shown. An `image` may show an asset field of the note instead of a fixed asset: see [Images from fields](#images-from-fields) |
 | `columns { ... }` | block | A [columns](#columns) layout whose columns hold slots and fixed blocks, so fields sit side by side |
 | `control { ... }` | block | A [control](#control) that edits a field in place, in the tab or in a column. A field may have a slot and any number of controls |
@@ -1127,6 +1128,26 @@ template default {
 ```
 
 A vault that uses `when` needs apps at 0.1.10 or later: an older app refuses a tab attribute it does not know. See [Releasing a format change](android-release.md#releasing-a-format-change).
+
+### Conditional slots
+
+A slot takes a `when` too, in a tab or in a column, with the same syntax and checks as a tab's: the slot shows only for a note that meets the condition, and appears or disappears as the note is edited. The error path names the slot, as `template default > tab "Main" > slot "phone".when: `kind` is not a field of the type`. A hidden slot still places its field, so the field is not listed in the properties sidebar, and the rule of one slot per field per template holds as before. One tab can so serve notes of different shapes, as the `outbox` type's default template shows the email fields only for an email:
+
+```wcl
+template default {
+  tab "Outbox item" {
+    slot "to" {
+      when = "kind == \"email\""
+    }
+    slot "phone" {
+      when = "kind == \"sms\""
+    }
+    slot "body"
+  }
+}
+```
+
+`GET /api/schema` and `GET /api/types` give a conditional slot its `when`, as `{ "slot": "phone", "label": null, "when": "kind == \"sms\"" }`; a slot without one has no `when`. An app from before conditional slots ignores the attribute with a warning, as it ignores any attribute inside a template it does not know, and shows the slot for every note.
 
 ### Field references
 

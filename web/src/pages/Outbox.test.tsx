@@ -146,7 +146,7 @@ describe("the Outbox page", () => {
     expect(names("Re: Roof").sort()).toEqual(["Approve and send", "Edit", "Reject"]);
     await openTab("Drafts");
     await screen.findByRole("link", { name: "New email" });
-    expect(names("New email").sort()).toEqual(["Delete", "Edit", "Send"]);
+    expect(names("New email").sort()).toEqual(["Delete", "Edit", "Ready"]);
     await openTab("Failed");
     await screen.findByRole("link", { name: "Lunch" });
     expect(names("Lunch").sort()).toEqual(["Edit", "Retry"]);
@@ -170,7 +170,7 @@ describe("the Outbox page", () => {
     await waitFor(() => expect(items["01REVIEW2"]!.note.fields.status).toBe("rejected"));
     await openTab("Drafts");
     await screen.findByRole("link", { name: "New email" });
-    fireEvent.click(within(card("New email")).getByRole("button", { name: "Send" }));
+    fireEvent.click(within(card("New email")).getByRole("button", { name: "Ready" }));
     await waitFor(() => expect(items["01DRAFT"]!.note.fields.status).toBe("approved"));
     await openTab("Failed");
     await screen.findByRole("link", { name: "Lunch" });
@@ -264,6 +264,13 @@ describe("the Outbox page", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "Failed" }).getAttribute("aria-selected")).toBe("true"));
     await screen.findByRole("link", { name: "Lunch" });
     expect(card("Lunch").getAttribute("aria-current")).toBe("true");
+  });
+
+  it("opens on the tab ?tab= names, as SMS Reply all opens Drafts", async () => {
+    searchParams = { tab: "drafts" };
+    render(() => <Outbox />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Drafts" }).getAttribute("aria-selected")).toBe("true"));
+    await screen.findByRole("link", { name: "New email" });
   });
 
   for (const [button, kind, title] of [

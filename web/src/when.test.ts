@@ -103,4 +103,23 @@ describe("templateWcl", () => {
       'template default {\n  tab "Main" {\n    slot "title"\n  }\n\n  tab "Draft" {\n    when = "stage == \\"draft\\""\n  }\n\n  tab "Blank"\n}\n',
     );
   });
+
+  it("writes a slot's when after its label, so the type editor keeps it", () => {
+    const wcl = templateWcl({
+      name: "default",
+      label: null,
+      tabs: [
+        {
+          title: "Main",
+          items: [
+            { slot: "due", label: "Due on", when: "!done" },
+            { slot: "stage", label: null, when: 'stage != "idea"' },
+          ],
+        },
+      ],
+    });
+    expect(wcl).toBe(
+      'template default {\n  tab "Main" {\n    slot "due" {\n      label = "Due on"\n      when = "!done"\n    }\n    slot "stage" {\n      when = "stage != \\"idea\\""\n    }\n  }\n}\n',
+    );
+  });
 });

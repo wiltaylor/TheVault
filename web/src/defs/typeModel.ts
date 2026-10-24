@@ -116,7 +116,7 @@ export interface FieldModel {
   extra: Record<string, string>;
 }
 
-export type TemplateItemModel = { slot: string; label: string | null; extra?: Record<string, string> } | { block: Block };
+export type TemplateItemModel = { slot: string; label: string | null; when?: string | null; extra?: Record<string, string> } | { block: Block };
 
 export interface TabModel {
   title: string;
@@ -493,7 +493,9 @@ export function templateWcl(t: TemplateModel): string {
     const items = tab.items.map((item) => {
       if ("block" in item) return wclBlock(item.block, "    ");
       const head = `    slot ${wclString(item.slot)}`;
-      const label = item.label ? wclField("label", item.label, "      ") : "";
+      const when = item.when?.trim();
+      const label =
+        (item.label ? wclField("label", item.label, "      ") : "") + (when ? wclField("when", when, "      ") : "");
       const body = label + extraWcl(item.extra, label, "      ");
       return body ? `${head} {\n${body}    }\n` : `${head}\n`;
     });

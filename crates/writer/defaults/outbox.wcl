@@ -161,78 +161,73 @@ handler "after_update" {
 }
 
 template default {
-  tab "Email" {
-    when = "kind == \"email\""
-    control {
-      field = "status"
-      kind  = "dropdown"
+  tab "Outbox item" {
+    slot "status"
+    columns {
+      column {
+        slot "to" {
+          when = "kind == \"email\""
+        }
+        slot "cc" {
+          when = "kind == \"email\""
+        }
+        slot "bcc" {
+          when = "kind == \"email\""
+        }
+        slot "phone" {
+          when = "kind == \"sms\""
+        }
+        slot "event" {
+          when = "kind == \"event\""
+        }
+        slot "when" {
+          when = "kind == \"event\""
+        }
+        slot "location" {
+          when = "kind == \"event\""
+        }
+      }
+      column {
+        slot "subject" {
+          when = "kind == \"email\""
+        }
+        slot "in_reply_to" {
+          when = "kind == \"email\""
+        }
+        slot "device" {
+          when = "kind == \"sms\""
+        }
+        slot "calendar" {
+          when = "kind == \"event\""
+        }
+        slot "attendees_raw" {
+          when = "kind == \"event\""
+        }
+      }
+    }
+    slot "body" {
+      when = "kind != \"event\""
+    }
+    slot "description" {
+      when = "kind == \"event\""
+    }
+    slot "attachments" {
+      when = "kind == \"email\""
     }
     columns {
       column {
-        slot "to"
-        slot "cc"
-        slot "bcc"
-      }
-      column {
-        slot "subject"
-        slot "in_reply_to"
-      }
-    }
-    slot "attachments"
-  }
-
-  tab "SMS" {
-    when = "kind == \"sms\""
-    control {
-      field = "status"
-      kind  = "dropdown"
-    }
-    columns {
-      column {
-        slot "phone"
-      }
-      column {
-        slot "device"
-      }
-    }
-  }
-
-  tab "Event" {
-    when = "kind == \"event\""
-    control {
-      field = "status"
-      kind  = "dropdown"
-    }
-    columns {
-      column {
-        slot "event"
-        slot "when"
-        slot "location"
-      }
-      column {
-        slot "calendar"
-        slot "attendees_raw"
-      }
-    }
-    slot "description"
-  }
-
-  tab "Message" {
-    when = "kind != \"event\""
-    slot "body"
-  }
-
-  tab "Status" {
-    columns {
-      column {
-        slot "kind"
-        slot "status"
         slot "drafted_by"
+        slot "sent_at" {
+          when = "!empty(sent_at)"
+        }
       }
       column {
-        slot "sent_at"
-        slot "result"
-        slot "error"
+        slot "result" {
+          when = "!empty(result)"
+        }
+        slot "error" {
+          when = "!empty(error)"
+        }
       }
     }
   }

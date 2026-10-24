@@ -33,7 +33,7 @@ import {
   unplacedFields,
   whenNote,
 } from "../notes";
-import { visibleTabs } from "../when";
+import { visibleTabs, whenHolds } from "../when";
 import { changes, onNoteChangedElsewhere } from "../changes";
 import { isPinned, togglePin } from "../pins";
 import { typeDef } from "../session";
@@ -50,6 +50,7 @@ import { offerPlaceholders, replacePlaceholderInDoc, resolvePlaceholder } from "
 import { PlaceholdersInert } from "../components/PlaceholderLink";
 import { ArchiveIcon, TrashIcon, TypeIcon, UnarchiveIcon } from "../components/Icon";
 import { NoteOutboxActions } from "../outbox/NoteActions";
+import { OUTBOX, STATUS_TEXT, statusOf } from "../outbox/model";
 
 /** How long after the last change a note saves itself. */
 export const AUTOSAVE_MS = 1500;
@@ -1003,7 +1004,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                             {(item) =>
                               "slot" in item ? (
                                 // The heading is the title's editor; a title slot would repeat it.
-                                item.slot === "title" ? null : <Slot name={item.slot} label={item.label} />
+                                item.slot === "title" ? null : <Slot name={item.slot} label={item.label} when={item.when} />
                               ) : (
                                 <FieldRefs.Provider value={refs}>
                                   <Show
@@ -1191,17 +1192,42 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     }
     if (slot === "title") return null;
     const label = b.fields?.label;
-    return <Slot name={slot} label={typeof label === "string" ? label : null} />;
+    const when = b.fields?.when;
+    return <Slot name={slot} label={typeof label === "string" ? label : null} when={typeof when === "string" ? when : null} />;
   }
 
-  function Slot(p: { name: string; label: string | null }) {
+  /** Whether a slot with condition `when` shows for the note as it is shown now, as a tab's does. */
+  function slotShows(when: string | null | undefined): boolean {
+    if (!when) return true;
+    const t = type();
+    const n = note();
+    return !t || !n || whenHolds(when, whenNote(t, n.id, shown()));
+  }
+
+  function Slot(p: { name: string; label: string | null; when?: string | null }) {
     const t = type();
     // A field holding another field's labels is edited with that field, not on its own.
     if (t && labelFields(t).has(p.name)) return null;
     const f = t ? slotField(t, p.name) : undefined;
+    // An Outbox item's status is shown, not chosen: the note page's Outbox buttons move it (outbox X13).
+    if (t?.name === OUTBOX && p.name === "status") {
+      const status = () => statusOf(shown().fields);
+      return (
+        <Show when={slotShows(p.when)}>
+          <div class="field property outbox-status-field" data-field="status" data-testid="field-status">
+            <span class="field-label">{p.label ?? f?.label ?? "Status"}</span>
+            <span class="badge outbox-status" data-status={status()}>
+              {STATUS_TEXT[status()] ?? status()}
+            </span>
+          </div>
+        </Show>
+      );
+    }
     return (
-      <Show when={f} fallback={<div class="field missing">Unknown field {p.name}</div>}>
-        {(field) => <Property field={field()} label={p.label ?? field().label} bare />}
+      <Show when={slotShows(p.when)}>
+        <Show when={f} fallback={<div class="field missing">Unknown field {p.name}</div>}>
+          {(field) => <Property field={field()} label={p.label ?? field().label} bare />}
+        </Show>
       </Show>
     );
   }

@@ -62,7 +62,8 @@ export interface FieldDef {
   extra?: Record<string, string>;
 }
 
-export type TemplateItem = { slot: string; label: string | null; extra?: Record<string, string> } | { block: Block };
+/** A slot, with the condition under which it shows (`when`, as a tab's), or a fixed block. */
+export type TemplateItem = { slot: string; label: string | null; when?: string | null; extra?: Record<string, string> } | { block: Block };
 
 export interface Tab {
   title: string;

@@ -1,6 +1,6 @@
-// The Outbox (outbox X7, X8): emails, SMS and calendar invites before and after they are sent,
+// The Outbox (outbox X7, X8, X13): emails, SMS and calendar invites before and after they are sent,
 // in tabs by status. What an agent drafts waits in Review until it is approved; what the user
-// composes sends on Send. Every action writes the item's note, which syncs, and the server's
+// composes sends on Ready. Every action writes the item's note, which syncs, and the server's
 // `outbox_send` handler sends what becomes `approved`.
 
 import { useNavigate, useSearchParams } from "@solidjs/router";
@@ -13,6 +13,7 @@ import { noteTitle } from "../editor/titles";
 import { createDraft, setItemStatus } from "../outbox/actions";
 import {
   type Kind,
+  STATUS_TEXT,
   type Status,
   TABS,
   bodyText,
@@ -34,17 +35,6 @@ const PAGE = 50;
 /** The most items Approve all sends at once. */
 const APPROVE_ALL_MAX = 500;
 
-/** What each status says on an item. */
-const STATUS_TEXT: Record<Status, string> = {
-  draft: "Draft",
-  review: "Waiting for review",
-  approved: "Approved",
-  sending: "Sending",
-  sent: "Sent",
-  failed: "Failed",
-  rejected: "Rejected",
-};
-
 /** The label of agent `name`, as the sidebar knows it. */
 function labelOf(name: string): string | undefined {
   const a = agents().find((x) => x.name === name);
@@ -57,6 +47,11 @@ export function Outbox() {
   const [params] = useSearchParams();
   const focus = () => (typeof params.item === "string" ? params.item : "");
   const [tab, setTab] = createSignal(0);
+  // `?tab=`: a tab by its key, as SMS Reply all opens Drafts when it made several.
+  createEffect(() => {
+    const at = TABS.findIndex((t) => t.key === params.tab);
+    if (at >= 0) setTab(at);
+  });
   createEffect(() => {
     const id = focus();
     if (!id) return;
@@ -404,7 +399,7 @@ function OutboxItem(props: {
         </Show>
         <Show when={status() === "draft"}>
           <button type="button" class="primary" onClick={props.onApprove}>
-            Send
+            Ready
           </button>
         </Show>
         <Show when={status() === "failed"}>

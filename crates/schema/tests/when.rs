@@ -193,3 +193,38 @@ fn an_unknown_block_in_a_template_stays_an_error() {
         "{issues:?}"
     );
 }
+
+#[test]
+fn a_slot_takes_a_when_checked_as_a_tabs_in_the_tab_and_in_a_column() {
+    let source = with_tab(
+        "  tab \"Two\" {\n    slot \"due\" {\n      when = \"!done\"\n    }\n    columns {\n      column {\n        slot \"status\" {\n          when = \"done\"\n        }\n      }\n      column {\n        slot \"tags\"\n      }\n    }\n  }",
+    );
+    let t = TypeDef::parse("task", &source).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(t.warnings, vec![]);
+    let tab = &t.template("default").unwrap().tabs[1];
+    assert!(matches!(
+        &tab.items[0],
+        schema::TabItem::Slot { field, when, .. } if field == "due" && when.as_deref() == Some("!done")
+    ));
+    // A slot without one has none.
+    assert!(matches!(
+        &t.template("default").unwrap().tabs[0].items[0],
+        schema::TabItem::Slot { when: None, .. }
+    ));
+    assert_eq!(
+        errors(&with_tab(
+            "  tab \"Two\" {\n    slot \"due\" {\n      when = \"nope\"\n    }\n  }"
+        )),
+        ["template default > tab \"Two\" > slot \"due\".when: `nope` is not a field of the type"]
+    );
+    let issues = errors(&with_tab(
+        "  tab \"Two\" {\n    columns {\n      column {\n        slot \"due\" {\n          when = \"owner.done\"\n        }\n      }\n      column {\n        slot \"tags\"\n      }\n    }\n  }",
+    ));
+    assert!(
+        issues
+            .iter()
+            .any(|i| i
+                .ends_with(".when: `owner.done` reads another note, which a tab condition cannot")),
+        "{issues:?}"
+    );
+}

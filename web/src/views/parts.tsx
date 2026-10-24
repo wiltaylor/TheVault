@@ -8,7 +8,7 @@ import { refText } from "../components/refText";
 import { BlockView, Blocks, ColumnsView, FieldValue } from "../components/Render";
 import { slotOfBlock } from "../blocks/columns";
 import { compoundBlock, fieldValue, labelFields, slotField, whenNote } from "../notes";
-import { shownTabs } from "../when";
+import { shownTabs, whenHolds } from "../when";
 import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { typeDef } from "../session";
 import { ThisNote } from "./thisNote";
@@ -65,6 +65,13 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
     const doc = props.doc ?? { fields: { ...props.row.fields, title: props.row.title }, blocks: [] };
     return t ? shownTabs(all, whenNote(t, props.row.id, doc), !props.tabTitles) : all.slice(0, props.tabTitles ? undefined : 1);
   };
+  // A slot's `when`, read as a tab's, on this note.
+  const slotShows = (when: unknown) => {
+    const t = type();
+    if (typeof when !== "string" || !when || !t) return true;
+    const doc = props.doc ?? { fields: { ...props.row.fields, title: props.row.title }, blocks: [] };
+    return whenHolds(when, whenNote(t, props.row.id, doc));
+  };
   // On a card, an image from a field that leads the template is the card's cover: drawn first,
   // above the title (styles.css, `.card-cover`).
   const cover = () => {
@@ -106,6 +113,7 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
                               const slot = slotOfBlock(b);
                               if (slot === null) return <div class="template-block"><BlockView block={b} /></div>;
                               const label = b.fields?.label;
+                              if (!slotShows(b.fields?.when)) return null;
                               return <SlotValue row={props.row} doc={props.doc} slot={slot} label={typeof label === "string" ? label : null} />;
                             }}
                           />
@@ -115,6 +123,7 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
                   </ThisNote.Provider>
                 );
               }
+              if (!slotShows(item.when)) return null;
               return <SlotValue row={props.row} doc={props.doc} slot={item.slot} label={item.label} />;
             }}
           </For>

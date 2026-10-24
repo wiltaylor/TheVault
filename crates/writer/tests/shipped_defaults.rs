@@ -119,7 +119,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "0004_remove_google_sync",
             "0005_list_page_defaults",
             "0006_assistant_settings",
-            "0007_person_correspondence"
+            "0007_person_correspondence",
+            "0008_outbox_template"
         ]
     );
     let fields: Vec<&str> = done
@@ -464,7 +465,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
             "0004_remove_google_sync",
             "0005_list_page_defaults",
             "0006_assistant_settings",
-            "0007_person_correspondence"
+            "0007_person_correspondence",
+            "0008_outbox_template"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
@@ -643,7 +645,8 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
                 "0004_remove_google_sync",
                 "0005_list_page_defaults",
                 "0006_assistant_settings",
-                "0007_person_correspondence"
+                "0007_person_correspondence",
+                "0008_outbox_template"
             ],
             "{name}"
         );
@@ -793,7 +796,8 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0004_remove_google_sync",
             "0005_list_page_defaults",
             "0006_assistant_settings",
-            "0007_person_correspondence"
+            "0007_person_correspondence",
+            "0008_outbox_template"
         ]
     );
     // One more for step 0007's Correspondence tab on the person type.
@@ -1239,7 +1243,8 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
             "0004_remove_google_sync",
             "0005_list_page_defaults",
             "0006_assistant_settings",
-            "0007_person_correspondence"
+            "0007_person_correspondence",
+            "0008_outbox_template"
         ]
     );
 
@@ -1331,7 +1336,8 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_ke
             "0004_remove_google_sync",
             "0005_list_page_defaults",
             "0006_assistant_settings",
-            "0007_person_correspondence"
+            "0007_person_correspondence",
+            "0008_outbox_template"
         ]
     );
     assert!(w.schema().type_def("google_sync").is_none());
@@ -1361,7 +1367,8 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
             [
                 "0005_list_page_defaults",
                 "0006_assistant_settings",
-                "0007_person_correspondence"
+                "0007_person_correspondence",
+                "0008_outbox_template"
             ]
         );
         assert!(w.schema().type_def("google_sync").is_some());
@@ -2099,4 +2106,86 @@ fn a_vault_whose_person_type_predates_the_correspondence_tab_gains_it_and_keeps_
             .count(),
         1
     );
+}
+
+/// The `outbox` type as ticket 180 shipped it, before step 0008.
+const OUTBOX_5E81292: &str = include_str!("../defaults/old/outbox_5e81292.wcl");
+
+/// Run step `0008_outbox_template` again under a new id, as a vault that has not run it yet would
+/// on its next start.
+fn run_outbox_step(w: &Writer) -> Vec<String> {
+    let step = writer::UPGRADE_STEPS
+        .iter()
+        .find(|s| s.id == "0008_outbox_template")
+        .unwrap();
+    w.run_upgrade_steps(&[UpgradeStep {
+        id: "test_0008_outbox_template",
+        run: step.run,
+    }])
+    .unwrap()
+}
+
+#[test]
+fn the_outbox_template_ticket_180_shipped_is_replaced_and_no_note_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let path = "types/outbox.wcl";
+    let current = store::canonical(writer::DEFAULT_OUTBOX_TYPE, path).unwrap();
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    // A new vault has the new template already.
+    assert_eq!(read(root, path).unwrap(), current);
+    assert!(!current.contains("tab \"Message\""), "{current}");
+    assert!(!current.contains("\"dropdown\""), "{current}");
+
+    // As ticket 180 left the vault, with one draft in it.
+    std::fs::write(
+        root.join(path),
+        store::canonical(OUTBOX_5E81292, path).unwrap(),
+    )
+    .unwrap();
+    let w = open(root);
+    let item = w
+        .create(
+            "outbox",
+            &writer::Input::Json(json!({ "fields": {
+                "title": "Lunch", "kind": "email", "status": "draft", "to": ["ada@example.com"],
+            } })),
+            &author(),
+        )
+        .unwrap()
+        .id;
+    let note_path = format!("notes/outbox/{item}.wcl");
+    let before = read(root, &note_path).unwrap();
+
+    assert_eq!(run_outbox_step(&w), ["test_0008_outbox_template"]);
+    assert_eq!(read(root, path).unwrap(), current);
+    assert_eq!(read(root, &note_path).unwrap(), before);
+    let schema = w.schema();
+    let tabs = &schema
+        .type_def("outbox")
+        .unwrap()
+        .template("default")
+        .unwrap()
+        .tabs;
+    assert_eq!(tabs.len(), 1, "one form for every kind");
+    assert!(tabs[0].items.iter().any(|i| matches!(
+        i,
+        schema::TabItem::Slot { field, when, .. }
+            if field == "body" && when.as_deref() == Some("kind != \"event\"")
+    )));
+}
+
+#[test]
+fn an_outbox_template_the_user_changed_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let path = "types/outbox.wcl";
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let edited = OUTBOX_5E81292.replacen("tab \"Status\" {", "tab \"Progress\" {", 1);
+    assert_ne!(edited, OUTBOX_5E81292);
+    let edited = store::canonical(&edited, path).unwrap();
+    std::fs::write(root.join(path), &edited).unwrap();
+    let w = open(root);
+    assert_eq!(run_outbox_step(&w), ["test_0008_outbox_template"]);
+    assert_eq!(read(root, path).unwrap(), edited);
 }

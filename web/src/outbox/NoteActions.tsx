@@ -1,14 +1,33 @@
-// The note page's Outbox buttons (outbox X8): Reply on an email, Propose a change on an event,
-// and Send, Approve and send or Retry on an Outbox item itself.
+// The note page's Outbox buttons (outbox X8, X13): Reply, Reply all and Forward on an email or an
+// SMS message, Propose a change on an event, and on an Outbox item itself the moves its status
+// may make: Ready on a draft, Approve and send and Reject on one in review, Retry on a failed one.
 
 import { useNavigate } from "@solidjs/router";
-import { Show, createSignal } from "solid-js";
+import { Show, createResource, createSignal } from "solid-js";
 import type { NoteDoc } from "../api";
 import { showToast } from "../components/Toasts";
 import { typeDef } from "../session";
 import { errorText } from "../pages/TypeEditor";
-import { createDraft } from "./actions";
-import { EMAIL, EVENT, OUTBOX, type Status, changeDraft, replyDraft, statusOf } from "./model";
+import { conversationPeople, createDraft, googleAccount, smsReplyDrafts } from "./actions";
+import {
+  EMAIL,
+  EVENT,
+  MESSAGE,
+  OUTBOX,
+  type Status,
+  changeDraft,
+  forwardDraft,
+  messageParties,
+  replyAllDraft,
+  replyDraft,
+  smsForwardDraft,
+  statusOf,
+  str,
+  strs,
+} from "./model";
+
+/** Where the Outbox lists drafts, opened when one action makes several. */
+const DRAFTS_TAB = "/outbox?tab=drafts";
 
 export function NoteOutboxActions(props: {
   id: string;
@@ -23,11 +42,18 @@ export function NoteOutboxActions(props: {
   // The Outbox is a built-in type; a vault that has it removed offers none of these.
   const hasOutbox = () => !!typeDef(OUTBOX);
 
-  async function draft(doc: NoteDoc) {
+  /** Create the drafts `make` builds and open the one made, or the Drafts tab for several. */
+  async function draft(make: () => NoteDoc[] | Promise<NoteDoc[]>) {
     setBusy(true);
     try {
-      const made = await createDraft(doc);
-      navigate(`/notes/${made.id}`);
+      const docs = await make();
+      const made = [];
+      for (const doc of docs) made.push(await createDraft(doc));
+      if (made.length === 1) navigate(`/notes/${made[0]!.id}`);
+      else if (made.length > 1) {
+        showToast(`${made.length} SMS drafts made`);
+        navigate(DRAFTS_TAB);
+      }
     } catch (e) {
       showToast(errorText(e));
     } finally {
@@ -35,40 +61,54 @@ export function NoteOutboxActions(props: {
     }
   }
 
+  // An email offers Reply all when it went to anyone besides its sender.
+  const emailHasOthers = () => strs(props.doc.fields, "to_raw").length + strs(props.doc.fields, "cc_raw").length > 1;
+  // A message offers Reply all in a conversation with several participants, or when it went to several.
+  const [participants] = createResource(
+    () => (props.type === MESSAGE && hasOutbox() ? str(props.doc.fields, "conversation") || null : null),
+    () => conversationPeople(props.doc).catch(() => [] as string[]),
+  );
+  const messageHasOthers = () => {
+    const { raws, people } = messageParties(props.doc, true);
+    return (participants() ?? []).length > 1 || raws.length > 1 || people.length > 1;
+  };
+
   const status = () => statusOf(props.doc.fields);
   const off = () => busy() || !!props.disabled;
+  const Button = (p: { label: string; primary?: boolean; onClick: () => void }) => (
+    <button type="button" class={p.primary ? "primary outbox-note-action" : "outbox-note-action"} disabled={off()} onClick={() => p.onClick()}>
+      {p.label}
+    </button>
+  );
   return (
     <Show when={hasOutbox()}>
       <Show when={props.type === EMAIL}>
-        <button type="button" class="outbox-note-action" disabled={off()} onClick={() => void draft(replyDraft(props.id, props.doc))}>
-          Reply
-        </button>
+        <Button label="Reply" onClick={() => void draft(() => [replyDraft(props.id, props.doc)])} />
+        <Show when={emailHasOthers()}>
+          <Button label="Reply all" onClick={() => void draft(async () => [replyAllDraft(props.id, props.doc, await googleAccount())])} />
+        </Show>
+        <Button label="Forward" onClick={() => void draft(() => [forwardDraft(props.doc)])} />
+      </Show>
+      <Show when={props.type === MESSAGE}>
+        <Button label="Reply" onClick={() => void draft(() => smsReplyDrafts(props.doc, false))} />
+        <Show when={messageHasOthers()}>
+          <Button label="Reply all" onClick={() => void draft(() => smsReplyDrafts(props.doc, true))} />
+        </Show>
+        <Button label="Forward" onClick={() => void draft(() => [smsForwardDraft(props.doc)])} />
       </Show>
       <Show when={props.type === EVENT}>
-        <button type="button" class="outbox-note-action" disabled={off()} onClick={() => void draft(changeDraft(props.id, props.doc))}>
-          Propose a change
-        </button>
+        <Button label="Propose a change" onClick={() => void draft(() => [changeDraft(props.id, props.doc)])} />
       </Show>
       <Show when={props.type === OUTBOX}>
         <Show when={status() === "draft"}>
-          <button type="button" class="primary outbox-note-action" disabled={off()} onClick={() => props.setStatus("approved")}>
-            Send
-          </button>
+          <Button label="Ready" primary onClick={() => props.setStatus("approved")} />
         </Show>
         <Show when={status() === "review"}>
-          <button type="button" class="primary outbox-note-action" disabled={off()} onClick={() => props.setStatus("approved")}>
-            Approve and send
-          </button>
+          <Button label="Approve and send" primary onClick={() => props.setStatus("approved")} />
+          <Button label="Reject" onClick={() => props.setStatus("rejected")} />
         </Show>
         <Show when={status() === "failed"}>
-          <button
-            type="button"
-            class="primary outbox-note-action"
-            disabled={off()}
-            onClick={() => props.setStatus("approved", { error: undefined })}
-          >
-            Retry
-          </button>
+          <Button label="Retry" primary onClick={() => props.setStatus("approved", { error: undefined })} />
         </Show>
       </Show>
     </Show>

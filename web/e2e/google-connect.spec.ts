@@ -211,12 +211,16 @@ test("an email composed in the Outbox is sent through Gmail and shows in Sent wi
     await to.press("Enter");
     await to.press("Escape");
     await page.getByLabel("Subject", { exact: true }).fill(subject);
-    await page.getByRole("tab", { name: "Message" }).click();
+    // One form: the body is under the email's fields, and the status is shown, not chosen.
+    await expect(page.locator(".note-view").getByRole("tab")).toHaveCount(0);
+    await expect(page.getByTestId("field-status")).toContainText("Draft");
+    await expect(page.getByTestId("field-status").locator("select")).toHaveCount(0);
+    await expect(page.getByTestId("field-phone")).toHaveCount(0);
     await page.getByRole("textbox", { name: "Body" }).click();
     await page.keyboard.type("Shall we meet at noon?");
     await expect(page.getByTestId("save-status")).toHaveText("Saved");
 
-    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.getByRole("button", { name: "Ready", exact: true }).click();
     await expect.poll(() => itemFields(admin, id), { timeout: 30_000 }).toMatchObject({ status: "sent", to: ["ada@example.com"], subject });
     await expect.poll(async () => (await itemFields(admin, id)).result, { timeout: 30_000 }).toBeTruthy();
     const fields = await itemFields(admin, id);
@@ -238,8 +242,14 @@ test("an email composed in the Outbox is sent through Gmail and shows in Sent wi
     await link.click();
     await expect(page).toHaveURL(new RegExp(`/notes/${copy}$`));
     await expect(page.getByRole("textbox", { name: "Title" })).toHaveText(subject);
-    // The copy is an email note, so it offers Reply.
-    await expect(page.getByRole("button", { name: "Reply" })).toBeVisible();
+    // The copy is an email note, so it offers Reply and Forward; Forward drafts it to no one.
+    await expect(page.getByRole("button", { name: "Reply", exact: true })).toBeVisible();
+    await page.locator("button.outbox-note-action", { hasText: "Forward" }).click();
+    await expect(page).not.toHaveURL(new RegExp(`/notes/${copy}$`));
+    await expect(page).toHaveURL(/\/notes\/[0-9A-Z]{26}$/);
+    const forward = /\/notes\/([0-9A-Z]{26})$/.exec(page.url())![1]!;
+    await expect.poll(() => itemFields(admin, forward)).toMatchObject({ kind: "email", status: "draft", subject: `Fwd: ${subject}` });
+    await expect(page.getByRole("button", { name: "Ready", exact: true })).toBeVisible();
   } finally {
     await admin.put("/api/types/outbox", { data: { wcl: shipped.wcl } });
     for (const name of ["google_client_id", "google_client_secret", "google_refresh_token", "google_account"]) {

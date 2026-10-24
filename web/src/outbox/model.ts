@@ -9,13 +9,25 @@ import { escapeText } from "../editor/markup";
 /** The built-in type of an Outbox item. */
 export const OUTBOX = "outbox";
 
-/** The built-in types Reply and Propose a change start from. */
+/** The built-in types Reply, Forward and Propose a change start from. */
 export const EMAIL = "email";
 export const EVENT = "event";
+export const MESSAGE = "message";
 
 export type Kind = "email" | "sms" | "event";
 
 export type Status = "draft" | "review" | "approved" | "sending" | "sent" | "failed" | "rejected";
+
+/** What each status says on an item, on the Outbox page and the item's own page. */
+export const STATUS_TEXT: Record<Status, string> = {
+  draft: "Draft",
+  review: "Waiting for review",
+  approved: "Approved",
+  sending: "Sending",
+  sent: "Sent",
+  failed: "Failed",
+  rejected: "Rejected",
+};
 
 /** Who drafted an item the user made. */
 export const DRAFTED_BY_USER = "user";
@@ -125,8 +137,48 @@ function markupLines(blocks: readonly Block[]): string[] {
   return out;
 }
 
+/** `subject` with one `Fwd: ` in front. */
+export function forwardSubject(subject: string): string {
+  const s = subject.trim();
+  return /^(fwd?|fw)\s*:/i.test(s) ? s : `Fwd: ${s}`;
+}
+
+/** `addresses` without empty ones, those in `leaveOut`, and repeats, compared ignoring case. */
+function uniqueAddresses(addresses: readonly string[], leaveOut: readonly string[] = []): string[] {
+  const seen = new Set(leaveOut.filter(Boolean).map((a) => a.toLowerCase()));
+  const out: string[] = [];
+  for (const a of addresses) {
+    const key = a.toLowerCase();
+    if (!a || seen.has(key)) continue;
+    seen.add(key);
+    out.push(a);
+  }
+  return out;
+}
+
+/** An email's `sent` as local text, or empty. */
+function sentText(f: Record<string, Json>): string {
+  const sent = str(f, "sent");
+  const when = sent ? new Date(sent) : null;
+  return when && !Number.isNaN(when.getTime()) ? when.toLocaleString() : "";
+}
+
+/** An email's body lines, still in inline markup, as a quote block, or nothing when empty. */
+function quoteOf(email: NoteDoc): Block[] {
+  const quoted = markupLines(contentOf(email, "body"));
+  return quoted.some((l) => l.trim()) ? [{ kind: "quote", fields: { text: quoted.join("\n") } }] : [];
+}
+
+/** An email draft drafted by the user. */
+function emailDraft(subject: string, fields: Record<string, Json>, body: Block[]): NoteDoc {
+  return {
+    fields: { title: subject, kind: "email", status: "draft", drafted_by: DRAFTED_BY_USER, ...fields, subject },
+    blocks: [content("body", body)],
+  };
+}
+
 /**
- * A reply to email note `id` (outbox X8): a draft with `in_reply_to`, To the sender, Subject
+ * A reply to email note `id` (outbox X8, X13): a draft with `in_reply_to`, To the sender, Subject
  * `Re: ...` and the email's body quoted below an empty line to write in.
  */
 export function replyDraft(id: string, email: NoteDoc): NoteDoc {
@@ -134,26 +186,135 @@ export function replyDraft(id: string, email: NoteDoc): NoteDoc {
   const subject = replySubject(str(f, "title") || "(no subject)");
   const from = str(f, "from_raw");
   const to = from ? [addressOf(from)] : [];
-  const quoted = markupLines(contentOf(email, "body"));
-  const sent = str(f, "sent");
-  const when = sent ? new Date(sent) : null;
-  const intro = `${when && !Number.isNaN(when.getTime()) ? `On ${when.toLocaleString()}, ` : ""}${from || "they"} wrote:`;
+  const when = sentText(f);
+  const intro = `${when ? `On ${when}, ` : ""}${from || "they"} wrote:`;
+  const quote = quoteOf(email);
   const body: Block[] = [paragraph("")];
-  if (quoted.some((l) => l.trim())) {
-    body.push(paragraph(escapeText(intro)), { kind: "quote", fields: { text: quoted.join("\n") } });
-  }
+  if (quote.length) body.push(paragraph(escapeText(intro)), ...quote);
+  return emailDraft(subject, { to, in_reply_to: id }, body);
+}
+
+/**
+ * A reply to everyone on email note `id` (outbox X13): [`replyDraft`] with To the sender, then the
+ * original To and Cc, without `account` (the connected Google address) and without repeats,
+ * ignoring case.
+ */
+export function replyAllDraft(id: string, email: NoteDoc, account?: string | null): NoteDoc {
+  const doc = replyDraft(id, email);
+  const f = email.fields;
+  const everyone = [str(f, "from_raw"), ...strs(f, "to_raw"), ...strs(f, "cc_raw")].map(addressOf);
+  const to = uniqueAddresses(everyone, account ? [addressOf(account)] : []);
+  // An email the user sent only to themselves still replies to its sender.
+  if (to.length) doc.fields.to = to;
+  return doc;
+}
+
+/**
+ * A forward of an email note (outbox X13): To empty, Subject `Fwd: ...`, the body an empty line
+ * to write in, a "Forwarded message" header block (From, Date, Subject, To) and the email's body
+ * quoted, and the email's attachments. It joins no thread.
+ */
+export function forwardDraft(email: NoteDoc): NoteDoc {
+  const f = email.fields;
+  const original = str(f, "title") || "(no subject)";
+  const subject = forwardSubject(original);
+  const header = [
+    "---------- Forwarded message ---------",
+    `From: ${str(f, "from_raw")}`,
+    `Date: ${sentText(f)}`,
+    `Subject: ${original}`,
+    `To: ${strs(f, "to_raw").join(", ")}`,
+  ];
+  const body: Block[] = [paragraph(""), ...header.map((l) => paragraph(escapeText(l))), ...quoteOf(email)];
+  const attachments = strs(f, "attachments");
+  return emailDraft(subject, { to: [], ...(attachments.length ? { attachments } : {}) }, body);
+}
+
+/** Whether `text` reads as a phone number rather than a name. */
+export function isPhoneNumber(text: string): boolean {
+  return /^\+?[\d\s().-]{3,}$/.test(text.trim()) && /\d/.test(text);
+}
+
+/** The number to text person note `person` at: its first mobile number, else its first number. */
+export function phoneOf(person: NoteDoc | null | undefined): string {
+  if (!person) return "";
+  const phones = strs(person.fields, "phones");
+  const labels = person.fields.phone_labels;
+  const at = Array.isArray(labels) ? labels.findIndex((l) => l === "mobile") : -1;
+  return (at >= 0 && phones[at]) || phones[0] || "";
+}
+
+/** An SMS draft to `phone` drafted by the user, titled `title`, with one paragraph per line. */
+export function smsDraft(title: string, phone: string, lines: readonly string[] = [""]): NoteDoc {
   return {
-    fields: {
-      title: subject,
-      kind: "email",
-      status: "draft",
-      drafted_by: DRAFTED_BY_USER,
-      to,
-      subject,
-      in_reply_to: id,
-    },
-    blocks: [content("body", body)],
+    fields: { title, kind: "sms", status: "draft", drafted_by: DRAFTED_BY_USER, phone },
+    blocks: [content("body", (lines.length ? lines : [""]).map((l) => paragraph(escapeText(l))))],
   };
+}
+
+/**
+ * The other parties of message note `message` (outbox X13): the sender of one that came in (with
+ * `all`, also the others it went to), else its recipients. `raws` are the numbers or names as the
+ * phone gave them; `people` the person notes it links, which need not line up with `raws`.
+ */
+export function messageParties(message: NoteDoc, all = false): { raws: string[]; people: string[] } {
+  const f = message.fields;
+  if (str(f, "direction") !== "in") return { raws: strs(f, "to_raw"), people: strs(f, "to") };
+  const raws = [str(f, "from_raw")].concat(all ? strs(f, "to_raw") : []).filter(Boolean);
+  const people = [str(f, "from")].concat(all ? strs(f, "to") : []).filter(Boolean);
+  return { raws, people };
+}
+
+/** A key comparing numbers by their digits. */
+export function numberKey(n: string): string {
+  return n.replace(/\D/g, "");
+}
+
+/** One number an SMS reply goes to, and whose it is. */
+export interface SmsTarget {
+  number: string;
+  name: string;
+}
+
+/**
+ * The numbers to reply at (outbox X13): each of `raws` that is a number, named by the person of
+ * `people` holding it, then the number of each person no such number belongs to. Repeats,
+ * compared by their digits, are left out.
+ */
+export function smsTargets(raws: readonly string[], people: readonly { doc: NoteDoc | null }[]): SmsTarget[] {
+  const out: SmsTarget[] = [];
+  const seen = new Set<string>();
+  const add = (number: string, name: string) => {
+    const key = numberKey(number);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push({ number, name: name || number });
+  };
+  const holder = (number: string) =>
+    people.find((p) => p.doc && strs(p.doc.fields, "phones").some((n) => numberKey(n) === numberKey(number)))?.doc;
+  for (const raw of raws) {
+    if (isPhoneNumber(raw)) add(raw.trim(), str(holder(raw)?.fields ?? {}, "title"));
+  }
+  for (const p of people) {
+    if (!p.doc) continue;
+    const phones = strs(p.doc.fields, "phones");
+    if (phones.some((n) => seen.has(numberKey(n)))) continue;
+    add(phoneOf(p.doc), str(p.doc.fields, "title"));
+  }
+  return out;
+}
+
+/** An SMS reply to `to`, the body empty to write in. */
+export function smsReplyDraft(to: SmsTarget): NoteDoc {
+  const who = to.name || to.number;
+  return smsDraft(who ? `SMS to ${who}` : "SMS reply", to.number);
+}
+
+/** A forward of message note `message` (outbox X13): no number yet, the body `Fwd: <text>`. */
+export function smsForwardDraft(message: NoteDoc): NoteDoc {
+  const lines = bodyText(message).split("\n");
+  lines[0] = `Fwd: ${lines[0] ?? ""}`;
+  return smsDraft("Forwarded SMS", "", lines);
 }
 
 /**
