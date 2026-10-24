@@ -17,3 +17,7 @@ Spec: /home/wil/dev/TheVault/.scratch/plans/skills/SPEC.md, S6, S7 (AI), S8 (age
 ### 2026-10-24T04:21:36Z — wil
 
 Design change before work started (user, 2026-10-24): the Available skills list goes at the END of the system text, as a per-thread snapshot taken on the first turn and kept unchanged; typing /update-skills in the chat box refreshes the thread's snapshot (turn request update_skills: true, no user message, a fixed short note to the model, a 'Skills updated (n)' notice in the panel). SPEC S6 rewritten. Extra tests: the section is last; a skill added mid-thread does not appear until /update-skills; /update-skills replaces the snapshot and shows the notice in the panel and the Chat tab.
+
+### 2026-10-24T04:44:56Z — wil
+
+Ticket 196 helpers: Writer::skills(), valid_skills(), skill(name) -> Skill{name, md: schema::SkillMd{name, description, license, compatibility, metadata, allowed_tools, extra, body, allowed_tools_list()}, files: Vec<SkillFileInfo{path,size,media_type,text}>, size, issues, valid()}; Writer::skill_file(name, path) -> bytes (confined); skill_text(name, path) (2 MiB cap, UTF-8); writer::skill_media_type(path). FORMAT_VERSION is now 3.
