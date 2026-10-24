@@ -137,7 +137,7 @@ fn the_vault_starts_with_the_assistant() {
     assert_eq!(a["permissions"]["types"], Value::Null);
     assert_eq!(
         a["permissions"]["confirm"],
-        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true })
+        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true })
     );
     assert_eq!(
         a["permissions"]["web"],

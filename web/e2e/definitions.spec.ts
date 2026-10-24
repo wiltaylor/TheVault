@@ -298,7 +298,13 @@ test("editing every field kind on a note page saves a value that validates", asy
   await field("extra").getByLabel("Extra value 1", { exact: true }).fill("capacities");
   await field("place").getByLabel("Latitude").fill("-37.8136");
   await field("place").getByLabel("Longitude").fill("144.9631");
-  await field("cover").getByLabel("Cover", { exact: true }).selectOption(asset);
+  // The cover is chosen through the asset field's Add menu, from the files in the vault.
+  await field("cover").getByRole("button", { name: "Add an attachment to Cover" }).click();
+  await page.getByRole("menuitem", { name: "Choose from the vault…" }).click();
+  const chooser = page.getByRole("dialog", { name: "Choose from the vault for Cover" });
+  await chooser.getByRole("searchbox", { name: "Search files" }).fill(`cover-${t}.txt`);
+  await chooser.getByRole("button", { name: `cover-${t}.txt` }).first().click();
+  await expect(chooser).toHaveCount(0);
 
   await page.getByLabel("Title", { exact: true }).focus();
   await expect(page.getByTestId("save-status")).toHaveText("Saved");
