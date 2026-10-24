@@ -305,15 +305,8 @@ pub(crate) fn propose_delete(
     ))
 }
 
-/// The agent that proposed `p`, as it stands now: its `proposer`, else the agent the proposal
-/// names. `None` for a change no agent proposed.
-fn proposer_of(w: &Writer, p: &Value) -> Result<Option<Agent>, ApplyError> {
-    let Some(name) = [&p["proposer"], &p["agent"]]
-        .into_iter()
-        .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
-    else {
-        return Ok(None);
-    };
+/// Agent `name` as it stands now, Assistant included; `None` when there is no such agent.
+pub(crate) fn agent_named(w: &Writer, name: &str) -> Result<Option<Agent>, ApplyError> {
     if name == ASSISTANT_AGENT {
         return crate::ai_settings::assistant(w)
             .map(Some)
@@ -321,10 +314,25 @@ fn proposer_of(w: &Writer, p: &Value) -> Result<Option<Agent>, ApplyError> {
     }
     match w.agent(name) {
         Ok(a) => Ok(Some(a)),
-        Err(writer::Error::Missing(_)) => Err(ApplyError::Refused(format!(
+        Err(writer::Error::Missing(_)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// The agent that proposed `p`, as it stands now: its `proposer`, else the agent the proposal
+/// names. `None` for a change no agent proposed.
+pub(crate) fn proposer_of(w: &Writer, p: &Value) -> Result<Option<Agent>, ApplyError> {
+    let Some(name) = [&p["proposer"], &p["agent"]]
+        .into_iter()
+        .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
+    else {
+        return Ok(None);
+    };
+    match agent_named(w, name)? {
+        Some(a) => Ok(Some(a)),
+        None => Err(ApplyError::Refused(format!(
             "the agent {name} that proposed this no longer exists, so nothing was written"
         ))),
-        Err(e) => Err(e.into()),
     }
 }
 

@@ -295,7 +295,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/chat",
-        "One AI chat turn as server-sent events (text, tool, tool_result, proposal, type_proposal, taxonomy_proposal, agent_proposal, applied, usage, refusal, error, done); the tools propose changes, and make the kinds whose confirmation Settings > AI turned off when the caller's scope allows",
+        "One AI chat turn as server-sent events (text, tool, tool_result, proposal, type_proposal, taxonomy_proposal, agent_proposal, agent_memory_proposal, applied, usage, refusal, error, done); the tools propose changes, and make the kinds whose confirmation Settings > AI turned off when the caller's scope allows",
     ),
     (
         "GET",
@@ -538,6 +538,26 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/agents/{name}/memories",
+        "The agent's memories, newest first, those whose title or text holds every word of ?query= when given: {memories: [{id, agent, title, text, version, created, updated}], held, limit}",
+    ),
+    (
+        "POST",
+        "/api/agents/{name}/memories",
+        "A new memory of the agent from {title, text}, authored as the caller: the memory; 400 invalid_memory past the title or text limit, 409 memory_full at 500 memories",
+    ),
+    (
+        "PATCH",
+        "/api/agents/{name}/memories/{id}",
+        "Change a memory from {title?, text?, base_version?}: the memory",
+    ),
+    (
+        "DELETE",
+        "/api/agents/{name}/memories/{id}",
+        "Move a memory to the trash",
+    ),
+    (
+        "GET",
         "/api/tasks",
         "Every scheduled task with its next run and latest run",
     ),
@@ -676,7 +696,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/apply",
-        "Apply a proposal, type_proposal, taxonomy_proposal or agent_proposal as the chat sent it, at its base version: {op, note_id, version}, {op, type_name}, {op, taxonomy_name, notes} or {op, agent_name}, or for a download {op, asset_id, filename}; a type, taxonomy or agent change needs admin, and an agent change is checked again against the agent that proposed it; with the proposal's agent it is authored by the agent, and with its thread the outcome is recorded there",
+        "Apply a proposal, type_proposal, taxonomy_proposal, agent_proposal or agent_memory_proposal as the chat sent it, at its base version: {op, note_id, version}, {op, type_name}, {op, taxonomy_name, notes}, {op, agent_name} or {op, memory_id, memory_agent, version}, or for a download {op, asset_id, filename}; a type, taxonomy or agent change needs admin, and an agent or agent memory change is checked again against the agent that proposed it; with the proposal's agent it is authored by the agent, and with its thread the outcome is recorded there",
     ),
     (
         "POST",

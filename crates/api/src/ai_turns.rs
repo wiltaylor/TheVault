@@ -28,13 +28,15 @@
 //! `POST /api/ai/apply` applies a change the chat proposed, its body the `proposal` or
 //! `type_proposal` event's data as the client received it (a type proposal is told apart by its
 //! WCL `after` text), a `taxonomy_proposal`'s (its `kind` is `taxonomy`, ai D31), or an
-//! `agent_proposal`'s (its `kind` is `agent`, agents G20, checked again against its `proposer`), through
+//! `agent_proposal`'s (its `kind` is `agent`, agents G20, checked again against its `proposer`), or an
+//! `agent_memory_proposal`'s (its `kind` is `agent_memory`, agents G21, checked again against
+//! its `proposer`, needing only `write` since memories are notes), through
 //! [`ai_chat::apply_change`], the code the confirmation switches use (ai D22), as the caller,
 //! version-checked against its `base_version`. It needs `write`, and `admin` for a type,
 //! taxonomy or agent change: without it, 403 `needs_admin`. It answers `{op, note_id, version}`
 //! for a note, `{op, type_name}` for a type, `{op, taxonomy_name, notes}` for a taxonomy and
-//! `{op, agent_name}` for an agent; an agent change the proposer may not make is a 403
-//! `not_permitted`.
+//! `{op, agent_name}` for an agent and `{op, memory_id, memory_agent, version}` for a memory; an
+//! agent or memory change the proposer may not make is a 403 `not_permitted`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -412,6 +414,8 @@ pub async fn apply(
         "taxonomy_proposal"
     } else if change["kind"] == "agent" {
         "agent_proposal"
+    } else if change["kind"] == "agent_memory" {
+        "agent_memory_proposal"
     } else if change["after"].is_string() && change.get("op").is_none() {
         "type_proposal"
     } else {

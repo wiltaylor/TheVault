@@ -32,7 +32,8 @@
 //! | `type_proposal` | `{id, name, exists, before, after, issues}`: a type file's new WCL for the user to apply (ai D18) |
 //! | `taxonomy_proposal` | a taxonomy change for the user to apply (ai D31), `kind` always `taxonomy`: `create` and `change` `{id, kind, op, name, exists, before, after, renames, issues, affected}`, `renames` a list of `{from, to}` term paths and `affected` the number of notes they rewrite; `delete` `{id, kind, op, name, before}` |
 //! | `agent_proposal` | an agent change for the user to apply (agents G20), `kind` always `agent` and `proposer` the agent that proposed it: `create` and `change` `{id, kind, op, name, label, exists, before, after, issues, proposer}`; `delete` `{id, kind, op, name, label, before, proposer}` |
-//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
+//! | `agent_memory_proposal` | a change to another agent's memories for the user to apply (agents G21), `kind` always `agent_memory`: `{id, kind, op, memory_agent, agent_label, memory_id, base_version, title, text, before, proposer}`, `op` `create` (`memory_id`, `base_version` and `before` null), `change` (`title` and `text` the new ones, `before` `{title, text}`) or `delete` |
+//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
 //! | `error` | `{kind, message, messages}`: the turn failed; ends the stream |
@@ -256,6 +257,7 @@ fn change_switch(name: &str) -> Option<&'static str> {
         "propose_type_change" => "types",
         "propose_taxonomy_change" | "propose_taxonomy_delete" => "taxonomies",
         "propose_agent_change" | "propose_agent_delete" => "agents",
+        "propose_agent_memory_change" | "propose_agent_memory_delete" => "agent_memories",
         "download_asset" | "browser_save" => "downloads",
         _ => return None,
     })
@@ -674,6 +676,9 @@ struct Direct {
     taxonomies: bool,
     /// Agent creates, changes and deletes (agents G20).
     agents: bool,
+    /// Changes to other agents' memories (agents G21), under the agents switch: memories are
+    /// notes, so `write` makes them.
+    memories: bool,
 }
 
 impl Direct {
@@ -687,6 +692,7 @@ impl Direct {
             downloads: !confirm.downloads && write,
             taxonomies: !confirm.taxonomies && scope.allows(Scope::Admin),
             agents: !confirm.agents && scope.allows(Scope::Admin),
+            memories: !confirm.agents && write,
         }
     }
 
@@ -700,6 +706,7 @@ impl Direct {
             "downloads" => self.downloads,
             "taxonomies" => self.taxonomies,
             "agents" => self.agents,
+            "agent_memories" => self.memories,
             _ => false,
         }
     }
@@ -710,6 +717,7 @@ impl Direct {
             "type_proposal" => self.types,
             "taxonomy_proposal" => self.taxonomies,
             "agent_proposal" => self.agents,
+            "agent_memory_proposal" => self.memories,
             "proposal" => match p["op"].as_str().unwrap_or("update") {
                 "update" | "create" => self.notes,
                 "archive" | "unarchive" => self.archive,
@@ -916,7 +924,12 @@ impl Turn {
     async fn emit(&self, name: &'static str, mut data: Value) -> bool {
         let proposal = matches!(
             name,
-            "proposal" | "type_proposal" | "taxonomy_proposal" | "agent_proposal" | "applied"
+            "proposal"
+                | "type_proposal"
+                | "taxonomy_proposal"
+                | "agent_proposal"
+                | "agent_memory_proposal"
+                | "applied"
         );
         if proposal && let Some(a) = &self.agent_name {
             data["agent"] = json!(a);
@@ -1740,6 +1753,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     ]
     .into_iter()
     .chain(agent_memory::tool_specs())
+    .chain(agent_memory::cross_tool_specs())
     .chain(crate::ai_outbox::tool_specs())
     .chain(crate::ai_web::tool_specs())
     .collect()
@@ -1918,6 +1932,17 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
                 _ => format!("The agent {name} was changed."),
             }
         }
+        "agent_memory_create" | "agent_memory_change" | "agent_memory_delete" => {
+            let id = done["memory_id"].as_str().unwrap_or_default();
+            let of = done["memory_agent"].as_str().unwrap_or_default();
+            match op.as_str() {
+                "agent_memory_create" => format!("The memory {id} of agent {of} was created."),
+                "agent_memory_delete" => format!(
+                    "The memory {id} of agent {of} was moved to the trash, where the user can restore it."
+                ),
+                _ => format!("The memory {id} of agent {of} was changed."),
+            }
+        }
         _ => format!("The type {name} was changed."),
     };
     let mut content = done.clone();
@@ -2019,6 +2044,9 @@ impl From<ApplyError> for ApiError {
 /// - an agent proposal (agents G20): when the agent file is still `before` and the change stays
 ///   within its `proposer`'s permissions, `after` as the agent `name`, or for `op` `delete` the
 ///   agent deleted.
+/// - an agent memory proposal (agents G21): when the memory is still at `base_version` and its
+///   `proposer` may still reach `memory_agent`'s memories, the memory created, changed or moved
+///   to the trash, answering `{op, memory_id, memory_agent, version}`.
 ///
 /// Returns `{op, note_id, version}` for a note, `{op, type_name}` for a type (`type_create` or
 /// `type_change`) and `{op, taxonomy_name, notes}` for a taxonomy (`taxonomy_create`,
@@ -2062,6 +2090,9 @@ pub fn apply_change(
     }
     if event == "agent_proposal" {
         return crate::ai_agents::apply_agent(w, p);
+    }
+    if event == "agent_memory_proposal" {
+        return agent_memory::apply(w, author, p);
     }
     if event != "proposal" {
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
@@ -2192,6 +2223,9 @@ fn propose_or_read(
         "get_agent" => crate::ai_agents::get(w, input),
         "propose_agent_change" => crate::ai_agents::propose_change(w, agent, &call.id, input),
         "propose_agent_delete" => crate::ai_agents::propose_delete(w, agent, &call.id, input),
+        n if agent_memory::is_cross_tool(n) => {
+            agent_memory::run_cross(w, agent, &call.id, n, input)
+        }
         other => Err(ToolOut::error(format!("there is no tool {other:?}"))),
     };
     result.unwrap_or_else(|e| e)

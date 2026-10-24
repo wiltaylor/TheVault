@@ -19,6 +19,7 @@ import { navigatePane, openBeside, workspace } from "../workspace/store";
 import { paneAt, wantsNewTab } from "../workspace/events";
 import { BROWSER_BOX_PATH } from "../pages/BrowserBox";
 import { AgentProposalCard } from "./AgentProposalCard";
+import { MemoryProposalCard, memoryHref } from "./MemoryProposalCard";
 import { blockLines, lineDiff } from "./diff";
 import { DownloadCard } from "./DownloadCard";
 import { Markdown } from "./markdown";
@@ -100,6 +101,14 @@ export function stepLabel(name: string, input: Json): string {
       return `Checked a change to agent ${s("name")}`;
     case "propose_agent_delete":
       return `Checked a delete of agent ${s("name")}`;
+    case "list_agent_memories":
+      return `Listed the memories of agent ${s("agent")}`;
+    case "get_agent_memory":
+      return "Read another agent's memory";
+    case "propose_agent_memory_change":
+      return o.id ? `Checked a change to a memory of agent ${s("agent")}` : `Checked a new memory of agent ${s("agent")}`;
+    case "propose_agent_memory_delete":
+      return "Checked forgetting another agent's memory";
     case "draft_email":
       return "Drafted an email";
     case "draft_sms":
@@ -176,6 +185,14 @@ export function activeLabel(name: string, input: Json): string {
       return "Checking an agent change";
     case "propose_agent_delete":
       return "Checking an agent delete";
+    case "list_agent_memories":
+      return "Listing another agent's memories";
+    case "get_agent_memory":
+      return "Reading another agent's memory";
+    case "propose_agent_memory_change":
+      return "Checking a memory change";
+    case "propose_agent_memory_delete":
+      return "Checking forgetting a memory";
     case "draft_email":
       return "Drafting an email";
     case "draft_sms":
@@ -606,6 +623,27 @@ const TAXONOMY_DID: Record<AppliedTaxonomy["op"], string> = {
 };
 
 type AppliedAgent = Extract<Applied, { agent_name: string }>;
+type AppliedMemory = Extract<Applied, { memory_agent: string }>;
+
+/** What an applied change to another agent's memories did (agents G21). */
+const MEMORY_DID: Record<AppliedMemory["op"], string> = {
+  agent_memory_create: "Added a memory of",
+  agent_memory_change: "Changed a memory of",
+  agent_memory_delete: "Moved to the trash a memory of",
+};
+
+/** A change to another agent's memories the AI made itself (agents G21). */
+function MemoryAppliedCard(props: { applied: AppliedMemory }) {
+  const a = () => props.applied;
+  return (
+    <section class="ai-proposal ai-applied-card" aria-label={`${MEMORY_DID[a().op]} ${a().memory_agent}`}>
+      <p class="ai-proposal-head" role="status">
+        {MEMORY_DID[a().op]} <a href={memoryHref(a().memory_agent)}>{a().memory_agent}</a>
+      </p>
+      <p class="muted">Made without asking, as the agent's permissions allow.</p>
+    </section>
+  );
+}
 
 /** What an applied agent change did (agents G20). */
 const AGENT_DID: Record<AppliedAgent["op"], string> = {
@@ -619,6 +657,19 @@ const AGENT_DID: Record<AppliedAgent["op"], string> = {
  * linking to the note, the trash or the type.
  */
 export function AppliedCard(props: { applied: Applied }) {
+  const memory = (): AppliedMemory | undefined => {
+    const x = props.applied;
+    return "memory_agent" in x ? x : undefined;
+  };
+  return (
+    <Show when={memory()} fallback={<ChangeAppliedCard applied={props.applied} />}>
+      {(m) => <MemoryAppliedCard applied={m()} />}
+    </Show>
+  );
+}
+
+/** An applied change other than to a memory. */
+function ChangeAppliedCard(props: { applied: Applied }) {
   const a = () => props.applied;
   const note = (): AppliedNote | undefined => {
     const x = a();
@@ -981,6 +1032,7 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                         <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "taxonomy_proposal" && part}>{(p) => <TaxonomyProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "agent_proposal" && part}>{(p) => <AgentProposalCard part={p()} turn={t()} index={i()} />}</Match>
+                        <Match when={part.kind === "memory_proposal" && part}>{(p) => <MemoryProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "applied" && part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
                         <Match when={part.kind === "download" && part}>{(p) => <DownloadCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>

@@ -24,7 +24,7 @@
 
 import { createContext, createRoot, createSignal, untrack, useContext } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { ASSISTANT, agents, agentsChanged, refreshAgents } from "../agents";
+import { ASSISTANT, agents, agentsChanged, memoriesChanged, refreshAgents } from "../agents";
 import {
   type AgentThread,
   type AiApplied,
@@ -217,6 +217,32 @@ export type AgentProposal =
     }
   | { id: string; kind: "agent"; op: "delete"; name: string; label?: string; before: string; proposer?: string };
 
+/**
+ * A change to another agent's memories the model proposed (agents G21), checked by the server
+ * against the proposing agent's reach, but not written: a new memory, a change with the title and
+ * text before, or forgetting one.
+ */
+export interface MemoryProposal {
+  id: string;
+  kind: "agent_memory";
+  op: "create" | "change" | "delete";
+  /** The agent whose memory it is. */
+  memory_agent: string;
+  agent_label?: string;
+  /** The memory; null for a new one. */
+  memory_id: string | null;
+  base_version?: string | null;
+  /** The title and text after the change; for a delete, the memory that goes. */
+  title: string;
+  text: string;
+  before: { title: string; text: string } | null;
+  /** The agent that proposed it, which the server checks the change against again. */
+  proposer?: string;
+}
+
+/** What the card says when the memory changed after the proposal (agents G21). */
+export const MEMORY_CHANGED = "This memory changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
+
 /** What the card says when the agent changed after the proposal (agents G20). */
 export const AGENT_CHANGED = "This agent changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
 
@@ -240,7 +266,8 @@ export type Applied =
   | { id: string; op: NoteOp; note_id: string; title: Json; version: string }
   | { id: string; op: "type_change" | "type_create"; type_name: string }
   | { id: string; op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes?: number }
-  | { id: string; op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string };
+  | { id: string; op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string }
+  | { id: string; op: "agent_memory_create" | "agent_memory_change" | "agent_memory_delete"; memory_id: string; memory_agent: string; version?: string };
 
 /** A file the model asked to download into the vault as an asset (ai D27). */
 export interface DownloadProposal {
@@ -291,6 +318,7 @@ export type Part =
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
   | { kind: "taxonomy_proposal"; proposal: TaxonomyProposal; state: ProposalState; error?: string }
   | { kind: "agent_proposal"; proposal: AgentProposal; state: ProposalState; error?: string }
+  | { kind: "memory_proposal"; proposal: MemoryProposal; state: ProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
 
 export interface Turn {
@@ -411,6 +439,21 @@ function agentDone(p: AgentProposal): string {
   return p.exists ? `changed agent ${p.name}` : `created agent ${p.name}`;
 }
 
+/** What a memory proposal is, for an outcome line (agents G21). */
+function memoryWhat(p: MemoryProposal): string {
+  if (p.op === "delete") return `forgetting memory ${p.memory_id} of agent ${p.memory_agent}`;
+  if (p.op === "change") return `change to memory ${p.memory_id} of agent ${p.memory_agent}`;
+  return `new memory "${p.title}" of agent ${p.memory_agent}`;
+}
+
+/** What an applied memory proposal did, for an outcome line. */
+function memoryDone(p: MemoryProposal, done: AiApplied): string {
+  if (p.op === "delete") return `forgot memory ${p.memory_id} of agent ${p.memory_agent}: moved to the trash`;
+  if (p.op === "change") return `changed memory ${p.memory_id} of agent ${p.memory_agent}`;
+  const id = "memory_id" in done ? done.memory_id : "";
+  return `created memory ${id} "${p.title}" of agent ${p.memory_agent}`;
+}
+
 /** The notices the server put in the turn's new messages, such as a round limit or a cut-off. */
 function noticesOf(data: { messages?: unknown }): Part[] {
   if (!Array.isArray(data.messages)) return [];
@@ -525,7 +568,7 @@ export const NOTE_GONE = "This note is no longer there, so nothing was applied."
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
   return (
-    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "download") &&
+    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "download") &&
     (p.state === "open" || p.state === "failed")
   );
 }
@@ -599,6 +642,8 @@ function eventPart(event: string, d: Record<string, unknown>): Part | null {
           : ({ ...d, op: d.exists ? "change" : "create", issues: Array.isArray(d.issues) ? d.issues : [] } as unknown as AgentProposal);
       return { kind: "agent_proposal", proposal: p, state: "open" };
     }
+    case "agent_memory_proposal":
+      return { kind: "memory_proposal", proposal: d as unknown as MemoryProposal, state: "open" };
     case "applied": {
       if (d.op === "download") {
         const asset = d as unknown as DownloadedAsset & { url?: string; source?: string; path?: string };
@@ -862,7 +907,8 @@ function createConversation(agent: string, id: string | null) {
       case "proposal":
       case "type_proposal":
       case "taxonomy_proposal":
-      case "agent_proposal": {
+      case "agent_proposal":
+      case "agent_memory_proposal": {
         // A re-read turn's proposal, applied or discarded meanwhile, shows as it stands.
         const stored = replay.get(String(d.id));
         push((stored && storedPart(stored)) || eventPart(e.event, d)!);
@@ -875,12 +921,13 @@ function createConversation(agent: string, id: string | null) {
         if (d.op === "download") break;
         const applied = d as unknown as Applied;
         // Open views of the note or type take the change, as after a write of this client's own.
+        if (applied.op.startsWith("agent_memory_")) memoriesChanged();
         void settle(
           applied.op === "type_change" || applied.op === "type_create"
             ? "type"
             : applied.op.startsWith("taxonomy_")
               ? "taxonomy"
-              : applied.op.startsWith("agent_")
+              : applied.op.startsWith("agent_") && !applied.op.startsWith("agent_memory_")
                 ? "agent"
                 : "note",
         );
@@ -1256,6 +1303,7 @@ function createConversation(agent: string, id: string | null) {
       else if (p.kind === "download") await applyDownload(turn, i);
       else if (p.kind === "taxonomy_proposal") await applyTaxonomyProposal(turn, i);
       else if (p.kind === "agent_proposal") await applyAgentProposal(turn, i);
+      else if (p.kind === "memory_proposal") await applyMemoryProposal(turn, i);
       else await applyTypeProposal(turn, i);
       const after = chat.turns[turn]?.parts[i];
       if (!after || !("state" in after) || after.state !== "applied") return;
@@ -1408,6 +1456,53 @@ function createConversation(agent: string, id: string | null) {
     discarded(p.proposal);
   }
 
+  function setMemoryProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "memory_proposal") return;
+        p.state = patch.state;
+        p.error = patch.error;
+      }),
+    );
+  }
+
+  /**
+   * Apply a memory proposal with POST /api/ai/apply (agents G21): the new memory, the change or
+   * the forgetting. The server writes nothing when the memory changed since the proposal (a
+   * 409), and checks the change again against the proposing agent. Memories are notes, so it
+   * needs only `write` and works from the apps; there it waits for the sync round.
+   */
+  async function applyMemoryProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "memory_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+    setMemoryProposal(turn, part, { state: "applying" });
+    try {
+      const done = await api.aiApply(p.proposal);
+      setMemoryProposal(turn, part, { state: "applied" });
+      record(p.proposal.id, `[Applied by the user: ${memoryDone(p.proposal, done)}]`);
+      memoriesChanged();
+      await settle("note");
+      notify();
+    } catch (e) {
+      const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
+      const error = stale ? MEMORY_CHANGED : e instanceof Error ? e.message : String(e);
+      setMemoryProposal(turn, part, { state: stale ? "stale" : "failed", error });
+      record(p.proposal.id, `[Failed to apply: ${memoryWhat(p.proposal)}: ${error}]`);
+    }
+  }
+
+  function discardMemoryProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "memory_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setMemoryProposal(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${memoryWhat(p.proposal)}]`);
+    discarded(p.proposal);
+  }
+
     /** A view shows the conversation; `listener` hears of each change until it lets go. */
     function hold(listener?: () => void) {
       holders++;
@@ -1458,6 +1553,8 @@ function createConversation(agent: string, id: string | null) {
       discardTaxonomyProposal,
       applyAgentProposal,
       discardAgentProposal,
+      applyMemoryProposal,
+      discardMemoryProposal,
     };
     return self;
   });
@@ -1643,6 +1740,8 @@ export function createChatSession(options: ChatOptions = {}) {
       discardTaxonomyProposal: (turn: number, part: number) => current().discardTaxonomyProposal(turn, part),
       applyAgentProposal: (turn: number, part: number) => current().applyAgentProposal(turn, part),
       discardAgentProposal: (turn: number, part: number) => current().discardAgentProposal(turn, part),
+      applyMemoryProposal: (turn: number, part: number) => current().applyMemoryProposal(turn, part),
+      discardMemoryProposal: (turn: number, part: number) => current().discardMemoryProposal(turn, part),
     };
   });
 }
@@ -1678,6 +1777,8 @@ export const applyTaxonomyProposal = panel.applyTaxonomyProposal;
 export const discardTaxonomyProposal = panel.discardTaxonomyProposal;
 export const applyAgentProposal = panel.applyAgentProposal;
 export const discardAgentProposal = panel.discardAgentProposal;
+export const applyMemoryProposal = panel.applyMemoryProposal;
+export const discardMemoryProposal = panel.discardMemoryProposal;
 
 /** The conversation the cards below act on: the panel's, unless a Chat tab provides its own. */
 export const ChatContext = createContext<ChatSession>(panel);

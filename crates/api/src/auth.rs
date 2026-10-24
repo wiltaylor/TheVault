@@ -69,6 +69,24 @@ fn agent_threads_path(path: &str) -> Option<bool> {
     }
 }
 
+/// Whether `path` is an agent's memories, `/api/agents/{name}/memories` or one memory under it,
+/// whose changes are note writes (agents G21).
+fn agent_memories_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/api/agents/") else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    let name = parts.next().unwrap_or_default();
+    if name.is_empty() || parts.next() != Some("memories") {
+        return false;
+    }
+    match (parts.next(), parts.next()) {
+        (None, _) => true,
+        (Some(id), None) => !id.is_empty(),
+        _ => false,
+    }
+}
+
 /// Paths that need `admin` even to read, because they disclose or hand out credentials.
 const ADMIN_PATHS: [&str; 3] = ["/api/tokens", "/api/secrets", "/api/integrations"];
 
@@ -219,6 +237,8 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     // Renaming and deleting a thread are note edits (agents G7).
     if WRITE_PATHS.iter().any(|p| under(p))
         || agent_threads_path(path) == Some(true)
+        // An agent's memories are notes (agents G21).
+        || agent_memories_path(path)
         || (method == Method::PUT && is_device_own(path))
         || (method == Method::POST && is_device_command_result(path))
         || (method == Method::POST && is_device_commands(path))

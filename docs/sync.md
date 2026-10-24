@@ -74,6 +74,7 @@ The device token is never widened to `admin`. In the apps, Settings hides the Se
 | `/api/types`, templates, `/api/taxonomies`, `/api/scripts`, `/api/device-files` | Definition files | Locally. Edits made in an app stay on the device until the server's version replaces them (D20). |
 | `GET /api/tasks/{name}`, `PUT` and `DELETE /api/tasks/{name}`, `GET /api/cron` | Task files; the cron preview is a computation | Locally |
 | `GET /api/agents`, `GET /api/agents/{name}` | Agent files (agents G1) | Locally. `PUT` and `DELETE /api/agents/{name}` need `admin`: 403 `needs_web_app`, so the agent screen is read-only in the apps (agents G2). |
+| `/api/agents/{name}/memories` and below | Memory notes (agents G21) | Locally, so the Memory tab works in the apps. Writes are queued for sync. |
 | `/api/assets` and below | Asset files | Locally. Android fetches an asset it does not hold from the server first (D19). |
 | `/api/trash` and its restore | The local trash, kept in step by the change feed's deletes | Locally |
 | `/api/pins` and below | The local `state.db` | Locally. Pins are kept per device and are not synced. |

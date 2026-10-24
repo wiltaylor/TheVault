@@ -1,11 +1,13 @@
 // The agent screen, `/agents/<name>` (agents G5): one agent as tabs. Chat, the default, holds its
-// threads (agents G7, `ai/AgentChat.tsx`); `?thread=<id>` opens one. Settings holds its
+// threads (agents G7, `ai/AgentChat.tsx`); `?thread=<id>` opens one. Memory holds what it
+// remembers (agents G21, `AgentMemory.tsx`), which the apps can change too. Settings holds its
 // label, icon, model and system prompt; Permissions its own tools, confirmation and internet
 // switches and note types (agents G4); Triggers its schedules and note events with their last runs
 // (agents G9 to G12, `AgentTriggers.tsx`); File its WCL. Settings, Permissions and Triggers edit
 // one draft, so moving between them keeps unsaved changes, and each tab's Save writes the whole
 // agent. In the
-// apps the screen is read only: agent files need `admin`, which a device token never has (G2).
+// apps the rest of the screen is read only: agent files need `admin`, which a device token never
+// has (G2).
 
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import {
@@ -49,6 +51,7 @@ import { Spinner } from "../components/SyncStatus";
 import { appInfo } from "../inApp";
 import { types } from "../session";
 import { usePane } from "../workspace/pane";
+import { MemoryTab } from "./AgentMemory";
 import { TriggersTab } from "./AgentTriggers";
 import { modelLabel } from "./Ai";
 import { errorText } from "./TypeEditor";
@@ -97,6 +100,11 @@ export const AGENT_TABS: { id: string; label: string; render: (p: AgentTabProps)
     id: "chat",
     label: "Chat",
     render: (p) => <AgentChat agent={p.agent.name} label={agentLabel(p.agent)} thread={p.thread} />,
+  },
+  {
+    id: "memory",
+    label: "Memory",
+    render: (p) => <MemoryTab agent={p.agent.name} label={agentLabel(p.agent)} id={p.id} />,
   },
   { id: "settings", label: "Settings", render: (p) => <SettingsTab {...p} /> },
   { id: "permissions", label: "Permissions", render: (p) => <PermissionsTab {...p} /> },

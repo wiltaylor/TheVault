@@ -407,9 +407,20 @@ export interface AgentThreadSummary {
   started_ms?: number | null;
 }
 
+/** One memory of an agent (agents G21), a note of type `agent_memory`. */
+export interface AgentMemory {
+  id: string;
+  agent: string;
+  title: string;
+  text: string;
+  version: string;
+  created?: string | null;
+  updated?: string | null;
+}
+
 /** A proposal of a thread and where it stands (agents G8). */
 export interface StoredProposal {
-  /** `proposal`, `type_proposal`, `taxonomy_proposal`, `agent_proposal`, or `applied` for a change the agent made. */
+  /** `proposal`, `type_proposal`, `taxonomy_proposal`, `agent_proposal`, `agent_memory_proposal`, or `applied` for a change the agent made. */
   event: string;
   data: Record<string, unknown>;
   status: "pending" | "applied" | "discarded" | "failed" | "stale" | "made";
@@ -689,6 +700,7 @@ export type AiApplied =
   | { op: "type_change" | "type_create"; type_name: string }
   | { op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes: number }
   | { op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string }
+  | { op: "agent_memory_create" | "agent_memory_change" | "agent_memory_delete"; memory_id: string; memory_agent: string; version?: string }
   | { op: "download"; asset_id: string; filename: string; media_type?: string; size?: number; url?: string };
 
 /** A poll of a chat turn's events through an app's embedded server (ai D23). */
@@ -1471,6 +1483,23 @@ export const api = {
   /** Rename a thread. */
   renameAgentThread: (name: string, id: string, title: string) =>
     request<AgentThread>("PATCH", `/api/agents/${enc(name)}/threads/${enc(id)}`, { title }),
+  /**
+   * The agent's memories, newest first (agents G21); with `query`, those whose title or text
+   * holds every word. `held` is how many it holds in all, `limit` the most it may.
+   */
+  agentMemories: (name: string, query = "") =>
+    request<{ memories: AgentMemory[]; held: number; limit: number }>(
+      "GET",
+      `/api/agents/${enc(name)}/memories${query.trim() ? `?query=${enc(query.trim())}` : ""}`,
+    ),
+  /** A new memory of the agent, authored by the caller. Past a limit, a 400 `invalid_memory` or a 409 `memory_full`. */
+  createAgentMemory: (name: string, title: string, text: string) =>
+    request<AgentMemory>("POST", `/api/agents/${enc(name)}/memories`, { title, text }),
+  /** Change a memory's title and text at `base_version`: a 409 when it changed since. */
+  updateAgentMemory: (name: string, id: string, change: { title?: string; text?: string; base_version?: string }) =>
+    request<AgentMemory>("PATCH", `/api/agents/${enc(name)}/memories/${enc(id)}`, change),
+  /** Move a memory to the trash. */
+  deleteAgentMemory: (name: string, id: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}/memories/${enc(id)}`),
   /** Move a thread to the trash. */
   deleteAgentThread: (name: string, id: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}/threads/${enc(id)}`),
   taskRuns: async (name: string, limit = 50) =>

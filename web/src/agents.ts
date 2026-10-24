@@ -66,6 +66,16 @@ export const setCreatingAgent = store.setCreating;
 /** Bumped by each change made here, so an open agent screen reads its agent again. */
 export const agentsVersion = store.version;
 
+const memories = createRoot(() => createSignal(0));
+
+/** Bumped when a chat changes an agent's memories, so an open Memory tab reads them again (agents G21). */
+export const memoriesVersion = memories[0];
+
+/** Say an agent's memories changed. */
+export function memoriesChanged(): void {
+  memories[1]((v) => v + 1);
+}
+
 /** How often the list reads again while a turn runs on an agent's thread (agents G17). */
 export const AGENTS_RUNNING_POLL_MS = 5_000;
 
@@ -245,6 +255,10 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["get_agent", "Read an agent"],
       ["propose_agent_change", "Create and change agents"],
       ["propose_agent_delete", "Delete agents"],
+      ["list_agent_memories", "List other agents' memories"],
+      ["get_agent_memory", "Read another agent's memory"],
+      ["propose_agent_memory_change", "Add and change other agents' memories"],
+      ["propose_agent_memory_delete", "Forget other agents' memories"],
     ],
   },
   {

@@ -184,6 +184,23 @@ pub fn proposal_what(event: &str, d: &Value) -> String {
             _ if d["exists"] == true => format!("change to agent {}", s("name")),
             _ => format!("new agent {}", s("name")),
         },
+        "agent_memory_proposal" => match d["op"].as_str() {
+            Some("delete") => format!(
+                "forgetting memory {} of agent {}",
+                s("memory_id"),
+                s("memory_agent")
+            ),
+            Some("change") => format!(
+                "change to memory {} of agent {}",
+                s("memory_id"),
+                s("memory_agent")
+            ),
+            _ => format!(
+                "new memory{} of agent {}",
+                quoted(&d["title"]),
+                s("memory_agent")
+            ),
+        },
         _ => match d["op"].as_str().unwrap_or("update") {
             "update" => format!("edit of note {}", s("note_id")),
             "create" => format!("new {} note{}", s("type"), quoted(&d["title"])),
@@ -225,6 +242,24 @@ fn proposal_done(event: &str, d: &Value, done: &Value) -> String {
             Some("delete") => format!("deleted agent {}", s(d, "name")),
             _ if d["exists"] == true => format!("changed agent {}", s(d, "name")),
             _ => format!("created agent {}", s(d, "name")),
+        },
+        "agent_memory_proposal" => match d["op"].as_str() {
+            Some("delete") => format!(
+                "forgot memory {} of agent {}: moved to the trash",
+                s(d, "memory_id"),
+                s(d, "memory_agent")
+            ),
+            Some("change") => format!(
+                "changed memory {} of agent {}",
+                s(d, "memory_id"),
+                s(d, "memory_agent")
+            ),
+            _ => format!(
+                "created memory {}{} of agent {}",
+                s(done, "memory_id"),
+                quoted(&d["title"]),
+                s(d, "memory_agent")
+            ),
         },
         _ => match d["op"].as_str().unwrap_or("update") {
             "create" => {

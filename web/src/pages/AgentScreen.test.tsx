@@ -3,7 +3,8 @@
 // checklist, the confirmation and internet switches, the note types), the File tab (the WCL,
 // saved with the form's checks), the Triggers tab (schedules with their next runs, note events,
 // the last runs linking to their threads, the tools a run is offered), Assistant always enabled,
-// and a read-only screen in the apps.
+// the Memory tab (the memories with search, Add, Edit with one Save, Delete after asking, also
+// in the apps), and a read-only screen in the apps.
 
 import { Route, Router } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
@@ -23,6 +24,10 @@ const aiProviders = vi.fn();
 const agentRuns = vi.fn();
 const agentThread = vi.fn();
 const cron = vi.fn();
+const agentMemories = vi.fn();
+const createAgentMemory = vi.fn();
+const updateAgentMemory = vi.fn();
+const deleteAgentMemory = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
   return {
@@ -41,6 +46,10 @@ vi.mock("../api", async (orig) => {
       agentRuns,
       agentThread,
       cron,
+      agentMemories,
+      createAgentMemory,
+      updateAgentMemory,
+      deleteAgentMemory,
     },
   };
 });
@@ -74,6 +83,10 @@ const TOOLS = [
   "get_agent",
   "propose_agent_change",
   "propose_agent_delete",
+  "list_agent_memories",
+  "get_agent_memory",
+  "propose_agent_memory_change",
+  "propose_agent_memory_delete",
   "propose_create",
   "propose_archive",
   "propose_delete",
@@ -188,9 +201,29 @@ beforeEach(async () => {
     text: "Every day at 02:00",
     next: [1767578400000, 1767664800000],
   }));
+  agentMemories.mockImplementation(async (_name: string, query = "") => {
+    const all = [TEA, GARDEN];
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const memories = all.filter((m) => words.every((w: string) => `${m.title}\n${m.text}`.toLowerCase().includes(w)));
+    return { memories, held: all.length, limit: 500 };
+  });
+  createAgentMemory.mockImplementation(async (agent: string, title: string, text: string) => ({ ...TEA, id: "01JNEW", agent, title, text }));
+  updateAgentMemory.mockImplementation(async (_agent: string, id: string, change: { title: string; text: string }) => ({ ...TEA, id, ...change }));
+  deleteAgentMemory.mockResolvedValue({ deleted: true });
   await refreshAgents();
   await reloadDefinitions();
 });
+
+const TEA = {
+  id: "01JTEA",
+  agent: "inbox_triage",
+  title: "Tea",
+  text: "Earl Grey, no milk.",
+  version: "v1",
+  created: "2026-01-04T10:00:00Z",
+  updated: "2026-01-05T10:00:00Z",
+};
+const GARDEN = { ...TEA, id: "01JGARDEN", title: "Garden", text: "Water on Sundays.", version: "v2", updated: "2026-01-03T10:00:00Z" };
 
 afterEach(() => {
   cleanup();
@@ -221,7 +254,7 @@ function sent(): Record<string, unknown> {
 describe("the agent screen", () => {
   it("has Chat, Settings, Permissions and File tabs, Chat first", async () => {
     await open("/agents/inbox_triage");
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Settings", "Permissions", "Triggers", "File"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Memory", "Settings", "Permissions", "Triggers", "File"]);
     expect(screen.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("region", { name: "Chat" })).toBeTruthy();
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeTruthy();
@@ -403,7 +436,16 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     const group = p.getAllByRole("group").find((g) => g.querySelector(":scope > legend")?.textContent === "Agents")!;
     const names = Array.from(group.querySelectorAll("label")).map((l) => l.textContent?.trim());
-    expect(names).toEqual(["List agents list_agents", "Read an agent get_agent", "Create and change agents propose_agent_change", "Delete agents propose_agent_delete"]);
+    expect(names).toEqual([
+      "List agents list_agents",
+      "Read an agent get_agent",
+      "Create and change agents propose_agent_change",
+      "Delete agents propose_agent_delete",
+      "List other agents' memories list_agent_memories",
+      "Read another agent's memory get_agent_memory",
+      "Add and change other agents' memories propose_agent_memory_change",
+      "Forget other agents' memories propose_agent_memory_delete",
+    ]);
     const ask = p.getByRole("switch", { name: "Ask before changing agents" });
     expect(ask).toBeChecked();
     fireEvent.click(ask);
@@ -600,6 +642,94 @@ describe("the File tab", () => {
     fireEvent.input(f.getByLabelText("Agent file"), { target: { value: 'provider = "x"\n' } });
     fireEvent.click(f.getByRole("button", { name: "Save" }));
     expect(await f.findByRole("alert")).toHaveTextContent("provider: is not anthropic, openai or chatgpt");
+  });
+});
+
+describe("the Memory tab", () => {
+  it("lists the agent's memories newest first and searches them", async () => {
+    await open("/agents/inbox_triage/memory");
+    const m = within(await screen.findByRole("region", { name: "Memory" }));
+    const items = await m.findAllByRole("listitem");
+    expect(items.map((i) => i.querySelector("strong")?.textContent)).toEqual(["Tea", "Garden"]);
+    expect(items[0]).toHaveTextContent("Earl Grey, no milk.");
+    expect(m.getByText("2 of 500 memories")).toBeTruthy();
+    fireEvent.input(m.getByRole("searchbox", { name: "Search memories" }), { target: { value: "sundays" } });
+    await waitFor(() => expect(m.getAllByRole("listitem")).toHaveLength(1));
+    expect(agentMemories).toHaveBeenLastCalledWith("inbox_triage", "sundays");
+    expect(m.getByRole("listitem")).toHaveTextContent("Garden");
+    fireEvent.input(m.getByRole("searchbox", { name: "Search memories" }), { target: { value: "coffee" } });
+    expect(await m.findByText("No memory matches the search.")).toBeTruthy();
+  });
+
+  it("adds a memory with its title and text", async () => {
+    await open("/agents/inbox_triage/memory");
+    const m = within(await screen.findByRole("region", { name: "Memory" }));
+    await m.findAllByRole("listitem");
+    fireEvent.click(m.getByRole("button", { name: "Add memory" }));
+    const form = within(m.getByRole("form", { name: "New memory" }));
+    const save = form.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    fireEvent.input(form.getByLabelText("Title"), { target: { value: "Coffee" } });
+    fireEvent.input(form.getByLabelText("Text"), { target: { value: "Flat white." } });
+    fireEvent.click(save);
+    await waitFor(() => expect(createAgentMemory).toHaveBeenCalledWith("inbox_triage", "Coffee", "Flat white."));
+    expect(await m.findByText("Memory added.")).toBeTruthy();
+    expect(m.queryByRole("form")).toBeNull();
+    expect(agentMemories.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("edits a memory's title and text with one Save at its version", async () => {
+    await open("/agents/inbox_triage/memory");
+    const m = within(await screen.findByRole("region", { name: "Memory" }));
+    await m.findAllByRole("listitem");
+    fireEvent.click(m.getByRole("button", { name: "Edit Tea" }));
+    const form = within(m.getByRole("form", { name: "Edit memory" }));
+    expect(form.getByLabelText("Title")).toHaveValue("Tea");
+    expect(form.getByLabelText("Text")).toHaveValue("Earl Grey, no milk.");
+    expect(form.getByRole("button", { name: "Save" })).toBeDisabled();
+    fireEvent.input(form.getByLabelText("Title"), { target: { value: "Tea order" } });
+    fireEvent.input(form.getByLabelText("Text"), { target: { value: "Green tea." } });
+    fireEvent.click(form.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateAgentMemory).toHaveBeenCalledTimes(1));
+    expect(updateAgentMemory).toHaveBeenCalledWith("inbox_triage", "01JTEA", { title: "Tea order", text: "Green tea.", base_version: "v1" });
+    expect(await m.findByText("Saved.")).toBeTruthy();
+  });
+
+  it("shows why a save is refused", async () => {
+    updateAgentMemory.mockRejectedValue(new ApiError(409, { error: "conflict", message: "the note changed since version v1" }));
+    await open("/agents/inbox_triage/memory");
+    const m = within(await screen.findByRole("region", { name: "Memory" }));
+    await m.findAllByRole("listitem");
+    fireEvent.click(m.getByRole("button", { name: "Edit Tea" }));
+    fireEvent.input(m.getByLabelText("Text"), { target: { value: "Green tea." } });
+    fireEvent.click(m.getByRole("button", { name: "Save" }));
+    expect(await m.findByRole("alert")).toHaveTextContent("changed since");
+    expect(m.getByRole("form", { name: "Edit memory" })).toBeTruthy();
+  });
+
+  it("deletes a memory to the trash after asking", async () => {
+    const ask = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    await open("/agents/inbox_triage/memory");
+    const m = within(await screen.findByRole("region", { name: "Memory" }));
+    await m.findAllByRole("listitem");
+    fireEvent.click(m.getByRole("button", { name: "Delete Garden" }));
+    expect(ask).toHaveBeenCalledWith('Delete the memory "Garden"? It moves to the trash, where you can restore it.');
+    expect(deleteAgentMemory).not.toHaveBeenCalled();
+    fireEvent.click(m.getByRole("button", { name: "Delete Garden" }));
+    await waitFor(() => expect(deleteAgentMemory).toHaveBeenCalledWith("inbox_triage", "01JGARDEN"));
+    expect(await m.findByText("Memory moved to the trash.")).toBeTruthy();
+    ask.mockRestore();
+  });
+
+  it("works in the apps too", async () => {
+    appInfo.mockResolvedValue({ app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" });
+    await open("/agents/inbox_triage/memory");
+    const m = within(await screen.findByRole("region", { name: "Memory" }));
+    await m.findAllByRole("listitem");
+    fireEvent.click(m.getByRole("button", { name: "Edit Tea" }));
+    fireEvent.input(m.getByLabelText("Text"), { target: { value: "Green tea." } });
+    fireEvent.click(m.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateAgentMemory).toHaveBeenCalledTimes(1));
   });
 });
 

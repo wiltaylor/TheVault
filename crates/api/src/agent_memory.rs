@@ -19,14 +19,20 @@
 //! any other route or tool that lists or changes an agent's memories goes through, so the limits
 //! hold for every writer.
 
+use std::sync::Arc;
+
+use axum::Json;
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use serde::Serialize;
+use schema::Agent;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use state::{Author, Scope};
 use writer::{Input, Writer, doc_to_json};
 
-use crate::ApiError;
-use crate::ai_chat::{ToolOut, tool};
+use crate::ai_chat::{ApplyError, ToolOut, tool};
+use crate::auth::Caller;
+use crate::{ApiError, blocking};
 
 /// The note type of a memory.
 pub const MEMORY_TYPE: &str = writer::AGENT_MEMORY_TYPE;
@@ -503,6 +509,460 @@ pub(crate) fn run(w: &Writer, scope: Scope, agent: &str, name: &str, input: &Val
         other => Err(ToolOut::error(format!("there is no tool {other:?}"))),
     };
     result.unwrap_or_else(|e| e)
+}
+
+// The routes of the agent screen's Memory tab (agents G21). The writes are authored as the
+// caller, and go through the helpers above, so the limits hold for them too.
+
+type Shared = State<Arc<Writer>>;
+
+/// The query of `GET /api/agents/{name}/memories`.
+#[derive(Debug, Deserialize)]
+pub struct ListQuery {
+    query: Option<String>,
+}
+
+/// `GET /api/agents/{name}/memories?query=`: the agent's memories whose title or text holds every
+/// word of `query`, all of them without one, newest first: `{memories, held, limit}`, `held` how
+/// many the agent holds in all and `limit` the most it may.
+pub async fn list(
+    State(w): Shared,
+    Path(name): Path<String>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    blocking(w, move |w| {
+        let all = memories(w, &name)?;
+        let held = all.len();
+        let found = matching(all, q.query.as_deref().unwrap_or_default());
+        Ok::<_, ApiError>(json!({ "memories": found, "held": held, "limit": MAX_MEMORIES }))
+    })
+    .await
+    .map(Json)
+}
+
+/// The body of `POST /api/agents/{name}/memories`.
+#[derive(Debug, Deserialize)]
+pub struct NewMemory {
+    title: String,
+    text: String,
+}
+
+/// `POST /api/agents/{name}/memories`: a new memory of the agent, from `{title, text}`.
+pub async fn create_route(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(name): Path<String>,
+    Json(b): Json<NewMemory>,
+) -> Result<(StatusCode, Json<Memory>), ApiError> {
+    let m = blocking(w, move |w| create(w, &name, &b.title, &b.text, &author)).await?;
+    Ok((StatusCode::CREATED, Json(m)))
+}
+
+/// The body of `PATCH /api/agents/{name}/memories/{id}`.
+#[derive(Debug, Deserialize)]
+pub struct MemoryChange {
+    title: Option<String>,
+    text: Option<String>,
+    base_version: Option<String>,
+}
+
+/// Memory `id` when it is agent `name`'s; any other is a 404.
+fn read_of(w: &Writer, name: &str, id: &str) -> Result<Memory, ApiError> {
+    let m = read(w, id)?;
+    if m.agent != name {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("{name} has no memory {id}"),
+        ));
+    }
+    Ok(m)
+}
+
+/// `PATCH /api/agents/{name}/memories/{id}`: change the memory's title, text or both, from
+/// `{title?, text?, base_version?}`; with `base_version`, a 409 when it changed since.
+pub async fn update_route(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path((name, id)): Path<(String, String)>,
+    Json(b): Json<MemoryChange>,
+) -> Result<Json<Memory>, ApiError> {
+    blocking(w, move |w| {
+        let m = read_of(w, &name, &id)?;
+        update(
+            w,
+            &m.id,
+            b.title.as_deref(),
+            b.text.as_deref(),
+            b.base_version.as_deref(),
+            &author,
+        )
+    })
+    .await
+    .map(Json)
+}
+
+/// `DELETE /api/agents/{name}/memories/{id}`: the memory goes to the trash.
+pub async fn delete_route(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path((name, id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    blocking(w, move |w| {
+        let m = read_of(w, &name, &id)?;
+        forget(w, &m.id, Some(&m.version), &author)?;
+        Ok::<_, ApiError>(json!({ "id": m.id, "deleted": true }))
+    })
+    .await
+    .map(Json)
+}
+
+// Other agents' memories (agents G21): for an agent that may change agents, and only the
+// memories of an agent whose file it could change (agents G20's no-escalation rule), because a
+// memory steers the agent that reads it.
+
+/// The names of the tools that reach other agents' memories.
+pub const CROSS_TOOLS: [&str; 4] = [
+    "list_agent_memories",
+    "get_agent_memory",
+    "propose_agent_memory_change",
+    "propose_agent_memory_delete",
+];
+
+/// Whether `name` is one of the cross-agent memory tools.
+pub fn is_cross_tool(name: &str) -> bool {
+    CROSS_TOOLS.contains(&name)
+}
+
+/// The cross-agent memory tools' specs.
+pub fn cross_tool_specs() -> Vec<ai::ToolSpec> {
+    vec![
+        tool(
+            "list_agent_memories",
+            "List another agent's memories: those whose title or text holds every word of `query`, ignoring case, or all of them for an empty query, newest first, each with its id, title, the start of its text and when it changed. You reach an agent's memories only when you could change its file; use recall for your own.",
+            json!({
+                "agent": { "type": "string", "description": "The other agent's name." },
+                "query": { "type": "string", "description": "Words to look for; empty for every memory." },
+            }),
+        ),
+        tool(
+            "get_agent_memory",
+            "Read one of another agent's memories in full by id.",
+            json!({ "id": { "type": "string", "description": "The memory's id." } }),
+        ),
+        tool(
+            "propose_agent_memory_change",
+            "Propose a memory of another agent for the user to apply: a new one when `id` is null, else a change to its memory `id`, null leaving the title or text as it is. A memory steers the agent that reads it, so you reach only the memories of an agent whose file you could change. When the user lets agent changes go ahead without asking, it is written at once and the result says applied.",
+            json!({
+                "agent": { "type": "string", "description": "The other agent's name." },
+                "id": { "type": ["string", "null"], "description": "The memory's id, or null for a new memory." },
+                "title": { "type": ["string", "null"], "description": "The title, at most 120 characters; null keeps it." },
+                "text": { "type": ["string", "null"], "description": "The text, at most 8000 characters; null keeps it." },
+            }),
+        ),
+        tool(
+            "propose_agent_memory_delete",
+            "Propose forgetting one of another agent's memories for the user to apply. Applied, it moves to the trash, where the user can restore it. When the user lets agent changes go ahead without asking, it is done at once and the result says applied.",
+            json!({ "id": { "type": "string", "description": "The memory's id." } }),
+        ),
+    ]
+}
+
+/// The refusal of a cross-agent tool on the calling agent's own memories.
+pub const OWN_MEMORIES: &str = "These tools reach other agents' memories: use remember, recall, update_memory and forget for your own.";
+
+/// Why agent `by` may not reach agent `target`'s memories (`found` as it stands, `None` when
+/// there is no such agent), or `None` when it may: only when it could change `target`'s file
+/// (agents G20), so it may change agents, `target` is another agent, and `target` has nothing
+/// `by` lacks.
+pub(crate) fn out_of_reach(by: &Agent, target: &str, found: Option<&Agent>) -> Option<String> {
+    if target == by.name {
+        return Some(OWN_MEMORIES.to_owned());
+    }
+    if !by.permissions.allows_tool("propose_agent_change") {
+        return Some(format!(
+            "The memories of agent {target} are out of reach: an agent reaches another agent's \
+             memories only when it may change agents (the propose_agent_change tool)."
+        ));
+    }
+    let Some(agent) = found else {
+        return Some(format!("There is no agent {target}."));
+    };
+    let problems = crate::ai_agents::escalation(by, agent);
+    if problems.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "The memories of agent {target} are out of reach: an agent reaches another agent's \
+         memories only when it could change that agent's file, and {target} has what this agent \
+         lacks: {}.",
+        problems.join("; ")
+    ))
+}
+
+/// Agent `target` as it stands, when `by` may reach its memories.
+fn reach(w: &Writer, by: &Agent, target: &str) -> Result<Agent, ToolOut> {
+    if !schema::is_name(target) {
+        return Err(ToolOut::error(format!("{target:?} is not an agent name")));
+    }
+    let found =
+        crate::ai_agents::agent_named(w, target).map_err(|e| ToolOut::error(e.to_string()))?;
+    if let Some(why) = out_of_reach(by, target, found.as_ref()) {
+        return Err(ToolOut::error(why));
+    }
+    found.ok_or_else(|| ToolOut::error(format!("There is no agent {target}.")))
+}
+
+/// A memory's row in a listing: its text cut to [`LINE_TEXT`] characters.
+fn row(m: &Memory) -> Value {
+    let mut text: String = m.text.chars().take(LINE_TEXT).collect();
+    if m.text.chars().count() > LINE_TEXT {
+        text.push('…');
+    }
+    json!({ "id": m.id, "title": m.title, "text": text, "updated": m.updated })
+}
+
+/// The answer of a cross-agent memory tool, with the proposal it emits.
+fn cross_out(content: Value, memories: &[&Memory], proposal: Option<Value>) -> ToolOut {
+    let mut o = out(content, memories);
+    o.proposal = proposal.map(|p| ("agent_memory_proposal", p));
+    o
+}
+
+/// `ApiError` `e` as the model reads it.
+fn checked<T>(r: Result<T, ApiError>) -> Result<T, ToolOut> {
+    r.map_err(failed)
+}
+
+/// Run cross-agent memory tool `name` for agent `by`: the reads answer, the changes propose.
+pub(crate) fn run_cross(
+    w: &Writer,
+    by: &Agent,
+    call_id: &str,
+    name: &str,
+    input: &Value,
+) -> Result<ToolOut, ToolOut> {
+    let str_arg = crate::ai_chat::str_arg;
+    match name {
+        "list_agent_memories" => {
+            let target = str_arg(input, "agent")?;
+            reach(w, by, target)?;
+            let query = input["query"].as_str().unwrap_or_default();
+            let all = checked(memories(w, target))?;
+            let held = all.len();
+            let found = matching(all, query);
+            let rows: Vec<Value> = found.iter().map(row).collect();
+            let refs: Vec<&Memory> = found.iter().collect();
+            Ok(cross_out(
+                json!({ "agent": target, "memories": rows, "matched": found.len(), "held": held }),
+                &refs,
+                None,
+            ))
+        }
+        "get_agent_memory" => {
+            let m = checked(read(w, str_arg(input, "id")?))?;
+            reach(w, by, &m.agent)?;
+            let mut content = m.to_json();
+            content["agent"] = json!(m.agent);
+            Ok(cross_out(content, &[&m], None))
+        }
+        "propose_agent_memory_change" => {
+            let target = str_arg(input, "agent")?;
+            let title = opt_str(input, "title")?;
+            let text = opt_str(input, "text")?;
+            let id = opt_str(input, "id")?
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let agent = reach(w, by, target)?;
+            let Some(id) = id else {
+                let (Some(title), Some(text)) = (title, text) else {
+                    return Err(ToolOut::error(
+                        "A new memory needs both a title and a text.",
+                    ));
+                };
+                let (title, text) = (checked(check_title(title))?, checked(check_text(text))?);
+                let held = checked(memories(w, target))?.len();
+                if held >= MAX_MEMORIES {
+                    return Err(ToolOut::error(format!(
+                        "{target} already holds {held} memories, the most an agent may. Propose \
+                         forgetting some first."
+                    )));
+                }
+                let proposal = json!({
+                    "id": call_id,
+                    "kind": "agent_memory",
+                    "op": "create",
+                    "memory_agent": target,
+                    "agent_label": agent.label,
+                    "memory_id": null,
+                    "title": title,
+                    "text": text,
+                    "before": null,
+                    "proposer": by.name,
+                });
+                return Ok(cross_out(
+                    json!({
+                        "proposed": true,
+                        "message": format!("The new memory of {target} is shown to the user as a proposal. It has not been written: it awaits the user, who applies or discards it."),
+                    }),
+                    &[],
+                    Some(proposal),
+                ));
+            };
+            let m = checked(read(w, id))?;
+            if m.agent != target {
+                return Err(ToolOut::error(format!(
+                    "Memory {id} belongs to agent {}, not {target}.",
+                    m.agent
+                )));
+            }
+            if title.is_none() && text.is_none() {
+                return Err(ToolOut::error(
+                    "Nothing to change: send a new title, a new text, or both.",
+                ));
+            }
+            let title = match title {
+                Some(t) => checked(check_title(t))?,
+                None => m.title.clone(),
+            };
+            let text = match text {
+                Some(t) => checked(check_text(t))?,
+                None => m.text.clone(),
+            };
+            if title == m.title && text == m.text {
+                return Ok(cross_out(
+                    json!({
+                        "proposed": false,
+                        "message": "The proposed memory is the same as the current one: there is nothing to apply.",
+                    }),
+                    &[&m],
+                    None,
+                ));
+            }
+            let proposal = json!({
+                "id": call_id,
+                "kind": "agent_memory",
+                "op": "change",
+                "memory_agent": target,
+                "agent_label": agent.label,
+                "memory_id": m.id,
+                "base_version": m.version,
+                "title": title,
+                "text": text,
+                "before": { "title": m.title, "text": m.text },
+                "proposer": by.name,
+            });
+            Ok(cross_out(
+                json!({
+                    "proposed": true,
+                    "message": "The memory change is shown to the user as a proposal. It has not been written: it awaits the user, who applies or discards it.",
+                }),
+                &[&m],
+                Some(proposal),
+            ))
+        }
+        "propose_agent_memory_delete" => {
+            let m = checked(read(w, str_arg(input, "id")?))?;
+            let agent = reach(w, by, &m.agent)?;
+            let proposal = json!({
+                "id": call_id,
+                "kind": "agent_memory",
+                "op": "delete",
+                "memory_agent": m.agent,
+                "agent_label": agent.label,
+                "memory_id": m.id,
+                "base_version": m.version,
+                "title": m.title,
+                "text": m.text,
+                "before": { "title": m.title, "text": m.text },
+                "proposer": by.name,
+            });
+            Ok(cross_out(
+                json!({
+                    "proposed": true,
+                    "message": "Forgetting the memory is shown to the user as a proposal. Nothing has been deleted: it awaits the user, who applies or discards it.",
+                }),
+                &[&m],
+                Some(proposal),
+            ))
+        }
+        other => Err(ToolOut::error(format!("there is no tool {other:?}"))),
+    }
+}
+
+/// Apply an `agent_memory_proposal` (agents G21) as `author`, when the memory is still at the
+/// proposal's `base_version` and its proposer may still reach the agent's memories. Answers
+/// `{op, memory_id, memory_agent, version}`, `op` `agent_memory_create`, `agent_memory_change`
+/// or `agent_memory_delete`.
+pub(crate) fn apply(w: &Writer, author: &Author, p: &Value) -> Result<Value, ApplyError> {
+    let target = p["memory_agent"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApplyError::Invalid("the change has no memory_agent".into()))?;
+    if let Some(by) = crate::ai_agents::proposer_of(w, p)? {
+        let found = crate::ai_agents::agent_named(w, target)?;
+        if let Some(why) = out_of_reach(&by, target, found.as_ref()) {
+            return Err(ApplyError::Refused(why));
+        }
+    }
+    let refused = |e: ApiError| {
+        ApplyError::Invalid(
+            e.body["message"]
+                .as_str()
+                .unwrap_or("the memory could not be changed")
+                .to_owned(),
+        )
+    };
+    let part = |k: &str| p[k].as_str().unwrap_or_default();
+    let op = p["op"].as_str().unwrap_or_default();
+    if op == "create" {
+        let m = create(w, target, part("title"), part("text"), author).map_err(refused)?;
+        return Ok(json!({
+            "op": "agent_memory_create",
+            "memory_id": m.id,
+            "memory_agent": target,
+            "version": m.version,
+        }));
+    }
+    let id = p["memory_id"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApplyError::Invalid("the change has no memory_id".into()))?;
+    let stale = || {
+        ApplyError::Stale(format!(
+            "the memory {id} changed since the proposal, so nothing was written"
+        ))
+    };
+    let m = read(w, id).map_err(|_| stale())?;
+    if m.agent != target || p["base_version"].as_str() != Some(m.version.as_str()) {
+        return Err(stale());
+    }
+    match op {
+        "change" => {
+            let m = update(
+                w,
+                id,
+                Some(part("title")),
+                Some(part("text")),
+                Some(&m.version),
+                author,
+            )
+            .map_err(refused)?;
+            Ok(json!({
+                "op": "agent_memory_change",
+                "memory_id": m.id,
+                "memory_agent": target,
+                "version": m.version,
+            }))
+        }
+        "delete" => {
+            forget(w, id, Some(&m.version), author).map_err(refused)?;
+            Ok(json!({ "op": "agent_memory_delete", "memory_id": id, "memory_agent": target }))
+        }
+        other => Err(ApplyError::Invalid(format!(
+            "{other:?} is not a memory change"
+        ))),
+    }
 }
 
 #[cfg(test)]

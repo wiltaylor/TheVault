@@ -287,6 +287,16 @@ fn build() -> Built {
         .get("/api/agents/{name}/threads/{id}", agent_threads::read)
         .patch("/api/agents/{name}/threads/{id}", agent_threads::rename)
         .delete("/api/agents/{name}/threads/{id}", agent_threads::delete)
+        .get("/api/agents/{name}/memories", agent_memory::list)
+        .post("/api/agents/{name}/memories", agent_memory::create_route)
+        .patch(
+            "/api/agents/{name}/memories/{id}",
+            agent_memory::update_route,
+        )
+        .delete(
+            "/api/agents/{name}/memories/{id}",
+            agent_memory::delete_route,
+        )
         .get("/api/assets", assets::list)
         .post_up_to("/api/assets", assets::MAX_UPLOAD, assets::upload)
         .post("/api/assets/cleanup", assets::cleanup)

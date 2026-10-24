@@ -143,6 +143,34 @@ The note tools leave memories out unless the agent's `permissions.types` names `
 | A memory's text | 8,000 characters | `remember` and `update_memory` are refused |
 | Memories one agent holds | 500 | `remember` is refused, asking the agent to forget some or merge several into one |
 
+### The Memory tab
+
+The agent screen's **Memory** tab, after Chat, lists the agent's memories, newest first, with a search box that keeps those whose title or text holds every word typed. **Add memory** opens an empty title and text; **Edit** opens a memory's title and text, saved together with one **Save**; **Delete** asks first, then moves the memory to the trash, where it can be restored. These changes are authored by you, and the same limits apply. The tab works in the desktop and Android apps too: the changes are note writes to the vault on the device, synced like any note.
+
+The tab uses these routes. Reading needs `read`; the changes need `write`.
+
+| Route | Does |
+|---|---|
+| `GET /api/agents/{name}/memories?query=` | `{memories: [{id, agent, title, text, version, created, updated}], held, limit}`, newest first; `query` keeps those whose title or text holds every word |
+| `POST /api/agents/{name}/memories` | A new memory from `{title, text}`. 400 `invalid_memory` past a limit, 409 `memory_full` at 500 memories |
+| `PATCH /api/agents/{name}/memories/{id}` | Changes the title, the text or both from `{title?, text?, base_version?}`; with `base_version`, 409 when the memory changed since |
+| `DELETE /api/agents/{name}/memories/{id}` | Moves the memory to the trash |
+
+### Other agents' memories
+
+An agent that manages agents can reach other agents' memories with four more tools, in the "Agents" group of the Permissions tab:
+
+| Tool | Does |
+|---|---|
+| `list_agent_memories {agent, query}` | The other agent's memories whose title or text holds every word of `query`, or all of them, newest first, each with its id, title, the first 200 characters of its text and when it changed |
+| `get_agent_memory {id}` | One memory in full |
+| `propose_agent_memory_change {agent, id, title, text}` | Proposes a new memory when `id` is `null`, else a change to memory `id`; `null` keeps a title or text as it is |
+| `propose_agent_memory_delete {id}` | Proposes moving a memory to the trash |
+
+A memory steers the agent that reads it, so these follow the no-escalation rule of [Agents that manage agents](#agents-that-manage-agents): an agent reaches another agent's memories, to read them as well as to change them, only when it could change that agent's file. It must have `propose_agent_change`, and the other agent must have nothing it lacks. Otherwise each tool is refused, naming the problems. An agent cannot use these tools on its own memories; it uses its memory tools for those.
+
+The proposals follow "Ask before changing agents" (`permissions.confirm.agents`). With it on, the panel shows a memory card with the title and text before and after, and Apply and Discard; Apply checks the memory is unchanged since the proposal ("This memory changed since the proposal") and checks the rule again against the proposing agent as it is then. Applying needs only `write`, since memories are notes, so it works from the apps too. With the switch off, the tool makes the change at once. An unattended run with the switch on is not offered the two propose tools. The changes are authored by the proposing agent, so they never fire a trigger.
+
 ## Triggers
 
 A `trigger` block runs the agent on its own. Each run starts a new thread, titled with the trigger's name and the local date and time, whose first message is the trigger's `prompt`.
