@@ -1,5 +1,5 @@
-// Skills (skills S4, S5): the list the left sidebar's Skills subsection and the command palette
-// show, creating and importing one, and what the skill screen needs to write `SKILL.md` back from
+// Skills (skills S4, S5): the list the Skills page, the sidebar's Skills item and the command
+// palette show, creating and importing one, and what the skill screen needs to write `SKILL.md` back from
 // its form: the frontmatter as YAML, keeping the keys the form does not know as they were.
 
 import { createRoot, createSignal } from "solid-js";
@@ -7,6 +7,12 @@ import { ApiError, type Skill, type SkillFile, type SkillSummary, api } from "./
 
 /** The icon a skill shows. */
 export const SKILL_ICON = "book-open";
+
+/** The Skills page, which lists every skill. */
+export const SKILLS_HREF = "/skills";
+
+/** Where docs/skills.md is read, as the page's empty state links to it. */
+export const SKILLS_DOC = "https://github.com/wiltaylor/TheVault/blob/main/docs/skills.md";
 
 /** The frontmatter's limits, from the Agent Skills specification (skills S2). */
 export const SKILL_NAME_MAX = 64;
@@ -33,11 +39,11 @@ export const skills = store.list;
 /** Why the list could not be read, if it could not. */
 export const skillsError = store.error;
 
-/** Whether the sidebar shows the new skill's name box. */
+/** Whether the Skills page shows the new skill's name box. */
 export const creatingSkill = store.creating;
 export const setCreatingSkill = store.setCreating;
 
-/** Bumped by each change made from the sidebar, so an open skill screen reads its skill again. */
+/** Bumped by each change made from the Skills page or a skill screen, so an open skill screen reads its skill again. */
 export const skillsVersion = store.version;
 
 /** Read the skill list again. A server without skills (404) lists none. */
@@ -60,6 +66,19 @@ export async function refreshSkills(): Promise<void> {
 export async function skillsChanged(): Promise<void> {
   store.setVersion(store.version() + 1);
   await refreshSkills();
+}
+
+/**
+ * Whether a skill matches what was typed in the Skills page's search box: every word, ignoring
+ * case, in its name, description or license.
+ */
+export function skillMatches(s: SkillSummary, query: string): boolean {
+  const hay = [s.name, s.description ?? "", s.license ?? ""].join("\n").toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((w) => hay.includes(w));
 }
 
 /** The address of a skill's screen. */

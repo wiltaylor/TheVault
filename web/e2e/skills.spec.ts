@@ -1,9 +1,10 @@
 import type { Page } from "@playwright/test";
 import { activePane, expect, logIn, test } from "./fixtures";
 
-// Skills under Agents in the sidebar and the skill screen (skills S4, S5): import a zipped skill
-// from the Skills subsection's + menu, see it listed and opened, change its description on the
-// Instructions tab with one Save, and find the change in SKILL.md, with its script kept.
+// The Skills page and the skill screen (skills S4, S5): open the Skills page from the Skills item
+// under Agents in the sidebar, import a zipped skill from its Import menu, see it opened and
+// listed, change its description on the Instructions tab with one Save, and find the change in
+// SKILL.md, with its script kept.
 
 function agentsNav(page: Page) {
   return page.getByRole("navigation", { name: "Agents" });
@@ -66,7 +67,7 @@ function zip(files: Record<string, string>): Buffer {
   return Buffer.concat([...parts, ...central, end]);
 }
 
-test("a zipped skill imported from the sidebar is listed, and its description is edited", async ({ page, admin }) => {
+test("a zipped skill imported from the Skills page is listed, and its description is edited", async ({ page, admin }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const name = `e2e-skill-${stamp}`;
   const buffer = zip({
@@ -75,16 +76,31 @@ test("a zipped skill imported from the sidebar is listed, and its description is
   });
 
   await logIn(page, "/daily");
-  const skills = agentsNav(page).getByRole("group", { name: "Skills" });
-  await skills.getByRole("button", { name: "Add skill" }).click();
+  const skillsItem = agentsNav(page).getByRole("link", { name: /^Skills/ });
+  await skillsItem.click();
+  await expect(page).toHaveURL(/\/skills$/);
+  const pane = activePane(page);
+  await expect(pane.getByRole("heading", { name: "Skills" })).toBeVisible();
+  // The sidebar lists no skill by name.
+  await expect(agentsNav(page).getByRole("link", { name })).toHaveCount(0);
+
+  await pane.getByRole("button", { name: "Import" }).click();
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("menu", { name: "Add skill" }).getByRole("menuitem", { name: "Import skill from a zip" }).click();
+  await page.getByRole("menu", { name: "Import skill" }).getByRole("menuitem", { name: "From a zip" }).click();
   await (await chooser).setFiles({ name: `${name}.zip`, mimeType: "application/zip", buffer });
 
   await expect(page).toHaveURL(new RegExp(`/skills/${name}$`));
-  const pane = activePane(page);
   await expect(pane.getByRole("heading", { name })).toBeVisible();
-  await expect(skills.getByRole("link", { name })).toBeVisible();
+
+  // The Skills page lists it, with its description and license.
+  await skillsItem.click();
+  await expect(page).toHaveURL(/\/skills$/);
+  const card = pane.getByRole("list", { name: "Skills" }).getByRole("listitem").filter({ has: page.getByRole("link", { name, exact: true }) });
+  await expect(card).toContainText("Fills in forms. Use when a form arrives.");
+  await expect(card).toContainText("2 files");
+  await expect(card).toContainText("MIT");
+  await card.getByRole("link", { name, exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/skills/${name}$`));
 
   const instructions = pane.getByRole("region", { name: "Instructions" });
   await expect(instructions.getByLabel("Name")).toHaveValue(name);

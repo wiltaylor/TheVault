@@ -3,12 +3,11 @@
 // one from a name and opens it, and each agent's ⋯ menu (or a right-click) opens, disables or
 // enables, and deletes it. Assistant is built in: it has no Disable or Delete. In the apps the
 // list is read only. An agent with a turn running on one of its threads shows a spinner, read as
-// "Running" (agents G17). Beneath the agents, a Skills subsection lists every skill by name, an
-// invalid one with a warning mark, each opening its skill screen; in the web app its "+" menu
-// makes a new skill from a name or imports one from a zip or a folder (skills S4).
+// "Running" (agents G17). After the agents, one Skills item opens the Skills page, `/skills`, with
+// the number of skills and a warning mark when any is invalid (skills S4).
 
 import { For, type JSX, Show, createSignal, onCleanup, onMount } from "solid-js";
-import type { AgentSummary, SkillSummary } from "../api";
+import type { AgentSummary } from "../api";
 import {
   AGENT_ICON,
   agentLabel,
@@ -25,19 +24,7 @@ import {
   setCreatingAgent,
 } from "../agents";
 import { RunningMark } from "../ai/RunningMark";
-import {
-  SKILL_ICON,
-  canPickFolder,
-  createSkill,
-  creatingSkill,
-  importSkillFolder,
-  importSkillZip,
-  refreshSkills,
-  setCreatingSkill,
-  skillHref,
-  skills,
-  skillsError,
-} from "../skills";
+import { SKILL_ICON, SKILLS_HREF, refreshSkills, skills, skillsError } from "../skills";
 import { errorText } from "../pages/TypeEditor";
 import { isActiveLink } from "../workspace/links";
 import { activePane } from "../workspace/model";
@@ -248,8 +235,8 @@ export function AgentsNav(props: { onNavigate: () => void }) {
         </Show>
         <ul id="agents-nav-list" class="types-nav-list agents-nav-list">
           <For each={agents()}>{(a) => <Entry agent={a} />}</For>
+          <SkillsEntry onNavigate={props.onNavigate} />
         </ul>
-        <SkillsNav onNavigate={props.onNavigate} report={report} />
       </Show>
       <Show when={error() ?? agentsError() ?? skillsError()}>
         <p class="error pinned-error" role="alert">
@@ -260,145 +247,36 @@ export function AgentsNav(props: { onNavigate: () => void }) {
   );
 }
 
-/** The Skills subsection beneath the agents (skills S4). */
-function SkillsNav(props: { onNavigate: () => void; report: (p: Promise<unknown>) => void }) {
-  const [menu, setMenu] = createSignal(false);
-  let add: HTMLButtonElement | undefined;
-  let zipInput!: HTMLInputElement;
-  let folderInput!: HTMLInputElement;
-
-  function open(name: string | null) {
-    if (!name) return;
-    navigatePane(activePane(workspace()), skillHref(name));
-    props.onNavigate();
-  }
-
-  function create(text: string | null) {
-    setCreatingSkill(false);
-    if (!text) return;
-    props.report(createSkill(text).then(open));
-  }
-
-  function picked(input: HTMLInputElement, run: (files: File[]) => Promise<string | null>) {
-    const files = [...(input.files ?? [])];
-    input.value = "";
-    if (files.length) props.report(run(files).then(open));
-  }
-
-  function title(s: SkillSummary) {
-    if (s.valid) return s.description ? `${s.name}: ${s.description}` : s.name;
-    const errors = s.issues.filter((i) => i.severity === "error").map((i) => i.message);
-    return `${s.name} is invalid${errors.length ? `: ${errors.join("; ")}` : ""}`;
-  }
-
+/** The Skills item after the agents: the Skills page, the number of skills, and a warning mark when any is invalid. */
+function SkillsEntry(props: { onNavigate: () => void }) {
+  const invalid = () => skills().filter((s) => !s.valid).length;
+  const title = () => {
+    const n = skills().length;
+    const count = `${n} skill${n === 1 ? "" : "s"}`;
+    return invalid() ? `Skills: ${count}, ${invalid()} invalid` : `Skills: ${count}`;
+  };
   return (
-    <div class="skills-nav" role="group" aria-labelledby="skills-nav-heading">
-      <div class="skills-nav-heading">
-        <span id="skills-nav-heading">Skills</span>
-        <Show when={!agentsReadOnly()}>
-          <button
-            ref={add}
-            type="button"
-            class="pinned-add"
-            aria-label="Add skill"
-            title="Add skill"
-            aria-haspopup="menu"
-            aria-expanded={menu()}
-            onClick={() => setMenu(!menu())}
-          >
-            <TypeIcon name="plus" size={16} />
-          </button>
-          <Show when={menu()}>
-            <MenuBox label="Add skill" anchor={() => add} onClose={() => setMenu(false)}>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenu(false);
-                  setCreatingSkill(true);
-                }}
-              >
-                New skill
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenu(false);
-                  zipInput.click();
-                }}
-              >
-                Import skill from a zip
-              </button>
-              <Show when={canPickFolder()}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenu(false);
-                    folderInput.click();
-                  }}
-                >
-                  Import skill from a folder
-                </button>
-              </Show>
-            </MenuBox>
-          </Show>
-          <input
-            ref={zipInput}
-            type="file"
-            accept=".zip,application/zip"
-            class="visually-hidden"
-            tabindex={-1}
-            aria-label="Skill zip"
-            onChange={(e) => picked(e.currentTarget, ([f]) => importSkillZip(f!, f!.name))}
-          />
-          <input
-            ref={(el) => {
-              folderInput = el;
-              el.setAttribute("webkitdirectory", "");
-            }}
-            type="file"
-            multiple
-            class="visually-hidden"
-            tabindex={-1}
-            aria-label="Skill folder"
-            onChange={(e) => picked(e.currentTarget, (files) => importSkillFolder(files))}
-          />
-        </Show>
-      </div>
-      <Show when={creatingSkill() && !agentsReadOnly()}>
-        <div class="pin-row pin-row-new">
+    <li>
+      <div class="pin-row agent-row skills-entry">
+        <a
+          href={SKILLS_HREF}
+          class="pin-note"
+          classList={{ active: isActiveLink(SKILLS_HREF) }}
+          title={title()}
+          onClick={() => props.onNavigate()}
+        >
           <TypeIcon name={SKILL_ICON} size={16} />
-          <NameInput label="New skill name" onDone={create} />
-        </div>
-      </Show>
-      <ul class="types-nav-list agents-nav-list skills-nav-list">
-        <For each={skills()}>
-          {(s) => (
-            <li>
-              <div class="pin-row agent-row" classList={{ "agent-broken": !s.valid }}>
-                <a
-                  href={skillHref(s.name)}
-                  class="pin-note"
-                  classList={{ active: isActiveLink(skillHref(s.name)) }}
-                  title={title(s)}
-                  onClick={() => props.onNavigate()}
-                >
-                  <TypeIcon name={s.valid ? SKILL_ICON : "triangle-alert"} size={16} />
-                  <span>{s.name}</span>
-                  <Show when={!s.valid}>
-                    <span class="visually-hidden"> (invalid)</span>
-                  </Show>
-                </a>
-              </div>
-            </li>
-          )}
-        </For>
-      </ul>
-      <Show when={skills().length === 0 && !creatingSkill()}>
-        <p class="muted skills-nav-empty">No skills yet.</p>
-      </Show>
-    </div>
+          <span class="skills-entry-label">Skills</span>
+          <Show when={invalid() > 0}>
+            <span class="skills-entry-warning" aria-label={`${invalid()} invalid`} role="img">
+              <TypeIcon name="triangle-alert" size={14} />
+            </span>
+          </Show>
+          <Show when={skills().length > 0}>
+            <span class="skills-entry-count">{skills().length}</span>
+          </Show>
+        </a>
+      </div>
+    </li>
   );
 }

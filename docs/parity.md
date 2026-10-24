@@ -285,14 +285,14 @@ The listing has 86 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/agents/{name}` | none | not used yet | Gap: the agent screen is ticket 171; no CLI command |
 | `PUT /api/agents/{name}` | none | not used yet | Gap: the agent screen is ticket 171; no CLI command |
 | `DELETE /api/agents/{name}` | none | not used yet | Gap: the agent screen is ticket 171; no CLI command |
-| `GET /api/skills` | none | Agents sidebar, Skills | Gap: no CLI command |
+| `GET /api/skills` | none | Skills page, Agents sidebar Skills item | Gap: no CLI command |
 | `GET /api/skills/{name}` | none | Skill screen | Gap: no CLI command |
 | `PUT /api/skills/{name}` | none | Skill screen, Instructions; New skill | Gap: no CLI command |
 | `DELETE /api/skills/{name}` | none | Skill screen, Delete skill | Gap: no CLI command |
 | `GET /api/skills/{name}/files/{*path}` | none | Skill screen, Files | Gap: no CLI command |
 | `PUT /api/skills/{name}/files/{*path}` | none | Skill screen, Files | Gap: no CLI command |
 | `DELETE /api/skills/{name}/files/{*path}` | none | Skill screen, Files | Gap: no CLI command |
-| `POST /api/skills/import` | none | Agents sidebar, Import skill | Gap: no CLI command |
+| `POST /api/skills/import` | none | Skills page, Import | Gap: no CLI command |
 | `GET /api/skills/{name}/export` | none | Skill screen, Export | Gap: no CLI command |
 | `GET /api/cron` | none | Scheduled editor, schedule preview | Gap: no CLI command (noticed while adding notifications; not filed) |
 | `GET /api/tasks/{name}/runs` | `vault task history` | Tasks | |

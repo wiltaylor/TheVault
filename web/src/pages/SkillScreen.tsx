@@ -18,6 +18,7 @@ import {
   DESCRIPTION_PLACEHOLDER,
   SKILL_COMPATIBILITY_MAX,
   SKILL_DESCRIPTION_MAX,
+  SKILLS_HREF,
   SKILL_ICON,
   type SkillForm,
   fileTree,
@@ -546,7 +547,7 @@ export function SkillScreen() {
     try {
       await api.deleteSkill(name);
       await skillsChanged();
-      navigate("/daily");
+      navigate(SKILLS_HREF);
     } catch (e) {
       setError(errorText(e));
     }

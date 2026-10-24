@@ -63,15 +63,20 @@ A broken limit is 413 `too_large`. Every write is recorded in the activity log a
 
 ## Skills in the web app
 
-The left sidebar's **Agents** section lists your skills under **Skills**, beneath the agents. Each skill shows by its name. A skill that fails the format's checks shows a warning mark; hover over it to read why. An invalid skill is offered to no agent until it is fixed.
+The left sidebar's **Agents** section ends with one **Skills** item, after the agents. Its number is how many skills the vault holds, and a warning mark beside it means at least one skill fails the format's checks. Click it to open the Skills page, `/skills`, in the active pane.
 
-Use the **+** beside **Skills** to add one:
+The Skills page lists every skill by name. Each one shows its description (the first two lines), its number of files and their size, and its license if it has one. A skill that fails the format's checks is marked **Invalid** with its first problem; open it to see them all. An invalid skill is offered to no agent until it is fixed. Type in the search box to list only the skills whose name, description or license holds every word you type. Click a skill's name to open its skill screen.
 
-- **New skill** asks for a name and creates the skill with a `SKILL.md` holding that name and a placeholder description. The name becomes lower case, with a hyphen for each run of other characters, as the format requires. Replace the placeholder description before you save: agents choose a skill by its description.
-- **Import skill from a zip** takes a zip holding one top-level folder, or `SKILL.md` at the zip's root. The skill is named by its frontmatter `name`. Nothing is written if the skill fails the checks. If a skill with that name exists, you are asked whether to replace it.
-- **Import skill from a folder** takes a skill folder from your computer. It appears only in browsers that can choose a folder.
+Two buttons in the page's header add skills:
 
-The command palette has **New skill** and **Open skill** followed by the skill's name.
+- **New skill** asks for a name, creates the skill with a `SKILL.md` holding that name and a placeholder description, and opens it. The name becomes lower case, with a hyphen for each run of other characters, as the format requires. Replace the placeholder description before you save: agents choose a skill by its description.
+- **Import** offers two choices:
+  - **From a zip** takes a zip holding one top-level folder, or `SKILL.md` at the zip's root. The skill is named by its frontmatter `name`. Nothing is written if the skill fails the checks. If a skill with that name exists, you are asked whether to replace it. The imported skill opens.
+  - **From a folder** takes a skill folder from your computer, with the same checks. It appears only in browsers that can choose a folder.
+
+With no skills yet, the page explains what a skill is and links to this page.
+
+The command palette has **New skill**, which opens the Skills page with its name box shown, and **Open skill** followed by the skill's name.
 
 ## The skill screen
 
@@ -115,7 +120,7 @@ The tree shows `SKILL.md` first, then the folders, then the other files, each wi
 The **⋯** menu beside the skill's name holds:
 
 - **Export**: downloads the skill's folder as `<name>.zip`, ready to import into another vault or tool.
-- **Delete skill**: deletes the skill's folder after you confirm. No agent is offered it afterwards.
+- **Delete skill**: deletes the skill's folder after you confirm, and returns to the Skills page. No agent is offered it afterwards.
 
 ## How agents use skills
 
@@ -127,4 +132,4 @@ Scripts in a skill run only in the browser box: an agent with Browser automation
 
 ## In the apps
 
-The desktop and Android apps list the skills and open the skill screen, but only show them: there is no **+**, no Save and no file changes, and the screen says "Edit skills in the web app". Changing a skill needs `admin`, which an app's device token never has. **Export** and **Download** work in the apps.
+The desktop and Android apps have the **Skills** item, the Skills page and the skill screen, but only show skills: there is no **New skill**, no **Import**, no Save and no file changes, and the screen says "Edit skills in the web app". Changing a skill needs `admin`, which an app's device token never has. **Export** and **Download** work in the apps.

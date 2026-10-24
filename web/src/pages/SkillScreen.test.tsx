@@ -96,7 +96,7 @@ async function show(path = "/skills/pdf-forms") {
   render(() => (
     <Router>
       <Route path={["/skills/:name", "/skills/:name/:tab"]} component={SkillScreen} />
-      <Route path="/daily" component={() => <p>Daily</p>} />
+      <Route path="/skills" component={() => <p>Skills page</p>} />
     </Router>
   ));
   await screen.findByRole("heading", { name: "pdf-forms" });
@@ -305,7 +305,7 @@ describe("the ⋯ menu", () => {
     fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Delete skill" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Delete the skill pdf-forms?"));
     await waitFor(() => expect(deleteSkill).toHaveBeenCalledWith("pdf-forms"));
-    expect(await screen.findByText("Daily")).toBeTruthy();
+    expect(await screen.findByText("Skills page")).toBeTruthy();
   });
 
   it("says when there is no such skill", async () => {

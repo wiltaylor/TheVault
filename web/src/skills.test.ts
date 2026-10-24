@@ -4,9 +4,14 @@
 
 import { describe, expect, it } from "vitest";
 import type { SkillSummary } from "./api";
+import * as M from "./workspace/model";
+import { workspace } from "./workspace/store";
 import { agentActions } from "./palette/actions";
 import {
   crc32,
+  creatingSkill,
+  setCreatingSkill,
+  skillMatches,
   fileTree,
   isTextFile,
   newSkillText,
@@ -172,6 +177,22 @@ describe("the palette's skill actions", () => {
     expect(actions[1]!.icon).toEqual({ type: "book-open" });
     expect(actions[2]!.icon).toEqual({ type: "triangle-alert" });
     expect(typeof actions[0]!.run).toBe("function");
+  });
+
+  it("New skill opens the Skills page with its name box shown", () => {
+    const create = agentActions([], false, skills).find((a) => a.id === "skill:new")!;
+    create.run!();
+    expect(creatingSkill()).toBe(true);
+    const ws = workspace();
+    expect(M.location(ws, M.activePane(ws))).toBe("/skills");
+    setCreatingSkill(false);
+  });
+
+  it("matches a search by every word in the name, description or license", () => {
+    expect(skillMatches(skills[0]!, "")).toBe(true);
+    expect(skillMatches(skills[0]!, "PDF fill")).toBe(true);
+    expect(skillMatches(skills[0]!, "pdf daily")).toBe(false);
+    expect(skillMatches({ ...skills[0]!, license: "MIT" }, "mit")).toBe(true);
   });
 
   it("leaves out New skill in the apps", () => {

@@ -6,11 +6,11 @@ import type { AgentSummary, SkillSummary, TypeDef } from "../api";
 import type { ActiveNote } from "../archive";
 import { openCapture } from "../capture/store";
 import { focusPanel, setLeftDrawer, toggleSidebar } from "../sidebars";
-import { SKILL_ICON, setCreatingSkill, skillHref } from "../skills";
+import { SKILLS_HREF, SKILL_ICON, setCreatingSkill, skillHref } from "../skills";
 import { typeNavLabel } from "../sidebarTypes";
 import { toggleTheme } from "../theme";
 import * as M from "../workspace/model";
-import { closePane, closeTab, openTab, splitPane, workspace } from "../workspace/store";
+import { closePane, closeTab, navigatePane, openTab, splitPane, workspace } from "../workspace/store";
 import type { ActionLike } from "./model";
 
 export type Glyph =
@@ -216,7 +216,8 @@ function showAgentsSection() {
 /**
  * "New agent", in the web app only, and "Open agent …" for each agent (agents G3). New agent
  * opens the left sidebar's name box for it, in the drawer on a narrow screen. With `skills`,
- * "New skill" (the web app only) and "Open skill …" for each skill, the same way (skills S4).
+ * "New skill" (the web app only), which opens the Skills page with its name box shown, and
+ * "Open skill …" for each skill (skills S4).
  */
 export function agentActions(list: readonly AgentSummary[], readOnly: boolean, skills: readonly SkillSummary[] = []): Action[] {
   const out: Action[] = [];
@@ -261,8 +262,8 @@ export function agentActions(list: readonly AgentSummary[], readOnly: boolean, s
       keywords: ["Create skill", "Add skill", "Agent skill", "SKILL.md"],
       icon: { type: SKILL_ICON },
       run: () => {
-        showAgentsSection();
         setCreatingSkill(true);
+        navigatePane(M.activePane(workspace()), SKILLS_HREF);
       },
     });
   }

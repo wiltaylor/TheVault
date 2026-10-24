@@ -10170,33 +10170,111 @@ button.toast-action {
   padding: 0.75rem 0;
 }
 
-/* Skills beneath the agents in the left sidebar (skills S4) */
-.skills-nav-heading {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  margin: 0.4rem 0 0.1rem;
-  padding-left: 1.45rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.skills-nav-heading > span {
+/* The Skills item after the agents in the left sidebar (skills S4) */
+.skills-entry .skills-entry-label {
   flex: 1;
 }
 
-.skills-nav-heading .pinned-add {
-  width: 1.5rem;
-  height: 1.5rem;
+.skills-entry .skills-entry-warning {
+  display: inline-flex;
+  flex: none;
 }
 
-.skills-nav-empty {
-  margin: 0.15rem 0 0.25rem 1.45rem;
+.skills-entry .skills-entry-warning .icon {
+  color: var(--danger);
+}
+
+.skills-entry .skills-entry-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The Skills page (skills S4) */
+.skills-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.skills-new {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 24rem;
+  margin-bottom: 0.75rem;
+}
+
+.skills-new .pin-name-input {
+  flex: 1;
+}
+
+.skills-empty {
+  max-width: 40rem;
+}
+
+.skills-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.skill-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+}
+
+.skill-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.skill-card-head .icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.skill-card-invalid .skill-card-head .icon {
+  color: var(--danger);
+}
+
+.skill-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.skill-card-description {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.skill-card-issue {
+  margin: 0;
   font-size: 0.85rem;
+}
+
+.skill-card-meta {
+  margin: auto 0 0;
+  font-size: 0.8rem;
 }
 
 /* The skill screen (skills S5) */

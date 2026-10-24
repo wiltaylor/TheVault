@@ -14,6 +14,7 @@ import { Outbox } from "./pages/Outbox";
 import { Ai } from "./pages/Ai";
 import { AgentScreen } from "./pages/AgentScreen";
 import { SkillScreen } from "./pages/SkillScreen";
+import { Skills } from "./pages/Skills";
 import { GoogleCallback, Integrations } from "./pages/Integrations";
 import { NoteHistoryRedirect } from "./history/redirect";
 import { NewNote, NoteView } from "./pages/NoteView";
@@ -69,6 +70,7 @@ export function paneRoutes() {
       </Route>
       <Route path="/integrations/google/callback" component={GoogleCallback} />
       <Route path={["/agents/:name", "/agents/:name/:tab"]} component={AgentScreen} />
+      <Route path="/skills" component={Skills} />
       <Route path={["/skills/:name", "/skills/:name/:tab"]} component={SkillScreen} />
       <Route path="/trash" component={Trash} />
       <Route path="/archive" component={Archive} />

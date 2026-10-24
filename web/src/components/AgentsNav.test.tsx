@@ -1,8 +1,8 @@
 // The left sidebar's Agents section (agents G3, G6): the list with Assistant first, + to create
 // one from a name and open it, the ⋯ menu's Open, Disable or Enable, and Delete after a confirm,
 // Assistant without Disable or Delete, disabled agents dimmed, and a read-only list in the apps.
-// Beneath the agents, the Skills subsection (skills S4): each skill by name with a warning mark
-// when invalid, the + menu's New skill and Import from a zip or a folder, read only in the apps.
+// After the agents, one Skills item (skills S4): the Skills page, the number of skills and a
+// warning mark when any is invalid, with no entry per skill.
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,12 +14,10 @@ const putAgent = vi.fn();
 const deleteAgent = vi.fn();
 const appInfo = vi.fn();
 const skillsList = vi.fn();
-const putSkill = vi.fn();
-const importSkill = vi.fn();
 const navigatePane = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, agents: agentsList, agent, putAgent, deleteAgent, skills: skillsList, putSkill, importSkill } };
+  return { ...real, api: { ...real.api, agents: agentsList, agent, putAgent, deleteAgent, skills: skillsList } };
 });
 vi.mock("../inApp", () => ({ appInfo }));
 vi.mock("../workspace/store", async (orig) => {
@@ -29,7 +27,6 @@ vi.mock("../workspace/store", async (orig) => {
 
 const { AgentsNav } = await import("./AgentsNav");
 const { setAgentsOpen, setCreatingAgent } = await import("../agents");
-const { setCreatingSkill, DESCRIPTION_PLACEHOLDER } = await import("../skills");
 const { ApiError } = await import("../api");
 
 function skill(name: string, more: Partial<SkillSummary> = {}): SkillSummary {
@@ -92,7 +89,6 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   setCreatingAgent(false);
-  setCreatingSkill(false);
 });
 
 function nav() {
@@ -108,7 +104,7 @@ describe("the sidebar's Agents section", () => {
   it("lists every agent by label, Assistant first, each opening its agent screen", async () => {
     await shown();
     const links = nav().getAllByRole("link");
-    expect(links.map((l) => l.textContent)).toEqual(["Assistant", "Inbox triage"]);
+    expect(links.map((l) => l.textContent)).toEqual(["Assistant", "Inbox triage", "Skills"]);
     expect(links[1]!.getAttribute("href")).toBe("/agents/inbox_triage");
     expect(nav().getByRole("button", { name: "Agents" })).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(nav().getByRole("button", { name: "Agents" }));
@@ -215,111 +211,48 @@ describe("running agents (agents G17)", () => {
   });
 });
 
-describe("the Skills subsection (skills S4)", () => {
-  function skillsGroup() {
-    return within(screen.getByRole("group", { name: "Skills" }));
+describe("the Skills item (skills S4)", () => {
+  function skillsLink() {
+    return nav().getByRole("link", { name: /^Skills/ });
   }
 
-  it("lists every skill by name beneath the agents, an invalid one with a warning mark", async () => {
+  it("is one item after the agents, opening the Skills page, with the number of skills", async () => {
+    skillList = [skill("pdf-forms"), skill("notes-helper")];
+    await shown();
+    await waitFor(() => expect(skillsLink()).toHaveTextContent("2"));
+    const links = nav().getAllByRole("link");
+    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/agents/assistant", "/agents/inbox_triage", "/skills"]);
+    expect(skillsLink()).toHaveAttribute("title", "Skills: 2 skills");
+    expect(skillsLink().closest(".agent-row")).toBeTruthy();
+    expect(within(skillsLink()).queryByRole("img", { name: /invalid/ })).toBeNull();
+    // No entry per skill, and no + menu for skills.
+    expect(nav().queryByRole("link", { name: "pdf-forms" })).toBeNull();
+    expect(nav().queryByRole("button", { name: "Add skill" })).toBeNull();
+    expect(screen.queryByLabelText("Skill zip")).toBeNull();
+  });
+
+  it("shows a warning mark when any skill is invalid", async () => {
     skillList = [
       skill("pdf-forms"),
       skill("broken", { valid: false, issues: [{ at: "name", message: "name must match the folder", severity: "error" }] }),
     ];
-    render(() => <AgentsNav onNavigate={() => {}} />);
-    await waitFor(() => expect(skillsGroup().getAllByRole("link")).toHaveLength(2));
-    const links = skillsGroup().getAllByRole("link");
-    // Sorted by name.
-    expect(links.map((l) => l.textContent)).toEqual(["broken (invalid)", "pdf-forms"]);
-    expect(links[1]!.getAttribute("href")).toBe("/skills/pdf-forms");
-    expect(links[1]!).toHaveAttribute("title", "pdf-forms: What pdf-forms does.");
-    expect(links[0]!).toHaveAttribute("title", "broken is invalid: name must match the folder");
-    expect(links[0]!.closest(".agent-row")).toHaveClass("agent-broken");
-    // Beneath the agents, inside the Agents section.
-    const agentLinks = nav().getAllByRole("link").map((l) => l.textContent);
-    expect(agentLinks.indexOf("Inbox triage")).toBeLessThan(agentLinks.indexOf("pdf-forms"));
+    await shown();
+    await waitFor(() => expect(within(skillsLink()).getByRole("img", { name: "1 invalid" })).toBeTruthy());
+    expect(skillsLink()).toHaveAttribute("title", "Skills: 2 skills, 1 invalid");
   });
 
-  it("lists no skills from a server that has none (404)", async () => {
+  it("shows no count from a server without skills (404), and no error", async () => {
     skillsList.mockRejectedValue(new ApiError(404, { error: "not_found" }));
-    render(() => <AgentsNav onNavigate={() => {}} />);
-    await screen.findByRole("link", { name: "Inbox triage" });
-    expect(await skillsGroup().findByText("No skills yet.")).toBeTruthy();
+    await shown();
+    await waitFor(() => expect(skillsList).toHaveBeenCalled());
+    expect(skillsLink().textContent).toBe("Skills");
     expect(nav().queryByRole("alert")).toBeNull();
   });
 
-  it("makes a new skill from a name, with the placeholder description, and opens it", async () => {
-    await shown();
-    putSkill.mockImplementation(async (name: string) => {
-      skillList = [skill(name, { description: DESCRIPTION_PLACEHOLDER })];
-    });
-    fireEvent.click(skillsGroup().getByRole("button", { name: "Add skill" }));
-    const menu = within(screen.getByRole("menu", { name: "Add skill" }));
-    expect(menu.getAllByRole("menuitem").map((b) => b.textContent)).toContain("Import skill from a zip");
-    fireEvent.click(menu.getByRole("menuitem", { name: "New skill" }));
-    const box = skillsGroup().getByLabelText("New skill name");
-    fireEvent.input(box, { target: { value: "PDF Forms" } });
-    fireEvent.keyDown(box, { key: "Enter" });
-    await waitFor(() => expect(putSkill).toHaveBeenCalled());
-    const [name, text] = putSkill.mock.calls[0]!;
-    expect(name).toBe("pdf-forms");
-    expect(text).toMatch(/^---\nname: pdf-forms\ndescription: Replace this with what the skill does and when to use it\.\n---\n/);
-    await waitFor(() => expect(navigatePane).toHaveBeenCalledWith(expect.any(String), "/skills/pdf-forms"));
-    expect(await skillsGroup().findByRole("link", { name: "pdf-forms" })).toBeTruthy();
-  });
-
-  it("refuses a name a skill already has", async () => {
-    skillList = [skill("pdf-forms")];
-    await shown();
-    await skillsGroup().findByRole("link", { name: "pdf-forms" });
-    setCreatingSkill(true);
-    const box = await skillsGroup().findByLabelText("New skill name");
-    fireEvent.input(box, { target: { value: "pdf forms" } });
-    fireEvent.keyDown(box, { key: "Enter" });
-    expect(await nav().findByRole("alert")).toHaveTextContent("There is already a skill called pdf-forms.");
-    expect(putSkill).not.toHaveBeenCalled();
-  });
-
-  it("imports a zip, asks before replacing a skill of that name, and opens it", async () => {
-    await shown();
-    importSkill
-      .mockRejectedValueOnce(new ApiError(409, { error: "exists", name: "pdf-forms", message: "there is already a skill pdf-forms" }))
-      .mockImplementationOnce(async () => {
-        skillList = [skill("pdf-forms")];
-        return { ...skill("pdf-forms"), body: "", files: [] };
-      });
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const zip = new File([new Uint8Array([80, 75, 5, 6])], "pdf-forms.zip", { type: "application/zip" });
-    fireEvent.change(skillsGroup().getByLabelText("Skill zip"), { target: { files: [zip] } });
-    await waitFor(() => expect(importSkill).toHaveBeenCalledTimes(2));
-    expect(importSkill.mock.calls[0]).toEqual([zip, "pdf-forms.zip"]);
-    expect(importSkill.mock.calls[1]).toEqual([zip, "pdf-forms.zip", true]);
-    expect(confirm).toHaveBeenCalledWith("There is already a skill called pdf-forms. Replace it with the imported one?");
-    await waitFor(() => expect(navigatePane).toHaveBeenCalledWith(expect.any(String), "/skills/pdf-forms"));
-    confirm.mockRestore();
-  });
-
-  it("imports a folder as a zip of its files under their relative paths", async () => {
-    await shown();
-    importSkill.mockImplementation(async () => ({ ...skill("notes-helper"), body: "", files: [] }));
-    const md = new File(["---\nname: notes-helper\n---\n"], "SKILL.md");
-    Object.defineProperty(md, "webkitRelativePath", { value: "notes-helper/SKILL.md" });
-    const script = new File(["echo hi"], "run.sh");
-    Object.defineProperty(script, "webkitRelativePath", { value: "notes-helper/scripts/run.sh" });
-    fireEvent.change(skillsGroup().getByLabelText("Skill folder"), { target: { files: [md, script] } });
-    await waitFor(() => expect(importSkill).toHaveBeenCalled());
-    const [blob, filename] = importSkill.mock.calls[0]!;
-    expect(filename).toBe("notes-helper.zip");
-    const text = new TextDecoder("latin1").decode(new Uint8Array(await (blob as Blob).arrayBuffer()));
-    expect(text).toContain("notes-helper/SKILL.md");
-    expect(text).toContain("notes-helper/scripts/run.sh");
-    await waitFor(() => expect(navigatePane).toHaveBeenCalledWith(expect.any(String), "/skills/notes-helper"));
-  });
-
-  it("is read only in the apps: the skills are listed with no +", async () => {
+  it("is there in the apps too", async () => {
     appInfo.mockResolvedValue({ app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" });
     skillList = [skill("pdf-forms")];
     await shown();
-    expect(await skillsGroup().findByRole("link", { name: "pdf-forms" })).toBeTruthy();
-    await waitFor(() => expect(skillsGroup().queryByRole("button", { name: "Add skill" })).toBeNull());
+    await waitFor(() => expect(skillsLink()).toHaveTextContent("1"));
   });
 });
