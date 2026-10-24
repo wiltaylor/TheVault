@@ -148,7 +148,7 @@ fn sync_info_needs_no_credentials() {
     let server = TestServer::start();
     let info = send(Client::new().get(server.url("/api/sync/info")), 200);
     assert_eq!(info["protocol"], 1);
-    assert_eq!(info["format_version"], 2);
+    assert_eq!(info["format_version"], 3);
     assert_eq!(info["server_version"], env!("CARGO_PKG_VERSION"));
     // The vault's id tells a device which vault its local copy belongs to (ticket 143).
     let vault_id = open_state(&server).vault_id().unwrap();
@@ -484,4 +484,68 @@ fn device_tokens_cannot_write_definitions() {
     // It reads them, and the feed, like any other token.
     send(device.get(server.url("/api/types/memo")), 200);
     send(device.get(server.url("/api/sync/changes")), 200);
+}
+
+#[test]
+fn skill_files_are_in_the_feed_as_text_or_base64() {
+    use base64::Engine as _;
+    let server = TestServer::start();
+    let admin = bearer(server.admin_token());
+    let (_, token) = pair(&server, "Phone");
+    let device = bearer(&token);
+    let start = changes(&device, &server, 0, None)["latest"]
+        .as_i64()
+        .unwrap();
+    let md = "---\nname: pdf\ndescription: Fills forms.\n---\n# PDF\n";
+    send(
+        admin
+            .put(server.url("/api/skills/pdf"))
+            .header(CONTENT_TYPE, "text/markdown")
+            .body(md),
+        201,
+    );
+    let blob: Vec<u8> = vec![0, 159, 146, 150, 255];
+    send(
+        admin
+            .put(server.url("/api/skills/pdf/files/assets/blob.bin"))
+            .body(blob.clone()),
+        200,
+    );
+    let page = changes(&device, &server, start, None);
+    assert_eq!(
+        summary(&page),
+        [
+            ("skill".into(), "skills/pdf/SKILL.md".into(), false),
+            ("skill".into(), "skills/pdf/assets/blob.bin".into(), false),
+        ]
+    );
+    let entries = page["changes"].as_array().unwrap();
+    assert_eq!(entries[0]["name"], "pdf");
+    assert_eq!(entries[0]["text"], md);
+    assert!(entries[0].get("base64").is_none());
+    assert_eq!(entries[1]["text"], Value::Null);
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(entries[1]["base64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(decoded, blob);
+    // A device token reads skills but cannot change them (skills S3).
+    send(device.get(server.url("/api/skills/pdf")), 200);
+    send(
+        device
+            .put(server.url("/api/skills/pdf"))
+            .header(CONTENT_TYPE, "text/markdown")
+            .body(md),
+        403,
+    );
+    send(admin.delete(server.url("/api/skills/pdf")), 200);
+    let next = page["next"].as_i64().unwrap();
+    let mut gone = summary(&changes(&device, &server, next, None));
+    gone.sort();
+    assert_eq!(
+        gone,
+        [
+            ("skill".into(), "skills/pdf/SKILL.md".into(), true),
+            ("skill".into(), "skills/pdf/assets/blob.bin".into(), true),
+        ]
+    );
 }

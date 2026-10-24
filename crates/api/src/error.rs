@@ -184,6 +184,13 @@ impl From<Error> for ApiError {
             Error::InUse { code, by, .. } => {
                 (StatusCode::CONFLICT, json!({ "error": code, "by": by }))
             }
+            Error::Exists { code, name, .. } => {
+                (StatusCode::CONFLICT, json!({ "error": code, "name": name }))
+            }
+            Error::TooLarge(_) => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                json!({ "error": "too_large" }),
+            ),
             Error::State(e) => return ApiError::from_state(e),
             Error::Schema(_) | Error::Store(_) | Error::Index(_) | Error::StepDeferred(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

@@ -13,6 +13,7 @@ query-syntax.workspace = true
 store.workspace = true
 wcl_lang.workspace = true
 thiserror.workspace = true
+yaml-rust2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

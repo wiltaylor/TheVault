@@ -29,6 +29,9 @@
 //! under `/api/ai/chat/turns`, which the apps use; `/api/ai/apply` applies a proposed change and
 //! `/api/ai/providers` lists the providers set up (ai D23).
 //!
+//! Agent Skills live under `/api/skills`: read by any token, written, imported from a zip and
+//! deleted with `admin`, and exported as a zip (skills S3).
+//!
 //! Settings > Integrations > Google signs in with the user's own OAuth client under
 //! `/api/integrations/google` (google-sync D1, D18).
 //!
@@ -93,6 +96,7 @@ mod notifications;
 mod openapi;
 mod pins;
 mod query;
+mod skills;
 mod sync;
 mod tasks;
 mod tokens;
@@ -283,6 +287,19 @@ fn build() -> Built {
         .get("/api/agents/{name}", agent_files::read)
         .put("/api/agents/{name}", agent_files::put)
         .delete("/api/agents/{name}", agent_files::delete)
+        .get("/api/skills", skills::list)
+        .post_up_to("/api/skills/import", skills::MAX_IMPORT, skills::import)
+        .get("/api/skills/{name}", skills::read)
+        .put_up_to("/api/skills/{name}", skills::MAX_SKILL_MD, skills::put)
+        .delete("/api/skills/{name}", skills::delete)
+        .get("/api/skills/{name}/export", skills::export)
+        .get("/api/skills/{name}/files/{*path}", skills::file)
+        .put_up_to(
+            "/api/skills/{name}/files/{*path}",
+            skills::MAX_FILE_UPLOAD,
+            skills::put_file,
+        )
+        .delete("/api/skills/{name}/files/{*path}", skills::delete_file)
         .get("/api/agents/calls/{call}", agent_runs::call)
         .get("/api/agents/{name}/runs", agent_runs::list)
         .get("/api/agents/{name}/threads", agent_threads::list)

@@ -101,8 +101,8 @@ pub(crate) enum Route {
     /// `GET /api/app/ai/turns/{turn}`: the turn's events so far, for a webview that cannot read
     /// a stream.
     AppAiTurn { turn: String },
-    /// Credentials, and changes to agent files, that need `admin`, which a device token never
-    /// has (agents G2).
+    /// Credentials, and changes to agent files and skills, that need `admin`, which a device
+    /// token never has (agents G2, skills S3).
     NeedsWebApp,
 }
 
@@ -201,6 +201,10 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
             .and_then(segment)
             .is_some()
     {
+        return Route::NeedsWebApp;
+    }
+    // Skills are definitions too (skills S3): the apps show them read-only.
+    if !get && under(path, "/api/skills") {
         return Route::NeedsWebApp;
     }
     if path == "/api/events" && get {
@@ -909,6 +913,18 @@ mod tests {
             route(&Method::DELETE, "/api/agents/triage"),
             Route::NeedsWebApp
         );
+        assert_eq!(route(&get, "/api/skills"), Route::Local);
+        assert_eq!(route(&get, "/api/skills/pdf/files/a/b.png"), Route::Local);
+        assert_eq!(route(&get, "/api/skills/pdf/export"), Route::Local);
+        for (method, path) in [
+            (Method::PUT, "/api/skills/pdf"),
+            (Method::PUT, "/api/skills/pdf/files/a.txt"),
+            (Method::DELETE, "/api/skills/pdf/files/a.txt"),
+            (Method::DELETE, "/api/skills/pdf"),
+            (post.clone(), "/api/skills/import"),
+        ] {
+            assert_eq!(route(&method, path), Route::NeedsWebApp, "{method} {path}");
+        }
         assert_eq!(
             route(&get, &format!("/api/notes/{id}/history")),
             Route::History

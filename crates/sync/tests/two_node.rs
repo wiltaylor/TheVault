@@ -633,6 +633,62 @@ fn definitions_are_not_pushed_from_the_device() {
 }
 
 #[test]
+fn a_skill_with_a_binary_asset_reaches_the_device_and_its_delete_follows() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Http::admin(&server);
+    let phone = Device::pair(&server, "Phone");
+    phone.sync();
+    let md =
+        "---\nname: pdf\ndescription: Fills PDF forms. Use when a PDF form arrives.\n---\n# PDF\n";
+    admin.send(
+        admin
+            .client
+            .put(server.url("/api/skills/pdf"))
+            .header("Content-Type", "text/markdown")
+            .body(md),
+        201,
+    );
+    let blob: Vec<u8> = (0..=255u8).chain([0, 0xff, 0xfe]).collect();
+    admin.send(
+        admin
+            .client
+            .put(server.url("/api/skills/pdf/files/assets/logo.bin"))
+            .body(blob.clone()),
+        200,
+    );
+    phone.sync();
+
+    let skill = phone.call("GET", "/api/skills/pdf", None, 200);
+    assert_eq!(skill["valid"], true);
+    assert_eq!(skill["files"].as_array().unwrap().len(), 2);
+    let (status, bytes) = phone.runtime.block_on(async {
+        let req = Request::builder()
+            .uri("/api/skills/pdf/files/assets/logo.bin")
+            .body(Body::empty())
+            .unwrap();
+        let res = phone.embedded.handle(req).await;
+        let status = res.status().as_u16();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, bytes.to_vec())
+    });
+    assert_eq!(status, 200);
+    assert_eq!(bytes, blob);
+    // The apps show skills read-only (skills S3).
+    let refused = phone.call("PUT", "/api/skills/pdf", Some(json!({ "text": md })), 403);
+    assert_eq!(refused["error"], "needs_web_app");
+
+    admin.send(admin.client.delete(server.url("/api/skills/pdf")), 200);
+    phone.sync();
+    assert_eq!(
+        phone.call("GET", "/api/skills", None, 200)["skills"],
+        json!([])
+    );
+    phone.call("GET", "/api/skills/pdf", None, 404);
+}
+
+#[test]
 fn desktop_keeps_every_asset_and_android_fetches_on_demand() {
     let server = TestServer::start_seeded(seed);
     let admin = Http::admin(&server);

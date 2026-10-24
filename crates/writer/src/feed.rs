@@ -5,7 +5,8 @@
 //! which journals the synced files it wrote or deleted once the commit is in. Opening the vault
 //! reconciles the feed with the files on disk, which covers files written before the feed
 //! existed, files added outside the server, and a crash between a commit and its journal entry.
-//! Assets are not in the feed: a device fetches them on demand (D19).
+//! Assets are not in the feed: a device fetches them on demand (D19). Skills are: every file under
+//! `skills/<name>/` is an entry of kind `skill`, binary files too (skills S1).
 
 use std::ops::ControlFlow;
 
@@ -28,6 +29,12 @@ pub const SYNCED_FILES: [(&str, &str, &str); 6] = [
 /// `types/memo.wcl`. `None` for any other path.
 pub fn synced_file(path: &str) -> Option<(&'static str, &str)> {
     let (dir, file) = path.split_once('/')?;
+    if dir == store::SKILLS_DIR {
+        // Every file of a skill, at any depth, named by the skill (skills S1).
+        let (name, rest) = file.split_once('/')?;
+        return (store::is_skill_folder(name) && !rest.is_empty() && !rest.ends_with('/'))
+            .then_some(("skill", name));
+    }
     SYNCED_FILES.iter().find_map(|(d, ext, kind)| {
         let name = file.strip_suffix(ext).filter(|_| *d == dir)?;
         (!name.is_empty() && !name.contains('/')).then_some((*kind, name))
@@ -63,6 +70,11 @@ fn synced_on_disk(vault: &Vault) -> Result<Vec<String>> {
             }
         }
     }
+    for folder in vault.skill_folders()? {
+        for f in vault.skill_tree(&folder)?.files {
+            out.push(format!("{}/{folder}/{}", store::SKILLS_DIR, f.path));
+        }
+    }
     out.sort();
     Ok(out)
 }
@@ -84,6 +96,23 @@ impl Writer {
         let full = self.vault.root().join(path);
         match std::fs::read_to_string(&full) {
             Ok(text) => Ok(Some(text)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(Error::Store(store::Error::Io { path: full, source })),
+        }
+    }
+
+    /// The bytes of synced file `path` as it is now, or `None` when it does not exist or `path` is
+    /// not a synced file. Skill files may be binary (skills S1).
+    pub fn read_synced_bytes(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        if synced_file(path).is_none() {
+            return Ok(None);
+        }
+        let full = self.vault.root().join(path);
+        if std::fs::symlink_metadata(&full).is_ok_and(|m| !m.is_file()) {
+            return Ok(None);
+        }
+        match std::fs::read(&full) {
+            Ok(bytes) => Ok(Some(bytes)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(source) => Err(Error::Store(store::Error::Io { path: full, source })),
         }
@@ -149,7 +178,15 @@ mod tests {
             synced_file("agents/assistant.wcl"),
             Some(("agent", "assistant"))
         );
+        assert_eq!(synced_file("skills/pdf/SKILL.md"), Some(("skill", "pdf")));
+        assert_eq!(
+            synced_file("skills/pdf/assets/logo.png"),
+            Some(("skill", "pdf"))
+        );
         for other in [
+            "skills/pdf",
+            "skills/pdf/",
+            "skills/.hidden/SKILL.md",
             "notes/memo/01JB8Z4K2MQ7V3X9T5R6W8Y2ZA.wcl",
             "assets/01JB8Z4K2MQ7V3X9T5R6W8Y2ZA/a.png",
             "types/memo.ws",

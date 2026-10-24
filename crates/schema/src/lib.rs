@@ -4,7 +4,8 @@
 //! express. [`TypeDef::parse`], [`Taxonomy::parse`] and [`Agent::parse`] check one definition
 //! file each, and [`Schema::new`] checks the rules between them: reference targets and inverses,
 //! and the taxonomies fields name. [`Schema::validate_note`] checks a note against its type, the notes it
-//! references and the terms it holds.
+//! references and the terms it holds. [`parse_skill_md`] checks an Agent Skill's `SKILL.md`
+//! (skills S2).
 
 mod agents;
 mod blocks;
@@ -16,6 +17,7 @@ mod inline;
 pub mod migrate;
 mod note;
 mod queryviews;
+mod skills;
 mod taxonomy;
 mod types;
 
@@ -48,6 +50,10 @@ pub use inline::{
 };
 pub use note::{NoteLookup, NoteReport};
 pub use queryviews::{FieldRename, VIEW_FIELD_ITEMS, query_view_issues, reads_type};
+pub use skills::{
+    SKILL_COMPATIBILITY_MAX, SKILL_DESCRIPTION_MAX, SKILL_KEYS, SKILL_NAME_MAX, SkillMd,
+    is_skill_name, parse_skill_md, skill_name_problem, split_frontmatter,
+};
 pub use taxonomy::{Taxonomy, Term};
 pub use types::{
     Accept, EVENTS, FieldDef, FieldKind, Handler, LIST_PAGE_SIZE_MAX, LIST_PAGE_SIZE_MIN,

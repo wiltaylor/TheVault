@@ -150,21 +150,28 @@ impl Writer {
         }
     }
 
-    /// Write synced files (types, taxonomies, scripts, tasks, `devices/`) exactly as the home
-    /// server holds them, `None` deleting one, and reload the schema. Returns whether the schema
-    /// loaded: the feed can deliver a type before a taxonomy it names, and then the old schema
-    /// stays until a later call completes the set.
-    pub fn apply_remote_files(&self, files: &[(String, Option<String>)]) -> Result<bool> {
+    /// Write synced files (types, taxonomies, scripts, tasks, `devices/`, agents and the files
+    /// of skills) exactly as the home server holds them, byte for byte, `None` deleting one, and
+    /// reload the schema. Returns whether the schema loaded: the feed can deliver a type before a
+    /// taxonomy it names, and then the old schema stays until a later call completes the set.
+    pub fn apply_remote_files(&self, files: &[(String, Option<Vec<u8>>)]) -> Result<bool> {
         let _w = self.write_lock();
         let mut store_changes = Vec::new();
+        let mut skills = std::collections::BTreeSet::new();
         for (path, text) in files {
-            if synced_file(path).is_none() {
+            let Some((kind, name)) = synced_file(path) else {
                 return Err(Error::BadRequest(format!("{path:?} is not a synced file")));
+            };
+            if kind == "skill" {
+                skills.insert(name.to_owned());
             }
             if in_store_layout(path) {
+                let exists = self.vault.root().join(path).is_file();
                 store_changes.push(match text {
-                    Some(t) => Change::write(path.clone(), t.as_bytes()),
-                    None => Change::delete(path.clone()),
+                    Some(t) => Change::write(path.clone(), t.clone()),
+                    None if exists => Change::delete(path.clone()),
+                    // Already gone here: nothing to delete.
+                    None => continue,
                 });
                 continue;
             }
@@ -196,6 +203,9 @@ impl Writer {
         if !store_changes.is_empty() {
             let generation = self.commit(store_changes)?;
             inner.index.advance(generation)?;
+        }
+        for name in &skills {
+            self.vault.prune_skill_folder(name)?;
         }
         match Schema::load(&self.vault) {
             Ok(schema) => {

@@ -513,6 +513,51 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/skills",
+        "Every Agent Skill with its frontmatter, file count, size, validity and issues",
+    ),
+    (
+        "POST",
+        "/api/skills/import",
+        "Import a skill from a zip (body or multipart), one folder or SKILL.md at the root; ?replace=true replaces an existing skill",
+    ),
+    (
+        "GET",
+        "/api/skills/{name}",
+        "One skill: its frontmatter, issues, SKILL.md body and file list",
+    ),
+    (
+        "PUT",
+        "/api/skills/{name}",
+        "Create a skill or replace its SKILL.md with the whole validated text",
+    ),
+    (
+        "DELETE",
+        "/api/skills/{name}",
+        "Delete a skill's whole folder",
+    ),
+    (
+        "GET",
+        "/api/skills/{name}/export",
+        "Download a skill as a zip of its folder",
+    ),
+    (
+        "GET",
+        "/api/skills/{name}/files/{*path}",
+        "Download one file of a skill",
+    ),
+    (
+        "PUT",
+        "/api/skills/{name}/files/{*path}",
+        "Create or replace one file of a skill with the body's bytes",
+    ),
+    (
+        "DELETE",
+        "/api/skills/{name}/files/{*path}",
+        "Delete one file of a skill, or every file under a folder of it",
+    ),
+    (
+        "GET",
         "/api/agents/calls/{call}",
         "What became of a call of an agent committed in a note: {agent, note, thread, running}, thread null for a call that was not run; 404 while the server has not seen the call",
     ),
@@ -723,6 +768,8 @@ pub fn document() -> Value {
         let params: Vec<Value> = path
             .split('/')
             .filter_map(|seg| seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+            // `{*path}` is the rest of the path, slashes and all.
+            .map(|name| name.trim_start_matches('*'))
             .map(|name| json!({ "name": name, "in": "path", "required": true, "schema": { "type": "string" } }))
             .collect();
         let mut op = json!({

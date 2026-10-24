@@ -52,6 +52,7 @@ mod refs;
 mod remote;
 mod script_vault;
 mod shipped;
+mod skills;
 mod terms;
 mod time;
 mod types;
@@ -102,6 +103,9 @@ pub use schema::NoteEdit;
 pub use shipped::{
     SERVER_AUTHOR, SHIPPED_FILES, ShippedFile, UPGRADE_STEPS, UpgradeStep, Upgraded, Upkeep,
     content_hash, shipped_hash,
+};
+pub use skills::{
+    MAX_SKILL_ZIP, RESERVED_SKILL_NAMES, Skill, SkillFileInfo, skill_dir, skill_media_type,
 };
 pub use types::{Flagged, Migration, PlannedNote, TypeChange, TypePlan};
 
@@ -217,6 +221,17 @@ pub enum Error {
         message: String,
         by: Vec<String>,
     },
+    /// What the request would create already exists, such as a skill an import names without
+    /// `replace`. `code` names it for the API.
+    #[error("{message}")]
+    Exists {
+        code: &'static str,
+        name: String,
+        message: String,
+    },
+    /// The write would break a size limit, such as a skill's files or bytes (skills S1).
+    #[error("{0}")]
+    TooLarge(String),
     /// An upgrade step cannot run yet, for the reason given: it is not recorded as applied, so it
     /// runs again on the next start.
     #[error("{0}")]

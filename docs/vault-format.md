@@ -26,6 +26,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 - [Task files](#task-files)
 - [Agent files](#agent-files)
 - [Device files](#device-files)
+- [Skills](#skills)
 - [Shipped defaults and upgrades](#shipped-defaults-and-upgrades)
 - [Validating vault files](#validating-vault-files)
 
@@ -39,9 +40,10 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 | Task | `tasks/<task>.wcl` | `schema/task.wcl` | `vault/tasks/daily_digest.wcl` |
 | Agent | `agents/<agent>.wcl` | `schema/agent.wcl` | `vault/agents/inbox_triage.wcl` |
 | Device file | `devices/<platform>.wcl` | `schema/device.wcl` | `vault/devices/android.wcl` |
+| Skill | `skills/<name>/SKILL.md` and any other files in the folder | none: not WCL, see [Skills](#skills) | none |
 | Canvas | A `canvas` content block, or a `canvas` field value in a note | `schema/common.wcl` | `vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` |
 
-Paths in the last two columns are relative to `docs/vault-format/`. Scripts (`scripts/*.ws`) are wscript, not WCL, and this document does not define them. Assets (`assets/<ULID>/<filename>`) are stored byte for byte. Deleting an asset moves its file to the server folder, at `.vault/asset-trash/<ULID>/<filename>`, with the time of the delete in milliseconds since the Unix epoch in `.vault/asset-trash/<ULID>.deleted`. It can be restored from there for 30 days, after which it is purged. The asset trash is not vault data: a note never names it, and a rebuild ignores it.
+Paths in the last two columns are relative to `docs/vault-format/`. Scripts (`scripts/*.ws`) are wscript, not WCL, and this document does not define them. Skills (`skills/<name>/`) are folders of files in the Agent Skills format, not WCL; [Skills](#skills) says how the vault keeps them. Assets (`assets/<ULID>/<filename>`) are stored byte for byte. Deleting an asset moves its file to the server folder, at `.vault/asset-trash/<ULID>/<filename>`, with the time of the delete in milliseconds since the Unix epoch in `.vault/asset-trash/<ULID>.deleted`. It can be restored from there for 30 days, after which it is purged. The asset trash is not vault data: a note never names it, and a rebuild ignores it.
 
 The example vault under `docs/vault-format/vault/` is self-consistent: its notes use its types, and its types use its taxonomies. Notes that the examples reference but do not need (the parent, child and peer specimens) are left out. The scripts named by the example handlers, task and device file are left out too.
 
@@ -56,6 +58,7 @@ The example vault under `docs/vault-format/vault/` is self-consistent: its notes
 | Trigger name | Same rule as a type name | The label of a `trigger` block in an agent file |
 | Script name | Same rule as a type name | The file stem of `scripts/<script>.ws` |
 | Device platform | `linux` or `android` | The file stem of `devices/<platform>.wcl` |
+| Skill name | 1 to 64 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`, no `--`; not `import` | The folder name of `skills/<name>/`, equal to the `name` in its `SKILL.md` |
 | Field name | Same rule as a type name. `title`, `created`, `updated` and `archived` are reserved | The label of a `field` block |
 | Template, view, canvas item name | `[A-Za-z_][A-Za-z0-9_]*` | A block label |
 | Note id | A ULID | The file stem of `notes/<type>/<ULID>.wcl` |
@@ -2304,6 +2307,36 @@ How triggers run, what an unattended run may do, and their limits are in [AI age
 The vault ships one agent, `agents/assistant.wcl`, labelled "Assistant": the chat panel's default (agents G6). It names no provider, model or system prompt, so it follows Settings > AI, and it allows every tool and type and has no triggers. It can be edited like any agent, but it cannot be deleted, and `enabled = false` is refused for it. A server that does not find it writes it on start, as it does the other shipped files (see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades)).
 
 Agent files raised the format version to 2 (D27): an app from before them cannot sync the `agents/` folder, so it stops syncing and asks to be updated.
+
+## Skills
+
+`skills/<name>/` holds one Agent Skill: a folder in the open [Agent Skills format](https://agentskills.io/specification), with `SKILL.md` at its root and any other files beside it, conventionally under `scripts/`, `references/` and `assets/` (skills S1). How agents use skills, importing and exporting them and the screens that edit them are in [Agent skills](skills.md).
+
+`skills/` is the one layout folder that holds no WCL. The store keeps every file in it byte for byte, binary files too: the data-only subset and the canonical form do not apply, not even to a file ending in `.wcl`. The folder name is the skill's identity.
+
+`SKILL.md` starts with YAML frontmatter between two lines of `---`, then the Markdown instructions. The frontmatter is a YAML mapping:
+
+| Key | Required | Rule |
+|-----|----------|------|
+| `name` | yes | A string, 1 to 64 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`, with no `--`, equal to the folder name |
+| `description` | yes | A string of 1 to 1024 characters, not only spaces: what the skill does and when to use it |
+| `license` | no | A string |
+| `compatibility` | no | A string of 1 to 500 characters |
+| `metadata` | no | A mapping of string keys to string values. Quote a value that YAML would read as a number or a boolean, such as `version: "1.0"` |
+| `allowed-tools` | no | A string of space-separated tool names. Recorded and shown; it grants an agent nothing |
+
+Any other key is kept as written and reported as a warning. Every other problem is an error: no frontmatter, frontmatter that is not a YAML mapping, a missing required key, a value of the wrong kind, a broken length or name rule, or a name that differs from the folder.
+
+A skill also has these limits, and holding more is an error:
+
+- At most 200 files and 20 MiB in total.
+- No symlinks. A symlink found in a skill folder is never followed, and is reported.
+- Every path is relative to the skill's folder, with `/` separators and no `..`. A write reads `\` as `/`, drops `./` and repeated slashes, and refuses a path that leaves the folder.
+- A text file read into a model is at most 2 MiB.
+
+A skill with an error is still listed, with its errors, but no agent is offered it. A folder under `skills/` that holds no file at all is not a skill.
+
+Skills sync to the apps like agent files, file by file, as change feed entries of kind `skill` (see [Device sync](sync.md#the-change-feed)). They raised the format version to 3 (D27): an app from before them cannot sync the `skills/` folder or its binary files, so it stops syncing and asks to be updated. Publish the new app builds with the server, as for any format change (see [Releasing a format change](android-release.md#releasing-a-format-change)).
 
 ## Device files
 

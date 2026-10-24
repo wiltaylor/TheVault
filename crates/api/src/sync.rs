@@ -83,6 +83,29 @@ fn entry(w: &Writer, c: &Journaled) -> Result<Value, ApiError> {
         }
         ChangeKey::File(path) => {
             let (kind, name) = writer::synced_file(path).unwrap_or(("file", path.as_str()));
+            if kind == "skill" {
+                // A skill's files are any bytes (skills S1): UTF-8 as `text`, anything else as
+                // `base64` with `text` null.
+                use base64::Engine as _;
+                let bytes = w.read_synced_bytes(path)?;
+                let deleted = bytes.is_none();
+                let (text, base64) = match bytes.map(String::from_utf8) {
+                    Some(Ok(text)) => (Some(text), None),
+                    Some(Err(e)) => (
+                        None,
+                        Some(base64::engine::general_purpose::STANDARD.encode(e.into_bytes())),
+                    ),
+                    None => (None, None),
+                };
+                let mut out = json!({
+                    "seq": c.seq, "at": c.at_ms, "kind": kind, "path": path, "name": name,
+                    "deleted": deleted, "text": text,
+                });
+                if let Some(b) = base64 {
+                    out["base64"] = json!(b);
+                }
+                return Ok(out);
+            }
             let text = w.read_synced(path)?;
             Ok(json!({
                 "seq": c.seq, "at": c.at_ms, "kind": kind, "path": path, "name": name,
@@ -97,6 +120,7 @@ fn entry(w: &Writer, c: &Journaled) -> Result<Value, ApiError> {
 /// newest change there is, and `remaining`, how many entries come after this page, so a device
 /// can show how far its pull has got (ticket 144). A note entry carries its type, version and WCL, or `deleted` and
 /// whether it went to the trash; a file entry carries its kind, path, name and text, or `deleted`.
+/// A skill file that is not UTF-8 carries `base64` instead of `text` (skills S1).
 pub async fn changes(
     State(w): Shared,
     Query(q): Query<ChangesQuery>,

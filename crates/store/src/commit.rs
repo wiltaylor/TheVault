@@ -194,13 +194,13 @@ impl Vault {
             }
             let real = self.contain(&self.resolve(&path)?)?;
             out.push(match change {
-                Change::Write { path, contents } if path.ends_with(".wcl") => {
+                Change::Write { path, contents } if is_wcl(&path) => {
                     let text =
                         String::from_utf8(contents).map_err(|_| Error::NotUtf8(path.clone()))?;
                     let contents = canonical(&text, &path)?.into_bytes();
                     Change::Write { path, contents }
                 }
-                Change::Stage { path, file } if path.ends_with(".wcl") => {
+                Change::Stage { path, file } if is_wcl(&path) => {
                     let contents = std::fs::read(&file).map_err(io_err(&file))?;
                     let text =
                         String::from_utf8(contents).map_err(|_| Error::NotUtf8(path.clone()))?;
@@ -304,6 +304,12 @@ fn roll_forward(vault: &Vault, hook: &mut dyn FnMut(CommitStep) -> ControlFlow<(
     std::fs::remove_file(&manifest_path).map_err(io_err(&manifest_path))?;
     sync_dir(&txn)?;
     std::fs::remove_dir_all(&txn).map_err(io_err(&txn))
+}
+
+/// Whether `path` is a WCL vault file, kept data-only and canonical. A `.wcl` file inside a skill
+/// is one of the skill's own files, stored byte for byte (skills S1).
+fn is_wcl(path: &str) -> bool {
+    path.ends_with(".wcl") && !crate::skills::is_skill_path(path)
 }
 
 fn read_generation(vault: &Vault) -> Result<u64> {

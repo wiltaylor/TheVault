@@ -10,7 +10,9 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// (D27). Raise it with any change an older reader would misread.
 ///
 /// 2: agent files, `agents/<name>.wcl` (agents G1), a synced folder an older device refuses.
-pub const FORMAT_VERSION: u32 = 2;
+/// 3: skills, `skills/<name>/` (skills S1): a synced folder an older device refuses, whose binary
+/// files the feed carries as `base64`, which an older device would read as deletes.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Who made a change (D13, D30).
 #[derive(Debug, Clone, PartialEq, Eq)]

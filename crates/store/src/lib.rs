@@ -3,11 +3,13 @@
 //! Every vault file is plain data (D20). [`parse_data_only`] rejects anything else and names the
 //! offending item, [`canonical`] prints the one canonical form every write emits (D21), and
 //! [`Vault`] owns the D22 folder: it reads through a loader that cannot leave the vault and
-//! commits a set of writes and deletes all at once or not at all.
+//! commits a set of writes and deletes all at once or not at all. `skills/` is the one folder of
+//! files that are not WCL: each skill's files are kept exactly as authored (skills S1).
 
 mod canonical;
 mod commit;
 mod data_only;
+mod skills;
 mod vault;
 
 use std::path::PathBuf;
@@ -17,6 +19,10 @@ pub use commit::Change;
 #[doc(hidden)]
 pub use commit::CommitStep;
 pub use data_only::{DataOnlyError, parse_data_only};
+pub use skills::{
+    MAX_SKILL_BYTES, MAX_SKILL_FILES, MAX_SKILL_TEXT_BYTES, SKILL_FILE, SKILLS_DIR, SkillFile,
+    SkillTree, is_skill_folder, is_skill_path, normalise_skill_path, skill_limits,
+};
 pub use vault::{LAYOUT_DIRS, Vault};
 
 /// Errors from the vault store.

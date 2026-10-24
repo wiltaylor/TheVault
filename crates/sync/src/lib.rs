@@ -1316,15 +1316,14 @@ impl Engine {
                 });
             self.progress
                 .feed_page(changes.len() as u64, read, remaining);
-            let files: Vec<(String, Option<String>)> = changes
+            let files = changes
                 .iter()
                 .filter(|c| c.get("kind").and_then(Json::as_str) != Some("note"))
                 .filter_map(|c| {
                     let path = c.get("path")?.as_str()?.to_owned();
-                    let text = c.get("text").and_then(Json::as_str).map(str::to_owned);
-                    Some((path, text))
+                    Some(file_contents(c).map(|bytes| (path, bytes)))
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
             if !files.is_empty() {
                 self.writer.apply_remote_files(&files)?;
             }
@@ -1640,6 +1639,24 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+/// The bytes of a file entry of the feed, or `None` for a deleted file: `base64` when the entry
+/// has it (a skill's binary file, skills S1), else `text`.
+fn file_contents(c: &Json) -> Result<Option<Vec<u8>>> {
+    use base64::Engine as _;
+    if c.get("deleted").and_then(Json::as_bool) == Some(true) {
+        return Ok(None);
+    }
+    if let Some(b) = c.get("base64").and_then(Json::as_str) {
+        return base64::engine::general_purpose::STANDARD
+            .decode(b)
+            .map(Some)
+            .map_err(|e| Error::Protocol(format!("a feed file's base64 does not decode: {e}")));
+    }
+    Ok(c.get("text")
+        .and_then(Json::as_str)
+        .map(|t| t.as_bytes().to_vec()))
 }
 
 #[cfg(test)]

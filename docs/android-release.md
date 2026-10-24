@@ -151,6 +151,8 @@ Apps before 0.1.10 also refuse an attribute inside a template, which 0.1.10 tole
 
 Content block kinds are closed, so an app refuses a note holding a block kind it does not know. Apps at 0.1.10 and earlier do not know `toggle` and `admonition` ([toggle](vault-format.md#toggle), [admonition](vault-format.md#admonition)), so a vault whose notes use them needs apps from the release that added them, the first after 0.1.10, or later. Apps from 0.1.9 update themselves before they sync, so the server-first order above brings them up to date before they read such a note. Publish those builds with the server before anyone adds a toggle or a callout.
 
+Skills raised the vault format version to 3 ([Skills](vault-format.md#skills)): the feed carries `skills/` files, binary ones as base64, which an app at format 2 cannot write. Such an app refuses to sync with a server at format 3 and keeps its queued writes until it is updated. Apps from 0.1.9 update themselves first when the new builds are published, so publish them with the server, in the server-first order above.
+
 When the new builds cannot be published with the server, or a phone runs 0.1.8 or earlier, use the apps-first order instead:
 
 1. Publish the new app first: `./dev just publish-clients <clients dir>`, with the old server still running. The old server announces the update.

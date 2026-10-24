@@ -36,6 +36,9 @@ lopdf = { version = "0.42", default-features = false }
 thiserror = "2"
 ulid = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+# Agent Skills (skills S1, S2): import and export zips with deflate only, and SKILL.md frontmatter.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+yaml-rust2 = { version = "0.13", default-features = false }
 
 store = { path = "crates/store" }
 schema = { path = "crates/schema" }
