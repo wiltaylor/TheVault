@@ -2513,6 +2513,97 @@ a.button {
   gap: 0.5rem;
 }
 
+/* Adding notes from a query view (allow_new). */
+.query-new-row {
+  padding: 0.25rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.query-new-bar {
+  padding-bottom: 0.5rem;
+}
+
+.new-note-button {
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+
+.new-note-button:hover,
+.new-note-button[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+.new-note-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.new-note-box input {
+  flex: 1;
+  min-width: 10rem;
+}
+
+.new-note-box .error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.kanban-new {
+  align-self: stretch;
+}
+
+.query-calendar,
+.query-timeline,
+.query-map {
+  position: relative;
+}
+
+.new-note-popover {
+  position: absolute;
+  z-index: 20;
+  min-width: 16rem;
+  padding: 0.5rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 0.18);
+}
+
+.new-note-caption {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+}
+
+.calendar-new {
+  display: none;
+  margin-right: auto;
+  padding: 0 0.35rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.query-calendar.adds .calendar-new {
+  display: inline-block;
+}
+
+.calendar-new:hover,
+.calendar-new:focus-visible {
+  color: var(--accent);
+}
+
+.query-allow-new {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
 /* ---- canvas ---------------------------------------------------------------------------- */
 
 .canvas {

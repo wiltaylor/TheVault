@@ -10,6 +10,8 @@ import { changes } from "../changes";
 import { types } from "../session";
 import { openInBackground, wantsNewTab } from "../workspace/events";
 import type { ViewDef } from "./model";
+import { NewNotePopover, useNewNote } from "./NewNoteBox";
+import { dateValue, localDay } from "./newNote";
 import { type TimelineItem, calendarEvent, dateField, hasDate, narrow, timelineItem, visibleWindow } from "./narrow";
 
 /** Rows per request, the API's largest page. */
@@ -112,6 +114,10 @@ export function CalendarView(props: { view: ViewDef; query: string; thisId: stri
         const navigate = useNavigate();
         const [error, setError] = createSignal<string | null>(null);
         const [capped, setCapped] = createSignal(false);
+        // With `allow_new`, each day has a "+" that opens a title box there.
+        const spec = useNewNote();
+        const [adding, setAdding] = createSignal<{ date: Date; at: { x: number; y: number } } | null>(null);
+        let wrap!: HTMLDivElement;
         let calendar: Calendar | undefined;
         onMount(() => {
           const start = calendarLayout(box.clientWidth || COMPACT_CALENDAR);
@@ -147,6 +153,27 @@ export function CalendarView(props: { view: ViewDef; query: string; thisId: stri
             eventDidMount: (info) => {
               info.el.dataset.testid = "calendar-event";
               info.el.dataset.id = info.event.id;
+            },
+            // Every day gets its "+"; the view's `adds` class shows them once it adds notes.
+            dayCellDidMount: (info) => {
+              const top = info.el.querySelector(".fc-daygrid-day-top, .fc-timegrid-col-frame") ?? info.el;
+              const plus = document.createElement("button");
+              plus.type = "button";
+              plus.className = "calendar-new";
+              plus.textContent = "+";
+              plus.dataset.testid = "calendar-new";
+              plus.dataset.date = localDay(info.date);
+              const day = info.date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+              plus.setAttribute("aria-label", `New on ${day}`);
+              plus.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                if (!spec()) return;
+                const cell = info.el.getBoundingClientRect();
+                const outer = wrap.getBoundingClientRect();
+                setAdding({ date: info.date, at: { x: cell.left - outer.left, y: cell.bottom - outer.top } });
+              });
+              top.prepend(plus);
             },
           });
           calendar.render();
@@ -187,12 +214,24 @@ export function CalendarView(props: { view: ViewDef; query: string; thisId: stri
           ),
         );
         return (
-          <div class="query-calendar">
+          <div class="query-calendar" classList={{ adds: !!spec() }} ref={wrap}>
             <Show when={error()}>
               <Problem text={error()!} />
             </Show>
             <CappedNote capped={capped()} />
             <div ref={box} data-testid="calendar" />
+            <Show when={spec() && adding()}>
+              {(a) => (
+                <NewNotePopover
+                  spec={spec()!}
+                  at={a().at}
+                  caption={a().date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}
+                  extra={() => ({ [f().name]: dateValue(f(), a().date, true) })}
+                  onClose={() => setAdding(null)}
+                  onCreated={() => calendar?.refetchEvents()}
+                />
+              )}
+            </Show>
           </div>
         );
       }}
@@ -215,6 +254,10 @@ export function TimelineView(props: { view: ViewDef; query: string; thisId: stri
         const [error, setError] = createSignal<string | null>(null);
         const [capped, setCapped] = createSignal(false);
         const [empty, setEmpty] = createSignal(false);
+        // With `allow_new`, a double-click on the timeline opens a title box at that moment.
+        const spec = useNewNote();
+        const [adding, setAdding] = createSignal<{ time: Date; at: { x: number; y: number } } | null>(null);
+        let wrap!: HTMLDivElement;
         const items = new Map<string, TimelineItem>();
         let timeline: Timeline | undefined;
         let generation = 0;
@@ -287,6 +330,11 @@ export function TimelineView(props: { view: ViewDef; query: string; thisId: stri
           timeline.on("click", (p: { item: string | null; what: string | null }) => {
             if (p.item && p.what === "item") navigate(`/notes/${p.item}`);
           });
+          timeline.on("doubleClick", (p: { item: string | null; time: Date; pageX: number; pageY: number }) => {
+            if (!spec() || p.item) return;
+            const outer = wrap.getBoundingClientRect();
+            setAdding({ time: p.time, at: { x: p.pageX - window.scrollX - outer.left, y: p.pageY - window.scrollY - outer.top } });
+          });
           // vis-timeline checks its size only on a once-a-second timer; redraw as the pane resizes.
           const stopFollowing = followSize(box, () => {
             if (box.clientWidth > 0) timeline?.redraw();
@@ -307,7 +355,7 @@ export function TimelineView(props: { view: ViewDef; query: string; thisId: stri
         );
         createEffect(on(changes, () => void reloadWindow(), { defer: true }));
         return (
-          <div class="query-timeline">
+          <div class="query-timeline" ref={wrap}>
             <Show when={error()}>
               <Problem text={error()!} />
             </Show>
@@ -315,7 +363,22 @@ export function TimelineView(props: { view: ViewDef; query: string; thisId: stri
               <p class="muted">No notes in this query have a {f().label.toLowerCase()}.</p>
             </Show>
             <CappedNote capped={capped()} />
+            <Show when={spec()}>
+              <p class="muted query-new-hint">Double-click the timeline to add a note there.</p>
+            </Show>
             <div ref={box} data-testid="timeline" />
+            <Show when={spec() && adding()}>
+              {(a) => (
+                <NewNotePopover
+                  spec={spec()!}
+                  at={a().at}
+                  caption={a().time.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                  extra={() => ({ [f().name]: dateValue(f(), a().time, f().kind === "date") })}
+                  onClose={() => setAdding(null)}
+                  onCreated={() => void reloadWindow()}
+                />
+              )}
+            </Show>
           </div>
         );
       }}

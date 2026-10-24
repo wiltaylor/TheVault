@@ -1791,6 +1791,7 @@ A `query_view` block runs one query and shows its results through one or more sa
 | `title` | string | Heading shown above the view |
 | `query` | string | Required. A query in the grammar of PRD Appendix B, with the `include archived` clause of [Archived notes in queries](#archived-notes-in-queries). `this` is the note that holds the block |
 | `default_view` | string | The view shown first. Default: the first view |
+| `allow_new` | bool | The views add notes. Default `false`. See [Adding notes from a query view](#adding-notes-from-a-query-view) |
 | `view <name> { ... }` | block | At least one. `<name>` is unique within the block |
 
 In the query's `search "<text>"` clause every word must appear in the note's title or text, ignoring case. Earlier words match whole words, and the last word also matches as a prefix: `search "meet"` finds `meeting`. A trailing space, as in `search "meet "`, or a last word of one character, makes the last word whole. A prefix stands for at most the 50 most frequent words it starts.
@@ -1862,6 +1863,36 @@ query_view {
       x = 0.0
       y = 0.0
     }
+  }
+}
+```
+
+### Adding notes from a query view
+
+With `allow_new = true`, every view of the block adds notes of the query's type. A query over one type is needed: one over `from *` or several types adds none. A new note starts with the values the query's `where` fixes, so it is one the view shows: each condition joined by `&&` that names a field of the type, as `field == value`, `field == this` (the note that holds the block), `under(field, "term")`, `has(field, value)`, `field` (true) and `!field` (false). A field that holds several values gets a list of the one value. A condition under `||`, a comparison such as `<`, and a path through a reference, such as `project.status`, fix nothing. A query the visual builder cannot show still names its type, and its notes start with no values.
+
+Each view adds them in its own place, from a title typed into an inline box: Enter adds the note and keeps the box for the next, Escape closes it.
+
+| View kind | Where | What the place sets |
+|-----------|-------|---------------------|
+| `table`, `list` | A "+ New" row above the results | nothing more |
+| `cards`, `details`, `canvas` | A "+ New" button above the results | nothing more |
+| `kanban` | A "+ New" button at the foot of each column | `group`: the column's term, or no term in the last column |
+| `calendar` | A "+" in each day | `date`: the day for a `date`, 9 am on it for a `datetime`, the day as both ends of a `date_range` (9 to 10 am for one of datetimes) |
+| `timeline` | A double-click on the timeline | `date`: the moment clicked, as the calendar does for a whole day when the field is a `date` |
+| `map` | "+ New", then a click on the map | `location`: the point clicked |
+
+A view that adds notes shows with no results, so the first note can be added. The block keeps no record of what was added: the notes are ordinary notes of the type.
+
+```wcl
+query_view {
+  title     = "Tasks"
+  query     = "from task where project == this && !done sort due asc"
+  allow_new = true
+
+  view table {
+    kind    = "table"
+    columns = ["title", "status", "due"]
   }
 }
 ```

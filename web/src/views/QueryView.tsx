@@ -25,10 +25,13 @@ import { slotField } from "../notes";
 import { typeDef } from "../session";
 import { resultCanvas } from "./canvasView";
 import { CalendarView, TimelineView } from "./LazyDateViews";
+import { fromTypes } from "./narrow";
 import { KanbanView } from "./KanbanView";
 import { type ViewDef, readQueryView, setViewItem, viewTemplate } from "./model";
 import { NoteLink, TemplateBody } from "./parts";
 import { useThisNote } from "./thisNote";
+import { NewNoteButton, NewNoteContext, useNewNote } from "./NewNoteBox";
+import { type NewNoteSpec, newNoteSpec } from "./newNote";
 
 /** Rows per request: the API's largest page, so long results take the fewest round trips. */
 const PAGE_SIZE = 1000;
@@ -81,6 +84,7 @@ function TableView(props: { view: ViewDef; data: PagedRows; total: number }) {
       <div class="query-table-head" style={grid()}>
         <For each={columns()}>{(c) => <span data-testid="query-columns">{label(c)}</span>}</For>
       </div>
+      <NewRow />
       <VirtualList
         count={props.total}
         rowHeight={ROW_HEIGHT}
@@ -107,8 +111,41 @@ function TableView(props: { view: ViewDef; data: PagedRows; total: number }) {
   );
 }
 
+/**
+ * The row a table or list adds notes from, above the results so it is in reach however long
+ * they are: "+ New <type>", then a title box that stays for the next note.
+ */
+function NewRow() {
+  const spec = useNewNote();
+  return (
+    <Show when={spec()}>
+      {(s) => (
+        <div class="query-new-row">
+          <NewNoteButton spec={s()} />
+        </div>
+      )}
+    </Show>
+  );
+}
+
+/** A "+ New <type>" bar above a cards, details or canvas view. */
+function NewBar() {
+  const spec = useNewNote();
+  return (
+    <Show when={spec()}>
+      {(s) => (
+        <div class="query-new-bar">
+          <NewNoteButton spec={s()} />
+        </div>
+      )}
+    </Show>
+  );
+}
+
 function ListView(props: { data: PagedRows; total: number }) {
   return (
+    <>
+    <NewRow />
     <VirtualList
       count={props.total}
       rowHeight={ROW_HEIGHT}
@@ -125,6 +162,7 @@ function ListView(props: { data: PagedRows; total: number }) {
         </Show>
       )}
     </VirtualList>
+    </>
   );
 }
 
@@ -149,6 +187,7 @@ function CardsView(props: { view: ViewDef; data: PagedRows; total: number }) {
   };
   return (
     <div ref={box} class="query-cards">
+      <NewBar />
       <VirtualList
         count={Math.ceil(props.total / cols())}
         rowHeight={CARD_HEIGHT}
@@ -211,6 +250,7 @@ function DetailsView(props: { view: ViewDef; data: PagedRows; total: number }) {
   const shown = () => props.data.rows().slice(page() * DETAILS_PER_PAGE, (page() + 1) * DETAILS_PER_PAGE);
   return (
     <div class="query-details">
+      <NewBar />
       <Show when={pages() > 1}>
         <nav class="pager" aria-label="Pages">
           <button type="button" onClick={() => setPage(0)} disabled={page() === 0}>
@@ -230,7 +270,7 @@ function DetailsView(props: { view: ViewDef; data: PagedRows; total: number }) {
           </button>
         </nav>
       </Show>
-      <Show when={shown().length > 0} fallback={<p class="muted">Loading…</p>}>
+      <Show when={shown().length > 0} fallback={<Show when={props.total > 0}><p class="muted">Loading…</p></Show>}>
         <For each={shown()}>{(row) => <Detail row={row} view={props.view} />}</For>
       </Show>
     </div>
@@ -251,6 +291,7 @@ function CanvasResultsView(props: { view: ViewDef; data: PagedRows; total: numbe
   const block = createMemo(() => resultCanvas(shown(), props.view.places));
   return (
     <div class="query-canvas">
+      <NewBar />
       <Show when={wanted() < props.total}>
         <p class="muted query-canvas-more">
           Showing the first {wanted()} of {props.total}.{" "}
@@ -322,8 +363,21 @@ export function QueryView(props: { block: Block; onChange?: (block: Block) => vo
     PAGE_SIZE,
     () => [changes(), tick()],
   );
+  // With `allow_new`, what the views add: the query's one type and the fields its `where` fixes.
+  const [spec] = createResource(
+    () => (def().allowNew ? ([def().query, thisId, typeDef(fromType(def().query) ?? "")] as const) : null),
+    ([query, id]) => newNoteSpec(query, id, typeDef),
+  );
+  const newSpec = (): NewNoteSpec | null => (spec.state === "ready" ? spec() : null) ?? null;
+  // A view that adds notes shows with no results too, so the first one can be added.
+  const shownTotal = () => {
+    const t = data.total();
+    if (t) return t;
+    return t === 0 && newSpec() ? 0 : undefined;
+  };
 
   return (
+    <NewNoteContext.Provider value={newSpec}>
     <section class="query-view" data-testid="query-view">
       <Show when={def().title}>
         <h3 class="query-view-title">{def().title}</h3>
@@ -349,12 +403,14 @@ export function QueryView(props: { block: Block; onChange?: (block: Block) => vo
           {data.error()}
         </p>
       </Show>
-      <Show when={data.total()} fallback={
+      <Show when={shownTotal() !== undefined ? { n: shownTotal()! } : undefined} fallback={
         <Show when={data.total() === 0} fallback={<Show when={!data.error()}><p class="muted">Loading…</p></Show>}>
           <p class="muted">No notes match.</p>
         </Show>
       }>
-        {(total) => (
+        {(shown) => {
+          const total = () => shown().n;
+          return (
           <>
             <p class="muted list-count" data-testid="query-count">
               {count(total())}
@@ -415,8 +471,15 @@ export function QueryView(props: { block: Block; onChange?: (block: Block) => vo
               )}
             </Show>
           </>
-        )}
+          );
+        }}
       </Show>
     </section>
+    </NewNoteContext.Provider>
   );
+}
+
+/** The first type a query reads, or null for `from *`. */
+function fromType(query: string): string | null {
+  return fromTypes(query)?.[0] ?? null;
 }

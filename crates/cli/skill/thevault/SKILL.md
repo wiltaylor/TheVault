@@ -626,7 +626,7 @@ Any content block in a tab is shown on every note of the type. In a fixed block'
 
 ### Query views
 
-`query_view { ... }` runs one query and shows its results. It takes `title`, `query` (step 2's language, in which `this` is the note being shown), `default_view`, and one or more `view <name> { kind = "..." }` blocks, each a tab of the view. A view may take `title`, and `template` (`default` or `card`) for the views that show notes as cards.
+`query_view { ... }` runs one query and shows its results. It takes `title`, `query` (step 2's language, in which `this` is the note being shown), `default_view`, `allow_new = true` to let every view add notes of the query's single type (starting with the values its `&&` conditions fix, such as `project == this`), and one or more `view <name> { kind = "..." }` blocks, each a tab of the view. A view may take `title`, and `template` (`default` or `card`) for the views that show notes as cards.
 
 | View `kind` | Shows | Takes |
 |-------------|-------|-------|

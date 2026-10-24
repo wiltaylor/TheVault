@@ -8,6 +8,7 @@ import { taxonomyDef, typeDef, types } from "../session";
 import { type ViewDef, viewTemplate } from "./model";
 import { type KanbanColumn, groupField, kanbanColumns, narrow } from "./narrow";
 import { NoteLink, TemplateBody } from "./parts";
+import { NewNoteButton, useNewNote } from "./NewNoteBox";
 
 /** Cards per column per request. A column shows more a page at a time (D33). */
 const COLUMN_PAGE = 25;
@@ -54,6 +55,7 @@ function Column(props: {
   );
   const [over, setOver] = createSignal(false);
   const accepts = () => props.dragging !== null && props.dragging.from !== props.column.key;
+  const spec = useNewNote();
   return (
     <section
       class="kanban-column"
@@ -115,6 +117,16 @@ function Column(props: {
         <button type="button" class="kanban-more" onClick={() => void data.loadUntil(data.rows().length)}>
           Show more ({(data.total() ?? 0) - data.rows().length} left)
         </button>
+      </Show>
+      <Show when={spec()}>
+        {(s) => (
+          <NewNoteButton
+            spec={s()}
+            class="kanban-new"
+            label="New"
+            extra={() => ({ [props.view.group ?? ""]: props.column.value })}
+          />
+        )}
       </Show>
     </section>
   );

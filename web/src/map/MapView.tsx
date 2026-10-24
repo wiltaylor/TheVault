@@ -6,6 +6,7 @@ import { applyEdits } from "../notes";
 import { typeDef } from "../session";
 import { MapCanvas, type PinView } from "./MapCanvas";
 import { MAP_VIEW_HEIGHT, type MapKind, mapKind, pinsOf } from "./model";
+import { NewNoteBox, newLabel, useNewNote } from "../views/NewNoteBox";
 
 /** Pins drawn at once. A larger result pages, like the details view (D33). */
 export const PINS_PER_PAGE = 500;
@@ -54,7 +55,13 @@ export function MapView(props: {
   );
   const shown = () => props.data.rows().slice(page() * PINS_PER_PAGE, (page() + 1) * PINS_PER_PAGE);
 
-  /** The location field's definition, from the first result whose type has it. */
+  // With `allow_new`: "+ New" arms the map, the next click picks the spot, and a title box adds
+  // a note there.
+  const spec = useNewNote();
+  const [placing, setPlacing] = createSignal(false);
+  const [picked, setPicked] = createSignal<Json | null>(null);
+
+  /** The location field's definition, from the first result whose type has it, else the new notes' type. */
   const field = createMemo(() => {
     const name = props.location;
     if (!name) return undefined;
@@ -62,7 +69,9 @@ export function MapView(props: {
       const f = typeDef(r.type)?.fields.find((x) => x.name === name);
       if (f) return f.kind === "location" ? f : undefined;
     }
-    return undefined;
+    const s = spec();
+    const f = s ? typeDef(s.type)?.fields.find((x) => x.name === name) : undefined;
+    return f?.kind === "location" ? f : undefined;
   });
   const kind = createMemo<MapKind | undefined>(
     () => (field() ? mapKind(field()) : undefined),
@@ -171,6 +180,33 @@ export function MapView(props: {
             {error()}
           </p>
         </Show>
+        <Show when={spec() && kind()}>
+          <div class="query-new-bar">
+            <Show
+              when={picked()}
+              fallback={
+                <button
+                  type="button"
+                  class="new-note-button"
+                  data-testid="new-note-button"
+                  aria-pressed={placing()}
+                  onClick={() => setPlacing(!placing())}
+                >
+                  {placing() ? "Click the map where the note goes, or press to cancel" : `+ New ${newLabel(spec()!)}`}
+                </button>
+              }
+            >
+              {(at) => (
+                <NewNoteBox
+                  spec={spec()!}
+                  once
+                  extra={() => ({ [props.location ?? ""]: at() })}
+                  onClose={() => setPicked(null)}
+                />
+              )}
+            </Show>
+          </div>
+        </Show>
         <Show when={conflict()}>
           {(c) => (
             <ConflictView
@@ -208,6 +244,11 @@ export function MapView(props: {
               onDragStart={startDrag}
               onMove={(id, v) => void move(id, v)}
               onOpen={(id) => setOpen(open() === id ? null : id)}
+              onPick={(v) => {
+                if (!placing()) return;
+                setPlacing(false);
+                setPicked(v);
+              }}
               open={openRow() ? open() : null}
               popup={
                 <Show when={openRow()}>

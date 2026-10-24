@@ -739,3 +739,39 @@ test.describe("on a phone", () => {
     await expectPans(page, map, "touch");
   });
 });
+
+test("a map view with allow_new adds a note at the point clicked", async ({ page, admin, baseURL }) => {
+  const room = await ensureRoom(admin);
+  const tag = token();
+  const view = {
+    kind: "query_view",
+    fields: { query: `from ${room.name} where tag == "${tag}"`, allow_new: true },
+    blocks: [{ kind: "view", labels: ["map"], fields: { kind: "map", location: "desk" } }],
+  };
+  const note = await create(admin, "page", { title: `Plan ${tag}` }, [{ kind: "content", labels: ["body"], blocks: [view] }]);
+
+  await standIn(page, baseURL!);
+  await logIn(page, `/notes/${note.id}`);
+  const qv = page.getByTestId("query-view");
+  const map = qv.getByTestId("map");
+  await expect(map).toBeVisible();
+  // The map takes a click once it has drawn its view.
+  await frame(map);
+  await qv.getByRole("button", { name: "+ New room" }).click();
+  await expect(qv.getByTestId("new-note-button")).toHaveAttribute("aria-pressed", "true");
+  const box = (await map.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const title = qv.getByRole("textbox", { name: "New room title" });
+  await title.fill(`Desk ${tag}`);
+  await title.press("Enter");
+  await expect(map.getByRole("button", { name: `Desk ${tag}` })).toBeVisible();
+
+  const res = await admin.post("/api/query", { data: { query: `from ${room.name} where tag == "${tag}"`, page_size: 5 } });
+  const rows = ((await res.json()) as { rows: { id: string }[] }).rows;
+  expect(rows).toHaveLength(1);
+  const desk = (await fields(admin, rows[0]!.id)).desk as { x: number; y: number };
+  expect(desk.x).toBeGreaterThan(0);
+  expect(desk.x).toBeLessThan(IMAGE_WIDTH);
+  expect(desk.y).toBeGreaterThan(0);
+  expect(desk.y).toBeLessThan(IMAGE_HEIGHT);
+});

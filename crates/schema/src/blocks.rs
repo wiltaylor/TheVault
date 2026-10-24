@@ -806,6 +806,7 @@ impl Check<'_> {
             opt("title", Form::Str),
             req("query", Form::Str),
             opt("default_view", Form::Ident),
+            opt("allow_new", Form::Bool),
         ];
         self.items(d, &items, &[], at);
         self.only_blocks(d, &["view"], at);

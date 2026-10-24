@@ -55,6 +55,8 @@ export interface QueryViewDef {
   views: ViewDef[];
   /** The view shown first: `default_view` when it names a view, else the first view. */
   first: ViewDef | undefined;
+  /** `allow_new`: the views offer to add notes of the query's type. */
+  allowNew: boolean;
 }
 
 function str(fields: Record<string, Json> | undefined, item: string): string | null {
@@ -92,6 +94,7 @@ export function readQueryView(block: Block): QueryViewDef {
     query: str(block.fields, "query") ?? "",
     views,
     first: views.find((v) => v.name === dv) ?? views[0],
+    allowNew: block.fields?.allow_new === true,
   };
 }
 

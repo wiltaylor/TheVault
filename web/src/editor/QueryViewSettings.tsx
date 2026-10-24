@@ -46,6 +46,20 @@ export function QueryViewSettings(props: { block: Block; onChange: (block: Block
         value={def().query}
         onChange={(text) => set(withItem(props.block, "query", text))}
       />
+      <label class="query-allow-new">
+        <input
+          type="checkbox"
+          checked={def().allowNew}
+          onChange={(e) => set(withItem(props.block, "allow_new", e.currentTarget.checked ? true : undefined))}
+        />
+        Add notes from the view
+      </label>
+      <Show when={def().allowNew}>
+        <p class="muted hint">
+          Each view offers a new note of the query's type, starting with the values its conditions fix, such as{" "}
+          <code>project == this</code>. A query over several types or <code>from *</code> adds none.
+        </p>
+      </Show>
       <Index each={views()}>
         {(view, i) => (
           <div class="view-settings" data-testid="view-settings">
