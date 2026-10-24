@@ -25,3 +25,7 @@ A single-user, self-hosted note app: a Rust server, a SolidJS web client, deskto
 ## Develop
 
 Every build, test and lint command runs through the dev container: `./dev just check` is the full gate. `CLAUDE.md` describes the layout and the rules.
+
+## License
+
+MIT. See [LICENSE](LICENSE). The bundled JetBrains Mono Nerd Font is under the SIL Open Font License, in `web/public/fonts/JetBrainsMono-OFL.txt`.
