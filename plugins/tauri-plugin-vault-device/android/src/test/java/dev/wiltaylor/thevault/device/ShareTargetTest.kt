@@ -1,8 +1,10 @@
 package dev.wiltaylor.thevault.device
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Parcel
 import androidx.test.core.app.ApplicationProvider
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -180,6 +182,103 @@ class ShareTargetTest {
         val note = queued(outcome.getJSONArray("notes").getString(0))
         val ids = (0 until 2).map { note.getJSONArray("assets").getJSONObject(it).getString("id") }.toSet()
         assertEquals(setOf(pdf.getString("asset"), files.getJSONObject(1).getString("asset")), ids)
+    }
+
+    /** [intent] as the share target receives it from another app: parcelled through Binder. */
+    private fun delivered(intent: Intent): Intent {
+        val parcel = Parcel.obtain()
+        try {
+            intent.writeToParcel(parcel, 0)
+            parcel.setDataPosition(0)
+            return Intent.CREATOR.createFromParcel(parcel)
+        } finally {
+            parcel.recycle()
+        }
+    }
+
+    /** The kinds of the blocks in the note's body. */
+    private fun bodyKinds(note: JSONObject): List<String> {
+        val blocks = note.getJSONArray("blocks")
+        if (blocks.length() == 0) return emptyList()
+        val body = blocks.getJSONObject(0).getJSONArray("blocks")
+        return (0 until body.length()).map { body.getJSONObject(it).getString("kind") }
+    }
+
+    @Test
+    fun oneSharedPdfIsAttachedInTheBody() {
+        val intent = Intent(Intent.ACTION_SEND).setType("application/pdf")
+            .putExtra(Intent.EXTRA_STREAM, shared("invoice.pdf", "%PDF-1.4 invoice".toByteArray()))
+        val note = share(delivered(intent))
+        assertEquals(listOf("invoice.pdf"), filenames(note))
+        assertFalse("a PDF is not an image", note.getJSONObject("fields").has("image"))
+        assertEquals(listOf("asset"), bodyKinds(note))
+    }
+
+    @Test
+    fun filesAnAppSharesFromAnotherProcessAreAttached() {
+        // As a real share arrives: the intent crossed Binder, so its extras are read back lazily.
+        val one = Intent(Intent.ACTION_SEND).setType("image/jpeg")
+            .putExtra(Intent.EXTRA_STREAM, shared("IMG_0003.jpg", ByteArray(32)))
+        val note = share(delivered(one))
+        assertEquals(listOf("IMG_0003.jpg"), filenames(note))
+        assertEquals(1, note.getJSONObject("fields").getJSONArray("image").length())
+
+        val many = Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*")
+            .putParcelableArrayListExtra(
+                Intent.EXTRA_STREAM,
+                arrayListOf(shared("slides.pdf", "%PDF-1.4".toByteArray()), shared("IMG_0004.png", ByteArray(16))),
+            )
+        val both = share(delivered(many))
+        assertEquals(listOf("IMG_0004.png", "slides.pdf"), filenames(both).sorted())
+        assertEquals(1, both.getJSONObject("fields").getJSONArray("image").length())
+        assertEquals(listOf("asset"), bodyKinds(both))
+    }
+
+    @Test
+    fun filesSharedOnlyAsClipDataAreAttached() {
+        // Some apps hand their files over in the intent's ClipData and leave EXTRA_STREAM out,
+        // often with a line of text: the note must not keep the text and drop the files.
+        val clip = ClipData.newRawUri("shared", shared("minutes.pdf", "%PDF-1.4 minutes".toByteArray()))
+        clip.addItem(ClipData.Item(shared("whiteboard.jpg", ByteArray(48))))
+        val intent = Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*")
+            .putExtra(Intent.EXTRA_TEXT, "From the meeting")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        intent.clipData = clip
+        val note = share(delivered(intent))
+        assertEquals(listOf("minutes.pdf", "whiteboard.jpg"), filenames(note).sorted())
+        assertEquals(1, note.getJSONObject("fields").getJSONArray("image").length())
+        assertEquals(listOf("paragraph", "asset"), bodyKinds(note))
+    }
+
+    @Test
+    fun aFileInBothExtraStreamAndClipDataIsAttachedOnce() {
+        // Android copies EXTRA_STREAM into the ClipData when the sharing app starts the share.
+        val uri = shared("report.pdf", "%PDF-1.4".toByteArray())
+        val intent = Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, uri)
+        intent.clipData = ClipData.newRawUri("", uri)
+        val note = share(delivered(intent))
+        assertEquals(listOf("report.pdf"), filenames(note))
+    }
+
+    @Test
+    fun aSingleFileSentAsAListIsAttached() {
+        val intent = Intent(Intent.ACTION_SEND).setType("application/pdf")
+            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(shared("form.pdf", "%PDF-1.4".toByteArray())))
+        val note = share(delivered(intent))
+        assertEquals(listOf("form.pdf"), filenames(note))
+    }
+
+    @Test
+    fun theSharedTypeNamesAFileItsProviderDoesNotType() {
+        // A provider that types nothing and names its file with no extension: the share's own
+        // type says it is a photo, so it shows as the note's image.
+        val intent = Intent(Intent.ACTION_SEND).setType("image/jpeg")
+            .putExtra(Intent.EXTRA_STREAM, shared("1000012345", ByteArray(24)))
+        val outcome = ShareImporter.import(context, delivered(intent))!!
+        assertEquals("image/jpeg", attachments(outcome).getJSONObject(0).getString("mime"))
+        val note = queued(outcome.getJSONArray("notes").getString(0))
+        assertEquals(listOf("1000012345.jpg"), filenames(note))
+        assertEquals(1, note.getJSONObject("fields").getJSONArray("image").length())
     }
 
     @Test

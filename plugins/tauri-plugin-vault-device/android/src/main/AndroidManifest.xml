@@ -5,6 +5,19 @@
     <!-- Scanning the pairing QR code. The camera is optional: pairing by password needs none. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- A file input with `capture` opens the camera (capture K1): the webview's file chooser
+         (wry's RustWebChromeClient) starts IMAGE_CAPTURE or VIDEO_CAPTURE only when
+         resolveActivity finds a camera app, and from Android 11 an app sees no other app's
+         activities unless it declares the intents it asks for. Without these the input fell
+         back to the file picker. It asks for CAMERA at run time, declared above. -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.VIDEO_CAPTURE" />
+        </intent>
+    </queries>
     <!-- Device capture (D7, D23): SMS and MMS, the call log, contacts. -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.READ_SMS" />

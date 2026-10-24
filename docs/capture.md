@@ -15,7 +15,7 @@ Each image shows as a thumbnail. Its **×** removes it before you save.
 
 **Camera** takes a photo and attaches it as **Add image** does.
 
-- On a phone, in a browser or in the Android app, it opens the phone's camera. Take the photo there, and it is attached when the camera closes.
+- On a phone, in a browser or in the Android app, it opens the phone's camera. Take the photo there, and it is attached when the camera closes. The Android app asks once for permission to use the camera; without it, Camera opens nothing.
 - In a desktop browser, it opens a preview in the dialog. **Take photo** takes the picture, **Retake** goes back to the live picture, and **Use photo** attaches it as a JPEG, no larger than 2560 pixels on its long edge. **Cancel**, or <kbd>Esc</kbd>, closes the preview. The browser asks once for permission to use the camera.
 - On a computer with no camera the button does not show.
 
@@ -41,6 +41,8 @@ The dialog remembers the choice on each device, so the next capture is sent to t
 In another app, choose **Share** and then **TheVault inbox**. The app saves a fleeting note at once, even with no connection, and shows "Saved to TheVault inbox"; the note reaches the home server with the next sync.
 
 - Shared text becomes the note's body. A shared web page is titled with the page title, with its link in the body.
-- Shared images go in the note's **Images** field.
-- Other shared files, such as PDFs, are attached in the body as files.
-- Several files shared at once make one note with every file attached.
+- Shared images go in the note's **Images** field. A file counts as an image when the sharing app, or its file name, says it is one.
+- Every other shared file, of any type, such as a PDF, a spreadsheet or an archive, is attached in the body as a file, after the text.
+- Several files shared at once make one note with every file attached, whichever way the sharing app hands them over.
+- The files are stored in the phone's vault with the note and reach the home server with it. On the server the note shows the same images and files.
+- A file the app cannot read saves nothing: the toast says "TheVault could not save this" and why, so you can share it again.

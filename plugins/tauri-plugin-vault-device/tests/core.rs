@@ -250,6 +250,79 @@ fn a_share_made_offline_is_queued_then_reaches_the_server() {
     }
 }
 
+/// Shared files of any type, one or several, are attached to the note and reach the home server
+/// with it: images in `image`, every other file an `asset` block in `body` (capture K4).
+#[test]
+fn shared_files_of_any_type_reach_the_server_attached() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    core.device("unpaired", || Arc::new(NoPhone)).unwrap();
+
+    // One PDF and nothing else.
+    let pdf = core
+        .share(&Shared {
+            files: vec![file(dir.path(), "invoice.pdf", b"%PDF-1.4 invoice")],
+            ..Shared::default()
+        })
+        .unwrap();
+    // Several files with a line of text: a photo whose provider gave no extension, a sheet and
+    // an archive.
+    let mut photo = file(dir.path(), "1000012345", b"\xff\xd8\xff photo");
+    photo.mime = "image/jpeg".into();
+    let several = core
+        .share(&Shared {
+            text: "From the meeting".into(),
+            files: vec![
+                photo,
+                file(dir.path(), "budget.csv", b"a,b\n1,2\n"),
+                file(dir.path(), "slides.zip", b"PK\x03\x04"),
+            ],
+            ..Shared::default()
+        })
+        .unwrap();
+    let ids = [pdf.notes[0].clone(), several.notes[0].clone()];
+    // Paired afterwards, so this round is the one that sends them.
+    let admin = Admin::start();
+    core.set_link(Some(link(&admin.pair("Pixel"), 64))).unwrap();
+    let report = core.sync_now().unwrap();
+    for id in &ids {
+        assert!(report.pushed.contains(id), "{id} pushed: {report:?}");
+    }
+    assert_eq!(core.status().unwrap()["pending"], 0);
+
+    let fetch = |a: &str| {
+        let res = admin
+            .client
+            .get(admin.server.url(&format!("/api/assets/{a}")))
+            .bearer_auth(admin.server.admin_token())
+            .send()
+            .unwrap();
+        assert!(res.status().is_success(), "asset {a}: {}", res.status());
+        res.bytes().unwrap().to_vec()
+    };
+    let note = |id: &str| admin.send("GET", &format!("/api/notes/{id}"), None)["note"].clone();
+
+    let one = note(&ids[0]);
+    assert!(one["fields"].get("image").is_none(), "{one}");
+    assert_eq!(body_kinds(&one), ["asset"]);
+    let a = one["blocks"][0]["blocks"][0]["fields"]["asset"]
+        .as_str()
+        .unwrap();
+    assert_eq!(fetch(a), b"%PDF-1.4 invoice");
+
+    let many = note(&ids[1]);
+    let images = many["fields"]["image"].as_array().unwrap();
+    assert_eq!(images.len(), 1, "{many}");
+    assert_eq!(fetch(images[0].as_str().unwrap()), b"\xff\xd8\xff photo");
+    assert_eq!(body_kinds(&many), ["paragraph", "asset", "asset"]);
+    let files: Vec<Vec<u8>> = many["blocks"][0]["blocks"].as_array().unwrap()[1..]
+        .iter()
+        .map(|b| fetch(b["fields"]["asset"].as_str().unwrap()))
+        .collect();
+    assert_eq!(files, [b"a,b\n1,2\n".to_vec(), b"PK\x03\x04".to_vec()]);
+}
+
 #[test]
 fn an_empty_share_is_refused() {
     let _turn = turn();

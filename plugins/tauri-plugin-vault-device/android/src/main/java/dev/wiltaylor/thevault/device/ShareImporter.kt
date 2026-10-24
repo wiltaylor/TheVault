@@ -3,8 +3,8 @@ package dev.wiltaylor.thevault.device
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.provider.OpenableColumns
+import androidx.core.content.IntentCompat
 import java.io.File
 import java.util.UUID
 import org.json.JSONArray
@@ -33,7 +33,7 @@ object ShareImporter {
             val input = context.contentResolver.openInputStream(uri)
                 ?: throw IllegalStateException("cannot read shared file $name")
             input.use { src -> copy.outputStream().use { dst -> src.copyTo(dst) } }
-            val mime = context.contentResolver.getType(uri) ?: ""
+            val mime = mimeOf(context, uri, intent)
             files.put(JSONObject().put("path", copy.path).put("filename", name).put("mime", mime))
         }
         if (text.isBlank() && subject.isBlank() && files.length() == 0) return null
@@ -54,23 +54,40 @@ object ShareImporter {
         return outcome
     }
 
+    /**
+     * Every file [intent] shares, each once, in the order it lists them: `EXTRA_STREAM`, one URI
+     * or a list of them whichever the action, then the URIs of its `ClipData`. Some apps hand
+     * their files over in the `ClipData` alone, often beside a line of text, and reading only
+     * `EXTRA_STREAM` kept the text and dropped the files (capture K4). `IntentCompat` reads the
+     * extra untyped on Android 13, whose typed getters can fail on a parcelled intent.
+     */
     private fun streams(intent: Intent): List<Uri> {
-        if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
-            val list = if (Build.VERSION.SDK_INT >= 33) {
-                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
-            }
-            return list.orEmpty().filterNotNull()
+        val out = LinkedHashSet<Uri>()
+        // Each read answers null, or throws on some versions, when the extra is the other form.
+        runCatching { IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java) }
+            .getOrNull()?.let { out.add(it) }
+        runCatching { IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java) }
+            .getOrNull()?.filterNotNull()?.let { out.addAll(it) }
+        intent.clipData?.let { clip ->
+            for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { out.add(it) }
         }
-        val one = if (Build.VERSION.SDK_INT >= 33) {
-            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+        return out.toList()
+    }
+
+    /**
+     * The media type of a shared file: its provider's, else the share's own type when that names
+     * one type, such as `image/jpeg` and not a wildcard, else none, and the core guesses it from
+     * the name.
+     */
+    private fun mimeOf(context: Context, uri: Uri, intent: Intent): String {
+        val given = try {
+            context.contentResolver.getType(uri)
+        } catch (e: Exception) {
+            null
         }
-        return listOfNotNull(one)
+        if (!given.isNullOrBlank()) return given
+        val shared = intent.type ?: return ""
+        return if (shared.contains('/') && !shared.endsWith("/*")) shared else ""
     }
 
     /** The file's display name from its provider, else the last segment of its URI. */
