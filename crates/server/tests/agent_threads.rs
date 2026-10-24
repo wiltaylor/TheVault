@@ -909,3 +909,201 @@ fn an_app_applies_an_agents_type_proposal_from_its_thread_as_the_thread_holds_it
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     assert!(type_file().contains("tab \"Details\""));
 }
+
+/// The text of every message `request` sent, in order, as `role: text`.
+fn sent_texts(request: &Value) -> Vec<String> {
+    request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            let text: Vec<&str> = match &m["content"] {
+                Value::String(s) => vec![s.as_str()],
+                Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect(),
+                _ => Vec::new(),
+            };
+            format!(
+                "{}: {}",
+                m["role"].as_str().unwrap_or_default(),
+                text.join(" | ")
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn each_call_reports_the_context_and_compact_summarizes_the_thread_for_the_model() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let thread = api.thread("assistant");
+    fake.push(AnthropicMessage::text("Paris is the capital.").usage(1200, 30));
+    let events = api.chat(
+        json!({ "agent": "assistant", "thread": thread, "messages": [user("Capital of France?")] }),
+    );
+    let context = events_named(&events, "context");
+    assert_eq!(
+        context,
+        [&json!({ "used": 1230, "window": 200_000 })],
+        "{events:?}"
+    );
+    let t = api.read_thread("assistant", &thread);
+    assert_eq!(t["context"], json!({ "used": 1230, "window": 200_000 }));
+    assert_eq!(t["compaction"], Value::Null);
+
+    // /compact: one call for the summary, kept in the thread; the turn ends there.
+    fake.clear_requests();
+    fake.push(
+        AnthropicMessage::text("The user asked for France's capital: Paris.").usage(1300, 12),
+    );
+    let events = api
+        .chat(json!({ "agent": "assistant", "thread": thread, "messages": [], "compact": true }));
+    let names: Vec<&str> = events.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        ["compacting", "compacted", "context", "done"],
+        "{events:?}"
+    );
+    let compacted = events_named(&events, "compacted")[0];
+    assert_eq!(compacted["reason"], "command");
+    assert_eq!(compacted["upto"], 2);
+    assert_eq!(
+        compacted["summary"],
+        "The user asked for France's capital: Paris."
+    );
+    assert_eq!(compacted["before"], 1300);
+    let asked = fake.message_requests()[0].json();
+    assert_eq!(
+        asked["tools"].as_array().map_or(0, Vec::len),
+        0,
+        "no tools for a summary"
+    );
+    let texts = sent_texts(&asked);
+    assert!(texts[0].contains("Capital of France?"), "{texts:?}");
+    assert!(
+        texts.last().unwrap().contains("Summarize the conversation"),
+        "{texts:?}"
+    );
+    let t = api.read_thread("assistant", &thread);
+    assert_eq!(t["compaction"]["upto"], 2);
+    // The thread keeps every message for the user.
+    assert_eq!(t["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(t["context"], json!({ "used": 12, "window": 200_000 }));
+
+    // The next turn sends the summary in place of the older messages.
+    fake.clear_requests();
+    fake.push(AnthropicMessage::text("Berlin."));
+    api.chat(json!({ "agent": "assistant", "thread": thread, "messages": [user("And Germany?")] }));
+    let texts = sent_texts(&fake.message_requests()[0].json());
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(
+        texts[0].starts_with("user: [The conversation before this point was compacted."),
+        "{texts:?}"
+    );
+    assert!(texts[0].contains("France's capital: Paris."), "{texts:?}");
+    assert!(texts[0].ends_with("And Germany?"), "{texts:?}");
+    assert!(!texts[0].contains("Capital of France?"), "{texts:?}");
+    assert_eq!(
+        api.read_thread("assistant", &thread)["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+#[test]
+fn a_thread_that_filled_its_window_is_compacted_before_the_next_turn() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.send(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({ "context": { "windows": { "anthropic": 10_000 }, "compact_at": 60 } }),
+    );
+    let thread = api.thread("assistant");
+    fake.push(AnthropicMessage::text("A long answer.").usage(5_000, 500));
+    api.chat(
+        json!({ "agent": "assistant", "thread": thread, "messages": [user("Tell me a lot.")] }),
+    );
+    // 5,500 of 10,000 is under 60%: nothing yet.
+    fake.push(AnthropicMessage::text("Longer still.").usage(6_000, 200));
+    let events =
+        api.chat(json!({ "agent": "assistant", "thread": thread, "messages": [user("More.")] }));
+    assert!(events_named(&events, "compacting").is_empty(), "{events:?}");
+
+    // 6,200 is over: the next turn compacts first, then answers from the summary.
+    fake.clear_requests();
+    fake.push(AnthropicMessage::text("Summary: the user wanted a lot, twice.").usage(6_300, 9));
+    fake.push(AnthropicMessage::text("Here is the rest.").usage(400, 20));
+    let events =
+        api.chat(json!({ "agent": "assistant", "thread": thread, "messages": [user("Finish.")] }));
+    assert_eq!(
+        events_named(&events, "compacting"),
+        [&json!({ "reason": "auto" })]
+    );
+    assert_eq!(events_named(&events, "compacted")[0]["upto"], 4);
+    let text: String = events_named(&events, "text")
+        .iter()
+        .filter_map(|d| d["delta"].as_str())
+        .collect();
+    assert_eq!(text, "Here is the rest.");
+    let requests = fake.message_requests();
+    assert_eq!(requests.len(), 2);
+    let answer = sent_texts(&requests[1].json());
+    assert_eq!(answer.len(), 1, "{answer:?}");
+    assert!(
+        answer[0].contains("the user wanted a lot, twice") && answer[0].ends_with("Finish."),
+        "{answer:?}"
+    );
+
+    // Turned off, a full thread is left as it is.
+    api.send(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({ "context": { "auto_compact": false } }),
+    );
+    fake.push(AnthropicMessage::text("Big.").usage(9_000, 100));
+    api.chat(json!({ "agent": "assistant", "thread": thread, "messages": [user("Again.")] }));
+    fake.push(AnthropicMessage::text("Fine."));
+    let events = api
+        .chat(json!({ "agent": "assistant", "thread": thread, "messages": [user("Once more.")] }));
+    assert!(events_named(&events, "compacting").is_empty(), "{events:?}");
+    let settings = api.get("/api/integrations/ai");
+    assert_eq!(
+        settings["context"],
+        json!({
+            "windows": {
+                "anthropic": { "window": 10_000, "set": true },
+                "openai": { "window": 400_000, "set": false },
+                "chatgpt": { "window": 272_000, "set": false },
+            },
+            "auto_compact": false,
+            "compact_at": 60,
+        })
+    );
+}
+
+#[test]
+fn compact_needs_a_thread_and_settings_refuse_a_window_out_of_range() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let res = api.request_as(
+        &api.token(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({ "messages": [], "compact": true })),
+    );
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    for body in [
+        json!({ "context": { "windows": { "anthropic": 10 } } }),
+        json!({ "context": { "compact_at": 99 } }),
+    ] {
+        let res = api.request_as(
+            &api.token(),
+            "PUT",
+            "/api/integrations/ai/settings",
+            Some(body),
+        );
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+}

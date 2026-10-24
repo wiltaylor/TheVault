@@ -140,11 +140,17 @@ function Column(props: {
  */
 export function KanbanView(props: { view: ViewDef; query: string; thisId: string | undefined }) {
   const check = createMemo(() => groupField(types(), props.query, props.view.group));
-  const columns = createMemo(() => {
-    const f = check().field;
-    if (!f) return [];
-    return kanbanColumns(taxonomyDef(f.taxonomy ?? "")?.terms ?? [], f.name, f.label);
-  });
+  // The same columns stay the same objects when the definitions are read again, so a change
+  // elsewhere does not remount every column and drop a drag under way.
+  const columns = createMemo(
+    () => {
+      const f = check().field;
+      if (!f) return [];
+      return kanbanColumns(taxonomyDef(f.taxonomy ?? "")?.terms ?? [], f.name, f.label);
+    },
+    [],
+    { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) },
+  );
   const problem = () => {
     const c = check();
     if (c.problem) return c.problem;

@@ -132,7 +132,7 @@ export function callsSaved() {
 /** Where clicking call `call` of `agent` goes: its thread, or the agent's chat until it has one. */
 export function callTarget(agent: string, call: string): string {
   const thread = entries.get(call)?.status().thread;
-  return thread ? `/agents/${agent}/chat?thread=${thread}` : `/agents/${agent}/chat`;
+  return thread ? `/agents/${agent}?thread=${thread}` : `/agents/${agent}`;
 }
 
 /** Test-only: forget every call. */

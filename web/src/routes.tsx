@@ -85,7 +85,7 @@ export function paneRoutes() {
         <Route path="/ai" component={Ai} />
       </Route>
       <Route path="/integrations/google/callback" component={GoogleCallback} />
-      <Route path={["/agents/:name", "/agents/:name/:tab"]} component={AgentScreen} />
+      <Route path={["/agents/:name", "/agents/:name/:section", "/agents/:name/:section/:tab"]} component={AgentScreen} />
       <Route path="/skills" component={Skills} />
       <Route path={["/skills/:name", "/skills/:name/:tab"]} component={SkillScreen} />
       <Route path="/trash" component={Trash} />

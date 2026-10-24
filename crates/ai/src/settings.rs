@@ -268,8 +268,101 @@ pub struct Settings {
     /// addresses on the local network (ai D27). An escape hatch with no UI; absent means false.
     #[serde(default, skip_serializing_if = "is_no")]
     pub fetch_private: bool,
+    /// How much a chat may send before it is compacted.
+    #[serde(default, skip_serializing_if = "Context::is_default")]
+    pub context: Context,
     #[serde(flatten)]
     pub other: Map<String, Value>,
+}
+
+/// The context windows of the providers and when a chat thread is compacted. A window left out
+/// is the provider's default ([`Context::DEFAULT_WINDOWS`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Context {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt: Option<u64>,
+    /// Compact a thread before a turn once its last request filled [`Context::compact_at`] of
+    /// the window.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub auto_compact: bool,
+    /// The share of the window, in percent, that starts a compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_at: Option<u8>,
+}
+
+impl Default for Context {
+    fn default() -> Context {
+        Context {
+            anthropic: None,
+            openai: None,
+            chatgpt: None,
+            auto_compact: true,
+            compact_at: None,
+        }
+    }
+}
+
+impl Context {
+    /// The windows a provider has when none is set: Anthropic's, the OpenAI API's, the ChatGPT
+    /// plan's, and a Chat Completions service's, which is often smaller.
+    pub const DEFAULT_WINDOWS: [(Provider, u64); 3] = [
+        (Provider::Anthropic, 200_000),
+        (Provider::OpenAi, 400_000),
+        (Provider::ChatGpt, 272_000),
+    ];
+    /// The window of a service the OpenAI card reaches over Chat Completions, when none is set.
+    pub const CHAT_COMPLETIONS_WINDOW: u64 = 128_000;
+    /// The share of the window that starts a compaction when none is set.
+    pub const COMPACT_AT: u8 = 80;
+    /// The windows the settings take.
+    pub const WINDOW_RANGE: std::ops::RangeInclusive<u64> = 4_000..=10_000_000;
+    /// The shares the settings take.
+    pub const COMPACT_RANGE: std::ops::RangeInclusive<u8> = 50..=95;
+
+    fn is_default(&self) -> bool {
+        *self == Context::default()
+    }
+
+    /// The window set for `p`, if one is.
+    pub fn set_window(&self, p: Provider) -> Option<u64> {
+        match p {
+            Provider::Anthropic => self.anthropic,
+            Provider::OpenAi => self.openai,
+            Provider::ChatGpt => self.chatgpt,
+        }
+    }
+
+    pub fn put_window(&mut self, p: Provider, window: Option<u64>) {
+        match p {
+            Provider::Anthropic => self.anthropic = window,
+            Provider::OpenAi => self.openai = window,
+            Provider::ChatGpt => self.chatgpt = window,
+        }
+    }
+
+    /// `p`'s window in tokens: the one set, else its default. `api` is the API the OpenAI card
+    /// speaks.
+    pub fn window(&self, p: Provider, api: OpenAiApi) -> u64 {
+        if let Some(w) = self.set_window(p) {
+            return w;
+        }
+        if p == Provider::OpenAi && api == OpenAiApi::ChatCompletions {
+            return Context::CHAT_COMPLETIONS_WINDOW;
+        }
+        Context::DEFAULT_WINDOWS
+            .iter()
+            .find(|(q, _)| *q == p)
+            .map_or(Context::CHAT_COMPLETIONS_WINDOW, |(_, w)| *w)
+    }
+
+    /// The share of the window, in percent, that starts a compaction.
+    pub fn compact_at(&self) -> u8 {
+        self.compact_at.unwrap_or(Context::COMPACT_AT)
+    }
 }
 
 fn yes() -> bool {
@@ -407,6 +500,11 @@ impl Settings {
     pub fn save(&self, state: &state::State) -> Result<(), AiError> {
         let text = serde_json::to_string(self).map_err(|e| AiError::invalid(e.to_string()))?;
         state.set_secret(SETTINGS, &text).map_err(state_error)
+    }
+
+    /// `p`'s context window in tokens, as set or by default.
+    pub fn window(&self, p: Provider) -> u64 {
+        self.context.window(p, self.endpoints.openai_api())
     }
 
     /// Whether the chat system prompt is the user's own rather than the shipped default.

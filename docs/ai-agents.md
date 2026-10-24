@@ -10,15 +10,17 @@ Each agent is a file `agents/<name>.wcl`. The name is lower case letters, digits
 
 The file names the label, description and icon, the `provider` and `model` (absent means the Settings > AI defaults), the `effort`, the `system_prompt` (absent means the shipped chat prompt), a `permissions` block and any `trigger` blocks. `enabled = false` keeps the file but starts no chat and runs no trigger. [Vault file format, Agent files](vault-format.md#agent-files) defines every item.
 
-In the web app, the left sidebar's **Agents** section lists every agent, Assistant first; **+** creates one. Each agent opens at `/agents/<name>`, with these tabs:
+In the web app, the left sidebar's **Agents** section lists every agent, Assistant first; **+** creates one. Each agent opens at `/agents/<name>` on its chat: a bar with the session picker, Rename, Archive and Delete for the chosen session and the settings cog, then the chosen session filling the pane, with the provider and model menus at the foot of the message box. [Threads](ai.md#threads) describes the chat. The cog opens the agent's settings at `/agents/<name>/settings`, with these tabs, each at `/agents/<name>/settings/<tab>`; the arrow at the top goes back to the chat:
 
 | Tab | Holds |
 |---|---|
-| Chat | The agent's threads and the open thread |
-| Settings | Label, description, icon, enabled, provider, model, effort and system prompt |
-| Permissions | Tools, confirmation switches, internet switches and note types |
+| General | Label, description, icon, enabled, provider, model, effort and system prompt |
+| Permissions | Tools, confirmation switches, internet switches, skills and note types |
+| Memory | What the agent remembers |
 | Triggers | Schedules, note events and mentions, with each trigger's last runs |
 | File | The WCL file itself, checked as the form is |
+
+The addresses of the screen's earlier tabs still work: `/agents/<name>/chat` opens the chat, and `/agents/<name>/memory`, `/permissions`, `/triggers` and `/file` open those settings tabs.
 
 The Assistant (`agents/assistant.wcl`) is shipped with every vault. It cannot be deleted or disabled; everything else about it can be changed.
 
@@ -116,7 +118,7 @@ Skills are folders of instructions and files in the vault's `skills/` folder, in
 
 The agent's system text ends with an "Available skills" section, after its prompt, its memories and the open note: each offered skill's name and description, and a line telling it to call `use_skill` before following one. When the agent has the browser box, the line says how to run a skill's scripts there; otherwise it says scripts can be read but not run.
 
-The list is a snapshot kept per thread, in the thread's transcript: taken on the thread's first turn and sent unchanged on every later turn, so adding or changing skills never changes a running conversation's instructions, and prompt caching holds. To give a thread the current list, type `/update-skills` alone in the chat box, in the panel or the Chat tab, in any client. The turn sends no message of yours: the server takes a fresh snapshot, tells the model "The available skills changed; the list at the end of your instructions is current.", and the conversation shows a small "Skills updated (<n>)" line instead of your bubble. Anything else starting with `/` is sent as typed. A thread from before skills takes its snapshot on its next turn; a conversation with no thread lists the skills as they are on each turn.
+The list is a snapshot kept per thread, in the thread's transcript: taken on the thread's first turn and sent unchanged on every later turn, so adding or changing skills never changes a running conversation's instructions, and prompt caching holds. To give a thread the current list, type `/update-skills` alone in the chat box, in the panel or the agent screen, in any client. The turn sends no message of yours: the server takes a fresh snapshot, tells the model "The available skills changed; the list at the end of your instructions is current.", and the conversation shows a small "Skills updated (<n>)" line instead of your bubble. Anything else starting with `/` is sent as typed. A thread from before skills takes its snapshot on its next turn; a conversation with no thread lists the skills as they are on each turn.
 
 | Tool | What it does |
 |------|--------------|
@@ -151,11 +153,11 @@ Every conversation with an agent is a note of the built-in type `agent_thread`, 
 
 The note tools leave threads out unless the agent's `permissions.types` names `agent_thread`, so an agent does not read chats back as vault content. Deleting an agent keeps its threads.
 
-The chat panel is another view of the same threads. Under its agent picker, a thread picker lists the chosen agent's threads, newest activity first and archived ones left out, with the running spinner and the "New reply" dot. **New thread**, at the top of the list, starts another, and **Open in agent screen** opens the shown thread in the agent's Chat tab. A thread open in the panel and in a Chat tab at the same time is one conversation: the answer streams in both, and sending, Stop, Apply and Discard in either show in both. Each view chooses its thread by itself, so choosing a thread in one never changes the other. The panel remembers its agent and thread in this browser and opens on them again, or on a new thread when that one was archived or deleted. The panel still sends the open note with each message, whichever thread it shows; the Chat tab sends none. The desktop and Android apps work the same way.
+The chat panel is another view of the same threads. Under its agent picker, a thread picker lists the chosen agent's threads, newest activity first and archived ones left out, with the running spinner and the "New reply" dot. **New thread**, at the top of the list, starts another, and **Open in agent screen** opens the shown thread in the agent screen. A thread open in the panel and in the agent screen at the same time is one conversation: the answer streams in both, and sending, Stop, Apply and Discard in either show in both. Each view chooses its thread by itself, so choosing a thread in one never changes the other. The panel remembers its agent and thread in this browser and opens on them again, or on a new thread when that one was archived or deleted. The panel still sends the open note with each message, whichever thread it shows; the agent screen sends none. The desktop and Android apps work the same way.
 
-Each thread in the Chat tab has a ⋯ menu, also opened by a right-click, with Rename, Archive or Unarchive, and Delete. These are ordinary note changes, authored by you: Delete moves the thread note to the trash, where it can be restored. Archived threads are hidden from the list until **Show archived**, at its foot, lists them dimmed. An archived thread still opens, and sending a message in it takes it out of the archive. When the chat panel's thread is archived or deleted elsewhere, its next message starts a new thread.
+In the agent screen, **Rename**, **Archive** (or **Unarchive**) and **Delete** in the bar act on the chosen thread. These are ordinary note changes, authored by you: Delete asks first, then moves the thread note to the trash, where it can be restored. Archived threads are hidden from the session picker until **Show archived**, at its foot, lists them dimmed. An archived thread still opens, and sending a message in it takes it out of the archive. When the chat panel's thread is archived or deleted elsewhere, its next message starts a new thread.
 
-A turn runs on the server until it ends or you press **Stop**, whether or not anything shows it. Opening another thread, choosing another agent in the panel, closing the panel or the tab only stops showing it; the turn goes on writing to its thread. A running thread shows a small spinner beside its title in the Chat tab, and the agent shows one in the sidebar; opening the thread shows the answer so far and follows the rest, with the activity line counting from when the turn started. A thread that answered while it was not open shows a dot, "New reply", until you open it. One thread runs one turn at a time ("Still answering" while it does), and an agent runs at most 4 turns at once across its threads, trigger runs included. [The turns form](ai.md#the-turns-form) describes the routes.
+A turn runs on the server until it ends or you press **Stop**, whether or not anything shows it. Opening another thread, choosing another agent in the panel, closing the panel or the tab only stops showing it; the turn goes on writing to its thread. A running thread shows a small spinner beside its title in the agent screen's session picker, and the agent shows one in the sidebar; opening the thread shows the answer so far and follows the rest, with the activity line counting from when the turn started. A thread that answered while it was not open shows a dot, "New reply", until you open it. One thread runs one turn at a time ("Still answering" while it does), and an agent runs at most 4 turns at once across its threads, trigger runs included. [The turns form](ai.md#the-turns-form) describes the routes.
 
 ## Memory
 
@@ -184,7 +186,7 @@ The note tools leave memories out unless the agent's `permissions.types` names `
 
 ### The Memory tab
 
-The agent screen's **Memory** tab, after Chat, lists the agent's memories, newest first, with a search box that keeps those whose title or text holds every word typed. **Add memory** opens an empty title and text; **Edit** opens a memory's title and text, saved together with one **Save**; **Delete** asks first, then moves the memory to the trash, where it can be restored. These changes are authored by you, and the same limits apply. The tab works in the desktop and Android apps too: the changes are note writes to the vault on the device, synced like any note.
+The **Memory** tab of the agent's settings lists the agent's memories, newest first, with a search box that keeps those whose title or text holds every word typed. **Add memory** opens an empty title and text; **Edit** opens a memory's title and text, saved together with one **Save**; **Delete** asks first, then moves the memory to the trash, where it can be restored. These changes are authored by you, and the same limits apply. The tab works in the desktop and Android apps too: the changes are note writes to the vault on the device, synced like any note.
 
 The tab uses these routes. Reading needs `read`; the changes need `write`.
 

@@ -295,6 +295,6 @@ test("Ask <Label> commits a call in one go, shown as a chip that opens the agent
   await expect(chip).toHaveText(`@${label} tidy this`);
   await expect(doc.getByText("Not answered")).toBeVisible({ timeout: 10_000 });
   await chip.click();
-  await expect(page).toHaveURL(new RegExp(`/agents/${name}/chat$`));
+  await expect(page).toHaveURL(new RegExp(`/agents/${name}$`));
   expect((await admin.delete(`/api/agents/${name}`)).ok()).toBe(true);
 });

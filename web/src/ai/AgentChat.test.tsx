@@ -1,9 +1,10 @@
-// The agent screen's Chat tab (agents G5, G7, G8) and the AI panel's agent picker (agents G6):
-// the thread list with its pending badges, New thread, a thread started by the first message
-// with only that message sent, reopened threads with their pending cards, outcomes recorded in
-// the thread, and the panel's conversations as threads of the chosen agent. The panel's thread
-// picker, and a thread open in the panel and the Chat tab at once as one conversation (agents
-// G18).
+// The agent screen's chat (agents G5, G7, G8) and the AI panel's agent picker (agents G6): the
+// session picker with its pending badges, its search and New chat, Rename, Archive and Delete in
+// the bar, a thread started by the first message with only that message sent, reopened threads
+// with their pending cards, outcomes recorded in the thread, Enter sending and Shift+Enter
+// starting a line, and the panel's conversations as threads of the chosen agent. The panel's
+// thread picker, and a thread open in the panel and the agent screen at once as one conversation
+// (agents G18).
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -150,23 +151,83 @@ async function send(text: string) {
   await waitFor(() => expect(live).not.toBeNull());
 }
 
-describe("the Chat tab", () => {
+type View = ReturnType<typeof within>;
+
+/** Open the chat's session picker, in `view` when given, and give its list of chats. */
+async function sessions(view: View = within(document.body)): Promise<View> {
+  fireEvent.click(await view.findByRole("button", { name: /^Chat session: / }));
+  return within(await view.findByRole("listbox", { name: "Chats" }));
+}
+
+/** Choose the chat `title` from the session picker. */
+async function openSession(title: RegExp, view?: View) {
+  const list = await sessions(view);
+  fireEvent.click(await list.findByRole("option", { name: title }));
+}
+
+describe("the chat", () => {
   it("lists the agent's threads, newest first, with a badge on the one with pending proposals", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    await waitFor(() => expect(list.getAllByRole("button", { name: /^(Groceries|Roof)/ })).toHaveLength(2));
-    expect(agentThreads).toHaveBeenCalledWith("triage");
-    const items = list.getAllByRole("listitem");
-    expect(items[0]).toHaveTextContent("Groceries");
-    expect(items[1]).toHaveTextContent("Roof");
-    expect(within(items[0]!).getByLabelText("1 proposal waits for you")).toHaveTextContent("1");
-    expect(within(items[1]!).queryByLabelText(/wait for you|waits for you/)).toBeNull();
+    await waitFor(() => expect(agentThreads).toHaveBeenCalledWith("triage"));
+    const list = await sessions();
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(3));
+    const items = list.getAllByRole("option");
+    expect(items[0]).toHaveTextContent("New chat");
+    expect(items[0]).toHaveAttribute("aria-selected", "true");
+    expect(items[1]).toHaveTextContent("Groceries");
+    expect(items[2]).toHaveTextContent("Roof");
+    expect(within(items[1]!).getByLabelText("1 proposal waits for you")).toHaveTextContent("1");
+    expect(within(items[2]!).queryByLabelText(/wait for you|waits for you/)).toBeNull();
+  });
+
+  it("searches the chats by title, and Enter opens the one highlighted", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    await waitFor(() => expect(agentThreads).toHaveBeenCalled());
+    const list = await sessions();
+    const search = screen.getByRole("combobox", { name: "Search chats" });
+    expect(search).toHaveFocus();
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(3));
+    fireEvent.input(search, { target: { value: "roo" } });
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(2));
+    expect(list.getAllByRole("option")[1]).toHaveTextContent("Roof");
+    // The first match is highlighted, and Enter opens it.
+    expect(search.getAttribute("aria-activedescendant")).toBe(list.getAllByRole("option")[1]!.id);
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(agentThread).toHaveBeenCalledWith("triage", "01JOLDER"));
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Chat session: Roof/ })).toHaveFocus();
+    // No match says so; Escape closes the list and gives focus back.
+    await sessions();
+    fireEvent.input(screen.getByRole("combobox", { name: "Search chats" }), { target: { value: "zebra" } });
+    expect(await screen.findByText("No chat matches the search.")).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search chats" }), { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Chat session: / })).toHaveFocus();
+  });
+
+  it("moves through the chats with the arrow keys, New chat first", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    await waitFor(() => expect(agentThreads).toHaveBeenCalled());
+    const trigger = screen.getByRole("button", { name: "Chat session: New chat" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const list = within(await screen.findByRole("listbox", { name: "Chats" }));
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(3));
+    const search = screen.getByRole("combobox", { name: "Search chats" });
+    const active = () => document.getElementById(search.getAttribute("aria-activedescendant")!);
+    expect(active()).toHaveTextContent("New chat");
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(active()).toHaveTextContent("Groceries");
+    fireEvent.keyDown(search, { key: "ArrowUp" });
+    fireEvent.keyDown(search, { key: "ArrowUp" });
+    expect(active()).toHaveTextContent("Roof");
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(active()).toHaveTextContent("New chat");
   });
 
   it("starts a thread with the first message and sends only that message", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
     await waitFor(() => expect(agentThreads).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "New thread" }));
+    fireEvent.click((await sessions()).getByRole("option", { name: /New chat/ }));
     await send("File my email.");
     expect(agentThreadStart).toHaveBeenCalledWith("triage");
     expect(live!.body).toMatchObject({ agent: "triage", thread: "01JNEW" });
@@ -184,17 +245,55 @@ describe("the Chat tab", () => {
     expect(live!.body.messages).toHaveLength(1);
   });
 
-  it("opens the thread a trigger run links to", async () => {
-    render(() => <AgentChat agent="triage" label="Triage" thread="01JTHREAD" />);
+  it("sends on Enter, and Shift+Enter and Enter in an IME composition do not", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    await waitFor(() => expect(agentThreads).toHaveBeenCalled());
+    const box = screen.getByLabelText("Ask AI");
+    fireEvent.input(box, { target: { value: "Line one" } });
+    expect(fireEvent.keyDown(box, { key: "Enter", shiftKey: true })).toBe(true);
+    expect(fireEvent.keyDown(box, { key: "Enter", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(box, { key: "Enter", keyCode: 229 })).toBe(true);
+    expect(turns.aiTurnStart).not.toHaveBeenCalled();
+    fireEvent.input(box, { target: { value: "Line one\nLine two" } });
+    expect(fireEvent.keyDown(box, { key: "Enter" })).toBe(false);
+    await waitFor(() => expect(live).not.toBeNull());
+    expect(live!.body.messages).toEqual([{ role: "user", content: [{ type: "text", text: "Line one\nLine two" }] }]);
+  });
+
+  it("shows the provider and model picker at the foot of the message box, and a turn uses the model chosen", async () => {
+    aiModels.mockResolvedValue({
+      provider: "anthropic",
+      model: "claude-opus-5",
+      models: [
+        { id: "claude-opus-5", display_name: "Claude Opus 5" },
+        { id: "claude-sonnet-5", display_name: "Claude Sonnet 5" },
+      ],
+    });
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    const model = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    expect(model.closest(".ai-form-foot")).toContainElement(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(model.value).toBe("claude-opus-5"));
+    fireEvent.change(model, { target: { value: "claude-sonnet-5" } });
+    await send("Which model?");
+    expect(live!.body).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5" });
+  });
+
+  it("opens the thread a trigger run links to, and says which thread it shows", async () => {
+    const onThread = vi.fn();
+    render(() => <AgentChat agent="triage" label="Triage" thread="01JTHREAD" onThread={onThread} />);
     await waitFor(() => expect(agentThread).toHaveBeenCalledWith("triage", "01JTHREAD"));
     const convo = within(await screen.findByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Chat session: Groceries/ })).toBeTruthy());
+    await openSession(/^Roof/);
+    expect(onThread).toHaveBeenLastCalledWith("01JOLDER");
+    fireEvent.click((await sessions()).getByRole("option", { name: /New chat/ }));
+    expect(onThread).toHaveBeenLastCalledWith(null);
   });
 
   it("reopens a thread with its turns and its pending card, and records Apply in the thread", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/);
     await waitFor(() => expect(agentThread).toHaveBeenCalledWith("triage", "01JTHREAD"));
     const convo = within(await screen.findByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
@@ -212,8 +311,7 @@ describe("the Chat tab", () => {
 
   it("records Discard in the thread", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/);
     const convo = within(await screen.findByRole("list", { name: "Conversation" }));
     const card = within(await convo.findByRole("region", { name: /Proposed edit to Groceries/ }));
     fireEvent.click(card.getByRole("button", { name: "Discard" }));
@@ -224,8 +322,7 @@ describe("the Chat tab", () => {
   it("shows a stored outcome as it stands and no buttons for it", async () => {
     agentThread.mockResolvedValue(thread({ pending: 0, proposals: [{ event: "proposal", data: PROPOSAL, status: "discarded" }] }));
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/);
     const convo = within(await screen.findByRole("list", { name: "Conversation" }));
     const card = within(await convo.findByRole("region", { name: /Proposed edit to Groceries/ }));
     expect(card.getByRole("status")).toHaveTextContent("Discarded.");
@@ -233,72 +330,65 @@ describe("the Chat tab", () => {
   });
 });
 
-describe("thread actions", () => {
-  async function rows() {
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    await waitFor(() => expect(list.getAllByRole("listitem")).toHaveLength(2));
-    return list;
-  }
-
-  function openMenu(list: ReturnType<typeof within>, title: string) {
-    fireEvent.click(list.getByRole("button", { name: `Actions for ${title}` }));
-    return within(screen.getByRole("menu", { name: `Actions for ${title}` }));
-  }
-
-  it("renames a thread inline", async () => {
+describe("the chosen chat's actions", () => {
+  /** The chat with thread `title` open. */
+  async function opened(title: RegExp = /^Groceries/) {
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = await rows();
-    fireEvent.click(openMenu(list, "Groceries").getByRole("menuitem", { name: "Rename" }));
-    const input = list.getByLabelText("Thread title") as HTMLInputElement;
+    await openSession(title);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Archive chat" })).toBeEnabled());
+  }
+
+  it("has nothing to rename, archive or delete in a new chat", async () => {
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    await waitFor(() => expect(agentThreads).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "Rename chat" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Archive chat" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete chat" })).toBeDisabled();
+  });
+
+  it("renames the chat inline", async () => {
+    await opened();
+    fireEvent.click(screen.getByRole("button", { name: "Rename chat" }));
+    const input = screen.getByLabelText("Thread title") as HTMLInputElement;
     expect(input.value).toBe("Groceries");
     const calls = agentThreads.mock.calls.length;
     fireEvent.input(input, { target: { value: "Shopping" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(renameAgentThread).toHaveBeenCalledWith("triage", "01JTHREAD", "Shopping"));
     await waitFor(() => expect(agentThreads.mock.calls.length).toBeGreaterThan(calls));
-    expect(list.queryByLabelText("Thread title")).toBeNull();
+    expect(screen.queryByLabelText("Thread title")).toBeNull();
   });
 
   it("leaves the title as it was when renaming is given up", async () => {
-    render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = await rows();
-    fireEvent.click(openMenu(list, "Roof").getByRole("menuitem", { name: "Rename" }));
-    fireEvent.keyDown(list.getByLabelText("Thread title"), { key: "Escape" });
-    expect(list.queryByLabelText("Thread title")).toBeNull();
+    await opened(/^Roof/);
+    fireEvent.click(screen.getByRole("button", { name: "Rename chat" }));
+    fireEvent.keyDown(screen.getByLabelText("Thread title"), { key: "Escape" });
+    expect(screen.queryByLabelText("Thread title")).toBeNull();
     expect(renameAgentThread).not.toHaveBeenCalled();
   });
 
-  it("archives a thread through the note route at its current version", async () => {
-    render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = await rows();
+  it("archives the chat through the note route at its current version, and unarchives it", async () => {
+    await opened();
     agentThreads.mockResolvedValue({ threads: [{ id: "01JOLDER", title: "Roof", pending: 0 }] });
-    fireEvent.click(openMenu(list, "Groceries").getByRole("menuitem", { name: "Archive" }));
+    fireEvent.click(screen.getByRole("button", { name: "Archive chat" }));
     await waitFor(() => expect(archiveNote).toHaveBeenCalledWith("01JTHREAD", "t1"));
-    await waitFor(() => expect(list.getAllByRole("listitem")).toHaveLength(1));
+    // The chat stays open, marked archived, and the list leaves it out.
+    const unarchive = await screen.findByRole("button", { name: "Unarchive chat" });
+    expect(screen.getByRole("button", { name: /^Chat session: Groceries/ })).toHaveTextContent("Archived");
+    const list = await sessions();
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(2));
     expect(list.queryByText("Groceries")).toBeNull();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search chats" }), { key: "Escape" });
+    agentThread.mockResolvedValue(thread({ version: "t2", archived: true }));
+    fireEvent.click(unarchive);
+    await waitFor(() => expect(unarchiveNote).toHaveBeenCalledWith("01JTHREAD", "t2"));
+    expect(await screen.findByRole("button", { name: "Archive chat" })).toBeTruthy();
   });
 
-  it("links a thread's menu to the agent's AI activity in the Log (activity Y5)", async () => {
+  it("shows archived chats dimmed with Show archived", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = await rows();
-    const menu = openMenu(list, "Groceries");
-    expect(menu.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Rename", "Archive", "Show in log", "Delete"]);
-    const link = menu.getByRole("menuitem", { name: "Show in log" });
-    expect(link.getAttribute("href")).toBe("/log?category=ai&actor=agent:triage");
-    fireEvent.click(link);
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("opens a thread's menu on right-click", async () => {
-    render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = await rows();
-    fireEvent.contextMenu(list.getByRole("button", { name: /^Roof/ }));
-    expect(screen.getByRole("menu", { name: "Actions for Roof" })).toBeTruthy();
-  });
-
-  it("shows archived threads dimmed with Show archived, and unarchives one", async () => {
-    render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = await rows();
+    const list = await sessions();
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(3));
     agentThreads.mockResolvedValue({
       threads: [
         { id: "01JTHREAD", title: "Groceries", pending: 0 },
@@ -306,52 +396,46 @@ describe("thread actions", () => {
         { id: "01JFILED", title: "Gutters", pending: 0, archived: true },
       ],
     });
-    fireEvent.click(list.getByLabelText("Show archived"));
+    fireEvent.click(screen.getByLabelText("Show archived"));
     await waitFor(() => expect(agentThreads).toHaveBeenLastCalledWith("triage", true));
-    await waitFor(() => expect(list.getAllByRole("listitem")).toHaveLength(3));
-    const filed = list.getByRole("button", { name: /^Gutters/ });
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(4));
+    const filed = list.getByRole("option", { name: /^Gutters/ });
     expect(filed).toHaveTextContent("(archived)");
-    expect(filed.closest(".agent-thread-row")).toHaveClass("agent-thread-archived");
-    expect(list.getByRole("button", { name: /^Roof/ }).closest(".agent-thread-row")).not.toHaveClass("agent-thread-archived");
-    agentThread.mockResolvedValue(thread({ id: "01JFILED", version: "g3", archived: true }));
-    fireEvent.click(openMenu(list, "Gutters").getByRole("menuitem", { name: "Unarchive" }));
-    await waitFor(() => expect(unarchiveNote).toHaveBeenCalledWith("01JFILED", "g3"));
-    expect(archiveNote).not.toHaveBeenCalled();
+    expect(filed).toHaveClass("agent-thread-archived");
+    expect(list.getByRole("option", { name: /^Roof/ })).not.toHaveClass("agent-thread-archived");
     // Off again, the list leaves archived threads out.
-    fireEvent.click(list.getByLabelText("Show archived"));
+    fireEvent.click(screen.getByLabelText("Show archived"));
     await waitFor(() => expect(agentThreads).toHaveBeenLastCalledWith("triage"));
   });
 
-  it("deletes a thread after confirming, and the open one gives way to a new thread", async () => {
+  it("deletes the chat after confirming, and gives way to a new chat", async () => {
     const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
-    render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = await rows();
-    fireEvent.click(list.getByRole("button", { name: /^Groceries/ }));
+    await opened();
     const convo = within(await screen.findByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
     agentThreads.mockResolvedValue({ threads: [{ id: "01JOLDER", title: "Roof", pending: 0 }] });
-    fireEvent.click(openMenu(list, "Groceries").getByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete chat" }));
     expect(ask).toHaveBeenCalledWith(expect.stringContaining("trash"));
     await waitFor(() => expect(deleteAgentThread).toHaveBeenCalledWith("triage", "01JTHREAD"));
-    await waitFor(() => expect(list.getAllByRole("listitem")).toHaveLength(1));
     await waitFor(() => expect(screen.queryByText("Tidy my list.")).toBeNull());
+    expect(screen.getByRole("button", { name: "Chat session: New chat" })).toBeTruthy();
+    const list = await sessions();
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(2));
     ask.mockRestore();
   });
 
-  it("keeps a thread when Delete is not confirmed", async () => {
+  it("keeps the chat when Delete is not confirmed", async () => {
     const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = await rows();
-    fireEvent.click(openMenu(list, "Roof").getByRole("menuitem", { name: "Delete" }));
+    await opened(/^Roof/);
+    fireEvent.click(screen.getByRole("button", { name: "Delete chat" }));
     expect(deleteAgentThread).not.toHaveBeenCalled();
     ask.mockRestore();
   });
 
   it("shows why an action failed", async () => {
     archiveNote.mockRejectedValue(new Error("The note changed."));
-    render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = await rows();
-    fireEvent.click(openMenu(list, "Roof").getByRole("menuitem", { name: "Archive" }));
+    await opened(/^Roof/);
+    fireEvent.click(screen.getByRole("button", { name: "Archive chat" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("The note changed."));
   });
 });
@@ -359,8 +443,7 @@ describe("thread actions", () => {
 describe("a stored thread as turns", () => {
   it("sends /update-skills as a turn with no message on the thread, and shows Skills updated", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/);
     const convo = within(await screen.findByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
     await send("/update-skills");
@@ -522,16 +605,13 @@ describe("turns in the background (agents G17)", () => {
   it("leaves a turn running when another thread is opened, and shows it still answering on return", async () => {
     agentThread.mockImplementation(async (_agent: string, id: string) => (id === "01JOLDER" ? ROOF : thread()));
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/);
     const convo = () => within(screen.getByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(convo().getByText("Tidy my list.")).toBeTruthy());
     await send("More please.");
     live!.onEvent({ event: "text", data: { delta: "Partial" } });
     // Another thread can be opened while it answers: the turn runs on.
-    const roof = list.getByRole("button", { name: /^Roof/ });
-    expect(roof).not.toBeDisabled();
-    fireEvent.click(roof);
+    await openSession(/^Roof/);
     await waitFor(() => expect(convo().getByText("Slate?")).toBeTruthy());
     expect(turns.aiTurnStop).not.toHaveBeenCalled();
     expect(screen.queryByText("Stopped.")).toBeNull();
@@ -539,7 +619,7 @@ describe("turns in the background (agents G17)", () => {
     // What it says meanwhile is kept: the thread's one subscription reads on (agents G18).
     live!.onEvent({ event: "text", data: { delta: " and more" } });
 
-    fireEvent.click(list.getByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/);
     await waitFor(() => expect(convo().getByText("Partial and more")).toBeTruthy());
     expect(turns.streamTurn).toHaveBeenCalledTimes(1);
     expect(convo().getAllByText("More please.")).toHaveLength(1);
@@ -561,8 +641,7 @@ describe("turns in the background (agents G17)", () => {
         }),
     );
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/);
     await waitFor(() => expect(live).not.toBeNull());
     const convo = () => within(screen.getByRole("list", { name: "Conversation" }));
     // The thread before the turn, then the turn read from its start.
@@ -583,8 +662,7 @@ describe("turns in the background (agents G17)", () => {
 
   it("stops a running thread's turn on the server with Stop", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/);
     await waitFor(() => expect(screen.getByText("Tidy my list.")).toBeTruthy());
     await send("More please.");
     const { turn } = await turns.aiTurnStart.mock.results[0]!.value;
@@ -601,10 +679,10 @@ describe("turns in the background (agents G17)", () => {
       ],
     });
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    const groceries = () => list.getByRole("button", { name: /^Groceries/ });
+    const list = await sessions();
+    const groceries = () => list.getByRole("option", { name: /^Groceries/ });
     await waitFor(() => expect(within(groceries()).getByRole("img", { name: "Running" })).toBeTruthy());
-    expect(within(list.getByRole("button", { name: /^Roof/ })).queryByRole("img", { name: "Running" })).toBeNull();
+    expect(within(list.getByRole("option", { name: /^Roof/ })).queryByRole("img", { name: "Running" })).toBeNull();
 
     // The live stream says the turn ended: the list reads again, and the reply is new.
     agentThreads.mockResolvedValue({
@@ -618,14 +696,14 @@ describe("turns in the background (agents G17)", () => {
     expect(within(groceries()).queryByRole("img", { name: "Running" })).toBeNull();
 
     fireEvent.click(groceries());
-    await waitFor(() => expect(within(groceries()).queryByRole("img", { name: "New reply" })).toBeNull());
-    expect(hasNewReply("01JTHREAD")).toBe(false);
+    await waitFor(() => expect(hasNewReply("01JTHREAD")).toBe(false));
+    const again = await sessions();
+    expect(within(again.getByRole("option", { name: /^Groceries/ })).queryByRole("img", { name: "New reply" })).toBeNull();
   });
 
   it("gives no New reply to a thread whose turn ends while it is open", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
-    const list = within(screen.getByRole("complementary", { name: "Threads" }));
-    fireEvent.click(await list.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/);
     await waitFor(() => expect(screen.getByText("Tidy my list.")).toBeTruthy());
     liveTurn({ agent: "triage", thread: "01JTHREAD", turn: null, running: false });
     expect(hasNewReply("01JTHREAD")).toBe(false);
@@ -657,9 +735,7 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
     proposals: [],
   });
 
-  type View = ReturnType<typeof within>;
-
-  /** The panel, in an aside as the shell has it, and the Chat tab of Triage beside it. */
+  /** The panel, in an aside as the shell has it, and the chat of Triage beside it. */
   function both(): { panel: View; tab: View } {
     agentThread.mockImplementation(async (_agent: string, id: string) => (id === "01JOLDER" ? ROOF : thread()));
     render(() => (
@@ -726,7 +802,7 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
     const convo = () => within(panel.getByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(convo().getByText("Tidy my list.")).toBeTruthy());
     fireEvent.click(panel.getByRole("button", { name: "Open in agent screen" }));
-    expect(navigatePane).toHaveBeenCalledWith(expect.any(String), "/agents/triage/chat?thread=01JTHREAD");
+    expect(navigatePane).toHaveBeenCalledWith(expect.any(String), "/agents/triage?thread=01JTHREAD");
 
     await pick(panel, "New thread");
     await waitFor(() => expect(convo().queryByText("Tidy my list.")).toBeNull());
@@ -735,12 +811,12 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
     expect(live!.body).toMatchObject({ agent: "triage", thread: "01JNEW", note_id: "01JNOTE" });
   });
 
-  it("shows one stream in the panel and the Chat tab, and a Stop in one ends it in both", async () => {
+  it("shows one stream in the panel and the agent screen, and a Stop in one ends it in both", async () => {
     await withAgents();
     const { panel, tab } = both();
     fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
     await pick(panel, /^Groceries/);
-    fireEvent.click(await tab.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/, tab);
     const inPanel = () => within(panel.getByRole("list", { name: "Conversation" }));
     const inTab = () => within(tab.getByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(inPanel().getByText("Tidy my list.")).toBeTruthy());
@@ -766,22 +842,22 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
     expect(tab.getByRole("button", { name: "Send" })).toBeTruthy();
   });
 
-  it("sends no note from the Chat tab", async () => {
+  it("sends no note from the agent screen", async () => {
     await withAgents();
     const { tab } = both();
-    fireEvent.click(await tab.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/, tab);
     await waitFor(() => expect(within(tab.getByRole("list", { name: "Conversation" })).getByText("Tidy my list.")).toBeTruthy());
     await sendIn(tab, "More please.");
     expect(live!.body).toMatchObject({ thread: "01JTHREAD" });
     expect(live!.body).not.toHaveProperty("note_id");
   });
 
-  it("switching the panel's thread leaves the Chat tab's alone", async () => {
+  it("switching the panel's thread leaves the agent screen's alone", async () => {
     await withAgents();
     const { panel, tab } = both();
     fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
     await pick(panel, /^Groceries/);
-    fireEvent.click(await tab.findByRole("button", { name: /^Groceries/ }));
+    await openSession(/^Groceries/, tab);
     const inPanel = () => within(panel.getByRole("list", { name: "Conversation" }));
     const inTab = () => within(tab.getByRole("list", { name: "Conversation" }));
     await waitFor(() => expect(inTab().getByText("Tidy my list.")).toBeTruthy());
@@ -789,10 +865,10 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
     await pick(panel, /^Roof/);
     await waitFor(() => expect(inPanel().getByText("Slate?")).toBeTruthy());
     expect(inTab().getByText("Tidy my list.")).toBeTruthy();
-    expect(tab.getByRole("button", { name: /^Groceries/ })).toHaveAttribute("aria-current", "true");
+    expect(tab.getByRole("button", { name: /^Chat session: Groceries/ })).toBeTruthy();
 
     // And the other way round.
-    fireEvent.click(tab.getByRole("button", { name: "New thread" }));
+    fireEvent.click((await sessions(tab)).getByRole("option", { name: /New chat/ }));
     await waitFor(() => expect(inTab().queryByText("Tidy my list.")).toBeNull());
     expect(inPanel().getByText("Slate?")).toBeTruthy();
   });
@@ -808,7 +884,7 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
       const { panel, tab } = both();
       fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
       await pick(panel, /^Groceries/);
-      fireEvent.click(await tab.findByRole("button", { name: /^Groceries/ }));
+      await openSession(/^Groceries/, tab);
       const inPanel = () => within(panel.getByRole("list", { name: "Conversation" }));
       const inTab = () => within(tab.getByRole("list", { name: "Conversation" }));
       await waitFor(() => expect(inTab().getByText("Tidy my list.")).toBeTruthy());

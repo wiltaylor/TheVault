@@ -109,14 +109,14 @@ describe("memory proposals", () => {
     expect(card).toHaveTextContent("+ Green tea.");
     expect(card.querySelector("del")).toHaveTextContent("Tea");
     expect(within(card).getByText("Tea order")).toBeInTheDocument();
-    expect(within(card).getByRole("link", { name: "Clerk" })).toHaveAttribute("href", "/agents/clerk/memory");
+    expect(within(card).getByRole("link", { name: "Clerk" })).toHaveAttribute("href", "/agents/clerk/settings/memory");
     expect(m.getByText("Checked a change to a memory of agent clerk")).toBeInTheDocument();
     const before = memoriesVersion();
     fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(within(card).getByText(/Applied\./)).toBeInTheDocument());
     expect(aiApply).toHaveBeenCalledWith(CHANGE);
     expect(memoriesVersion()).toBeGreaterThan(before);
-    expect(within(card).getByRole("link", { name: "Open memories" })).toHaveAttribute("href", "/agents/clerk/memory");
+    expect(within(card).getByRole("link", { name: "Open memories" })).toHaveAttribute("href", "/agents/clerk/settings/memory");
     expect(outcomesNow()).toEqual(["[Applied by the user: changed memory 01JTEA of agent clerk]"]);
   });
 
@@ -183,7 +183,7 @@ describe("memory proposals", () => {
     agents.mockClear();
     live!.onEvent({ event: "applied", data: { id: "toolu_a", op: "agent_memory_create", memory_id: "01JNEW", memory_agent: "clerk", version: "v1" } });
     const card = await m.findByRole("region", { name: "Added a memory of clerk" });
-    expect(within(card).getByRole("link", { name: "clerk" })).toHaveAttribute("href", "/agents/clerk/memory");
+    expect(within(card).getByRole("link", { name: "clerk" })).toHaveAttribute("href", "/agents/clerk/settings/memory");
     // A memory is a note: the agent list is not read again.
     expect(agents).not.toHaveBeenCalled();
   });

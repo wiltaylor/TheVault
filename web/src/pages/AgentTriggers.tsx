@@ -141,7 +141,7 @@ function RunList(props: { agent: string; runs: AgentRun[] | undefined; loading: 
                   <span class="muted">{took(r)}</span>{" "}
                 </Show>
                 <Show when={r.thread}>
-                  <A href={`/agents/${encodeURIComponent(props.agent)}/chat?thread=${encodeURIComponent(r.thread!)}`}>
+                  <A href={`/agents/${encodeURIComponent(props.agent)}?thread=${encodeURIComponent(r.thread!)}`}>
                     Open thread
                   </A>
                 </Show>

@@ -1,6 +1,6 @@
 //! `POST /api/ai/chat`: the chat panel's conversation turn (ai D10, D11, D14).
 //!
-//! The body is `{ provider?, model?, messages, note_id?, agent?, thread?, update_skills? }`: the transcript so
+//! The body is `{ provider?, model?, messages, note_id?, agent?, thread?, update_skills?, compact? }`: the transcript so
 //! far, ending with the user's new message, in the neutral form of [`ai::Message`]. Provider and
 //! model default to Settings > AI's. The turn is run by `agent`, the built-in Assistant when it is
 //! absent (agents G4, G6): its provider and model when it names them, its prompt, effort, tools,
@@ -37,6 +37,10 @@
 //! | `agent_memory_proposal` | a change to another agent's memories for the user to apply (agents G21), `kind` always `agent_memory`: `{id, kind, op, memory_agent, agent_label, memory_id, base_version, title, text, before, proposer}`, `op` `create` (`memory_id`, `base_version` and `before` null), `change` (`title` and `text` the new ones, `before` `{title, text}`) or `delete` |
 //! | `skill_proposal` | a skill change for the user to apply (skills S9), `kind` always `skill`: `{id, kind, op, name, path?, exists, before, after, issues, base, proposer, ...}`, `op` `create`, `change`, `file`, `file_delete` or `delete` (`crate::ai_skill_changes`) |
 //! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change`, `type_create` and `type_delete`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
+//! | `context` | `{used, window}` after each model call: the tokens the call took in and gave back, and the model's context window as Settings > AI has it |
+//! | `compacting` | `{reason}`: a thread's compaction started, `auto` because its last call filled `compact_at` of the window, or `command` for `/compact` (`compact: true`) |
+//! | `compacted` | `{reason, upto, summary, before, after}`: the model now reads `summary` in place of the thread's first `upto` messages; `before` is the tokens it summarized and `after` the summary's. `/compact` then ends with `done` |
+//! | `compact_failed` | `{message}`: a compaction due on its own failed; the turn goes on with the thread as it was |
 //! | `skills_updated` | `{count, skills, message}`: first in an `update_skills` turn (skills S6), the new snapshot's skill count and names and the user message the server added, a notice and the text the model reads (`crate::ai_skills`) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
@@ -124,6 +128,10 @@ pub struct ChatBody {
     /// ([`crate::ai_skills::UPDATED_TEXT`]); `messages` holds none of the user's.
     #[serde(default)]
     update_skills: bool,
+    /// `/compact`: summarize the thread for the model now, and end the turn. `messages` holds
+    /// none of the user's.
+    #[serde(default)]
+    compact: bool,
 }
 
 impl ChatBody {
@@ -210,6 +218,7 @@ pub(crate) async fn run_unattended(
         agent: Some(agent.name.clone()),
         thread: Some(thread.to_owned()),
         update_skills: false,
+        compact: false,
     };
     let author = Author::Agent(agent.name.clone());
     let (_stop, never) = watch::channel(false);
@@ -358,7 +367,7 @@ async fn start_with(
         Some(p) if !p.is_empty() => Some(p.parse::<Provider>().map_err(ApiError::bad_request)?),
         _ => None,
     };
-    if body.messages.is_empty() && !body.update_skills {
+    if body.messages.is_empty() && !body.update_skills && !body.compact {
         return Err(ApiError::bad_request(
             "send the conversation, ending with the user's message",
         ));
@@ -370,12 +379,21 @@ async fn start_with(
         agent,
         thread,
         update_skills,
+        compact,
         ..
     } = body;
     let writer = w.clone();
     let by = author.clone();
     let prepared = tokio::task::spawn_blocking(move || {
-        prepare(&writer, &by, agent, thread, messages, update_skills)
+        prepare(
+            &writer,
+            &by,
+            agent,
+            thread,
+            messages,
+            update_skills,
+            compact,
+        )
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
@@ -414,6 +432,7 @@ async fn start_with(
         activity,
         skills: prepared.skills,
         skills_updated: prepared.skills_updated,
+        compact: prepared.compact,
     };
     let agent = prepared.agent;
     let history = prepared.history;
@@ -440,7 +459,20 @@ struct Prepared {
     skills: crate::ai_skills::Snapshot,
     /// For a `/update-skills` turn, the `skills_updated` event's data.
     skills_updated: Option<Value>,
+    /// The compaction to make before the turn's first call, if one is due.
+    compact: Option<PendingCompact>,
 }
+
+/// A compaction due before a turn: why, how many of the thread's messages it covers, and the
+/// compaction it replaces, through which the model saw the older ones.
+struct PendingCompact {
+    reason: &'static str,
+    upto: usize,
+    previous: Option<agent_threads::Compaction>,
+}
+
+/// What the model is asked for when a thread is compacted.
+const COMPACT_PROMPT: &str = "Summarize the conversation so far, so that you can carry on from your summary alone once the earlier messages are dropped from what you are sent. Keep: what the user wants and asked for, the decisions made, the facts found with the ids and titles of the notes they came from, the changes proposed or made and how each ended, the open questions, and what you were about to do next. Write it as working notes for yourself, short but complete. Do not call any tool.";
 
 /// The agent a turn runs as: the one named, or the built-in Assistant. A disabled agent takes
 /// no turn.
@@ -473,6 +505,7 @@ fn prepare(
     thread: Option<String>,
     mut messages: Vec<Message>,
     update_skills: bool,
+    compact: bool,
 ) -> Result<Prepared, ApiError> {
     let named = agent
         .as_deref()
@@ -502,6 +535,11 @@ fn prepare(
         .map(|t| t.trim().to_owned())
         .filter(|t| !t.is_empty())
     else {
+        if compact {
+            return Err(ApiError::bad_request(
+                "/compact works on a thread: send the turn with its thread",
+            ));
+        }
         // With no thread, nothing keeps a snapshot: each turn lists the skills as they are.
         let skills = fresh();
         let mut skills_updated = None;
@@ -518,6 +556,7 @@ fn prepare(
             origin: None,
             skills,
             skills_updated,
+            compact: None,
         });
     };
     let thread = Thread::read(w, &id)?;
@@ -567,7 +606,30 @@ fn prepare(
     } else {
         None
     };
-    let mut history = transcript.messages;
+    // A compaction, asked for or due because the last call filled enough of the window, covers
+    // every message before this turn's.
+    let upto = transcript.messages.len();
+    // Unreadable settings compact nothing on their own; the turn reports them when it starts.
+    let settings = Settings::load(w.state()).unwrap_or_default();
+    let full = transcript.context.is_some_and(|c| {
+        c.used.saturating_mul(100)
+            >= c.window
+                .saturating_mul(u64::from(settings.context.compact_at()))
+    });
+    let covered = transcript.compaction.as_ref().map_or(0, |c| c.upto);
+    let reason = if compact {
+        Some("command")
+    } else if settings.context.auto_compact && full && upto > covered {
+        Some("auto")
+    } else {
+        None
+    };
+    let pending = reason.map(|reason| PendingCompact {
+        reason,
+        upto,
+        previous: transcript.compaction.clone(),
+    });
+    let mut history = transcript.messages.clone();
     history.extend(new);
     let base = history.clone();
     agent_threads::save(w, &thread.id, &agent.label, None, |t| {
@@ -585,16 +647,18 @@ fn prepare(
         steps: serde_json::Map::new(),
         proposals: Vec::new(),
         saved: (0, 0),
+        context: None,
         _busy: busy,
     };
     Ok(Prepared {
         agent,
         named: true,
-        history,
+        history: transcript.model_view(&history),
         log: Some(log),
         origin,
         skills,
         skills_updated,
+        compact: pending,
     })
 }
 
@@ -610,6 +674,8 @@ struct ThreadLog {
     proposals: Vec<Stored>,
     /// How many messages, and steps and proposals, the last write held.
     saved: (usize, usize),
+    /// How full the context was after the turn's last call.
+    context: Option<agent_threads::ContextUse>,
     _busy: Busy,
 }
 
@@ -699,6 +765,8 @@ struct Setup {
     effort: Option<ai::Effort>,
     /// The tools the agent may use; `None` is every tool the server offers (agents G4).
     tools: Option<Vec<String>>,
+    /// The model's context window in tokens, as Settings > AI has it.
+    window: u64,
     /// The note types the agent's tools reach (agents G4, G7).
     limits: Limits,
     /// The agent whose turn it is, which the agent tools check a change against (agents G20).
@@ -928,6 +996,7 @@ fn setup(
         fetch_private: settings.fetch_private,
         web: web_of(agent),
         effort: agent.effort.as_deref().and_then(|e| e.parse().ok()),
+        window: settings.window(provider),
         tools: agent.permissions.tools.clone(),
         limits: Limits::of(agent),
         agent: Arc::new(agent.clone()),
@@ -999,6 +1068,8 @@ struct Turn {
     skills: crate::ai_skills::Snapshot,
     /// For a `/update-skills` turn, the `skills_updated` event's data, sent first.
     skills_updated: Option<Value>,
+    /// The compaction to make before the first call.
+    compact: Option<PendingCompact>,
 }
 
 impl Turn {
@@ -1096,7 +1167,7 @@ impl Turn {
     /// Write the thread's transcript as it stands: the messages it started from and `added`,
     /// with this turn's steps and proposals. Nothing new since the last write writes nothing.
     async fn persist(&self, added: &[Message]) {
-        let (id, label, messages, steps, proposals) = {
+        let (id, label, messages, steps, proposals, context) = {
             let Some(mut log) = self.log() else { return };
             let now = (added.len(), log.steps.len() + log.proposals.len());
             if now == log.saved {
@@ -1111,12 +1182,16 @@ impl Turn {
                 messages,
                 log.steps.clone(),
                 log.proposals.clone(),
+                log.context,
             )
         };
         let w = self.writer.clone();
         let saved = tokio::task::spawn_blocking(move || {
             agent_threads::save(&w, &id, &label, None, |t| {
                 t.transcript.messages = messages.clone();
+                if context.is_some() {
+                    t.transcript.context = context;
+                }
                 for (k, v) in &steps {
                     t.transcript.steps.insert(k.clone(), v.clone());
                 }
@@ -1184,6 +1259,28 @@ impl Turn {
             uses_skills,
         );
         let offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+        let mut history = history;
+        if let Some(pending) = &self.compact {
+            match self.compact(&setup, pending).await {
+                Ok(view) => history = view,
+                // `/compact` is the whole turn: it ends here, or with why it failed.
+                Err(e) if pending.reason == "command" => {
+                    self.failed(&e, &[]).await;
+                    return;
+                }
+                // A compaction due on its own that fails leaves the thread as it was.
+                Err(e) => {
+                    let data = json!({ "message": e.message });
+                    if !self.out.send("compact_failed", data).await {
+                        return;
+                    }
+                }
+            }
+            if pending.reason == "command" {
+                self.done(&Stop::EndTurn, &[]).await;
+                return;
+            }
+        }
         // The images read_asset has sent this turn (ai D19).
         let mut images_sent = 0usize;
         for round in 1..=MAX_ROUNDS {
@@ -1260,6 +1357,7 @@ impl Turn {
                     usage,
                 } => {
                     trail(usage, Outcome::of_stop(&stop));
+                    self.context(usage.input + usage.output, setup.window).await;
                     (text, calls, stop, state)
                 }
             };
@@ -1629,6 +1727,139 @@ impl Turn {
                 crate::ai_browser::save(self.writer.clone(), b, direct, &call.id, &call.input).await
             }
         }
+    }
+
+    /// Say how full the context is after a call, and keep it for the thread.
+    async fn context(&self, used: u64, window: u64) {
+        if let Some(mut log) = self.log() {
+            log.context = Some(agent_threads::ContextUse { used, window });
+        }
+        self.out
+            .send("context", json!({ "used": used, "window": window }))
+            .await;
+    }
+
+    /// Summarize the thread's messages before `pending.upto` with one model call, keep the
+    /// summary in the thread, and answer the messages the model is sent from now on.
+    async fn compact(
+        &self,
+        setup: &Setup,
+        pending: &PendingCompact,
+    ) -> Result<Vec<Message>, AiError> {
+        let (id, label, full) = {
+            let Some(log) = self.log() else {
+                return Err(AiError::invalid("only a thread is compacted"));
+            };
+            (log.id.clone(), log.label.clone(), log.base.clone())
+        };
+        let older = &full[..pending.upto.min(full.len())];
+        let mut messages = agent_threads::model_view(pending.previous.as_ref(), older);
+        if messages.is_empty() {
+            return Err(AiError::invalid("there is nothing to compact yet"));
+        }
+        if !self
+            .out
+            .send("compacting", json!({ "reason": pending.reason }))
+            .await
+        {
+            return Err(AiError::new(ErrorKind::Unavailable, "the turn was stopped"));
+        }
+        messages.push(Message::user(COMPACT_PROMPT));
+        let req = Request {
+            provider: setup.provider,
+            model: setup.model.clone(),
+            system: Some(setup.system.clone()),
+            messages: self.hydrate(messages).await,
+            tools: Vec::new(),
+            schema: None,
+            effort: setup.effort,
+            max_tokens: None,
+        };
+        let began = Instant::now();
+        let mut stream = ai::stream(http(), &setup.cred, &req).await?;
+        let mut summary = String::new();
+        let mut usage = Usage::default();
+        let mut ended = false;
+        while let Some(e) = stream.next().await {
+            match e? {
+                AiEvent::TextDelta(d) => summary.push_str(&d),
+                AiEvent::Usage(u) => usage = u,
+                AiEvent::Done { .. } => {
+                    ended = true;
+                    break;
+                }
+                AiEvent::ToolCall(_) => {}
+            }
+        }
+        let line = ai::trail_line(
+            setup.provider,
+            &setup.model,
+            usage,
+            if ended {
+                Outcome::Ok
+            } else {
+                Outcome::Error(ErrorKind::Provider)
+            },
+            began.elapsed(),
+            setup.cred.custom_host.as_deref(),
+        );
+        eprintln!("{line}");
+        self.report(|r| r.log.push(line));
+        let summary = summary.trim().to_owned();
+        if !ended || summary.is_empty() {
+            return Err(AiError::new(
+                ErrorKind::Provider,
+                format!("{} gave no summary", setup.provider.label()),
+            ));
+        }
+        let compaction = agent_threads::Compaction {
+            summary: summary.clone(),
+            upto: older.len(),
+            at_ms: crate::ai_settings::now_ms(),
+            before: usage.input,
+            reason: pending.reason.to_owned(),
+        };
+        let context = agent_threads::ContextUse {
+            used: usage.output,
+            window: setup.window,
+        };
+        let w = self.writer.clone();
+        let kept = compaction.clone();
+        tokio::task::spawn_blocking(move || {
+            agent_threads::save(&w, &id, &label, None, |t| {
+                t.transcript.compaction = Some(kept.clone());
+                t.transcript.context = Some(context);
+            })
+        })
+        .await
+        .map_err(|e| AiError::new(ErrorKind::Unavailable, e.to_string()))?
+        .map_err(|e| {
+            AiError::new(
+                ErrorKind::Unavailable,
+                e.body["message"]
+                    .as_str()
+                    .unwrap_or("the thread was not written")
+                    .to_owned(),
+            )
+        })?;
+        if let Some(mut log) = self.log() {
+            log.context = Some(context);
+        }
+        let data = json!({
+            "reason": pending.reason,
+            "upto": compaction.upto,
+            "summary": summary,
+            "before": compaction.before,
+            "after": usage.output,
+        });
+        self.out.send("compacted", data).await;
+        self.out
+            .send(
+                "context",
+                json!({ "used": context.used, "window": context.window }),
+            )
+            .await;
+        Ok(agent_threads::model_view(Some(&compaction), &full))
     }
 
     /// One model call, its text and usage streamed to the client as they arrive.

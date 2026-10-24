@@ -484,6 +484,10 @@ export interface AgentThread extends AgentThreadSummary {
   /** Each tool step's summary, by call id. */
   steps?: Record<string, { summary?: Record<string, unknown>; is_error?: boolean }>;
   proposals?: StoredProposal[];
+  /** Where the thread was last compacted: the model reads `summary` in place of its first `upto` messages. */
+  compaction?: { summary: string; upto: number; at_ms: number; before: number; reason: string } | null;
+  /** How full the context was after the thread's last model call. */
+  context?: { used: number; window: number } | null;
 }
 
 /** One line of `GET /api/agents` (agents G2). An agent whose file does not check has `error`. */
@@ -695,6 +699,18 @@ export interface AiStatus {
   confirm: AiConfirm;
   /** Which internet tools the chat gets (ai D28). */
   web: AiWeb;
+  /** Each provider's context window and when threads compact themselves; absent from a server before them. */
+  context?: AiContext;
+}
+
+/** Context windows and compaction, every key filled. */
+export interface AiContext {
+  /** Each provider's window in tokens, and whether it is set rather than the default. */
+  windows: Record<AiProvider, { window: number; set: boolean }>;
+  /** Whether a thread compacts itself before a turn once it fills `compact_at` of the window. */
+  auto_compact: boolean;
+  /** The share of the window, in percent, that starts a compaction. */
+  compact_at: number;
 }
 
 /** Settings > AI's internet tool switches (ai D28), every key filled; true gives the chat the tool. */
@@ -747,6 +763,8 @@ export interface AiProviders {
   confirm: AiConfirm;
   /** The built-in Assistant's internet switches (agents G6). */
   web?: AiWeb;
+  /** The context windows and when threads compact themselves. */
+  context?: AiContext;
 }
 
 /** What an applied skill change did (skills S9). */
@@ -1710,6 +1728,8 @@ export const api = {
     web?: Partial<AiWeb>;
     urls?: Partial<Record<"anthropic" | "openai", string>>;
     openai_api?: OpenAiApi | "";
+    /** Windows to set, `null` putting one back to its default; the switch and the share. */
+    context?: { windows?: Partial<Record<AiProvider, number | null>>; auto_compact?: boolean; compact_at?: number };
   }) =>
     request<AiStatus>("PUT", "/api/integrations/ai/settings", settings),
   /** Store an Anthropic or OpenAI API key; an empty key deletes it. */

@@ -10506,3 +10506,21 @@ button.toast-action {
 .skill-download {
   margin-left: auto;
 }
+
+/* Settings > AI: context windows and compaction. */
+.ai-context {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 28rem;
+}
+
+.ai-context label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.ai-context .ai-context-switch {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}

@@ -72,6 +72,65 @@ pub struct Transcript {
     /// until `/update-skills`. `None` for a thread from before skills, which takes one next turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<crate::ai_skills::Snapshot>,
+    /// The thread's last compaction: the model reads its summary in place of the messages before
+    /// `upto`, which the thread keeps for the user to read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<Compaction>,
+    /// How full the context was after the thread's last model call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextUse>,
+}
+
+/// A summary that stands for the messages before `upto` in what the model is sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Compaction {
+    pub summary: String,
+    /// How many of the thread's messages the summary stands for.
+    pub upto: usize,
+    /// When it was made, in milliseconds since the epoch.
+    pub at_ms: i64,
+    /// The tokens the context held before it.
+    pub before: u64,
+    /// `auto` when the thread neared its window, `command` for `/compact`.
+    pub reason: String,
+}
+
+/// The tokens a thread's last model call took in and gave back, and the window they fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextUse {
+    pub used: u64,
+    pub window: u64,
+}
+
+impl Transcript {
+    /// The messages a model is sent: after a compaction, its summary at the head of the first
+    /// message after `upto`, then the rest. `messages` is the whole thread.
+    pub fn model_view(&self, messages: &[Message]) -> Vec<Message> {
+        model_view(self.compaction.as_ref(), messages)
+    }
+}
+
+/// [`Transcript::model_view`] for compaction `c`.
+pub fn model_view(c: Option<&Compaction>, messages: &[Message]) -> Vec<Message> {
+    {
+        let Some(c) = c else {
+            return messages.to_vec();
+        };
+        let mut rest: Vec<Message> = messages.get(c.upto..).unwrap_or_default().to_vec();
+        let head = summary_text(&c.summary);
+        match rest.first_mut() {
+            Some(m) if m.role == Role::User => m.content.insert(0, Content::text(head)),
+            _ => rest.insert(0, Message::user(head)),
+        }
+        rest
+    }
+}
+
+/// How a summary reads to the model.
+pub fn summary_text(summary: &str) -> String {
+    format!(
+        "[The conversation before this point was compacted. This summary stands for it:]\n\n{summary}\n\n[End of the summary.]"
+    )
 }
 
 /// One proposal of a thread and its outcome (agents G8).
@@ -442,6 +501,9 @@ impl Thread {
         v["proposals"] = json!(self.transcript.proposals);
         // The skills the thread's system text lists, by name and description (skills S6).
         v["skills"] = json!(self.transcript.skills.as_ref().map(|s| &s.skills));
+        // Where the thread was last compacted, and how full its context was after its last call.
+        v["compaction"] = json!(self.transcript.compaction);
+        v["context"] = json!(self.transcript.context);
         v
     }
 

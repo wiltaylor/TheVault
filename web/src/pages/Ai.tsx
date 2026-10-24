@@ -1,6 +1,7 @@
 import { For, type JSX, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { ASSISTANT } from "../agents";
 import {
+  type AiContext,
   type AiModel,
   type AiProvider,
   type AiStatus,
@@ -572,6 +573,91 @@ export function ChatGptCard(props: { status: AiStatus; onStatus: (s: AiStatus) =
 }
 
 /** Settings > AI. */
+const CONTEXT_LABELS: Record<AiProvider, string> = { anthropic: "Anthropic", openai: "OpenAI", chatgpt: "ChatGPT plan" };
+
+/** The context windows TheVault plans with, and when a long chat is compacted. */
+export function ContextCard(props: { status: AiStatus & { context: AiContext }; onStatus: (s: AiStatus) => void }) {
+  const c = () => props.status.context;
+  const [error, setError] = createSignal<string | null>(null);
+  const [saved, setSaved] = createSignal<string | null>(null);
+  async function save(body: Parameters<typeof api.aiSaveSettings>[0]["context"], what: string) {
+    setError(null);
+    setSaved(null);
+    try {
+      props.onStatus(await api.aiSaveSettings({ context: body }));
+      setSaved(what);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  return (
+    <Card
+      title="Context"
+      blurb={
+        <>
+          How many tokens each provider's models take, and when a long chat is summarized for the model. Type{" "}
+          <code>/compact</code> in a chat to compact it at once.
+        </>
+      }
+    >
+      <div class="ai-context">
+        <For each={Object.keys(CONTEXT_LABELS) as AiProvider[]}>
+          {(p) => (
+            <label>
+              {CONTEXT_LABELS[p]} window, tokens
+              <input
+                type="number"
+                min="4000"
+                max="10000000"
+                step="1000"
+                value={c().windows[p]?.window ?? ""}
+                onChange={(e) => {
+                  const n = e.currentTarget.valueAsNumber;
+                  void save({ windows: { [p]: Number.isFinite(n) ? n : null } }, `${CONTEXT_LABELS[p]} window saved.`);
+                }}
+              />
+              <Show when={c().windows[p]?.set}>
+                <button type="button" class="link" onClick={() => void save({ windows: { [p]: null } }, `${CONTEXT_LABELS[p]} window reset.`)}>
+                  Use the default
+                </button>
+              </Show>
+            </label>
+          )}
+        </For>
+        <label class="ai-context-switch">
+          <input
+            type="checkbox"
+            checked={c().auto_compact}
+            onChange={(e) => void save({ auto_compact: e.currentTarget.checked }, "Saved.")}
+          />
+          Compact long chats on their own
+        </label>
+        <label>
+          Compact at, percent of the window
+          <input
+            type="number"
+            min="50"
+            max="95"
+            value={c().compact_at}
+            disabled={!c().auto_compact}
+            onChange={(e) => void save({ compact_at: e.currentTarget.valueAsNumber }, "Saved.")}
+          />
+        </label>
+      </div>
+      <Show when={error()}>
+        <p class="error" role="alert">
+          {error()}
+        </p>
+      </Show>
+      <Show when={saved()}>
+        <p class="muted" role="status">
+          {saved()}
+        </p>
+      </Show>
+    </Card>
+  );
+}
+
 export function Ai() {
   const [status, setStatus] = createSignal<AiStatus | null>(null);
   const [error, setError] = createSignal<string | null>(null);
@@ -618,6 +704,9 @@ export function Ai() {
               onStatus={setStatus}
             />
             <ChatGptCard status={s()} onStatus={setStatus} />
+            <Show when={s().context ? (s() as AiStatus & { context: AiContext }) : undefined}>
+              {(withContext) => <ContextCard status={withContext()} onStatus={setStatus} />}
+            </Show>
           </>
         )}
       </Show>

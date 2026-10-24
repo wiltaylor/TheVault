@@ -8,7 +8,7 @@
 //!
 //! | Command | Effect |
 //! |---------|--------|
-//! | `push <json>` | Queue the answer to the next `POST /v1/messages`: `{ "text"?: string, "tools"?: [{ "id", "name", "input" }] }`, a message of that text and those tool calls, ending `tool_use` when it has tools |
+//! | `push <json>` | Queue the answer to the next `POST /v1/messages`: `{ "text"?: string, "tools"?: [{ "id", "name", "input" }] }`, a message of that text and those tool calls, ending `tool_use` when it has tools; `"usage": [input, output]` sets the tokens it reports |
 //! | `requests` | Answers `{ "ok": "requests", "count": <n> }`, the `POST /v1/messages` requests so far |
 
 use std::io::{BufRead, Write};
@@ -59,6 +59,9 @@ fn command(fake: &FakeAnthropic, line: &str) -> Result<Value, String> {
                     return Err("each tool needs an id and a name".into());
                 };
                 m = m.tool_use(id, tool, t["input"].clone());
+            }
+            if let Some([input, output]) = spec["usage"].as_array().map(Vec::as_slice) {
+                m = m.usage(input.as_u64().unwrap_or(0), output.as_u64().unwrap_or(0));
             }
             fake.push(m);
             Ok(json!({}))

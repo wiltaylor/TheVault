@@ -1,12 +1,13 @@
 // The right sidebar's AI panel (ai D14, D23; agents G6, G18): pick an agent, Assistant by
 // default, and one of its threads, ask about the vault, watch the answer stream, see which notes
 // the model searched and read, and apply or discard the edits it proposes. Each conversation is a
-// thread of the chosen agent, which its Chat tab lists too: the thread picker under the agent
-// picker lists the agent's threads with the running and new-reply marks, starts a new one, and
-// opens the shown one in the agent screen. A thread open here and in a Chat tab is one
-// conversation, shown in both; each chooses its thread by itself. The panel remembers its agent
-// and thread per browser. It shows in the web app and in the desktop and Android apps, whose chat
-// runs on the home server. `Conversation` is the view the panel and the Chat tab share.
+// thread of the chosen agent, which the agent screen's session picker lists too: the thread
+// picker under the agent picker lists the agent's threads with the running and new-reply marks,
+// starts a new one, and opens the shown one in the agent screen. A thread open here and in the
+// agent screen is one conversation, shown in both; each chooses its thread by itself. The panel
+// remembers its agent and thread per browser. It shows in the web app and in the desktop and
+// Android apps, whose chat runs on the home server. `Conversation` is the view the panel and the
+// agent screen share, with the provider and model picker at the foot of its message box.
 
 import { For, type JSX, Match, Show, Switch, createEffect, createRoot, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { agentLabel, agents } from "../agents";
@@ -33,6 +34,7 @@ import {
   type Applied,
   ChatContext,
   type ChatSession,
+  type ContextUse,
   type DraftRef,
   type NoteOp,
   type BrowserRef,
@@ -902,6 +904,49 @@ function Notice(props: { part: Extract<Part, { kind: "notice" }> }) {
   );
 }
 
+/** A token count as people read it: 950, 12.4k, 1.2M. */
+export function tokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${n < 10_000 ? (n / 1000).toFixed(1) : Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+}
+
+/** The share of the window, in percent, past which a thread compacts itself, as Settings > AI has it. */
+const [compactAt, setCompactAt] = createSignal(80);
+let compactAtAsked = false;
+
+/**
+ * How full the context was after the last call, above the message box: tokens used over the
+ * window, as a bar that turns amber past the compaction point and red near the window.
+ */
+function ContextMeter(props: { use: ContextUse }) {
+  if (!compactAtAsked) {
+    compactAtAsked = true;
+    void api
+      .aiProviders()
+      .then((s) => {
+        if (s.context?.compact_at) setCompactAt(s.context.compact_at);
+      })
+      .catch(() => undefined);
+  }
+  const pct = () => Math.min(100, Math.round((props.use.used / Math.max(1, props.use.window)) * 100));
+  const level = () => (pct() >= 95 ? "full" : pct() >= compactAt() ? "high" : "ok");
+  return (
+    <div
+      class={`ai-context-meter ai-context-${level()}`}
+      data-testid="context-meter"
+      title={`The last request held ${props.use.used.toLocaleString()} of ${props.use.window.toLocaleString()} tokens. Type /compact to summarize the conversation.`}
+    >
+      <span class="ai-context-bar" role="meter" aria-label="Context used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct()}>
+        <span style={{ width: `${pct()}%` }} />
+      </span>
+      <span class="ai-context-text">
+        {tokens(props.use.used)} / {tokens(props.use.window)}
+      </span>
+    </div>
+  );
+}
+
 /**
  * The activity line above the message box while a turn runs (ai D30): a spinner, or a still dot
  * when motion is reduced, the current step's verb, and the seconds since the turn started. Only
@@ -916,6 +961,7 @@ function ActivityLine() {
     const a = chat.activity;
     if (!a || a.step === "thinking") return "Thinking";
     if (a.step === "writing") return "Writing";
+    if (a.step === "compacting") return "Compacting the conversation";
     return activeLabel(a.name, a.input);
   };
   const seconds = () => Math.max(0, Math.floor((now() - (chat.startedAt ?? now())) / 1000));
@@ -1059,9 +1105,10 @@ function scrollParent(el: HTMLElement | undefined): HTMLElement | null {
 const AT_END_PX = 48;
 
 /**
- * A conversation as the panel and the Chat tab show it: its turns, with streaming text, tool
+ * A conversation as the panel and the agent screen show it: its turns, with streaming text, tool
  * steps, proposal cards, Apply all, applied cards and notices, the activity line, and the box to
- * ask in. `noteId` is the note open beside it, if any. While it shows a thread, that thread has
+ * ask in, with the provider and model picker and Send at its foot. Enter sends; Shift+Enter
+ * starts a new line. `noteId` is the note open beside it, if any. While it shows a thread, that thread has
  * no "New reply" (agents G17).
  */
 export function Conversation(props: { session: ChatSession; noteId?: () => string; empty?: JSX.Element; placeholder?: string }) {
@@ -1141,6 +1188,17 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                         <Match when={part.kind === "applied" && part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
                         <Match when={part.kind === "download" && part}>{(p) => <DownloadCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>
+                        <Match when={part.kind === "compaction" && part}>
+                          {(p) => (
+                            <details class="ai-compaction" data-testid="compaction">
+                              <summary>
+                                {p().reason === "command" ? "Compacted" : "Compacted on its own"}: the model reads this summary in place of the
+                                conversation above
+                              </summary>
+                              <Markdown text={p().summary} />
+                            </details>
+                          )}
+                        </Match>
                       </Switch>
                     )}
                   </For>
@@ -1181,34 +1239,45 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
         }}
       >
         {/* Inside the form, which stays at the panel's foot, so the line sits right above the box. */}
-        <Show when={chat.streaming && chat.activity}>
-          <ActivityLine />
-        </Show>
+        <div class="ai-form-status">
+          <Show when={chat.streaming && chat.activity}>
+            <ActivityLine />
+          </Show>
+          <Show when={chat.context}>{(c) => <ContextMeter use={c()} />}</Show>
+        </div>
         <textarea
           aria-label="Ask AI"
+          aria-keyshortcuts="Enter"
+          title="Enter sends, Shift+Enter starts a new line"
           placeholder={props.placeholder ?? "Ask about your notes"}
           rows={3}
           value={draft()}
           onInput={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+            // Enter sends and Shift+Enter starts a new line; Enter that ends an IME composition
+            // (keyCode 229 in some browsers) only commits the composed text.
+            if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
               e.preventDefault();
               send();
             }
           }}
         />
-        <Show
-          when={chat.streaming}
-          fallback={
-            <button type="submit" class="primary" disabled={!draft().trim()}>
-              Send
+        {/* The model the next turn uses sits at the box's foot, beside Send. */}
+        <div class="ai-form-foot">
+          <ModelPicker session={s} />
+          <Show
+            when={chat.streaming}
+            fallback={
+              <button type="submit" class="primary" disabled={!draft().trim()}>
+                Send
+              </button>
+            }
+          >
+            <button type="button" onClick={s.stop}>
+              Stop
             </button>
-          }
-        >
-          <button type="button" onClick={s.stop}>
-            Stop
-          </button>
-        </Show>
+          </Show>
+        </div>
       </form>
     </ChatContext.Provider>
   );
@@ -1275,9 +1344,9 @@ async function restoreChoice() {
   if ((got === "archived" || got === "gone") && chat.thread === saved.thread) newConversation();
 }
 
-/** Where thread `id` of agent `agent` opens in the agent screen's Chat tab. */
+/** Where thread `id` of agent `agent` opens in the agent screen's chat. */
 export function threadHref(agent: string, id: string): string {
-  return `/agents/${encodeURIComponent(agent)}/chat?thread=${encodeURIComponent(id)}`;
+  return `/agents/${encodeURIComponent(agent)}?thread=${encodeURIComponent(id)}`;
 }
 
 /**
@@ -1462,7 +1531,6 @@ export function ChatPanel(props: { noteId: () => string }) {
     <div class="ai-panel">
       <div class="ai-toolbar">
         <AgentPicker />
-        <ModelPicker session={session} />
         <Show when={!listed()}>
           <button type="button" class="link" onClick={newConversation} disabled={chat.turns.length === 0 && !chat.streaming}>
             New conversation

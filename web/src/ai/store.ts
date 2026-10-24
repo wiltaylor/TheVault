@@ -18,7 +18,7 @@
 // changes already made. In an app such a change reaches the device's copy with a sync round,
 // which the panel asks for. A thread's conversation is one store per thread id, shared by every
 // view in the tab that shows it, with the one subscription to its turn's events (agents G18):
-// the right sidebar's panel and the agent screen's Chat tab are views made with
+// the right sidebar's panel and the agent screen's chat are views made with
 // `createChatSession`, each choosing its own thread. A conversation goes once no view holds it
 // and its turn has ended, so one a view left while its turn ran is found as it stands.
 
@@ -361,7 +361,9 @@ export type Part =
   | { kind: "agent_proposal"; proposal: AgentProposal; state: ProposalState; error?: string }
   | { kind: "memory_proposal"; proposal: MemoryProposal; state: ProposalState; error?: string }
   | { kind: "skill_proposal"; proposal: SkillProposal; state: ProposalState; error?: string }
-  | { kind: "notice"; notice: string; text: string; category?: string | null };
+  | { kind: "notice"; notice: string; text: string; category?: string | null }
+  /** Where the thread was compacted: the model reads `summary` in place of what came before. */
+  | { kind: "compaction"; summary: string; reason: string };
 
 export interface Turn {
   role: "user" | "assistant";
@@ -395,7 +397,24 @@ export const UPDATING_SKILLS = "Updating skills…";
  * the last event, thinking before any event and after a tool result, a tool's step after its
  * `tool` event, writing after a `text` delta.
  */
-export type Activity = { step: "thinking" } | { step: "writing" } | { step: "tool"; name: string; input: Json };
+export type Activity =
+  | { step: "thinking" }
+  | { step: "writing" }
+  | { step: "compacting" }
+  | { step: "tool"; name: string; input: Json };
+
+/** What typed alone in the chat box compacts the thread now. */
+export const COMPACT = "/compact";
+
+/** The user turn's notice while the thread is compacted, and once it is. */
+export const COMPACTING = "Compacting the conversation…";
+export const COMPACTED = "Conversation compacted";
+
+/** How full a thread's context was after its last model call. */
+export interface ContextUse {
+  used: number;
+  window: number;
+}
 
 const LABELS: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", chatgpt: "ChatGPT" };
 
@@ -564,7 +583,11 @@ function activityAfter(e: StreamEvent, d: Record<string, unknown>): Activity | n
     case "tool":
       return { step: "tool", name: String(d.name), input: (d.input ?? null) as Json };
     case "tool_result":
+    case "compacted":
+    case "compact_failed":
       return { step: "thinking" };
+    case "compacting":
+      return { step: "compacting" };
     case "done":
     case "error":
     case "refusal":
@@ -804,7 +827,14 @@ export function turnsFromThread(t: AgentThread): Turn[] {
     turns.push(fresh);
     return fresh;
   };
-  for (const m of (t.messages ?? []) as ChatMessage[]) {
+  const compaction = t.compaction ?? null;
+  const messages = (t.messages ?? []) as ChatMessage[];
+  /** Mark where the model's view starts: the summary, at the end of the turn before it. */
+  const mark = () => {
+    if (compaction) answer().parts.push({ kind: "compaction", summary: compaction.summary, reason: compaction.reason });
+  };
+  for (const [index, m] of messages.entries()) {
+    if (compaction && index === compaction.upto && index > 0) mark();
     const content = m.content ?? [];
     const results = content.filter((c) => c.type === "tool_result");
     if (m.role === "user" && results.length === 0) {
@@ -838,6 +868,7 @@ export function turnsFromThread(t: AgentThread): Turn[] {
       }
     }
   }
+  if (compaction && compaction.upto >= messages.length && messages.length > 0) mark();
   return turns;
 }
 
@@ -864,6 +895,8 @@ interface ConversationState {
   thread: string | null;
   turn: string | null;
   loading: boolean;
+  /** How full the context was after the last model call, once known. */
+  context: ContextUse | null;
 }
 
 /** How opening a thread went: open, archived, no longer there, or not readable. */
@@ -902,6 +935,7 @@ function createConversation(agent: string, id: string | null) {
       thread: id,
       turn: null,
       loading: false,
+      context: null,
     });
   /** The views holding it, and what each wants told when it changes. */
   let holders = 0;
@@ -1062,6 +1096,23 @@ function createConversation(agent: string, id: string | null) {
         appendMessages(d);
         for (const n of noticesOf(d)) push(n);
         break;
+      case "context": {
+        if (typeof d.used === "number" && typeof d.window === "number") setChat("context", { used: d.used, window: d.window });
+        break;
+      }
+      case "compacted": {
+        push({ kind: "compaction", summary: String(d.summary ?? ""), reason: String(d.reason ?? "auto") });
+        // A `/compact` turn's notice says it is done.
+        if (d.reason === "command") {
+          let at = chat.turns.length - 1;
+          while (at >= 0 && chat.turns[at]!.role !== "user") at--;
+          if (at >= 0) setChat("turns", at, "notice", COMPACTED);
+        }
+        break;
+      }
+      case "compact_failed":
+        push({ kind: "notice", notice: "error", text: `The conversation was not compacted: ${String(d.message ?? "")}` });
+        break;
       case "skills_updated": {
         // The server's user message of a `/update-skills` turn (skills S6), which a conversation
         // with no thread sends back as its own.
@@ -1119,6 +1170,19 @@ function createConversation(agent: string, id: string | null) {
     // `/update-skills` alone takes a fresh list of skills and sends no message of the user's
     // (skills S6); any other `/` text is sent as typed.
     const updateSkills = text.trim() === UPDATE_SKILLS;
+    // `/compact` alone summarizes the thread for the model now; a conversation with no thread
+    // has nothing kept to compact.
+    const compact = text.trim() === COMPACT;
+    if (compact && !chat.thread) {
+      setChat(
+        produce((c) => {
+          c.turns.push({ role: "user", text: "", notice: COMPACT, parts: [] });
+          c.turns.push({ role: "assistant", parts: [{ kind: "notice", notice: "error", text: "There is nothing to compact yet." }] });
+        }),
+      );
+      return;
+    }
+    const command = updateSkills || compact;
     // The proposals acted on since the last message, shown ahead of the question (ai D29).
     const lines = [...outcomes.values()];
     const kept = [...outcomes.entries()];
@@ -1127,8 +1191,8 @@ function createConversation(agent: string, id: string | null) {
     stopping = false;
     setChat(
       produce((c) => {
-        const asked = updateSkills ? { text: "", notice: UPDATING_SKILLS } : { text: question };
-        c.turns.push({ role: "user", ...asked, parts: [], ...(lines.length && !updateSkills ? { outcomes: lines } : {}) });
+        const asked = updateSkills ? { text: "", notice: UPDATING_SKILLS } : compact ? { text: "", notice: COMPACTING } : { text: question };
+        c.turns.push({ role: "user", ...asked, parts: [], ...(lines.length && !command ? { outcomes: lines } : {}) });
         c.turns.push({ role: "assistant", parts: [] });
         c.streaming = true;
         c.activity = { step: "thinking" };
@@ -1147,17 +1211,18 @@ function createConversation(agent: string, id: string | null) {
       const user: ChatMessage = { role: "user", content };
       // A `/update-skills` turn's message is the server's: the outcome lines wait for the next
       // message, except on a thread, where the server adds them to its message.
-      if (updateSkills && !thread) for (const [id, line] of kept) record(id, line);
-      if (!updateSkills) transcript = [...transcript, user];
+      if (command && !thread) for (const [id, line] of kept) record(id, line);
+      if (!command) transcript = [...transcript, user];
       const named = thread || agent !== ASSISTANT;
       const body = {
         ...(o.provider ? { provider: o.provider } : {}),
         ...(o.model ? { model: o.model } : {}),
-        messages: updateSkills ? (thread ? [] : transcript) : thread ? [user] : transcript,
+        messages: command ? (thread ? [] : transcript) : thread ? [user] : transcript,
         ...(o.noteId ? { note_id: o.noteId } : {}),
         ...(named ? { agent } : {}),
         ...(thread ? { thread } : {}),
         ...(updateSkills ? { update_skills: true } : {}),
+        ...(compact ? { compact: true } : {}),
       };
       const started = await api.aiTurnStart(body);
       if (mine !== generation || ctl.signal.aborted) {
@@ -1245,7 +1310,7 @@ function createConversation(agent: string, id: string | null) {
     const t = await api.agentThread(agent, id);
     if (mine !== generation) return;
     transcript = (t.messages ?? []) as ChatMessage[];
-    setChat({ turns: turnsFromThread(t) });
+    setChat({ turns: turnsFromThread(t), context: t.context ?? null });
   }
 
   /**
@@ -1311,7 +1376,7 @@ function createConversation(agent: string, id: string | null) {
         return result;
       }
       transcript = (t.messages ?? []) as ChatMessage[];
-      setChat({ turns: turnsFromThread(t), loading: false });
+      setChat({ turns: turnsFromThread(t), loading: false, context: t.context ?? null });
       return result;
     } catch (e) {
       if (mine !== generation) return "error";
@@ -1774,7 +1839,7 @@ export interface ChatState extends ConversationState {
 }
 
 /**
- * One view of conversations, such as the right sidebar's AI panel or an agent screen's Chat tab:
+ * One view of conversations, such as the right sidebar's AI panel or an agent screen's chat:
  * the agent, provider and model it chose, and the conversation it shows, a new one or a thread's.
  * A thread's conversation is shared with every other view showing that thread (agents G18), so
  * a reply streams in both, and sending, Stop, Apply and Discard in either show in both; each view
@@ -1813,6 +1878,9 @@ export function createChatSession(options: ChatOptions = {}) {
       },
       get startedAt() {
         return current().chat.startedAt;
+      },
+      get context() {
+        return current().chat.context;
       },
       get thread() {
         return current().chat.thread;
@@ -1869,7 +1937,7 @@ export function createChatSession(options: ChatOptions = {}) {
       const question = text.trim();
       if (!question || chat.streaming) return;
       // The panel's thread, archived or deleted elsewhere, gives way to a new one (agents G15). A
-      // Chat tab keeps its thread: sending in an archived thread takes it out of the archive.
+      // The agent screen keeps its thread: sending in an archived thread takes it out of the archive.
       const was = current();
       if (options.threads === "listed" && was.chat.thread) {
         setChecking(true);
@@ -1966,7 +2034,7 @@ export const discardMemoryProposal = panel.discardMemoryProposal;
 export const applySkillProposal = panel.applySkillProposal;
 export const discardSkillProposal = panel.discardSkillProposal;
 
-/** The conversation the cards below act on: the panel's, unless a Chat tab provides its own. */
+/** The conversation the cards below act on: the panel's, unless the agent screen provides its own. */
 export const ChatContext = createContext<ChatSession>(panel);
 
 export function useChatSession(): ChatSession {

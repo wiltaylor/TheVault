@@ -12,7 +12,10 @@ import { activePane, expect, logIn, test } from "./fixtures";
 // the new note open; and, with notes confirmation off (ai D22), see an edit land in the open note
 // without pressing Apply; and, in an app (ai D23), run a turn through the turns form and apply
 // on the home server, asking for a sync round; and the panel's thread picker lists the thread a
-// message started and opens it in the agent screen as the same conversation (agents G18).
+// message started and opens it in the agent screen as the same conversation (agents G18); and in
+// the agent screen's chat, Enter sends and Shift+Enter starts a line, the model dropdown at the
+// box's foot chooses the model a turn uses, and the session picker's search, Archive and Delete
+// act on the chosen session.
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -377,12 +380,12 @@ test("the AI panel's thread opens in the agent screen as the same conversation, 
   await expect(menu).toHaveCount(0);
 
   await panel.getByRole("button", { name: "Open in agent screen" }).click();
-  await expect(page).toHaveURL(/\/agents\/assistant\/chat\?thread=[0-9A-Z]+$/);
+  await expect(page).toHaveURL(/\/agents\/assistant\?thread=[0-9A-Z]+$/);
   const chat = activePane(page).getByRole("region", { name: "Chat" });
   const shown = chat.getByRole("list", { name: "Conversation" });
   await expect(shown).toContainText(`Say hello ${stamp}.`);
   await expect(shown).toContainText(`Hello from thread ${stamp}.`);
-  await expect(chat.getByRole("complementary", { name: "Threads" }).locator('[aria-current="true"]')).toHaveCount(1);
+  await expect(chat.getByRole("button", { name: /^Chat session: / })).not.toHaveAccessibleName("Chat session: New chat");
 
   // Starting a new thread in the panel leaves the agent screen's alone.
   await panel.getByRole("button", { name: /^Thread: / }).click();
@@ -390,4 +393,151 @@ test("the AI panel's thread opens in the agent screen as the same conversation, 
   await expect(panel.getByRole("button", { name: "Thread: New thread" })).toBeVisible();
   await expect(panel.getByRole("list", { name: "Conversation" })).not.toContainText(`Hello from thread ${stamp}.`);
   await expect(shown).toContainText(`Hello from thread ${stamp}.`);
+});
+
+/** A fresh agent of no model of its own, so the chat's model dropdown decides; its name. */
+async function freshAgent(admin: import("@playwright/test").APIRequestContext, stamp: string): Promise<string> {
+  for (const [name, value] of [
+    ["ai_anthropic_api_key", fake.api_key],
+    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
+  ]) {
+    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
+    expect(res.ok(), await res.text()).toBe(true);
+  }
+  const name = `chatter_${stamp}`;
+  const res = await admin.put(`/api/agents/${name}`, { data: { wcl: `label = "Chatter ${stamp}"\n` } });
+  expect(res.ok(), await res.text()).toBe(true);
+  return name;
+}
+
+test("the agent screen's chat sends on Enter, keeps Shift+Enter as a new line, and runs the model chosen at its foot", async ({ page, admin }) => {
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const name = await freshAgent(admin, stamp);
+  await tell(`push ${JSON.stringify({ text: `Two lines read ${stamp}.` })}`);
+
+  await logIn(page, `/agents/${name}`);
+  const chat = activePane(page).getByRole("region", { name: "Chat" });
+  const model = chat.getByLabel("Model");
+  await expect(model).toHaveValue("claude-opus-5");
+  // The dropdown sits at the bottom right, beside Send.
+  const send = (await chat.getByRole("button", { name: "Send" }).boundingBox())!;
+  const picked = (await model.boundingBox())!;
+  expect(picked.y + picked.height).toBeGreaterThan(send.y);
+  expect(picked.x).toBeLessThan(send.x);
+  await model.selectOption("claude-sonnet-5");
+
+  const box = chat.getByLabel("Ask AI");
+  await box.click();
+  await page.keyboard.type("Line one");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("Line two");
+  await expect(box).toHaveValue("Line one\nLine two");
+  const conversation = chat.getByRole("list", { name: "Conversation" });
+  await expect(conversation.getByRole("listitem")).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  await expect(conversation).toContainText(`Two lines read ${stamp}.`);
+  await expect(box).toHaveValue("");
+  await expect(conversation.locator(".ai-question")).toHaveText("Line one\nLine two");
+
+  // The address names the new session, and the turn ran on the model chosen.
+  await expect(page).toHaveURL(new RegExp(`/agents/${name}\\?thread=[0-9A-Z]+$`));
+  const thread = new URL(page.url()).searchParams.get("thread")!;
+  await expect(chat.getByRole("button", { name: /^Chat session: / })).not.toHaveAccessibleName("Chat session: New chat");
+  await expect
+    .poll(async () => {
+      const res = await admin.get(`/api/activity?category=ai&kind=ai.turn.end&limit=50`);
+      const items = ((await res.json()) as { items: Record<string, unknown>[] }).items;
+      const mine = items.find((i) => JSON.stringify(i).includes(thread));
+      return mine ? JSON.stringify(mine) : "";
+    })
+    .toContain('"claude-sonnet-5"');
+
+  expect((await admin.delete(`/api/agents/${name}`)).ok()).toBe(true);
+});
+
+test("the agent screen's session picker searches the chats, and Archive and Delete act on the one chosen", async ({ page, admin }) => {
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const name = await freshAgent(admin, stamp);
+  const start = async (title: string) => {
+    const res = await admin.post(`/api/agents/${name}/threads`, { data: { title } });
+    expect(res.ok(), await res.text()).toBe(true);
+    return ((await res.json()) as { id: string }).id;
+  };
+  await start(`Alpha ${stamp}`);
+  const beta = await start(`Beta ${stamp}`);
+
+  await logIn(page, `/agents/${name}`);
+  const chat = activePane(page).getByRole("region", { name: "Chat" });
+  const picker = chat.getByRole("button", { name: /^Chat session: / });
+  await expect(picker).toHaveAccessibleName("Chat session: New chat");
+  await expect(chat.getByRole("button", { name: "Archive chat" })).toBeDisabled();
+
+  // Search, and open the match with Enter.
+  await picker.click();
+  const search = chat.getByRole("combobox", { name: "Search chats" });
+  await expect(search).toBeFocused();
+  const options = chat.getByRole("listbox", { name: "Chats" }).getByRole("option");
+  await expect(options).toHaveCount(3);
+  await search.fill("beta");
+  await expect(options).toHaveCount(2);
+  await expect(options.nth(1)).toContainText(`Beta ${stamp}`);
+  await search.press("Enter");
+  await expect(chat.getByRole("listbox")).toHaveCount(0);
+  await expect(picker).toHaveAccessibleName(`Chat session: Beta ${stamp}`);
+  await expect(picker).toBeFocused();
+  await expect(page).toHaveURL(new RegExp(`/agents/${name}\\?thread=${beta}$`));
+
+  // Archive: the chat stays open, marked, and leaves the list until Show archived.
+  await chat.getByRole("button", { name: "Archive chat" }).click();
+  await expect(chat.getByRole("button", { name: "Unarchive chat" })).toBeVisible();
+  await expect.poll(async () => ((await (await admin.get(`/api/agents/${name}/threads/${beta}`)).json()) as { archived?: boolean }).archived).toBe(true);
+  await picker.click();
+  await expect(options).toHaveCount(2);
+  await expect(options.nth(1)).toContainText(`Alpha ${stamp}`);
+  await chat.getByLabel("Show archived").check();
+  await expect(options).toHaveCount(3);
+  await page.keyboard.press("Escape");
+  await expect(chat.getByRole("listbox")).toHaveCount(0);
+
+  // Delete, after confirming: a new chat takes its place.
+  page.once("dialog", (d) => void d.accept());
+  await chat.getByRole("button", { name: "Delete chat" }).click();
+  await expect(picker).toHaveAccessibleName("Chat session: New chat");
+  await expect(page).toHaveURL(new RegExp(`/agents/${name}$`));
+  await expect.poll(async () => (await admin.get(`/api/agents/${name}/threads/${beta}`)).status()).toBe(404);
+
+  expect((await admin.delete(`/api/agents/${name}`)).ok()).toBe(true);
+});
+
+test("the chat shows how full the context is, and /compact summarizes the thread for the model", async ({ page }) => {
+  const title = `Context ${Date.now().toString(36)}`;
+  await logIn(page, "/agents/assistant");
+  const box = page.getByRole("textbox", { name: "Ask AI" });
+  await tell(`push ${JSON.stringify({ text: `${title}: a long answer.`, usage: [170_000, 2_000] })}`);
+  await box.fill(`${title} question`);
+  await box.press("Enter");
+  await expect(page.getByText(`${title}: a long answer.`)).toBeVisible();
+  const meter = page.getByTestId("context-meter");
+  await expect(meter).toContainText("172k / 200k");
+  // 86% is past the default 80% compaction point.
+  await expect(meter).toHaveClass(/ai-context-high/);
+
+  const before = (await tell("requests")).count as number;
+  await tell(`push ${JSON.stringify({ text: `Summary of ${title}.`, usage: [172_000, 300] })}`);
+  await box.fill("/compact");
+  await box.press("Enter");
+  await expect(page.getByRole("status").filter({ hasText: "Conversation compacted" })).toBeVisible();
+  const divider = page.getByTestId("compaction");
+  await expect(divider).toBeVisible();
+  await divider.locator("summary").click();
+  await expect(divider).toContainText(`Summary of ${title}.`);
+  await expect(meter).toContainText("300 / 200k");
+  await expect(meter).toHaveClass(/ai-context-ok/);
+  expect((await tell("requests")).count).toBe(before + 1);
+
+  // The thread keeps its messages, and the divider stays where it was after a reload.
+  await page.reload();
+  await expect(page.getByText(`${title}: a long answer.`)).toBeVisible();
+  await expect(page.getByTestId("compaction")).toBeVisible();
+  await expect(page.getByTestId("context-meter")).toContainText("300 / 200k");
 });

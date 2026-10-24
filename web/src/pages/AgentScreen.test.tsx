@@ -1,4 +1,6 @@
-// The agent screen (agents G5): the Settings tab (the live model list, the system prompt with the
+// The agent screen (agents G5): the chat as its main view with the settings cog, the settings
+// screen with its tabs at /agents/<name>/settings, the old tab addresses leading there, the
+// General tab (the live model list, the system prompt with the
 // shipped text as its placeholder, one Save of the whole agent), the Permissions tab (the tool
 // checklist, the confirmation and internet switches, the note types), the File tab (the WCL,
 // saved with the form's checks), the Triggers tab (schedules with their next runs, note events,
@@ -260,7 +262,7 @@ async function open(path = "/agents/inbox_triage/settings") {
   window.history.replaceState({}, "", path);
   render(() => (
     <Router>
-      <Route path={["/agents/:name", "/agents/:name/:tab"]} component={AgentScreen} />
+      <Route path={["/agents/:name", "/agents/:name/:section", "/agents/:name/:section/:tab"]} component={AgentScreen} />
     </Router>
   ));
   await screen.findByRole("heading", { name: /Inbox triage|Assistant/ });
@@ -278,25 +280,75 @@ function sent(): Record<string, unknown> {
 }
 
 describe("the agent screen", () => {
-  it("has Chat, Settings, Permissions and File tabs, Chat first", async () => {
+  it("opens on the chat, with the session picker, Archive, Delete and the settings cog in its bar", async () => {
     await open("/agents/inbox_triage");
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Memory", "Settings", "Permissions", "Triggers", "File"]);
-    expect(screen.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByRole("region", { name: "Chat" })).toBeTruthy();
-    expect(screen.getByRole("complementary", { name: "Threads" })).toBeTruthy();
+    const chat = within(await screen.findByRole("region", { name: "Chat" }));
+    expect(chat.getByRole("button", { name: "Chat session: New chat" })).toBeTruthy();
+    expect(chat.getByRole("button", { name: "Archive chat" })).toBeDisabled();
+    expect(chat.getByRole("button", { name: "Delete chat" })).toBeDisabled();
+    expect(chat.getByRole("link", { name: "Settings of Inbox triage" })).toHaveAttribute("href", "/agents/inbox_triage/settings");
+    expect(screen.queryByRole("tablist")).toBeNull();
     expect(agentThreads).toHaveBeenCalledWith("inbox_triage");
     expect(agent).toHaveBeenCalledWith("inbox_triage");
   });
 
-  it("links to the agent's AI activity in the Log with Show in log (activity Y5)", async () => {
+  it("opens the settings from the cog, with General, Permissions, Memory, Triggers and File tabs, and goes back to the chat", async () => {
     await open("/agents/inbox_triage");
+    fireEvent.click(await screen.findByRole("link", { name: "Settings of Inbox triage" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/agents/inbox_triage/settings"));
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["General", "Permissions", "Memory", "Triggers", "File"]);
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("region", { name: "Chat" })).toBeNull();
+    await tab("Permissions");
+    expect(window.location.pathname).toBe("/agents/inbox_triage/settings/permissions");
+    fireEvent.click(screen.getByRole("link", { name: "Back to the chat" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/agents/inbox_triage"));
+    expect(await screen.findByRole("region", { name: "Chat" })).toBeTruthy();
+  });
+
+  it("moves between the settings tabs with the arrow keys", async () => {
+    await open();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "General" }), { key: "ArrowRight" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Permissions" })).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Permissions" }), { key: "End" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "File" })).toHaveAttribute("aria-selected", "true"));
+    expect(window.location.pathname).toBe("/agents/inbox_triage/settings/file");
+  });
+
+  it("links to the agent's AI activity in the Log with Show in log (activity Y5)", async () => {
+    await open();
     const link = screen.getByRole("link", { name: "Show in log" });
     expect(link.getAttribute("href")).toBe("/log?category=ai&actor=agent:inbox_triage");
   });
 
-  it("opens the tab the address names", async () => {
-    await open("/agents/inbox_triage/permissions");
+  it("opens the settings tab the address names", async () => {
+    await open("/agents/inbox_triage/settings/permissions");
     expect(screen.getByRole("tab", { name: "Permissions" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("leads the old tab addresses to their new places", async () => {
+    await open("/agents/inbox_triage/permissions");
+    await waitFor(() => expect(window.location.pathname).toBe("/agents/inbox_triage/settings/permissions"));
+    expect(await screen.findByRole("tab", { name: "Permissions" })).toHaveAttribute("aria-selected", "true");
+    cleanup();
+    await open("/agents/inbox_triage/chat?thread=01JRUN2");
+    await waitFor(() => expect(window.location.pathname + window.location.search).toBe("/agents/inbox_triage?thread=01JRUN2"));
+    expect(await screen.findByRole("region", { name: "Chat" })).toBeTruthy();
+    cleanup();
+    await open("/agents/inbox_triage/settings/nothing");
+    await waitFor(() => expect(window.location.pathname).toBe("/agents/inbox_triage/settings"));
+    expect(await screen.findByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("keeps unsaved settings over a visit to the chat", async () => {
+    await open();
+    fireEvent.input(within(screen.getByRole("region", { name: "General" })).getByLabelText("Label"), {
+      target: { value: "Renamed" },
+    });
+    fireEvent.click(screen.getByRole("link", { name: "Back to the chat" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Settings of Inbox triage" }));
+    const s = within(await screen.findByRole("region", { name: "General" }));
+    expect((s.getByLabelText("Label") as HTMLInputElement).value).toBe("Renamed");
   });
 
   it("says when there is no such agent", async () => {
@@ -311,10 +363,10 @@ describe("the agent screen", () => {
   });
 });
 
-describe("the Settings tab", () => {
+describe("the General tab", () => {
   it("picks a model from the live list and edits the prompt, then saves the whole agent once", async () => {
     await open();
-    const s = within(screen.getByRole("region", { name: "Settings" }));
+    const s = within(screen.getByRole("region", { name: "General" }));
     const model = (await s.findByLabelText("Model")) as HTMLSelectElement;
     await waitFor(() => expect(model.tagName).toBe("SELECT"));
     expect(aiModels).toHaveBeenCalledWith("anthropic");
@@ -359,7 +411,7 @@ describe("the Settings tab", () => {
   it("clears a custom prompt with Use the shipped prompt", async () => {
     agent.mockResolvedValue(triage({ system_prompt: "Be terse." }));
     await open();
-    const s = within(screen.getByRole("region", { name: "Settings" }));
+    const s = within(screen.getByRole("region", { name: "General" }));
     expect((s.getByLabelText("System prompt") as HTMLTextAreaElement).value).toBe("Be terse.");
     fireEvent.click(s.getByRole("button", { name: "Use the shipped prompt" }));
     expect((s.getByLabelText("System prompt") as HTMLTextAreaElement).value).toBe("");
@@ -371,7 +423,7 @@ describe("the Settings tab", () => {
   it("types the model when the provider's list cannot be read, and a new provider clears the model", async () => {
     agent.mockResolvedValue(triage({ provider: "anthropic", model: "claude-opus-5" }));
     await open();
-    const s = within(screen.getByRole("region", { name: "Settings" }));
+    const s = within(screen.getByRole("region", { name: "General" }));
     await waitFor(() => expect(s.getByLabelText("Model").tagName).toBe("SELECT"));
     fireEvent.change(s.getByLabelText("Provider"), { target: { value: "openai" } });
     await waitFor(() => expect(aiModels).toHaveBeenCalledWith("openai"));
@@ -386,7 +438,7 @@ describe("the Settings tab", () => {
   it("shows the server's issues when a save is refused", async () => {
     putAgent.mockRejectedValue(new ApiError(400, { error: "invalid", issues: [{ at: "label", message: "is blank" }] }));
     await open();
-    const s = within(screen.getByRole("region", { name: "Settings" }));
+    const s = within(screen.getByRole("region", { name: "General" }));
     fireEvent.input(s.getByLabelText("Label"), { target: { value: " " } });
     fireEvent.click(s.getByRole("button", { name: "Save" }));
     expect(await s.findByRole("alert")).toHaveTextContent("label: is blank");
@@ -395,7 +447,7 @@ describe("the Settings tab", () => {
   it("keeps Assistant enabled: its switch cannot be turned off", async () => {
     agent.mockResolvedValue(triage({ name: "assistant", label: "Assistant", built_in: true }));
     await open("/agents/assistant/settings");
-    const s = within(screen.getByRole("region", { name: "Settings" }));
+    const s = within(screen.getByRole("region", { name: "General" }));
     const enabled = s.getByRole("switch");
     expect(enabled).toBeChecked();
     expect(enabled).toBeDisabled();
@@ -405,11 +457,11 @@ describe("the Settings tab", () => {
 
   it("keeps unsaved changes when moving between tabs", async () => {
     await open();
-    fireEvent.input(within(screen.getByRole("region", { name: "Settings" })).getByLabelText("Label"), {
+    fireEvent.input(within(screen.getByRole("region", { name: "General" })).getByLabelText("Label"), {
       target: { value: "Renamed" },
     });
     await tab("Permissions");
-    const s = await tab("Settings");
+    const s = await tab("General");
     expect((s.getByLabelText("Label") as HTMLInputElement).value).toBe("Renamed");
   });
 });
@@ -625,7 +677,7 @@ describe("the Permissions tab", () => {
 
 describe("the Triggers tab", () => {
   it("shows a schedule with its next runs and its last runs, each linking to its thread", async () => {
-    await open("/agents/inbox_triage/triggers");
+    await open("/agents/inbox_triage/settings/triggers");
     const t = within(await screen.findByRole("region", { name: "Triggers" }));
     expect((t.getByLabelText("Schedule") as HTMLInputElement).value).toBe("0 2 * * *");
     expect(await t.findByText("Every day at 02:00")).toBeTruthy();
@@ -638,7 +690,7 @@ describe("the Triggers tab", () => {
     expect(items[0]).toHaveTextContent("Anthropic is unavailable");
     expect(within(items[0]!).getByRole("link", { name: "Open thread" })).toHaveAttribute(
       "href",
-      "/agents/inbox_triage/chat?thread=01JRUN2",
+      "/agents/inbox_triage?thread=01JRUN2",
     );
     expect(items[1]).toHaveTextContent("Succeeded");
     expect(t.getByText(/a run is offered only the tools that need no confirmation/).parentElement).toHaveTextContent(
@@ -648,7 +700,7 @@ describe("the Triggers tab", () => {
   });
 
   it("adds a note event trigger and saves it with the agent", async () => {
-    await open("/agents/inbox_triage/triggers");
+    await open("/agents/inbox_triage/settings/triggers");
     const t = within(await screen.findByRole("region", { name: "Triggers" }));
     fireEvent.click(t.getByRole("button", { name: "Add a note event" }));
     const card = within(t.getByRole("group", { name: "Trigger on_change" }));
@@ -666,7 +718,7 @@ describe("the Triggers tab", () => {
   });
 
   it("adds a mention trigger, warns that the agent cannot change the note, and saves it", async () => {
-    await open("/agents/inbox_triage/triggers");
+    await open("/agents/inbox_triage/settings/triggers");
     const t = within(await screen.findByRole("region", { name: "Triggers" }));
     fireEvent.click(t.getByRole("button", { name: "Add a mention" }));
     const card = within(t.getByRole("group", { name: "Trigger asked" }));
@@ -687,7 +739,7 @@ describe("the Triggers tab", () => {
         triggers: [{ name: "asked", kind: "mention", type: [], prompt: "Be brief." }],
       }),
     );
-    await open("/agents/inbox_triage/triggers");
+    await open("/agents/inbox_triage/settings/triggers");
     const t = within(await screen.findByRole("region", { name: "Triggers" }));
     const card = within(t.getByRole("group", { name: "Trigger asked" }));
     expect((card.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("Be brief.");
@@ -700,13 +752,13 @@ describe("the Triggers tab", () => {
         triggers: [{ name: "asked", kind: "mention", type: [], prompt: "" }],
       }),
     );
-    await open("/agents/inbox_triage/triggers");
+    await open("/agents/inbox_triage/settings/triggers");
     const again = within(await screen.findByRole("region", { name: "Triggers" }));
     expect(within(again.getByRole("group", { name: "Trigger asked" })).getByRole("note")).toHaveTextContent(MENTION_WARNING);
   });
 
   it("removes a trigger", async () => {
-    await open("/agents/inbox_triage/triggers");
+    await open("/agents/inbox_triage/settings/triggers");
     const t = within(await screen.findByRole("region", { name: "Triggers" }));
     fireEvent.click(t.getByRole("button", { name: "Remove trigger" }));
     expect(t.getByText("No triggers yet.")).toBeTruthy();
@@ -714,7 +766,7 @@ describe("the Triggers tab", () => {
     await waitFor(() => expect(sent().triggers).toEqual([]));
   });
 
-  it("opens a run's thread in the Chat tab", async () => {
+  it("opens a run's thread in the chat", async () => {
     await open("/agents/inbox_triage/chat?thread=01JRUN2");
     await waitFor(() => expect(agentThread).toHaveBeenCalledWith("inbox_triage", "01JRUN2"));
   });
@@ -745,7 +797,7 @@ describe("the File tab", () => {
 
 describe("the Memory tab", () => {
   it("lists the agent's memories newest first and searches them", async () => {
-    await open("/agents/inbox_triage/memory");
+    await open("/agents/inbox_triage/settings/memory");
     const m = within(await screen.findByRole("region", { name: "Memory" }));
     const items = await m.findAllByRole("listitem");
     expect(items.map((i) => i.querySelector("strong")?.textContent)).toEqual(["Tea", "Garden"]);
@@ -760,7 +812,7 @@ describe("the Memory tab", () => {
   });
 
   it("adds a memory with its title and text", async () => {
-    await open("/agents/inbox_triage/memory");
+    await open("/agents/inbox_triage/settings/memory");
     const m = within(await screen.findByRole("region", { name: "Memory" }));
     await m.findAllByRole("listitem");
     fireEvent.click(m.getByRole("button", { name: "Add memory" }));
@@ -777,7 +829,7 @@ describe("the Memory tab", () => {
   });
 
   it("edits a memory's title and text with one Save at its version", async () => {
-    await open("/agents/inbox_triage/memory");
+    await open("/agents/inbox_triage/settings/memory");
     const m = within(await screen.findByRole("region", { name: "Memory" }));
     await m.findAllByRole("listitem");
     fireEvent.click(m.getByRole("button", { name: "Edit Tea" }));
@@ -795,7 +847,7 @@ describe("the Memory tab", () => {
 
   it("shows why a save is refused", async () => {
     updateAgentMemory.mockRejectedValue(new ApiError(409, { error: "conflict", message: "the note changed since version v1" }));
-    await open("/agents/inbox_triage/memory");
+    await open("/agents/inbox_triage/settings/memory");
     const m = within(await screen.findByRole("region", { name: "Memory" }));
     await m.findAllByRole("listitem");
     fireEvent.click(m.getByRole("button", { name: "Edit Tea" }));
@@ -807,7 +859,7 @@ describe("the Memory tab", () => {
 
   it("deletes a memory to the trash after asking", async () => {
     const ask = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
-    await open("/agents/inbox_triage/memory");
+    await open("/agents/inbox_triage/settings/memory");
     const m = within(await screen.findByRole("region", { name: "Memory" }));
     await m.findAllByRole("listitem");
     fireEvent.click(m.getByRole("button", { name: "Delete Garden" }));
@@ -821,7 +873,7 @@ describe("the Memory tab", () => {
 
   it("works in the apps too", async () => {
     appInfo.mockResolvedValue({ app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" });
-    await open("/agents/inbox_triage/memory");
+    await open("/agents/inbox_triage/settings/memory");
     const m = within(await screen.findByRole("region", { name: "Memory" }));
     await m.findAllByRole("listitem");
     fireEvent.click(m.getByRole("button", { name: "Edit Tea" }));
@@ -836,7 +888,7 @@ describe("in the apps", () => {
     appInfo.mockResolvedValue({ app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" });
     await open();
     expect(await screen.findByRole("note")).toHaveTextContent("Edit agents in the web app.");
-    const s = within(screen.getByRole("region", { name: "Settings" }));
+    const s = within(screen.getByRole("region", { name: "General" }));
     expect(s.getByLabelText("Label")).toBeDisabled();
     expect(s.getByLabelText("System prompt")).toBeDisabled();
     expect(s.queryByRole("button", { name: "Save" })).toBeNull();

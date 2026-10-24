@@ -42,7 +42,7 @@ describe("the chip", () => {
     const chip = await r.findByTestId("agent-call");
     expect(chip).toHaveTextContent("@Clerk tidy this");
     expect(await r.findByRole("img", { name: "Running" })).toBeInTheDocument();
-    await waitFor(() => expect(chip).toHaveAttribute("href", "/agents/clerk/chat?thread=01THREAD"));
+    await waitFor(() => expect(chip).toHaveAttribute("href", "/agents/clerk?thread=01THREAD"));
     expect(call).toHaveBeenCalledWith(CALL);
     // The run ends: the spinner goes.
     call.mockResolvedValue({ agent: "clerk", note: "01N", thread: "01THREAD", running: false });
@@ -57,7 +57,7 @@ describe("the chip", () => {
       const call = vi.spyOn(api, "agentCall").mockRejectedValue(new ApiError(404, { error: "not_found", message: "not seen" }));
       const r = render(() => <Inline text={text} />);
       expect(r.getByTestId("agent-call-sending")).toHaveTextContent("Sending…");
-      expect(r.getByTestId("agent-call")).toHaveAttribute("href", "/agents/clerk/chat");
+      expect(r.getByTestId("agent-call")).toHaveAttribute("href", "/agents/clerk");
       call.mockResolvedValue({ agent: "clerk", note: "01N", thread: null, running: false });
       await vi.advanceTimersByTimeAsync(3_000);
       expect(await r.findByText("Not answered")).toBeInTheDocument();

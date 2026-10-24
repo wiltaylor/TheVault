@@ -1,15 +1,19 @@
-// The agent screen, `/agents/<name>` (agents G5): one agent as tabs. Chat, the default, holds its
-// threads (agents G7, `ai/AgentChat.tsx`); `?thread=<id>` opens one. Memory holds what it
-// remembers (agents G21, `AgentMemory.tsx`), which the apps can change too. Settings holds its
-// label, icon, model and system prompt; Permissions its own tools, confirmation and internet
-// switches and note types (agents G4); Triggers its schedules and note events with their last runs
-// (agents G9 to G12, `AgentTriggers.tsx`); File its WCL. Settings, Permissions and Triggers edit
-// one draft, so moving between them keeps unsaved changes, and each tab's Save writes the whole
-// agent. Show in log opens the agent's AI activity in the Log (activity Y5). In the
-// apps the rest of the screen is read only: agent files need `admin`, which a device token never
-// has (G2).
+// The agent screen, `/agents/<name>` (agents G5). Its main view is the agent's chat (agents G7,
+// `ai/AgentChat.tsx`): a bar with the session picker, Rename, Archive and Delete for the chosen
+// session, and the settings cog at its end; then the chosen session, filling the pane.
+// `?thread=<id>` opens one, and the address follows the session shown. The cog opens the agent's
+// settings at `/agents/<name>/settings`, as tabs at `/agents/<name>/settings/<tab>`: General holds
+// its label, icon, model and system prompt; Permissions its own tools, confirmation and internet
+// switches and note types (agents G4); Memory what it remembers (agents G21, `AgentMemory.tsx`),
+// which the apps can change too; Triggers its schedules and note events with their last runs
+// (agents G9 to G12, `AgentTriggers.tsx`); File its WCL. General, Permissions and Triggers edit
+// one draft, so moving between them, or to the chat and back, keeps unsaved changes, and each
+// tab's Save writes the whole agent. Show in log opens the agent's AI activity in the Log
+// (activity Y5). The addresses of the tabs the screen had before, `/agents/<name>/chat`,
+// `/memory`, `/permissions`, `/triggers` and `/file`, lead to their new places. In the apps the
+// settings are read only: agent files need `admin`, which a device token never has (G2).
 
-import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
+import { A, useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import {
   For,
   type JSX,
@@ -90,30 +94,56 @@ export interface AgentTabProps {
   ai: AiStatus | null;
   /** A prefix for element ids, unique to this screen. */
   id: string;
-  /** The thread the address names (`?thread=<id>`), for the Chat tab to open. */
-  thread: string | null;
 }
 
 /**
- * The screen's tabs, in order; the first is the default. Tickets that add a tab (Chat, Triggers)
- * add it here.
+ * The settings screen's tabs, in order; the first is the default. Tickets that add a tab add it
+ * here.
  */
 export const AGENT_TABS: { id: string; label: string; render: (p: AgentTabProps) => JSX.Element }[] = [
-  {
-    id: "chat",
-    label: "Chat",
-    render: (p) => <AgentChat agent={p.agent.name} label={agentLabel(p.agent)} thread={p.thread} />,
-  },
+  { id: "general", label: "General", render: (p) => <SettingsTab {...p} /> },
+  { id: "permissions", label: "Permissions", render: (p) => <PermissionsTab {...p} /> },
   {
     id: "memory",
     label: "Memory",
     render: (p) => <MemoryTab agent={p.agent.name} label={agentLabel(p.agent)} id={p.id} />,
   },
-  { id: "settings", label: "Settings", render: (p) => <SettingsTab {...p} /> },
-  { id: "permissions", label: "Permissions", render: (p) => <PermissionsTab {...p} /> },
   { id: "triggers", label: "Triggers", render: (p) => <TriggersTab {...p} /> },
   { id: "file", label: "File", render: (p) => <FileTab {...p} /> },
 ];
+
+/** Where the chat of agent `name` is, open on thread `thread` when one is given. */
+export function agentHref(name: string, thread?: string | null): string {
+  return `/agents/${encodeURIComponent(name)}${thread ? `?thread=${encodeURIComponent(thread)}` : ""}`;
+}
+
+/** Where tab `tab` of the settings of agent `name` is; the first tab when none is given. */
+export function agentSettingsHref(name: string, tab?: string): string {
+  const base = `/agents/${encodeURIComponent(name)}/settings`;
+  return tab && tab !== AGENT_TABS[0]!.id ? `${base}/${tab}` : base;
+}
+
+/**
+ * Where an address of the agent screen leads, as `/agents/<name>/<section>/<tab>` gives it: the
+ * chat, a settings tab, or another address to go to in its place, for the screen's old tabs.
+ */
+export function agentView(
+  name: string,
+  section: string | undefined,
+  tab: string | undefined,
+  search: string,
+): { view: "chat" } | { view: "settings"; tab: string } | { redirect: string } {
+  if (!section) return tab ? { redirect: `${agentHref(name)}${search}` } : { view: "chat" };
+  if (section === "chat") return { redirect: `${agentHref(name)}${search}` };
+  if (section === "settings") {
+    if (!tab) return { view: "settings", tab: AGENT_TABS[0]!.id };
+    if (AGENT_TABS.some((t) => t.id === tab)) return { view: "settings", tab };
+    return { redirect: agentSettingsHref(name) };
+  }
+  // The screen's old tabs: Memory, Permissions, Triggers and File are settings now.
+  if (!tab && AGENT_TABS.some((t) => t.id === section)) return { redirect: agentSettingsHref(name, section) };
+  return { redirect: agentHref(name) };
+}
 
 /** A Save button with its spinner, and the result of the last save below it. */
 export function SaveBar(props: { dirty: boolean; readOnly: boolean; save: () => Promise<void>; label?: string }) {
@@ -254,7 +284,7 @@ function SettingsTab(p: AgentTabProps) {
   const prompt = () => p.draft.system_prompt ?? "";
   const length = () => [...prompt()].length;
   return (
-    <section class="agent-tab" aria-label="Settings">
+    <section class="agent-tab" aria-label="General">
       <fieldset class="agent-fieldset" disabled={p.readOnly}>
         <div class="form-grid">
           <label for={id("label")}>Label</label>
@@ -624,6 +654,7 @@ function FileTab(p: AgentTabProps) {
 export function AgentScreen() {
   const params = useParams();
   const [search] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const pane = usePane();
   const uid = createUniqueId();
@@ -671,7 +702,43 @@ export function AgentScreen() {
     const d = draft();
     return !!a && !!d && JSON.stringify(agentForm(a)) !== JSON.stringify(d);
   });
-  const tab = () => AGENT_TABS.find((t) => t.id === params.tab) ?? AGENT_TABS[0]!;
+
+  const view = createMemo(() => agentView(params.name!, params.section, params.tab, location.search));
+  // An old address goes to its new place, in place of itself in the pane's history.
+  createEffect(() => {
+    const v = view();
+    if ("redirect" in v) navigate(v.redirect, { replace: true });
+  });
+  const settingsTab = () => {
+    const v = view();
+    return "tab" in v ? v.tab : null;
+  };
+  const tab = () => AGENT_TABS.find((t) => t.id === settingsTab()) ?? AGENT_TABS[0]!;
+  const addressThread = () => {
+    const t = search.thread;
+    return (Array.isArray(t) ? t[0] : t) || null;
+  };
+  // The chat shows once it has been asked for and then stays, hidden behind the settings, so
+  // the session and what is typed in it are there on the way back.
+  const [chatSeen, setChatSeen] = createSignal(false);
+  const inChat = () => {
+    const v = view();
+    return "view" in v && v.view === "chat";
+  };
+  createEffect(() => {
+    if (inChat()) setChatSeen(true);
+  });
+  /** The session the chat shows, for the way back from the settings. */
+  const [shownThread, setShownThread] = createSignal<string | null>(null);
+  createEffect(() => {
+    if (inChat()) setShownThread(addressThread());
+  });
+
+  function onThread(id: string | null) {
+    setShownThread(id);
+    if (!inChat() || addressThread() === id) return;
+    navigate(agentHref(params.name!, id), { replace: true });
+  }
 
   async function put(body: AgentForm | { wcl: string }) {
     const name = params.name!;
@@ -681,20 +748,22 @@ export function AgentScreen() {
   }
 
   function onTabKey(e: KeyboardEvent) {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
     e.preventDefault();
     const i = AGENT_TABS.indexOf(tab());
-    const next = AGENT_TABS[(i + (e.key === "ArrowRight" ? 1 : AGENT_TABS.length - 1)) % AGENT_TABS.length]!;
+    const n = AGENT_TABS.length;
+    const at = e.key === "Home" ? 0 : e.key === "End" ? n - 1 : (i + (e.key === "ArrowRight" ? 1 : n - 1)) % n;
+    const next = AGENT_TABS[at]!;
     go(next.id);
     queueMicrotask(() => document.getElementById(`${uid}-tab-${next.id}`)?.focus());
   }
 
   function go(id: string) {
-    navigate(`/agents/${encodeURIComponent(params.name!)}/${id}`, { replace: true });
+    navigate(agentSettingsHref(params.name!, id), { replace: true });
   }
 
   return (
-    <section class="list-page agent-screen">
+    <section class="list-page agent-screen" classList={{ "agent-screen-chat": inChat() }}>
       <Show when={error()}>
         <p class="error" role="alert">
           {error()}
@@ -703,72 +772,101 @@ export function AgentScreen() {
       <Show when={agent() && draft() ? { a: agent()!, d: draft()! } : null}>
         {(v) => (
           <>
-            <header class="note-header agent-header">
-              <h1>
-                <TypeIcon name={v().a.icon || AGENT_ICON} size={22} /> {agentLabel(v().a)}
-              </h1>
-              <Show when={v().a.built_in}>
-                <span class="agent-badge">Built in</span>
-              </Show>
-              <Show when={!v().a.enabled}>
-                <span class="agent-badge agent-badge-off">Disabled</span>
-              </Show>
-              <a class="agent-log-link" href={logHref(v().a.name)}>
-                <TypeIcon name="scroll-text" size={16} /> Show in log
-              </a>
-            </header>
-            <Show when={v().a.description}>
-              <p class="muted">{v().a.description}</p>
+            <Show when={chatSeen()}>
+              <div class="agent-chat-wrap" hidden={!inChat()}>
+                <h1 class="visually-hidden">{agentLabel(v().a)}</h1>
+                <AgentChat
+                  agent={v().a.name}
+                  label={agentLabel(v().a)}
+                  thread={addressThread()}
+                  onThread={onThread}
+                  actions={
+                    <>
+                      <Show when={!v().a.enabled}>
+                        <span class="agent-badge agent-badge-off">Disabled</span>
+                      </Show>
+                      <A
+                        class="agent-settings-button icon-button"
+                        href={agentSettingsHref(v().a.name)}
+                        aria-label={`Settings of ${agentLabel(v().a)}`}
+                        title="Agent settings"
+                      >
+                        <TypeIcon name="settings" size={18} />
+                      </A>
+                    </>
+                  }
+                />
+              </div>
             </Show>
-            <Show when={readOnly()}>
-              <p class="agent-readonly" role="note">
-                Edit agents in the web app. This app can show them but not change them.
-              </p>
+            <Show when={!inChat() && settingsTab()}>
+              <div class="agent-settings">
+                <header class="note-header agent-header">
+                  <A class="agent-back icon-button" href={agentHref(v().a.name, shownThread())} aria-label="Back to the chat" title="Back to the chat">
+                    <TypeIcon name="arrow-left" size={18} />
+                  </A>
+                  <h1>
+                    <TypeIcon name={v().a.icon || AGENT_ICON} size={22} /> {agentLabel(v().a)}
+                  </h1>
+                  <Show when={v().a.built_in}>
+                    <span class="agent-badge">Built in</span>
+                  </Show>
+                  <Show when={!v().a.enabled}>
+                    <span class="agent-badge agent-badge-off">Disabled</span>
+                  </Show>
+                  <a class="agent-log-link" href={logHref(v().a.name)}>
+                    <TypeIcon name="scroll-text" size={16} /> Show in log
+                  </a>
+                </header>
+                <Show when={v().a.description}>
+                  <p class="muted">{v().a.description}</p>
+                </Show>
+                <Show when={readOnly()}>
+                  <p class="agent-readonly" role="note">
+                    Edit agents in the web app. This app can show them but not change them.
+                  </p>
+                </Show>
+                <div class="agent-tabs" role="tablist" aria-label="Agent settings" onKeyDown={onTabKey}>
+                  <For each={AGENT_TABS}>
+                    {(t) => (
+                      <button
+                        type="button"
+                        role="tab"
+                        id={`${uid}-tab-${t.id}`}
+                        aria-selected={tab().id === t.id}
+                        aria-controls={`${uid}-panel`}
+                        tabindex={tab().id === t.id ? 0 : -1}
+                        onClick={() => go(t.id)}
+                      >
+                        {t.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <div id={`${uid}-panel`} role="tabpanel" aria-labelledby={`${uid}-tab-${tab().id}`}>
+                  {tab().render({
+                    get agent() {
+                      return v().a;
+                    },
+                    get draft() {
+                      return v().d;
+                    },
+                    setDraft: (f) => setDraftSignal((d) => (d ? f(d) : d)),
+                    get dirty() {
+                      return dirty();
+                    },
+                    save: () => put(draft()!),
+                    saveWcl: (wcl) => put({ wcl }),
+                    get readOnly() {
+                      return readOnly();
+                    },
+                    get ai() {
+                      return ai() ?? null;
+                    },
+                    id: uid,
+                  })}
+                </div>
+              </div>
             </Show>
-            <div class="agent-tabs" role="tablist" aria-label="Agent" onKeyDown={onTabKey}>
-              <For each={AGENT_TABS}>
-                {(t) => (
-                  <button
-                    type="button"
-                    role="tab"
-                    id={`${uid}-tab-${t.id}`}
-                    aria-selected={tab().id === t.id}
-                    aria-controls={`${uid}-panel`}
-                    tabindex={tab().id === t.id ? 0 : -1}
-                    onClick={() => go(t.id)}
-                  >
-                    {t.label}
-                  </button>
-                )}
-              </For>
-            </div>
-            <div id={`${uid}-panel`} role="tabpanel" aria-labelledby={`${uid}-tab-${tab().id}`}>
-              {tab().render({
-                get agent() {
-                  return v().a;
-                },
-                get draft() {
-                  return v().d;
-                },
-                setDraft: (f) => setDraftSignal((d) => (d ? f(d) : d)),
-                get dirty() {
-                  return dirty();
-                },
-                save: () => put(draft()!),
-                saveWcl: (wcl) => put({ wcl }),
-                get readOnly() {
-                  return readOnly();
-                },
-                get ai() {
-                  return ai() ?? null;
-                },
-                id: uid,
-                get thread() {
-                  const t = search.thread;
-                  return (Array.isArray(t) ? t[0] : t) || null;
-                },
-              })}
-            </div>
           </>
         )}
       </Show>

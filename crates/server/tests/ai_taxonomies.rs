@@ -236,11 +236,11 @@ fn read_events(res: Response) -> Vec<(String, Value)> {
     out
 }
 
-/// The event names, `usage` left out and each run of `text` folded into one.
+/// The event names, `usage` and `context` left out and each run of `text` folded into one.
 fn shape(events: &[(String, Value)]) -> Vec<&str> {
     let mut out: Vec<&str> = Vec::new();
     for (n, _) in events {
-        if n == "usage" || (n == "text" && out.last() == Some(&"text")) {
+        if n == "usage" || n == "context" || (n == "text" && out.last() == Some(&"text")) {
             continue;
         }
         out.push(n);

@@ -364,11 +364,17 @@ export function QueryView(props: { block: Block; onChange?: (block: Block) => vo
     () => [changes(), tick()],
   );
   // With `allow_new`, what the views add: the query's one type and the fields its `where` fixes.
-  const [spec] = createResource(
-    () => (def().allowNew ? ([def().query, thisId, typeDef(fromType(def().query) ?? "")] as const) : null),
-    ([query, id]) => newNoteSpec(query, id, typeDef),
-  );
-  const newSpec = (): NewNoteSpec | null => (spec.state === "ready" ? spec() : null) ?? null;
+  // Keyed on the query, the note and whether its type is known, never on the type's definition:
+  // a definition read again elsewhere would refetch it, and a view that briefly had no spec would
+  // tear down what it shows, such as a map waiting for a click.
+  const specKey = createMemo(() => {
+    if (!def().allowNew) return null;
+    const type = fromType(def().query);
+    return `${def().query}\u0000${thisId ?? ""}\u0000${type && typeDef(type) ? type : ""}`;
+  });
+  const [spec] = createResource(specKey, () => newNoteSpec(def().query, thisId, typeDef));
+  // The last spec stays while a new one is read.
+  const newSpec = (): NewNoteSpec | null => (specKey() === null ? null : (spec.latest ?? null));
   // A view that adds notes shows with no results too, so the first one can be added.
   const shownTotal = () => {
     const t = data.total();

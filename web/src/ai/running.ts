@@ -1,6 +1,6 @@
 // Which agent threads have a turn running, and which answered while nobody had them open
 // (agents G17). The server announces each turn on a thread starting and ending on the live
-// stream as `ai_turn`; the Chat tab's thread list and the sidebar's agents read again when it
+// stream as `ai_turn`; the agent screen's session picker and the sidebar's agents read again when it
 // does, and the apps, which may not have the stream, poll while something runs. A thread whose
 // turn ended while no conversation showed it gets a "New reply" dot until it is opened, kept per
 // browser.

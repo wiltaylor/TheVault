@@ -155,7 +155,7 @@ fn provider(name: &str) -> Result<Provider, ApiError> {
     name.parse::<Provider>().map_err(ApiError::bad_request)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -219,6 +219,7 @@ fn status_of(w: &Writer) -> Result<Value, ApiError> {
     let confirm = confirm_json(&agent.permissions.confirm);
     let web = web_json(&agent.permissions.web);
     if !s.has_secret_key() {
+        let context = context_json(&Settings::default());
         let off = json!({ "configured": false, "model": null, "url": null, "has_key": false });
         return Ok(json!({
             "secrets_key": false,
@@ -233,6 +234,7 @@ fn status_of(w: &Writer) -> Result<Value, ApiError> {
             "system_prompt_custom": custom.is_some(),
             "confirm": confirm,
             "web": web,
+            "context": context,
         }));
     }
     let settings = Settings::load(s).map_err(api_error)?;
@@ -262,7 +264,27 @@ fn status_of(w: &Writer) -> Result<Value, ApiError> {
         "system_prompt_custom": custom.is_some(),
         "confirm": confirm,
         "web": web,
+        "context": context_json(&settings),
     }))
+}
+
+/// The context settings with every key filled: each provider's window in use and whether it is
+/// set or the default, whether threads compact themselves, and at what share of the window.
+fn context_json(settings: &Settings) -> Value {
+    let windows: Map<String, Value> = Provider::ALL
+        .iter()
+        .map(|&p| {
+            (
+                p.as_str().to_owned(),
+                json!({ "window": settings.window(p), "set": settings.context.set_window(p).is_some() }),
+            )
+        })
+        .collect();
+    json!({
+        "windows": windows,
+        "auto_compact": settings.context.auto_compact,
+        "compact_at": settings.context.compact_at(),
+    })
 }
 
 async fn status_answer(a: &Arc<Ai>) -> Result<Json<Value>, ApiError> {
@@ -288,6 +310,7 @@ pub async fn providers(State(a): Shared) -> Result<Json<Value>, ApiError> {
         "providers": providers,
         "confirm": status["confirm"],
         "web": status["web"],
+        "context": status["context"],
     })))
 }
 
@@ -313,6 +336,21 @@ pub struct SettingsBody {
     urls: Option<HashMap<String, Option<String>>>,
     #[serde(default)]
     openai_api: Option<String>,
+    #[serde(default)]
+    context: Option<ContextBody>,
+}
+
+/// A partial `context`: each window sent replaces the stored one, `null` putting back the
+/// default, and so does each switch.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ContextBody {
+    #[serde(default)]
+    windows: Option<HashMap<String, Option<u64>>>,
+    #[serde(default)]
+    auto_compact: Option<bool>,
+    #[serde(default)]
+    compact_at: Option<u8>,
 }
 
 /// A partial `confirm`: each switch sent replaces the stored one (ai D22).
@@ -384,6 +422,30 @@ pub async fn put_settings(
     let prompt = b.system_prompt;
     let confirm = b.confirm;
     let web = b.web;
+    let context = b.context.unwrap_or_default();
+    let mut windows = Vec::new();
+    for (name, window) in context.windows.unwrap_or_default() {
+        let p = provider(&name)?;
+        if let Some(n) = window
+            && !ai::Context::WINDOW_RANGE.contains(&n)
+        {
+            return Err(ApiError::bad_request(format!(
+                "a context window is from {} to {} tokens",
+                ai::Context::WINDOW_RANGE.start(),
+                ai::Context::WINDOW_RANGE.end()
+            )));
+        }
+        windows.push((p, window));
+    }
+    if let Some(n) = context.compact_at
+        && !ai::Context::COMPACT_RANGE.contains(&n)
+    {
+        return Err(ApiError::bad_request(format!(
+            "compact_at is from {} to {} percent",
+            ai::Context::COMPACT_RANGE.start(),
+            ai::Context::COMPACT_RANGE.end()
+        )));
+    }
     blocking_w(&a, move |w| {
         let _acting = writer::acting_as(&by);
         let s = w.state();
@@ -446,6 +508,15 @@ pub async fn put_settings(
         }
         for (p, m) in models {
             settings.set_model(p, m);
+        }
+        for (p, window) in windows {
+            settings.context.put_window(p, window);
+        }
+        if let Some(on) = context.auto_compact {
+            settings.context.auto_compact = on;
+        }
+        if let Some(n) = context.compact_at {
+            settings.context.compact_at = (n != ai::Context::COMPACT_AT).then_some(n);
         }
         settings.save(s).map_err(api_error)?;
         status_of(w)

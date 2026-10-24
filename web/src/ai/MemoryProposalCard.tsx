@@ -9,7 +9,7 @@ import { type Part, useChatSession } from "./store";
 import { wclDiff } from "./TypeProposalCard";
 
 /** The Memory tab of agent `name`'s screen. */
-export const memoryHref = (name: string) => `/agents/${encodeURIComponent(name)}/memory`;
+export const memoryHref = (name: string) => `/agents/${encodeURIComponent(name)}/settings/memory`;
 
 export function MemoryProposalCard(props: { part: Extract<Part, { kind: "memory_proposal" }>; turn: number; index: number }) {
   const session = useChatSession();

@@ -206,7 +206,7 @@ fn names(events: &[(String, Value)]) -> Vec<&str> {
     events
         .iter()
         .map(|(n, _)| n.as_str())
-        .filter(|n| *n != "usage")
+        .filter(|n| *n != "usage" && *n != "context")
         .collect()
 }
 

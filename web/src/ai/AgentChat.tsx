@@ -1,26 +1,27 @@
-// The agent screen's Chat tab (agents G5, G7, G8): the agent's threads on the left, newest
-// activity first, each with its title, when it was last active and a badge counting the
-// proposals that wait for the user; New thread; and the chosen thread on the right, in the same
-// conversation view as the AI panel. A thread is a note the server keeps, so reopening one shows
-// its turns as they were and its pending proposals with Apply and Discard again. The first
-// message of a new thread starts it. Each thread's ⋯ menu (or a right-click) renames it inline,
-// archives or unarchives it, opens the agent's AI activity in the Log (activity Y5), and deletes
-// it to the trash (agents G15): ordinary note writes,
-// authored by the user. Archived threads are hidden until "Show archived" lists them, dimmed.
+// The agent screen's chat (agents G5, G7, G8): a bar at the top with the session picker, Rename,
+// Archive and Delete for the chosen session, and whatever the screen adds at its end (the
+// settings cog); and the chosen session below it, filling the rest of the pane, in the same
+// conversation view as the AI panel. A session is a thread the server keeps, so reopening one
+// shows its turns as they were and its pending proposals with Apply and Discard again. The first
+// message of a new chat starts its thread.
+// The session picker lists the agent's threads, newest activity first, each with its title, when
+// it was last active and a badge counting the proposals that wait for the user; a search box
+// filters them by title, New chat starts afresh, and "Show archived" lists the archived threads
+// too, dimmed. Rename edits the chosen thread's title inline, Archive archives or unarchives it,
+// and Delete moves it to the trash (agents G15): ordinary note writes, authored by the user.
 // Turns run on the server in the background (agents G17): any thread can be opened while one
 // answers, a running thread shows a spinner, read as "Running", and one that answered while it
 // was not open shows a "New reply" dot until opened. The list reads again when the live stream
 // says a turn of the agent started or ended, and every few seconds while one runs, for the apps.
 // A thread open here and in the AI panel is one conversation, shown in both (agents G18); the
-// tab and the panel each choose their thread by themselves, and the tab sends no open note.
+// screen and the panel each choose their thread by themselves, and the screen sends no open note.
 
-import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
-import { logHref } from "../activity/model";
+import { For, type JSX, Show, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount } from "solid-js";
 import { type AgentThreadSummary, api } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { NameInput } from "../components/PinnedTree";
 import { errorText } from "../pages/TypeEditor";
-import { Conversation, ModelPicker } from "./ChatPanel";
+import { Conversation } from "./ChatPanel";
 import { NewReplyMark, RunningMark } from "./RunningMark";
 import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged } from "./running";
 import { createChatSession } from "./store";
@@ -41,19 +42,37 @@ export function pendingLabel(n: number): string {
   return n === 1 ? "1 proposal waits for you" : `${n} proposals wait for you`;
 }
 
+/** The threads whose title holds every word of `query`, ignoring case, in the order given. */
+export function matchThreads(threads: AgentThreadSummary[], query: string): AgentThreadSummary[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return threads.filter((t) => words.every((w) => (t.title || "Untitled thread").toLowerCase().includes(w)));
+}
+
+const titleOf = (t: AgentThreadSummary) => t.title || "Untitled thread";
+
 /**
- * The Chat tab of agent `agent`, whose display name is `label`. The agent screen mounts it at
- * `/agents/<name>`; `thread`, from `?thread=<id>`, opens that thread, as a trigger run's link does.
+ * The chat of agent `agent`, whose display name is `label`. The agent screen mounts it at
+ * `/agents/<name>`; `thread`, from `?thread=<id>`, opens that thread, as a trigger run's link
+ * does, and `onThread` hears which thread it shows, so the address can name it. `actions` goes at
+ * the end of the bar.
  */
-export function AgentChat(props: { agent: string; label?: string; thread?: string | null }) {
+export function AgentChat(props: {
+  agent: string;
+  label?: string;
+  thread?: string | null;
+  onThread?: (id: string | null) => void;
+  actions?: JSX.Element;
+}) {
   const [threads, setThreads] = createSignal<AgentThreadSummary[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [loaded, setLoaded] = createSignal(false);
   const [showArchived, setShowArchived] = createSignal(false);
-  const [menu, setMenu] = createSignal<string | null>(null);
-  const [renaming, setRenaming] = createSignal<string | null>(null);
+  const [renaming, setRenaming] = createSignal(false);
+  /** The open thread when the list leaves it out, such as an archived one a link opened. */
+  const [unlisted, setUnlisted] = createSignal<AgentThreadSummary | null>(null);
   let asked = 0;
   let poll: ReturnType<typeof setTimeout> | undefined;
+  let picker: HTMLButtonElement | undefined;
   onCleanup(() => clearTimeout(poll));
   async function refresh() {
     const mine = ++asked;
@@ -96,6 +115,16 @@ export function AgentChat(props: { agent: string; label?: string; thread?: strin
       },
     ),
   );
+  createEffect(
+    on(
+      () => session.chat.thread,
+      (id) => {
+        setRenaming(false);
+        props.onThread?.(id);
+      },
+      { defer: true },
+    ),
+  );
   // A turn of this agent started or ended somewhere.
   createEffect(
     on(
@@ -108,9 +137,26 @@ export function AgentChat(props: { agent: string; label?: string; thread?: strin
     ),
   );
   const name = () => props.label || props.agent;
-  const titleOf = (t: AgentThreadSummary) => t.title || "Untitled thread";
+  const current = createMemo(() => {
+    const id = session.chat.thread;
+    if (!id) return null;
+    return threads().find((t) => t.id === id) ?? (unlisted()?.id === id ? unlisted() : null);
+  });
+  // The open thread is not in the list once it has loaded: read its title and archived mark.
+  createEffect(
+    on([() => session.chat.thread, loaded, threads], ([id, done, list]) => {
+      if (!id || !done || list.some((t) => t.id === id) || unlisted()?.id === id) return;
+      const agent = props.agent;
+      api.agentThread(agent, id).then(
+        (t) => {
+          if (session.chat.thread === id && props.agent === agent) setUnlisted(t);
+        },
+        () => undefined,
+      );
+    }),
+  );
 
-  /** Run a thread action, then list the threads again; a failure shows above the list. */
+  /** Run a thread action, then list the threads again; a failure shows above the chat. */
   function act(p: Promise<unknown>) {
     setError(null);
     p.then(
@@ -123,21 +169,24 @@ export function AgentChat(props: { agent: string; label?: string; thread?: strin
   }
 
   function rename(t: AgentThreadSummary, title: string | null) {
-    setRenaming(null);
+    setRenaming(false);
+    queueMicrotask(() => picker?.focus());
     if (!title || title === t.title) return;
+    if (unlisted()?.id === t.id) setUnlisted({ ...t, title });
     act(api.renameAgentThread(props.agent, t.id, title));
   }
 
   /** Archive or unarchive thread `t` through the note routes, at its current version. */
   function setArchived(t: AgentThreadSummary, archived: boolean) {
-    setMenu(null);
     act(
-      api.agentThread(props.agent, t.id).then((cur) => (archived ? api.archiveNote(t.id, cur.version) : api.unarchiveNote(t.id, cur.version))),
+      api.agentThread(props.agent, t.id).then(async (cur) => {
+        await (archived ? api.archiveNote(t.id, cur.version) : api.unarchiveNote(t.id, cur.version));
+        if (session.chat.thread === t.id) setUnlisted({ ...t, archived });
+      }),
     );
   }
 
   function remove(t: AgentThreadSummary) {
-    setMenu(null);
     if (!confirm(`Delete the thread "${titleOf(t)}"? It moves to the trash, where you can restore it.`)) return;
     act(
       api.deleteAgentThread(props.agent, t.id).then(() => {
@@ -146,177 +195,323 @@ export function AgentChat(props: { agent: string; label?: string; thread?: strin
     );
   }
 
-  function Menu(p: { thread: AgentThreadSummary; anchor: () => HTMLButtonElement | undefined }) {
+  function choose(id: string | null) {
+    if (id === null) session.newConversation();
+    else if (session.chat.thread !== id) void session.openThread(id);
+  }
+
+  return (
+    <section class="agent-chat" aria-label="Chat">
+      <div class="agent-chat-bar">
+        <Show
+          when={renaming() && current()}
+          fallback={
+            <SessionPicker
+              ref={(el) => (picker = el)}
+              threads={threads()}
+              current={session.chat.thread}
+              currentInfo={current()}
+              streaming={session.chat.streaming}
+              showArchived={showArchived()}
+              setShowArchived={(on) => {
+                setShowArchived(on);
+                void refresh();
+              }}
+              onOpen={() => void refresh()}
+              choose={choose}
+            />
+          }
+        >
+          {(t) => (
+            <div class="agent-session-rename">
+              <NameInput label="Thread title" value={t().title} onDone={(title) => rename(t(), title)} />
+            </div>
+          )}
+        </Show>
+        <div class="agent-chat-actions">
+          <button
+            type="button"
+            class="agent-chat-action"
+            aria-label="Rename chat"
+            title="Rename chat"
+            disabled={!current() || renaming()}
+            onClick={() => setRenaming(true)}
+          >
+            <TypeIcon name="pencil" size={16} />
+          </button>
+          <button
+            type="button"
+            class="agent-chat-action"
+            aria-label={current()?.archived ? "Unarchive chat" : "Archive chat"}
+            title={current()?.archived ? "Take this chat out of the archive" : "Archive this chat"}
+            disabled={!current()}
+            onClick={() => {
+              const t = current();
+              if (t) setArchived(t, !t.archived);
+            }}
+          >
+            <TypeIcon name={current()?.archived ? "archive-restore" : "archive"} size={16} />
+            <span class="agent-chat-action-label">{current()?.archived ? "Unarchive" : "Archive"}</span>
+          </button>
+          <button
+            type="button"
+            class="agent-chat-action danger"
+            aria-label="Delete chat"
+            title="Move this chat to the trash"
+            disabled={!current()}
+            onClick={() => {
+              const t = current();
+              if (t) remove(t);
+            }}
+          >
+            <TypeIcon name="trash-2" size={16} />
+            <span class="agent-chat-action-label">Delete</span>
+          </button>
+        </div>
+        <Show when={props.actions}>
+          <div class="agent-chat-bar-end">{props.actions}</div>
+        </Show>
+      </div>
+      <Show when={error()}>
+        <p class="error" role="alert">
+          {error()}
+        </p>
+      </Show>
+      <div class="agent-chat-body">
+        <div class="ai-panel agent-thread-view">
+          <Conversation
+            session={session}
+            placeholder={`Ask ${name()}`}
+            empty={
+              <p class="muted ai-empty">
+                <Show when={loaded() && threads().length === 0 && !error() && !showArchived()}>No chats yet. </Show>A new chat with{" "}
+                {name()}. Edits are proposals you apply, unless {name()}'s permissions let them go ahead without asking.
+              </p>
+            }
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The session picker: a button naming the open chat that opens a list of the agent's threads, with
+ * a search box over them driven by the arrow keys, Enter and Escape (the ARIA combobox pattern).
+ */
+function SessionPicker(props: {
+  ref: (el: HTMLButtonElement) => void;
+  threads: AgentThreadSummary[];
+  current: string | null;
+  currentInfo: AgentThreadSummary | null;
+  streaming: boolean;
+  showArchived: boolean;
+  setShowArchived: (on: boolean) => void;
+  onOpen: () => void;
+  choose: (id: string | null) => void;
+}) {
+  const uid = createUniqueId();
+  const [open, setOpen] = createSignal(false);
+  const [query, setQuery] = createSignal("");
+  /** The highlighted option: -1 is New chat, else an index into the shown threads. */
+  const [active, setActive] = createSignal(-1);
+  let anchor: HTMLButtonElement | undefined;
+  const shown = createMemo(() => matchThreads(props.threads, query()));
+  const label = () => (props.current ? (props.currentInfo ? titleOf(props.currentInfo) : "Untitled thread") : "New chat");
+  const optionId = (i: number) => (i < 0 ? `${uid}-new` : `${uid}-opt-${i}`);
+
+  function show() {
+    setQuery("");
+    setActive(Math.max(-1, props.threads.findIndex((t) => t.id === props.current)));
+    setOpen(true);
+    props.onOpen();
+  }
+  function close(refocus: boolean) {
+    setOpen(false);
+    if (refocus) anchor?.focus();
+  }
+  function pick(id: string | null) {
+    close(true);
+    props.choose(id);
+  }
+  createEffect(
+    on(query, () => setActive(shown().length > 0 && query().trim() ? 0 : -1), { defer: true }),
+  );
+  createEffect(() => {
+    if (!open()) return;
+    document.getElementById(optionId(active()))?.scrollIntoView?.({ block: "nearest" });
+  });
+
+  function onKey(e: KeyboardEvent) {
+    const n = shown().length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      // New chat, then each thread shown, round and round.
+      const at = active() + 1;
+      setActive(((at + (e.key === "ArrowDown" ? 1 : -1) + n + 1) % (n + 1)) - 1);
+    } else if (e.key === "Home" && e.ctrlKey) {
+      e.preventDefault();
+      setActive(-1);
+    } else if (e.key === "End" && e.ctrlKey) {
+      e.preventDefault();
+      setActive(n - 1);
+    } else if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      const i = active();
+      pick(i < 0 ? null : (shown()[i]?.id ?? null));
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      close(true);
+    }
+  }
+
+  function Popup() {
     let el!: HTMLDivElement;
-    const close = (refocus: boolean) => {
-      setMenu(null);
-      if (refocus) p.anchor()?.focus();
-    };
-    const items = () => [...el.querySelectorAll<HTMLElement>("[role=menuitem]")];
+    let search!: HTMLInputElement;
     onMount(() => {
-      items()[0]?.focus();
+      search.focus();
       const outside = (e: PointerEvent) => {
-        if (!el.contains(e.target as Node) && !p.anchor()?.contains(e.target as Node)) close(false);
+        if (!el.contains(e.target as Node) && !anchor?.contains(e.target as Node)) close(false);
       };
       document.addEventListener("pointerdown", outside, true);
       onCleanup(() => document.removeEventListener("pointerdown", outside, true));
     });
-    function onKey(e: KeyboardEvent) {
-      const list = items();
-      const at = list.indexOf(document.activeElement as HTMLElement);
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        close(true);
-      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        list[(at + (e.key === "ArrowDown" ? 1 : -1) + list.length) % list.length]?.focus();
-      } else if (e.key === "Tab") {
-        close(false);
-      }
-    }
-    const t = () => p.thread;
     return (
       <div
         ref={el}
-        class="pin-menu"
-        role="menu"
-        aria-label={`Actions for ${titleOf(t())}`}
-        onKeyDown={onKey}
-        onPointerDown={(e) => e.stopPropagation()}
+        class="agent-session-popup"
+        role="dialog"
+        aria-label="Chat sessions"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            close(true);
+          }
+        }}
+        onFocusOut={(e) => {
+          const to = e.relatedTarget as Node | null;
+          if (to && !el.contains(to) && !anchor?.contains(to)) close(false);
+        }}
       >
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            setMenu(null);
-            setRenaming(t().id);
-          }}
-        >
-          Rename
-        </button>
-        <button type="button" role="menuitem" onClick={() => setArchived(t(), !t().archived)}>
-          {t().archived ? "Unarchive" : "Archive"}
-        </button>
-        <a role="menuitem" href={logHref(props.agent)} onClick={() => setMenu(null)}>
-          Show in log
-        </a>
-        <button type="button" role="menuitem" class="danger" onClick={() => remove(t())}>
-          Delete
-        </button>
+        <input
+          ref={search}
+          type="search"
+          class="agent-session-search"
+          role="combobox"
+          aria-label="Search chats"
+          aria-expanded="true"
+          aria-controls={`${uid}-list`}
+          aria-autocomplete="list"
+          aria-activedescendant={optionId(active())}
+          placeholder="Search chats"
+          autocomplete="off"
+          spellcheck={false}
+          value={query()}
+          onInput={(e) => setQuery(e.currentTarget.value)}
+          onKeyDown={onKey}
+        />
+        <ul class="agent-session-list" role="listbox" id={`${uid}-list`} aria-label="Chats">
+          <li
+            id={optionId(-1)}
+            role="option"
+            class="agent-session-option agent-session-new"
+            classList={{ active: active() === -1 }}
+            aria-selected={props.current === null}
+            onPointerDown={(e) => e.preventDefault()}
+            onPointerEnter={() => setActive(-1)}
+            onClick={() => pick(null)}
+          >
+            <TypeIcon name="plus" size={16} />
+            <span>New chat</span>
+          </li>
+          <For each={shown()}>
+            {(t, i) => (
+              <li
+                id={optionId(i())}
+                role="option"
+                class="agent-session-option"
+                classList={{ active: active() === i(), "agent-thread-archived": t.archived === true }}
+                aria-selected={props.current === t.id}
+                onPointerDown={(e) => e.preventDefault()}
+                onPointerEnter={() => setActive(i())}
+                onClick={() => pick(t.id)}
+              >
+                <span class="agent-thread-name">
+                  <span class="agent-thread-title">{titleOf(t)}</span>
+                  <Show when={t.running} fallback={<Show when={hasNewReply(t.id) && props.current !== t.id}><NewReplyMark /></Show>}>
+                    <RunningMark />
+                  </Show>
+                </span>
+                <Show when={t.archived}>
+                  <span class="visually-hidden"> (archived)</span>
+                </Show>
+                <Show when={t.pending > 0}>
+                  <span class="agent-thread-badge" title={pendingLabel(t.pending)} aria-label={pendingLabel(t.pending)}>
+                    {t.pending}
+                  </span>
+                </Show>
+                <Show when={t.last_activity}>
+                  <time class="muted" datetime={t.last_activity ?? undefined}>
+                    {lastActive(t.last_activity)}
+                  </time>
+                </Show>
+              </li>
+            )}
+          </For>
+        </ul>
+        <Show when={shown().length === 0 && query().trim()}>
+          <p class="muted agent-session-none" role="status">
+            No chat matches the search.
+          </p>
+        </Show>
+        <label class="agent-threads-archived">
+          <input type="checkbox" checked={props.showArchived} onChange={(e) => props.setShowArchived(e.currentTarget.checked)} />
+          Show archived
+        </label>
       </div>
     );
   }
+
   return (
-    <section class="agent-chat" aria-label="Chat">
-      <aside class="agent-threads" aria-label="Threads">
-        <button type="button" class="primary" onClick={() => session.newConversation()}>
-          New thread
-        </button>
-        <Show when={error()}>
-          <p class="error" role="alert">
-            {error()}
-          </p>
-        </Show>
-        <Show when={loaded() && threads().length === 0 && !error()}>
-          <p class="muted">No threads yet. Ask {name()} something to start one.</p>
-        </Show>
-        <ul class="agent-thread-list">
-          <For each={threads()}>
-            {(t) => {
-              let more: HTMLButtonElement | undefined;
-              return (
-                <li>
-                  <div
-                    class="agent-thread-row"
-                    classList={{ "menu-open": menu() === t.id, "agent-thread-archived": t.archived === true }}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setMenu(t.id);
-                    }}
-                  >
-                    <Show
-                      when={renaming() === t.id}
-                      fallback={
-                        <button
-                          type="button"
-                          class="agent-thread-item"
-                          aria-current={session.chat.thread === t.id ? "true" : undefined}
-                          onClick={() => {
-                            if (session.chat.thread !== t.id) void session.openThread(t.id);
-                          }}
-                        >
-                          <span class="agent-thread-name">
-                            <span class="agent-thread-title">{titleOf(t)}</span>
-                            <Show when={t.running} fallback={<Show when={hasNewReply(t.id) && session.chat.thread !== t.id}><NewReplyMark /></Show>}>
-                              <RunningMark />
-                            </Show>
-                          </span>
-                          <Show when={t.archived}>
-                            <span class="visually-hidden"> (archived)</span>
-                          </Show>
-                          <Show when={t.pending > 0}>
-                            <span class="agent-thread-badge" title={pendingLabel(t.pending)} aria-label={pendingLabel(t.pending)}>
-                              {t.pending}
-                            </span>
-                          </Show>
-                          <Show when={t.last_activity}>
-                            <time class="muted" datetime={t.last_activity ?? undefined}>
-                              {lastActive(t.last_activity)}
-                            </time>
-                          </Show>
-                        </button>
-                      }
-                    >
-                      <NameInput label="Thread title" value={t.title} onDone={(title) => rename(t, title)} />
-                    </Show>
-                    <button
-                      ref={more}
-                      type="button"
-                      class="pin-more agent-thread-more"
-                      aria-label={`Actions for ${titleOf(t)}`}
-                      aria-haspopup="menu"
-                      aria-expanded={menu() === t.id}
-                      title="More actions"
-                      onClick={() => setMenu(menu() === t.id ? null : t.id)}
-                    >
-                      <TypeIcon name="ellipsis" size={16} />
-                    </button>
-                    <Show when={menu() === t.id}>
-                      <Menu thread={t} anchor={() => more} />
-                    </Show>
-                  </div>
-                </li>
-              );
-            }}
-          </For>
-        </ul>
-        <label class="agent-threads-archived">
-          <input
-            type="checkbox"
-            checked={showArchived()}
-            onChange={(e) => {
-              setShowArchived(e.currentTarget.checked);
-              void refresh();
-            }}
-          />
-          Show archived
-        </label>
-      </aside>
-      <div class="ai-panel agent-thread-view">
-        <div class="ai-toolbar">
-          <ModelPicker session={session} />
-        </div>
-        <Conversation
-          session={session}
-          placeholder={`Ask ${name()}`}
-          empty={
-            <p class="muted ai-empty">
-              A new thread with {name()}. Edits are proposals you apply, unless {name()}'s permissions let them go ahead without asking.
-            </p>
+    <div class="agent-session-picker">
+      <button
+        ref={(el) => {
+          anchor = el;
+          props.ref(el);
+        }}
+        type="button"
+        class="agent-session-button"
+        aria-haspopup="dialog"
+        aria-expanded={open()}
+        aria-label={`Chat session: ${label()}${(props.currentInfo?.pending ?? 0) > 0 ? `, ${pendingLabel(props.currentInfo!.pending)}` : ""}`}
+        title={label()}
+        onClick={() => (open() ? close(false) : show())}
+        onKeyDown={(e) => {
+          if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !open()) {
+            e.preventDefault();
+            show();
           }
-        />
-      </div>
-    </section>
+        }}
+      >
+        <span class="agent-session-current">{label()}</span>
+        <Show when={props.currentInfo?.archived}>
+          <span class="agent-badge agent-badge-off">Archived</span>
+        </Show>
+        <Show when={props.current && (props.streaming || props.currentInfo?.running)}>
+          <RunningMark />
+        </Show>
+        <Show when={(props.currentInfo?.pending ?? 0) > 0}>
+          <span class="agent-thread-badge" aria-hidden="true">
+            {props.currentInfo!.pending}
+          </span>
+        </Show>
+        <TypeIcon name="chevron-down" size={14} />
+      </button>
+      <Show when={open()}>
+        <Popup />
+      </Show>
+    </div>
   );
 }

@@ -398,56 +398,230 @@
   box-sizing: border-box;
 }
 
-.ai-form button {
-  align-self: flex-end;
+/* The box's foot: the provider and model picker, then Send, at the bottom right. */
+.ai-form-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
-/* The agent screen's Chat tab (agents G5): threads on the left, the chosen one on the right. */
+.ai-form-foot .ai-picker {
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.ai-form-foot .ai-picker select {
+  min-width: 0;
+  max-width: 12rem;
+}
+
+.ai-form-foot .ai-picker p {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.85rem;
+  text-align: right;
+}
+
+.ai-form-foot .ai-agent-model {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.ai-form-foot > button {
+  flex: none;
+}
+
+/* The agent screen's chat (agents G5): a bar with the session picker, the session's actions and
+   the settings cog, and the chosen session below, filling the rest of the pane. */
+.agent-screen-chat {
+  min-height: 0;
+}
+
+.agent-chat-wrap {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.agent-chat-wrap[hidden] {
+  display: none;
+}
+
 .agent-chat {
-  display: grid;
-  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
-  gap: 1rem;
-  align-items: start;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
 }
 
-@media (max-width: 40rem) {
-  .agent-chat {
-    grid-template-columns: minmax(0, 1fr);
+.agent-chat-bar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.agent-chat-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 2rem;
+  padding: 0.3rem 0.55rem;
+}
+
+.agent-chat-bar-end {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+/* In a narrow pane the actions keep their icons and lose their words. */
+@container pane (max-width: 480px) {
+  .agent-chat-action-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 }
 
-.agent-threads {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+.agent-settings-button,
+.agent-back {
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
 }
 
-.agent-thread-list {
+.agent-chat-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.agent-thread-view {
+  min-height: 100%;
+}
+
+/* The session picker: the open chat's title, and under it a search box over the agent's chats. */
+.agent-session-picker {
+  position: relative;
+  flex: 1 1 8rem;
+  min-width: 0;
+  max-width: 28rem;
+}
+
+.agent-session-button,
+.agent-session-rename {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 2rem;
+  text-align: left;
+}
+
+.agent-session-rename {
+  flex: 1 1 8rem;
+  max-width: 28rem;
+}
+
+.agent-session-rename .pin-name-input {
+  width: 100%;
+}
+
+.agent-session-current {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.agent-session-popup {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.25rem);
+  left: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.4rem;
+  width: min(24rem, calc(100cqw - 2rem));
+  min-width: 14rem;
+  max-height: min(28rem, 70cqh);
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.agent-session-search {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.agent-session-list {
+  flex: 1;
+  min-height: 0;
   margin: 0;
   padding: 0;
+  overflow-y: auto;
   list-style: none;
 }
 
-.agent-thread-item {
+.agent-session-option {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.15rem 0.5rem;
-  width: 100%;
+  align-items: center;
+  gap: 0.1rem 0.5rem;
   padding: 0.4rem 0.5rem;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: none;
-  text-align: left;
+  border-radius: 0.35rem;
   cursor: pointer;
 }
 
-.agent-thread-item:hover,
-.agent-thread-item[aria-current="true"] {
-  border-color: var(--border, #ddd);
+.agent-session-option.active {
   background: var(--hover, rgba(0, 0, 0, 0.04));
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.agent-session-option[aria-selected="true"] .agent-thread-title {
+  font-weight: 600;
+}
+
+.agent-session-new {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.agent-session-option time {
+  grid-column: 1 / -1;
+  font-size: 0.8rem;
+}
+
+.agent-session-none {
+  margin: 0;
+  padding: 0 0.5rem;
 }
 
 .agent-thread-title {
@@ -456,31 +630,7 @@
   white-space: nowrap;
 }
 
-.agent-thread-item time {
-  grid-column: 1 / -1;
-  font-size: 0.8rem;
-}
-
-/* A thread's row: the thread, and its ⋯ menu shown on hover or focus (agents G15). */
-.agent-thread-row {
-  position: relative;
-}
-
-.agent-thread-row .pin-name-input {
-  width: 100%;
-}
-
-.agent-thread-row .agent-thread-item {
-  padding-right: 2rem;
-}
-
-.agent-thread-row:hover .pin-more,
-.agent-thread-row:focus-within .pin-more,
-.agent-thread-row.menu-open .pin-more {
-  opacity: 1;
-}
-
-.agent-thread-archived .agent-thread-item {
+.agent-thread-archived {
   opacity: 0.6;
 }
 
@@ -501,10 +651,6 @@
   font-size: 0.75rem;
   line-height: 1.4rem;
   text-align: center;
-}
-
-.agent-thread-view {
-  min-height: 24rem;
 }
 
 .ai-agent-picker {
@@ -588,4 +734,68 @@
   left: 0;
   right: auto;
   max-width: 18rem;
+}
+
+/* Above the message box: what the turn is doing, and how full the context is. */
+.ai-form-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ai-form-status:empty {
+  display: none;
+}
+
+.ai-context-meter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-context-bar {
+  position: relative;
+  width: 4.5rem;
+  height: 0.35rem;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.ai-context-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+}
+
+.ai-context-high .ai-context-bar > span {
+  background: #d97706;
+}
+
+.ai-context-full .ai-context-bar > span {
+  background: var(--danger);
+}
+
+.ai-context-full .ai-context-text {
+  color: var(--danger);
+}
+
+/* Where a thread was compacted: the summary the model reads in place of what came before. */
+.ai-compaction {
+  margin: 0.75rem 0;
+  padding: 0.4rem 0.6rem;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.ai-compaction > summary {
+  cursor: pointer;
 }
