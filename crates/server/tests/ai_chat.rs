@@ -323,7 +323,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 38);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 44);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
@@ -1528,17 +1528,17 @@ fn confirm_defaults_to_on_and_takes_a_partial_change() {
     let status = api.get("/api/integrations/ai");
     assert_eq!(
         status["confirm"],
-        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true })
+        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true })
     );
     let status = api.confirm(json!({ "notes": false }));
     assert_eq!(
         status["confirm"],
-        json!({ "notes": false, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true })
+        json!({ "notes": false, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true })
     );
     let status = api.confirm(json!({ "delete": false }));
     assert_eq!(
         status["confirm"],
-        json!({ "notes": false, "archive": true, "delete": false, "types": true, "downloads": true, "taxonomies": true, "agents": true })
+        json!({ "notes": false, "archive": true, "delete": false, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true })
     );
     // The other settings are kept.
     assert_eq!(status["default_provider"], "anthropic");
@@ -2103,7 +2103,7 @@ fn get_providers_answers_a_read_token_with_no_key_token_or_account() {
     assert_eq!(v["providers"]["openai"]["configured"], false);
     assert_eq!(
         v["confirm"],
-        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true })
+        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true })
     );
     for secret in [
         fake.api_key(),

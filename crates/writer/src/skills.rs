@@ -293,12 +293,12 @@ impl Writer {
         })
     }
 
-    // ---- writes ---------------------------------------------------------------------------
+    // ---- checks ---------------------------------------------------------------------------
 
-    /// Create or replace `SKILL.md` of skill `name` with `text`, which must validate as the
-    /// skill's: its `name` equal to `name`, and every other constraint of the specification.
-    /// Warnings are kept. Returns the skill as written, and whether it was created.
-    pub fn put_skill_md(&self, name: &str, text: &str) -> Result<(Skill, bool)> {
+    /// Check `text` as `SKILL.md` of skill `name` as [`Writer::put_skill_md`] does, without
+    /// writing it: the name, the specification's constraints and the limits. Returns its
+    /// warnings, and whether writing it would create the skill.
+    pub fn check_skill_md(&self, name: &str, text: &str) -> Result<(Vec<Issue>, bool)> {
         if !writable_name(name) {
             return Err(bad_name(name));
         }
@@ -306,12 +306,61 @@ impl Writer {
         if issues.iter().any(|i| !i.is_warning()) {
             return Err(invalid(name, issues));
         }
-        let _w = self.write_lock();
-        let mut inner = self.lock();
         let tree = self.existing_tree(name)?;
         let created = tree.as_ref().is_none_or(|t| t.files.is_empty());
         let files = tree.map(|t| t.files).unwrap_or_default();
         self.check_limits(&files, &[(SKILL_FILE, text.len() as u64)])?;
+        Ok((issues, created))
+    }
+
+    /// Check a file of `size` bytes at `path` of skill `name` as [`Writer::put_skill_file`]
+    /// does, without writing it: the name, the path confined to the skill and clear of its other
+    /// files and folders, and the limits. `SKILL.md` is refused: it goes through
+    /// [`Writer::check_skill_md`]. Returns whether the skill exists, which the write needs.
+    pub fn check_skill_file(&self, name: &str, path: &str, size: u64) -> Result<bool> {
+        let rel = normalise_skill_path(path).map_err(|e| Error::BadRequest(e.to_string()))?;
+        if rel == SKILL_FILE {
+            return Err(Error::BadRequest(
+                "SKILL.md is the skill's instructions: write it as SKILL.md, not as a file"
+                    .to_owned(),
+            ));
+        }
+        if !writable_name(name) {
+            return Err(bad_name(name));
+        }
+        let files = self
+            .existing_tree(name)?
+            .filter(|t| !t.files.is_empty())
+            .map(|t| t.files);
+        let exists = files.is_some();
+        let files = files.unwrap_or_default();
+        if files.iter().any(|f| f.path.starts_with(&format!("{rel}/"))) {
+            return Err(Error::BadRequest(format!(
+                "{rel} is a folder in skill {name:?}"
+            )));
+        }
+        if let Some(f) = files
+            .iter()
+            .find(|f| rel.starts_with(&format!("{}/", f.path)))
+        {
+            return Err(Error::BadRequest(format!(
+                "{} is a file in skill {name:?}, so it cannot hold {rel}",
+                f.path
+            )));
+        }
+        self.check_limits(&files, &[(&rel, size)])?;
+        Ok(exists)
+    }
+
+    // ---- writes ---------------------------------------------------------------------------
+
+    /// Create or replace `SKILL.md` of skill `name` with `text`, which must validate as the
+    /// skill's: its `name` equal to `name`, and every other constraint of the specification.
+    /// Warnings are kept. Returns the skill as written, and whether it was created.
+    pub fn put_skill_md(&self, name: &str, text: &str) -> Result<(Skill, bool)> {
+        let _w = self.write_lock();
+        let mut inner = self.lock();
+        let (_, created) = self.check_skill_md(name, text)?;
         let path = self.vault.skill_file_path(name, SKILL_FILE)?;
         let generation = self.commit(vec![Change::write(path, text.as_bytes())])?;
         inner.index.advance(generation)?;
@@ -340,31 +389,11 @@ impl Writer {
                 .cloned()
                 .ok_or_else(|| missing_skill(name));
         }
-        if !writable_name(name) {
-            return Err(bad_name(name));
-        }
         let _w = self.write_lock();
         let mut inner = self.lock();
-        let files = self
-            .existing_tree(name)?
-            .filter(|t| !t.files.is_empty())
-            .ok_or_else(|| missing_skill(name))?
-            .files;
-        if files.iter().any(|f| f.path.starts_with(&format!("{rel}/"))) {
-            return Err(Error::BadRequest(format!(
-                "{rel} is a folder in skill {name:?}"
-            )));
+        if !self.check_skill_file(name, &rel, bytes.len() as u64)? {
+            return Err(missing_skill(name));
         }
-        if let Some(f) = files
-            .iter()
-            .find(|f| rel.starts_with(&format!("{}/", f.path)))
-        {
-            return Err(Error::BadRequest(format!(
-                "{} is a file in skill {name:?}, so it cannot hold {rel}",
-                f.path
-            )));
-        }
-        self.check_limits(&files, &[(&rel, bytes.len() as u64)])?;
         let vault_path = self
             .vault
             .skill_file_path(name, &rel)

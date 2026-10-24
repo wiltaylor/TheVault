@@ -9,10 +9,10 @@
 //!   null for the official API, and whether a key is
 //!   stored, which a custom URL makes optional (ai D24), the chat system prompt in
 //!   use, the shipped one, and whether they differ (ai D17), and `confirm: { notes, archive,
-//!   delete, types, downloads, taxonomies, agents }` with every key filled (ai D22, D27, D31, agents G20). A provider with a custom API URL counts as
+//!   delete, types, downloads, taxonomies, agents, skills }` with every key filled (ai D22, D27, D31, agents G20, skills S9). A provider with a custom API URL counts as
 //!   configured without a key. No answer of these routes ever holds a key or a token.
 //! - `PUT /api/integrations/ai/settings` takes `{ default_provider?, models?: { anthropic?,
-//!   openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types?, downloads?, taxonomies?, agents? }, urls?:
+//!   openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types?, downloads?, taxonomies?, agents?, skills? }, urls?:
 //!   { anthropic?, openai? }, openai_api? }`; a field sent replaces the stored one, and an empty
 //!   string clears it, which for `system_prompt` means the default, for a URL the official API
 //!   and for `openai_api` (`responses` or `chat_completions`, else a 400) Responses. A system
@@ -333,6 +333,8 @@ pub struct ConfirmBody {
     taxonomies: Option<bool>,
     #[serde(default)]
     agents: Option<bool>,
+    #[serde(default)]
+    skills: Option<bool>,
 }
 
 /// A partial `web`: each internet tool switch sent replaces the stored one (ai D28).
@@ -408,6 +410,7 @@ pub async fn put_settings(
                     (&mut to.types, c.types),
                     (&mut to.downloads, c.downloads),
                     (&mut to.taxonomies, c.taxonomies),
+                    (&mut to.skills, c.skills),
                     (&mut to.agents, c.agents),
                 ] {
                     if let Some(v) = value {

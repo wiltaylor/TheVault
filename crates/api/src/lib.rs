@@ -76,6 +76,7 @@ mod ai_browser;
 mod ai_chat;
 mod ai_outbox;
 mod ai_settings;
+mod ai_skill_changes;
 mod ai_skills;
 mod ai_taxonomies;
 mod ai_turns;

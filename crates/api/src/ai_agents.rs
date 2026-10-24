@@ -454,6 +454,17 @@ mod tests {
     }
 
     #[test]
+    fn escalation_refuses_the_skills_switch_off_when_the_proposer_must_ask() {
+        let free = agent("permissions {\n  confirm {\n    skills = false\n  }\n}\n");
+        let all = agent("");
+        let p = escalation(&all, &free);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("skills changes"), "{p:?}");
+        assert!(escalation(&free, &free).is_empty());
+        assert!(escalation(&free, &all).is_empty());
+    }
+
+    #[test]
     fn escalation_refuses_skills_the_proposer_is_not_offered() {
         let all = agent("");
         let one = agent("permissions {\n  skills = [\"pdf-forms\"]\n}\n");

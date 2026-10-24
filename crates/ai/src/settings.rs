@@ -309,6 +309,9 @@ pub struct Confirm {
     /// `propose_agent_change` and `propose_agent_delete` (agents G20).
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub agents: bool,
+    /// The skill propose tools (skills S9).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub skills: bool,
 }
 
 impl Default for Confirm {
@@ -321,6 +324,7 @@ impl Default for Confirm {
             downloads: true,
             taxonomies: true,
             agents: true,
+            skills: true,
         }
     }
 }
@@ -340,6 +344,7 @@ impl Confirm {
             "downloads": self.downloads,
             "taxonomies": self.taxonomies,
             "agents": self.agents,
+            "skills": self.skills,
         })
     }
 }

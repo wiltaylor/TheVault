@@ -167,6 +167,24 @@ fn quoted(title: &Value) -> String {
     }
 }
 
+/// What a skill proposal is (skills S9), or with `done` what it did once applied.
+fn skill_what(d: &Value, done: bool) -> String {
+    let name = d["name"].as_str().unwrap_or_default();
+    let path = d["path"].as_str().unwrap_or_default();
+    match (d["op"].as_str().unwrap_or_default(), done) {
+        ("create", false) => format!("new skill {name}"),
+        ("create", true) => format!("created skill {name}"),
+        ("change", false) => format!("change to skill {name}"),
+        ("change", true) => format!("changed skill {name}"),
+        ("file", false) => format!("file {path} of skill {name}"),
+        ("file", true) => format!("wrote {path} in skill {name}"),
+        ("file_delete", false) => format!("delete of {path} from skill {name}"),
+        ("file_delete", true) => format!("deleted {path} from skill {name}"),
+        (_, false) => format!("delete of skill {name}"),
+        (_, true) => format!("deleted skill {name}"),
+    }
+}
+
 /// What a proposal is, for an outcome line or the readable body.
 pub fn proposal_what(event: &str, d: &Value) -> String {
     let s = |k: &str| d[k].as_str().unwrap_or_default().to_owned();
@@ -188,6 +206,7 @@ pub fn proposal_what(event: &str, d: &Value) -> String {
             _ if d["exists"] == true => format!("change to agent {}", s("name")),
             _ => format!("new agent {}", s("name")),
         },
+        "skill_proposal" => skill_what(d, false),
         "agent_memory_proposal" => match d["op"].as_str() {
             Some("delete") => format!(
                 "forgetting memory {} of agent {}",
@@ -247,6 +266,7 @@ fn proposal_done(event: &str, d: &Value, done: &Value) -> String {
             _ if d["exists"] == true => format!("changed agent {}", s(d, "name")),
             _ => format!("created agent {}", s(d, "name")),
         },
+        "skill_proposal" => skill_what(d, true),
         "agent_memory_proposal" => match d["op"].as_str() {
             Some("delete") => format!(
                 "forgot memory {} of agent {}: moved to the trash",

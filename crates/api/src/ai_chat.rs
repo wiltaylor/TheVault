@@ -14,10 +14,12 @@
 //! [`MAX_ROUNDS`] model calls per user turn, over read-only tools; `propose_edit`,
 //! `propose_create`, `propose_archive`, `propose_delete`, `propose_type_change`,
 //! `propose_taxonomy_change`, `propose_taxonomy_delete`, `propose_agent_change` and
-//! `propose_agent_delete` check a change and hand it to the user (ai D14, D18, D20, D31, agents
+//! `propose_agent_delete`, and the skill tools `propose_skill_change`, `propose_skill_file_change`,
+//! `propose_skill_file_delete` and `propose_skill_delete` (`crate::ai_skill_changes`, skills S9)
+//! check a change and hand it to the user (ai D14, D18, D20, D31, agents
 //! G20; an agent change is also checked against the turn's agent, `crate::ai_agents`). When
 //! Settings > AI turns a kind's confirmation off and the caller's scope allows the write (`write`
-//! for notes, `admin` for types, taxonomies and agents), the tool makes
+//! for notes, `admin` for types, taxonomies, agents and skills), the tool makes
 //! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
 //! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
 //! the trash (ai D21). With a Brave Search key stored, `web_search` searches the web
@@ -33,7 +35,8 @@
 //! | `taxonomy_proposal` | a taxonomy change for the user to apply (ai D31), `kind` always `taxonomy`: `create` and `change` `{id, kind, op, name, exists, before, after, renames, issues, affected}`, `renames` a list of `{from, to}` term paths and `affected` the number of notes they rewrite; `delete` `{id, kind, op, name, before}` |
 //! | `agent_proposal` | an agent change for the user to apply (agents G20), `kind` always `agent` and `proposer` the agent that proposed it: `create` and `change` `{id, kind, op, name, label, exists, before, after, issues, proposer}`; `delete` `{id, kind, op, name, label, before, proposer}` |
 //! | `agent_memory_proposal` | a change to another agent's memories for the user to apply (agents G21), `kind` always `agent_memory`: `{id, kind, op, memory_agent, agent_label, memory_id, base_version, title, text, before, proposer}`, `op` `create` (`memory_id`, `base_version` and `before` null), `change` (`title` and `text` the new ones, `before` `{title, text}`) or `delete` |
-//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
+//! | `skill_proposal` | a skill change for the user to apply (skills S9), `kind` always `skill`: `{id, kind, op, name, path?, exists, before, after, issues, base, proposer, ...}`, `op` `create`, `change`, `file`, `file_delete` or `delete` (`crate::ai_skill_changes`) |
+//! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change` and `type_create`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `skills_updated` | `{count, skills, message}`: first in an `update_skills` turn (skills S6), the new snapshot's skill count and names and the user message the server added, a notice and the text the model reads (`crate::ai_skills`) |
 //! | `usage` | `{provider, model, input, output}`: one model call's tokens |
 //! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
@@ -250,6 +253,7 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
         "propose_agent_delete",
     ]
     .iter()
+    .chain(crate::ai_skill_changes::PROPOSE_TOOLS.iter())
     .any(|t| p.allows_tool(t));
     if admin { Scope::Admin } else { Scope::Write }
 }
@@ -265,6 +269,10 @@ fn change_switch(name: &str) -> Option<&'static str> {
         "propose_taxonomy_change" | "propose_taxonomy_delete" => "taxonomies",
         "propose_agent_change" | "propose_agent_delete" => "agents",
         "propose_agent_memory_change" | "propose_agent_memory_delete" => "agent_memories",
+        "propose_skill_change"
+        | "propose_skill_file_change"
+        | "propose_skill_file_delete"
+        | "propose_skill_delete" => "skills",
         "download_asset" | "browser_save" => "downloads",
         _ => return None,
     })
@@ -769,6 +777,8 @@ struct Direct {
     /// Changes to other agents' memories (agents G21), under the agents switch: memories are
     /// notes, so `write` makes them.
     memories: bool,
+    /// Skill creates, changes and deletes (skills S9).
+    skills: bool,
 }
 
 impl Direct {
@@ -783,6 +793,7 @@ impl Direct {
             taxonomies: !confirm.taxonomies && scope.allows(Scope::Admin),
             agents: !confirm.agents && scope.allows(Scope::Admin),
             memories: !confirm.agents && write,
+            skills: !confirm.skills && scope.allows(Scope::Admin),
         }
     }
 
@@ -797,6 +808,7 @@ impl Direct {
             "taxonomies" => self.taxonomies,
             "agents" => self.agents,
             "agent_memories" => self.memories,
+            "skills" => self.skills,
             _ => false,
         }
     }
@@ -808,6 +820,7 @@ impl Direct {
             "taxonomy_proposal" => self.taxonomies,
             "agent_proposal" => self.agents,
             "agent_memory_proposal" => self.memories,
+            "skill_proposal" => self.skills,
             "proposal" => match p["op"].as_str().unwrap_or("update") {
                 "update" | "create" => self.notes,
                 "archive" | "unarchive" => self.archive,
@@ -831,6 +844,7 @@ fn confirm_of(agent: &Agent) -> ai::Confirm {
         downloads: c.downloads,
         taxonomies: c.taxonomies,
         agents: c.agents,
+        skills: c.skills,
     }
 }
 
@@ -1037,6 +1051,7 @@ impl Turn {
                 | "taxonomy_proposal"
                 | "agent_proposal"
                 | "agent_memory_proposal"
+                | "skill_proposal"
                 | "applied"
         );
         if proposal && let Some(a) = &self.agent_name {
@@ -1951,6 +1966,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     ]
     .into_iter()
     .chain(crate::ai_skills::tool_specs())
+    .chain(crate::ai_skill_changes::tool_specs())
     .chain(agent_memory::tool_specs())
     .chain(agent_memory::cross_tool_specs())
     .chain(crate::ai_outbox::tool_specs())
@@ -2142,6 +2158,7 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
                 _ => format!("The memory {id} of agent {of} was changed."),
             }
         }
+        o if o.starts_with("skill_") => crate::ai_skill_changes::made_line(&done),
         _ => format!("The type {name} was changed."),
     };
     let mut content = done.clone();
@@ -2295,6 +2312,9 @@ pub fn apply_change(
     if event == "agent_memory_proposal" {
         return agent_memory::apply(w, author, p);
     }
+    if event == "skill_proposal" {
+        return crate::ai_skill_changes::apply_skill(w, p);
+    }
     if event != "proposal" {
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
     }
@@ -2424,6 +2444,20 @@ fn propose_or_read(
         "get_agent" => crate::ai_agents::get(w, input),
         "propose_agent_change" => crate::ai_agents::propose_change(w, agent, &call.id, input),
         "propose_agent_delete" => crate::ai_agents::propose_delete(w, agent, &call.id, input),
+        "list_skills" => crate::ai_skill_changes::list(w, agent),
+        "get_skill" => crate::ai_skill_changes::get(w, agent, input),
+        "propose_skill_change" => {
+            crate::ai_skill_changes::propose_change(w, agent, &call.id, input)
+        }
+        "propose_skill_file_change" => {
+            crate::ai_skill_changes::propose_file(w, agent, &call.id, input)
+        }
+        "propose_skill_file_delete" => {
+            crate::ai_skill_changes::propose_file_delete(w, agent, &call.id, input)
+        }
+        "propose_skill_delete" => {
+            crate::ai_skill_changes::propose_delete(w, agent, &call.id, input)
+        }
         n if agent_memory::is_cross_tool(n) => {
             agent_memory::run_cross(w, agent, &call.id, n, input)
         }

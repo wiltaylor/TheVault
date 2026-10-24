@@ -126,6 +126,25 @@ The list is a snapshot kept per thread, in the thread's transcript: taken on the
 
 `use_skill` and `read_skill_file` are ordinary tool names, the "Skills" group on the Permissions tab, and only read, so an unattended run is offered them. `install_skill_in_browser` comes with the browser tools: only with Browser automation on, a browser box, and skills offered. A skill not offered to the agent is refused by every tool. A skill's `allowed-tools` is shown and recorded but grants nothing: the agent's own permissions decide its tools. Each call is an `ai.skill` entry in the [activity log](activity.md).
 
+## Agents that manage skills
+
+An agent can also read, create, change and delete the skills themselves, with six chat tools. They are ordinary tool names, so an agent has them only when its tools list allows them; an agent with no tools list, such as the Assistant, has them. On the Permissions tab they are the "Skill management" group.
+
+| Tool | What it does |
+|------|--------------|
+| `list_skills {}` | Every skill in the vault, offered to the agent or not: its name, description, license, compatibility, metadata, `allowed-tools`, file count, size, whether it is valid and its issues, and `offered`, whether `use_skill` opens it for this agent |
+| `get_skill {name}` | One skill: its `SKILL.md` as stored, the frontmatter fields, the body, the file list with sizes and media types, its issues, and a summary of the skill format |
+| `propose_skill_change {name, skill_md}` | Proposes a whole `SKILL.md`: a new skill under a new name, or the new text of an existing one. It is checked as `PUT /api/skills/{name}` checks it, without writing: an invalid one is refused with its issues |
+| `propose_skill_file_change {name, path, text, base64}` | Proposes one other file of a skill, with exactly one of `text` or `base64` (the other `null`). The path is from the skill's folder, normalised and kept inside it, and the skill's limits apply. `SKILL.md` is refused: it goes through `propose_skill_change`. A file for a skill that does not exist yet can be proposed, but applies only once the skill's `SKILL.md` is applied |
+| `propose_skill_file_delete {name, path}` | Proposes deleting a file, or every file in a folder. `SKILL.md` cannot be deleted alone |
+| `propose_skill_delete {name}` | Proposes deleting the whole skill |
+
+The panel shows a skill proposal as a card: the `SKILL.md` or file lines removed and added, or for a binary file its size and type, with Apply and Discard, and **Apply all** includes it. Apply checks that what the proposal replaces (the `SKILL.md`, the file, the folder's files, or for a delete the whole skill) is unchanged since; if it changed, the card says "This skill changed since the proposal" and nothing is written. Apply writes through the same calls as the `/api/skills` routes, so each write is a `skill.change` entry in the activity log, and the proposal and its apply are `ai.proposal` and `ai.applied` entries. Apply needs `admin`: from an app the server answers "Apply skill changes in the web app." Applied cards link to the skill's screen, and the Skills page and the sidebar's count refresh. The next message tells the model what was applied, such as `[Applied by the user: created skill pdf-tools]`.
+
+The confirmation switch is "Ask before changing skills" (`permissions.confirm.skills`, on by default, written to the agent file only when off). With it off, and with `admin`, the tool makes the change at once and the panel shows it as made. An unattended run with the switch on is not offered the four propose tools. An agent cannot give another agent the switch off when it is on for itself (see [No escalation](#agents-that-manage-agents)).
+
+Once a skill exists, the agent that created it may call `use_skill` on it at once when its **Skills** permission offers it. The thread's "Available skills" list does not change: type `/update-skills` to give the thread the new list.
+
 ## Threads
 
 Every conversation with an agent is a note of the built-in type `agent_thread`, holding the agent's name, where it came from (`user`, `trigger:<name>` for a trigger run, or `mention` for a call from a note), when it was last active, the transcript and a readable copy of the conversation. The server writes the thread as each turn streams, so closing a tab loses nothing. Proposals and what became of them are kept in the thread, so a reopened thread shows its pending proposals with Apply and Discard. [Threads](ai.md#threads) describes them in full.
@@ -281,7 +300,7 @@ A trigger run has no one present to apply a proposal, so it is offered only:
 - the change tools whose confirmation switch is off for the agent, and
 - the Outbox draft tools, since what they draft waits in the Outbox for you.
 
-A change tool whose switch is on is left out of the run's tool list, so nothing is left pending. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types, taxonomies and agents only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
+A change tool whose switch is on is left out of the run's tool list, so nothing is left pending. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types, taxonomies, agents and skills only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
 
 ## No loops
 

@@ -130,6 +130,12 @@ A conversation keeps the list it started with. After you add or change skills, t
 
 Scripts in a skill run only in the browser box: an agent with Browser automation copies the skill to `/work/skills/<name>` with `install_skill_in_browser` and runs them there with `browser_run`. Without the box, an agent can read the scripts but not run them. `allowed-tools` never grants a tool. See [Using skills](ai-agents.md#using-skills) for the details.
 
+## Agents that create skills
+
+An agent with the skill management tools can write skills too: `list_skills` and `get_skill` read them, and `propose_skill_change`, `propose_skill_file_change`, `propose_skill_file_delete` and `propose_skill_delete` propose a new `SKILL.md`, a change to one, a file added or changed (as text or base64), a file or folder deleted, or a whole skill deleted. Every proposal is checked as the API's writes check it, so an invalid `SKILL.md`, a path outside the skill or a broken limit is refused before you see it. The chat panel shows each as a card with the lines added and removed, and you apply or discard it. Applying needs `admin`, so it works in the web app only.
+
+Turn off **Ask before changing skills** on an agent's Permissions tab (`permissions.confirm.skills = false`) to let it make these changes without asking. Once a skill exists, the agent may use it at once when its **Skills** permission offers it; type `/update-skills` to add it to the thread's list. See [Agents that manage skills](ai-agents.md#agents-that-manage-skills).
+
 ## In the apps
 
 The desktop and Android apps have the **Skills** item, the Skills page and the skill screen, but only show skills: there is no **New skill**, no **Import**, no Save and no file changes, and the screen says "Edit skills in the web app". Changing a skill needs `admin`, which an app's device token never has. **Export** and **Download** work in the apps.

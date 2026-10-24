@@ -30,7 +30,7 @@ pub const AGENT_PROVIDERS: [&str; 3] = ["anthropic", "openai", "chatgpt"];
 pub const AGENT_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// The confirmation switches of `permissions.confirm` (ai D22).
-pub const CONFIRM_SWITCHES: [&str; 7] = [
+pub const CONFIRM_SWITCHES: [&str; 8] = [
     "notes",
     "archive",
     "delete",
@@ -38,6 +38,7 @@ pub const CONFIRM_SWITCHES: [&str; 7] = [
     "downloads",
     "taxonomies",
     "agents",
+    "skills",
 ];
 
 /// The internet switches of `permissions.web` (ai D28).
@@ -150,6 +151,9 @@ pub struct Confirm {
     pub taxonomies: bool,
     /// Agent creates, changes and deletes (agents G20).
     pub agents: bool,
+    /// Skill creates, changes and deletes (skills S9). Written only when off, so a file without
+    /// it still reads in an app from before it.
+    pub skills: bool,
 }
 
 impl Default for Confirm {
@@ -162,13 +166,14 @@ impl Default for Confirm {
             downloads: true,
             taxonomies: true,
             agents: true,
+            skills: true,
         }
     }
 }
 
 impl Confirm {
     /// The switches in [`CONFIRM_SWITCHES`] order.
-    pub fn switches(&self) -> [(&'static str, bool); 7] {
+    pub fn switches(&self) -> [(&'static str, bool); 8] {
         [
             ("notes", self.notes),
             ("archive", self.archive),
@@ -177,6 +182,7 @@ impl Confirm {
             ("downloads", self.downloads),
             ("taxonomies", self.taxonomies),
             ("agents", self.agents),
+            ("skills", self.skills),
         ]
     }
 
@@ -190,6 +196,7 @@ impl Confirm {
             "downloads" => &mut self.downloads,
             "taxonomies" => &mut self.taxonomies,
             "agents" => &mut self.agents,
+            "skills" => &mut self.skills,
             _ => return false,
         };
         *slot = on;

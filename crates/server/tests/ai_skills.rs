@@ -366,8 +366,12 @@ fn the_system_text_ends_with_the_offered_valid_skills() {
         let s = system(&fake, 2 + i);
         assert!(!s.contains("## Available skills"), "{agent}: {s}");
         let names = tool_names(&fake, 2 + i);
+        // The tools that use skills; managing them (skills S9) is apart.
         assert!(
-            !names.iter().any(|n| n.contains("skill")),
+            !names.iter().any(
+                |n| ["use_skill", "read_skill_file", "install_skill_in_browser"]
+                    .contains(&n.as_str())
+            ),
             "{agent}: {names:?}"
         );
     }

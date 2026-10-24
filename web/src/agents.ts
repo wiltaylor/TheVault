@@ -271,6 +271,18 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
     ],
   },
   {
+    // Managing the skills themselves (skills S9), apart from using them.
+    group: "Skill management",
+    tools: [
+      ["list_skills", "List skills"],
+      ["get_skill", "Read a skill"],
+      ["propose_skill_change", "Create skills and change SKILL.md"],
+      ["propose_skill_file_change", "Add and change skill files"],
+      ["propose_skill_file_delete", "Delete skill files"],
+      ["propose_skill_delete", "Delete skills"],
+    ],
+  },
+  {
     group: "Outbox",
     tools: [
       ["draft_email", "Draft emails"],
@@ -316,6 +328,7 @@ export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
   { key: "downloads", label: "Ask before downloading files into the vault" },
   { key: "taxonomies", label: "Ask before changing taxonomies" },
   { key: "agents", label: "Ask before changing agents" },
+  { key: "skills", label: "Ask before changing skills" },
 ];
 
 /** The internet switches, in order, with their labels (ai D28). */

@@ -47,7 +47,7 @@ function status(over: Partial<Record<"anthropic" | "openai" | "chatgpt", object>
     system_prompt: DEFAULT_PROMPT,
     default_system_prompt: DEFAULT_PROMPT,
     system_prompt_custom: false,
-    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
+    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true, skills: true },
     web: { search: true, read: true, download: true },
   };
 }

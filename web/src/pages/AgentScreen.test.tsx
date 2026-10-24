@@ -89,6 +89,12 @@ const TOOLS = [
   "get_agent_memory",
   "propose_agent_memory_change",
   "propose_agent_memory_delete",
+  "list_skills",
+  "get_skill",
+  "propose_skill_change",
+  "propose_skill_file_change",
+  "propose_skill_file_delete",
+  "propose_skill_delete",
   "propose_create",
   "propose_archive",
   "propose_delete",
@@ -122,7 +128,7 @@ function triage(over: Partial<Agent> = {}): Agent {
     permissions: {
       tools: null,
       types: null,
-      confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
+      confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true, skills: true },
       web: { search: true, read: true, download: true },
       outbox: { send_without_review: false },
     },
@@ -144,7 +150,7 @@ function status(): AiStatus {
     system_prompt: SHIPPED,
     default_system_prompt: SHIPPED,
     system_prompt_custom: false,
-    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
+    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true, skills: true },
     web: { search: true, read: true, download: true },
   };
 }
@@ -414,7 +420,7 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByText(/they replace Settings > AI for this agent/)).toBeTruthy();
     const groups = p.getAllByRole("group").map((g) => g.querySelector(":scope > legend")?.textContent).filter(Boolean);
-    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Memory", "Skills", "Types", "Taxonomies", "Agents", "Outbox", "Assets", "Internet"]);
+    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Memory", "Skills", "Types", "Taxonomies", "Agents", "Skill management", "Outbox", "Assets", "Internet"]);
     const web = p.getByRole("checkbox", { name: /Search the web/ });
     expect(web).toBeChecked();
     fireEvent.click(web);
@@ -480,6 +486,29 @@ describe("the Permissions tab", () => {
     expect((sent().permissions as { confirm: Record<string, boolean> }).confirm.agents).toBe(false);
   });
 
+  it("lists the skill management tools in their group and saves Ask before changing skills", async () => {
+    await open();
+    const p = await tab("Permissions");
+    const group = p.getAllByRole("group").find((g) => g.querySelector(":scope > legend")?.textContent === "Skill management")!;
+    const names = Array.from(group.querySelectorAll("label")).map((l) => l.textContent?.trim());
+    expect(names).toEqual([
+      "List skills list_skills",
+      "Read a skill get_skill",
+      "Create skills and change SKILL.md propose_skill_change",
+      "Add and change skill files propose_skill_file_change",
+      "Delete skill files propose_skill_file_delete",
+      "Delete skills propose_skill_delete",
+    ]);
+    const ask = p.getByRole("switch", { name: "Ask before changing skills" });
+    expect(ask).toBeChecked();
+    fireEvent.click(ask);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    const confirm = (sent().permissions as { confirm: Record<string, boolean> }).confirm;
+    expect(confirm.skills).toBe(false);
+    expect(confirm.agents).toBe(true);
+  });
+
   it("saves the confirmation and internet switches and a chosen list of types", async () => {
     await open();
     const p = await tab("Permissions");
@@ -494,7 +523,7 @@ describe("the Permissions tab", () => {
     expect(sent().permissions).toEqual({
       tools: null,
       types: ["task"],
-      confirm: { notes: false, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true },
+      confirm: { notes: false, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true, skills: true },
       web: { search: true, read: false, download: true },
       outbox: { send_without_review: false },
     });

@@ -149,6 +149,10 @@ fn change_line(event: &str, p: &Value) -> String {
         "taxonomy_proposal" => format!("taxonomy{}", name.unwrap_or_default()),
         "agent_proposal" => format!("agent{}", name.unwrap_or_default()),
         "agent_memory_proposal" => format!("memory{}", title.unwrap_or_default()),
+        "skill_proposal" => format!("skill{}", name.unwrap_or_default()),
+        _ if op.starts_with("skill_") => {
+            format!("skill {}", p["skill_name"].as_str().unwrap_or_default())
+        }
         _ => match p["type"].as_str() {
             Some(t) => format!("{t}{}", title.unwrap_or_default()),
             None => format!("note{}", title.unwrap_or_default()),

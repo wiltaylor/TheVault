@@ -31,6 +31,7 @@ import {
   type AppInfo,
   type Json,
   type NoteDoc,
+  type SkillOp,
   ApiError,
   type StoredProposal,
   type StreamEvent,
@@ -40,6 +41,7 @@ import {
 import { noteChangedElsewhere, noteWritten } from "../changes";
 import { appInfo } from "../inApp";
 import { reloadDefinitions } from "../session";
+import { skillsChanged } from "../skills";
 import { refreshSync } from "../sync/store";
 import { bumpTurns, turnEnded } from "./running";
 
@@ -240,6 +242,39 @@ export interface MemoryProposal {
   proposer?: string;
 }
 
+/**
+ * A skill change the model proposed (skills S9), checked by the server as the skill writes check
+ * it, but not written: a new `SKILL.md` or a change to one, a file written, a file or folder
+ * deleted, or the whole skill deleted. `before` and `after` are text when the file is text;
+ * a binary file shows its `size` and `media_type`.
+ */
+export interface SkillProposal {
+  id: string;
+  kind: "skill";
+  op: "create" | "change" | "file" | "file_delete" | "delete";
+  name: string;
+  /** The file, for `file` and `file_delete`; `SKILL.md` for `create` and `change`. */
+  path?: string;
+  /** Whether the file (or for `create` and `change`, the skill) existed when proposed. */
+  exists?: boolean;
+  before: string | null;
+  after: string | null;
+  issues: { at?: string; message: string; severity?: string }[];
+  binary?: boolean;
+  size?: number;
+  media_type?: string | null;
+  before_size?: number | null;
+  before_media_type?: string | null;
+  /** The paths a delete removes. */
+  files?: string[];
+  /** For a `file` change to a skill not created yet: false. */
+  skill_exists?: boolean;
+  proposer?: string;
+}
+
+/** What the card says when the skill changed after the proposal (skills S9). */
+export const SKILL_CHANGED = "This skill changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
+
 /** What the card says when the memory changed after the proposal (agents G21). */
 export const MEMORY_CHANGED = "This memory changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
 
@@ -267,7 +302,8 @@ export type Applied =
   | { id: string; op: "type_change" | "type_create"; type_name: string }
   | { id: string; op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes?: number }
   | { id: string; op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string }
-  | { id: string; op: "agent_memory_create" | "agent_memory_change" | "agent_memory_delete"; memory_id: string; memory_agent: string; version?: string };
+  | { id: string; op: "agent_memory_create" | "agent_memory_change" | "agent_memory_delete"; memory_id: string; memory_agent: string; version?: string }
+  | { id: string; op: SkillOp; skill_name: string; path?: string };
 
 /** A file the model asked to download into the vault as an asset (ai D27). */
 export interface DownloadProposal {
@@ -319,6 +355,7 @@ export type Part =
   | { kind: "taxonomy_proposal"; proposal: TaxonomyProposal; state: ProposalState; error?: string }
   | { kind: "agent_proposal"; proposal: AgentProposal; state: ProposalState; error?: string }
   | { kind: "memory_proposal"; proposal: MemoryProposal; state: ProposalState; error?: string }
+  | { kind: "skill_proposal"; proposal: SkillProposal; state: ProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null };
 
 export interface Turn {
@@ -468,6 +505,39 @@ function memoryDone(p: MemoryProposal, done: AiApplied): string {
   return `created memory ${id} "${p.title}" of agent ${p.memory_agent}`;
 }
 
+/** What a skill proposal is, for an outcome line (skills S9). */
+export function skillWhat(p: SkillProposal): string {
+  switch (p.op) {
+    case "create":
+      return `new skill ${p.name}`;
+    case "change":
+      return `change to skill ${p.name}`;
+    case "file":
+      return `file ${p.path ?? ""} of skill ${p.name}`;
+    case "file_delete":
+      return `delete of ${p.path ?? ""} from skill ${p.name}`;
+    default:
+      return `delete of skill ${p.name}`;
+  }
+}
+
+/** What an applied skill proposal did, for an outcome line. */
+export function skillDone(p: SkillProposal, done?: AiApplied): string {
+  const op = done && "skill_name" in done ? done.op : null;
+  switch (p.op) {
+    case "create":
+    case "change":
+      // The server says whether the write created the skill.
+      return (op ?? (p.op === "create" ? "skill_create" : "skill_change")) === "skill_create" ? `created skill ${p.name}` : `changed skill ${p.name}`;
+    case "file":
+      return `wrote ${p.path ?? ""} in skill ${p.name}`;
+    case "file_delete":
+      return `deleted ${p.path ?? ""} from skill ${p.name}`;
+    default:
+      return `deleted skill ${p.name}`;
+  }
+}
+
 /** The notices the server put in the turn's new messages, such as a round limit or a cut-off. */
 function noticesOf(data: { messages?: unknown }): Part[] {
   if (!Array.isArray(data.messages)) return [];
@@ -582,7 +652,7 @@ export const NOTE_GONE = "This note is no longer there, so nothing was applied."
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
   return (
-    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "download") &&
+    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "skill_proposal" || p.kind === "download") &&
     (p.state === "open" || p.state === "failed")
   );
 }
@@ -658,6 +728,17 @@ function eventPart(event: string, d: Record<string, unknown>): Part | null {
     }
     case "agent_memory_proposal":
       return { kind: "memory_proposal", proposal: d as unknown as MemoryProposal, state: "open" };
+    case "skill_proposal":
+      return {
+        kind: "skill_proposal",
+        proposal: {
+          ...(d as unknown as SkillProposal),
+          before: typeof d.before === "string" ? d.before : null,
+          after: typeof d.after === "string" ? d.after : null,
+          issues: Array.isArray(d.issues) ? (d.issues as SkillProposal["issues"]) : [],
+        },
+        state: "open",
+      };
     case "applied": {
       if (d.op === "download") {
         const asset = d as unknown as DownloadedAsset & { url?: string; source?: string; path?: string };
@@ -925,7 +1006,8 @@ function createConversation(agent: string, id: string | null) {
       case "type_proposal":
       case "taxonomy_proposal":
       case "agent_proposal":
-      case "agent_memory_proposal": {
+      case "agent_memory_proposal":
+      case "skill_proposal": {
         // A re-read turn's proposal, applied or discarded meanwhile, shows as it stands.
         const stored = replay.get(String(d.id));
         push((stored && storedPart(stored)) || eventPart(e.event, d)!);
@@ -939,6 +1021,11 @@ function createConversation(agent: string, id: string | null) {
         const applied = d as unknown as Applied;
         // Open views of the note or type take the change, as after a write of this client's own.
         if (applied.op.startsWith("agent_memory_")) memoriesChanged();
+        // A skill change shows on the Skills page, the sidebar's count and any open skill screen (skills S9).
+        if (applied.op.startsWith("skill_")) {
+          void skillsChanged().catch(() => undefined);
+          break;
+        }
         void settle(
           applied.op === "type_change" || applied.op === "type_create"
             ? "type"
@@ -1342,6 +1429,7 @@ function createConversation(agent: string, id: string | null) {
       else if (p.kind === "taxonomy_proposal") await applyTaxonomyProposal(turn, i);
       else if (p.kind === "agent_proposal") await applyAgentProposal(turn, i);
       else if (p.kind === "memory_proposal") await applyMemoryProposal(turn, i);
+      else if (p.kind === "skill_proposal") await applySkillProposal(turn, i);
       else await applyTypeProposal(turn, i);
       const after = chat.turns[turn]?.parts[i];
       if (!after || !("state" in after) || after.state !== "applied") return;
@@ -1541,6 +1629,52 @@ function createConversation(agent: string, id: string | null) {
     discarded(p.proposal);
   }
 
+  function setSkillProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "skill_proposal") return;
+        p.state = patch.state;
+        p.error = patch.error;
+      }),
+    );
+  }
+
+  /**
+   * Apply a skill proposal with POST /api/ai/apply, on the home server (skills S9): the new
+   * `SKILL.md`, the file, or the delete. The server re-reads what it replaces and writes nothing
+   * when it changed since the proposal (a 409). It needs admin: from an app, the server answers
+   * that it is done in the web app. The Skills page and the sidebar's count read again after it.
+   */
+  async function applySkillProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "skill_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+    setSkillProposal(turn, part, { state: "applying" });
+    try {
+      const done = await api.aiApply(p.proposal);
+      setSkillProposal(turn, part, { state: "applied" });
+      record(p.proposal.id, `[Applied by the user: ${skillDone(p.proposal, done)}]`);
+      await skillsChanged().catch(() => undefined);
+      notify();
+    } catch (e) {
+      const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
+      const error = stale ? SKILL_CHANGED : e instanceof Error ? e.message : String(e);
+      setSkillProposal(turn, part, { state: stale ? "stale" : "failed", error });
+      record(p.proposal.id, `[Failed to apply: ${skillWhat(p.proposal)}: ${error}]`);
+    }
+  }
+
+  function discardSkillProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "skill_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setSkillProposal(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${skillWhat(p.proposal)}]`);
+    discarded(p.proposal);
+  }
+
     /** A view shows the conversation; `listener` hears of each change until it lets go. */
     function hold(listener?: () => void) {
       holders++;
@@ -1593,6 +1727,8 @@ function createConversation(agent: string, id: string | null) {
       discardAgentProposal,
       applyMemoryProposal,
       discardMemoryProposal,
+      applySkillProposal,
+      discardSkillProposal,
     };
     return self;
   });
@@ -1780,6 +1916,8 @@ export function createChatSession(options: ChatOptions = {}) {
       discardAgentProposal: (turn: number, part: number) => current().discardAgentProposal(turn, part),
       applyMemoryProposal: (turn: number, part: number) => current().applyMemoryProposal(turn, part),
       discardMemoryProposal: (turn: number, part: number) => current().discardMemoryProposal(turn, part),
+      applySkillProposal: (turn: number, part: number) => current().applySkillProposal(turn, part),
+      discardSkillProposal: (turn: number, part: number) => current().discardSkillProposal(turn, part),
     };
   });
 }
@@ -1817,6 +1955,8 @@ export const applyAgentProposal = panel.applyAgentProposal;
 export const discardAgentProposal = panel.discardAgentProposal;
 export const applyMemoryProposal = panel.applyMemoryProposal;
 export const discardMemoryProposal = panel.discardMemoryProposal;
+export const applySkillProposal = panel.applySkillProposal;
+export const discardSkillProposal = panel.discardSkillProposal;
 
 /** The conversation the cards below act on: the panel's, unless a Chat tab provides its own. */
 export const ChatContext = createContext<ChatSession>(panel);

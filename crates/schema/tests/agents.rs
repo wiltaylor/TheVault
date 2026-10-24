@@ -592,3 +592,21 @@ fn skills_are_every_valid_skill_unless_the_file_lists_them() {
         ["permissions.skills"]
     );
 }
+
+#[test]
+fn the_skills_confirmation_is_on_unless_the_file_turns_it_off() {
+    // Ask before changing skills (skills S9): on by default and written only when off, so a file
+    // without it still reads in an app from before it.
+    let a = Agent::parse("helper", "").unwrap();
+    assert!(a.permissions.confirm.skills);
+    assert!(!a.to_wcl().contains("skills"));
+    let a = Agent::parse(
+        "curator",
+        "permissions {\n  confirm {\n    skills = false\n  }\n}\n",
+    )
+    .unwrap();
+    assert!(!a.permissions.confirm.skills);
+    assert!(a.permissions.confirm.agents);
+    assert!(a.to_wcl().contains("skills = false"), "{}", a.to_wcl());
+    assert_eq!(Agent::parse("curator", &a.to_wcl()).unwrap(), a);
+}

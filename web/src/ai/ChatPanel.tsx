@@ -27,6 +27,7 @@ import { NewReplyMark, RunningMark } from "./RunningMark";
 import { TaxonomyProposalCard } from "./TaxonomyProposalCard";
 import { TypeProposalCard } from "./TypeProposalCard";
 import { outboxItemHref } from "../outbox/model";
+import { SkillProposalCard, skillHref } from "./SkillProposalCard";
 import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged, viewThread } from "./running";
 import {
   type Applied,
@@ -133,6 +134,18 @@ export function stepLabel(name: string, input: Json): string {
       return `Read ${s("path")} from skill ${s("name")}`;
     case "install_skill_in_browser":
       return `Copied skill ${s("name")} into the browser box`;
+    case "list_skills":
+      return "Listed the skills";
+    case "get_skill":
+      return `Read skill ${s("name")}`;
+    case "propose_skill_change":
+      return `Checked SKILL.md of skill ${s("name")}`;
+    case "propose_skill_file_change":
+      return `Checked ${s("path")} of skill ${s("name")}`;
+    case "propose_skill_file_delete":
+      return `Checked a delete of ${s("path")} from skill ${s("name")}`;
+    case "propose_skill_delete":
+      return `Checked a delete of skill ${s("name")}`;
     default:
       return `Called ${name}`;
   }
@@ -223,6 +236,15 @@ export function activeLabel(name: string, input: Json): string {
       return "Reading a skill's file";
     case "install_skill_in_browser":
       return "Copying a skill into the browser box";
+    case "list_skills":
+      return "Listing the skills";
+    case "get_skill":
+      return "Reading a skill";
+    case "propose_skill_change":
+    case "propose_skill_file_change":
+    case "propose_skill_file_delete":
+    case "propose_skill_delete":
+      return "Checking a skill change";
     default:
       return `Running ${name}`;
   }
@@ -261,6 +283,13 @@ const TYPE_TOOLS = new Set([
   "use_skill",
   "read_skill_file",
   "install_skill_in_browser",
+  // And the skill management tools (skills S9).
+  "list_skills",
+  "get_skill",
+  "propose_skill_change",
+  "propose_skill_file_change",
+  "propose_skill_file_delete",
+  "propose_skill_delete",
 ]);
 
 /** The host of `url`, or `url` itself when it is not a URL. */
@@ -678,10 +707,52 @@ export function AppliedCard(props: { applied: Applied }) {
     const x = props.applied;
     return "memory_agent" in x ? x : undefined;
   };
+  const skill = (): AppliedSkill | undefined => {
+    const x = props.applied;
+    return "skill_name" in x ? x : undefined;
+  };
   return (
-    <Show when={memory()} fallback={<ChangeAppliedCard applied={props.applied} />}>
-      {(m) => <MemoryAppliedCard applied={m()} />}
+    <Show when={skill()} fallback={
+      <Show when={memory()} fallback={<ChangeAppliedCard applied={props.applied} />}>
+        {(m) => <MemoryAppliedCard applied={m()} />}
+      </Show>
+    }>
+      {(s) => <SkillAppliedCard applied={s()} />}
     </Show>
+  );
+}
+
+type AppliedSkill = Extract<Applied, { skill_name: string }>;
+
+/** What an applied skill change did (skills S9), before the skill's name. */
+function skillDid(a: AppliedSkill): string {
+  switch (a.op) {
+    case "skill_create":
+      return "Created skill";
+    case "skill_change":
+      return "Changed SKILL.md of skill";
+    case "skill_file":
+      return `Wrote ${a.path ?? ""} in skill`;
+    case "skill_file_delete":
+      return `Deleted ${a.path ?? ""} from skill`;
+    default:
+      return "Deleted skill";
+  }
+}
+
+/** A skill change the AI made itself (skills S9), linking to the skill. */
+function SkillAppliedCard(props: { applied: AppliedSkill }) {
+  const a = () => props.applied;
+  return (
+    <section class="ai-proposal ai-applied-card" aria-label={`${skillDid(a())} ${a().skill_name}`}>
+      <p class="ai-proposal-head" role="status">
+        {skillDid(a())}{" "}
+        <Show when={a().op !== "skill_delete"} fallback={<strong>{a().skill_name}</strong>}>
+          <a href={skillHref(a().skill_name)}>{a().skill_name}</a>
+        </Show>
+      </p>
+      <p class="muted">Made without asking, as the agent's permissions allow.</p>
+    </section>
   );
 }
 
@@ -1050,6 +1121,7 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                         <Match when={part.kind === "taxonomy_proposal" && part}>{(p) => <TaxonomyProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "agent_proposal" && part}>{(p) => <AgentProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "memory_proposal" && part}>{(p) => <MemoryProposalCard part={p()} turn={t()} index={i()} />}</Match>
+                        <Match when={part.kind === "skill_proposal" && part}>{(p) => <SkillProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "applied" && part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
                         <Match when={part.kind === "download" && part}>{(p) => <DownloadCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>

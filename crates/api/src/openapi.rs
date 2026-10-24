@@ -295,7 +295,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/chat",
-        "One AI chat turn as server-sent events (text, tool, tool_result, proposal, type_proposal, taxonomy_proposal, agent_proposal, agent_memory_proposal, applied, usage, refusal, error, done); the tools propose changes, and make the kinds whose confirmation Settings > AI turned off when the caller's scope allows",
+        "One AI chat turn as server-sent events (text, tool, tool_result, proposal, type_proposal, taxonomy_proposal, agent_proposal, agent_memory_proposal, skill_proposal, applied, usage, refusal, error, done); the tools propose changes, and make the kinds whose confirmation Settings > AI turned off when the caller's scope allows",
     ),
     (
         "GET",
@@ -751,7 +751,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/ai/apply",
-        "Apply a proposal, type_proposal, taxonomy_proposal, agent_proposal or agent_memory_proposal as the chat sent it, at its base version: {op, note_id, version}, {op, type_name}, {op, taxonomy_name, notes}, {op, agent_name} or {op, memory_id, memory_agent, version}, or for a download {op, asset_id, filename}; a type, taxonomy or agent change needs admin, and an agent or agent memory change is checked again against the agent that proposed it; with the proposal's agent it is authored by the agent, and with its thread the outcome is recorded there",
+        "Apply a proposal, type_proposal, taxonomy_proposal, agent_proposal, agent_memory_proposal or skill_proposal as the chat sent it, at its base version: {op, note_id, version}, {op, type_name}, {op, taxonomy_name, notes}, {op, agent_name}, {op, memory_id, memory_agent, version} or {op, skill_name, path?}, or for a download {op, asset_id, filename}; a type, taxonomy, agent or skill change needs admin, and an agent or agent memory change is checked again against the agent that proposed it; with the proposal's agent it is authored by the agent, and with its thread the outcome is recorded there",
     ),
     (
         "POST",

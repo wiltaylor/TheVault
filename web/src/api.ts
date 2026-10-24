@@ -462,7 +462,7 @@ export interface AgentMemory {
 
 /** A proposal of a thread and where it stands (agents G8). */
 export interface StoredProposal {
-  /** `proposal`, `type_proposal`, `taxonomy_proposal`, `agent_proposal`, `agent_memory_proposal`, or `applied` for a change the agent made. */
+  /** `proposal`, `type_proposal`, `taxonomy_proposal`, `agent_proposal`, `agent_memory_proposal`, `skill_proposal`, or `applied` for a change the agent made. */
   event: string;
   data: Record<string, unknown>;
   status: "pending" | "applied" | "discarded" | "failed" | "stale" | "made";
@@ -718,6 +718,8 @@ export interface AiConfirm {
   taxonomies: boolean;
   /** Changing, creating and deleting agents (agents G20). */
   agents: boolean;
+  /** Creating, changing and deleting skills and their files (skills S9). */
+  skills: boolean;
 }
 
 /** A model a provider offers now (ai D6). */
@@ -742,6 +744,9 @@ export interface AiProviders {
   web?: AiWeb;
 }
 
+/** What an applied skill change did (skills S9). */
+export type SkillOp = "skill_create" | "skill_change" | "skill_file" | "skill_file_delete" | "skill_delete";
+
 /** What `POST /api/ai/apply` did (ai D23): a note's change with its new version, or a type's. */
 export type AiApplied =
   | { op: "update" | "create" | "archive" | "unarchive" | "delete"; note_id: string; version: string }
@@ -749,6 +754,7 @@ export type AiApplied =
   | { op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes: number }
   | { op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string }
   | { op: "agent_memory_create" | "agent_memory_change" | "agent_memory_delete"; memory_id: string; memory_agent: string; version?: string }
+  | { op: SkillOp; skill_name: string; path?: string }
   | { op: "download"; asset_id: string; filename: string; media_type?: string; size?: number; url?: string };
 
 /** A poll of a chat turn's events through an app's embedded server (ai D23). */
