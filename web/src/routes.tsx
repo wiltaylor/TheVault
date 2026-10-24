@@ -1,33 +1,49 @@
 // The pages a pane can show. Every pane has a router of its own over these routes.
 
-import { Navigate, Route } from "@solidjs/router";
-import { Secrets, Tokens } from "./pages/Access";
-import { Archive } from "./pages/Archive";
-import { BrowserBox } from "./pages/BrowserBox";
-import { Assets } from "./pages/Assets";
-import { AssetView } from "./pages/AssetView";
+import { Navigate, Route, type RouteSectionProps } from "@solidjs/router";
+import { type Component, lazy } from "solid-js";
 import { DailyNotes } from "./pages/DailyNotes";
-import { Devices } from "./pages/Devices";
 import { Inbox } from "./pages/Inbox";
-import { Log } from "./pages/Log";
 import { Outbox } from "./pages/Outbox";
-import { Ai } from "./pages/Ai";
-import { AgentScreen } from "./pages/AgentScreen";
-import { SkillScreen } from "./pages/SkillScreen";
-import { Skills } from "./pages/Skills";
-import { GoogleCallback, Integrations } from "./pages/Integrations";
 import { NoteHistoryRedirect } from "./history/redirect";
 import { NewNote, NoteView } from "./pages/NoteView";
 import { Search } from "./pages/Search";
-import { Settings } from "./pages/Settings";
 import { MovedToScheduled, MovedToSettings, SettingsLayout } from "./pages/SettingsLayout";
-import { ScheduledEditor, ScheduledList } from "./pages/Scheduled";
-import { Trash } from "./pages/Trash";
-import { TaxonomyEditor, TaxonomyList } from "./pages/TaxonomyEditor";
-import { TemplateEditor } from "./pages/TemplateEditor";
-import { TypeEditor } from "./pages/TypeEditor";
-import { TypeGallery } from "./pages/TypeGallery";
 import { TypeList } from "./pages/TypeList";
+
+/**
+ * A page that loads when a pane first shows it. Settings, admin and other less used pages load
+ * this way, so the app starts without them; each shows nothing until its code has arrived. There
+ * is no Suspense boundary: one would also hold back the page whenever a resource it reads loads.
+ */
+function page<M extends Record<string, unknown>>(load: () => Promise<M>, name: keyof M & string): Component<RouteSectionProps> {
+  return lazy(() => load().then((m) => ({ default: m[name] as Component<RouteSectionProps> })));
+}
+
+
+const Secrets = page(() => import("./pages/Access"), "Secrets");
+const Tokens = page(() => import("./pages/Access"), "Tokens");
+const Archive = page(() => import("./pages/Archive"), "Archive");
+const BrowserBox = page(() => import("./pages/BrowserBox"), "BrowserBox");
+const Assets = page(() => import("./pages/Assets"), "Assets");
+const AssetView = page(() => import("./pages/AssetView"), "AssetView");
+const Devices = page(() => import("./pages/Devices"), "Devices");
+const Log = page(() => import("./pages/Log"), "Log");
+const Ai = page(() => import("./pages/Ai"), "Ai");
+const AgentScreen = page(() => import("./pages/AgentScreen"), "AgentScreen");
+const SkillScreen = page(() => import("./pages/SkillScreen"), "SkillScreen");
+const Skills = page(() => import("./pages/Skills"), "Skills");
+const GoogleCallback = page(() => import("./pages/Integrations"), "GoogleCallback");
+const Integrations = page(() => import("./pages/Integrations"), "Integrations");
+const Settings = page(() => import("./pages/Settings"), "Settings");
+const ScheduledEditor = page(() => import("./pages/Scheduled"), "ScheduledEditor");
+const ScheduledList = page(() => import("./pages/Scheduled"), "ScheduledList");
+const Trash = page(() => import("./pages/Trash"), "Trash");
+const TaxonomyEditor = page(() => import("./pages/TaxonomyEditor"), "TaxonomyEditor");
+const TaxonomyList = page(() => import("./pages/TaxonomyEditor"), "TaxonomyList");
+const TemplateEditor = page(() => import("./pages/TemplateEditor"), "TemplateEditor");
+const TypeEditor = page(() => import("./pages/TypeEditor"), "TypeEditor");
+const TypeGallery = page(() => import("./pages/TypeGallery"), "TypeGallery");
 
 export function paneRoutes() {
   return (

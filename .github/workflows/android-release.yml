@@ -44,7 +44,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Write the version into the checkout
         env:
@@ -100,7 +100,7 @@ jobs:
           mv target/android-release/SHA256SUMS target/android-release/SHA256SUMS-android
 
       - name: Keep the APK for the train's publish job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-android
           path: |

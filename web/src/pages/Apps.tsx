@@ -5,7 +5,7 @@ import { A } from "@solidjs/router";
 import { For, Show, createResource, createSignal } from "solid-js";
 import { type ClientBuild, api } from "../api";
 import { when } from "../admin/format";
-import { copyText } from "../blocks/CodeBlock";
+import { copyText } from "../clipboard";
 import { formatSize } from "../blocks/MediaBlocks";
 import { sessionState } from "../session";
 import { errorText } from "./TypeEditor";

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.webkit.WebView
+import androidx.appcompat.app.AppCompatActivity
 import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
@@ -44,8 +45,7 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
         opened(activity.intent)
     }
 
-    override fun onResume() {
-        super.onResume()
+    override fun onResume(activity: AppCompatActivity) {
         SyncWorker.foreground = true
         if (openAndSync()) live(true)
     }
@@ -54,8 +54,7 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
      * Out of the front: background writes sync through WorkManager ([SyncWorker.soon]), and
      * server changes arrive as a `note.changed` push instead of on the live stream.
      */
-    override fun onPause() {
-        super.onPause()
+    override fun onPause(activity: AppCompatActivity) {
         SyncWorker.foreground = false
         live(false)
     }

@@ -2,7 +2,7 @@
 // scheduled task. There is no separate scripts page.
 import { For, Show, createEffect, createResource, createSignal, on, onMount } from "solid-js";
 import { ApiError, type ScriptProblem, api } from "../api";
-import { CodeMirror } from "../blocks/CodeBlock";
+import { CodeMirror } from "../blocks/LazyCode";
 import { isName } from "../defs/typeModel";
 
 const ROLE_LABELS: Record<ScriptProblem["role"], string> = {

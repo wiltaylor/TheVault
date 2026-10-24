@@ -42,7 +42,7 @@ jobs:
       TAG_INPUT: ${{ inputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.version != '' && github.sha || format('refs/tags/{0}', inputs.tag) }}
 

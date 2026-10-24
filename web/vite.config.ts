@@ -36,6 +36,12 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
+    // The app loads CodeMirror, the calendar and timeline views, maps, PDFs, diagrams and the less
+    // used pages on demand. What stays over Vite's 500 kB default are the main bundle, with the
+    // note editor every note page needs, and single libraries loaded only when used, the largest
+    // being elk (about 1.4 MB, one file) for Mermaid's layouts. A chunk past this limit is new
+    // weight worth looking at.
+    chunkSizeWarningLimit: 1500,
   },
   test: {
     environment: "jsdom",

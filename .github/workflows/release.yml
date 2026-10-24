@@ -36,7 +36,7 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Write the version into the checkout
         env:
@@ -116,7 +116,7 @@ jobs:
           ls -l target/release-desktop
 
       - name: Keep them for the train's publish job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-desktop
           path: target/release-desktop/*

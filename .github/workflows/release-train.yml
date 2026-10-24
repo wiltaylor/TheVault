@@ -54,7 +54,7 @@ jobs:
       version: ${{ steps.calc.outputs.version }}
       prerelease: ${{ steps.calc.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -147,7 +147,7 @@ jobs:
       PRERELEASE: ${{ needs.version.outputs.prerelease }}
     steps:
       - name: Fetch the builds
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: "release-*"
           merge-multiple: true

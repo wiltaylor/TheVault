@@ -18,7 +18,7 @@ val tauriProperties = Properties().apply {
 // path and passwords from these variables; with none set, the release APK is left unsigned.
 val releaseKeystore: String? = System.getenv("THEVAULT_ANDROID_KEYSTORE")?.takeIf { it.isNotBlank() }
 
-android {
+extensions.configure<com.android.build.api.dsl.ApplicationExtension> {
     compileSdk = 36
     namespace = "dev.wiltaylor.thevault"
     defaultConfig {

@@ -5,7 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-android {
+extensions.configure<com.android.build.api.dsl.LibraryExtension> {
     namespace = "dev.wiltaylor.thevault.device"
     compileSdk = 36
 
@@ -46,6 +46,8 @@ kotlin {
 dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
+    // Tauri's plugin lifecycle hands the activity over as an AppCompatActivity.
+    implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.work:work-runtime-ktx:2.10.5")
     // E.164 numbers in device event payloads (D24).
     implementation("com.googlecode.libphonenumber:libphonenumber:8.13.52")

@@ -24,7 +24,7 @@ import { MAP_VIEW_HEIGHT } from "../map/model";
 import { slotField } from "../notes";
 import { typeDef } from "../session";
 import { resultCanvas } from "./canvasView";
-import { CalendarView, TimelineView } from "./DateViews";
+import { CalendarView, TimelineView } from "./LazyDateViews";
 import { KanbanView } from "./KanbanView";
 import { type ViewDef, readQueryView, setViewItem, viewTemplate } from "./model";
 import { NoteLink, TemplateBody } from "./parts";

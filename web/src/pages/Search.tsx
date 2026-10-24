@@ -5,7 +5,7 @@
 import { A, useLocation, useNavigate } from "@solidjs/router";
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { type ArchivedFilter, type FieldDef, type Row, type TypeDef, api, isArchived } from "../api";
-import { copyText } from "../blocks/CodeBlock";
+import { copyText } from "../clipboard";
 import { optionText } from "../options";
 import { ChipPicker, typeSuggestions } from "../components/ChipPicker";
 import { FieldInput, termOptions } from "../components/FieldInput";

@@ -2,7 +2,7 @@ import { For, type JSX, Match, Show, Switch, createEffect, createSignal } from "
 import { Dynamic } from "solid-js/web";
 import type { Block, FieldDef, Json } from "../api";
 import { QueryView } from "../views/QueryView";
-import { CodeBlock } from "../blocks/CodeBlock";
+import { CodeBlock } from "../blocks/LazyCode";
 import { columnWidth, columnsOf } from "../blocks/columns";
 import { text } from "../blocks/fields";
 import { admonitionLook, findTextFor, holdsFind, nestedText, readOpen, toggleLevel, writeOpen } from "../blocks/toggle";

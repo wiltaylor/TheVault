@@ -23,7 +23,7 @@ import {
   webAccess,
 } from "../admin/taskModel";
 import { isName } from "../defs/typeModel";
-import { CodeMirror } from "../blocks/CodeBlock";
+import { CodeMirror } from "../blocks/LazyCode";
 import { errorText } from "./TypeEditor";
 
 const BASE = "/settings/scheduled";

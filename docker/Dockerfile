@@ -1,3 +1,4 @@
+# check=skip=SecretsUsedInArgOrEnv
 # The TheVault server image: vault-server, the `vault` CLI and the built web client, run as uid
 # 1000 with the vault in /data and its secret key in /config (OQ-S2). Build it from the repository
 # root with `just image-build`, or `just image-clients-build <dir>` to bake in the APK and AppImage
@@ -59,6 +60,8 @@ RUN --mount=type=bind,from=clients,target=/mnt/clients \
 COPY docker/entrypoint.sh /usr/local/bin/thevault-entrypoint
 COPY docker/healthcheck.sh /usr/local/bin/thevault-healthcheck
 
+# VAULT_SECRET_KEY_FILE names where the key file lives, not the key, so BuildKit's
+# SecretsUsedInArgOrEnv check, which matches the word in its name, is skipped at the top.
 ENV VAULT_SECRET_KEY_FILE=/config/vault.key \
     VAULT_CLIENTS_DIR=/opt/thevault/clients \
     XDG_CONFIG_HOME=/config \
