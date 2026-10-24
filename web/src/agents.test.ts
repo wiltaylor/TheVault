@@ -32,16 +32,17 @@ describe("the palette's agent actions", () => {
     { name: "inbox_triage", label: "Inbox triage", built_in: false },
   ];
 
-  it("offers New agent and Open agent for each", () => {
+  it("offers New agent, Open browser box and Open agent for each", () => {
     const actions = agentActions(list, false);
-    expect(actions.map((a) => a.label)).toEqual(["New agent", "Open agent Assistant", "Open agent Inbox triage"]);
-    expect(actions[2]!.href).toBe("/agents/inbox_triage");
-    expect(actions[1]!.icon).toEqual({ type: "sparkles" });
-    expect(actions[2]!.icon).toEqual({ type: "bot" });
+    expect(actions.map((a) => a.label)).toEqual(["New agent", "Open browser box", "Open agent Assistant", "Open agent Inbox triage"]);
+    expect(actions[1]!.href).toBe("/browser-box");
+    expect(actions[3]!.href).toBe("/agents/inbox_triage");
+    expect(actions[2]!.icon).toEqual({ type: "sparkles" });
+    expect(actions[3]!.icon).toEqual({ type: "bot" });
     expect(typeof actions[0]!.run).toBe("function");
   });
 
-  it("leaves out New agent in the apps", () => {
+  it("leaves out New agent and the browser box in the apps", () => {
     expect(agentActions(list, true).map((a) => a.label)).toEqual(["Open agent Assistant", "Open agent Inbox triage"]);
   });
 });
