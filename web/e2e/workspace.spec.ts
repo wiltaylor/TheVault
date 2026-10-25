@@ -7,7 +7,7 @@ function token(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/** A type of its own: `owner` is placed nowhere (so it is a property), and a paragraph shows it. */
+/** A type of its own: `owner` is placed nowhere, so only the properties sidebar edits it, and a paragraph shows it. */
 const TYPE_WCL = `label = "Desk"
 plural = "Desks"
 

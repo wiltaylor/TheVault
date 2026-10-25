@@ -1203,7 +1203,7 @@ template default {
 }
 ```
 
-A field that no slot places is still stored and editable through the API and in the note page's properties sidebar. The template only controls the layout.
+A field that no slot places is still stored and editable through the API and in the note page's properties sidebar. The template only controls the layout. The properties sidebar lists every field of the type in type-file order, placed on the page or not, and edits it in step with the page. It leaves out a `hidden` field, and a `content`, `ink` or `canvas` field the page already places, whose editor is on the page.
 
 ### Conditional tabs
 
@@ -1246,7 +1246,7 @@ A vault that uses `when` needs apps at 0.1.10 or later: an older app refuses a t
 
 ### Conditional slots
 
-A slot takes a `when` too, in a tab or in a column, with the same syntax and checks as a tab's: the slot shows only for a note that meets the condition, and appears or disappears as the note is edited. The error path names the slot, as `template default > tab "Main" > slot "phone".when: `kind` is not a field of the type`. A hidden slot still places its field, so the field is not listed in the properties sidebar, and the rule of one slot per field per template holds as before. One tab can so serve notes of different shapes, as the `outbox` type's default template shows the email fields only for an email:
+A slot takes a `when` too, in a tab or in a column, with the same syntax and checks as a tab's: the slot shows only for a note that meets the condition, and appears or disappears as the note is edited. The error path names the slot, as `template default > tab "Main" > slot "phone".when: `kind` is not a field of the type`. A hidden slot still places its field, and the rule of one slot per field per template holds as before. One tab can so serve notes of different shapes, as the `outbox` type's default template shows the email fields only for an email:
 
 ```wcl
 template default {
@@ -1835,7 +1835,7 @@ Rules:
 - On an `int` field, `min`, `max` and `step` are whole numbers.
 - A control may bind a computed field. It shows the value and cannot change it.
 - A control cannot clear a required field: the control keeps the value and says why.
-- A field bound by a control in the `default` template, or in the note's own content, counts as placed: the properties sidebar does not list it again. A control on a computed field places nothing.
+- A field bound by a control in the `default` template, or in the note's own content, counts as placed, as a slot does. A control on a computed field places nothing.
 - In a canvas card, a control binds the note that holds the canvas. Where there is no such note, the control is shown disabled.
 - A field rename in a type change renames the `field` of every control bound to it, in templates and in notes. A control that names a removed field makes its note invalid, so the type change is refused until the control is removed. A rename also follows into template query views: see [Field names in query views](#field-names-in-query-views).
 

@@ -802,15 +802,30 @@ function LocationInput(props: FieldInputProps) {
   const rec = (v: Json | undefined) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
   // A half-typed point is kept here until both parts have a value.
   const [draft, setDraft] = createSignal<Record<string, Json | undefined>>({ ...rec(props.value) });
+  // A value written elsewhere (the same field on the page and in the properties sidebar, or a
+  // control bound to it) replaces the draft.
+  let written: Json | undefined = props.value;
+  createEffect(
+    on(
+      () => props.value,
+      (v) => {
+        if (!same(v, written)) setDraft({ ...rec(v) });
+        written = v;
+      },
+      { defer: true },
+    ),
+  );
   function pick(v: Json) {
     setDraft({ ...rec(v) });
+    written = v;
     props.onChange(v);
   }
   function set(part: string, v: Json | undefined) {
     const next = { ...draft(), [part]: v };
     setDraft(next);
     const [a, b] = parts;
-    props.onChange(next[a] === undefined || next[b] === undefined ? undefined : { [a]: next[a]!, [b]: next[b]! });
+    written = next[a] === undefined || next[b] === undefined ? undefined : { [a]: next[a]!, [b]: next[b]! };
+    props.onChange(written);
   }
   const heightKey = () => [props.related?.type ?? "", props.field.name] as const;
   const [height, setHeight] = createSignal(locationMapHeight(...heightKey()));
@@ -855,6 +870,7 @@ function LocationInput(props: FieldInputProps) {
           type="button"
           onClick={() => {
             setDraft({});
+            written = undefined;
             props.onChange(undefined);
           }}
         >

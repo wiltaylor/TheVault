@@ -427,14 +427,14 @@ test("every control writes its field, and a {{field}} and a slot of the same fie
   });
   expect(String(f.at)).toMatch(/^2026-10-20T14:45:00(Z|[+-]\d\d:\d\d)$/);
 
-  // Controls in columns place their fields: the Properties panel lists only what is placed nowhere.
+  // The Properties panel lists every field, the ones controls in columns place too, with the
+  // values the controls wrote. The body has its editor on the page; the canvas no place.
   const panel = await properties(page);
-  await expect(panel.getByTestId("field-plan")).toBeVisible();
-  for (const placed of ["name", "notes", "ratio", "done", "area", "parent", "sizes", "areas", "links", "span", "at", "stars"]) {
-    await expect(panel.getByTestId(`field-${placed}`)).toHaveCount(0);
+  for (const field of ["name", "notes", "ratio", "done", "area", "parent", "sizes", "areas", "links", "span", "at", "stars", "words", "plan"]) {
+    await expect(panel.getByTestId(`field-${field}`)).toBeVisible();
   }
-  // A read-only control on a computed field does not place it.
-  await expect(panel.getByTestId("field-words")).toBeVisible();
+  await expect(panel.getByTestId("field-name").getByLabel("Name")).toHaveValue("Grace");
+  await expect(panel.getByTestId("field-body")).toHaveCount(0);
 
   // After a reload the controls show the stored values.
   await page.reload();
@@ -491,10 +491,11 @@ test("a control in a note's own content edits the note and places its field", as
   expect(stored.note.fields.stars).toBe(4);
   expect(stored.note.blocks.find((b) => b.labels?.[0] === "body")?.blocks).toMatchObject([{ kind: "control", fields: { field: "stars", kind: "rating" } }]);
 
-  // Placed by the control, the field leaves the Properties panel.
+  // Placed by the control, the field stays in the Properties panel, with the control's value.
   const after = await properties(page);
   await expect(after.getByTestId("field-name")).toBeVisible();
-  await expect(after.getByTestId("field-stars")).toHaveCount(0);
+  await expect(after.getByTestId("field-stars")).toBeVisible();
+  await expect(after.getByTestId("field-stars").getByLabel("Stars")).toHaveValue("4");
 });
 
 test("a control in a canvas card edits the note that holds the canvas", async ({ page, admin }) => {

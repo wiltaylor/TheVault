@@ -330,7 +330,7 @@ const TEMPLATE_WCL = TYPE_WCL.replace(
 }`,
 );
 
-test("a template's fields in two columns are edited side by side and left out of the Properties panel", async ({ page, admin }) => {
+test("a template's fields in two columns are edited side by side and listed in the Properties panel too", async ({ page, admin }) => {
   const { id } = await setup(admin, [], TEMPLATE_WCL);
   await logIn(page, `/notes/${id}`);
   const layout = page.getByTestId("template-columns");
@@ -350,11 +350,11 @@ test("a template's fields in two columns are edited side by side and left out of
   await saved(page);
   expect((await stored(admin, id)).note.fields.owner).toBe("Ana");
 
-  // Every field is on the page.
+  // Every field is on the page, and the Properties panel lists the placed ones as well.
   await page.getByRole("button", { name: "Properties", exact: true }).click();
   const sidebar = page.getByRole("complementary", { name: "Properties" });
-  await expect(sidebar).toContainText("Every property is on the page.");
-  await expect(sidebar.getByTestId("field-status")).toHaveCount(0);
+  await expect(sidebar.getByTestId("field-status")).toBeVisible();
+  await expect(sidebar.getByTestId("field-owner").getByLabel("Owner")).toHaveValue("Ana");
   await page.getByRole("button", { name: "Properties", exact: true }).click();
 });
 

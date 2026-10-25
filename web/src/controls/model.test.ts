@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FieldDef, NoteDoc, TypeDef } from "../api";
-import { unplacedFields } from "../notes";
+import { placedFields, propertyFields } from "../notes";
 import {
   CONTROL_KINDS,
   type ControlKind,
@@ -246,7 +246,7 @@ describe("value mapping", () => {
   });
 });
 
-describe("unplaced fields with controls", () => {
+describe("fields placed by controls", () => {
   const words = field("words", "int", { computed: true });
   const type = (blocks: object[]): TypeDef => ({
     name: "t",
@@ -266,13 +266,15 @@ describe("unplaced fields with controls", () => {
       ctl("name", "text"),
       { kind: "columns", blocks: [{ kind: "column", blocks: [ctl("count", "slider")] }, { kind: "column", blocks: [ctl("done", "toggle")] }] },
     ]);
-    expect(names(unplacedFields(t))).toEqual(["due", "size", "plan", "words"]);
+    expect([...placedFields(t)].sort()).toEqual(["body", "count", "done", "name"]);
     expect([...controlledFields(t)].sort()).toEqual(["count", "done", "name"]);
+    // The sidebar lists the placed fields too, all but the body the page shows.
+    expect(names(propertyFields(t))).toEqual(["name", "count", "done", "due", "size", "plan", "words"]);
   });
 
   it("a read-only control on a computed field, or one that does not fit, places nothing", () => {
     const t = type([ctl("words", "number"), ctl("due", "toggle"), ctl("gone", "text")]);
-    expect(names(unplacedFields(t))).toEqual(["name", "count", "done", "due", "size", "plan", "words"]);
+    expect([...placedFields(t)]).toEqual(["body"]);
   });
 
   it("a control in the note's own content or a canvas card places its field", () => {
@@ -288,7 +290,7 @@ describe("unplaced fields with controls", () => {
         },
       ],
     };
-    expect(names(unplacedFields(t, doc))).toEqual(["name", "count", "done", "plan", "words"]);
-    expect(names(unplacedFields(t))).toEqual(["name", "count", "done", "due", "size", "plan", "words"]);
+    expect([...placedFields(t, doc)].sort()).toEqual(["body", "due", "size"]);
+    expect([...placedFields(t)]).toEqual(["body"]);
   });
 });

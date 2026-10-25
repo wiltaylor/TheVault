@@ -11,7 +11,8 @@ import {
   mergeDocs,
   refValue,
   slotField,
-  unplacedFields,
+  placedFields,
+  propertyFields,
 } from "./notes";
 
 const task: TypeDef = {
@@ -105,14 +106,38 @@ describe("the inline note page", () => {
     ],
   };
 
-  it("puts every field the default template has no slot for in the sidebar", () => {
+  it("places the fields the default template has a slot for", () => {
     // A {{due}} reference and a card slot do not count; slots on any default tab do.
-    expect(unplacedFields(typed).map((f) => f.name)).toEqual(["estimate", "due", "owner", "size"]);
+    expect([...placedFields(typed)].sort()).toEqual(["body", "title"]);
+  });
+
+  it("lists every field in the sidebar but the bodies the page already shows", () => {
+    expect(propertyFields(typed).map((f) => f.name)).toEqual(["estimate", "due", "owner", "size"]);
   });
 
   it("leaves a hidden field out of the sidebar", () => {
     const fields = typed.fields.map((f) => (f.name === "owner" ? { ...f, hidden: true } : f));
-    expect(unplacedFields({ ...typed, fields }).map((f) => f.name)).toEqual(["estimate", "due", "size"]);
+    expect(propertyFields({ ...typed, fields }).map((f) => f.name)).toEqual(["estimate", "due", "size"]);
+  });
+
+  it("lists placed fields, a dict and the bodies the page does not place, in type order", () => {
+    const f = (name: string, kind: string, more: object = {}) => ({ ...TITLE_FIELD, name, label: name, kind, required: false, ...more });
+    const slot = (name: string) => ({ slot: name, label: null });
+    const t: TypeDef = {
+      ...task,
+      fields: [
+        f("placed", "string"),
+        f("free", "int"),
+        f("secret", "string", { hidden: true }),
+        f("body", "content", { compound: true }),
+        f("notes", "content", { compound: true }),
+        f("sketch", "ink", { compound: true }),
+        f("plan", "canvas", { compound: true }),
+        f("extra", "dict", { compound: true }),
+      ],
+      templates: [{ name: "default", label: null, tabs: [{ title: "Main", items: ["placed", "secret", "body", "sketch", "extra"].map(slot) }] }],
+    };
+    expect(propertyFields(t).map((x) => x.name)).toEqual(["placed", "free", "notes", "plan", "extra"]);
   });
 
   it("resolves {{name}} to the title, a field, or null for no such field", () => {

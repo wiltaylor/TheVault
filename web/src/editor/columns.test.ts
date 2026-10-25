@@ -4,7 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { Block, TemplateItem, TypeDef } from "../api";
 import { addedWidth, newColumns, nudgePair, slotsOf, splitPair } from "../blocks/columns";
 import { type TemplateModel, followFields, typeFromSchema, unplaced } from "../defs/typeModel";
-import { TITLE_FIELD, unplacedFields } from "../notes";
+import { TITLE_FIELD, placedFields } from "../notes";
 import { blockOfSelection, edgeDropTr, moveBlockTr } from "./blockTools";
 import { addColumnTr, equalWidthsTr, normalizeTr, removeColumnTr, setPairTr } from "./columns";
 import { blocksToDoc, docToBlocks, docToItems, itemsToDoc } from "./doc";
@@ -217,7 +217,7 @@ describe("slots in columns", () => {
     { block: p("{{owner}}") },
   ];
 
-  it("count as placed for the properties panel and the template's / menu", () => {
+  it("count as placed for the note page and the template's / menu", () => {
     expect(slotsOf(items)).toEqual(["title", "status", "due"]);
     const type: TypeDef = {
       name: "t",
@@ -229,7 +229,7 @@ describe("slots in columns", () => {
       fields: ["status", "due", "owner"].map((name) => ({ ...TITLE_FIELD, name, label: name, required: false })),
       templates: [{ name: "default", label: null, tabs: [{ title: "Main", items }] }],
     };
-    expect(unplacedFields(type).map((f) => f.name)).toEqual(["owner"]);
+    expect([...placedFields(type)]).toEqual(["title", "status", "due"]);
     const t: TemplateModel = { name: "default", label: null, tabs: [{ title: "Main", items }] };
     expect(unplaced(t, type.fields)).toEqual(["owner"]);
   });

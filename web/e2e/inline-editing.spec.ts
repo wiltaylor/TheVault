@@ -179,7 +179,7 @@ test("template blocks are read-only on a note, and {{field}} shows the value as 
   await saved(page);
 });
 
-test("fields the template does not place are edited in the properties sidebar", async ({ page, admin }) => {
+test("every field is edited in the properties sidebar, placed or not, but the body the page shows", async ({ page, admin }) => {
   const { note } = await setup(admin);
   await logIn(page, `/notes/${note.id}`);
   const sidebar = page.getByRole("complementary", { name: "Properties" });
@@ -189,12 +189,13 @@ test("fields the template does not place are edited in the properties sidebar", 
   await toggle.click();
   await expect(sidebar).toBeVisible();
 
-  // Only unplaced fields: estimate and owner. {{status}} and {{due}} are read-only, and slotted.
-  await expect(sidebar.locator("[data-field]")).toHaveCount(2);
-  await expect(sidebar.getByTestId("field-estimate")).toBeVisible();
-  await expect(sidebar.getByTestId("field-owner")).toBeVisible();
-  for (const placed of ["status", "due", "body", "title"]) {
-    await expect(sidebar.getByTestId(`field-${placed}`)).toHaveCount(0);
+  // Every field in type order, the slotted status and due too. The body has the page's editor.
+  await expect(sidebar.locator("[data-field]")).toHaveCount(4);
+  for (const name of ["status", "due", "estimate", "owner"]) {
+    await expect(sidebar.getByTestId(`field-${name}`)).toBeVisible();
+  }
+  for (const left of ["body", "title"]) {
+    await expect(sidebar.getByTestId(`field-${left}`)).toHaveCount(0);
   }
 
   await sidebar.getByLabel("Estimate").fill("8");
@@ -316,14 +317,14 @@ test("the template editor places a property with / and a field value with {{", a
   expect(wcl.wcl).toContain('slot "owner"');
   expect(wcl.wcl).toContain("Estimated at {{estimate}} hours");
 
-  // The note page now has owner in place, and shows the estimate in text; neither is in the sidebar.
+  // The note page now has owner in place, and shows the estimate in text; the sidebar lists both.
   await page.goto(`/notes/${note.id}`);
   await expect(page.getByTestId("field-owner").getByLabel("Owner")).toHaveValue("Kim");
   await expect(page.getByText("Estimated at 5 hours")).toBeVisible();
   await page.getByRole("button", { name: "Properties", exact: true }).click();
   const sidebar = page.getByRole("complementary", { name: "Properties" });
   await expect(sidebar.getByTestId("field-estimate")).toBeVisible();
-  await expect(sidebar.getByTestId("field-owner")).toHaveCount(0);
+  await expect(sidebar.getByTestId("field-owner").getByLabel("Owner")).toHaveValue("Kim");
 });
 
 test("the server refuses a template whose {{name}} names no field", async ({ admin }) => {
@@ -335,17 +336,33 @@ test("the server refuses a template whose {{name}} names no field", async ({ adm
   expect(await res.text()).toContain("`{{nothing}}` names no field of the type");
 });
 
-test("every property on the page leaves the sidebar saying so", async ({ page, admin }) => {
+test("a type with only a hidden field and a placed body leaves the sidebar saying so", async ({ page, admin }) => {
   const name = `all_${token()}`;
-  const put = await admin.put(`/api/types/${name}`, {
-    data: { wcl: `label = "All"\n\nfield a {\n  kind = "string"\n}\n\ntemplate default {\n  tab "Main" {\n    slot "title"\n    slot "a"\n  }\n}\n` },
-  });
+  const wcl = `label = "All"
+
+field a {
+  kind   = "string"
+  hidden = true
+}
+
+field body {
+  kind = "content"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "body"
+  }
+}
+`;
+  const put = await admin.put(`/api/types/${name}`, { data: { wcl } });
   expect(put.status(), await put.text()).toBe(200);
   const res = await admin.post(`/api/notes?type=${name}`, { data: { note: { fields: { title: "All placed" } } } });
   const id = (await res.json()).id;
   await logIn(page, `/notes/${id}`);
   await page.getByRole("button", { name: "Properties", exact: true }).click();
-  await expect(page.getByRole("complementary", { name: "Properties" })).toContainText("Every property is on the page.");
+  await expect(page.getByRole("complementary", { name: "Properties" })).toContainText("This type has no properties to show.");
   await page.getByRole("button", { name: "Properties", exact: true }).click();
 });
 
@@ -404,6 +421,37 @@ test("property blocks on the note show only their editor; the Properties panel k
   const estimate = sidebar.getByTestId("field-estimate").locator(".field-label");
   await expect(estimate).toBeVisible();
   await expect(estimate).toHaveText(/Estimate/);
+  // A field placed on the page shows its label in the panel too.
+  await expect(sidebar.getByTestId("field-status").locator(".field-label")).toBeVisible();
+});
+
+test("a field on the page and in the Properties panel stays in step both ways", async ({ page, admin }) => {
+  const { note } = await setup(admin, { due: "2026-12-01" });
+  await logIn(page, `/notes/${note.id}`);
+  const onPage = page.locator("article.note-view");
+  await page.getByRole("button", { name: "Properties", exact: true }).click();
+  const sidebar = page.getByRole("complementary", { name: "Properties" });
+  const pageStatus = onPage.getByTestId("field-status").getByLabel("Status");
+  const sideStatus = sidebar.getByTestId("field-status").getByLabel("Status");
+  const pageDue = onPage.getByTestId("field-due").getByLabel("Due");
+  const sideDue = sidebar.getByTestId("field-due").getByLabel("Due");
+  await expect(sideStatus).toHaveValue("todo");
+  await expect(sideDue).toHaveValue("2026-12-01");
+
+  // Edited in the panel, the page follows, and the template's text with it.
+  await sideStatus.selectOption("doing");
+  await expect(pageStatus).toHaveValue("doing");
+  await expect(onPage).toContainText("is doing, due 2026-12-01.");
+  await sideDue.fill("2026-12-24");
+  await expect(pageDue).toHaveValue("2026-12-24");
+
+  // Edited on the page, the panel follows.
+  await pageStatus.selectOption("done");
+  await expect(sideStatus).toHaveValue("done");
+  await pageDue.fill("2027-01-02");
+  await expect(sideDue).toHaveValue("2027-01-02");
+  await saved(page);
+  expect((await stored(admin, note.id)).note.fields).toMatchObject({ status: "done", due: "2027-01-02" });
 });
 
 test("a long title runs the full width, and the chip and buttons follow its last word", async ({ page, admin }) => {

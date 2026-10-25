@@ -17,7 +17,7 @@ const para = (text: string) => ({ kind: "paragraph", fields: { text } });
 
 /**
  * A type whose template shows the links in a fixed paragraph and in a fixed canvas's card,
- * places the body, and leaves the `ref` reference field to the Properties panel.
+ * places the body, and places the `ref` reference field nowhere, so the Properties panel edits it.
  */
 function typeWcl(target: string) {
   const text = JSON.stringify(linksTo(target));

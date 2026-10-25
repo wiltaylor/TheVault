@@ -112,7 +112,7 @@ test("on a note page, references, list items and deep terms are picked as chips"
   });
 });
 
-test("in the Properties panel, the same pickers edit the fields the page does not place", async ({ page, admin }) => {
+test("in the Properties panel, the same pickers edit the fields, the ones the page does not place too", async ({ page, admin }) => {
   const s = await setup(admin);
   await logIn(page, `/notes/${s.note}`);
   await page.getByRole("button", { name: "Properties", exact: true }).click();

@@ -25,11 +25,11 @@ import {
   missingRequired,
   mergeDocs,
   pageTemplate,
+  propertyFields,
   sameBlocks,
   sameValue,
   slotField,
   TITLE_FIELD,
-  unplacedFields,
   whenNote,
 } from "../notes";
 import { visibleTabs, whenHolds } from "../when";
@@ -130,9 +130,9 @@ function PropertiesIcon() {
 
 /**
  * A note laid out by its type's default template, a tab per template tab (D14), and edited in
- * place: every field the template places is edited where it shows, the rest in the properties
- * sidebar, and changes save themselves (D12 versioning; a stale save shows the conflict view).
- * With `newType`, an unsaved note of that type, which Create creates.
+ * place: every field the template places is edited where it shows, and the properties sidebar
+ * edits every field as well, and changes save themselves (D12 versioning; a stale save shows the
+ * conflict view). With `newType`, an unsaved note of that type, which Create creates.
  */
 export function NoteView(props: { newType?: string; id?: string; prefill?: { title: string; from?: string } }) {
   const params = useParams();
@@ -398,8 +398,9 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
     if (!(to instanceof Node && e.target instanceof Element && e.target.closest(".content-editor")?.contains(to))) flush();
   };
 
-  // The right sidebar's Properties panel edits the fields the template places nowhere, through
-  // this page's own note and autosave, so the two never disagree.
+  // The right sidebar's Properties panel edits every field but the hidden ones and the bodies the
+  // page already shows (notes.ts, propertyFields), through this page's own note and autosave, so a
+  // field edited in one place shows the change in the other.
   const renderProperties = () => (
     <div class="properties-fields" onFocusOut={flushOnLeave}>
       <Show when={note()} fallback={<p class="muted">Loading…</p>}>
@@ -412,7 +413,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                     <Show when={preview()}>
                       <p class="muted preview-note">Showing the version from {when(preview()!.at)}, read-only.</p>
                     </Show>
-                    <For each={type() ? unplacedFields(type()!, shown()) : []} fallback={<p class="muted">Every property is on the page.</p>}>
+                    <For each={type() ? propertyFields(type()!, shown()) : []} fallback={<p class="muted">This type has no properties to show.</p>}>
                       {(f) => <Property field={f} label={f.label} ns="properties-" />}
                     </For>
                   </fieldset>

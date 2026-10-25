@@ -2,7 +2,7 @@ import { MemoryRouter, Route } from "@solidjs/router";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Block, FieldDef, Page, TypeDef } from "../api";
+import type { Block, FieldDef, Json, Page, TypeDef } from "../api";
 
 // How tall a map is: a map view's `height` item, set by the handle on its bottom edge and saved
 // with the block, and a location field's map, whose height this browser keeps per type and field.
@@ -215,5 +215,22 @@ describe("a location field's map height", () => {
     fireEvent.pointerDown(handle(), pointer(0));
     fireEvent.pointerUp(handle(), pointer(10_000));
     expect(map().style.height).toBe("2000px");
+  });
+});
+
+describe("a location field's inputs", () => {
+  it("follow a value written elsewhere, as the same field on the page and in the sidebar", () => {
+    const [value, setValue] = createSignal<Json | undefined>({ lat: 1, lng: 2 });
+    const r = render(() => <FieldInput field={placeField} value={value()} onChange={setValue} label="Place" id="place" related={{ type: "site" }} />);
+    const input = (name: string) => r.getByLabelText(name, { selector: "input" }) as HTMLInputElement;
+    expect(input("Latitude").value).toBe("1");
+    setValue({ lat: -33.5, lng: 151 });
+    expect(input("Latitude").value).toBe("-33.5");
+    expect(input("Longitude").value).toBe("151");
+    // What it writes itself is kept as typed.
+    fireEvent.input(input("Latitude"), { target: { value: "-34" } });
+    expect(value()).toEqual({ lat: -34, lng: 151 });
+    setValue(undefined);
+    expect(input("Latitude").value).toBe("");
   });
 });

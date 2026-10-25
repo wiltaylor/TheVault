@@ -5071,7 +5071,7 @@ h1.note-title {
   min-height: 3rem;
 }
 
-/* The Properties panel of the right sidebar: the fields the template places nowhere. */
+/* The Properties panel of the right sidebar: every field of the note but the hidden ones and the bodies the page shows. */
 
 .side-panel .field.property {
   grid-template-columns: minmax(0, 1fr);

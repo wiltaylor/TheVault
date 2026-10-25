@@ -607,7 +607,7 @@ vault template list invoice | jq -e '.templates[] | select(.name == "card") | .t
 
 ### Slots
 
-`slot "<field>"` places a field, or `title`, where it stands. A field has at most one slot in a template, columns included. A `label` inside the slot, as in `slot "amount" { label = "Total" }`, renames the field in this template only. A field with no slot is still stored, and the app's properties sidebar edits it.
+`slot "<field>"` places a field, or `title`, where it stands. A field has at most one slot in a template, columns included. A `label` inside the slot, as in `slot "amount" { label = "Total" }`, renames the field in this template only. A field with no slot is still stored, and the app's properties sidebar edits it. The sidebar lists every field that is not `hidden`, placed or not, except a `content`, `ink` or `canvas` field the page already places.
 
 ### Fixed blocks
 

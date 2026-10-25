@@ -203,23 +203,35 @@ export function slottedFields(type: TypeDef): Set<string> {
 }
 
 /**
+ * The fields the note page places with a slot or an editable control. A control in the template
+ * or in the note's own content places its field as a slot does; a read-only control on a computed
+ * field and a `{{name}}` reference do not count as a place.
+ */
+export function placedFields(type: TypeDef, doc?: NoteDoc): Set<string> {
+  const placed = slottedFields(type);
+  for (const name of controlledFields(type, doc)) placed.add(name);
+  return placed;
+}
+
+/**
  * Whether the type's default template places field `name` with a slot or an editable control, so
  * an empty image from that field need not offer an upload of its own.
  */
 export function templatePlaces(type: TypeDef, name: string): boolean {
-  return slottedFields(type).has(name) || controlledFields(type).has(name);
+  return placedFields(type).has(name);
 }
 
+/** Compound kinds that hold a whole body, which a second editor in the sidebar would only repeat. */
+const BODY_KINDS = new Set(["content", "ink", "canvas"]);
+
 /**
- * The type's fields the note page has no slot or editable control for, in type order: the
- * properties sidebar edits these. A control in the template or in the note's own content places
- * its field as a slot does; a read-only control on a computed field and a `{{name}}` reference
- * do not count as a place. A hidden field is left out.
+ * The fields the properties sidebar edits, in type order: every field, placed on the page or not,
+ * except a hidden one, and a content, ink or canvas field the page already places (see
+ * [`placedFields`]).
  */
-export function unplacedFields(type: TypeDef, doc?: NoteDoc): FieldDef[] {
-  const placed = slottedFields(type);
-  for (const name of controlledFields(type, doc)) placed.add(name);
-  return type.fields.filter((f) => !placed.has(f.name) && !f.hidden);
+export function propertyFields(type: TypeDef, doc?: NoteDoc): FieldDef[] {
+  const placed = placedFields(type, doc);
+  return type.fields.filter((f) => !f.hidden && !(BODY_KINDS.has(f.kind) && placed.has(f.name)));
 }
 
 /**
