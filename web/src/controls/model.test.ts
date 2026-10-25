@@ -48,6 +48,7 @@ const FIELDS: FieldDef[] = [
   field("done", "bool"),
   field("due", "date"),
   field("at", "datetime"),
+  field("opens", "time"),
   field("span", "date_range", { of: "date" }),
   field("slots", "date_range", { of: "datetime" }),
   // A range of either form fits no control: the calendar control picks days only.
@@ -91,7 +92,7 @@ const FITS: Record<ControlKind, string[]> = {
   chips: ["sizes", "areas", "links", "tags", "phones"],
   calendar: ["due", "span"],
   datetime: ["at"],
-  time: ["at"],
+  time: ["at", "opens"],
   rating: ["count"],
 };
 

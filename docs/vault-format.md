@@ -131,6 +131,7 @@ WCL has no date, URL or reference type. TheVault stores these as strings and its
 | Boolean | `true` / `false` | | `false` |
 | Date | string | ISO 8601 calendar date, `YYYY-MM-DD` | `"2026-11-01"` |
 | Datetime | string | ISO 8601 date and time with seconds and a required offset: `YYYY-MM-DDTHH:MM:SS[.fff](Z\|±HH:MM)`. The writer keeps the offset it was given | `"2026-10-20T09:30:00+11:00"` |
+| Time | string | A 24-hour time of day with no date and no offset: `HH:MM` or `HH:MM:SS`, zero-padded, hours `00` to `23`, minutes and seconds `00` to `59`. No fraction, no `24:00` | `"09:30"`, `"17:45:30"` |
 | Date range | record | `{ start: <date>, end: <date> }`, or two datetimes. Both ends inclusive, `end` not before `start`. Both ends have the same form, never one date and one datetime | `{ start: "2026-10-20", end: "2026-11-01" }` |
 | Duration | string | ISO 8601 duration | `"PT1M"` |
 | URL | string | An absolute URL with a scheme | `"https://example.com/importer"` |
@@ -587,7 +588,7 @@ Every `field` block takes these items. The next section lists the extra items ea
 | `computed` | bool | `false` | Only handlers write the field. The UI shows it read-only, and a client write is rejected (D3). A computed field cannot also be `required` |
 | `hidden` | bool | `false` | The properties sidebar does not show the field. The value is still stored, validated, queried, and written by the API and scripts, and a slot in a template still shows it. A hidden field cannot also be `required` |
 
-`default` is allowed on `string`, `int`, `float`, `bool`, `date`, `datetime`, `url`, `select`, `taxonomy` and `list` fields.
+`default` is allowed on `string`, `int`, `float`, `bool`, `date`, `datetime`, `time`, `url`, `select`, `taxonomy` and `list` fields.
 
 ## Field kinds
 
@@ -678,6 +679,26 @@ field starts_at {
 ```wcl
 starts_at = "2026-10-20T09:30:00+11:00"
 ```
+
+### `time`
+
+A wall-clock time of day in 24-hour form, with no date and no time zone: `HH:MM`, or `HH:MM:SS`
+when the seconds matter. `9:30`, `09:5`, `24:00`, `09:30Z` and `09:30:00.5` are not times.
+
+```wcl
+field opens {
+  kind    = "time"
+  default = "09:00"
+}
+```
+
+```wcl
+opens = "08:30"
+```
+
+Queries compare and sort a time by its time of day, and read a string on the other side as a time,
+so `where opens < "09:00"` finds the notes that open before nine and `"09:00"` equals `"09:00:00"`.
+A time does not compare with a date or a datetime.
 
 ### `date_range`
 
@@ -863,7 +884,7 @@ related  = ["01JB8Z4K2MQ7V3X9T5R6W8Y2ZD", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZE"]
 
 ### `list`
 
-An ordered list of values, every one of one definition: its item. The item may be any kind but `content`, `ink` and `canvas`, which are blocks of their own: `string`, `int`, `float`, `bool`, `date`, `datetime`, `date_range`, `url`, `select`, `taxonomy`, `reference`, `asset`, `location`, another `list` and a `dict`.
+An ordered list of values, every one of one definition: its item. The item may be any kind but `content`, `ink` and `canvas`, which are blocks of their own: `string`, `int`, `float`, `bool`, `date`, `datetime`, `time`, `date_range`, `url`, `select`, `taxonomy`, `reference`, `asset`, `location`, another `list` and a `dict`.
 
 | Item | Form | Meaning |
 |------|------|---------|
@@ -1805,7 +1826,7 @@ The control kinds, and the fields each fits:
 | `chips` | The values as chips, removed one at a time, with a box that adds one and suggests values. On an open taxonomy the box can add a new term | `list` of strings, terms or labelled values (a dict of exactly two string keys, one `label`, and no other entries), multiple `select`, `taxonomy` or `reference` |
 | `calendar` | A month calendar in place. For a range, the first click picks the start and the second the end | `date`, `date_range` of dates |
 | `datetime` | A date and time box | `datetime` |
-| `time` | The time of day of a datetime. A new time keeps the date the field has, or takes today's when it is empty | `datetime` |
+| `time` | A 24-hour time of day box. On a `time` field it writes `HH:MM`, or `HH:MM:SS` when the seconds are set. On a `datetime` it edits the time of day: a new time keeps the date the field has, or takes today's when it is empty | `datetime`, `time` |
 | `rating` | Stars from 1 to `max` | `int` |
 
 Rules:
@@ -2596,7 +2617,7 @@ A note's top-level fields depend on its type, so its `@document` is generated fr
 
   | Field kind | WCL type |
   |------------|----------|
-  | `string`, `date`, `datetime`, `url`, `select`, `taxonomy`, `reference`, `asset` | `utf8` |
+  | `string`, `date`, `datetime`, `time`, `url`, `select`, `taxonomy`, `reference`, `asset` | `utf8` |
   | `int` | `i64` |
   | `float` | `f64` |
   | `bool` | `bool` |

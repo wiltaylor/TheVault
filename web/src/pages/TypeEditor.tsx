@@ -90,6 +90,7 @@ const KIND_LABELS: Record<FieldKind, string> = {
   bool: "Yes/no",
   date: "Date",
   datetime: "Date and time",
+  time: "Time",
   date_range: "Date range",
   url: "URL",
   select: "Select",

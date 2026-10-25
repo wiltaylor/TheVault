@@ -260,8 +260,9 @@ fn block_assets(b: &DocBlock, field: &str, out: &mut Vec<AssetRef>) {
     }
 }
 
-/// How a field's values are stored. `num` holds numbers, booleans as 0 or 1, and dates and
-/// datetimes as seconds since the Unix epoch, so they compare in time order whatever the offset.
+/// How a field's values are stored. `num` holds numbers, booleans as 0 or 1, dates and datetimes
+/// as seconds since the Unix epoch, so they compare in time order whatever the offset, and times
+/// of day as seconds since midnight, so `09:00` and `09:00:00` are one time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Text,
@@ -270,6 +271,7 @@ enum Kind {
     Bool,
     Date,
     Datetime,
+    Time,
     DateRange,
     Url,
     Select,
@@ -288,6 +290,7 @@ impl Kind {
             FieldKind::Bool => Kind::Bool,
             FieldKind::Date => Kind::Date,
             FieldKind::Datetime => Kind::Datetime,
+            FieldKind::Time => Kind::Time,
             FieldKind::DateRange { .. } => Kind::DateRange,
             FieldKind::Url => Kind::Url,
             FieldKind::Select { .. } => Kind::Select,
@@ -319,6 +322,7 @@ impl Kind {
             Kind::Bool => "bool",
             Kind::Date => "date",
             Kind::Datetime => "datetime",
+            Kind::Time => "time",
             Kind::DateRange => "date_range",
             Kind::Url => "url",
             Kind::Select => "select",
@@ -349,6 +353,7 @@ fn scalars(out: &mut Vec<FieldValue>, field: &str, pos: i64, part: &str, kind: K
                     time::date(s).map(|d| Num::Int(d * 86_400))
                 }
                 Kind::Datetime | Kind::DateRange => time::datetime(s).map(Num::Real),
+                Kind::Time => schema::parse_time(s).map(Num::Int),
                 _ => None,
             };
             (Some(s.clone()), num)

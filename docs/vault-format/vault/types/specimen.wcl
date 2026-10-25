@@ -43,6 +43,12 @@ field starts_at {
   label = "Starts at"
 }
 
+field opens {
+  kind    = "time"
+  label   = "Opens"
+  default = "09:00"
+}
+
 field span {
   kind  = "date_range"
   label = "Span"

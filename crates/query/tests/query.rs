@@ -1697,6 +1697,112 @@ fn a_date_or_datetime_range_filters_and_sorts_across_both_forms() {
     }
 }
 
+/// A `time` field holds a time of day, with or without seconds. Filters, equality and sorts read
+/// it as seconds since midnight, so `"09:00"` equals `"09:00:00"` and comes before `"09:00:30"`,
+/// a string on the other side reads as a time, and the SQL plan agrees with the note-by-note scan.
+#[test]
+fn a_time_of_day_filters_sorts_and_equals_across_both_forms() {
+    let mut files = vec![(
+        "types/shop.wcl".to_owned(),
+        with_template(
+            "label = \"Shop\"\n\nfield opens {\n  kind = \"time\"\n}\n\nfield slots {\n  kind  = \"list\"\n  items = \"time\"\n}\n",
+        ),
+    )];
+    // (title, fields): seconds on some values and not on others, and one shop with no time.
+    let shops = [
+        (
+            "Bakery",
+            "opens = \"09:00\"\nslots = [\"12:00\", \"15:30\"]\n",
+        ),
+        ("Cafe", "opens = \"08:30:15\"\nslots = [\"12:00:00\"]\n"),
+        ("Deli", "opens = \"09:00:30\"\n"),
+        ("Bar", "opens = \"17:00\"\nslots = [\"23:59:59\"]\n"),
+        ("Kiosk", ""),
+    ];
+    for (i, (title, fields)) in shops.iter().enumerate() {
+        let id = format!("01JB8Z4K2MQ7V3X9T5R6W8Y2S{i}");
+        files.push((
+            format!("notes/shop/{id}.wcl"),
+            note(title, "2026-10-02T09:00:00Z", fields),
+        ));
+    }
+    let f = build(&files, shops.len());
+    let titles = |text: &str| -> Vec<String> {
+        let q = query::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        let page = query::run(&q, &f.ctx(), &PageRequest::default()).unwrap();
+        let by_id: std::collections::HashMap<String, &str> = (0..shops.len())
+            .map(|i| (format!("01JB8Z4K2MQ7V3X9T5R6W8Y2S{i}"), shops[i].0))
+            .collect();
+        page.rows.iter().map(|r| by_id[&r.id].to_owned()).collect()
+    };
+    let cases: [(&str, &[&str]); 11] = [
+        // Missing values sort last either way.
+        (
+            "from shop sort opens",
+            &["Cafe", "Bakery", "Deli", "Bar", "Kiosk"],
+        ),
+        (
+            "from shop sort opens desc",
+            &["Bar", "Deli", "Bakery", "Cafe", "Kiosk"],
+        ),
+        ("from shop where opens < \"09:00\" sort title", &["Cafe"]),
+        ("from shop where opens == \"09:00:00\"", &["Bakery"]),
+        ("from shop where \"09:00\" == opens", &["Bakery"]),
+        ("from shop where opens == \"08:30:15\"", &["Cafe"]),
+        (
+            "from shop where opens > \"09:00\" sort opens",
+            &["Deli", "Bar"],
+        ),
+        (
+            "from shop where opens <= \"09:00:30\" sort opens",
+            &["Cafe", "Bakery", "Deli"],
+        ),
+        (
+            "from shop where opens != \"09:00\" sort title",
+            &["Bar", "Cafe", "Deli", "Kiosk"],
+        ),
+        (
+            "from shop where has(slots, \"12:00:00\") sort title",
+            &["Bakery", "Cafe"],
+        ),
+        (
+            "from shop where opens >= \"08:00\" && opens < \"12:00\" sort opens desc",
+            &["Deli", "Bakery", "Cafe"],
+        ),
+    ];
+    for (text, want) in cases {
+        assert_eq!(titles(text), want, "{text}");
+    }
+    let planned = [
+        "from shop sort opens",
+        "from shop where opens < \"09:00\"",
+        "from shop where opens == \"09:00:00\"",
+        "from shop where has(slots, \"12:00:00\")",
+    ];
+    for text in planned {
+        let q = query::parse(text).unwrap();
+        assert!(query::is_planned(&q, &f.ctx()).unwrap(), "{text}");
+    }
+    // A time does not order against a date, whichever way runs it.
+    let mixed = "from shop where opens < \"2026-10-14\"";
+    for text in cases.iter().map(|(t, _)| *t).chain([mixed]) {
+        for size in [0, 1, 2] {
+            match (
+                every_page(&f, text, None, size, false),
+                every_page(&f, text, None, size, true),
+            ) {
+                (Ok(a), Ok(b)) => assert!(
+                    same_pages(&a, &b),
+                    "{text} (pages of {size})\n{a:#?}\n{b:#?}"
+                ),
+                (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "{text}"),
+                (a, b) => panic!("{text}\n  planned {a:?}\n  scanned {b:?}"),
+            }
+        }
+    }
+    assert!(every_page(&f, mixed, None, 0, true).is_err());
+}
+
 /// The shapes the S6 benchmark times, against this fixture's fields, must run as SQL: run note
 /// by note they read every note of their types (D33).
 #[test]

@@ -16,7 +16,8 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// `key` blocks in a dict, which an older reader refuses, failing the whole schema; and the
 /// `card` content block, which an older reader refuses in a note; and lists of dicts that hold
 /// each value with its label, a person's `phones`, `emails` and `addresses` among them, in place
-/// of the `labels` attribute naming a label list.
+/// of the `labels` attribute naming a label list; and the `time` field kind, a time of day with
+/// no date, which an older reader refuses as an unknown kind.
 pub const FORMAT_VERSION: u32 = 4;
 
 /// Who made a change (D13, D30).

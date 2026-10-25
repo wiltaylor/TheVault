@@ -35,6 +35,7 @@ pub enum Scalar {
     Bool,
     Date,
     Datetime,
+    Time,
     Url,
 }
 
@@ -71,6 +72,8 @@ pub enum FieldKind {
     Bool,
     Date,
     Datetime,
+    /// A 24-hour time of day with no date or offset.
+    Time,
     /// `of` says what both ends are.
     DateRange {
         of: RangeOf,
@@ -150,13 +153,14 @@ impl RangeOf {
 
 impl FieldKind {
     /// The closed set of kind names.
-    pub const NAMES: [&str; 18] = [
+    pub const NAMES: [&str; 19] = [
         "string",
         "int",
         "float",
         "bool",
         "date",
         "datetime",
+        "time",
         "date_range",
         "url",
         "select",
@@ -179,6 +183,7 @@ impl FieldKind {
             FieldKind::Bool => "bool",
             FieldKind::Date => "date",
             FieldKind::Datetime => "datetime",
+            FieldKind::Time => "time",
             FieldKind::DateRange { .. } => "date_range",
             FieldKind::Url => "url",
             FieldKind::Select { .. } => "select",
@@ -203,6 +208,7 @@ impl FieldKind {
             FieldKind::Bool => Scalar::Bool,
             FieldKind::Date => Scalar::Date,
             FieldKind::Datetime => Scalar::Datetime,
+            FieldKind::Time => Scalar::Time,
             FieldKind::Url => Scalar::Url,
             _ => return None,
         })
@@ -231,13 +237,14 @@ const MULTIPLE_KINDS: [&str; 4] = ["select", "taxonomy", "reference", "asset"];
 
 /// The kinds a list item, a dict key or a dict's other values may be: every kind but the ones
 /// written as blocks of their own (types T1).
-pub const VALUE_KINDS: [&str; 15] = [
+pub const VALUE_KINDS: [&str; 16] = [
     "string",
     "int",
     "float",
     "bool",
     "date",
     "datetime",
+    "time",
     "date_range",
     "url",
     "select",
@@ -250,13 +257,14 @@ pub const VALUE_KINDS: [&str; 15] = [
 ];
 
 /// What `values` of a dict may name: a kind of [`VALUE_KINDS`], or `any`.
-const DICT_VALUE_NAMES: [&str; 16] = [
+const DICT_VALUE_NAMES: [&str; 17] = [
     "string",
     "int",
     "float",
     "bool",
     "date",
     "datetime",
+    "time",
     "date_range",
     "url",
     "select",
@@ -269,8 +277,9 @@ const DICT_VALUE_NAMES: [&str; 16] = [
     "any",
 ];
 /// Kinds that take a `default`.
-const DEFAULT_KINDS: [&str; 10] = [
-    "string", "int", "float", "bool", "date", "datetime", "url", "select", "taxonomy", "list",
+const DEFAULT_KINDS: [&str; 11] = [
+    "string", "int", "float", "bool", "date", "datetime", "time", "url", "select", "taxonomy",
+    "list",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -776,6 +785,7 @@ fn field_def(
         "bool" => FieldKind::Bool,
         "date" => FieldKind::Date,
         "datetime" => FieldKind::Datetime,
+        "time" => FieldKind::Time,
         "date_range" => FieldKind::DateRange {
             of: RangeOf::parse(s("of").as_deref()),
         },

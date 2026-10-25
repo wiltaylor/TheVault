@@ -116,6 +116,7 @@ fn is_key_kind(kind: &FieldKind) -> bool {
             | FieldKind::Url
             | FieldKind::Date
             | FieldKind::Datetime
+            | FieldKind::Time
             | FieldKind::Select { .. }
     )
 }
@@ -371,7 +372,7 @@ impl Writer {
                 Some(f) if f.multiple || !is_key_kind(&f.kind) => {
                     return Err(Error::BadRequest(format!(
                         "field {key:?} cannot be an upsert key: a key is `title` or a single \
-                         string, int, url, date, datetime or select field"
+                         string, int, url, date, datetime, time or select field"
                     )));
                 }
                 Some(_) => {}

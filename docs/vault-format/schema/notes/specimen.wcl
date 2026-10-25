@@ -19,6 +19,7 @@ type SpecimenAliasesItem {
   done:        bool?
   due:         utf8?
   starts_at:   utf8?
+  opens:       utf8?
   span:        DateRange?
   session:     DateRange?
   homepage:    utf8?

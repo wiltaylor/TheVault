@@ -9,6 +9,7 @@
     { "name": "topics", "kind": "taxonomy", "taxonomy": "status", "multiple": true },
     { "name": "due", "kind": "date" },
     { "name": "starts_at", "kind": "datetime" },
+    { "name": "opens", "kind": "time" },
     { "name": "estimate", "kind": "int" },
     { "name": "score", "kind": "float" },
     { "name": "tags", "kind": "list", "items": "string" },
@@ -31,6 +32,7 @@
         "topics": ["Inbox", "Active/Blocked"],
         "due": "2026-10-15",
         "starts_at": "2026-10-13T09:00:00+11:00",
+        "opens": "08:30",
         "estimate": 3,
         "score": 4.5,
         "tags": ["urgent", "code"],
@@ -126,6 +128,12 @@
     { "note": "full", "when": "archived", "expected": false },
     { "note": "archived", "when": "archived && stage == \"final\"", "expected": true },
     { "note": "full", "when": "true && !false", "expected": true },
-    { "note": "full", "when": "stage", "expected": false }
+    { "note": "full", "when": "stage", "expected": false },
+    { "note": "full", "when": "opens < \"09:00\"", "expected": true },
+    { "note": "full", "when": "opens == \"08:30:00\"", "expected": true },
+    { "note": "full", "when": "\"08:30:01\" > opens", "expected": true },
+    { "note": "full", "when": "opens >= \"08:30:01\"", "expected": false },
+    { "note": "bare", "when": "opens < \"09:00\"", "expected": false },
+    { "note": "full", "when": "opens < \"2026-10-15\"", "expected": false }
   ]
 }

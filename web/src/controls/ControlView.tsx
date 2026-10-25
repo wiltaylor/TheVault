@@ -7,7 +7,7 @@ import { type Block, type FieldDef, type Json, type Row, api } from "../api";
 import { ChipPicker, matches } from "../components/ChipPicker";
 import { termPicker } from "../components/termPicker";
 import { Combobox, type Suggestion } from "../components/Combobox";
-import { datetimeInput, datetimeValue, findNotes, knownLabels, termOptions } from "../components/FieldInput";
+import { TIME, datetimeInput, datetimeValue, findNotes, knownLabels, termOptions, timeValue } from "../components/FieldInput";
 import { LabelledList, type LabelledShape, labelled, labelledShape, labelledValue } from "../components/LabelledList";
 import { optionChoices, optionText } from "../options";
 import { noteTitle } from "../editor/titles";
@@ -766,7 +766,16 @@ function CalendarInput(props: Part) {
   );
 }
 
+/**
+ * A time box. On a `time` field it holds the time of day as stored, `HH:MM` or `HH:MM:SS`, with
+ * a seconds box only when the time has seconds; on a datetime it edits the time of the date.
+ */
 function TimeInput(props: Part) {
+  const clock = () => props.field.kind === "time";
+  const stored = () => {
+    const v = props.value();
+    return typeof v === "string" && TIME.test(v) ? v : "";
+  };
   const date = () => {
     const v = props.value();
     return typeof v === "string" && /^\d{4}-\d\d-\d\d/.test(v) ? SHORT.format(dateOf(v.slice(0, 10))) : "today";
@@ -776,17 +785,25 @@ function TimeInput(props: Part) {
       <input
         type="time"
         id={props.id}
-        value={timeOf(props.value())}
+        value={clock() ? stored() : timeOf(props.value())}
+        step={clock() && stored().length === 8 ? "1" : undefined}
         disabled={props.disabled}
         aria-describedby={props.describedBy || undefined}
         required={props.field.required}
         onChange={(e) => {
           const raw = e.currentTarget.value;
+          if (clock()) {
+            props.commit(raw === "" ? undefined : timeValue(raw));
+            e.currentTarget.value = stored();
+            return;
+          }
           props.commit(raw === "" ? undefined : withTime(props.value(), raw));
           e.currentTarget.value = timeOf(props.value());
         }}
       />
-      <span class="control-time-date muted">on {date()}</span>
+      <Show when={!clock()}>
+        <span class="control-time-date muted">on {date()}</span>
+      </Show>
     </div>
   );
 }

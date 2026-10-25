@@ -42,7 +42,7 @@ fn text(issues: &[Issue]) -> Vec<String> {
 fn the_example_vault_is_valid() {
     let schema = example();
     let specimen = schema.type_def("specimen").unwrap();
-    assert_eq!(specimen.fields.len(), 28);
+    assert_eq!(specimen.fields.len(), 29);
     assert_eq!(specimen.plural, "Specimens");
     assert!(specimen.field("word_count").unwrap().computed);
     let parent = specimen.field("parent").unwrap().reference().unwrap();
@@ -125,6 +125,9 @@ field d {
 }
 field dt {
   kind = "datetime"
+}
+field tm {
+  kind = "time"
 }
 field dr {
   kind = "date_range"
@@ -259,6 +262,7 @@ fn every_field_kind_accepts_a_valid_value_and_rejects_an_invalid_one() {
             r#"dt = "2026-10-20T09:30:00+11:00""#.into(),
             r#"dt = "2026-10-20T09:30""#.into(),
         ),
+        ("time", "tm", r#"tm = "23:59:59""#.into(), r#"tm = "24:00""#.into()),
         (
             "date_range",
             "dr",

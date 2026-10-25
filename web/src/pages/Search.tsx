@@ -485,6 +485,8 @@ function ValueInputs(props: {
   const v = (i: number) => props.filter.values[i] ?? "";
   const kind = () => props.def.kind;
   const dateOp = () => ["on", "before", "after", "between"].includes(op());
+  // A time of day field takes times in place of dates, in a 24-hour clock box.
+  const clock = () => kind() === "time";
   const single = (): FieldDef => ({ ...props.def, multiple: false, required: false });
   return (
     <Show when={arity(op()) > 0}>
@@ -492,8 +494,14 @@ function ValueInputs(props: {
         fallback={
           <input
             class="filter-value"
-            type={kind() === "int" || kind() === "float" || (kind() === "list" && /int|float/.test(props.def.items ?? "")) ? "number" : "text"}
-            step="any"
+            type={
+              kind() === "int" || kind() === "float" || (kind() === "list" && /int|float/.test(props.def.items ?? ""))
+                ? "number"
+                : kind() === "list" && props.def.items === "time"
+                  ? "time"
+                  : "text"
+            }
+            step={kind() === "list" && props.def.items === "time" ? undefined : "any"}
             aria-label="Value"
             value={v(0)}
             onInput={(e) => props.set(0, e.currentTarget.value, true)}
@@ -516,8 +524,8 @@ function ValueInputs(props: {
         <Match when={dateOp()}>
           <input
             class="filter-value"
-            type="date"
-            aria-label={op() === "between" ? "From" : "Date"}
+            type={clock() ? "time" : "date"}
+            aria-label={op() === "between" ? "From" : clock() ? "Time" : "Date"}
             value={v(0)}
             onChange={(e) => props.set(0, e.currentTarget.value)}
           />
@@ -525,7 +533,7 @@ function ValueInputs(props: {
             <span class="muted">and</span>
             <input
               class="filter-value"
-              type="date"
+              type={clock() ? "time" : "date"}
               aria-label="To"
               value={v(1)}
               onChange={(e) => props.set(1, e.currentTarget.value)}

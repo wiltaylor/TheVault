@@ -889,3 +889,43 @@ content body {
         .validate_note_source("task", &ok, "notes/task/x.wcl", &HashMap::new())
         .unwrap();
 }
+
+#[test]
+fn a_time_of_day_is_stored_as_written_with_its_seconds_since_midnight() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = Vault::init(dir.path()).unwrap();
+    let root = vault.root().to_owned();
+    write(
+        &root,
+        "types/shop.wcl",
+        "label = \"Shop\"\n\nfield opens {\n  kind = \"time\"\n}\n\nfield slots {\n  kind  = \"list\"\n  items = \"time\"\n}\n\ntemplate default {\n  tab \"Shop\" {\n    slot \"title\"\n  }\n}\n",
+    );
+    write(
+        &root,
+        &format!("notes/shop/{SCRATCH}.wcl"),
+        "title   = \"Bakery\"\ncreated = \"2026-10-01T09:00:00Z\"\nupdated = \"2026-10-01T09:00:00Z\"\nopens   = \"09:05\"\nslots   = [\"12:00:30\", \"23:59\"]\n",
+    );
+    let mut index = Index::open(&vault).unwrap();
+    let report = index.rebuild(&vault).unwrap();
+    assert_eq!(report.failures, vec![], "{report:?}");
+    let mut stmt = index
+        .connection()
+        .prepare(
+            "SELECT field || ' ' || pos || ' ' || kind || ' ' || str || ' ' || num FROM field_values
+             WHERE note = ?1 AND field IN ('opens', 'slots') ORDER BY field, pos",
+        )
+        .unwrap();
+    let rows: Vec<String> = stmt
+        .query_map([SCRATCH], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            "opens 0 time 09:05 32700",
+            "slots 0 time 12:00:30 43230",
+            "slots 1 time 23:59 86340",
+        ]
+    );
+}

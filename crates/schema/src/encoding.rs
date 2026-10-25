@@ -58,6 +58,29 @@ pub fn is_datetime(s: &str) -> bool {
     parse_datetime(s).is_some()
 }
 
+/// A 24-hour wall-clock time of day with no date or offset: `HH:MM` or `HH:MM:SS`, zero-padded.
+pub fn is_time(s: &str) -> bool {
+    parse_time(s).is_some()
+}
+
+/// Seconds since midnight of a valid time of day.
+pub fn parse_time(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if !matches!(b.len(), 5 | 8) || b[2] != b':' || (b.len() == 8 && b[5] != b':') {
+        return None;
+    }
+    let h = digits(&s[0..2])?;
+    let m = digits(&s[3..5])?;
+    let sec = if b.len() == 8 { digits(&s[6..8])? } else { 0 };
+    (h <= 23 && m <= 59 && sec <= 59).then_some(h * 3600 + m * 60 + sec)
+}
+
+/// A valid time of day written with seconds, `HH:MM:SS`, so that times sort as strings.
+pub fn canonical_time(s: &str) -> Option<String> {
+    let t = parse_time(s)?;
+    Some(format!("{:02}:{:02}:{:02}", t / 3600, t / 60 % 60, t % 60))
+}
+
 /// An ISO 8601 datetime in UTC, written with `Z`, as `created` and `updated` are.
 pub fn is_utc_datetime(s: &str) -> bool {
     s.ends_with('Z') && is_datetime(s)
@@ -249,6 +272,7 @@ mod tests {
     #[test]
     fn datetimes() {
         assert!(is_datetime("2026-10-20T09:30:00+11:00"));
+        assert!(!is_datetime("09:30:00"));
         assert!(is_datetime("2026-10-12T09:15:00Z"));
         assert!(is_datetime("2026-10-12T09:15:00.123Z"));
         assert!(!is_datetime("2026-10-12T09:15Z"));
@@ -297,5 +321,38 @@ mod tests {
         assert!(!is_ink_colour("1f2937"));
         assert!(is_palette("blue") && !is_palette("cyan"));
         assert!(is_name("in_progress2") && !is_name("InProgress") && !is_name("2x"));
+    }
+
+    #[test]
+    fn times() {
+        for ok in [
+            "00:00", "09:05", "23:59", "09:05:30", "23:59:59", "00:00:00",
+        ] {
+            assert!(is_time(ok), "{ok}");
+        }
+        for bad in [
+            "24:00",
+            "9:05",
+            "09:5",
+            "09:60",
+            "09:05:60",
+            "09:05:5",
+            "09:05:30Z",
+            "09:05+11:00",
+            "09:05:30.5",
+            "0905",
+            "09-05",
+            "",
+            "ab:cd",
+            "+9:05",
+            "2026-10-12",
+        ] {
+            assert!(!is_time(bad), "{bad}");
+        }
+        assert_eq!(parse_time("09:00"), parse_time("09:00:00"));
+        assert_eq!(parse_time("01:02:03"), Some(3723));
+        assert_eq!(canonical_time("09:05").as_deref(), Some("09:05:00"));
+        assert_eq!(canonical_time("23:59:59").as_deref(), Some("23:59:59"));
+        assert_eq!(canonical_time("24:00"), None);
     }
 }

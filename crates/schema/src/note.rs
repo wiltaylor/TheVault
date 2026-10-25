@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use crate::blocks::Check;
 use crate::doc::{Doc, Value};
 use crate::encoding::{
-    is_date, is_datetime, is_ulid, is_url, is_utc_datetime, parse_date, parse_datetime,
+    is_date, is_datetime, is_time, is_ulid, is_url, is_utc_datetime, parse_date, parse_datetime,
 };
 use crate::types::{Accept, DictValues, FieldDef, FieldKind, RangeOf, Scalar, is_image_filename};
 use crate::{Issue, Schema};
@@ -224,6 +224,7 @@ fn check_single(f: &FieldDef, v: &Value, ctx: Option<&Context>, c: &mut Check, a
         FieldKind::Bool => check_scalar(Scalar::Bool, v, c, at),
         FieldKind::Date => check_scalar(Scalar::Date, v, c, at),
         FieldKind::Datetime => check_scalar(Scalar::Datetime, v, c, at),
+        FieldKind::Time => check_scalar(Scalar::Time, v, c, at),
         FieldKind::Url => check_scalar(Scalar::Url, v, c, at),
         FieldKind::DateRange { of } => date_range(*of, v, c, at),
         FieldKind::Select { options, .. } => match v {
@@ -405,12 +406,16 @@ pub(crate) fn check_scalar(kind: Scalar, v: &Value, c: &mut Check, at: &str) {
         (Scalar::Datetime, Value::Str(s)) => Some(format!(
             "{s:?} is not an ISO 8601 datetime with seconds and an offset"
         )),
+        (Scalar::Time, Value::Str(s)) if is_time(s) => None,
+        (Scalar::Time, Value::Str(s)) => Some(format!(
+            "{s:?} is not a 24-hour time of day (HH:MM or HH:MM:SS)"
+        )),
         (Scalar::Url, Value::Str(s)) if is_url(s) => None,
         (Scalar::Url, Value::Str(s)) => Some(format!("{s:?} is not an absolute URL")),
         (Scalar::Int, Value::Float(_)) => Some("must be an integer, not a float".to_owned()),
         (Scalar::Int | Scalar::Float, v) => Some(format!("must be a number, not {}", v.describe())),
         (Scalar::Bool, v) => Some(format!("must be true or false, not {}", v.describe())),
-        (Scalar::String | Scalar::Date | Scalar::Datetime | Scalar::Url, v) => {
+        (Scalar::String | Scalar::Date | Scalar::Datetime | Scalar::Time | Scalar::Url, v) => {
             Some(format!("must be a string, not {}", v.describe()))
         }
     };

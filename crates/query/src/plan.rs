@@ -54,6 +54,8 @@ enum Class {
     Bool,
     /// `date` and `datetime`, as Unix time in `num`.
     Time,
+    /// `time`, a time of day, as seconds since midnight in `num`.
+    Clock,
     /// A taxonomy term path, sorted in the taxonomy's term order.
     Tax(String),
 }
@@ -74,6 +76,7 @@ fn class_of(kind: &FieldKind) -> Option<Class> {
         FieldKind::Int | FieldKind::Float => Class::Num,
         FieldKind::Bool => Class::Bool,
         FieldKind::Date | FieldKind::Datetime => Class::Time,
+        FieldKind::Time => Class::Clock,
         FieldKind::Taxonomy { taxonomy } => Class::Tax(taxonomy.clone()),
         FieldKind::Reference(_) => Class::Ref,
         // A list of scalars plans as its items do; any other list goes to the evaluator.
@@ -875,6 +878,8 @@ impl Planner<'_, '_> {
             (Class::Time, V::Date(d)) => ("num", Sql::Real(*d as f64 * 86_400.0)),
             (Class::Time, V::Datetime(t)) => ("num", Sql::Real(*t)),
             (Class::Time, V::Str(s)) => ("num", Sql::Real(value::str_time(s)?)),
+            (Class::Clock, V::Time(t)) => ("num", Sql::Integer(*t)),
+            (Class::Clock, V::Str(s)) => ("num", Sql::Integer(schema::parse_time(s)?)),
             _ => return None,
         };
         Some((col, self.bind(sql)))

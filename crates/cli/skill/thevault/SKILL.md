@@ -64,6 +64,7 @@ Every note also has `title`, which is required. The server sets `created` and `u
 | `bool` | `true` or `false` |
 | `date` | `"YYYY-MM-DD"` |
 | `datetime` | `"2026-10-20T09:30:00+11:00"`, seconds and an offset required |
+| `time` | A 24-hour time of day with no date or offset: `"09:30"` or `"17:45:30"`. Queries compare it by time of day, so `opens < "09:00"` works and `"09:00"` equals `"09:00:00"` |
 | `date_range` | `{ start: "2026-10-20", end: "2026-11-01" }` |
 | `url` | An absolute URL, such as `"https://example.com"` |
 | `select` | One of the field's `options` |
@@ -312,7 +313,7 @@ The second report lists the project under `also`, because the server added the t
 
 An upsert finds the note of the type whose `key` field holds the same value. It updates that note, or creates one when there is none. Running the same upsert twice changes nothing the second time, so an import that uses upserts can be rerun safely.
 
-- The key is `title` or a single `string`, `int`, `url`, `date`, `datetime` or `select` field, and the note you send must have a value for it.
+- The key is `title` or a single `string`, `int`, `url`, `date`, `datetime`, `time` or `select` field, and the note you send must have a value for it.
 - The server does not keep key values unique. When more than one note of the type holds the value, the upsert is refused with `"status": 409` and `"error": "key_not_unique"`, and `ids` lists the matching notes. Choose a key that is unique in your data, such as a person's `homepage`. A list field, such as a person's `emails`, cannot be a key. `title` works when no two notes of the type share a title.
 - Two upserts in one batch may not have the same key value.
 - An update sets only the fields and `content` blocks you send. Every other field keeps its value, so an upsert cannot clear a field. To clear one, `put` the whole note.
@@ -624,7 +625,7 @@ Any content block in a tab is shown on every note of the type. In a fixed block'
 | `columns` | 2 to 6 `column { width = 1 ... }` blocks side by side, each holding slots and fixed blocks. Columns do not nest |
 | `toggle` | `text`, the summary, and optional `level` (0 to 3); the blocks it opens to show nest inside it |
 | `admonition` | `kind` (`note`, `info`, `tip`, `success`, `warning`, `danger`, `question` or `quote`), optional `title`, `colour`, `icon` and `collapsible`; its blocks nest inside it |
-| `control` | `field` and `kind`: a form control that edits the field in place. The kinds are `text`, `textarea`, `number`, `slider` (with `min` and `max`), `rating`, `toggle`, `checkbox`, `dropdown`, `radio`, `chips`, `calendar`, `datetime` and `time`. A kind that does not fit the field is refused with the field kinds it fits |
+| `control` | `field` and `kind`: a form control that edits the field in place. The kinds are `text`, `textarea`, `number`, `slider` (with `min` and `max`), `rating`, `toggle`, `checkbox`, `dropdown`, `radio`, `chips`, `calendar`, `datetime` and `time` (a `time` field, or the time of day of a `datetime`). A kind that does not fit the field is refused with the field kinds it fits |
 | `query_view` | A live query and its views: below |
 | `ink`, `canvas` | A drawing or a canvas, made in the app |
 

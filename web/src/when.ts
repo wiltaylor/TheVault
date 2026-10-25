@@ -402,7 +402,8 @@ export function whenProblem(text: string, fields: WhenField[]): string | null {
   return check(e, []);
 }
 
-// Values while evaluating. Dates are days since 1970-01-01, datetimes and durations seconds.
+// Values while evaluating. Dates are days since 1970-01-01, datetimes and durations seconds, and
+// times of day seconds since midnight.
 type V =
   | { k: "null" }
   | { k: "bool"; v: boolean }
@@ -411,6 +412,7 @@ type V =
   | { k: "str"; v: string }
   | { k: "date"; v: number }
   | { k: "datetime"; v: number }
+  | { k: "time"; v: number }
   | { k: "duration"; v: number }
   | { k: "ref"; v: string }
   | { k: "list"; v: V[] }
@@ -428,6 +430,7 @@ const KIND: Record<V["k"], string> = {
   str: "a string",
   date: "a date",
   datetime: "a datetime",
+  time: "a time",
   duration: "a duration",
   ref: "a note",
   list: "a list",
@@ -506,6 +509,34 @@ function parseDatetime(s: string): number | null {
   return days * 86_400 + h * 3600 + mi * 60 + sec - offset + frac;
 }
 
+/** Seconds since midnight of a 24-hour `HH:MM` or `HH:MM:SS`. */
+function parseClock(s: string): number | null {
+  if ((s.length !== 5 && s.length !== 8) || s[2] !== ":" || (s.length === 8 && s[5] !== ":")) return null;
+  const h = digits(s.slice(0, 2));
+  const m = digits(s.slice(3, 5));
+  const sec = s.length === 8 ? digits(s.slice(6, 8)) : 0;
+  if (h === null || m === null || sec === null || h > 23 || m > 59 || sec > 59) return null;
+  return h * 3600 + m * 60 + sec;
+}
+
+/** Both sides as times of day, when one is a time and the other a time or a string holding one. */
+function clocks(a: V, b: V): [number, number] | null {
+  const x = a.k === "time" ? a.v : null;
+  const y = b.k === "time" ? b.v : null;
+  if (x !== null && y !== null) return [x, y];
+  if (x !== null) {
+    const s = idOf(b);
+    const t = s === null ? null : parseClock(s);
+    return t === null ? null : [x, t];
+  }
+  if (y !== null) {
+    const s = idOf(a);
+    const t = s === null ? null : parseClock(s);
+    return t === null ? null : [t, y];
+  }
+  return null;
+}
+
 function strTime(s: string): number | null {
   const d = parseDate(s);
   return d !== null ? d * 86_400 : parseDatetime(s);
@@ -531,6 +562,8 @@ function times(a: V, b: V): [number, number] | null {
 function equals(a: V, b: V): boolean {
   const t = times(a, b);
   if (t) return t[0] === t[1];
+  const c = clocks(a, b);
+  if (c) return c[0] === c[1];
   if (a.k === "null" && b.k === "null") return true;
   if (a.k === "null" || b.k === "null") return false;
   if (a.k === "bool" && b.k === "bool") return a.v === b.v;
@@ -563,6 +596,8 @@ function compare(a: V, b: V): number | null {
   const cmp = (x: number, y: number) => (Number.isNaN(x) || Number.isNaN(y) ? null : x < y ? -1 : x > y ? 1 : 0);
   const t = times(a, b);
   if (t) return cmp(t[0], t[1]);
+  const c = clocks(a, b);
+  if (c) return cmp(c[0], c[1]);
   if (a.k === "duration" && b.k === "duration") return cmp(a.v, b.v);
   if (a.k === "str" && b.k === "str") return a.v < b.v ? -1 : a.v > b.v ? 1 : 0;
   const [x, y] = [numOf(a), numOf(b)];
@@ -632,6 +667,10 @@ function fromJson(raw: Json, kind: string, f?: WhenField): V {
   if (kind === "datetime" && typeof raw === "string") {
     const t = parseDatetime(raw);
     return t === null ? { k: "str", v: raw } : { k: "datetime", v: t };
+  }
+  if (kind === "time" && typeof raw === "string") {
+    const t = parseClock(raw);
+    return t === null ? { k: "str", v: raw } : { k: "time", v: t };
   }
   if (kind === "date_range" && typeof raw === "object") {
     return {

@@ -117,6 +117,13 @@ export function opsFor(f: FieldDef): [Op, string][] {
     ["between", "between"],
     ["last", "in the last"],
   ];
+  // A time of day compares by the clock: at one, before, after or between two.
+  const clock: [Op, string][] = [
+    ["on", "at"],
+    ["before", "before"],
+    ["after", "after"],
+    ["between", "between"],
+  ];
   const builtin = f.name === "created" || f.name === "updated";
   switch (f.kind) {
     case "string":
@@ -138,13 +145,15 @@ export function opsFor(f: FieldDef): [Op, string][] {
       return [["is", "is"], ...empties];
     case "list":
       // A list of date ranges, locations, lists or dicts holds no item a typed value matches.
-      return ["string", "int", "float", "bool", "date", "datetime", "url"].includes(f.items ?? "string")
+      return ["string", "int", "float", "bool", "date", "datetime", "time", "url"].includes(f.items ?? "string")
         ? [["has", "contains"], ...empties]
         : empties;
     case "date":
     case "datetime":
     case "date_range":
       return builtin ? dates : [...dates, ...empties];
+    case "time":
+      return [...clock, ...empties];
     default:
       return empties;
   }
@@ -428,6 +437,33 @@ function rangeCond(f: string, days: boolean, op: Op, v: string[], offset: Offset
   }
 }
 
+/** A 24-hour time of day, `HH:MM` or `HH:MM:SS`, as a time input gives it. */
+const CLOCK = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
+/** A time `HH:MM` or `HH:MM:SS` with its seconds, so two order as text. */
+const withSeconds = (t: string) => (t.length === 5 ? `${t}:00` : t);
+
+/** A condition on a time of day field: at a time, before or after one, or between two, both included. */
+function timeCond(subject: string, op: Op, v: string[]): string | null {
+  const [a, b] = v;
+  if (!a || !CLOCK.test(a)) return null;
+  switch (op) {
+    case "on":
+      return `${subject} == ${lit(a)}`;
+    case "before":
+      return `${subject} < ${lit(a)}`;
+    case "after":
+      return `${subject} > ${lit(a)}`;
+    case "between": {
+      if (!b || !CLOCK.test(b)) return null;
+      const [lo, hi] = withSeconds(a) <= withSeconds(b) ? [a, b] : [b, a];
+      return `${subject} >= ${lit(lo)} && ${subject} <= ${lit(hi)}`;
+    }
+    default:
+      return null;
+  }
+}
+
 const COMPARE: Partial<Record<Op, string>> = { eq: "==", ne: "!=", lt: "<", le: "<=", gt: ">", ge: ">=" };
 
 /** A list item literal of the list's item kind. */
@@ -493,6 +529,7 @@ export function filterCond(
     case "after":
     case "between":
     case "last": {
+      if (def.kind === "time") return timeCond(f, filter.op, v);
       if (def.kind === "date_range") {
         if (def.of === "date_or_datetime") return mixedRangeCond(f, filter.op, v, offset, today);
         return rangeCond(f, def.of !== "datetime", filter.op, v, offset);

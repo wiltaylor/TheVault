@@ -41,8 +41,8 @@ pub use change::{FieldChanges, NoteEdit};
 pub use devices::{DEVICE_COMMANDS, DEVICE_EVENTS, DEVICE_PLATFORMS, DeviceFile, DeviceHook};
 pub use doc::{Doc, DocBlock, Value};
 pub use encoding::{
-    PALETTE, is_date, is_datetime, is_duration, is_ident, is_ink_colour, is_name, is_palette,
-    is_ulid, is_url, is_utc_datetime, parse_datetime,
+    PALETTE, canonical_time, is_date, is_datetime, is_duration, is_ident, is_ink_colour, is_name,
+    is_palette, is_time, is_ulid, is_url, is_utc_datetime, parse_datetime, parse_time,
 };
 pub use inline::{
     AGENT_CALL_SCHEME, AgentCall, MARKUP_ITEMS, Placeholder, agent_calls, escape_markup,

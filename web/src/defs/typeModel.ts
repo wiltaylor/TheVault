@@ -13,6 +13,7 @@ export const FIELD_KINDS = [
   "bool",
   "date",
   "datetime",
+  "time",
   "date_range",
   "url",
   "select",
@@ -29,7 +30,7 @@ export const FIELD_KINDS = [
 
 export type FieldKind = (typeof FIELD_KINDS)[number];
 
-export const SCALARS = ["string", "int", "float", "bool", "date", "datetime", "url"] as const;
+export const SCALARS = ["string", "int", "float", "bool", "date", "datetime", "time", "url"] as const;
 /** What a list item, a dict key or a dict's other entries may be: every kind but the block kinds (types T1). */
 export const VALUE_KINDS = [
   "string",
@@ -38,6 +39,7 @@ export const VALUE_KINDS = [
   "bool",
   "date",
   "datetime",
+  "time",
   "date_range",
   "url",
   "select",
@@ -77,6 +79,7 @@ export const DEFAULT_KINDS = new Set<string>([
   "bool",
   "date",
   "datetime",
+  "time",
   "url",
   "select",
   "taxonomy",

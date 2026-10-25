@@ -17,6 +17,8 @@ pub(crate) enum V {
     Date(i64),
     /// Seconds since the Unix epoch.
     Datetime(f64),
+    /// A time of day with no date: seconds since midnight.
+    Time(i64),
     /// Seconds.
     Duration(f64),
     /// The id of a note.
@@ -37,6 +39,7 @@ impl V {
             V::Str(_) => "a string",
             V::Date(_) => "a date",
             V::Datetime(_) => "a datetime",
+            V::Time(_) => "a time",
             V::Duration(_) => "a duration",
             V::Ref(_) => "a note",
             V::List(_) => "a list",
@@ -84,6 +87,22 @@ pub(crate) fn str_time(s: &str) -> Option<f64> {
         .or_else(|| time::datetime(s))
 }
 
+/// The two sides of a comparison as times of day, when one is a time of day and the other one or
+/// a string holding one, so `opens < "09:00"` compares clock times and `"09:00"` equals
+/// `"09:00:00"`.
+fn clocks(a: &V, b: &V) -> Option<(i64, i64)> {
+    let clock = |v: &V| match v {
+        V::Time(t) => Some(*t),
+        _ => None,
+    };
+    match (clock(a), clock(b)) {
+        (Some(x), Some(y)) => Some((x, y)),
+        (Some(x), None) => Some((x, schema::parse_time(b.id()?)?)),
+        (None, Some(y)) => Some((schema::parse_time(a.id()?)?, y)),
+        (None, None) => None,
+    }
+}
+
 /// The two sides of a comparison as times, when one is a time and the other a time or a string
 /// holding one.
 fn times(a: &V, b: &V) -> Option<(f64, f64)> {
@@ -97,6 +116,9 @@ fn times(a: &V, b: &V) -> Option<(f64, f64)> {
 
 pub(crate) fn equals(a: &V, b: &V) -> Eval<bool> {
     if let Some((x, y)) = times(a, b) {
+        return Ok(x == y);
+    }
+    if let Some((x, y)) = clocks(a, b) {
         return Ok(x == y);
     }
     Ok(match (a, b) {
@@ -131,6 +153,9 @@ pub(crate) fn compare(a: &V, b: &V) -> Eval<Option<Ordering>> {
     }
     if let Some((x, y)) = times(a, b) {
         return Ok(x.partial_cmp(&y));
+    }
+    if let Some((x, y)) = clocks(a, b) {
+        return Ok(Some(x.cmp(&y)));
     }
     match (a, b) {
         (V::Duration(x), V::Duration(y)) => Ok(x.partial_cmp(y)),
@@ -235,6 +260,7 @@ pub(crate) fn from_json(raw: &serde_json::Value, kind: &FieldKind) -> V {
         (FieldKind::Datetime, J::String(s)) => {
             time::datetime(s).map_or(V::Str(s.clone()), V::Datetime)
         }
+        (FieldKind::Time, J::String(s)) => schema::parse_time(s).map_or(V::Str(s.clone()), V::Time),
         (FieldKind::DateRange { of }, J::Object(m)) => V::Record(
             m.iter()
                 .map(|(k, v)| {
@@ -380,6 +406,7 @@ impl Key {
             V::Int(n) => Key::Int(*n),
             V::Float(x) | V::Duration(x) => Key::Float(*x),
             V::Date(_) | V::Datetime(_) => Key::Float(v.time().unwrap_or_default()),
+            V::Time(t) => Key::Int(*t),
             V::Str(s) | V::Ref(s) => Key::Str(s.clone()),
             V::List(l) => Key::List(l.iter().map(Key::of).collect()),
             V::Record(r) => Key::List(r.iter().map(|(_, v)| Key::of(v)).collect()),

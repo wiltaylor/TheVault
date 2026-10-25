@@ -97,6 +97,7 @@ const SCALAR_INPUT: Record<string, string> = {
   float: "number",
   date: "date",
   datetime: "datetime-local",
+  time: "time",
   url: "url",
 };
 
@@ -124,6 +125,18 @@ export function datetimeValue(raw: string, previous: Json | undefined): string {
   return `${local}${minutes < 0 ? "-" : "+"}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
 }
 
+/** A stored time of day, 24-hour: `HH:MM` or `HH:MM:SS`. */
+export const TIME = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
+/**
+ * A time input's text as a stored time: `HH:MM`, or `HH:MM:SS` when it has seconds. A fraction of
+ * a second some browsers add is dropped.
+ */
+export function timeValue(raw: string): string {
+  const m = /^(\d\d:\d\d(?::\d\d)?)(?:\.\d+)?$/.exec(raw);
+  return m ? m[1]! : raw;
+}
+
 /** An input's text as a scalar of `kind`. Empty text means no value. */
 export function scalarValue(kind: string, raw: string, previous?: Json): Json | undefined {
   if (raw === "") return undefined;
@@ -133,6 +146,7 @@ export function scalarValue(kind: string, raw: string, previous?: Json): Json | 
     return kind === "int" ? Math.trunc(n) : n;
   }
   if (kind === "datetime") return datetimeValue(raw, previous);
+  if (kind === "time") return timeValue(raw);
   return raw;
 }
 
@@ -142,7 +156,18 @@ function scalarText(kind: string, v: Json | undefined): string {
   return typeof v === "object" ? JSON.stringify(v) : String(v);
 }
 
-/** One scalar of `kind`: string, int, float, bool, date, datetime or url. */
+/**
+ * The step of a scalar's input: any number for a float, and seconds for a datetime, and for a
+ * time that holds seconds, so a time without them stays `HH:MM`.
+ */
+function scalarStep(kind: string, v: Json | undefined): string | undefined {
+  if (kind === "float") return "any";
+  if (kind === "datetime") return "1";
+  if (kind === "time" && typeof v === "string" && v.length === 8) return "1";
+  return undefined;
+}
+
+/** One scalar of `kind`: string, int, float, bool, date, datetime, time or url. */
 export function ScalarInput(props: {
   kind: string;
   value: Json | undefined;
@@ -159,7 +184,7 @@ export function ScalarInput(props: {
         <input
           id={props.id}
           type={SCALAR_INPUT[props.kind] ?? "text"}
-          step={props.kind === "float" ? "any" : props.kind === "datetime" ? "1" : undefined}
+          step={scalarStep(props.kind, props.value)}
           value={scalarText(props.kind, props.value)}
           required={props.required}
           placeholder={props.placeholder}
@@ -431,6 +456,7 @@ export const ANY_KINDS = [
   ["bool", "Yes/no"],
   ["date", "Date"],
   ["datetime", "Date and time"],
+  ["time", "Time"],
   ["url", "URL"],
   ["list", "List of text"],
 ] as const;
@@ -448,6 +474,7 @@ export function anyKind(v: Json | undefined): string {
   if (typeof v === "string") {
     if (DATE.test(v)) return "date";
     if (DATETIME.test(v)) return "datetime";
+    if (TIME.test(v)) return "time";
     if (/^https?:\/\//.test(v)) return "url";
     return "string";
   }
@@ -944,6 +971,7 @@ const INPUT_KINDS = new Set([
   "bool",
   "date",
   "datetime",
+  "time",
   "date_range",
   "url",
   "select",

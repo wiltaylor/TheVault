@@ -32,6 +32,9 @@ field due {
 field at {
   kind = "datetime"
 }
+field opens {
+  kind = "time"
+}
 field span {
   kind = "date_range"
 }
@@ -142,7 +145,7 @@ const FITS: &[(&str, &[&str])] = &[
     ("chips", &["tags", "phones", "sizes", "statuses", "links"]),
     ("calendar", &["due", "span"]),
     ("datetime", &["at"]),
-    ("time", &["at"]),
+    ("time", &["at", "opens"]),
     ("rating", &["count", "words"]),
 ];
 
@@ -157,6 +160,7 @@ const ALL: &[&str] = &[
     "done",
     "due",
     "at",
+    "opens",
     "span",
     "slot_span",
     "size",

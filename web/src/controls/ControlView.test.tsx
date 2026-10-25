@@ -29,6 +29,7 @@ const TYPE: TypeDef = {
     field("done", "bool"),
     field("stars", "int"),
     field("words", "int", { computed: true }),
+    field("opens", "time"),
     field("phones", "list", {
       items: "dict",
       item: field("phones", "dict", { keys: [field("number", "string", { required: true }), field("label", "string")], values: null }),
@@ -73,6 +74,21 @@ describe("ControlBlock", () => {
     expect(chips).toEqual(["mobile+61400000020", "home+61400000021"]);
     fireEvent.click(getByRole("button", { name: "Remove mobile +61400000020" }));
     expect(values().phones).toEqual([{ number: "+61400000021", label: "home" }]);
+  });
+
+  it("a time control on a time field writes the 24-hour time as given, with no date", () => {
+    const { container, values } = mount([ctl("opens", "time")], { opens: "08:30" });
+    const box = container.querySelector("input[type=time]") as HTMLInputElement;
+    expect(box.value).toBe("08:30");
+    expect(box.getAttribute("step")).toBeNull();
+    expect(container.querySelector(".control-time-date")).toBeNull();
+    fireEvent.change(box, { target: { value: "17:45" } });
+    expect(values().opens).toBe("17:45");
+    fireEvent.change(box, { target: { value: "06:05:30" } });
+    expect(values().opens).toBe("06:05:30");
+    expect(box.getAttribute("step")).toBe("1");
+    fireEvent.change(box, { target: { value: "" } });
+    expect(values().opens).toBeUndefined();
   });
 
   it("two controls on one field agree, and each writes the field", () => {

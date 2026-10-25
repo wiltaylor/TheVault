@@ -118,7 +118,8 @@ pub fn control_fits_text(kind: &str) -> &'static str {
             "a list of strings or of labelled values, or a multiple select, taxonomy or reference field"
         }
         "calendar" => "a date field or a date range of dates",
-        "datetime" | "time" => "a datetime field",
+        "datetime" => "a datetime field",
+        "time" => "a datetime or time field",
         "rating" => "an int field",
         _ => "no field",
     }
@@ -144,7 +145,8 @@ pub fn control_fits(kind: &str, f: &FieldDef) -> bool {
                 || f.kind.item().is_some_and(labelled)
         }
         "calendar" => matches!(f.kind, K::Date | K::DateRange { of: RangeOf::Date }),
-        "datetime" | "time" => matches!(f.kind, K::Datetime),
+        "datetime" => matches!(f.kind, K::Datetime),
+        "time" => matches!(f.kind, K::Datetime | K::Time),
         "rating" => matches!(f.kind, K::Int),
         _ => false,
     }

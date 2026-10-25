@@ -40,7 +40,7 @@ export const CONTROL_INFO: Record<ControlKind, { label: string; keywords: string
   chips: { label: "Chip list", keywords: "tags multi pills tokens", fits: "list of strings, multiple select, taxonomy or reference" },
   calendar: { label: "Calendar", keywords: "date month day range", fits: "date or date range" },
   datetime: { label: "Date and time", keywords: "datetime timestamp when", fits: "datetime" },
-  time: { label: "Time", keywords: "clock hour minute", fits: "datetime" },
+  time: { label: "Time", keywords: "clock hour minute", fits: "datetime or time" },
   rating: { label: "Rating", keywords: "stars score", fits: "int" },
 };
 
@@ -73,8 +73,9 @@ export function controlFits(kind: ControlKind, f: FieldDef): boolean {
     case "calendar":
       return f.kind === "date" || (f.kind === "date_range" && (f.of ?? "date") === "date");
     case "datetime":
-    case "time":
       return f.kind === "datetime";
+    case "time":
+      return f.kind === "datetime" || f.kind === "time";
     case "rating":
       return f.kind === "int";
   }
