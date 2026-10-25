@@ -20,7 +20,9 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// no date, which an older reader refuses as an unknown kind.
 /// 5: AI accounts (accounts A10): agent files name `account = "<account name>"` in place of
 /// `provider`, which an older reader refuses as an unknown agent field (its `provider` is a
-/// closed list of three).
+/// closed list of three); and the planner's built-in `weeklynote`, `monthlynote`,
+/// `quarterlynote` and `yearlynote` types, whose templates hold the template-only
+/// `period_calendar` block, an unknown block that makes an older reader refuse the type.
 pub const FORMAT_VERSION: u32 = 5;
 
 /// Who made a change (D13, D30).

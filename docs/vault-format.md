@@ -218,11 +218,15 @@ A release that adds an attribute is rolled out apps first. See [Releasing a form
 
 ### Built-in types
 
-Every vault has eleven types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it, and adds to a built-in type the vault has every field its shipped default gained since: see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`. A type of the user's that merely holds a built-in's name is not the built-in: [Shipped defaults and upgrades](#shipped-defaults-and-upgrades), step 2, gives the rule.
+Every vault has fifteen types that the app relies on. The server writes each one's type file when it starts on a vault that lacks it, so a new vault and a vault made before a type existed both get it, and adds to a built-in type the vault has every field its shipped default gained since: see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). `vault init --starter` writes them too. The files it writes are in `crates/writer/defaults/`, one per type, named after it. A built-in type can be customised like any other type, but it cannot be deleted: a delete answers 409 `built_in_type`. Schema inspection marks each with `"builtin": true`. A type of the user's that merely holds a built-in's name is not the built-in: [Shipped defaults and upgrades](#shipped-defaults-and-upgrades), step 2, gives the rule.
 
 | Type | Label | For | Must keep |
 |------|-------|-----|-----------|
-| `dailynote` | Daily note | One note for each day. The app opens today's note and finds a day's note by its date | `date`, one required `date` field |
+| `dailynote` | Daily note | One note for each day. The app opens today's note and finds a day's note by its date. See [Planner notes](#planner-notes) | `date`, one required `date` field |
+| `weeklynote` | Weekly note | One note for each ISO week, Monday to Sunday. Its page shows a [`period_calendar`](#period_calendar) of the week. See [Planner notes](#planner-notes) | `date`, one required `date` field |
+| `monthlynote` | Monthly note | One note for each month, with a calendar of the month | `date`, one required `date` field |
+| `quarterlynote` | Quarterly note | One note for each quarter, January to March, April to June, July to September or October to December, with a calendar of its three months | `date`, one required `date` field |
+| `yearlynote` | Yearly note | One note for each year, with a calendar of its twelve months | `date`, one required `date` field |
 | `fleeting` | Fleeting note | A quick capture of text or images, made from the app's capture dialog. Unprocessed ones wait in the Inbox (`from fleeting where !processed`) until they are marked done, converted into a note of another type, or deleted | `processed`, one `bool` field that handlers do not compute |
 | `message` | Message | One SMS, MMS or RCS message from a phone, written by the default device scripts (D15) | nothing |
 | `call` | Call | One phone call, made, received or missed (D15) | nothing |
@@ -235,6 +239,20 @@ Every vault has eleven types that the app relies on. The server writes each one'
 | `agent_memory` | Agent memory | One thing an agent remembers from one conversation to the next (agents G21): `title`, a short name of at most 120 characters; `agent`, the agent's name; and the content field `body`, the memory's text, at most 8,000 characters. An agent holds at most 500. Its list page shows the list view, last changed first. An agent writes its own memories, authored by the agent | nothing |
 
 A change that removes a "must keep" field, or changes its kind, is refused with `invalid_type`.
+
+#### Planner notes
+
+The five planner types hold one note for each day, ISO week, month, quarter or year. A planner note's `date` is the first day of its period: the day itself, the Monday of the ISO week, the 1st of the month, the 1st of January, April, July or October, or the 1st of January. The app finds a period's note by its type and that date, never by its title, so a note can be renamed freely. When several notes of a type hold the same `date`, the oldest is the period's note. The server creates a note with this title, which the user may change:
+
+| Type | Period | Title of a new note |
+|------|--------|---------------------|
+| `dailynote` | One day | `Tuesday 13 October 2026` |
+| `weeklynote` | One ISO week, Monday to Sunday. Week 1 is the week that holds the year's first Thursday, so 29 to 31 December can be in week 1 of the next year and 1 to 3 January in week 52 or 53 of the year before | `Week 43, 2026`, with the ISO week-year, the year of the week's Thursday |
+| `monthlynote` | One calendar month | `October 2026` |
+| `quarterlynote` | One quarter | `Q4 2026` |
+| `yearlynote` | One calendar year | `2026` |
+
+`GET /api/planner/{period}/{date}` reads the note of the period holding `date`, given as `YYYY-MM-DD`, and answers 404 when the period has none. `POST` on the same path creates it when there is none and answers 201, or answers 200 with the note there is. Both answer as `GET /api/notes/{id}` does, with `created`. `{period}` is `day`, `week`, `month`, `quarter` or `year`, and `{date}` is any day of the period: `POST /api/planner/week/2026-10-25` and `POST /api/planner/week/2026-10-19` open the same note, whose `date` is `2026-10-19`. Another period, or a date that is not a real day, answers 400. Finding and creating happen under the write lock, so two clients opening one period get one note. `GET` and `POST /api/daily/{date}` are `day`'s routes under their older name. The CLI's `vault planner get <period> <date>` and `vault planner open <period> <date>` call them, as `vault daily get` and `vault daily open` call the daily routes.
 
 The phone data types, `email`, `email_thread` and `event` reference `person`, which is a starter type and not a built-in one. When the server adds any of them to a vault that has no `person` type, it adds `crates/writer/defaults/person.wcl` with them, in the same commit. That `person` can be customised and, once nothing references it, deleted. A vault that already has a `person` type keeps it, and gains on start each field of `crates/writer/defaults/person.wcl` it lacks, such as `emails`, `phones`, `addresses` and `device_contacts`, which the device scripts write.
 
@@ -1188,6 +1206,7 @@ A tab holds an optional `when` and an ordered mix of slots and content blocks:
 | `when` inside a slot | string | Optional. A condition, as a tab's, under which the slot shows. See [Conditional slots](#conditional-slots) |
 | any [content block](#content-blocks) | block | Fixed content shown on every note. In a `query_view`, `this` is the note being shown. An `image` may show an asset field of the note instead of a fixed asset: see [Images from fields](#images-from-fields) |
 | `columns { ... }` | block | A [columns](#columns) layout whose columns hold slots and fixed blocks, so fields sit side by side |
+| `period_calendar { ... }` | block | A [calendar of the period](#period_calendar) a planner note covers, in the tab or in a column. Only a template holds one |
 | `control { ... }` | block | A [control](#control) that edits a field in place, in the tab or in a column. A field may have a slot and any number of controls |
 
 A slot inside a column counts as placing its field, as one directly in the tab does, and the rule of one slot per field covers the whole template, columns included. Controls in columns are checked as anywhere else. `{{name}}` references in fixed blocks inside columns are checked as anywhere else. Inside a tab, the canonical form writes a `columns` block and its columns compactly, with no blank lines between their blocks.
@@ -1466,13 +1485,13 @@ estimate = 3
 - **A normal write.** Archiving and unarchiving are updates at a base version, like any other write (D12). Each records a version of its own in the history, even straight after the same session's autosave, sets `updated`, and runs the type's `before_update` and `after_update` handlers. Archiving a note that is already archived, or unarchiving one that is not, changes nothing and returns the current version.
 - **Still a note.** An archived note opens by id, can be edited, and its references and mentions still resolve. A write keeps it archived. Restoring an earlier version keeps the state the note has now, and a note deleted while archived comes back from the trash archived.
 - **Left out of listings.** `index.db` keeps the flag in the `archived` column of `notes`, and the full-text index keeps it beside each document. Every query, full-text search and note listing leaves archived notes out unless it asks for them; see [Archived notes in queries](#archived-notes-in-queries). The link graph leaves archived neighbours out.
-- **Daily notes.** An archived daily note is still the note for its day: opening the day opens it, and no second note is created.
+- **Planner notes.** An archived daily, weekly, monthly, quarterly or yearly note is still the note for its period: opening the period opens it, and no second note is created.
 
 `vault/notes/specimen/01JB8Z4K2MQ7V3X9T5R6W8Y2ZA.wcl` uses every field kind and every content block kind. `vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` is a note that is mostly one canvas, using both canvas node kinds.
 
 ## Content blocks
 
-A content field, and a template tab, hold an ordered sequence of these blocks (D34). The block kinds are closed: `store` rejects any other kind. Items marked required must be written. The text items marked *markup* use the [inline markup](#inline-markup).
+A content field, and a template tab, hold an ordered sequence of these blocks (D34). The block kinds are closed: `store` rejects any other kind. A template also holds [`period_calendar`](#period_calendar), which a note's content cannot. Items marked required must be written. The text items marked *markup* use the [inline markup](#inline-markup).
 
 ### `heading`
 
@@ -1612,6 +1631,35 @@ Rules:
 - A card is a link, as a mention is: `index` records it in the note's links as a mention in the content field that holds it, so `linked_from` and the note's backlinks see it. A card nested in columns, a toggle, an admonition or a canvas card links as one at the top does.
 - The note need not exist. A card of a note that is missing or deleted shows "Missing note" and stays in the content, as a mention of it does; deleting a note never changes the notes that show it in a card.
 - The card's text is not searched as this note's text. Only the `note` id is stored, so renaming the note shown never rewrites the notes that show it.
+
+### `period_calendar`
+
+A calendar of the week, month, quarter or year a [planner note](#planner-notes) covers, with the notes of a query on its days. Only a template holds it, in a tab or in a column; the schema refuses it in a note's content. The shipped `weeklynote`, `monthlynote`, `quarterlynote` and `yearlynote` types put one above their `body`.
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `period` | string | Required. `week`, `month`, `quarter` or `year` |
+| `query` | string | The notes shown. Default: `from event` |
+| `date` | string | The date, datetime or date range field of the notes of `query` that places them on days. Default: `when` |
+
+```wcl
+template default {
+  tab "Week" {
+    period_calendar {
+      period = "week"
+    }
+    slot "body"
+  }
+}
+```
+
+Rules:
+
+- The period is the one holding the note's own `date` field, which the type must have as a `date` field: the schema refuses the block in a type without one. The calendar starts on the first day of that period, wherever in it the date falls.
+- The calendar shows the notes of `query` whose `date` field falls in the period, or whose date range overlaps it. A note whose range starts before the period or ends after it shows on the days of it inside the period, and an all-day range shows on every day it covers. `this` in `query` is the note shown, as in a `query_view`.
+- `week` shows seven day columns, Monday to Sunday, each listing its notes. `month` shows the month's grid, its weeks starting on Monday. `quarter` shows the grids of its three months. `year` shows twelve small month grids with a count of the notes on each day; choosing a day lists them.
+- Each day's number links to that day's daily note, which opens it, or offers to create it, as the planner does. Choosing a note opens it.
+- A `query` that does not run, or a `date` that no type of the query has as a date, datetime or date range field, shows the problem in place of the calendar, as a calendar `query_view` does.
 
 ### `code`
 
@@ -2589,7 +2637,7 @@ The app ships defaults into every vault: the built-in types (and the `person` ty
    | `0005_list_page_defaults` | An `email` or `message` type with no `list_page` block, as every release before lists L5 shipped it: it gains the shipped type's block (details view, `sent desc`, 50 a page) after its last item, as one planned type change that edits no note (lists L5). The rest of the file stays as it is, so a type the user edited, such as one with a slot added to its card, keeps the edit; the seeding below only adds fields, so it would not carry the block. A type that has a `list_page` block, whatever it holds, is left alone, and so is a user's own type holding the name (see step 2). A type without the `sent` field gains the block without its `sort` |
 2. **Built-in taxonomies and types.** A built-in taxonomy the vault lacks is added whole, before the types that use it; one the vault has is never changed. A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` or `card` template places an added field, the vault's template of the same name gains that slot, after the nearest slot the shipped template puts before it, else before the nearest slot it puts after it, or at the end of its first tab. A vault type without that template gains none. Slots inside `columns` and `column` count, so a slot the shipped template puts after `from` in a column lands after `from` in the vault's column. Nothing else in either template changes: a vault from before 0.1.13 gains `processed` on `email` and `message` with its slot on their pages and on their cards, and an old starter vault's `person` card gains `photo` before the title. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
 
-   A vault type that holds a built-in's name is the built-in only in one of two cases. Either `state.db` records that the server wrote it (the server records each built-in type it adds, in the shipped-file table under the type file's path, such as `types/event.wcl`), or it matches the built-in's identity: it declares the built-in's key field as a single string field. The key fields are `device_ref` for `message` and `call`, `thread_ref` for `conversation` and `email_thread`, `gmail_ref` for `email` and `google_ref` for `event`. Each is the field the phone or the Google sync captures a note once by, and every version the app shipped declares it. A type found by its identity is recorded on that start, so it stays the built-in whatever the user changes in it later. `dailynote` and `fleeting` are always the built-in. Any other type holding a built-in's name, such as an `event` type with unrelated fields made before `event` was a built-in, is the user's own: the server leaves it as it is, adds no shipped field to it, does not mark it built-in, lets it be deleted, and logs one line on each start saying it skipped the built-in because a type of the user's holds the name. Once the user deletes or renames it, the next start adds the built-in in its place.
+   A vault type that holds a built-in's name is the built-in only in one of two cases. Either `state.db` records that the server wrote it (the server records each built-in type it adds, in the shipped-file table under the type file's path, such as `types/event.wcl`), or it matches the built-in's identity: it declares the built-in's key field as a single string field. The key fields are `device_ref` for `message` and `call`, `thread_ref` for `conversation` and `email_thread`, `gmail_ref` for `email` and `google_ref` for `event`. Each is the field the phone or the Google sync captures a note once by, and every version the app shipped declares it. A type found by its identity is recorded on that start, so it stays the built-in whatever the user changes in it later. The planner types, `dailynote`, `weeklynote`, `monthlynote`, `quarterlynote` and `yearlynote`, and `fleeting` are always the built-in. Any other type holding a built-in's name, such as an `event` type with unrelated fields made before `event` was a built-in, is the user's own: the server leaves it as it is, adds no shipped field to it, does not mark it built-in, lets it be deleted, and logs one line on each start saying it skipped the built-in because a type of the user's holds the name. Once the user deletes or renames it, the next start adds the built-in in its place.
 3. **Missing files.** Each default device script, the default device file, each shipped task and its script, and the built-in agent the vault lacks is written, the scripts before the device file or task that names them. A deleted one comes back on the next start; pause a shipped task to stop it. That changes nothing on a device: a vault with no `devices/android.wcl` runs the same built-in default, and a script the device file names cannot be deleted while it does.
 4. **Newer shipped files.** `state.db` records the content hash of each shipped device file, task or script the server writes. The app carries the hash of every version of each that it has ever shipped. On start, a file whose content is still a version the app shipped, or still what the server wrote, is replaced by the current shipped version, so a vault that skipped releases is upgraded too. A file the user changed is left alone. When a newer shipped version exists than the one the user changed, the server adds one notification under the bell that names the file and says a newer version exists. It adds no other for that version, on any later start. A file the user changed with no record of what the server wrote, as in a vault from before these records, counts as based on an older version. A device's local vault never adds the notification, since the home server does.
 

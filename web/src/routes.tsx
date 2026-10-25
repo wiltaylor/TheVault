@@ -2,7 +2,7 @@
 
 import { Navigate, Route, type RouteSectionProps } from "@solidjs/router";
 import { type Component, lazy } from "solid-js";
-import { DailyNotes } from "./pages/DailyNotes";
+import { DailyRedirect, Planner } from "./pages/Planner";
 import { Inbox } from "./pages/Inbox";
 import { Outbox } from "./pages/Outbox";
 import { NoteHistoryRedirect } from "./history/redirect";
@@ -48,8 +48,9 @@ const TypeGallery = page(() => import("./pages/TypeGallery"), "TypeGallery");
 export function paneRoutes() {
   return (
     <>
-      <Route path="/" component={() => <Navigate href="/daily" />} />
-      <Route path={["/daily", "/daily/:date"]} component={DailyNotes} />
+      <Route path="/" component={() => <Navigate href="/planner" />} />
+      <Route path={["/daily", "/daily/:date"]} component={DailyRedirect} />
+      <Route path={["/planner", "/planner/:period", "/planner/:period/:date"]} component={Planner} />
       <Route path={["/types", "/types/new", "/types/:type/edit", "/types/:type/templates"]} component={MovedToSettings} />
       <Route path="/types/:type" component={TypeList} />
       <Route path="/notes/new" component={NewNote} />

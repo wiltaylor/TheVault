@@ -38,7 +38,7 @@ export function setPaneTitle(pane: string, title: PageTitle | null) {
 }
 
 const NAMES: [RegExp, string, string?][] = [
-  [/^\/daily/, "Daily notes"],
+  [/^\/(planner|daily)/, "Planner"],
   [/^\/settings/, "Settings"],
   [/^\/search/, "Search"],
   [/^\/inbox/, "Inbox"],
@@ -81,7 +81,7 @@ export function locationTitle(url: string): PageTitle {
     return { title: t?.plural ?? list[1]!, icon: t?.icon ?? null };
   }
   for (const [re, name, icon] of NAMES) if (re.test(path)) return icon ? { title: name, icon } : { title: name };
-  if (path === "/") return { title: "Daily notes" };
+  if (path === "/") return { title: "Planner" };
   return { title: "Not found" };
 }
 

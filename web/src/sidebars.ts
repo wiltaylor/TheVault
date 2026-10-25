@@ -182,7 +182,7 @@ export interface NoteSource {
   flush: () => Promise<boolean>;
   /** Take `note`, just written by a restore, as the live note. */
   restored: (note: Note) => void;
-  /** Reactive: the day of a daily note, `YYYY-MM-DD`; empty for a note of any other type. */
+  /** Reactive: the first day of a planner note (daily, weekly, monthly, quarterly, yearly), `YYYY-MM-DD`; empty for a note of any other type. */
   day?: () => string;
 }
 

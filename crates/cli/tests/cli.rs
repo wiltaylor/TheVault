@@ -1100,6 +1100,12 @@ fn every_command_prints_json() {
     assert_eq!(day["note"]["fields"]["date"], "2026-10-13");
     let same = run("daily get", &["2026-10-13"], "");
     assert_eq!(same["id"], day["id"]);
+    let week = run("planner open", &["week", "2026-10-25"], "");
+    assert_eq!(week["created"], true);
+    assert_eq!(week["note"]["fields"]["date"], "2026-10-19");
+    assert_eq!(week["note"]["fields"]["title"], "Week 43, 2026");
+    let same_week = run("planner get", &["week", "2026-10-21"], "");
+    assert_eq!(same_week["id"], week["id"]);
     let pinned = run("pin add", &[&id], "");
     assert_eq!(pinned["id"], id.as_str());
     let pins = run("pin list", &[], "");

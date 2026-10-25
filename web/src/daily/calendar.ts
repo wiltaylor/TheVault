@@ -1,6 +1,8 @@
 // Date math for the daily notes calendar in the right sidebar: which days a month's grid shows,
 // the first day of the week for a locale, and moving between days and months. Days are
-// `YYYY-MM-DD` strings in the browser's own time zone, as the daily notes page uses.
+// `YYYY-MM-DD` strings in the browser's own time zone, as the planner uses.
+
+import { plannerHref, plannerOfLocation } from "../planner/period";
 
 /** A day of the week: 0 is Sunday, 1 Monday, up to 6 for Saturday, as `Date.getDay` counts. */
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -152,15 +154,12 @@ export function dailyQuery(first: string, last: string): string {
   return `from dailynote where date >= "${first}" && date <= "${last}" select date`;
 }
 
-/** Where `day`'s daily note is: today's is `/daily` itself, as the daily page's Today goes. */
+/** Where `day`'s daily note is: today's is `/planner/day` itself, as the planner's Today goes. */
 export function dailyHref(day: string, today: string): string {
-  return day === today ? "/daily" : `/daily/${day}`;
+  return plannerHref("day", day, today);
 }
 
-/** The day a daily notes location shows (`today` for `/daily`), or undefined for any other location. */
+/** The day a planner location shows (the period's first day, `today` for the current day), or undefined for any other location. */
 export function dayOfLocation(location: string, today: string): string | undefined {
-  const path = location.split(/[?#]/)[0]!;
-  if (/^\/daily\/?$/.test(path)) return today;
-  const m = /^\/daily\/(\d{4}-\d{2}-\d{2})\/?$/.exec(path);
-  return m ? m[1] : undefined;
+  return plannerOfLocation(location, today)?.day;
 }

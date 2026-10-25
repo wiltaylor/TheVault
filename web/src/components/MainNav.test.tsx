@@ -28,7 +28,7 @@ describe("the main links", () => {
         <MainNavLinks />
       </ul>
     ));
-    expect(screen.getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(["/daily", "/search", "/inbox", "/outbox", "/log"]);
+    expect(screen.getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(["/planner", "/search", "/inbox", "/outbox", "/log"]);
     expect(link(/^Outbox/).querySelector(".nav-badge")).toBeNull();
     await refreshOutboxCount();
     await waitFor(() => expect(link(/^Outbox/).querySelector(".nav-badge")?.textContent).toBe("3"));

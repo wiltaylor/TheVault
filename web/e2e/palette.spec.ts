@@ -81,7 +81,7 @@ test("typing finds a note by title; Enter opens it, Ctrl+Enter opens it in a bac
   await expect(tabs(page)).toHaveCount(2);
   await expect(tabs(page).nth(0)).toHaveAttribute("aria-selected", "true");
   await expect(tabs(page).nth(1)).toHaveAccessibleName(new RegExp(`Another ${word}`));
-  await expect(page).toHaveURL(/\/daily/);
+  await expect(page).toHaveURL(/\/planner\/day/);
 
   // Enter: in the active pane.
   await openPalette(page);

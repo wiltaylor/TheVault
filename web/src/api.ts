@@ -102,7 +102,7 @@ export interface TypeDef {
   description: string | null;
   icon: string | null;
   colour: string | null;
-  /** A built-in type (`dailynote`, `fleeting`): it can be customised but not deleted. */
+  /** A built-in type (`dailynote`, `fleeting`, the planner types): it can be customised but not deleted. */
   builtin?: boolean;
   fields: FieldDef[];
   templates: Template[];
@@ -1542,6 +1542,10 @@ export const api = {
   daily: (date: string) => request<Note>("GET", `/api/daily/${enc(date)}`),
   /** The daily note for a day, created when the day has none. Opening it twice gives one note. */
   openDaily: (date: string) => request<Note>("POST", `/api/daily/${enc(date)}`),
+  /** The planner note of the period (`day`, `week`, `month`, `quarter`, `year`) `date` falls in; none is a 404 `ApiError`. */
+  planner: (period: string, date: string) => request<Note>("GET", `/api/planner/${enc(period)}/${enc(date)}`),
+  /** The planner note of the period `date` falls in, created when the period has none. */
+  openPlanner: (period: string, date: string) => request<Note>("POST", `/api/planner/${enc(period)}/${enc(date)}`),
   createNote: (type: string, note: NoteDoc) =>
     request<Note>("POST", `/api/notes?type=${enc(type)}`, { note }),
   /** Save `note` over version `base`. A stale base is an ApiError whose `isConflict` is true. */

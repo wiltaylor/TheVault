@@ -1,4 +1,5 @@
-//! The built-in types every vault has: `dailynote`, `fleeting`, the phone data types `message`,
+//! The built-in types every vault has: the planner types `dailynote`, `weeklynote`,
+//! `monthlynote`, `quarterlynote` and `yearlynote`, `fleeting`, the phone data types `message`,
 //! `call` and `conversation` (D15), and the Google sync types `email`, `email_thread` and `event`
 //! (google-sync D4, D15, D17), with the `gmail_label` taxonomy `email` uses
 //! (google-sync D14), and `outbox`, the email, SMS and calendar invites waiting to be sent
@@ -7,7 +8,7 @@
 //! A built-in type is added when a vault lacks it, can be customised, and cannot be deleted. A
 //! vault type holding a built-in's name is the built-in only when the server recorded writing it
 //! or it matches the built-in's identity: see [`Writer::is_built_in`].
-//! `dailynote` and `fleeting` keep the fields the app relies on: see [`crate::daily`] and
+//! The planner types and `fleeting` keep the fields the app relies on: see [`crate::daily`] and
 //! [`crate::fleeting`].
 //!
 //! The phone data types and the Google sync types reference `person`, which is a starter type rather than a built-in one. A
@@ -90,8 +91,12 @@ pub const DEFAULT_GMAIL_LABEL_TAXONOMY: &str =
 pub const DEFAULT_PERSON_TYPE: &str = include_str!("../defaults/person.wcl");
 
 /// Every built-in type, as `(name, the type file a vault without it gets)`.
-pub const BUILT_IN_TYPES: [(&str, &str); 11] = [
+pub const BUILT_IN_TYPES: [(&str, &str); 15] = [
     (daily::DAILY_TYPE, daily::DEFAULT_DAILY_TYPE),
+    (daily::WEEKLY_TYPE, daily::DEFAULT_WEEKLY_TYPE),
+    (daily::MONTHLY_TYPE, daily::DEFAULT_MONTHLY_TYPE),
+    (daily::QUARTERLY_TYPE, daily::DEFAULT_QUARTERLY_TYPE),
+    (daily::YEARLY_TYPE, daily::DEFAULT_YEARLY_TYPE),
     (fleeting::FLEETING_TYPE, fleeting::DEFAULT_FLEETING_TYPE),
     (MESSAGE_TYPE, DEFAULT_MESSAGE_TYPE),
     (CALL_TYPE, DEFAULT_CALL_TYPE),
@@ -132,7 +137,7 @@ pub fn is_built_in_type(name: &str) -> bool {
 /// string field by which it captures each note once. Every version of the type the app has
 /// shipped declares it, and a type the user made for their own use has no reason to, so a vault
 /// type of the name that declares it as a string field is the built-in even with no record of
-/// the server having written it (ticket 104). `dailynote` and `fleeting` have no key: the app
+/// the server having written it (ticket 104). The planner types and `fleeting` have no key: the app
 /// owns those names outright and [`check_built_in_types`] holds them to the fields it needs.
 /// `agent_thread` and `agent_memory` capture nothing, so their key is the string field that
 /// marks the shape: a thread's hidden `transcript`, a memory's `agent`.

@@ -68,7 +68,7 @@ test("days with notes have dots, and a click opens another day and the selection
   await expect(cell(page, s.day(12)).locator(".calendar-dot")).toHaveCount(0);
 
   await cell(page, s.day(12)).click();
-  await expect(page).toHaveURL(new RegExp(`/daily/${s.day(12)}$`));
+  await expect(page).toHaveURL(new RegExp(`/planner/day/${s.day(12)}$`));
   await expect(activePane(page).getByText("There is no note for this day.")).toBeVisible();
   await expect(cell(page, s.day(12)).locator("xpath=..")).toHaveAttribute("aria-selected", "true");
   await expect(cell(page, s.day(5)).locator("xpath=..")).toHaveAttribute("aria-selected", "false");
@@ -80,7 +80,7 @@ test("days with notes have dots, and a click opens another day and the selection
   await expect(tabs).toHaveCount(2);
   await cell(page, s.day(21)).click({ modifiers: ["ControlOrMeta"] });
   await expect(tabs).toHaveCount(3);
-  await expect(page).toHaveURL(new RegExp(`/daily/${s.day(12)}$`));
+  await expect(page).toHaveURL(new RegExp(`/planner/day/${s.day(12)}$`));
 
   // Creating the note puts a dot on its day.
   await activePane(page).getByRole("button", { name: "Create note for this day" }).click();
@@ -88,7 +88,7 @@ test("days with notes have dots, and a click opens another day and the selection
 
   // The daily page's own arrows move the selection too.
   await activePane(page).getByRole("button", { name: "Next day" }).click();
-  await expect(page).toHaveURL(new RegExp(`/daily/${s.day(13)}$`));
+  await expect(page).toHaveURL(new RegExp(`/planner/day/${s.day(13)}$`));
   await expect(cell(page, s.day(13)).locator("xpath=..")).toHaveAttribute("aria-selected", "true");
 
   // Next and previous month.
@@ -103,7 +103,7 @@ test("days with notes have dots, and a click opens another day and the selection
   await calendar(page).getByRole("button", { name: "Today" }).click();
   const now = new Date();
   await expect(calendar(page).getByRole("heading")).toHaveText(title(now.getFullYear(), now.getMonth() + 1));
-  await expect(page).toHaveURL(new RegExp(`/daily/${s.day(13)}$`));
+  await expect(page).toHaveURL(new RegExp(`/planner/day/${s.day(13)}$`));
 });
 
 test("the keyboard moves between days and months, and Enter opens a day", async ({ page }) => {
@@ -129,7 +129,7 @@ test("the keyboard moves between days and months, and Enter opens a day", async 
 
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(new RegExp(`/daily/${s.day(11)}$`));
+  await expect(page).toHaveURL(new RegExp(`/planner/day/${s.day(11)}$`));
   await expect(cell(page, s.day(11)).locator("xpath=..")).toHaveAttribute("aria-selected", "true");
 });
 

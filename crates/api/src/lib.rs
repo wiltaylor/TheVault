@@ -245,6 +245,8 @@ fn build() -> Built {
         .get("/api/search", query::search)
         .get("/api/daily/{date}", notes::daily)
         .post("/api/daily/{date}", notes::open_daily)
+        .get("/api/planner/{period}/{date}", notes::planner)
+        .post("/api/planner/{period}/{date}", notes::open_planner)
         .get("/api/pins", pins::list)
         .put("/api/pins/{id}", pins::pin)
         .delete("/api/pins/{id}", pins::unpin)

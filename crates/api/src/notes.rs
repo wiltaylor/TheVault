@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use state::Author;
-use writer::{Event, Input, Saved, Writer, doc_to_json, note_path};
+use writer::{Event, Input, Period, Saved, Writer, doc_to_json, note_path};
 
 use crate::{ApiError, Caller, blocking};
 
@@ -540,18 +540,75 @@ pub async fn purge_from_trash(
 }
 
 /// `GET /api/daily/{date}`: the daily note for a day, given as `YYYY-MM-DD`. A day with no note is
-/// a 404; `POST` creates it.
+/// a 404; `POST` creates it. The same as `GET /api/planner/day/{date}`.
 pub async fn daily(
-    State(w): Shared,
+    state: Shared,
     Path(date): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    find_period(state, Period::Day, date, headers).await
+}
+
+/// `POST /api/daily/{date}`: the daily note for a day, created when the day has none. Calling it
+/// again for the same day returns the same note. The same as `POST /api/planner/day/{date}`.
+pub async fn open_daily(
+    state: Shared,
+    caller: Caller,
+    Path(date): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    open_period(state, caller, Period::Day, date, headers).await
+}
+
+fn period_of(name: &str) -> Result<Period, ApiError> {
+    Period::parse(name).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "{name:?} is not a planner period: give day, week, month, quarter or year"
+        ))
+    })
+}
+
+/// `GET /api/planner/{period}/{date}`: the note of the day, ISO week, month, quarter or year that
+/// holds `date` (`YYYY-MM-DD`, any day of the period). A period with no note is a 404; `POST`
+/// creates it.
+pub async fn planner(
+    state: Shared,
+    Path((period, date)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    find_period(state, period_of(&period)?, date, headers).await
+}
+
+/// `POST /api/planner/{period}/{date}`: the note of the period that holds `date`, created when
+/// the period has none. Calling it again with any day of the same period returns the same note.
+pub async fn open_planner(
+    state: Shared,
+    caller: Caller,
+    Path((period, date)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    open_period(state, caller, period_of(&period)?, date, headers).await
+}
+
+async fn find_period(
+    State(w): Shared,
+    period: Period,
+    date: String,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     let day = date.clone();
-    let Some(note) = blocking(w, move |w| w.find_daily_note(&day)).await? else {
+    let Some(note) = blocking(w, move |w| w.find_period_note(period, &day)).await? else {
+        let what = match period {
+            Period::Day => "daily",
+            Period::Week => "weekly",
+            Period::Month => "monthly",
+            Period::Quarter => "quarterly",
+            Period::Year => "yearly",
+        };
         return Err(ApiError::new(
             StatusCode::NOT_FOUND,
             "not_found",
-            format!("there is no daily note for {date}"),
+            format!("there is no {what} note for {date}"),
         ));
     };
     Ok(note_response(
@@ -565,15 +622,14 @@ pub async fn daily(
     ))
 }
 
-/// `POST /api/daily/{date}`: the daily note for a day, created when the day has none. Calling it
-/// again for the same day returns the same note.
-pub async fn open_daily(
+async fn open_period(
     State(w): Shared,
     Caller(author): Caller,
-    Path(date): Path<String>,
+    period: Period,
+    date: String,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let (note, created) = blocking(w, move |w| w.daily_note(&date, &author)).await?;
+    let (note, created) = blocking(w, move |w| w.period_note(period, &date, &author)).await?;
     Ok(note_response(
         if created {
             StatusCode::CREATED

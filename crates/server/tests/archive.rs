@@ -273,6 +273,19 @@ fn an_archived_daily_note_is_still_the_note_for_its_day() {
 }
 
 #[test]
+fn an_archived_period_note_is_still_the_note_for_its_period() {
+    let api = Api::start();
+    let month = expect(api.post("/api/planner/month/2026-10-13"), 201);
+    let archived = api.archive(&month);
+    let again = expect(api.post("/api/planner/month/2026-10-31"), 200);
+    assert_eq!(again["id"], month["id"]);
+    assert_eq!(again["created"], false);
+    assert_eq!(again["note"]["fields"]["archived"], true);
+    assert_eq!(again["version"], archived["version"]);
+    expect(api.get("/api/planner/month/2026-10-01"), 200);
+}
+
+#[test]
 fn a_type_cannot_define_a_field_called_archived() {
     let api = Api::start();
     let res = api

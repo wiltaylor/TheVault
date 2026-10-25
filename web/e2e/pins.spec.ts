@@ -240,7 +240,7 @@ test("dragging nests a note in a folder and reorders entries, and the order hold
     await expect(row(page, folder)).toHaveClass(/drop-inside/);
     await expect(page.locator(".pin-drag-ghost")).toHaveText(a);
   });
-  await expect(page).toHaveURL(/\/daily/);
+  await expect(page).toHaveURL(/\/planner\/day/);
   await expect.poll(() => shownShape(page)).toBe(`${b} ${c} Box(${a})`);
   await expect.poll(async () => shape(await tree(admin))).toBe(`${b} ${c} Box(${a})`);
 
@@ -330,7 +330,7 @@ test("a note nests under another pinned note, which opens with a click and expan
   await expect(arrow).toHaveAttribute("aria-expanded", "true");
   await arrow.click();
   await expect(pinned.getByRole("link", { name: child })).toHaveCount(0);
-  await expect(page).toHaveURL(/\/daily/);
+  await expect(page).toHaveURL(/\/planner\/day/);
   await pinned.getByRole("button", { name: `Expand ${parent}` }).click();
   await expect(pinned.getByRole("link", { name: child })).toBeVisible();
 

@@ -1,6 +1,7 @@
 // The actions the command palette offers: create a note of any type, capture, go to a page or a
 // type's notes, open a settings section, and act on the workspace's panes, tabs and sidebars.
 
+import { periodOfType } from "../planner/period";
 import { AGENT_ICON, agentLabel, setAgentsOpen, setCreatingAgent } from "../agents";
 import type { AgentSummary, SkillSummary, TypeDef } from "../api";
 import type { ActiveNote } from "../archive";
@@ -56,13 +57,13 @@ const SETTINGS: [string, string, string[]][] = [
   ["/settings/ai", "AI", ["AI accounts", "API keys", "models", "Sign in with ChatGPT", "usage"]],
 ];
 
-/** "New …" and "Go to …" for each type. The daily note type has no "New": each day has one. */
+/** "New …" and "Go to …" for each type. The planner's types have no "New": each period has one note. */
 export function typeActions(types: readonly TypeDef[]): Action[] {
   const out: Action[] = [];
   for (const t of types) {
     const label = t.label || t.name;
     const plural = typeNavLabel(t);
-    if (t.name !== "dailynote") {
+    if (!periodOfType(t.name)) {
       out.push({
         id: `new:${t.name}`,
         section: "Create",
@@ -126,7 +127,15 @@ export function generalActions(opts: { phone: boolean; dark: boolean; androidApp
       run: openCapture,
     },
     { id: "inbox", section: "Go to", label: "Go to Inbox", keywords: ["Fleeting notes", "Captures"], icon: { glyph: "inbox" }, href: "/inbox" },
-    { id: "daily", section: "Go to", label: "Go to Today", keywords: ["Daily notes", "Journal", "Daily note"], icon: { glyph: "calendar" }, href: "/daily" },
+    { id: "daily", section: "Go to", label: "Go to Today", keywords: ["Daily notes", "Journal", "Daily note"], icon: { glyph: "calendar" }, href: "/planner/day" },
+    {
+      id: "planner",
+      section: "Go to",
+      label: "Go to Planner",
+      keywords: ["Weekly note", "Monthly note", "Quarterly note", "Yearly note", "Calendar"],
+      icon: { glyph: "calendar" },
+      href: "/planner",
+    },
     { id: "search", section: "Go to", label: "Go to Search", keywords: ["Find", "Filter notes"], icon: { glyph: "search" }, href: "/search" },
     { id: "trash", section: "Go to", label: "Go to Trash", keywords: ["Deleted notes", "Restore"], icon: { glyph: "trash" }, href: "/trash" },
     { id: "archive", section: "Go to", label: "Go to Archive", keywords: ["Archived notes", "Unarchive"], icon: { glyph: "archive" }, href: "/archive" },

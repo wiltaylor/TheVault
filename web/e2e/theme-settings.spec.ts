@@ -31,12 +31,12 @@ test.describe("with a dark system preference", () => {
   });
 });
 
-test("the sidebar holds Daily notes, Search, Inbox, Outbox, Log and Capture, with trash and settings beside the theme switch", async ({ page }) => {
+test("the sidebar holds Planner, Search, Inbox, Outbox, Log and Capture, with trash and settings beside the theme switch", async ({ page }) => {
   await logIn(page);
   const main = page.getByRole("navigation", { name: "Main" });
   // The Inbox link counts the fleeting notes waiting in it, and the Outbox link the items waiting
   // for review, when there are any. The Log follows Outbox (activity Y4).
-  await expect(main.getByRole("link")).toHaveText(["Daily notes", "Search", /^Inbox\d*$/, /^Outbox\d*$/, "Log"]);
+  await expect(main.getByRole("link")).toHaveText(["Planner", "Search", /^Inbox\d*$/, /^Outbox\d*$/, "Log"]);
   await expect(main.getByRole("button")).toHaveText([/^Search or run a command/, "Capture"]);
 
   const trash = page.locator(".sidebar-footer").getByRole("link", { name: "Trash" });

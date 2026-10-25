@@ -72,7 +72,7 @@ The device token is never widened to `admin`. In the apps, Settings hides the Se
 
 | Routes | Backed by | Answered |
 |---|---|---|
-| `/api/notes` and below (read, create, update, delete, graph, archive, canvas), `/api/batch`, `/api/upsert`, `/api/daily` | Note files | Locally. Writes are queued for sync. |
+| `/api/notes` and below (read, create, update, delete, graph, archive, canvas), `/api/batch`, `/api/upsert`, `/api/daily`, `/api/planner` | Note files | Locally. Writes are queued for sync. |
 | `/api/query`, `/api/query/parse`, `/api/query/text`, `/api/search`, `/api/flagged`, `/api/schema` | The local index of the note files | Locally |
 | `/api/types`, templates, `/api/taxonomies`, `/api/scripts`, `/api/device-files` | Definition files | Locally. Edits made in an app stay on the device until the server's version replaces them (D20). |
 | `GET /api/tasks/{name}`, `PUT` and `DELETE /api/tasks/{name}`, `GET /api/cron` | Task files; the cron preview is a computation | Locally |

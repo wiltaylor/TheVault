@@ -27,6 +27,7 @@ import {
   weekdayNames,
   weekdayOf,
 } from "./calendar";
+import { isoWeek, plannerHref, periodTitle } from "../planner/period";
 import "./calendar.css";
 
 export const CALENDAR_KEY = "thevault.dailyCalendar";
@@ -123,10 +124,24 @@ export function DailyCalendar(props: { day: string; noteId: string; shown: boole
     setFocusDay(t);
   }
 
-  function open(day: string) {
-    navigatePane(activePane(workspace()), dailyHref(day, today()));
+  function openHref(href: string) {
+    navigatePane(activePane(workspace()), href);
     if (rightIsDrawer()) setRightDrawer(false);
   }
+
+  function open(day: string) {
+    openHref(dailyHref(day, today()));
+  }
+
+  /** A plain left click opens `href` in the active pane; any other click is the link's own. */
+  const follow = (href: () => string) => (e: MouseEvent) => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    openHref(href());
+  };
+  const monthHref = () => plannerHref("month", dayOf(view().year, view().month, 1), today());
+  /** The Monday of a grid week, whichever day the week starts on. */
+  const mondayOf = (week: { day: string }[]) => week.find((c) => weekdayOf(c.day) === 1)!.day;
 
   function onKey(e: KeyboardEvent) {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
@@ -195,7 +210,15 @@ export function DailyCalendar(props: { day: string; noteId: string; shown: boole
               ‹
             </button>
             <h3 class="calendar-title" id={titleId} aria-live="polite">
-              {monthTitle(view(), locale)}
+              <a
+                href={monthHref()}
+                class="calendar-month-link"
+                data-testid="calendar-month-link"
+                title={`Open the note for ${periodTitle("month", dayOf(view().year, view().month, 1))}`}
+                on:click={follow(monthHref)}
+              >
+                {monthTitle(view(), locale)}
+              </a>
             </h3>
             <button type="button" class="calendar-step" aria-label="Next month" title="Next month" onClick={() => stepMonth(1)}>
               ›
@@ -212,6 +235,7 @@ export function DailyCalendar(props: { day: string; noteId: string; shown: boole
           <table class="calendar-grid" role="grid" aria-labelledby={titleId} ref={grid} onKeyDown={onKey}>
             <thead>
               <tr>
+                <td class="calendar-week-head" aria-hidden="true" />
                 <For each={names}>
                   {(n) => (
                     <th scope="col" abbr={n.long}>
@@ -226,6 +250,18 @@ export function DailyCalendar(props: { day: string; noteId: string; shown: boole
               <For each={weeks()}>
                 {(week) => (
                   <tr>
+                    <th scope="row" class="calendar-week">
+                      <a
+                        href={plannerHref("week", mondayOf(week), today())}
+                        data-week={mondayOf(week)}
+                        tabindex={-1}
+                        aria-label={periodTitle("week", mondayOf(week))}
+                        title={`Open the note for ${periodTitle("week", mondayOf(week))}`}
+                        on:click={follow(() => plannerHref("week", mondayOf(week), today()))}
+                      >
+                        {isoWeek(mondayOf(week)).week}
+                      </a>
+                    </th>
                     <For each={week}>
                       {(cell) => (
                         <td

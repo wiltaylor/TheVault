@@ -143,3 +143,33 @@
     height: 2.4rem;
   }
 }
+
+/* ISO week numbers in the left gutter, each a link to its weekly note. */
+.calendar-grid .calendar-week-head,
+.calendar-grid th.calendar-week {
+  width: 1.7rem;
+  padding: 1px 0;
+}
+
+.calendar-grid th.calendar-week a {
+  width: 1.6rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 500;
+}
+
+.calendar-grid th.calendar-week a:hover {
+  color: var(--ink);
+}
+
+/* The month's title links to its monthly note. */
+.calendar-month-link {
+  color: inherit;
+  text-decoration: none;
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.3rem;
+}
+
+.calendar-month-link:hover {
+  background: var(--hover);
+}

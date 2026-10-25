@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use query_syntax::Expr;
 
-use crate::blocks::{CONTENT_KINDS, Check, Form, opt, req};
+use crate::blocks::{CONTENT_KINDS, Check, Form, PERIOD_CALENDAR, opt, req};
 use crate::doc::{Doc, DocBlock, Value};
 use crate::encoding::{is_name, is_ulid};
 use crate::note::check_value;
@@ -1173,11 +1173,17 @@ fn template(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) -> Optio
                 c.columns(&block.body, &block_at, &mut |c, b, path| {
                     if b.kind == "slot" {
                         slot(c, b, fields, &mut placed, path);
+                    } else if b.kind == PERIOD_CALENDAR {
+                        c.period_calendar(b, path);
                     } else {
                         c.content_item(b, path);
                         check_field_refs(c, b, fields, path);
                     }
                 });
+                items.push(TabItem::Block(block.clone()));
+            } else if block.kind == PERIOD_CALENDAR {
+                let block_at = format!("{tab_at} > {}#{}", block.kind, n + 1);
+                c.period_calendar(block, &block_at);
                 items.push(TabItem::Block(block.clone()));
             } else if CONTENT_KINDS.contains(&block.kind.as_str()) {
                 let block_at = format!("{tab_at} > {}#{}", block.kind, n + 1);

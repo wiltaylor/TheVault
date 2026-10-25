@@ -200,7 +200,7 @@ function NoteSidebar(props: { shown: boolean }) {
   // The graph follows the active pane's note, once it has been created.
   const graphOf = createMemo(() => source()?.noteId() || "");
   const graphOpen = () => sidebars().right.graph;
-  // Beside the daily notes page or a daily note, a calendar to pick another day sits on top.
+  // Beside the planner or a planner note, a calendar to pick another day sits on top.
   const calendarDay = createMemo(() => dayOfLocation(paneLocation(workspace(), pane()), todayDay()) || source()?.day?.() || "");
   return (
     <div id="right-sidebar" class="right-sidebar">

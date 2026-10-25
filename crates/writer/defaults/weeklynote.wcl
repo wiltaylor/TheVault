@@ -1,0 +1,32 @@
+label       = "Weekly note"
+plural      = "Weekly notes"
+description = "One note for each ISO week, Monday to Sunday."
+icon        = "calendar-range"
+colour      = "green"
+
+field date {
+  kind     = "date"
+  label    = "Starts on"
+  required = true
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+template default {
+  tab "Week" {
+    period_calendar {
+      period = "week"
+    }
+    slot "body"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "date"
+  }
+}

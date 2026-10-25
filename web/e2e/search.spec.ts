@@ -74,13 +74,13 @@ test("Search in the sidebar opens the page in the active pane; a middle-click op
   await expect(box(page)).toBeVisible();
   await expect(link).toHaveClass(/active/);
 
-  await main(page).getByRole("link", { name: "Daily notes" }).click();
-  await expect(page).toHaveURL(/\/daily/);
+  await main(page).getByRole("link", { name: "Planner" }).click();
+  await expect(page).toHaveURL(/\/planner/);
   await link.click({ button: "middle" });
   await expect(tabs(page)).toHaveCount(2);
   await expect(tabs(page).nth(0)).toHaveAttribute("aria-selected", "true");
   await expect(tabs(page).nth(1)).toHaveAccessibleName(/Search/);
-  await expect(page).toHaveURL(/\/daily/);
+  await expect(page).toHaveURL(/\/planner/);
 });
 
 test("full text finds a note by a word in its content, as you type", async ({ page, admin }) => {

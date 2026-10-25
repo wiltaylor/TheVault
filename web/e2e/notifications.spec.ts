@@ -173,7 +173,7 @@ test("a notification with a url opens that page, and Ctrl+click opens a backgrou
   await items(page).filter({ hasText: "Read this later" }).getByRole("link").click({ modifiers: ["ControlOrMeta"] });
   await expect(tabs).toHaveCount(before + 1);
   // A background tab: the pane stays where it was, and the panel stays open.
-  await expect(page).toHaveURL(/\/daily/);
+  await expect(page).toHaveURL(/\/planner\/day/);
   await expect(panel(page)).toBeVisible();
   await expect(badge(bell)).toHaveText("1");
 

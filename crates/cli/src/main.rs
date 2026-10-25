@@ -229,6 +229,10 @@ enum Command {
     /// Daily notes: one note of the built-in `dailynote` type per day.
     #[command(subcommand)]
     Daily(Daily),
+    /// Planner notes: one note per day, ISO week, month, quarter or year, of the built-in
+    /// `dailynote`, `weeklynote`, `monthlynote`, `quarterlynote` and `yearlynote` types.
+    #[command(subcommand)]
+    Planner(Planner),
     /// Notes pinned to the web sidebar.
     #[command(subcommand)]
     Pin(Pin),
@@ -366,6 +370,15 @@ enum Daily {
     Get { date: String },
     /// The daily note for a day (YYYY-MM-DD), created when the day has none.
     Open { date: String },
+}
+
+#[derive(Subcommand)]
+enum Planner {
+    /// The note of the period (day, week, month, quarter or year) holding a day (YYYY-MM-DD).
+    /// A period with no note fails with 404.
+    Get { period: String, date: String },
+    /// The note of the period holding a day (YYYY-MM-DD), created when the period has none.
+    Open { period: String, date: String },
 }
 
 #[derive(Subcommand)]
@@ -957,6 +970,15 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
         Command::Daily(Daily::Open { date }) => {
             api.call(Method::POST, &["api", "daily", &date], &[], Body::None)
         }
+        Command::Planner(Planner::Get { period, date }) => {
+            api.get(&["api", "planner", &period, &date])
+        }
+        Command::Planner(Planner::Open { period, date }) => api.call(
+            Method::POST,
+            &["api", "planner", &period, &date],
+            &[],
+            Body::None,
+        ),
         Command::Pin(Pin::List) => api.get(&["api", "pins"]),
         Command::Pin(Pin::Add { id }) => {
             api.call(Method::PUT, &["api", "pins", &id], &[], Body::None)

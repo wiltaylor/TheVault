@@ -51,6 +51,7 @@ import { ArchiveIcon, TrashIcon, TypeIcon, UnarchiveIcon } from "../components/I
 import { NoteOutboxActions } from "../outbox/NoteActions";
 import { OutboxChips } from "../outbox/Chips";
 import { OUTBOX } from "../outbox/model";
+import { periodOfType } from "../planner/period";
 
 /** How long after the last change a note saves itself. */
 export const AUTOSAVE_MS = 1500;
@@ -473,7 +474,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
         restored: takeRestored,
         day: () => {
           const n = note();
-          const date = n?.type === "dailynote" ? n.note.fields.date : undefined;
+          const date = periodOfType(n?.type) ? n!.note.fields.date : undefined;
           return typeof date === "string" ? date.slice(0, 10) : "";
         },
       }),

@@ -8,7 +8,7 @@ import { CalendarIcon, InboxIcon, LogIcon, OutboxIcon, SearchIcon } from "./Icon
 
 /** The sidebar's main links. Each opens in the active pane; a middle-click opens a background tab. */
 export const NAV: { href: string; label: string; icon: () => JSX.Element; badge?: () => number | null }[] = [
-  { href: "/daily", label: "Daily notes", icon: CalendarIcon },
+  { href: "/planner", label: "Planner", icon: CalendarIcon },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/inbox", label: "Inbox", icon: InboxIcon, badge: inboxCount },
   // The drafts an agent made, waiting on the user (outbox X7, X14).

@@ -16,7 +16,7 @@ function spareDay(): string {
 test("logging in opens today's daily note, made once however often it is opened", async ({ page, admin }) => {
   const today = isoDay(new Date());
   await logIn(page);
-  await expect(page).toHaveURL(/\/daily$/);
+  await expect(page).toHaveURL(/\/planner$/);
   await expect(page.getByRole("navigation", { name: "Day" }).getByLabel("Day", { exact: true })).toHaveValue(today);
   await expect(page.getByText("Daily note", { exact: true })).toBeVisible();
 
@@ -48,16 +48,16 @@ test("another day with no note offers to create one, and the arrows step a day a
   await page.getByRole("button", { name: "Next day" }).click();
   const [y, m, d] = day.split("-").map(Number);
   const next = isoDay(new Date(y!, m! - 1, d! + 1));
-  await expect(page).toHaveURL(new RegExp(`/daily/${next}$`));
+  await expect(page).toHaveURL(new RegExp(`/planner/day/${next}$`));
   await expect(page.getByText("There is no note for this day.")).toBeVisible();
   await page.getByRole("button", { name: "Previous day" }).click();
-  await expect(page).toHaveURL(new RegExp(`/daily/${day}$`));
+  await expect(page).toHaveURL(new RegExp(`/planner/day/${day}$`));
   await expect(page.getByRole("heading", { name: body.note.fields.title })).toBeVisible();
 
   await page.getByRole("navigation", { name: "Day" }).getByLabel("Day", { exact: true }).fill(next);
-  await expect(page).toHaveURL(new RegExp(`/daily/${next}$`));
+  await expect(page).toHaveURL(new RegExp(`/planner/day/${next}$`));
   await page.getByRole("button", { name: "Today" }).click();
-  await expect(page).toHaveURL(/\/daily$/);
+  await expect(page).toHaveURL(/\/planner\/day$/);
 });
 
 test("the daily note type can be edited but has no delete button", async ({ page }) => {

@@ -23,7 +23,7 @@ test.describe("login", () => {
     await page.getByLabel("Password").fill(password());
     await page.getByRole("button", { name: "Log in" }).click();
     await expect(page.getByRole("navigation", { name: "Day" })).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Daily notes" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Planner" })).toBeVisible();
     await expect(page).not.toHaveURL(/\/login/);
   });
 
@@ -213,7 +213,7 @@ test.describe("at tablet width", () => {
   test("the sidebar opens from the menu button", async ({ page }) => {
     await logIn(page);
     const nav = page.getByRole("navigation", { name: "Main" });
-    const daily = nav.getByRole("link", { name: "Daily notes" });
+    const daily = nav.getByRole("link", { name: "Planner" });
     await expect(daily).not.toBeInViewport();
     await page.getByRole("button", { name: "Menu" }).click();
     await expect(daily).toBeInViewport();

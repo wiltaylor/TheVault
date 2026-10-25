@@ -258,6 +258,16 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/planner/{period}/{date}",
+        "The note of the day, ISO week, month, quarter or year holding a YYYY-MM-DD day; 404 when the period has none",
+    ),
+    (
+        "POST",
+        "/api/planner/{period}/{date}",
+        "The note of the day, ISO week, month, quarter or year holding a YYYY-MM-DD day, created when the period has none",
+    ),
+    (
+        "GET",
         "/api/pins",
         "The sidebar's pinned tree: notes with type and title, and folders, each with children",
     ),

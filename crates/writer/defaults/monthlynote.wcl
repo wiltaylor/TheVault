@@ -1,0 +1,32 @@
+label       = "Monthly note"
+plural      = "Monthly notes"
+description = "One note for each month."
+icon        = "calendar-1"
+colour      = "pink"
+
+field date {
+  kind     = "date"
+  label    = "Starts on"
+  required = true
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+template default {
+  tab "Month" {
+    period_calendar {
+      period = "month"
+    }
+    slot "body"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "date"
+  }
+}

@@ -50,6 +50,13 @@ pub const CARD_BLOCK_KINDS: [&str; 15] = [
     "card",
 ];
 
+/// The template block that only a template tab, or a column of one, holds: a calendar of the
+/// period a planner note covers. It is not a content block kind, so a note's content never holds it.
+pub const PERIOD_CALENDAR: &str = "period_calendar";
+
+/// The periods a `period_calendar` block shows.
+pub const PERIOD_CALENDAR_PERIODS: [&str; 4] = ["week", "month", "quarter", "year"];
+
 /// The kinds of an `admonition` block, in the order the editor offers them.
 pub const ADMONITION_KINDS: [&str; 8] = [
     "note", "info", "tip", "success", "warning", "danger", "question", "quote",
@@ -842,6 +849,39 @@ impl Check<'_> {
                 &format!("{at}.default_view"),
                 format!("names no view {dv:?}"),
             );
+        }
+    }
+
+    /// A `period_calendar` block, which only a template holds: the notes of `query` (default
+    /// `from event`) on the days of the week, month, quarter or year that starts on the shown
+    /// note's `date`, by their `date` field (default `when`). With the type's fields known, the
+    /// type must have a `date` field of kind `date`.
+    pub fn period_calendar(&mut self, b: &DocBlock, at: &str) {
+        self.no_label(b, at);
+        let d = &b.body;
+        let items = [
+            req("period", Form::OneOf(&PERIOD_CALENDAR_PERIODS)),
+            opt("query", Form::Str),
+            opt("date", Form::Str),
+        ];
+        self.items(d, &items, &[], at);
+        self.only_blocks(d, &[], at);
+        let Some(fields) = self.fields else {
+            return;
+        };
+        match fields.iter().find(|f| f.name == "date") {
+            Some(f) if f.kind == FieldKind::Date => {}
+            Some(f) => self.fail(
+                at,
+                format!(
+                    "a period calendar reads the note's `date` field, which is {}",
+                    field_kind_text(f)
+                ),
+            ),
+            None => self.fail(
+                at,
+                "a period calendar reads the note's `date` field, and the type has none",
+            ),
         }
     }
 

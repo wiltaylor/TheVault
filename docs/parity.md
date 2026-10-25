@@ -50,8 +50,10 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Restore from the trash | `History.tsx` (`Trash`) | `POST /api/trash/{id}/restore` | `vault trash restore <id>` | |
 | Empty the trash, after a confirm naming the count | `pages/Trash.tsx` (Empty trash), in a browser only | `POST /api/trash/empty` | none, see below | Explained: only the signed-in user purges (ai D21). Every API token, `admin` included, gets 403 `human_only`, so the CLI has no command |
 | Delete a note in the trash forever, after a confirm | `pages/Trash.tsx` (Delete forever), in a browser only | `DELETE /api/trash/{id}` | none, see below | Explained: as Empty the trash (ai D21) |
-| Open today's daily note, or another day's | `DailyNotes.tsx` | `POST /api/daily/{date}` (today), `GET /api/daily/{date}` (other days) | `vault daily open <date>`, `vault daily get <date>` | |
-| Create the daily note for another day | `DailyNotes.tsx` (Create note for this day) | `POST /api/daily/{date}` | `vault daily open <date>` | |
+| Open the planner note of the current day, week, month, quarter or year, or another period's | `pages/Planner.tsx` (Day, Week, Month, Quarter, Year; previous, Today, next) | `POST /api/planner/{period}/{date}` (the current period), `GET /api/planner/{period}/{date}` (other periods) | `vault planner open <period> <date>`, `vault planner get <period> <date>` | |
+| Create the planner note for another period | `pages/Planner.tsx` (Create) | `POST /api/planner/{period}/{date}` | `vault planner open <period> <date>` | |
+| Open a day's or a week's note from the sidebar calendar, or a month's from its title | `daily/DailyCalendar.tsx` | as the planner | as the planner | |
+| See the events of a weekly, monthly, quarterly or yearly note's period on its calendar | `planner/PeriodCalendar.tsx` (`period_calendar` block) | `POST /api/query` (`from event where when.start < <end> && when.end >= <start>`) | `vault query 'from event where ...'` | |
 | Capture a fleeting note (text, pasted, dropped or attached images, camera photos, pen drawings, Send to an agent) | `capture/CaptureModal.tsx` (+ button, sidebar Capture, Ctrl+Shift+K) | `POST /api/assets`, then `POST /api/notes?type=fleeting` | `vault asset upload <file>`, then `vault put --type fleeting` (an `ink` block and an `agent:<name>?call=<ULID>` link in `body`) | |
 | Count the inbox in the sidebar | `capture/store.ts` | `POST /api/query` (`from fleeting where !processed`) | `vault query 'from fleeting where !processed'` | |
 | List the inbox | `Inbox.tsx` | `POST /api/query`, `GET /api/notes/{id}` per item | `vault query 'from fleeting where !processed sort created desc'` | |
@@ -213,8 +215,10 @@ The listing has 86 routes. `/api/test/clock` is left out of the listing on purpo
 | `POST /api/trash/{id}/restore` | `vault trash restore` | Trash | |
 | `POST /api/trash/empty` | none | Trash: Empty trash | Explained: a signed-in session only, every token gets 403 `human_only` (ai D21) |
 | `DELETE /api/trash/{id}` | none | Trash: Delete forever | Explained: a signed-in session only, every token gets 403 `human_only` (ai D21) |
-| `GET /api/daily/{date}` | `vault daily get` | Daily notes | |
-| `POST /api/daily/{date}` | `vault daily open` | Daily notes | |
+| `GET /api/daily/{date}` | `vault daily get` | Planner, under its older name | |
+| `POST /api/daily/{date}` | `vault daily open` | Planner, under its older name | |
+| `GET /api/planner/{period}/{date}` | `vault planner get` | Planner | |
+| `POST /api/planner/{period}/{date}` | `vault planner open` | Planner | |
 | `GET /api/pins` | `vault pin list` | Sidebar, Pinned | |
 | `PUT /api/pins/{id}` | `vault pin add` | Note page, Pin | |
 | `DELETE /api/pins/{id}` | `vault pin remove` | Note page, Unpin; sidebar ⋯ menu, Unpin | |

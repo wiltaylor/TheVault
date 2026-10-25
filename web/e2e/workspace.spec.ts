@@ -75,9 +75,9 @@ test("a link opens in the pane it is in; Ctrl+click and middle-click open backgr
   await paneAction(page, activePane(page), "Split right");
   await expect(panes(page)).toHaveCount(2);
   const [left, right] = [panes(page).nth(0), panes(page).nth(1)];
-  // The new pane shows the list too; open the daily notes in the left one.
+  // The new pane shows the list too; open the planner in the left one.
   await left.click();
-  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Daily notes" }).click();
+  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Planner" }).click();
   await expect(left.getByRole("navigation", { name: "Day" })).toBeVisible();
 
   // A row in the right pane opens there; the left pane keeps its page.
@@ -254,7 +254,7 @@ test("the address follows the active pane, browser back works in it, and reload 
 
   // A second tab, then reload: both tabs, the split and each pane's page come back.
   await page.getByRole("button", { name: "New tab" }).click();
-  await expect(page).toHaveURL(/\/daily$/);
+  await expect(page).toHaveURL(/\/planner$/);
   await tabs(page).nth(0).click();
   await page.waitForTimeout(300);
   await page.reload();
@@ -282,12 +282,12 @@ test("tabs reorder by dragging, close with a middle-click or their ×, and closi
   await page.getByRole("button", { name: "New tab" }).click();
   await page.getByRole("button", { name: "New tab" }).click();
   await page.getByRole("link", { name: "Trash" }).click();
-  await expect.poll(() => tabNames(page)).toEqual(["Settings", "Daily notes", "Trash"]);
+  await expect.poll(() => tabNames(page)).toEqual(["Settings", "Planner", "Trash"]);
   await expect(page).toHaveTitle(/^Trash/);
   await drag(page, tabs(page).nth(2), tabs(page).nth(0), 0.1, 0.5);
-  await expect.poll(() => tabNames(page)).toEqual(["Trash", "Settings", "Daily notes"]);
+  await expect.poll(() => tabNames(page)).toEqual(["Trash", "Settings", "Planner"]);
   await tabs(page).nth(1).click({ button: "middle" });
-  await expect.poll(() => tabNames(page)).toEqual(["Trash", "Daily notes"]);
+  await expect.poll(() => tabNames(page)).toEqual(["Trash", "Planner"]);
   // Every tab shows its ×, not only the active one.
   await expect(tabs(page).nth(1).getByRole("button", { name: "Close tab" })).toBeVisible();
   expect(Number(await tabs(page).nth(1).getByRole("button", { name: "Close tab" }).evaluate((el) => getComputedStyle(el).opacity))).toBeGreaterThan(0.3);
@@ -305,8 +305,8 @@ test("tabs reorder by dragging, close with a middle-click or their ×, and closi
   await expect(tabs(page)).toHaveCount(0);
 
   // Opening something from the sidebar gives it a tab of its own.
-  await page.getByRole("link", { name: "Daily notes" }).click();
-  await expect.poll(() => tabNames(page)).toEqual(["Daily notes"]);
+  await page.getByRole("link", { name: "Planner" }).click();
+  await expect.poll(() => tabNames(page)).toEqual(["Planner"]);
   await expect(activePane(page).getByRole("navigation", { name: "Day" })).toBeVisible();
 });
 

@@ -85,14 +85,16 @@ describe("calendar date math", () => {
     expect(weekdayNames("en-US", 0)[0]!.long).toBe("Sunday");
   });
 
-  it("reads the day a daily notes location shows, and links to a day", () => {
+  it("reads the day a planner location shows, and links to a day", () => {
     expect(dayOfLocation("/daily", "2026-10-17")).toBe("2026-10-17");
     expect(dayOfLocation("/daily/2026-10-05", "2026-10-17")).toBe("2026-10-05");
     expect(dayOfLocation("/daily/2026-10-05?x=1#top", "2026-10-17")).toBe("2026-10-05");
     expect(dayOfLocation("/notes/abc", "2026-10-17")).toBeUndefined();
     expect(dayOfLocation("/dailyish", "2026-10-17")).toBeUndefined();
-    expect(dailyHref("2026-10-17", "2026-10-17")).toBe("/daily");
-    expect(dailyHref("2026-10-05", "2026-10-17")).toBe("/daily/2026-10-05");
+    expect(dayOfLocation("/planner/day/2026-10-05", "2026-10-17")).toBe("2026-10-05");
+    expect(dayOfLocation("/planner/week/2026-10-07", "2026-10-17")).toBe("2026-10-05");
+    expect(dailyHref("2026-10-17", "2026-10-17")).toBe("/planner/day");
+    expect(dailyHref("2026-10-05", "2026-10-17")).toBe("/planner/day/2026-10-05");
     expect(dailyQuery("2026-09-28", "2026-11-01")).toBe(
       'from dailynote where date >= "2026-09-28" && date <= "2026-11-01" select date',
     );

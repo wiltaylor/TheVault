@@ -83,9 +83,13 @@ fn lists_every_type_with_its_fields_and_templates() {
             "event",
             "fleeting",
             "message",
+            "monthlynote",
             "outbox",
             "person",
-            "task"
+            "quarterlynote",
+            "task",
+            "weeklynote",
+            "yearlynote"
         ]
     );
     let task = types.iter().find(|t| t["name"] == "task").unwrap();

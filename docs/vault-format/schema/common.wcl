@@ -331,6 +331,18 @@ type Admonition {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
+  # Only a template's column holds one; `schema` refuses it in a note's content.
+  @children("period_calendar") period_calendars: list<PeriodCalendar>
+}
+
+# A template's calendar of the period a planner note covers (docs/vault-format.md,
+# "period_calendar"). Only a template holds it; `schema` checks that the type
+# has a `date` field of kind `date`.
+@block("period_calendar", required_fields = ["period"])
+type PeriodCalendar {
+  period: utf8
+  query:  utf8?
+  date:   utf8?
 }
 
 @block("columns") type Columns {

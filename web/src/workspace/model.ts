@@ -3,7 +3,7 @@
 // so the store can keep the last value and tests can compare before and after.
 
 /** Where a fresh pane or tab goes when nothing else is asked for. */
-export const HOME = "/daily";
+export const HOME = "/planner";
 
 /** How many locations a pane remembers behind and ahead of the one it shows. */
 export const MAX_HISTORY = 50;
