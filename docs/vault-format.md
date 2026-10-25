@@ -114,7 +114,7 @@ Every write emits the canonical form (D21). `wcl_lang`'s formatter fixes indenta
 - Fields come before blocks at every level.
 - A note's fields follow the order in [Note files](#note-files).
 - A definition's fields and blocks follow the order of the tables in this document.
-- An optional definition flag that is `false` (`required`, `computed`, `multiple`, `paused`) is left out. A note's `bool` field is always written, `false` included.
+- An optional definition flag that is `false` (`required`, `computed`, `paused`) is left out. A note's `bool` field is always written, `false` included.
 - A field that holds its definition's default is still written.
 - A `float` is written with a decimal point (`3.0`). An `int` is written without one.
 - Block order is significant and is kept: content blocks, list items, ink strokes, canvas nodes, terms, tabs and slots are all stored in display order.
@@ -244,13 +244,13 @@ The fields of the phone data types, as a new vault gets them:
 | `message` | `channel` | `select`: `sms`, `mms`, `rcs` | How the message travelled |
 | | `direction` | `select`: `in`, `out` | Received or sent |
 | | `from` | `reference` to `person` | The sender, when a person matches |
-| | `to` | `reference` to `person`, `multiple` | The recipients that match a person |
+| | `to` | list of `reference` to `person` | The recipients that match a person |
 | | `from_raw` | `string` | The sender's number or display name, as the phone gave it |
 | | `to_raw` | `list` of `string` | Each recipient's number or display name, as the phone gave it |
 | | `conversation` | `reference` to `conversation` | The thread the message belongs to |
 | | `sent` | `datetime` | When it was sent |
 | | `body` | `content` | The text |
-| | `attachments` | `asset`, `multiple` | MMS attachments. The default template shows the ones that are images on the note page and its card |
+| | `attachments` | list of `asset` | MMS attachments. The default template shows the ones that are images on the note page and its card |
 | | `partial` | `bool`, default `false` | Captured from a notification, so it may be incomplete (RCS) |
 | | `processed` | `bool`, default `false` | Set when the user, or an agent, has dealt with the message. Its slot sits beside `from` on the page and on the card. No device script writes it, so a message captured again keeps it |
 | | `device_ref` | `string` | The phone's id for the message: a provider row id or a notification key. The device scripts use it to capture a message once |
@@ -260,7 +260,7 @@ The fields of the phone data types, as a new vault gets them:
 | | `started` | `datetime` | When the call started |
 | | `duration` | `int` | Its length in seconds |
 | | `device_ref` | `string` | The phone's call log id, so a call is captured once |
-| `conversation` | `participants` | `reference` to `person`, `multiple` | The people in the thread |
+| `conversation` | `participants` | list of `reference` to `person` | The people in the thread |
 | | `channel` | `select`: `sms`, `mms`, `rcs` | |
 | | `thread_ref` | `string` | The phone's id for the thread |
 
@@ -301,25 +301,25 @@ The fields of the Google sync types, as a new vault gets them. The Gmail and cal
 |------|-------|------|---------|
 | `email` | `from` | `reference` to `person` | The sender, when a person matches. The title is the subject |
 | | `from_raw` | `string` | The sender as the message gave it, such as `Alex Example <alex@example.com>` |
-| | `to`, `cc` | `reference` to `person`, `multiple` | The recipients that match a person |
+| | `to`, `cc` | list of `reference` to `person` | The recipients that match a person |
 | | `to_raw`, `cc_raw` | `list` of `string` | Each recipient as the message gave it |
 | | `sent` | `datetime` | When it was sent |
 | | `thread` | `reference` to `email_thread` | The thread it belongs to |
-| | `labels` | `taxonomy` `gmail_label`, `multiple` | Its Gmail labels |
+| | `labels` | list of `taxonomy` `gmail_label` | Its Gmail labels |
 | | `snippet` | `string` | Gmail's short preview |
 | | `body` | `content` | The text |
 | | `html` | `asset` | The HTML part, as Gmail sent it |
-| | `attachments` | `asset`, `multiple` | Its attachments |
+| | `attachments` | list of `asset` | Its attachments |
 | | `processed` | `bool`, default `false` | Set when the user, or an agent, has dealt with the email. Its slot sits beside `from` on the page and on the card. The Gmail sync never writes it: a label change rewrites only `labels` |
 | | `gmail_ref` | `string`, hidden | Gmail's message id, so a message is pulled once |
-| `email_thread` | `participants` | `reference` to `person`, `multiple` | The people in the thread. The title is the subject |
+| `email_thread` | `participants` | list of `reference` to `person` | The people in the thread. The title is the subject |
 | | `thread_ref` | `string`, hidden | Gmail's thread id |
 | `event` | `when` | `date_range`, `of = "date_or_datetime"` | Dates for an all-day event, datetimes with their offsets for a timed one |
 | | `calendar` | `string` | The id of the Google calendar it is on, as the Google settings' `calendars` lists it, such as `primary` |
 | | `calendar_name` | `string`, computed | The calendar's name from the user's Google calendar list, which the calendar sync fills. `calendar` stays a string rather than a select with labelled options: a select's options are fixed in the type file, and a script cannot change a type to list the synced calendars |
 | | `location` | `string` | |
 | | `description` | `content` | |
-| | `attendees` | `reference` to `person`, `multiple` | The attendees that match a person |
+| | `attendees` | list of `reference` to `person` | The attendees that match a person |
 | | `attendees_raw` | `list` of `string` | Each attendee's address as Google gave it |
 | | `organiser` | `string` | |
 | | `status` | `select`: `confirmed`, `tentative`, `cancelled` | |
@@ -367,7 +367,7 @@ The `outbox` type holds what TheVault sends for the user: emails through Gmail, 
 | `to`, `cc`, `bcc` | `list` of `string` | Email: the addresses, each `addr` or `Name <addr>` |
 | `subject` | `string` | Email: the subject. Empty sends the title |
 | `in_reply_to` | `reference` to any type | Email: the `email` note this one answers. The reply joins its Gmail thread |
-| `attachments` | `asset`, `multiple` | Email: the files to attach, at most 25 MB together and 16 MB each |
+| `attachments` | list of `asset` | Email: the files to attach, at most 25 MB together and 16 MB each |
 | `body` | `content` | Email and SMS: the text. An email sends it as a `text/plain` part and a `text/html` part |
 | `phone` | `string` | SMS: the number |
 | `device` | `string` | SMS: the id of the device that sends it; empty is the vault's one Android device with SMS sending on |
@@ -518,9 +518,9 @@ field body {
 }
 
 field image {
-  kind     = "asset"
-  label    = "Images"
-  multiple = true
+  kind  = "list"
+  items = "asset"
+  label = "Images"
 }
 
 field processed {
@@ -563,13 +563,14 @@ Every `field` block takes these items. The next section lists the extra items ea
 | `default` | value | none | The value a new note gets, and the value a schema change writes into existing notes. It uses the note encoding of the field's kind |
 | `computed` | bool | `false` | Only handlers write the field. The UI shows it read-only, and a client write is rejected (D3). A computed field cannot also be `required` |
 | `hidden` | bool | `false` | The properties sidebar does not show the field. The value is still stored, validated, queried, and written by the API and scripts, and a slot in a template still shows it. A hidden field cannot also be `required` |
-| `multiple` | bool | `false` | Allowed on `select`, `taxonomy`, `reference` and `asset`. The note holds a list |
 
 `default` is allowed on `string`, `int`, `float`, `bool`, `date`, `datetime`, `url`, `select`, `taxonomy` and `list` fields.
 
 ## Field kinds
 
-Each kind below gives its definition items and its note encoding. A field holding several values (`multiple = true`, or kind `list`) is a WCL list in the note. The order of that list is kept.
+Each kind below gives its definition items and its note encoding. A field holding several values, a [`list`](#list), is a WCL list in the note. The order of that list is kept.
+
+An older type file may say `multiple = true` on a `select`, `taxonomy`, `reference` or `asset` field. It reads as a list of that kind, and the home server rewrites it to the list form on its next start (types T6); the notes do not change.
 
 Most kinds are written as a field, `name = value`, in the note. `content`, `dict`, `ink` and `canvas` are written as a block whose label is the field name, as in `content body { ... }`. They are called compound fields below.
 
@@ -732,9 +733,9 @@ field calendar {
 }
 
 field channels {
-  kind     = "select"
-  multiple = true
-  options  = ["email", "chat", "phone"]
+  kind    = "list"
+  items   = "select"
+  options = ["email", "chat", "phone"]
 }
 ```
 
@@ -763,9 +764,9 @@ field status {
 }
 
 field topics {
-  kind     = "taxonomy"
+  kind     = "list"
+  items    = "taxonomy"
   taxonomy = "topic"
-  multiple = true
 }
 ```
 
@@ -790,8 +791,8 @@ A link to another note by ULID (D4, D5).
 The relations:
 
 - `one_way` is stored only on this note.
-- `two_way` is stored on both notes. The `inverse` field must be a `two_way` reference field on the target type whose own `inverse` names this field. Either side may be single or `multiple`. The writer updates both files in one commit. When the target type has no field by the `inverse` name, the schema gives it one: a `two_way` reference back to this type, `multiple`, whose `inverse` is this field. The target's type file does not hold it, so one type file sets up both sides; `GET /api/types` lists it with `implied: true`, and the properties sidebar shows it. Writing the field into the target's type file makes it that file's own, single or `multiple` as written, and the target's notes keep their values. A field another type's reference already gets this way is not given again: a second `two_way` reference naming the same missing field is refused as not its inverse.
-- `peer` is a symmetric group. The field must be `multiple` and its `target` must be this type. Every member stores the list of the other members, so adding a note to one member's list adds it to every member's list.
+- `two_way` is stored on both notes. The `inverse` field must be a `two_way` reference field on the target type whose own `inverse` names this field. Either side may be a single reference or a list of references. The writer updates both files in one commit. When the target type has no field by the `inverse` name, the schema gives it one: a `two_way` reference back to this type, `multiple`, whose `inverse` is this field. The target's type file does not hold it, so one type file sets up both sides; `GET /api/types` lists it with `implied: true`, and the properties sidebar shows it. Writing the field into the target's type file makes it that file's own, single or `multiple` as written, and the target's notes keep their values. A field another type's reference already gets this way is not given again: a second `two_way` reference naming the same missing field is refused as not its inverse.
+- `peer` is a symmetric group. The field must be a list of references and its `target` must be this type. Every member stores the list of the other members, so adding a note to one member's list adds it to every member's list.
 
 `on_delete` is read from the field on the note that holds the reference. Take a note A whose field points at note B, and delete B:
 
@@ -815,18 +816,18 @@ field parent {
 }
 
 field children {
-  kind     = "reference"
+  kind     = "list"
+  items    = "reference"
   target   = "specimen"
   relation = "two_way"
   inverse  = "parent"
-  multiple = true
 }
 
 field related {
-  kind     = "reference"
+  kind     = "list"
+  items    = "reference"
   target   = "specimen"
   relation = "peer"
-  multiple = true
 }
 ```
 
@@ -839,13 +840,15 @@ related  = ["01JB8Z4K2MQ7V3X9T5R6W8Y2ZD", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZE"]
 
 ### `list`
 
-An ordered list of scalar values of one kind, or of taxonomy terms.
+An ordered list of values, every one of one definition: its item. The item may be any kind but `content`, `ink` and `canvas`, which are blocks of their own: `string`, `int`, `float`, `bool`, `date`, `datetime`, `date_range`, `url`, `select`, `taxonomy`, `reference`, `asset`, `location`, another `list` and a `dict`.
 
 | Item | Form | Meaning |
 |------|------|---------|
-| `items` | string | Required. One of `string`, `int`, `float`, `bool`, `date`, `datetime`, `url` and `taxonomy` |
-| `taxonomy` | string | Required with `items = "taxonomy"`, and allowed only with it. The taxonomy name, a file stem in `taxonomies/` |
+| `items` | string | The item's kind, with the item's own items beside it in the field block: `target`, `relation`, `inverse` and `on_delete` for references, `options` and `option_labels` for selects, `taxonomy`, `accept`, `of`, `map` and `image` |
+| `item { ... }` | block | The item as a whole definition, the way a `field` block is written, with no label: needed for a list of lists, or of dicts with keys |
 | `labels` | string | Allowed only with `items = "string"`. Another field of the type, a list of strings, that holds one label per value in the same order |
+
+A list gives `items` or an `item` block, not both. `label`, `description`, `required`, `computed`, `hidden` and `default` belong to the list. A list of `select`, `taxonomy`, `reference` or `asset` items is that kind holding several values in every respect: a value can appear once, queries such as `has()` and `under()` read it, a list of references can be `two_way` or `peer` (the [`reference`](#reference) rules), and a kanban view cannot group by it. Inside a dict, or in a list inside a list, a reference is `one_way`.
 
 ```wcl
 field aliases {
@@ -858,7 +861,7 @@ field aliases {
 aliases = ["importer", "capacities import"]
 ```
 
-A list with `items = "taxonomy"` holds term paths. It is a `taxonomy` field with `multiple = true` in every respect but how it is declared: a note writes the same list, values are checked against the taxonomy the same way, a term can appear once, queries such as `has()` and `under()` treat it the same, and a kanban view cannot group by it. A `default` must hold terms the taxonomy already has. `multiple` is not allowed on a list.
+A list with `items = "taxonomy"` holds term paths. A `default` must hold terms the taxonomy already has.
 
 ```wcl
 field tags {
@@ -892,25 +895,78 @@ phones       = ["+61400000020", "+61400000021"]
 phone_labels = ["mobile", "home"]
 ```
 
-### `dict`
-
-A set of named values of one kind. Keys are identifiers (`[A-Za-z_][A-Za-z0-9_]*`), because WCL record keys and block fields must be. The note writes a `dict` block labelled with the field name, with one field per key. Keys are written in the order they were added.
-
-| Item | Form | Meaning |
-|------|------|---------|
-| `values` | string | Required. One of `string`, `int`, `float`, `bool`, `date`, `datetime`, `url` |
+Items with items of their own, and lists of lists:
 
 ```wcl
-field extra {
-  kind   = "dict"
-  values = "string"
+field visits {
+  kind  = "list"
+  items = "date_range"
+  of    = "date"
+}
+
+field grid {
+  kind = "list"
+
+  item {
+    kind  = "list"
+    items = "int"
+  }
 }
 ```
 
 ```wcl
-dict extra {
-  owner  = "Wil"
-  source = "capacities"
+visits = [{ start: "2026-01-02", end: "2026-01-04" }, { start: "2026-03-01", end: "2026-03-01" }]
+grid   = [[1, 2, 3], [4, 5]]
+```
+
+### `dict`
+
+Entries named by identifiers (`[A-Za-z_][A-Za-z0-9_]*`, because WCL record keys and block fields must be). A dict declares the keys it knows, each with a definition of its own, and says what any other entry may be. The note writes a `dict` block labelled with the field name, with one field per entry: declared keys first, in the order they are declared, then the others by name. A dict inside a list or inside another dict is a record value, `{ key: value, ... }`, in the same order.
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `key <name> { ... }` | block | A declared key: a whole definition, the way a `field` block is written, of any kind a [`list`](#list) item may be. `required = true` makes a note hold it |
+| `values` | string | What an entry no `key` declares may be: a kind with no items of its own, such as `"string"` or `"date"`, or `"any"`: each entry is its own kind, a string, number, true or false, list or record, checked for shape only |
+| `values { ... }` | block | The same as a whole definition, for a kind with items of its own, such as a `reference` with its `target` |
+
+A dict without `values` takes only its declared keys, and then needs at least one. A reference in a dict is `one_way`; its `on_delete` applies, so a deleted target is taken out of the entry (`unlink`), refuses the delete (`restrict`) or deletes this note too (`cascade`). Queries read an entry as `<field>.<key>`, typed by its definition: `from crate where spec.weight > 5`. References and assets in entries are links and asset uses like a field's.
+
+```wcl
+field spec {
+  kind   = "dict"
+  values = "any"
+
+  key weight {
+    kind     = "float"
+    label    = "Weight (kg)"
+    required = true
+  }
+
+  key owner {
+    kind   = "reference"
+    target = "person"
+  }
+
+  key sizes {
+    kind    = "list"
+    items   = "select"
+    options = ["s", "m", "l"]
+  }
+
+  key dims {
+    kind   = "dict"
+    values = "float"
+  }
+}
+```
+
+```wcl
+dict spec {
+  weight = 12.5
+  owner  = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"
+  sizes  = ["m", "l"]
+  dims   = { w: 40.0, h: 30.0 }
+  colour = "red"
 }
 ```
 
@@ -976,8 +1032,8 @@ field cover {
 }
 
 field attachments {
-  kind     = "asset"
-  multiple = true
+  kind  = "list"
+  items = "asset"
 }
 ```
 
@@ -1050,7 +1106,7 @@ A type has two templates at most, `default` and `card` (D14). Each lays fields a
 | Name | Used by | When missing |
 |------|---------|--------------|
 | `default` | The note page and details views | Required |
-| `card` | Cards, kanban and canvas views, map pins, and canvas note nodes | Falls back to the first tab of `default` |
+| `card` | Cards, kanban and canvas views, map pins, canvas note nodes, and [`card`](#card) blocks | Falls back to the first tab of `default`, except in a `card` block |
 
 A template takes these items:
 
@@ -1215,7 +1271,7 @@ An `image` block in a template can name an asset field of the type with `field` 
 
 - An image takes exactly one of `asset` and `field`. The schema rejects one with both, or with neither, with "takes `asset` or `field`, not both" or "needs `asset` or `field`".
 - `field` names an [`asset`](#asset) field of the type. The schema rejects any other name with "`"<name>"` names no field of the type", and a field of another kind with "an image shows an asset field, and `"<name>"` is a ... field".
-- A field with `multiple = true` shows every image in it, in order, in a row that wraps. `width` applies to each image.
+- A list of assets shows every image in it, in order, in a row that wraps. `width` applies to each image.
 - An asset in the field that is not an image (by its file name: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif` or `.svg`) is skipped. An empty field shows nothing on a card. On the note page it offers to add an image, by choosing a file or dropping one, which uploads the file and sets the field (for a multiple field, adds it). It shows nothing there either when the default template also places the field with a slot or an editable control, which has its own upload.
 - `alt` and `caption` may hold `{{name}}` [field references](#field-references), checked like those in `text`.
 - `field` is template-only. In a note's own content, an image with `field` fails validation with "is allowed only in a template".
@@ -1472,6 +1528,27 @@ asset {
   caption = "Sample export"
 }
 ```
+
+### `card`
+
+Another note shown as a card inside the content. Clicking the card opens the note, as clicking a mention of it does.
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `note` | note ULID | Required. The note shown |
+
+```wcl
+card {
+  note = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"
+}
+```
+
+Rules:
+
+- The card shows the note's type icon and its current title, then the first tab of the type's `card` template that shows for the note, as a card view shows it (see [Conditional tabs](#conditional-tabs)). A type with no `card` template shows the icon and title alone: the card block does not fall back to the `default` template.
+- A card is a link, as a mention is: `index` records it in the note's links as a mention in the content field that holds it, so `linked_from` and the note's backlinks see it. A card nested in columns, a toggle, an admonition or a canvas card links as one at the top does.
+- The note need not exist. A card of a note that is missing or deleted shows "Missing note" and stays in the content, as a mention of it does; deleting a note never changes the notes that show it in a card.
+- The card's text is not searched as this note's text. Only the `note` id is stored, so renaming the note shown never rewrites the notes that show it.
 
 ### `code`
 
@@ -2480,7 +2557,7 @@ A note's top-level fields depend on its type, so its `@document` is generated fr
 
 - The document type is named after the type in PascalCase with a `Note` suffix, for example `SpecimenNote`.
 - `title`, `created` and `updated` are `utf8`. `archived` is `bool?`.
-- Each non-compound field is declared under its own name, in type-file order, with the WCL type below. It is optional (`?`) unless `required = true`. If `multiple = true`, the field is `list<T>?` instead.
+- Each non-compound field is declared under its own name, in type-file order, with the WCL type below. It is optional (`?`) unless `required = true`. A list is `list<T>?`, `T` its item's type.
 
   | Field kind | WCL type |
   |------------|----------|

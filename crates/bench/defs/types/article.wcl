@@ -4,10 +4,10 @@ description = "A longer piece of writing."
 icon        = "file-text"
 
 field topics {
-  kind     = "taxonomy"
+  kind     = "list"
+  items    = "taxonomy"
   label    = "Topics"
   taxonomy = "topic"
-  multiple = true
 }
 
 field published {
@@ -27,11 +27,11 @@ field tags {
 }
 
 field related {
-  kind     = "reference"
+  kind     = "list"
+  items    = "reference"
   label    = "Related"
   target   = "article"
   relation = "peer"
-  multiple = true
 }
 
 field body {

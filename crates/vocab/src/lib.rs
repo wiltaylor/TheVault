@@ -12,7 +12,10 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// 2: agent files, `agents/<name>.wcl` (agents G1), a synced folder an older device refuses.
 /// 3: skills, `skills/<name>/` (skills S1): a synced folder an older device refuses, whose binary
 /// files the feed carries as `base64`, which an older device would read as deletes.
-pub const FORMAT_VERSION: u32 = 3;
+/// 4: typed lists and dicts (types T6): `kind = "list"` of any kind in place of `multiple`, and
+/// `key` blocks in a dict, which an older reader refuses, failing the whole schema; and the
+/// `card` content block, which an older reader refuses in a note.
+pub const FORMAT_VERSION: u32 = 4;
 
 /// Who made a change (D13, D30).
 #[derive(Debug, Clone, PartialEq, Eq)]

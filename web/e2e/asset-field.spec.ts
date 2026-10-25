@@ -11,7 +11,7 @@ function token(): string {
 test("an asset field uploads files and chooses vault files: single replaces, multiple appends, remove keeps the file", async ({ page, admin }) => {
   const type = `filed_${token()}`;
   const wcl =
-    `label = "Filed"\n\nfield cover {\n  kind = "asset"\n  label = "Cover"\n}\n\nfield attachments {\n  kind = "asset"\n  multiple = true\n  label = "Attachments"\n}\n\n` +
+    `label = "Filed"\n\nfield cover {\n  kind = "asset"\n  label = "Cover"\n}\n\nfield attachments {\n  kind = "list"\n  items = "asset"\n  label = "Attachments"\n}\n\n` +
     `template default {\n  tab "Main" {\n    slot "title"\n    slot "cover"\n    slot "attachments"\n  }\n}\n`;
   const put = await admin.put(`/api/types/${type}`, { data: { wcl } });
   expect(put.status(), await put.text()).toBe(200);

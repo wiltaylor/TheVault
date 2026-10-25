@@ -102,7 +102,7 @@ test("an open taxonomy takes a new term typed on a note, and a closed one offers
   const wcl =
     `label = "Tagged"\n\n` +
     `field tags {\n  kind = "list"\n  items = "taxonomy"\n  taxonomy = "${open}"\n  label = "Tags"\n}\n\n` +
-    `field stages {\n  kind = "taxonomy"\n  multiple = true\n  taxonomy = "${closed}"\n  label = "Stages"\n}\n\n` +
+    `field stages {\n  kind = "list"\n  items = "taxonomy"\n  taxonomy = "${closed}"\n  label = "Stages"\n}\n\n` +
     `template default {\n  tab "Main" {\n    slot "title"\n    slot "tags"\n    slot "stages"\n  }\n}\n`;
   await ok(admin.put(`/api/types/${type}`, { data: { wcl } }), 200);
   const note = (

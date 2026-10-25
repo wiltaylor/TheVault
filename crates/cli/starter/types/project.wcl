@@ -23,9 +23,9 @@ field due {
 }
 
 field tasks {
-  kind     = "reference"
+  kind     = "list"
+  items    = "reference"
   label    = "Tasks"
-  multiple = true
   target   = "task"
   relation = "two_way"
   inverse  = "project"

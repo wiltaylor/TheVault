@@ -8,7 +8,7 @@ use crate::doc::{Doc, Value};
 use crate::encoding::{
     is_date, is_datetime, is_ulid, is_url, is_utc_datetime, parse_date, parse_datetime,
 };
-use crate::types::{Accept, FieldDef, FieldKind, RangeOf, Scalar, is_image_filename};
+use crate::types::{Accept, DictValues, FieldDef, FieldKind, RangeOf, Scalar, is_image_filename};
 use crate::{Issue, Schema};
 
 /// What validation needs to know about the rest of the vault.
@@ -149,16 +149,9 @@ pub(crate) fn validate(
                 c.items(&b.body, &[], &[], &at);
                 c.content_blocks(&b.body.blocks, &at);
             }
-            FieldKind::Dict { values } => {
+            FieldKind::Dict { keys, values } => {
                 c.only_blocks(&b.body, &[], &at);
-                let mut keys = HashSet::new();
-                for (k, v) in &b.body.fields {
-                    let path = format!("{at}.{k}");
-                    if !keys.insert(k) {
-                        c.fail(&path, "appears more than once");
-                    }
-                    check_scalar(*values, v, &mut c, &path);
-                }
+                check_entries(keys, values, &b.body.fields, Some(&ctx), &mut c, &at);
             }
             FieldKind::Ink => c.ink(&b.body, &at),
             FieldKind::Canvas => c.canvas(&b.body, &at),
@@ -304,13 +297,21 @@ fn check_single(f: &FieldDef, v: &Value, ctx: Option<&Context>, c: &mut Check, a
                 format!("must be an asset ULID string, not {}", v.describe()),
             ),
         },
-        FieldKind::List { items } => match v {
+        FieldKind::List { item } => match v {
             Value::List(l) => {
-                for (n, item) in l.iter().enumerate() {
-                    check_scalar(*items, item, c, &format!("{at}[{n}]"));
+                for (n, x) in l.iter().enumerate() {
+                    check_value(item, x, ctx, c, &format!("{at}[{n}]"));
                 }
             }
             v => c.fail(at, format!("must be a list, not {}", v.describe())),
+        },
+        // A dict inside a dict or a list is a record of its entries.
+        FieldKind::Dict { keys, values } => match v {
+            Value::Record(entries) => check_entries(keys, values, entries, ctx, c, at),
+            v => c.fail(
+                at,
+                format!("must be a record of entries, not {}", v.describe()),
+            ),
         },
         FieldKind::Location { image } => {
             let (a, b, ranges) = if image.is_some() {
@@ -335,13 +336,58 @@ fn check_single(f: &FieldDef, v: &Value, ctx: Option<&Context>, c: &mut Check, a
                 c.fail(at, "`x` and `y` must be finite");
             }
         }
-        FieldKind::Content | FieldKind::Dict { .. } | FieldKind::Ink | FieldKind::Canvas => c.fail(
+        FieldKind::Content | FieldKind::Ink | FieldKind::Canvas => c.fail(
             at,
             format!(
                 "a {} field is written as a block, not a value",
                 f.kind.name()
             ),
         ),
+    }
+}
+
+/// A dict's entries (types T4): a declared key by its own definition, any other by the dict's
+/// `values`, and every required key there.
+fn check_entries(
+    keys: &[FieldDef],
+    values: &DictValues,
+    entries: &[(String, Value)],
+    ctx: Option<&Context>,
+    c: &mut Check,
+    at: &str,
+) {
+    let mut seen = HashSet::new();
+    for (k, v) in entries {
+        let path = format!("{at}.{k}");
+        if !seen.insert(k.as_str()) {
+            c.fail(&path, "appears more than once");
+            continue;
+        }
+        match (keys.iter().find(|d| &d.name == k), values) {
+            (Some(def), _) => {
+                if def.multiple && def.required && v == &Value::List(Vec::new()) {
+                    c.fail(&path, "is required and cannot be empty");
+                }
+                check_value(def, v, ctx, c, &path);
+            }
+            (None, DictValues::Of(def)) => check_value(def, v, ctx, c, &path),
+            (None, DictValues::Any) => {}
+            (None, DictValues::None) => {
+                let declared: Vec<&str> = keys.iter().map(|d| d.name.as_str()).collect();
+                c.fail(
+                    &path,
+                    format!(
+                        "is not a key of this dict, which takes {}",
+                        declared.join(", ")
+                    ),
+                );
+            }
+        }
+    }
+    for k in keys.iter().filter(|k| k.required) {
+        if !seen.contains(k.name.as_str()) {
+            c.fail(&format!("{at}.{}", k.name), "is required");
+        }
     }
 }
 

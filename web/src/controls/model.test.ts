@@ -60,7 +60,7 @@ const FIELDS: FieldDef[] = [
   field("links", "reference", { target: "t", multiple: true }),
   field("tags", "list", { items: "string" }),
   field("numbers", "list", { items: "int" }),
-  field("extra", "dict", { values: "string" }),
+  field("extra", "dict", { values: { ...field("extra", "string"), kind: "string" } }),
   field("place", "location"),
   field("body", "content"),
   field("cover", "asset"),

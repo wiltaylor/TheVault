@@ -202,8 +202,11 @@ function docToBlock(node: JSONContent): Block | null {
       if (typeof label === "string" && label) out.fields = { label };
       return out;
     }
-    case "vaultBlock":
-      return (node.attrs?.block as Block | null) ?? null;
+    case "vaultBlock": {
+      const block = (node.attrs?.block as Block | null) ?? null;
+      // A card whose note is not chosen yet is not content, as an empty last line is not.
+      return block?.kind === "card" && !block.fields?.note ? null : block;
+    }
     default:
       return null;
   }

@@ -141,6 +141,10 @@ content body {
     caption = "Sample export"
   }
 
+  card {
+    note = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"
+  }
+
   code {
     language = "rust"
     caption  = "Entry point"

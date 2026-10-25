@@ -6,7 +6,7 @@
 //! identifiers are printed bare and every other label is quoted, so a note reads the same whichever
 //! form it was submitted in.
 
-use schema::{Doc, DocBlock, TypeDef, Value};
+use schema::{Doc, DocBlock, FieldDef, FieldKind, TypeDef, Value};
 use serde_json::{Map, Number, Value as Json};
 
 use crate::{Error, Result};
@@ -251,6 +251,11 @@ pub(crate) fn arrange(ty: &TypeDef, doc: Doc, created: &str, updated: &str) -> D
     for f in ty.fields.iter().filter(|f| f.kind.is_compound()) {
         for slot in blocks.iter_mut() {
             if slot.as_ref().is_some_and(|b| b.label() == Some(&f.name)) {
+                if let (Some(b), FieldKind::Dict { keys, .. }) = (slot.as_mut(), &f.kind)
+                    && b.kind == "dict"
+                {
+                    order_entries(keys, &mut b.body.fields);
+                }
                 ordered_blocks.extend(slot.take());
             }
         }
@@ -260,6 +265,35 @@ pub(crate) fn arrange(ty: &TypeDef, doc: Doc, created: &str, updated: &str) -> D
     Doc {
         fields: ordered,
         blocks: ordered_blocks,
+    }
+}
+
+/// Put a dict's entries in canonical order: its declared keys in declaration order, then the
+/// others by name, so a dict reads the same whether it came as WCL or as JSON, whose objects are
+/// unordered. Dicts nested in an entry, directly or in a list, are ordered the same way.
+fn order_entries(keys: &[FieldDef], entries: &mut [(String, Value)]) {
+    let rank = |name: &str| {
+        keys.iter()
+            .position(|k| k.name == name)
+            .unwrap_or(keys.len())
+    };
+    entries.sort_by(|(a, _), (b, _)| rank(a).cmp(&rank(b)).then_with(|| a.cmp(b)));
+    for (name, value) in entries.iter_mut() {
+        if let Some(def) = keys.iter().find(|k| &k.name == name) {
+            order_value(def, value);
+        }
+    }
+}
+
+fn order_value(def: &FieldDef, value: &mut Value) {
+    match (&def.kind, value) {
+        (FieldKind::Dict { keys, .. }, Value::Record(members)) => order_entries(keys, members),
+        (FieldKind::List { item }, Value::List(items)) => {
+            for v in items {
+                order_value(item, v);
+            }
+        }
+        _ => {}
     }
 }
 

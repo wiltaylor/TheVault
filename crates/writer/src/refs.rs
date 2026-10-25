@@ -320,6 +320,74 @@ impl Work<'_> {
                     }
                 }
             }
+            // A reference in a dict's entry follows its own `on_delete` too (types T5).
+            for field in &ty.fields {
+                let schema::FieldKind::Dict { keys, values } = &field.kind else {
+                    continue;
+                };
+                let entries: Vec<(String, Value)> = doc
+                    .blocks
+                    .iter()
+                    .find(|b| b.kind == "dict" && b.label() == Some(field.name.as_str()))
+                    .map(|b| b.body.fields.clone())
+                    .unwrap_or_default();
+                for (key, value) in entries {
+                    let def = keys.iter().find(|k| k.name == key).or(match values {
+                        schema::DictValues::Of(d) => Some(d.as_ref()),
+                        _ => None,
+                    });
+                    let Some(r) = def.and_then(FieldDef::reference) else {
+                        continue;
+                    };
+                    let holds = match &value {
+                        Value::Str(s) => s == id,
+                        Value::List(l) => l.iter().any(|v| v.as_str() == Some(id)),
+                        _ => false,
+                    };
+                    if !holds {
+                        continue;
+                    }
+                    match r.on_delete {
+                        OnDelete::Unlink => {
+                            let entry = self.notes.get_mut(a).expect("loaded above");
+                            let Some(doc) = entry.doc.as_mut() else {
+                                continue;
+                            };
+                            if let Some(b) = doc.blocks.iter_mut().find(|b| {
+                                b.kind == "dict" && b.label() == Some(field.name.as_str())
+                            }) {
+                                b.body.fields.retain_mut(|(k, v)| {
+                                    if k != &key {
+                                        return true;
+                                    }
+                                    match v {
+                                        Value::List(l) => {
+                                            l.retain(|x| x.as_str() != Some(id));
+                                            true
+                                        }
+                                        _ => false,
+                                    }
+                                });
+                            }
+                        }
+                        OnDelete::Restrict => restricted.push((
+                            id.to_owned(),
+                            Referrer {
+                                id: a.clone(),
+                                type_name: type_name.clone(),
+                                field: format!("{}.{key}", field.name),
+                            },
+                        )),
+                        OnDelete::Cascade => {
+                            let entry = self.notes.get_mut(a).expect("loaded above");
+                            if entry.doc.take().is_some() {
+                                entry.event = Event::Delete;
+                                self.deletes.push_back(a.clone());
+                            }
+                        }
+                    }
+                }
+            }
         }
         Ok(restricted)
     }

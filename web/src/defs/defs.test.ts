@@ -12,6 +12,7 @@ import {
   RANGE_OF,
   type SchemaType,
   emptyType,
+  fieldDefOf,
   followFields,
   needsDefault,
   newField,
@@ -181,7 +182,7 @@ template default {
 `);
     // An attribute the editor now writes itself is not written twice.
     m.fields[0]!.kind = "list";
-    m.fields[0]!.items = "string";
+    m.fields[0]!.item = newField("rank");
     m.fields[0]!.labels = "other";
     const wcl = typeWcl(m);
     expect(wcl.match(/labels = /g)).toHaveLength(1);
@@ -270,20 +271,20 @@ handler "before_update" {
     expect(problems(m)).toContain('phones: labels names no field "nope".');
   });
 
-  it("reads a list of terms back as a list whose items are a taxonomy, and writes it so", () => {
+  it("reads a list of terms, and a multiple taxonomy, as a list whose items are a taxonomy, and writes both so", () => {
     const tagged: SchemaType = {
       ...stored,
       fields: [
-        { name: "tags", kind: "taxonomy", label: "Tags", required: false, computed: false, multiple: true, taxonomy: "tags", items: "taxonomy" },
+        { name: "tags", kind: "taxonomy", label: "Tags", required: false, computed: false, multiple: true, listed: true, taxonomy: "tags", items: "taxonomy" },
         { name: "topics", kind: "taxonomy", label: "topics", required: false, computed: false, multiple: true, taxonomy: "tags" },
       ],
       templates: [],
       handlers: [],
     };
     const m = typeFromSchema(tagged);
-    expect(m.fields.map((f) => [f.kind, f.items, f.multiple, f.taxonomy])).toEqual([
-      ["list", "taxonomy", false, "tags"],
-      ["taxonomy", "string", true, "tags"],
+    expect(m.fields.map((f) => [f.kind, f.item?.kind, f.item?.taxonomy])).toEqual([
+      ["list", "taxonomy", "tags"],
+      ["list", "taxonomy", "tags"],
     ]);
     const text = typeWcl(m);
     expect(text).toContain(`field tags {
@@ -293,12 +294,15 @@ handler "before_update" {
   taxonomy = "tags"
 }`);
     expect(text).toContain(`field topics {
-  kind = "taxonomy"
-  multiple = true
+  kind = "list"
+  items = "taxonomy"
   taxonomy = "tags"
 }`);
-    m.fields[0]!.taxonomy = "";
+    expect(text).not.toContain("multiple");
+    m.fields[0]!.item!.taxonomy = "";
     expect(problems(m)).toContain("tags: choose a taxonomy.");
+    // The default is edited as the multiple taxonomy field the list reads as.
+    expect(fieldDefOf(m.fields[1]!)).toMatchObject({ kind: "taxonomy", multiple: true, listed: true, items: "taxonomy", taxonomy: "tags" });
   });
 
   it("offers a date range of dates, datetimes, or either, and writes and reads each back", () => {

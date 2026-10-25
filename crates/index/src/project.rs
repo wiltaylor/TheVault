@@ -52,7 +52,7 @@ pub(crate) enum Num {
 }
 
 /// A link from this note. `via` is `field` for a reference field and `mention` for a mention in
-/// inline text, where `field` is the content or canvas field holding it.
+/// inline text or a `card` block, where `field` is the content or canvas field holding it.
 pub(crate) struct Link {
     pub field: String,
     pub pos: i64,
@@ -134,15 +134,47 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
             continue;
         }
         match &f.kind {
-            FieldKind::Dict { values: v } => {
-                let kind = Kind::of_scalar(*v);
+            FieldKind::Dict {
+                keys,
+                values: other,
+            } => {
+                // Each entry by its own definition (types T5): a declared key's, the dict's
+                // `values`, or, for any value, the kind the value shows.
                 for (key, item) in &b.body.fields {
-                    if kind.searchable()
-                        && let Some(s) = item.as_str()
-                    {
-                        body.push(s.to_owned());
+                    let def = keys.iter().find(|k| &k.name == key).or(match other {
+                        schema::DictValues::Of(d) => Some(d.as_ref()),
+                        _ => None,
+                    });
+                    let kind = def.map_or_else(|| Kind::of_value(item), |d| Kind::of(&d.kind));
+                    let path = format!("{}.{key}", f.name);
+                    let entries: Vec<&Value> = match (def.is_some_and(|d| d.multiple), item) {
+                        (true, Value::List(l)) => l.iter().collect(),
+                        (_, v) => vec![v],
+                    };
+                    for (pos, entry) in entries.into_iter().enumerate() {
+                        if kind.searchable()
+                            && let Some(s) = entry.as_str()
+                        {
+                            body.push(s.to_owned());
+                        }
+                        if kind == Kind::Reference
+                            && let Some(dst) = entry.as_str()
+                        {
+                            links.push(Link {
+                                field: path.clone(),
+                                pos: pos as i64,
+                                dst: dst.to_owned(),
+                                via: "field",
+                            });
+                        }
+                        if kind == Kind::Asset
+                            && let Some(asset) = entry.as_str()
+                            && schema::is_ulid(asset)
+                        {
+                            push_asset(&mut assets, asset, &path, "field");
+                        }
+                        scalars(&mut values, &f.name, pos as i64, key, kind, entry);
                     }
-                    scalars(&mut values, &f.name, 0, key, kind, item);
                 }
             }
             FieldKind::Content | FieldKind::Canvas => {
@@ -161,12 +193,26 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
         }
     }
 
-    let data = serde_json::Value::Object(
-        doc.fields
-            .iter()
-            .map(|(k, v)| (k.clone(), json(v)))
-            .collect(),
-    );
+    // A dict reads as an object of its entries, so `dict.key` is a path a query follows (T5).
+    let mut data: serde_json::Map<String, serde_json::Value> = doc
+        .fields
+        .iter()
+        .map(|(k, v)| (k.clone(), json(v)))
+        .collect();
+    for b in doc.blocks.iter().filter(|b| b.kind == "dict") {
+        if let Some(name) = b.label()
+            && ty.field(name).is_some_and(|f| f.kind.name() == "dict")
+        {
+            let entries = b
+                .body
+                .fields
+                .iter()
+                .map(|(k, v)| (k.clone(), json(v)))
+                .collect();
+            data.insert(name.to_owned(), serde_json::Value::Object(entries));
+        }
+    }
+    let data = serde_json::Value::Object(data);
     Note {
         id: id.to_owned(),
         type_name: ty.name.clone(),
@@ -247,24 +293,21 @@ impl Kind {
             FieldKind::Select { .. } => Kind::Select,
             FieldKind::Taxonomy { .. } => Kind::Taxonomy,
             FieldKind::Reference(_) => Kind::Reference,
-            FieldKind::List { items } => Kind::of_scalar(*items),
+            FieldKind::List { item } => Kind::of(&item.kind),
             FieldKind::Location { .. } => Kind::Location,
             FieldKind::Asset => Kind::Asset,
-            FieldKind::Dict { values } => Kind::of_scalar(*values),
+            FieldKind::Dict { .. } => Kind::Text,
             FieldKind::Content | FieldKind::Ink | FieldKind::Canvas => Kind::Text,
         }
     }
 
-    fn of_scalar(s: schema::Scalar) -> Kind {
-        use schema::Scalar;
-        match s {
-            Scalar::String => Kind::Text,
-            Scalar::Int => Kind::Int,
-            Scalar::Float => Kind::Float,
-            Scalar::Bool => Kind::Bool,
-            Scalar::Date => Kind::Date,
-            Scalar::Datetime => Kind::Datetime,
-            Scalar::Url => Kind::Url,
+    /// The kind a value of no declared kind shows: a dict entry under `values = "any"`.
+    fn of_value(v: &Value) -> Kind {
+        match v {
+            Value::Int(_) => Kind::Int,
+            Value::Float(_) => Kind::Float,
+            Value::Bool(_) => Kind::Bool,
+            _ => Kind::Text,
         }
     }
 
@@ -348,6 +391,13 @@ fn visit(b: &DocBlock, text: &mut Vec<String>, mentioned: &mut Vec<String>) {
         if markup == Some(name.as_str()) {
             mentioned.extend(mentions(s));
         }
+    }
+    // A `card` block links to the note it shows, as a mention of it does.
+    if b.kind == "card"
+        && let Some(note) = b.body.field("note").and_then(Value::as_str)
+        && schema::is_ulid(note)
+    {
+        mentioned.push(note.to_owned());
     }
     block_text(&b.body, text, mentioned);
 }

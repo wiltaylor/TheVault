@@ -10,9 +10,9 @@ field body {
 }
 
 field image {
-  kind     = "asset"
-  label    = "Images"
-  multiple = true
+  kind  = "list"
+  items = "asset"
+  label = "Images"
 }
 
 field processed {

@@ -595,3 +595,54 @@ fn a_two_way_field_on_a_new_type_gives_a_type_with_notes_the_other_side() {
         sorted(vec![chess.clone(), go.clone()])
     );
 }
+
+#[test]
+fn a_reference_in_a_dict_key_is_unlinked_when_its_target_goes_and_dict_keys_are_queried() {
+    let api = Api::start();
+    let crate_type = format!(
+        "label = \"Crate\"\n\nfield spec {{\n  kind   = \"dict\"\n  values = \"any\"\n\n  key owner {{\n    kind   = \"reference\"\n    target = \"person\"\n  }}\n\n  key helpers {{\n    kind   = \"list\"\n    items  = \"reference\"\n    target = \"person\"\n  }}\n\n  key weight {{\n    kind = \"float\"\n  }}\n}}\n{TEMPLATE}"
+    );
+    let res = api
+        .client
+        .put(api.server.url("/api/types/crate"))
+        .header(CONTENT_TYPE, WCL)
+        .body(crate_type)
+        .send()
+        .unwrap();
+    expect(res, 200);
+    let ann = api.create("person", "title = \"Ann\"\n");
+    let bo = api.create("person", "title = \"Bo\"\n");
+    let heavy = api.create(
+        "crate",
+        &format!("title = \"Heavy\"\n\ndict spec {{\n  owner   = \"{ann}\"\n  helpers = [\"{ann}\", \"{bo}\"]\n  weight  = 12.5\n  colour  = \"red\"\n}}\n"),
+    );
+    api.create(
+        "crate",
+        "title = \"Light\"\n\ndict spec {\n  weight = 1.0\n}\n",
+    );
+
+    // A dict's keys are paths a query follows, each by its own kind.
+    let found = expect(
+        api.client
+            .post(api.server.url("/api/query"))
+            .json(&json!({ "query": "from crate where spec.weight > 5 && spec.colour == \"red\"", "page_size": 10 }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    let ids: Vec<&str> = found["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| s(&r["id"]))
+        .collect();
+    assert_eq!(ids, [heavy.as_str()]);
+
+    // Deleting Ann takes her out of the dict: the single key goes, the list keeps Bo.
+    expect(api.delete(&ann), 200);
+    let file = api.file("crate", &heavy).unwrap();
+    assert!(!file.contains(&ann), "{file}");
+    assert!(file.contains(&bo), "{file}");
+    assert!(!file.contains("owner"), "{file}");
+    assert!(file.contains("weight"), "{file}");
+}

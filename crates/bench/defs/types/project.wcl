@@ -27,16 +27,16 @@ field budget {
 }
 
 field topics {
-  kind     = "taxonomy"
+  kind     = "list"
+  items    = "taxonomy"
   label    = "Topics"
   taxonomy = "topic"
-  multiple = true
 }
 
 field tasks {
-  kind     = "reference"
+  kind     = "list"
+  items    = "reference"
   label    = "Tasks"
-  multiple = true
   target   = "task"
   relation = "two_way"
   inverse  = "project"

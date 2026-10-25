@@ -8,6 +8,7 @@ import { text } from "../blocks/fields";
 import { admonitionLook, findTextFor, holdsFind, nestedText, readOpen, toggleLevel, writeOpen } from "../blocks/toggle";
 import { AssetBlock, ImageBlock } from "../blocks/MediaBlocks";
 import { MermaidBlock } from "../blocks/MermaidBlock";
+import { NoteCardBlock } from "../blocks/NoteCardBlock";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { ControlBlock } from "../controls/ControlView";
 import { InkSurface } from "../ink/InkSurface";
@@ -16,6 +17,8 @@ import { ImageThumb } from "./ImageField";
 import { Inline } from "./Inline";
 import { labelled, labelledText } from "./LabelledList";
 import { optionText } from "../options";
+import { noteTitle } from "../editor/titles";
+import { assetName } from "./assetNames";
 
 /** A field value as plain text. Lists join with commas and records list their members. */
 export function formatValue(value: Json | undefined): string {
@@ -32,18 +35,57 @@ export function formatValue(value: Json | undefined): string {
 
 /**
  * A field's value as plain text, with the note's other `fields` at hand: a list with `labels`
- * shows each value after its label, "mobile +61400000020, home +61400000021".
+ * shows each value after its label, "mobile +61400000020, home +61400000021". A select shows its
+ * options' labels, a reference its notes' titles and an asset its file names, in lists and dicts
+ * too; a date range its start to its end; a dict each entry after its key's label. Reactive, as titles and names load.
  */
 export function fieldText(f: FieldDef, value: Json | undefined, fields?: Record<string, Json | undefined>): string {
+  if (value === undefined || value === null) return "";
   if (f.kind === "list" && f.labels && Array.isArray(value)) {
     return labelledText(labelled(value, fields?.[f.labels]));
   }
-  // A select shows each option's label, where it has one.
-  if (f.kind === "select" && f.option_labels?.length) {
-    const text = (v: Json) => (typeof v === "string" ? optionText(f, v) : formatValue(v));
-    return Array.isArray(value) ? value.map(text).join(", ") : value === undefined || value === null ? "" : text(value);
+  if (Array.isArray(value)) {
+    const item = f.kind === "list" ? (f.item ?? null) : { ...f, multiple: false };
+    // Items that are lists or records are told apart by semicolons.
+    const sep = item && (item.kind === "list" || item.kind === "dict" || item.kind === "date_range") ? "; " : ", ";
+    return value.map((v) => (item ? fieldText(item, v) : formatValue(v))).join(sep);
+  }
+  switch (f.kind) {
+    case "select":
+      return typeof value === "string" ? optionText(f, value) : formatValue(value);
+    case "reference":
+      return typeof value === "string" ? (noteTitle(value) ?? value) : formatValue(value);
+    case "asset":
+      return typeof value === "string" ? (assetName(value) ?? value) : formatValue(value);
+    case "dict":
+      return dictText(f, value);
+    case "date_range":
+      // Start to end, whatever order the record's members come in.
+      if (typeof value === "object" && !Array.isArray(value) && value.start !== undefined && value.end !== undefined) {
+        return `${formatValue(value.start)} – ${formatValue(value.end)}`;
+      }
   }
   return formatValue(value);
+}
+
+/** A dict's entries as "Key: value", apart by semicolons, the declared keys by their labels and their own kinds. */
+function dictText(f: FieldDef, value: Json): string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return formatValue(value);
+  const values = f.values && typeof f.values === "object" ? f.values : null;
+  // Declared keys first, in their order, as the editor writes them.
+  const order = (k: string) => {
+    const i = f.keys?.findIndex((x) => x.name === k) ?? -1;
+    return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+  };
+  return Object.entries(value)
+    .sort(([a], [b]) => order(a) - order(b))
+    .map(([k, v]) => {
+      const key = f.keys?.find((x) => x.name === k);
+      const def = key ?? values;
+      const text = def ? fieldText(def, v) : formatValue(v);
+      return `${key?.label || k}: ${text}`;
+    })
+    .join("; ");
 }
 
 /**
@@ -171,6 +213,9 @@ export function BlockView(
       </Match>
       <Match when={b().kind === "control"}>
         <ControlBlock block={b()} />
+      </Match>
+      <Match when={b().kind === "card"}>
+        <NoteCardBlock block={b()} onChange={props.onChange} selected={props.selected} onRemove={props.onRemove} />
       </Match>
     </Switch>
   );

@@ -277,10 +277,10 @@ field stage {
 }
 
 field topics {
-  kind     = "taxonomy"
+  kind     = "list"
+  items    = "taxonomy"
   label    = "Topics"
   taxonomy = "stage"
-  multiple = true
 }
 
 field due {

@@ -66,7 +66,7 @@ test("fields are a grid with one row per field and settings that open underneath
   await logIn(page, `/settings/types/${name}/edit`);
 
   const grid = page.getByRole("table", { name: "Fields" });
-  await expect(grid.getByRole("columnheader")).toHaveText(["Order", "Name", "Kind", "Label", "Required", "Computed", "Hidden", "Several", "Actions"]);
+  await expect(grid.getByRole("columnheader")).toHaveText(["Order", "Name", "Kind", "Label", "Required", "Computed", "Hidden", "Actions"]);
   const size = page.getByTestId("field-row-0");
   await expect(size.getByLabel("Name", { exact: true })).toHaveValue("size");
   await expect(size.getByLabel("Kind", { exact: true })).toHaveValue("int");
@@ -151,7 +151,7 @@ test("saving keeps attributes this version does not know, and select options kee
   expect(file).toMatch(/^\s+option_labels = \["By car", "By air", ""\]$/m);
 });
 
-test("a list of notes is a reference that holds several, and two-way gives the target type the other side", async ({ page, admin }) => {
+test("a list of references is a list whose items are references, and two-way gives the target type the other side", async ({ page, admin }) => {
   const t = token();
   const crew = `crew_${t}`;
   const tool = `tool_${t}`;
@@ -163,20 +163,34 @@ test("a list of notes is a reference that holds several, and two-way gives the t
   const added = page.getByTestId("field-row-2");
   await added.getByLabel("Name", { exact: true }).fill("tools");
   await added.getByLabel("Kind", { exact: true }).selectOption("list");
-  await added.getByLabel("Item kind").selectOption({ label: "Notes (references)" });
-  await expect(added.getByLabel("Kind", { exact: true })).toHaveValue("reference");
-  await expect(added.getByLabel("Holds several notes")).toBeChecked();
-  await added.getByLabel("Target type").selectOption(tool);
-  await added.getByLabel("Relation").selectOption("two_way");
-  await added.getByLabel("Inverse field").fill("crews");
+  await added.getByLabel("Item kind").selectOption("reference");
+  // The item's own settings show under the item kind; there is no checkbox for several values.
+  const item = added.getByTestId("item-settings");
+  await expect(added.getByLabel("Holds several notes")).toHaveCount(0);
+  await item.getByLabel("Target type").selectOption(tool);
+  await expect(item.getByLabel("Relation").locator("option")).toHaveText(["One-way", "Two-way", "Peer group"]);
+  await item.getByLabel("Relation").selectOption("two_way");
+  await item.getByLabel("Inverse field").fill("crews");
+  await expect(item).toContainText("it gets one on save");
   await page.getByRole("button", { name: "Preview changes" }).click();
   await page.getByRole("button", { name: "Apply changes" }).click();
 
   await expect.poll(() => typeFile(admin, crew)).toMatch(/inverse\s*=\s*"crews"/);
+  const file = await typeFile(admin, crew);
+  expect(file).toMatch(/field tools \{\n\s+kind\s+= "list"\n\s+items\s+= "reference"\n/);
+  expect(file).not.toMatch(/multiple/);
   const fieldOf = async (type: string, field: string) => {
     const types = (await (await admin.get("/api/types")).json()) as { types: { name: string; fields: Record<string, unknown>[] }[] };
     return types.types.find((x) => x.name === type)!.fields.find((f) => f.name === field);
   };
-  expect(await fieldOf(crew, "tools")).toMatchObject({ kind: "reference", target: tool, relation: "two_way", inverse: "crews", multiple: true });
+  expect(await fieldOf(crew, "tools")).toMatchObject({ kind: "reference", target: tool, relation: "two_way", inverse: "crews", multiple: true, listed: true });
   expect(await fieldOf(tool, "crews")).toMatchObject({ kind: "reference", target: crew, relation: "two_way", inverse: "tools", multiple: true, implied: true });
+
+  // It reads back as a list of references.
+  await page.goto(`/settings/types/${crew}/edit`);
+  const again = page.getByTestId("field-row-2");
+  await expect(again.getByLabel("Kind", { exact: true })).toHaveValue("list");
+  await again.getByRole("button", { name: "Settings for tools" }).click();
+  await expect(again.getByLabel("Item kind")).toHaveValue("reference");
+  await expect(again.getByTestId("item-settings").getByLabel("Relation")).toHaveValue("two_way");
 });

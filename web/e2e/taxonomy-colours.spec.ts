@@ -26,7 +26,7 @@ async function setup(admin: APIRequestContext) {
   );
   const type = `coloured_${t}`;
   const wcl =
-    `label = "Coloured"\n\nfield topics {\n  kind = "taxonomy"\n  multiple = true\n  taxonomy = "${tax}"\n  label = "Topics"\n}\n\n` +
+    `label = "Coloured"\n\nfield topics {\n  kind = "list"\n  items = "taxonomy"\n  taxonomy = "${tax}"\n  label = "Topics"\n}\n\n` +
     `template default {\n  tab "Main" {\n    slot "title"\n    slot "topics"\n  }\n}\n`;
   await ok(admin.put(`/api/types/${type}`, { data: { wcl } }), 200);
   const res = await ok(

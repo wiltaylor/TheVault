@@ -72,10 +72,10 @@ field size {
 }
 
 field sizes {
-  kind     = "select"
+  kind     = "list"
+  items    = "select"
   label    = "Sizes"
   options  = ["small", "medium", "large"]
-  multiple = true
 }
 
 field area {
@@ -85,10 +85,10 @@ field area {
 }
 
 field areas {
-  kind     = "taxonomy"
+  kind     = "list"
+  items    = "taxonomy"
   label    = "Areas"
   taxonomy = "area"
-  multiple = true
 }
 
 field tags {
@@ -104,10 +104,10 @@ field parent {
 }
 
 field links {
-  kind     = "reference"
-  label    = "Links"
-  target   = "${name}"
-  multiple = true
+  kind   = "list"
+  items  = "reference"
+  label  = "Links"
+  target = "${name}"
 }
 
 field stars {

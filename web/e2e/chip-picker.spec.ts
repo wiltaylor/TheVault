@@ -28,9 +28,9 @@ async function setup(admin: APIRequestContext) {
     200,
   );
   const fields = (prefix: string) =>
-    `field ${prefix}refs {\n  kind = "reference"\n  multiple = true\n  target = "task"\n  label = "${prefix ? "Side refs" : "Refs"}"\n}\n` +
+    `field ${prefix}refs {\n  kind = "list"\n  items = "reference"\n  target = "task"\n  label = "${prefix ? "Side refs" : "Refs"}"\n}\n` +
     `field ${prefix}tags {\n  kind = "list"\n  items = "string"\n  label = "${prefix ? "Side tags" : "Tags"}"\n}\n` +
-    `field ${prefix}topics {\n  kind = "taxonomy"\n  multiple = true\n  taxonomy = "${tax}"\n  label = "${prefix ? "Side topics" : "Topics"}"\n}\n`;
+    `field ${prefix}topics {\n  kind = "list"\n  items = "taxonomy"\n  taxonomy = "${tax}"\n  label = "${prefix ? "Side topics" : "Topics"}"\n}\n`;
   const name = `chips_${t}`;
   const wcl =
     `label = "Chips"\n\n${fields("")}${fields("side_")}\n` +

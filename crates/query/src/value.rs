@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use schema::{FieldKind, RangeOf, Scalar};
+use schema::{FieldKind, RangeOf};
 
 /// A value during evaluation. Dates and datetimes are typed by the schema, so they compare in
 /// time order rather than as text.
@@ -253,24 +253,25 @@ pub(crate) fn from_json(raw: &serde_json::Value, kind: &FieldKind) -> V {
                 })
                 .collect(),
         ),
-        (FieldKind::List { items }, v) | (FieldKind::Dict { values: items }, v) => {
-            from_json(v, &scalar_kind(*items))
-        }
+        (FieldKind::List { item }, v) => from_json(v, &item.kind),
+        // A dict's entries, each by its own definition (types T5).
+        (FieldKind::Dict { keys, values }, J::Object(m)) => V::Record(
+            m.iter()
+                .map(|(k, v)| {
+                    let def = keys.iter().find(|d| &d.name == k).or(match values {
+                        schema::DictValues::Of(d) => Some(d.as_ref()),
+                        _ => None,
+                    });
+                    (
+                        k.clone(),
+                        def.map_or_else(|| plain(v), |d| from_json(v, &d.kind)),
+                    )
+                })
+                .collect(),
+        ),
         (FieldKind::Reference(_), J::String(s)) => V::Ref(s.clone()),
         (FieldKind::Float, J::Number(n)) => V::Float(n.as_f64().unwrap_or_default()),
         (_, v) => plain(v),
-    }
-}
-
-fn scalar_kind(s: Scalar) -> FieldKind {
-    match s {
-        Scalar::String => FieldKind::String,
-        Scalar::Int => FieldKind::Int,
-        Scalar::Float => FieldKind::Float,
-        Scalar::Bool => FieldKind::Bool,
-        Scalar::Date => FieldKind::Date,
-        Scalar::Datetime => FieldKind::Datetime,
-        Scalar::Url => FieldKind::Url,
     }
 }
 

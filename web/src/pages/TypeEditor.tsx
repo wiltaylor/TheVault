@@ -4,31 +4,33 @@ import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 import { ApiError, type FieldDef, type Json, type Row, type SchemaIssue, type TypePlan, api } from "../api";
 import { FieldInput } from "../components/FieldInput";
 import {
-  DEFAULT_KINDS,
   EVENTS,
   FIELD_KINDS,
   type FieldKind,
-  ITEM_KINDS,
   type FieldModel,
   type HandlerModel,
   LIST_SORT_BUILT_INS,
   type ListPageModel,
-  MULTIPLE_KINDS,
   ON_DELETE,
   PALETTE,
+  type Place,
   RANGE_OF,
-  RELATIONS,
-  SCALARS,
   type TypeModel,
+  VALUE_KINDS,
+  changeKind,
   emptyType,
+  fieldDefOf,
   isName,
-  isTermList,
+  itemKind,
+  itemPlace,
   needsDefault,
   newField,
   optionsText as writeOptions,
   parseOptions,
   problems,
+  relationsAt,
   renames,
+  takesDefault,
   typeFromSchema,
   typeWcl,
 } from "../defs/typeModel";
@@ -78,25 +80,7 @@ export function TypeWarnings(props: { warnings: SchemaIssue[] }) {
 
 /** The field as a note page would edit it, so a default is entered with the field's own editor. */
 function defaultDef(f: FieldModel): FieldDef {
-  // A list of terms is edited as the multiple taxonomy field it reads as.
-  if (isTermList(f)) return { ...defaultDef({ ...f, kind: "taxonomy", multiple: true }), items: "taxonomy" };
-  return {
-    name: "default",
-    label: "Default",
-    description: null,
-    kind: f.kind,
-    required: false,
-    computed: false,
-    multiple: f.multiple && MULTIPLE_KINDS.has(f.kind),
-    compound: false,
-    options: f.options,
-    taxonomy: f.taxonomy,
-    target: f.target,
-    items: f.items,
-    values: f.values,
-    of: f.of,
-    image: f.map === "image" ? f.image : null,
-  };
+  return { ...fieldDefOf(f), name: "default", label: "Default", description: null, required: false, computed: false, hidden: false };
 }
 
 const KIND_LABELS: Record<FieldKind, string> = {
@@ -119,6 +103,429 @@ const KIND_LABELS: Record<FieldKind, string> = {
   ink: "Ink",
   canvas: "Canvas",
 };
+
+/** What an item of a list is called in its Item kind picker. */
+const ITEM_LABELS: Partial<Record<FieldKind, string>> = {
+  taxonomy: "Taxonomy terms",
+};
+
+/** Kinds with settings of their own, which [`KindSettings`] shows. */
+const SETTING_KINDS = new Set<string>(["select", "taxonomy", "reference", "date_range", "location", "asset", "list", "dict"]);
+
+interface SettingsProps {
+  def: FieldModel;
+  /** Change the definition. Any preview is now out of date. */
+  set: (fn: (x: FieldModel) => void) => void;
+  place: Place;
+  /** The element id of one of the definition's inputs. */
+  id: (part: string) => string;
+  /** The type being edited, offered as a reference target before it is saved. */
+  typeName: string;
+}
+
+/** A picker of the kinds a list item, a dict key or a dict's other entries may be (types T1). */
+function ValueKindSelect(props: { id: string; label?: string; value: FieldKind | null; onChange: (kind: FieldKind) => void; items?: boolean }) {
+  return (
+    <select id={props.id} aria-label={props.label} onChange={(e) => props.onChange(e.currentTarget.value as FieldKind)}>
+      <For each={VALUE_KINDS}>
+        {(k) => (
+          <option value={k} selected={props.value === k}>
+            {(props.items && ITEM_LABELS[k]) || KIND_LABELS[k]}
+          </option>
+        )}
+      </For>
+    </select>
+  );
+}
+
+/**
+ * The settings of a definition's kind (types T8): a select's options, a taxonomy, a reference's
+ * target and relation, a date range's ends, a location's map, an asset's files, and what a list
+ * or a dict holds, each item and key with these same settings of its own.
+ */
+function KindSettings(props: SettingsProps) {
+  const f = () => props.def;
+  const id = props.id;
+  const set = (fn: (x: FieldModel) => void) => props.set(fn);
+  const [optionsText, setOptionsText] = createSignal(writeOptions(f()));
+  const targetFields = () =>
+    types()
+      .find((t) => t.name === f().target)
+      ?.fields.filter((x) => x.kind === "reference") ?? [];
+  // The relations this place allows, and the stored one even when it does not.
+  const relations = () => {
+    const ok = relationsAt(props.place);
+    return ok.includes(f().relation) ? ok : [...ok, f().relation];
+  };
+  return (
+    <>
+      <Show when={f().kind === "select"}>
+        <label for={id("options")}>Options, one per line, as value or value = Label</label>
+        <textarea
+          id={id("options")}
+          rows={3}
+          value={optionsText()}
+          onInput={(e) => {
+            setOptionsText(e.currentTarget.value);
+            const parsed = parseOptions(e.currentTarget.value);
+            set((x) => {
+              x.options = parsed.options;
+              x.option_labels = parsed.option_labels;
+            });
+          }}
+        />
+      </Show>
+      <Show when={f().kind === "taxonomy"}>
+        <label for={id("taxonomy")}>Taxonomy</label>
+        <select
+          id={id("taxonomy")}
+          onChange={(e) =>
+            set((x) => {
+              x.taxonomy = e.currentTarget.value;
+              x.default = undefined;
+            })
+          }
+        >
+          <option value="" selected={!f().taxonomy}>
+            —
+          </option>
+          <For each={taxonomies()}>
+            {(t) => (
+              <option value={t.name} selected={f().taxonomy === t.name}>
+                {t.label}
+              </option>
+            )}
+          </For>
+        </select>
+      </Show>
+      <Show when={f().kind === "reference"}>
+        <label for={id("target")}>Target type</label>
+        <select id={id("target")} onChange={(e) => set((x) => (x.target = e.currentTarget.value))}>
+          <option value="" selected={!f().target}>
+            —
+          </option>
+          <option value="*" selected={f().target === "*"}>
+            Any type
+          </option>
+          <For each={[...new Set([...types().map((t) => t.name), ...(props.typeName ? [props.typeName] : [])])].sort()}>
+            {(t) => (
+              <option value={t} selected={f().target === t}>
+                {t}
+              </option>
+            )}
+          </For>
+        </select>
+        <label for={id("relation")}>Relation</label>
+        <select id={id("relation")} onChange={(e) => set((x) => (x.relation = e.currentTarget.value as FieldModel["relation"]))}>
+          <For each={relations()}>
+            {(r) => (
+              <option value={r} selected={f().relation === r}>
+                {{ one_way: "One-way", two_way: "Two-way", peer: "Peer group" }[r]}
+              </option>
+            )}
+          </For>
+        </select>
+        <Show when={props.place !== "field" && props.place !== "fieldItem"}>
+          <p class="muted hint">Inside a dictionary or a nested list, a reference is one-way.</p>
+        </Show>
+        <Show when={f().relation === "two_way"}>
+          <label for={id("inverse")}>Inverse field</label>
+          <input
+            id={id("inverse")}
+            list={id("inverse-list")}
+            value={f().inverse}
+            onInput={(e) => set((x) => (x.inverse = e.currentTarget.value))}
+          />
+          <datalist id={id("inverse-list")}>
+            <For each={targetFields()}>{(t) => <option value={t.name} />}</For>
+          </datalist>
+          <p class="muted hint">
+            The field on {f().target || "the target type"} that holds the other side. When it has no field by that
+            name, it gets one on save: a two-way reference back that holds several notes.
+          </p>
+        </Show>
+        <label for={id("on_delete")}>When the target is deleted</label>
+        <select id={id("on_delete")} onChange={(e) => set((x) => (x.on_delete = e.currentTarget.value as FieldModel["on_delete"]))}>
+          <For each={ON_DELETE}>
+            {(o) => (
+              <option value={o} selected={f().on_delete === o}>
+                {{ unlink: "Unlink", restrict: "Refuse the delete", cascade: "Delete this note too" }[o]}
+              </option>
+            )}
+          </For>
+        </select>
+      </Show>
+      <Show when={f().kind === "date_range"}>
+        <label for={id("of")}>Ends are</label>
+        <select
+          id={id("of")}
+          onChange={(e) =>
+            set((x) => {
+              x.of = e.currentTarget.value as FieldModel["of"];
+              x.default = undefined;
+            })
+          }
+        >
+          <For each={RANGE_OF}>
+            {(o) => (
+              <option value={o.value} selected={f().of === o.value}>
+                {o.label}
+              </option>
+            )}
+          </For>
+        </select>
+      </Show>
+      <Show when={f().kind === "location"}>
+        <label for={id("map")}>Map</label>
+        <select id={id("map")} onChange={(e) => set((x) => (x.map = e.currentTarget.value as FieldModel["map"]))}>
+          <option value="geo" selected={f().map === "geo"}>
+            Real-world map
+          </option>
+          <option value="image" selected={f().map === "image"}>
+            Image map
+          </option>
+        </select>
+        <Show when={f().map === "image"}>
+          <label for={id("image")}>Map image</label>
+          <FieldInput
+            field={{ ...fieldDefOf(f()), kind: "asset", multiple: false, listed: false, accept: "any", label: "Map image" }}
+            value={f().image || undefined}
+            onChange={(v) => set((x) => (x.image = typeof v === "string" ? v : ""))}
+            label="Map image"
+            id={id("image")}
+          />
+        </Show>
+      </Show>
+      <Show when={f().kind === "asset"}>
+        <label for={id("accept")}>Takes</label>
+        <select id={id("accept")} onChange={(e) => set((x) => (x.accept = e.currentTarget.value === "image" ? "image" : "any"))}>
+          <option value="any" selected={f().accept !== "image"}>
+            Any file
+          </option>
+          <option value="image" selected={f().accept === "image"}>
+            Images only
+          </option>
+        </select>
+      </Show>
+      <Show when={f().kind === "list"}>
+        <label for={id("items")}>Item kind</label>
+        <ValueKindSelect
+          id={id("items")}
+          items
+          value={itemKind(f())}
+          onChange={(k) =>
+            set((x) => {
+              x.item ??= newField(x.name);
+              changeKind(x.item, k);
+              if (!relationsAt(itemPlace(props.place, k)).includes(x.item.relation)) x.item.relation = "one_way";
+              x.default = undefined;
+            })
+          }
+        />
+        <Show when={f().item && SETTING_KINDS.has(f().item!.kind) ? f().item : null}>
+          {(item) => (
+            <div class="nested-settings" data-testid="item-settings" role="group" aria-label="Item settings">
+              <div class="form-grid">
+                <KindSettings
+                  def={item()}
+                  set={(fn) =>
+                    set((x) => {
+                      if (x.item) fn(x.item);
+                      x.default = undefined;
+                    })
+                  }
+                  place={itemPlace(props.place, item().kind)}
+                  id={(part) => id(`item-${part}`)}
+                  typeName={props.typeName}
+                />
+              </div>
+            </div>
+          )}
+        </Show>
+      </Show>
+      <Show when={f().kind === "dict"}>
+        <DictSettings {...props} />
+      </Show>
+    </>
+  );
+}
+
+/** A dict's settings: its keys, each a row with settings of its own, and what other keys may hold. */
+function DictSettings(props: SettingsProps) {
+  const f = () => props.def;
+  const id = props.id;
+  const values = () => (f().values === null ? "none" : f().values === "any" ? "any" : "one");
+  const valuesDef = () => {
+    const v = f().values;
+    return v && v !== "any" ? v : null;
+  };
+  function addKey() {
+    props.set((x) => {
+      let n = x.keys.length + 1;
+      while (x.keys.some((k) => k.name === `key_${n}`)) n++;
+      x.keys.push(newField(`key_${n}`));
+    });
+  }
+  function moveKey(key: number, by: number) {
+    props.set((x) => {
+      const i = x.keys.findIndex((k) => k.key === key);
+      const j = i + by;
+      if (i < 0 || j < 0 || j >= x.keys.length) return;
+      const [k] = x.keys.splice(i, 1);
+      x.keys.splice(j, 0, k!);
+    });
+  }
+  return (
+    <>
+      <span>Keys</span>
+      <div class="dict-keys" role="group" aria-label="Keys">
+        <For each={f().keys} fallback={<p class="muted">No keys declared.</p>}>
+          {(k, i) => <KeyRow {...props} keyDef={k} index={i()} count={f().keys.length} move={moveKey} />}
+        </For>
+        <button type="button" onClick={addKey}>
+          Add key
+        </button>
+      </div>
+      <label for={id("values")}>Other keys</label>
+      <select
+        id={id("values")}
+        onChange={(e) =>
+          props.set((x) => {
+            const v = e.currentTarget.value;
+            x.values = v === "none" ? null : v === "any" ? "any" : x.values && x.values !== "any" ? x.values : newField(x.name);
+          })
+        }
+      >
+        <option value="none" selected={values() === "none"}>
+          None: only the keys above
+        </option>
+        <option value="any" selected={values() === "any"}>
+          Any kind, chosen for each entry
+        </option>
+        <option value="one" selected={values() === "one"}>
+          One kind
+        </option>
+      </select>
+      <Show when={valuesDef()}>
+        {(v) => (
+          <>
+            <label for={id("values-kind")}>Kind of other keys</label>
+            <ValueKindSelect
+              id={id("values-kind")}
+              value={v().kind}
+              onChange={(k) =>
+                props.set((x) => {
+                  if (x.values && x.values !== "any") {
+                    changeKind(x.values, k);
+                    x.values.relation = "one_way";
+                  }
+                })
+              }
+            />
+            <Show when={SETTING_KINDS.has(v().kind)}>
+              <div class="nested-settings" data-testid="values-settings" role="group" aria-label="Other keys settings">
+                <div class="form-grid">
+                  <KindSettings
+                    def={v()}
+                    set={(fn) =>
+                      props.set((x) => {
+                        if (x.values && x.values !== "any") fn(x.values);
+                      })
+                    }
+                    place="values"
+                    id={(part) => id(`values-${part}`)}
+                    typeName={props.typeName}
+                  />
+                </div>
+              </div>
+            </Show>
+          </>
+        )}
+      </Show>
+    </>
+  );
+}
+
+/** One declared key of a dict: its name, kind, label and whether it is required, and its settings underneath. */
+function KeyRow(props: SettingsProps & { keyDef: FieldModel; index: number; count: number; move: (key: number, by: number) => void }) {
+  const k = () => props.keyDef;
+  const key = k().key;
+  const set = (fn: (x: FieldModel) => void) =>
+    props.set((x) => {
+      const found = x.keys.find((y) => y.key === key);
+      if (found) fn(found);
+    });
+  const id = (part: string) => props.id(`key${key}-${part}`);
+  const [open, setOpen] = createSignal(k().original === null && SETTING_KINDS.has(k().kind));
+  const who = () => k().name || "key";
+  return (
+    <div class="dict-key" classList={{ open: open() }} data-testid={`key-row-${props.index}`}>
+      <div class="dict-key-row">
+        <button type="button" aria-label={`Move key ${who()} up`} disabled={props.index === 0} onClick={() => props.move(key, -1)}>
+          ↑
+        </button>
+        <button
+          type="button"
+          aria-label={`Move key ${who()} down`}
+          disabled={props.index === props.count - 1}
+          onClick={() => props.move(key, 1)}
+        >
+          ↓
+        </button>
+        <input aria-label="Key name" value={k().name} onInput={(e) => set((x) => (x.name = e.currentTarget.value))} />
+        <ValueKindSelect
+          id={id("kind")}
+          label="Key kind"
+          value={k().kind}
+          onChange={(kind) =>
+            set((x) => {
+              changeKind(x, kind);
+              x.relation = "one_way";
+              if (SETTING_KINDS.has(kind)) setOpen(true);
+            })
+          }
+        />
+        <input
+          aria-label="Key label"
+          value={k().label}
+          placeholder={k().name}
+          onInput={(e) => set((x) => (x.label = e.currentTarget.value))}
+        />
+        <label class="dict-key-flag">
+          <input type="checkbox" aria-label="Key required" checked={k().required} onChange={(e) => set((x) => (x.required = e.currentTarget.checked))} />
+          <span>Required</span>
+        </label>
+        <button
+          type="button"
+          aria-label={`Settings for key ${who()}`}
+          aria-expanded={open()}
+          title="More settings"
+          onClick={() => setOpen(!open())}
+        >
+          ⚙
+        </button>
+        <button
+          type="button"
+          class="danger"
+          aria-label={`Remove key ${who()}`}
+          title="Remove key"
+          onClick={() => props.set((x) => void x.keys.splice(x.keys.findIndex((y) => y.key === key), 1))}
+        >
+          ✕
+        </button>
+      </div>
+      <Show when={open()}>
+        <div class="nested-settings" role="group" aria-label={`Key ${who()} settings`}>
+          <div class="form-grid">
+            <label for={id("description")}>Description</label>
+            <input id={id("description")} value={k().description} onInput={(e) => set((x) => (x.description = e.currentTarget.value))} />
+            <KindSettings def={k()} set={set} place="key" id={id} typeName={props.typeName} />
+          </div>
+        </div>
+      </Show>
+    </div>
+  );
+}
 
 /**
  * The type editor (D3, D6): the type's own items and its fields, each kind with its options. A new
@@ -351,39 +758,9 @@ export function TypeEditor() {
     const f = () => props.field;
     const key = f().key;
     const set = (fn: (x: FieldModel) => void) => editField(key, fn);
-    const [optionsText, setOptionsText] = createSignal(writeOptions(f()));
     // A field added in this session opens with its settings showing.
     const [open, setOpen] = createSignal(f().original === null);
     const id = (part: string) => `f${key}-${part}`;
-    const taxonomySelect = () => (
-      <>
-        <label for={id("taxonomy")}>Taxonomy</label>
-        <select
-          id={id("taxonomy")}
-          onChange={(e) =>
-            set((x) => {
-              x.taxonomy = e.currentTarget.value;
-              x.default = undefined;
-            })
-          }
-        >
-          <option value="" selected={!f().taxonomy}>
-            —
-          </option>
-          <For each={taxonomies()}>
-            {(t) => (
-              <option value={t.name} selected={f().taxonomy === t.name}>
-                {t.label}
-              </option>
-            )}
-          </For>
-        </select>
-      </>
-    );
-    const targetFields = () =>
-      types()
-        .find((t) => t.name === f().target)
-        ?.fields.filter((x) => x.kind === "reference") ?? [];
     return (
       <tbody class="field-row" classList={{ open: open() }} data-testid={`field-row-${props.index}`}>
         <tr>
@@ -423,13 +800,7 @@ export function TypeEditor() {
             <select
               id={id("kind")}
               aria-label="Kind"
-              onChange={(e) =>
-                set((x) => {
-                  x.kind = e.currentTarget.value as FieldKind;
-                  x.default = undefined;
-                  if (!MULTIPLE_KINDS.has(x.kind)) x.multiple = false;
-                })
-              }
+              onChange={(e) => set((x) => changeKind(x, e.currentTarget.value as FieldKind))}
             >
               <For each={FIELD_KINDS}>
                 {(k) => (
@@ -477,21 +848,6 @@ export function TypeEditor() {
               onChange={(e) => set((x) => (x.hidden = e.currentTarget.checked))}
             />
           </td>
-          <td class="field-flag">
-            <Show when={MULTIPLE_KINDS.has(f().kind)} fallback={<span class="muted">—</span>}>
-              <input
-                type="checkbox"
-                aria-label="Several values"
-                checked={f().multiple}
-                onChange={(e) =>
-                  set((x) => {
-                    x.multiple = e.currentTarget.checked;
-                    x.default = undefined;
-                  })
-                }
-              />
-            </Show>
-          </td>
           <td class="field-actions">
             <button
               type="button"
@@ -515,7 +871,7 @@ export function TypeEditor() {
         </tr>
         <Show when={open()}>
           <tr class="field-details">
-            <td colSpan={9}>
+            <td colSpan={8}>
               <div class="form-grid">
                 <label for={id("description")}>Description</label>
                 <input
@@ -523,176 +879,10 @@ export function TypeEditor() {
                   value={f().description}
                   onInput={(e) => set((x) => (x.description = e.currentTarget.value))}
                 />
-                <Show when={f().kind === "select"}>
-                  <label for={id("options")}>Options, one per line, as value or value = Label</label>
-                  <textarea
-                    id={id("options")}
-                    rows={3}
-                    value={optionsText()}
-                    onInput={(e) => {
-                      setOptionsText(e.currentTarget.value);
-                      const parsed = parseOptions(e.currentTarget.value);
-                      set((x) => {
-                        x.options = parsed.options;
-                        x.option_labels = parsed.option_labels;
-                      });
-                    }}
-                  />
-                </Show>
-                <Show when={f().kind === "taxonomy"}>{taxonomySelect()}</Show>
-                <Show when={f().kind === "reference"}>
-                  <label for={id("target")}>Target type</label>
-                  <select id={id("target")} onChange={(e) => set((x) => (x.target = e.currentTarget.value))}>
-                    <option value="" selected={!f().target}>
-                      —
-                    </option>
-                    <option value="*" selected={f().target === "*"}>
-                      Any type
-                    </option>
-                    <For each={[...new Set([...types().map((t) => t.name), ...(name() ? [name()] : [])])].sort()}>
-                      {(t) => (
-                        <option value={t} selected={f().target === t}>
-                          {t}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                  <label for={id("several")}>Holds several notes</label>
-                  <input
-                    id={id("several")}
-                    type="checkbox"
-                    checked={f().multiple}
-                    disabled={f().relation === "peer"}
-                    onChange={(e) =>
-                      set((x) => {
-                        x.multiple = e.currentTarget.checked;
-                        x.default = undefined;
-                      })
-                    }
-                  />
-                  <label for={id("relation")}>Relation</label>
-                  <select
-                    id={id("relation")}
-                    onChange={(e) =>
-                      set((x) => {
-                        x.relation = e.currentTarget.value as FieldModel["relation"];
-                        if (x.relation === "peer") x.multiple = true;
-                      })
-                    }
-                  >
-                    <For each={RELATIONS}>
-                      {(r) => (
-                        <option value={r} selected={f().relation === r}>
-                          {{ one_way: "One-way", two_way: "Two-way", peer: "Peer group" }[r]}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                  <Show when={f().relation === "two_way"}>
-                    <label for={id("inverse")}>Inverse field</label>
-                    <input
-                      id={id("inverse")}
-                      list={id("inverse-list")}
-                      value={f().inverse}
-                      onInput={(e) => set((x) => (x.inverse = e.currentTarget.value))}
-                    />
-                    <datalist id={id("inverse-list")}>
-                      <For each={targetFields()}>{(t) => <option value={t.name} />}</For>
-                    </datalist>
-                    <p class="muted hint">
-                      The field on {f().target || "the target type"} that holds the other side. When it has no field by that
-                      name, it gets one on save: a two-way reference back that holds several notes.
-                    </p>
-                  </Show>
-                  <label for={id("on_delete")}>When the target is deleted</label>
-                  <select
-                    id={id("on_delete")}
-                    onChange={(e) => set((x) => (x.on_delete = e.currentTarget.value as FieldModel["on_delete"]))}
-                  >
-                    <For each={ON_DELETE}>
-                      {(o) => (
-                        <option value={o} selected={f().on_delete === o}>
-                          {{ unlink: "Unlink", restrict: "Refuse the delete", cascade: "Delete this note too" }[o]}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                </Show>
-                <Show when={f().kind === "list" || f().kind === "dict"}>
-                  <label for={id("scalar")}>{f().kind === "list" ? "Item kind" : "Value kind"}</label>
-                  <select
-                    id={id("scalar")}
-                    onChange={(e) =>
-                      set((x) => {
-                        const v = e.currentTarget.value as FieldModel["items"] | "reference";
-                        // A list of notes is a reference field that holds several notes.
-                        if (v === "reference") {
-                          x.kind = "reference";
-                          x.multiple = true;
-                          x.items = "string";
-                        } else if (x.kind === "list") x.items = v;
-                        else if (v !== "taxonomy") x.values = v;
-                        x.default = undefined;
-                      })
-                    }
-                  >
-                    <For each={f().kind === "list" ? ITEM_KINDS : SCALARS}>
-                      {(s) => (
-                        <option value={s} selected={(f().kind === "list" ? f().items : f().values) === s}>
-                          {s === "taxonomy" ? "Taxonomy terms" : KIND_LABELS[s]}
-                        </option>
-                      )}
-                    </For>
-                    <Show when={f().kind === "list"}>
-                      <option value="reference">Notes (references)</option>
-                    </Show>
-                  </select>
-                </Show>
-                <Show when={isTermList(f())}>{taxonomySelect()}</Show>
-                <Show when={f().kind === "date_range"}>
-                  <label for={id("of")}>Ends are</label>
-                  <select
-                    id={id("of")}
-                    onChange={(e) =>
-                      set((x) => {
-                        x.of = e.currentTarget.value as FieldModel["of"];
-                        x.default = undefined;
-                      })
-                    }
-                  >
-                    <For each={RANGE_OF}>
-                      {(o) => (
-                        <option value={o.value} selected={f().of === o.value}>
-                          {o.label}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                </Show>
-                <Show when={f().kind === "location"}>
-                  <label for={id("map")}>Map</label>
-                  <select id={id("map")} onChange={(e) => set((x) => (x.map = e.currentTarget.value as FieldModel["map"]))}>
-                    <option value="geo" selected={f().map === "geo"}>
-                      Real-world map
-                    </option>
-                    <option value="image" selected={f().map === "image"}>
-                      Image map
-                    </option>
-                  </select>
-                  <Show when={f().map === "image"}>
-                    <label for={id("image")}>Map image</label>
-                    <FieldInput
-                      field={{ ...defaultDef(f()), kind: "asset", multiple: false, label: "Map image" }}
-                      value={f().image || undefined}
-                      onChange={(v) => set((x) => (x.image = typeof v === "string" ? v : ""))}
-                      label="Map image"
-                      id={id("image")}
-                    />
-                  </Show>
-                </Show>
-                <Show when={DEFAULT_KINDS.has(f().kind)}>
+                <KindSettings def={f()} set={set} place="field" id={id} typeName={name()} />
+                <Show when={takesDefault(f())}>
                   <label for={id("default")}>Default</label>
-                  <Show when={`${f().kind}/${f().multiple}/${f().items}/${f().of}/${f().taxonomy}`} keyed>
+                  <Show when={`${f().kind}/${itemKind(f())}/${f().of}/${f().taxonomy}/${f().item?.taxonomy}/${f().item?.of}`} keyed>
                     {(_kind) => (
                     <FieldInput
                       field={defaultDef(f())}
@@ -888,7 +1078,6 @@ export function TypeEditor() {
                   <th scope="col">Required</th>
                   <th scope="col">Computed</th>
                   <th scope="col">Hidden</th>
-                  <th scope="col">Several</th>
                   <th scope="col">
                     <span class="visually-hidden">Actions</span>
                   </th>

@@ -4807,6 +4807,96 @@ body.pin-dragging * {
   font-size: 0.8rem;
 }
 
+/* What a list or a dict holds: the same settings, set in under the setting that chose them */
+.nested-settings {
+  grid-column: 1 / -1;
+  border-left: 2px solid var(--line);
+  padding-left: 0.75rem;
+  margin-left: 0.25rem;
+}
+
+.nested-settings > .form-grid {
+  margin: 0.25rem 0;
+}
+
+.dict-keys {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.dict-key {
+  width: 100%;
+}
+
+.dict-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.dict-key-row > input:not([type="checkbox"]),
+.dict-key-row > select {
+  min-width: 7rem;
+  flex: 1 1 7rem;
+}
+
+.dict-key-row button {
+  padding: 0.2rem 0.5rem;
+}
+
+.dict-key-flag {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.def-editor .form-grid > .hint {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+/* A list's items and a dict's entries on a note: one row each, the value taking the room left */
+.list-input > .list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.dict-input > .dict-key-entry {
+  display: grid;
+  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr);
+}
+
+.dict-input > .dict-free-entry {
+  display: grid;
+  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto;
+}
+
+.dict-input > .dict-free-entry.with-kind {
+  grid-template-columns: minmax(6rem, 10rem) minmax(6rem, 10rem) minmax(0, 1fr) auto;
+}
+
+.dict-input > .dict-free-entry > input,
+.dict-input > .dict-free-entry > select {
+  width: 100%;
+  min-width: 0;
+}
+
+.dict-input > .dict-free-entry > .field-problem {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.list-item-value {
+  min-width: 0;
+}
+
+.list-item-value .pair-input label > span {
+  white-space: nowrap;
+}
+
 /* A script chosen and edited where it is used */
 .script-field {
   display: flex;
@@ -10523,4 +10613,74 @@ button.toast-action {
   display: flex;
   gap: 0.4rem;
   align-items: center;
+}
+
+/* A `card` content block: another note as a card that opens it (blocks/NoteCardBlock.tsx). */
+.note-card-block {
+  position: relative;
+  max-width: 28rem;
+  margin: 0.5rem 0;
+}
+
+.note-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--note-card, var(--line));
+  border-radius: 0.5rem;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.note-card:hover {
+  background: var(--hover);
+}
+
+.note-card.missing {
+  border-style: dashed;
+  cursor: default;
+}
+
+.note-card.missing:hover {
+  background: var(--bg);
+}
+
+.note-card.archived .note-card-title span {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.note-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.note-card-title .icon {
+  color: var(--note-card, var(--muted));
+}
+
+.note-card-body {
+  font-size: 0.92rem;
+}
+
+.note-card-block.selected .note-card {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.note-card-block.selected .note-card-tools,
+.note-card-block.editing:hover .note-card-tools {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.note-card-picker {
+  max-width: 28rem;
+  margin: 0.5rem 0;
 }

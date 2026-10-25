@@ -118,8 +118,20 @@ export function comparedFields(type: TypeDef | undefined, a: NoteDoc, b: NoteDoc
   return [...known, ...extra];
 }
 
+/**
+ * `v` as JSON text with every object's members in name order: the server keeps a dict's entries,
+ * and a record's members, in that order, so two values that differ only in it are the same.
+ */
+export function canonicalJson(v: unknown): string {
+  return JSON.stringify(v ?? null, (_, x: unknown) =>
+    x && typeof x === "object" && !Array.isArray(x)
+      ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : x,
+  );
+}
+
 export function sameValue(a: Json | undefined, b: Json | undefined): boolean {
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  return canonicalJson(a) === canonicalJson(b);
 }
 
 /** The fields the server stamps: a merge takes them from the stored side. */
@@ -181,7 +193,7 @@ export function mergeDocs(base: NoteDoc, mine: NoteDoc, theirs: NoteDoc, preferM
 
 /** Whether two docs hold the same compound blocks, which editors with state of their own show. */
 export function sameBlocks(a: NoteDoc, b: NoteDoc): boolean {
-  return JSON.stringify(a.blocks) === JSON.stringify(b.blocks);
+  return canonicalJson(a.blocks) === canonicalJson(b.blocks);
 }
 
 /** The fields the type's default template places with a slot, on any tab and in any column. */

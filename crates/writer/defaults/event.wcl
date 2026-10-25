@@ -34,10 +34,10 @@ field description {
 }
 
 field attendees {
-  kind     = "reference"
-  label    = "Attendees"
-  target   = "person"
-  multiple = true
+  kind   = "list"
+  items  = "reference"
+  label  = "Attendees"
+  target = "person"
 }
 
 field attendees_raw {

@@ -1,7 +1,8 @@
 // Editors for every field kind a note page edits in place (D3, D7). Content, ink and canvas fields
 // have editors of their own; a computed field is never given one.
 
-import { For, Match, Show, Switch, createEffect, createSignal, on } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import { type FieldDef, type Json, type Row, type Term, api } from "../api";
 import { knowTitle, noteTitle } from "../editor/titles";
 import { MapCanvas } from "../map/MapCanvas";
@@ -13,6 +14,7 @@ import {
   mapKind,
   setLocationMapHeight,
 } from "../map/model";
+import { canonicalJson } from "../notes";
 import { taxonomyDef, typeDef } from "../session";
 import { AssetInput } from "./AssetField";
 import { ChipPicker, matches } from "./ChipPicker";
@@ -103,6 +105,8 @@ const SCALAR_INPUT: Record<string, string> = {
   datetime: "datetime-local",
   url: "url",
 };
+
+const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const DATETIME = /^(\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?)(?:\.\d+)?(Z|[+-]\d\d:\d\d)$/;
 
@@ -311,10 +315,44 @@ function ReferencePicker(props: FieldInputProps) {
   );
 }
 
-/** An ordered list of scalars. */
-function ListInput(props: FieldInputProps & { kind: string }) {
-  // Blank rows are kept while editing and left out of the value.
-  const [rows, setRows] = createSignal<(Json | undefined)[]>(asList(props.value));
+/** The definition of a list's items: its `item`, or a bare one of its `items` kind from an older server. */
+export function itemDef(f: FieldDef): FieldDef {
+  return f.item ?? { name: f.name, label: f.label, description: null, kind: f.items ?? "string", required: false, computed: false, multiple: false, compound: false };
+}
+
+/** What a dict's other entries are, an older server's kind name read as a bare definition of it. */
+export function dictValues(f: FieldDef): FieldDef | "any" | null {
+  const v = f.values as FieldDef | string | null | undefined;
+  if (v === "any") return "any";
+  if (typeof v === "string") return { name: f.name, label: f.label, description: null, kind: v, required: false, computed: false, multiple: false, compound: false };
+  return v ?? null;
+}
+
+const isRecord = (v: Json | undefined): v is Record<string, Json> => !!v && typeof v === "object" && !Array.isArray(v);
+const same = (a: Json | undefined, b: Json | undefined) => canonicalJson(a) === canonicalJson(b);
+
+/** A new row's value: an unticked box for a yes/no, else nothing yet. */
+const blank = (kind: string): Json | undefined => (kind === "bool" ? false : undefined);
+
+let nextRow = 1;
+
+/**
+ * An ordered list, each item edited with [`FieldInput`] for the list's item definition: a list of
+ * date ranges, of locations, of lists and of dicts as well as of scalars. Rows move up and down.
+ */
+function ListInput(props: FieldInputProps) {
+  const item = () => itemDef(props.field);
+  // Each row has an id, so a row keeps its editor while its value changes and as it moves. Blank
+  // rows are kept while editing and left out of the value.
+  const [rows, setRows] = createSignal<number[]>([]);
+  const [values, setValues] = createSignal<Record<number, Json | undefined>>({});
+  function load(v: Json | undefined) {
+    const list = asList(v);
+    const ids = list.map(() => nextRow++);
+    setValues(Object.fromEntries(ids.map((id, i) => [id, list[i]])));
+    setRows(ids);
+  }
+  load(props.value);
   // What this editor last wrote. A different value came from elsewhere (a control bound to the
   // same field), and the rows start again from it.
   let written: Json | undefined = props.value;
@@ -322,94 +360,315 @@ function ListInput(props: FieldInputProps & { kind: string }) {
     on(
       () => props.value,
       (v) => {
-        if (JSON.stringify(v ?? null) !== JSON.stringify(written ?? null)) setRows(asList(v));
+        if (!same(v, written)) load(v);
         written = v;
       },
       { defer: true },
     ),
   );
-  function update(next: (Json | undefined)[]) {
-    setRows(next);
-    const values = next.filter((v): v is Json => v !== undefined);
-    written = values.length ? values : undefined;
+  function write(ids: number[], vals: Record<number, Json | undefined>) {
+    setValues(vals);
+    setRows(ids);
+    const out = ids.map((id) => vals[id]).filter((v): v is Json => v !== undefined);
+    written = out.length ? out : undefined;
     props.onChange(written);
+  }
+  function move(i: number, by: number) {
+    const ids = [...rows()];
+    const j = i + by;
+    if (j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j]!, ids[i]!];
+    write(ids, values());
   }
   return (
     <div class="list-input" role="group" aria-label={props.label} id={props.id}>
       <For each={rows()}>
-        {(v, i) => (
-          <div class="list-row">
-            <ScalarInput
-              kind={props.kind}
-              value={v}
-              label={`${props.label} item ${i() + 1}`}
-              onChange={(x) => update(rows().map((old, j) => (j === i() ? x : old)))}
-            />
-            <button
-              type="button"
-              aria-label={`Remove ${props.label} item ${i() + 1}`}
-              onClick={() => update(rows().filter((_, j) => j !== i()))}
-            >
-              ×
-            </button>
-          </div>
-        )}
+        {(row, i) => {
+          const label = () => `${props.label} item ${i() + 1}`;
+          return (
+            <div class="list-row" data-testid="list-item">
+              <div class="list-item-value">
+                <FieldInput
+                  field={item()}
+                  value={values()[row]}
+                  onChange={(v) => write(rows(), { ...values(), [row]: v })}
+                  label={label()}
+                  id={`${props.id}-item-${row}`}
+                  fixedTerms={props.fixedTerms}
+                />
+              </div>
+              <button type="button" aria-label={`Move ${label()} up`} disabled={i() === 0} onClick={() => move(i(), -1)}>
+                ↑
+              </button>
+              <button
+                type="button"
+                aria-label={`Move ${label()} down`}
+                disabled={i() === rows().length - 1}
+                onClick={() => move(i(), 1)}
+              >
+                ↓
+              </button>
+              <button type="button" aria-label={`Remove ${label()}`} onClick={() => write(rows().filter((r) => r !== row), values())}>
+                ×
+              </button>
+            </div>
+          );
+        }}
       </For>
-      <button type="button" onClick={() => setRows([...rows(), props.kind === "bool" ? false : undefined])}>
+      <button
+        type="button"
+        onClick={() => {
+          const id = nextRow++;
+          setValues({ ...values(), [id]: blank(item().kind) });
+          setRows([...rows(), id]);
+        }}
+      >
         Add item
       </button>
     </div>
   );
 }
 
-/** Named values of one kind. Keys are identifiers. */
-function DictInput(props: FieldInputProps & { kind: string }) {
-  const start = props.value && typeof props.value === "object" && !Array.isArray(props.value) ? props.value : {};
-  const [rows, setRows] = createSignal<{ key: string; value: Json | undefined }[]>(
-    Object.entries(start).map(([key, value]) => ({ key, value })),
-  );
-  function update(next: { key: string; value: Json | undefined }[]) {
-    setRows(next);
-    const out: Record<string, Json> = {};
-    for (const r of next) if (r.key && r.value !== undefined) out[r.key] = r.value;
-    props.onChange(Object.keys(out).length ? out : undefined);
+/** The kinds an entry of a dict with `values = "any"` may be chosen as, and what the picker calls them. */
+export const ANY_KINDS = [
+  ["string", "Text"],
+  ["int", "Whole number"],
+  ["float", "Number"],
+  ["bool", "Yes/no"],
+  ["date", "Date"],
+  ["datetime", "Date and time"],
+  ["url", "URL"],
+  ["list", "List of text"],
+] as const;
+
+const DATE = /^\d{4}-\d\d-\d\d$/;
+
+/**
+ * The kind an entry of any kind is edited as, read from its value; `other` for a record or a list
+ * of other than text, which is shown as it is.
+ */
+export function anyKind(v: Json | undefined): string {
+  if (v === undefined || v === null) return "string";
+  if (typeof v === "boolean") return "bool";
+  if (typeof v === "number") return Number.isInteger(v) ? "int" : "float";
+  if (typeof v === "string") {
+    if (DATE.test(v)) return "date";
+    if (DATETIME.test(v)) return "datetime";
+    if (/^https?:\/\//.test(v)) return "url";
+    return "string";
   }
-  const set = (i: number, patch: Partial<{ key: string; value: Json | undefined }>) =>
-    update(rows().map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  if (Array.isArray(v) && v.every((x) => typeof x === "string")) return "list";
+  return "other";
+}
+
+/** A bare definition of `kind`, as an entry of any kind is edited. */
+function anyDef(name: string, kind: string): FieldDef {
+  const d: FieldDef = { name, label: name, description: null, kind, required: false, computed: false, multiple: false, compound: false };
+  return kind === "list" ? { ...d, items: "string", item: { ...d, kind: "string" } } : d;
+}
+
+/** An entry of a dict no key declares, as its editor holds it. */
+interface FreeEntry {
+  key: string;
+  /** For a dict of any kind: what the entry is edited as. */
+  kind: string;
+}
+
+/**
+ * A dict (types T8): each declared key on a row of its own, edited with [`FieldInput`] for the
+ * key's definition, then the entries no key declares, each with its key name and, when the dict
+ * takes entries of any kind, a picker of the entry's kind. The value keeps the declared keys
+ * first, in their order, then the other entries in theirs.
+ */
+function DictInput(props: FieldInputProps) {
+  const keys = () => props.field.keys ?? [];
+  const values = () => dictValues(props.field);
+  const declared = () => new Set(keys().map((k) => k.name));
+  const [own, setOwn] = createSignal<Record<string, Json | undefined>>({});
+  const [rows, setRows] = createSignal<number[]>([]);
+  const [free, setFree] = createStore<Record<number, FreeEntry>>({});
+  const [freeValues, setFreeValues] = createSignal<Record<number, Json | undefined>>({});
+  function load(v: Json | undefined) {
+    const rec = isRecord(v) ? v : {};
+    const names = declared();
+    setOwn(Object.fromEntries(Object.entries(rec).filter(([k]) => names.has(k))));
+    const others = Object.entries(rec).filter(([k]) => !names.has(k));
+    const ids = others.map(() => nextRow++);
+    setFree(reconcile(Object.fromEntries(ids.map((id, i) => [id, { key: others[i]![0], kind: anyKind(others[i]![1]) }]))));
+    setFreeValues(Object.fromEntries(ids.map((id, i) => [id, others[i]![1]])));
+    setRows(ids);
+  }
+  load(props.value);
+  let written: Json | undefined = props.value;
+  createEffect(
+    on(
+      () => props.value,
+      (v) => {
+        if (!same(v, written)) load(v);
+        written = v;
+      },
+      { defer: true },
+    ),
+  );
+  /** Whether a free entry's key is one the value can hold: a key name no key and no earlier entry takes. */
+  const keyProblem = (id: number): string | null => {
+    const key = free[id]?.key ?? "";
+    if (key === "") return null;
+    if (!KEY_NAME.test(key)) return "Use letters, digits and _, not starting with a digit.";
+    if (declared().has(key)) return `${key} is a key of its own above.`;
+    if (rows().some((r) => r < id && free[r]?.key === key)) return `${key} is already an entry.`;
+    return null;
+  };
+  function write() {
+    const out: Record<string, Json> = {};
+    const mine = own();
+    for (const k of keys()) {
+      const v = mine[k.name];
+      if (v !== undefined) out[k.name] = v;
+    }
+    const vals = freeValues();
+    for (const id of rows()) {
+      const key = free[id]?.key ?? "";
+      const v = vals[id];
+      if (key && !keyProblem(id) && v !== undefined) out[key] = v;
+    }
+    written = Object.keys(out).length ? out : undefined;
+    props.onChange(written);
+  }
+  const entryDef = (id: number): FieldDef | null => {
+    const v = values();
+    if (v === "any" || v === null) {
+      const kind = free[id]?.kind ?? "string";
+      return kind === "other" ? null : anyDef(props.field.name, kind);
+    }
+    return v;
+  };
+  function addEntry() {
+    const id = nextRow++;
+    const v = values();
+    const kind = v === "any" || v === null ? "string" : v.kind;
+    setFree(id, { key: "", kind });
+    setFreeValues({ ...freeValues(), [id]: blank(kind) });
+    setRows([...rows(), id]);
+  }
   return (
     <div class="dict-input" role="group" aria-label={props.label} id={props.id}>
-      <For each={rows()}>
-        {(r, i) => (
-          <div class="list-row">
-            <input
-              aria-label={`${props.label} key ${i() + 1}`}
-              placeholder="key"
-              pattern="[A-Za-z_][A-Za-z0-9_]*"
-              value={r.key}
-              onInput={(e) => set(i(), { key: e.currentTarget.value })}
-            />
-            <ScalarInput
-              kind={props.kind}
-              value={r.value}
-              label={`${props.label} value ${i() + 1}`}
-              onChange={(value) => set(i(), { value })}
-            />
-            <button
-              type="button"
-              aria-label={`Remove ${props.label} entry ${i() + 1}`}
-              onClick={() => update(rows().filter((_, j) => j !== i()))}
-            >
-              ×
-            </button>
-          </div>
-        )}
+      <For each={keys()}>
+        {(k) => {
+          const id = `${props.id}-key-${k.name}`;
+          const label = () => k.label || k.name;
+          return (
+            <div class="list-row dict-key-entry" data-testid={`dict-key-${k.name}`}>
+              <label class="dict-entry-label" for={id}>
+                {label()}
+                <Show when={k.required}>
+                  <span class="muted" title="Required">
+                    {" "}
+                    (required)
+                  </span>
+                </Show>
+              </label>
+              <div class="list-item-value">
+                <FieldInput
+                  field={k}
+                  value={own()[k.name]}
+                  onChange={(v) => {
+                    setOwn({ ...own(), [k.name]: v });
+                    write();
+                  }}
+                  label={label()}
+                  id={id}
+                  fixedTerms={props.fixedTerms}
+                />
+              </div>
+            </div>
+          );
+        }}
       </For>
-      <button
-        type="button"
-        onClick={() => setRows([...rows(), { key: "", value: props.kind === "bool" ? false : undefined }])}
-      >
-        Add entry
-      </button>
+      <For each={rows()}>
+        {(row, i) => {
+          const n = () => i() + 1;
+          // A new editor only when the entry's kind changes, not as its key is typed.
+          const def = createMemo(() => entryDef(row));
+          return (
+            <div class="list-row dict-free-entry" classList={{ "with-kind": values() === "any" }} data-testid="dict-entry">
+              <input
+                aria-label={`${props.label} key ${n()}`}
+                placeholder="key"
+                pattern="[A-Za-z_][A-Za-z0-9_]*"
+                value={free[row]?.key ?? ""}
+                aria-invalid={keyProblem(row) ? "true" : undefined}
+                title={keyProblem(row) ?? undefined}
+                onInput={(e) => {
+                  setFree(row, "key", e.currentTarget.value);
+                  write();
+                }}
+              />
+              <Show when={values() === "any"}>
+                <select
+                  aria-label={`${props.label} kind ${n()}`}
+                  onChange={(e) => {
+                    const kind = e.currentTarget.value;
+                    setFree(row, "kind", kind);
+                    setFreeValues({ ...freeValues(), [row]: blank(kind) });
+                    write();
+                  }}
+                >
+                  <For each={ANY_KINDS}>
+                    {([kind, text]) => (
+                      <option value={kind} selected={free[row]?.kind === kind}>
+                        {text}
+                      </option>
+                    )}
+                  </For>
+                  <Show when={free[row]?.kind === "other"}>
+                    <option value="other" selected>
+                      As stored
+                    </option>
+                  </Show>
+                </select>
+              </Show>
+              <div class="list-item-value">
+                <Show when={def()} keyed fallback={<code>{JSON.stringify(freeValues()[row] ?? null)}</code>}>
+                  {(d) => (
+                    <FieldInput
+                      field={d}
+                      value={freeValues()[row]}
+                      onChange={(v) => {
+                        setFreeValues({ ...freeValues(), [row]: v });
+                        write();
+                      }}
+                      label={`${props.label} value ${n()}`}
+                      id={`${props.id}-entry-${row}`}
+                      fixedTerms={props.fixedTerms}
+                    />
+                  )}
+                </Show>
+              </div>
+              <button
+                type="button"
+                aria-label={`Remove ${props.label} entry ${n()}`}
+                onClick={() => {
+                  setRows(rows().filter((r) => r !== row));
+                  write();
+                }}
+              >
+                ×
+              </button>
+              <Show when={keyProblem(row)}>
+                <p class="field-problem error" role="alert">
+                  {keyProblem(row)}
+                </p>
+              </Show>
+            </div>
+          );
+        }}
+      </For>
+      <Show when={values() !== null}>
+        <button type="button" onClick={addEntry}>
+          Add entry
+        </button>
+      </Show>
     </div>
   );
 }
@@ -664,10 +923,10 @@ export function FieldInput(props: FieldInputProps) {
         <Picker {...props} freeText suggest={() => []} />
       </Match>
       <Match when={f().kind === "list"}>
-        <ListInput {...props} kind={f().items ?? "string"} />
+        <ListInput {...props} />
       </Match>
       <Match when={f().kind === "dict"}>
-        <DictInput {...props} kind={f().values ?? "string"} />
+        <DictInput {...props} />
       </Match>
       <Match when={f().kind === "date_range"}>
         <PairInput

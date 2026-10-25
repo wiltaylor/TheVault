@@ -5,10 +5,10 @@ icon        = "messages-square"
 colour      = "blue"
 
 field participants {
-  kind     = "reference"
-  label    = "Participants"
-  target   = "person"
-  multiple = true
+  kind   = "list"
+  items  = "reference"
+  label  = "Participants"
+  target = "person"
 }
 
 field channel {

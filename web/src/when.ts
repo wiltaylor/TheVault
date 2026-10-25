@@ -336,7 +336,12 @@ export interface WhenField {
   kind: string;
   of?: string | null;
   items?: string | null;
-  values?: string | null;
+  /** A list's item. */
+  item?: WhenField | null;
+  /** A dict's declared keys. */
+  keys?: WhenField[] | null;
+  /** What a dict's other entries are: one definition, `"any"`, or none. */
+  values?: WhenField | string | null;
 }
 
 /** Fields every note has, besides its type's. */
@@ -638,8 +643,22 @@ function fromJson(raw: Json, kind: string, f?: WhenField): V {
       }),
     };
   }
-  if (kind === "list") return fromJson(raw, f?.items === "taxonomy" ? "string" : (f?.items ?? "string"));
-  if (kind === "dict") return fromJson(raw, f?.values ?? "string");
+  if (kind === "list") {
+    if (f?.item) return fromJson(raw, f.item.kind, f.item);
+    return fromJson(raw, f?.items === "taxonomy" ? "string" : (f?.items ?? "string"));
+  }
+  if (kind === "dict" && typeof raw === "object") {
+    // A declared key reads by its own kind, another entry by `values`; an entry of any kind by its shape.
+    const values = f?.values;
+    return {
+      k: "record",
+      v: Object.entries(raw).map(([k, v]) => {
+        const def = f?.keys?.find((x) => x.name === k) ?? (values && typeof values === "object" ? values : undefined);
+        if (def) return [k, fromJson(v as Json, def.kind, def)];
+        return [k, typeof values === "string" && values !== "any" ? fromJson(v as Json, values) : plain(v as Json)];
+      }),
+    };
+  }
   if (kind === "reference" && typeof raw === "string") return { k: "ref", v: raw };
   if (kind === "float" && typeof raw === "number") return { k: "float", v: raw };
   return plain(raw);

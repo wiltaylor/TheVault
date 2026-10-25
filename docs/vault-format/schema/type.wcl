@@ -11,7 +11,6 @@ type FieldDef {
   required:      bool?
   computed:      bool?
   hidden:        bool?
-  multiple:      bool?
   @schemaless default: utf8?
   options:       list<utf8>?
   option_labels: list<utf8>?
@@ -27,6 +26,34 @@ type FieldDef {
   image:         utf8?
   labels:        utf8?
   accept:        utf8?
+  @children("key") keys: list<KeyDef>
+  # A list's `item { ... }` block and a dict's `values { ... }` block take the
+  # same attributes as a field, without a name. The `item` block name is also a
+  # content list item (common.wcl), so neither is declared here: the server's
+  # schema checks them (docs/vault-format.md, `list` and `dict`).
+}
+
+# A dict's declared key: a whole definition, the attributes of a field.
+@block("key", required_fields = ["kind"])
+type KeyDef {
+  @inline(0) name: identifier
+  kind:          utf8
+  label:         utf8?
+  description:   utf8?
+  required:      bool?
+  @schemaless default: utf8?
+  options:       list<utf8>?
+  option_labels: list<utf8>?
+  taxonomy:      utf8?
+  target:        utf8?
+  on_delete:     utf8?
+  items:         utf8?
+  values:        utf8?
+  of:            utf8?
+  map:           utf8?
+  image:         utf8?
+  accept:        utf8?
+  @children("key") keys: list<KeyDef>
 }
 
 @block("tab") type Tab {
@@ -48,6 +75,7 @@ type FieldDef {
   @children("control")    controls:    list<Control>
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
+  @children("card")       cards:       list<NoteCard>
 }
 
 @block("template") type Template {

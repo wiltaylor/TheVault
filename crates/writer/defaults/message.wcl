@@ -23,10 +23,10 @@ field from {
 }
 
 field to {
-  kind     = "reference"
-  label    = "To"
-  target   = "person"
-  multiple = true
+  kind   = "list"
+  items  = "reference"
+  label  = "To"
+  target = "person"
 }
 
 field from_raw {
@@ -59,9 +59,9 @@ field body {
 }
 
 field attachments {
-  kind     = "asset"
-  label    = "Attachments"
-  multiple = true
+  kind  = "list"
+  items = "asset"
+  label = "Attachments"
 }
 
 field partial {

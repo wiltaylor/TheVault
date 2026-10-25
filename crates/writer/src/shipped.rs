@@ -250,6 +250,92 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
     },
 ];
 
+/// On every start of the home server (types T6): every field of every type file that says
+/// `multiple = true` says it as a list instead, `kind = "list"` with `items` its old kind, the
+/// kind's own attributes left beside it. A list of selects, terms, references or assets reads as
+/// that kind holding several, as `multiple` did, so no note changes; a type whose change would
+/// edit a note is left as it is.
+fn lists_not_multiple(w: &Writer) -> Result<()> {
+    let attribute = |name: &str, value: &str, path: &str| -> Result<Item> {
+        let src = store::parse_data_only(&format!("{name} = {value:?}\n"), path)?;
+        Ok(src.items.into_iter().next().expect("one attribute"))
+    };
+    // The files on disk: an older vault's schema may not load until the seeding after the steps
+    // brings the types it names.
+    let mut raw = Vec::new();
+    for (name, text) in w.definitions("types")? {
+        let path = type_path(&name);
+        let mut ast = store::parse_data_only(&text, &path)?;
+        let mut changed = false;
+        for item in &mut ast.items {
+            let Some(field) = block_mut(item, "field") else {
+                continue;
+            };
+            let multiple = field
+                .items
+                .iter()
+                .any(|i| matches!(i, Item::Field(f) if f.name == "multiple" && matches!(f.expr, Expr::Bool(true))));
+            let kind = field.items.iter().find_map(|i| match i {
+                Item::Field(f) if f.name == "kind" => match &f.expr {
+                    Expr::Utf8(k) => Some(k.clone()),
+                    _ => None,
+                },
+                _ => None,
+            });
+            field
+                .items
+                .retain(|i| !matches!(i, Item::Field(f) if f.name == "multiple"));
+            let (true, Some(kind)) = (multiple, kind) else {
+                continue;
+            };
+            if kind == "list" {
+                continue;
+            }
+            let at = field
+                .items
+                .iter()
+                .position(|i| matches!(i, Item::Field(f) if f.name == "kind"))
+                .unwrap_or(0);
+            field.items[at] = attribute("kind", "list", &path)?;
+            field
+                .items
+                .insert(at + 1, attribute("items", &kind, &path)?);
+            changed = true;
+        }
+        if !changed {
+            continue;
+        }
+        let wcl = store::to_canonical(&ast);
+        // A type the loaded schema lacks has no notes the index knows to plan for: its file is
+        // written as it is, and the schema read again once every file is.
+        if w.schema().type_def(&name).is_none() {
+            raw.push(Change::write(path, wcl.as_bytes()));
+            continue;
+        }
+        let change = TypeChange {
+            wcl,
+            ..TypeChange::default()
+        };
+        let plan = w.plan_type_change(&name, &change)?;
+        if !plan.changes.is_empty() {
+            eprintln!("type {name:?} still says multiple: a list in its place would edit notes");
+            continue;
+        }
+        w.apply_type_change(
+            &name,
+            &change,
+            &plan.token,
+            &Author::Task(SERVER_AUTHOR.to_owned()),
+        )?;
+    }
+    if !raw.is_empty() {
+        // In one commit; a set that still does not load waits for the seeding, as before.
+        w.commit(raw)?;
+        let _ = w.reload_schema();
+    }
+    Ok(())
+}
+
 /// The `outbox` type as ticket 194 shipped it, whose status options, description and templates
 /// step `0009_outbox_statuses` replaces.
 const OUTBOX_TYPE_3A489B0: &str = include_str!("../defaults/old/outbox_3a489b0.wcl");
@@ -1066,12 +1152,7 @@ fn person_labels(w: &Writer) -> Result<()> {
     };
     let is_strings = |name: &str| {
         ty.field(name).is_some_and(|f| {
-            matches!(
-                f.kind,
-                schema::FieldKind::List {
-                    items: schema::Scalar::String
-                }
-            )
+            f.kind.item().and_then(|i| i.kind.scalar()) == Some(schema::Scalar::String)
         })
     };
     if ty.fields.iter().any(|f| f.labels.is_some()) {
@@ -1467,7 +1548,13 @@ impl Writer {
     /// Bring the vault's shipped defaults up to date, as the module documentation describes.
     pub fn upgrade_shipped_defaults(&self, upkeep: Upkeep) -> Result<Upgraded> {
         let steps = match upkeep {
-            Upkeep::Home => self.run_upgrade_steps(UPGRADE_STEPS)?,
+            Upkeep::Home => {
+                let steps = self.run_upgrade_steps(UPGRADE_STEPS)?;
+                // Not a step: a type file in the old form can arrive any time, by the CLI or a
+                // copy, and is brought to the list form on the next start.
+                lists_not_multiple(self)?;
+                steps
+            }
             Upkeep::Device => Vec::new(),
         };
         let mut done = self.seed_shipped_defaults_with(upkeep, &SHIPPED_FILES)?;

@@ -69,10 +69,10 @@ field priority {
 }
 
 field channels {
-  kind     = "select"
-  label    = "Channels"
-  multiple = true
-  options  = ["email", "chat", "phone"]
+  kind    = "list"
+  items   = "select"
+  label   = "Channels"
+  options = ["email", "chat", "phone"]
 }
 
 field status {
@@ -84,10 +84,10 @@ field status {
 }
 
 field topics {
-  kind     = "taxonomy"
+  kind     = "list"
+  items    = "taxonomy"
   label    = "Topics"
   taxonomy = "topic"
-  multiple = true
 }
 
 field board {
@@ -108,21 +108,21 @@ field parent {
 }
 
 field children {
-  kind      = "reference"
+  kind      = "list"
+  items     = "reference"
   label     = "Children"
   target    = "specimen"
   relation  = "two_way"
   inverse   = "parent"
-  multiple  = true
   on_delete = "unlink"
 }
 
 field related {
-  kind     = "reference"
+  kind     = "list"
+  items    = "reference"
   label    = "Related"
   target   = "specimen"
   relation = "peer"
-  multiple = true
 }
 
 field aliases {
@@ -175,9 +175,9 @@ field cover {
 }
 
 field attachments {
-  kind     = "asset"
-  label    = "Attachments"
-  multiple = true
+  kind  = "list"
+  items = "asset"
+  label = "Attachments"
 }
 
 field sketch {

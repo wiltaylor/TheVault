@@ -819,8 +819,12 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0009_outbox_statuses"
         ]
     );
-    // One more for step 0007's Correspondence tab on the person type.
-    assert_eq!(generation(root).trim().parse::<u64>().unwrap(), before + 4);
+    // One more for step 0007's Correspondence tab on the person type, and one for each of the
+    // three types whose `multiple` fields become lists.
+    assert_eq!(
+        generation(root).trim().parse::<u64>().unwrap(),
+        before + 4 + 3
+    );
     // The message type 0.1.6 had gains only `processed`.
     assert!(
         done.fields_added
@@ -2188,6 +2192,8 @@ fn the_outbox_template_ticket_180_shipped_is_replaced_and_no_note_changes() {
         run_step_again(&w, "0009_outbox_statuses"),
         ["test_0009_outbox_statuses"]
     );
+    // The start after the steps brings the old `multiple` attachments to the list form.
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     assert_eq!(read(root, path).unwrap(), current);
     assert_eq!(read(root, &note_path).unwrap(), before);
     let schema = w.schema();
@@ -2291,6 +2297,8 @@ fn the_outbox_statuses_become_draft_ready_sending_and_failed() {
         run_step_again(&w, "0009_outbox_statuses"),
         ["test_0009_outbox_statuses"]
     );
+    // The start after the steps brings the old `multiple` attachments to the list form.
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     assert_eq!(read(root, path).unwrap(), current);
     assert_eq!(outbox_status(&w, &draft), "draft");
     assert_eq!(outbox_status(&w, &review), "draft");

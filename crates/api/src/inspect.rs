@@ -115,10 +115,6 @@ fn field_json(f: &FieldDef) -> Value {
         }
         FieldKind::Taxonomy { taxonomy } => {
             out.insert("taxonomy".into(), json!(taxonomy));
-            if f.term_list {
-                // Declared as a list of terms; it reads as a multiple taxonomy field.
-                out.insert("items".into(), json!("taxonomy"));
-            }
         }
         FieldKind::Reference(r) => {
             out.insert("target".into(), json!(r.target.as_deref().unwrap_or("*")));
@@ -140,15 +136,27 @@ fn field_json(f: &FieldDef) -> Value {
                 }),
             );
         }
-        FieldKind::List { items } => {
-            out.insert("items".into(), json!(scalar_name(*items)));
+        FieldKind::List { item } => {
+            out.insert("items".into(), json!(item.kind.name()));
+            out.insert("item".into(), field_json(item));
             out.insert("labels".into(), json!(f.labels));
         }
         FieldKind::Asset => {
             out.insert("accept".into(), json!(f.accept.name()));
         }
-        FieldKind::Dict { values } => {
-            out.insert("values".into(), json!(scalar_name(*values)));
+        FieldKind::Dict { keys, values } => {
+            out.insert(
+                "keys".into(),
+                json!(keys.iter().map(field_json).collect::<Vec<_>>()),
+            );
+            out.insert(
+                "values".into(),
+                match values {
+                    schema::DictValues::None => Value::Null,
+                    schema::DictValues::Any => json!("any"),
+                    schema::DictValues::Of(d) => field_json(d),
+                },
+            );
         }
         FieldKind::Location { image } => {
             out.insert(
@@ -159,22 +167,14 @@ fn field_json(f: &FieldDef) -> Value {
         }
         _ => {}
     }
+    // Declared as a list of selects, terms, references or assets: that kind holding several.
+    if f.listed {
+        out.insert("listed".into(), json!(true));
+        out.insert("items".into(), json!(f.kind.name()));
+    }
     let mut out = Value::Object(out);
     with_extra(&mut out, &f.extra);
     out
-}
-
-fn scalar_name(s: schema::Scalar) -> &'static str {
-    use schema::Scalar as S;
-    match s {
-        S::String => "string",
-        S::Int => "int",
-        S::Float => "float",
-        S::Bool => "bool",
-        S::Date => "date",
-        S::Datetime => "datetime",
-        S::Url => "url",
-    }
 }
 
 pub(crate) fn template_json(t: &Template) -> Value {

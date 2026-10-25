@@ -651,7 +651,7 @@ fn field_definition_rules() {
         ),
         (
             "field a {\n  kind = \"reference\"\n  target = \"t\"\n  relation = \"peer\"\n}",
-            "must be multiple",
+            "must be a list of references",
         ),
         (
             "field a {\n  kind = \"reference\"\n  target = \"other\"\n  relation = \"peer\"\n  multiple = true\n}",
@@ -1122,6 +1122,41 @@ fn an_asset_block_takes_a_viewer_height_and_a_card_flag() {
 }
 
 #[test]
+fn a_card_block_names_a_note_by_ulid_which_need_not_exist() {
+    let block = |items: &str| format!("content body {{\n  card {{\n{items}  }}\n}}");
+    check_kinds(&block(&format!("    note = {BOX_NOTE:?}\n"))).unwrap();
+    // A card of a note that is gone stays valid, as a mention of one does.
+    check_kinds(&block("    note = \"01JB8Z4K2MQ7V3X9T5R6W8Y2ZZ\"\n")).unwrap();
+    // Nested in a toggle, as anywhere else in the content.
+    check_kinds(&format!(
+        "content body {{\n  toggle {{\n    text = \"t\"\n\n    card {{\n      note = {BOX_NOTE:?}\n    }}\n  }}\n}}"
+    ))
+    .unwrap();
+    let issues = check_kinds(&block("")).unwrap_err();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.ends_with("card#1.note: is required")),
+        "{issues:?}"
+    );
+    let issues = check_kinds(&block("    note = \"nope\"\n")).unwrap_err();
+    assert!(
+        issues.iter().any(|i| i.contains("\"nope\" is not a ULID")),
+        "{issues:?}"
+    );
+    let issues = check_kinds(&block(&format!(
+        "    note = {BOX_NOTE:?}\n    template = \"card\"\n"
+    )))
+    .unwrap_err();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.contains("card#1.template: is not an item of this block")),
+        "{issues:?}"
+    );
+}
+
+#[test]
 fn a_map_view_takes_a_height_from_160_to_4000_and_no_other_view_does() {
     let block = |kind: &str, items: &str| {
         format!(
@@ -1223,10 +1258,10 @@ fn a_list_of_terms_reads_as_a_multiple_taxonomy_field() {
             taxonomy: "status".into()
         }
     );
-    assert!(tags.multiple && tags.term_list);
+    assert!(tags.multiple && tags.listed);
     // Apart from how it was declared, it is the same field as a multiple taxonomy field.
     assert_eq!(tags.kind, topics.kind);
-    assert!(topics.multiple && !topics.term_list);
+    assert!(topics.multiple && !topics.listed);
     assert!(!tags.is_kanban_group());
 
     // Its values are term paths, validated as a multiple taxonomy field's are.
@@ -1839,4 +1874,185 @@ fn a_two_way_reference_implies_its_missing_inverse_on_the_target_type() {
         ),
         "{e}"
     );
+}
+
+const TYPED_TYPE: &str = r#"label = "Typed"
+
+field owners {
+  kind     = "list"
+  items    = "reference"
+  target   = "box"
+}
+
+field sizes {
+  kind    = "list"
+  items   = "select"
+  options = ["s", "m", "l"]
+}
+
+field periods {
+  kind  = "list"
+  items = "date_range"
+}
+
+field matrix {
+  kind = "list"
+
+  item {
+    kind  = "list"
+    items = "int"
+  }
+}
+
+field spec {
+  kind   = "dict"
+  values = "any"
+
+  key weight {
+    kind     = "float"
+    required = true
+  }
+
+  key owner {
+    kind   = "reference"
+    target = "box"
+  }
+
+  key tags {
+    kind  = "list"
+    items = "string"
+  }
+
+  key extra {
+    kind   = "dict"
+    values = "int"
+  }
+}
+
+field strict {
+  kind = "dict"
+
+  key when {
+    kind = "date"
+  }
+}
+
+template default {
+  tab "T" {
+    slot "title"
+  }
+}
+"#;
+
+#[test]
+fn lists_hold_every_value_kind_and_dicts_declare_keys_of_any_kind() {
+    let schema = Schema::from_sources(
+        &[("typed", TYPED_TYPE), ("box", BOX_TYPE)],
+        &[("status", STATUS)],
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let t = schema.type_def("typed").unwrap();
+    // A list of references or selects is that kind holding several, declared as a list.
+    let owners = t.field("owners").unwrap();
+    assert!(owners.multiple && owners.listed);
+    assert!(owners.reference().is_some());
+    assert!(t.field("sizes").unwrap().multiple);
+    // Any other list keeps an item definition.
+    let periods = t.field("periods").unwrap();
+    assert!(matches!(
+        periods.kind.item().unwrap().kind,
+        FieldKind::DateRange { .. }
+    ));
+    let row = t.field("matrix").unwrap().kind.item().unwrap();
+    assert_eq!(row.kind.item().unwrap().kind.name(), "int");
+    let FieldKind::Dict { keys, values } = &t.field("spec").unwrap().kind else {
+        panic!("spec is a dict")
+    };
+    assert_eq!(
+        keys.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(),
+        ["weight", "owner", "tags", "extra"]
+    );
+    assert_eq!(values, &schema::DictValues::Any);
+
+    let notes = lookup(&[(BOX_NOTE, "box")]);
+    let ok = format!(
+        "title = \"T\"\nowners = [\"{BOX_NOTE}\"]\nsizes = [\"s\", \"l\"]\nperiods = [{{ start: \"2026-01-01\", end: \"2026-01-02\" }}]\nmatrix = [[1, 2], [3]]\n\ndict spec {{\n  weight = 2.5\n  owner  = \"{BOX_NOTE}\"\n  tags   = [\"a\", \"b\"]\n  extra  = {{ a: 1 }}\n  anything = \"goes\"\n  more  = [1, \"x\"]\n}}\n\ndict strict {{\n  when = \"2026-03-01\"\n}}\n"
+    );
+    schema
+        .validate_note_source("typed", &ok, "typed.wcl", &notes)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+
+    let check = |src: &str| {
+        schema
+            .validate_note_source("typed", src, "typed.wcl", &notes)
+            .unwrap_err()
+            .to_string()
+    };
+    // Each value is checked by its own definition, at any depth.
+    let e = check("title = \"T\"\nsizes = [\"xl\"]\n\ndict spec {\n  weight = 1.0\n}\n");
+    assert!(
+        e.contains("sizes[0]") && e.contains("is not one of the options"),
+        "{e}"
+    );
+    let e = check("title = \"T\"\nmatrix = [[1, \"two\"]]\n\ndict spec {\n  weight = 1.0\n}\n");
+    assert!(e.contains("matrix[0][1]"), "{e}");
+    let e =
+        check("title = \"T\"\n\ndict spec {\n  weight = \"heavy\"\n  extra = { a: \"one\" }\n}\n");
+    assert!(
+        e.contains("dict \"spec\".weight") && e.contains("dict \"spec\".extra.a"),
+        "{e}"
+    );
+    // A declared required key must be there, and a dict without `values` takes only its keys.
+    let e = check(
+        "title = \"T\"\n\ndict spec {\n  owner = \"01JB8Z4K2MQ7V3X9T5R6W8Y2ZZ\"\n}\n\ndict strict {\n  other = 1\n}\n",
+    );
+    assert!(e.contains("dict \"spec\".weight: is required"), "{e}");
+    assert!(
+        e.contains("dict \"strict\".other: is not a key of this dict"),
+        "{e}"
+    );
+}
+
+#[test]
+fn typed_list_and_dict_definitions_are_checked() {
+    let def = |field: &str| {
+        type_issues(&format!(
+            "label = \"T\"\n{field}\ntemplate default {{\n  tab \"T\" {{\n    slot \"title\"\n  }}\n}}\n"
+        ))
+    };
+    let cases: &[(&str, &str)] = &[
+        ("field a {\n  kind = \"list\"\n}", "needs `items`"),
+        (
+            "field a {\n  kind = \"list\"\n  items = \"content\"\n}",
+            "is not one of",
+        ),
+        (
+            "field a {\n  kind = \"list\"\n  items = \"int\"\n\n  item {\n    kind = \"int\"\n  }\n}",
+            "gives its item twice",
+        ),
+        ("field a {\n  kind = \"dict\"\n}", "needs `key` blocks"),
+        (
+            "field a {\n  kind = \"dict\"\n\n  key \"a-b\" {\n    kind = \"int\"\n  }\n}",
+            "is not a key name",
+        ),
+        (
+            "field a {\n  kind = \"dict\"\n\n  key b {\n    kind = \"ink\"\n  }\n}",
+            "cannot be inside a list or a dict",
+        ),
+        (
+            "field a {\n  kind = \"dict\"\n\n  key b {\n    kind = \"reference\"\n    target = \"t\"\n    relation = \"two_way\"\n    inverse = \"c\"\n  }\n}",
+            "inside a dict or a nested list a reference is one_way",
+        ),
+        (
+            "field a {\n  kind = \"list\"\n  items = \"select\"\n}",
+            "options: is required",
+        ),
+    ];
+    for (field, expected) in cases {
+        let issues = def(field);
+        assert!(
+            issues.iter().any(|i| i.contains(expected)),
+            "`{field}` should fail with {expected:?}, got {issues:?}"
+        );
+    }
 }

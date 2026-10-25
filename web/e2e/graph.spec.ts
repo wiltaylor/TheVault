@@ -26,11 +26,11 @@ field ref {
 }
 
 field partners {
-  kind     = "reference"
+  kind     = "list"
+  items    = "reference"
   label    = "Partners"
   target   = "${name}"
   relation = "peer"
-  multiple = true
 }
 
 template default {

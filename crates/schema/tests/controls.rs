@@ -256,7 +256,7 @@ fn the_reason_names_the_control_and_the_field() {
     assert!(
         has(
             &issues,
-            "template default > tab \"Main\" > control#1.field: a dropdown control fits a single select, taxonomy or reference field, and \"sizes\" is a multiple select field"
+            "template default > tab \"Main\" > control#1.field: a dropdown control fits a single select, taxonomy or reference field, and \"sizes\" is a list of select field"
         ),
         "{issues:?}"
     );

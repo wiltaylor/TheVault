@@ -24,7 +24,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use schema::{Doc, DocBlock, FieldDef, FieldKind, Relation, Scalar, TabItem, Template, TypeDef};
+use schema::{Doc, DocBlock, FieldDef, FieldKind, Relation, TabItem, Template, TypeDef};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use writer::{Migration, NoteEdit, TypeChange, TypePlan, Writer, doc_to_json};
@@ -76,18 +76,6 @@ pub(crate) fn type_json(t: &TypeDef, builtin: bool) -> Value {
     out
 }
 
-fn scalar_name(s: Scalar) -> &'static str {
-    match s {
-        Scalar::String => "string",
-        Scalar::Int => "int",
-        Scalar::Float => "float",
-        Scalar::Bool => "bool",
-        Scalar::Date => "date",
-        Scalar::Datetime => "datetime",
-        Scalar::Url => "url",
-    }
-}
-
 fn field_json(f: &FieldDef) -> Value {
     let mut out = json!({
         "name": f.name,
@@ -120,10 +108,6 @@ fn field_json(f: &FieldDef) -> Value {
             json!({ "options": options, "option_labels": option_labels })
         }
         FieldKind::Select { options, .. } => json!({ "options": options }),
-        // A list of terms reads as a multiple taxonomy field; `items` says how it was declared.
-        FieldKind::Taxonomy { taxonomy } if f.term_list => {
-            json!({ "taxonomy": taxonomy, "items": "taxonomy" })
-        }
         FieldKind::Taxonomy { taxonomy } => json!({ "taxonomy": taxonomy }),
         FieldKind::Reference(r) => json!({
             "target": r.target.as_deref().unwrap_or("*"),
@@ -134,14 +118,31 @@ fn field_json(f: &FieldDef) -> Value {
             },
             "inverse": r.inverse,
         }),
-        FieldKind::List { items } => json!({ "items": scalar_name(*items), "labels": f.labels }),
+        // Types T7: any other list carries its item's whole definition.
+        FieldKind::List { item } => json!({
+            "items": item.kind.name(),
+            "item": field_json(item),
+            "labels": f.labels,
+        }),
         FieldKind::Asset => json!({ "accept": f.accept.name() }),
-        FieldKind::Dict { values } => json!({ "values": scalar_name(*values) }),
+        FieldKind::Dict { keys, values } => json!({
+            "keys": keys.iter().map(field_json).collect::<Vec<_>>(),
+            "values": match values {
+                schema::DictValues::None => Value::Null,
+                schema::DictValues::Any => json!("any"),
+                schema::DictValues::Of(d) => field_json(d),
+            },
+        }),
         FieldKind::Location { image } => json!({ "image": image }),
         _ => json!({}),
     };
     if let (Value::Object(out), Value::Object(extra)) = (&mut out, extra) {
         out.extend(extra);
+    }
+    // A list of selects, terms, references or assets: that kind holding several (types T7).
+    if f.listed {
+        out["listed"] = json!(true);
+        out["items"] = json!(f.kind.name());
     }
     out
 }

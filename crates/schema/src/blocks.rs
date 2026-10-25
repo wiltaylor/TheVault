@@ -9,10 +9,10 @@ use std::collections::HashSet;
 use crate::Issue;
 use crate::doc::{Doc, DocBlock, Value};
 use crate::encoding::{PALETTE, is_ident, is_ink_colour, is_palette, is_ulid};
-use crate::types::{FieldDef, FieldKind, RangeOf, Scalar};
+use crate::types::{FieldDef, FieldKind, RangeOf};
 
 /// The closed set of content block kinds.
-pub const CONTENT_KINDS: [&str; 15] = [
+pub const CONTENT_KINDS: [&str; 16] = [
     "heading",
     "paragraph",
     "list",
@@ -28,10 +28,11 @@ pub const CONTENT_KINDS: [&str; 15] = [
     "control",
     "toggle",
     "admonition",
+    "card",
 ];
 
 /// The content block kinds a canvas card holds: every content block kind but a canvas.
-pub const CARD_BLOCK_KINDS: [&str; 14] = [
+pub const CARD_BLOCK_KINDS: [&str; 15] = [
     "heading",
     "paragraph",
     "list",
@@ -46,6 +47,7 @@ pub const CARD_BLOCK_KINDS: [&str; 14] = [
     "control",
     "toggle",
     "admonition",
+    "card",
 ];
 
 /// The kinds of an `admonition` block, in the order the editor offers them.
@@ -136,12 +138,7 @@ pub fn control_fits(kind: &str, f: &FieldDef) -> bool {
         "radio" => matches!(f.kind, K::Select { .. }) && !f.multiple,
         "chips" => {
             (choice && f.multiple)
-                || matches!(
-                    f.kind,
-                    K::List {
-                        items: Scalar::String
-                    }
-                )
+                || f.kind.item().and_then(|i| i.kind.scalar()) == Some(crate::types::Scalar::String)
         }
         "calendar" => matches!(f.kind, K::Date | K::DateRange { of: RangeOf::Date }),
         "datetime" | "time" => matches!(f.kind, K::Datetime),
@@ -150,37 +147,30 @@ pub fn control_fits(kind: &str, f: &FieldDef) -> bool {
     }
 }
 
-/// A field's kind in words: `a multiple select field`, `a list of int field`.
+/// A field's kind in words: `a list of select field`, `a list of int field`.
 fn field_kind_text(f: &FieldDef) -> String {
-    let what = match &f.kind {
-        FieldKind::List { items } => format!("list of {} ", scalar_name(*items)),
-        _ if f.term_list => "list of taxonomy terms ".to_owned(),
-        FieldKind::DateRange {
-            of: RangeOf::Datetime,
-        } => "date range of datetimes ".to_owned(),
-        FieldKind::DateRange {
-            of: RangeOf::DateOrDatetime,
-        } => "date range of dates or datetimes ".to_owned(),
-        k if f.multiple => format!("multiple {} ", k.name()),
-        k => format!("{} ", k.name()),
-    };
+    let what = kind_words(f);
     let article = if what.starts_with(['a', 'e', 'i', 'o', 'u']) {
         "an"
     } else {
         "a"
     };
-    format!("{article} {what}field")
+    format!("{article} {what} field")
 }
 
-fn scalar_name(s: Scalar) -> &'static str {
-    match s {
-        Scalar::String => "string",
-        Scalar::Int => "int",
-        Scalar::Float => "float",
-        Scalar::Bool => "bool",
-        Scalar::Date => "date",
-        Scalar::Datetime => "datetime",
-        Scalar::Url => "url",
+/// A definition's kind in words, with no article: `list of select`, `date range of datetimes`.
+fn kind_words(f: &FieldDef) -> String {
+    match &f.kind {
+        FieldKind::List { item } => format!("list of {}", kind_words(item)),
+        FieldKind::Taxonomy { .. } if f.multiple => "list of taxonomy terms".to_owned(),
+        FieldKind::DateRange {
+            of: RangeOf::Datetime,
+        } => "date range of datetimes".to_owned(),
+        FieldKind::DateRange {
+            of: RangeOf::DateOrDatetime,
+        } => "date range of dates or datetimes".to_owned(),
+        k if f.multiple => format!("list of {}", k.name()),
+        k => k.name().to_owned(),
     }
 }
 
@@ -550,6 +540,10 @@ impl Check<'_> {
                 ];
                 self.items(d, &items, &[], at);
                 self.nested(d, "an admonition", at);
+            }
+            "card" => {
+                self.items(d, &[req("note", Form::Ulid)], &[], at);
+                self.only_blocks(d, &[], at);
             }
             _ => {}
         }

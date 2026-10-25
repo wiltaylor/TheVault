@@ -26,7 +26,7 @@ pub const EVENTS: [&str; 6] = [
     "after_delete",
 ];
 
-/// A `list` item kind or a `dict` value kind.
+/// The scalar kinds, as a list item or a dict entry may be one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scalar {
     String,
@@ -36,28 +36,6 @@ pub enum Scalar {
     Date,
     Datetime,
     Url,
-}
-
-/// The `items` of a `list` field: a scalar kind, or `taxonomy` for a list of taxonomy terms.
-const ITEM_NAMES: [&str; 8] = [
-    "string", "int", "float", "bool", "date", "datetime", "url", "taxonomy",
-];
-
-impl Scalar {
-    const NAMES: [&str; 7] = ["string", "int", "float", "bool", "date", "datetime", "url"];
-
-    fn parse(s: &str) -> Option<Scalar> {
-        Some(match s {
-            "string" => Scalar::String,
-            "int" => Scalar::Int,
-            "float" => Scalar::Float,
-            "bool" => Scalar::Bool,
-            "date" => Scalar::Date,
-            "datetime" => Scalar::Datetime,
-            "url" => Scalar::Url,
-            _ => return None,
-        })
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,11 +86,16 @@ pub enum FieldKind {
         taxonomy: String,
     },
     Reference(Reference),
+    /// A list of values of `item`, a definition of any kind a value can be (types T1). A list of
+    /// selects, terms, references or assets is that kind with `multiple` instead (T2).
     List {
-        items: Scalar,
+        item: Box<FieldDef>,
     },
+    /// Entries named by identifiers: `keys` declares some, each with a definition of its own, and
+    /// `values` says what any other entry may be (types T2).
     Dict {
-        values: Scalar,
+        keys: Vec<FieldDef>,
+        values: DictValues,
     },
     /// `image` is the image asset of an image map; `None` is a real-world map.
     Location {
@@ -122,6 +105,17 @@ pub enum FieldKind {
     Asset,
     Ink,
     Canvas,
+}
+
+/// What a dict entry no `key` declares may be.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DictValues {
+    /// Nothing: only the declared keys.
+    None,
+    /// A value of this definition.
+    Of(Box<FieldDef>),
+    /// Any value: each entry is its own kind, a scalar, a list or a record.
+    Any,
 }
 
 /// What the ends of a date range are: both dates, both datetimes, or either form as long as both
@@ -200,6 +194,28 @@ impl FieldKind {
         }
     }
 
+    /// The scalar kind this is, if it is one.
+    pub fn scalar(&self) -> Option<Scalar> {
+        Some(match self {
+            FieldKind::String => Scalar::String,
+            FieldKind::Int => Scalar::Int,
+            FieldKind::Float => Scalar::Float,
+            FieldKind::Bool => Scalar::Bool,
+            FieldKind::Date => Scalar::Date,
+            FieldKind::Datetime => Scalar::Datetime,
+            FieldKind::Url => Scalar::Url,
+            _ => return None,
+        })
+    }
+
+    /// A list's item definition, if this is a list.
+    pub fn item(&self) -> Option<&FieldDef> {
+        match self {
+            FieldKind::List { item } => Some(item),
+            _ => None,
+        }
+    }
+
     /// Written in a note as a block labelled with the field name, not as `name = value`.
     pub fn is_compound(&self) -> bool {
         matches!(
@@ -209,8 +225,49 @@ impl FieldKind {
     }
 }
 
-/// Kinds that take `multiple = true`.
+/// Kinds a list of which is that kind holding several values (types T2), and that the old
+/// `multiple = true` names.
 const MULTIPLE_KINDS: [&str; 4] = ["select", "taxonomy", "reference", "asset"];
+
+/// The kinds a list item, a dict key or a dict's other values may be: every kind but the ones
+/// written as blocks of their own (types T1).
+pub const VALUE_KINDS: [&str; 15] = [
+    "string",
+    "int",
+    "float",
+    "bool",
+    "date",
+    "datetime",
+    "date_range",
+    "url",
+    "select",
+    "taxonomy",
+    "reference",
+    "list",
+    "dict",
+    "location",
+    "asset",
+];
+
+/// What `values` of a dict may name: a kind of [`VALUE_KINDS`], or `any`.
+const DICT_VALUE_NAMES: [&str; 16] = [
+    "string",
+    "int",
+    "float",
+    "bool",
+    "date",
+    "datetime",
+    "date_range",
+    "url",
+    "select",
+    "taxonomy",
+    "reference",
+    "list",
+    "dict",
+    "location",
+    "asset",
+    "any",
+];
 /// Kinds that take a `default`.
 const DEFAULT_KINDS: [&str; 10] = [
     "string", "int", "float", "bool", "date", "datetime", "url", "select", "taxonomy", "list",
@@ -230,9 +287,10 @@ pub struct FieldDef {
     pub hidden: bool,
     /// The note holds a list.
     pub multiple: bool,
-    /// Written as `kind = "list"` with `items = "taxonomy"`. Such a field is read as a `taxonomy`
-    /// field with `multiple = true` everywhere else: in notes, queries and the index.
-    pub term_list: bool,
+    /// Written as `kind = "list"` of selects, terms, references or assets (types T2). Such a
+    /// field is read as that kind with `multiple = true` everywhere else: in notes, queries and
+    /// the index.
+    pub listed: bool,
     pub default: Option<Value>,
     /// On a list of strings: another list-of-string field of the type that holds one label per
     /// value, index-aligned. The named field is edited with this one and not shown on its own.
@@ -289,7 +347,7 @@ pub(crate) fn title_field() -> FieldDef {
         computed: false,
         hidden: false,
         multiple: false,
-        term_list: false,
+        listed: false,
         default: None,
         labels: None,
         accept: Accept::Any,
@@ -566,8 +624,19 @@ impl TypeDef {
     }
 }
 
+/// Where a field definition sits (types T2): a type's field, the item of a field-level list of
+/// selects, terms, references or assets (which is that field holding several), the item of any
+/// other list, a dict's key, or what a dict's other entries are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    Field,
+    FieldItem,
+    Item,
+    Key,
+    Values,
+}
+
 fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<FieldDef> {
-    let d = &b.body;
     let name = match b.labels.as_slice() {
         [l] if RESERVED_FIELDS.contains(&l.as_str()) => {
             c.fail(at, format!("{l:?} is a built-in field and is reserved"));
@@ -583,46 +652,98 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
             return None;
         }
     };
-    c.only_blocks(d, &[], at);
+    field_def(c, &b.body, name, type_name, at, Place::Field)
+}
+
+/// The attributes kind `kind` takes besides the ones every definition has.
+fn kind_items(kind: &str) -> Vec<crate::blocks::Item> {
+    match kind {
+        "date_range" => vec![opt("of", Form::OneOf(&RangeOf::NAMES))],
+        "select" => vec![
+            req("options", Form::StrList),
+            opt("option_labels", Form::StrList),
+        ],
+        "taxonomy" => vec![req("taxonomy", Form::Str)],
+        "reference" => vec![
+            req("target", Form::Str),
+            opt("relation", Form::OneOf(&["one_way", "two_way", "peer"])),
+            opt("inverse", Form::Str),
+            opt("on_delete", Form::OneOf(&["unlink", "restrict", "cascade"])),
+        ],
+        "asset" => vec![opt("accept", Form::OneOf(&["image", "any"]))],
+        "location" => vec![
+            req("map", Form::OneOf(&["geo", "image"])),
+            opt("image", Form::Ulid),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// The definition `items = "<kind>"` stands for: kind `kind` with the attributes of `d` that kind
+/// takes (types T2).
+fn shorthand(d: &Doc, kind: &str) -> Doc {
+    let takes = kind_items(kind);
+    let mut fields = vec![("kind".to_owned(), Value::Str(kind.to_owned()))];
+    fields.extend(
+        d.fields
+            .iter()
+            .filter(|(n, _)| takes.iter().any(|i| i.name == n))
+            .cloned(),
+    );
+    Doc {
+        fields,
+        blocks: Vec::new(),
+    }
+}
+
+fn field_def(
+    c: &mut Check,
+    d: &Doc,
+    name: String,
+    type_name: &str,
+    at: &str,
+    place: Place,
+) -> Option<FieldDef> {
+    let kind_name = d.field("kind").and_then(Value::as_str).unwrap_or("");
+    let blocks: &[&str] = match kind_name {
+        "list" => &["item"],
+        "dict" => &["key", "values"],
+        _ => &[],
+    };
+    c.only_blocks(d, blocks, at);
 
     let mut items = vec![
         req("kind", Form::OneOf(&FieldKind::NAMES)),
         opt("label", Form::Str),
         opt("description", Form::Str),
-        opt("required", Form::Bool),
-        opt("computed", Form::Bool),
-        opt("hidden", Form::Bool),
-        opt("multiple", Form::Bool),
     ];
-    let kind_name = d.field("kind").and_then(Value::as_str).unwrap_or("");
-    match kind_name {
-        "date_range" => items.push(opt("of", Form::OneOf(&RangeOf::NAMES))),
-        "select" => items.extend([
-            req("options", Form::StrList),
-            opt("option_labels", Form::StrList),
-        ]),
-        "taxonomy" => items.push(req("taxonomy", Form::Str)),
-        "reference" => items.extend([
-            req("target", Form::Str),
-            opt("relation", Form::OneOf(&["one_way", "two_way", "peer"])),
-            opt("inverse", Form::Str),
-            opt("on_delete", Form::OneOf(&["unlink", "restrict", "cascade"])),
-        ]),
-        "list" => {
-            items.push(req("items", Form::OneOf(&ITEM_NAMES)));
-            match d.field("items").and_then(Value::as_str) {
-                Some("taxonomy") => items.push(req("taxonomy", Form::Str)),
-                Some("string") => items.push(opt("labels", Form::Str)),
-                _ => {}
+    if matches!(place, Place::Field | Place::Key) {
+        items.push(opt("required", Form::Bool));
+    }
+    if place == Place::Field {
+        items.extend([
+            opt("computed", Form::Bool),
+            opt("hidden", Form::Bool),
+            opt("multiple", Form::Bool),
+        ]);
+    }
+    items.extend(kind_items(kind_name));
+    let shorthand_kind = d.field("items").and_then(Value::as_str).map(str::to_owned);
+    if kind_name == "list" {
+        items.push(opt("items", Form::OneOf(&VALUE_KINDS)));
+        if let Some(k) = &shorthand_kind {
+            for i in kind_items(k) {
+                // The item's own attributes sit beside `items`; none is required there, the
+                // item's check says what is missing.
+                items.push(opt(i.name, i.form));
+            }
+            if k == "string" {
+                items.push(opt("labels", Form::Str));
             }
         }
-        "asset" => items.push(opt("accept", Form::OneOf(&["image", "any"]))),
-        "dict" => items.push(req("values", Form::OneOf(&Scalar::NAMES))),
-        "location" => items.extend([
-            req("map", Form::OneOf(&["geo", "image"])),
-            opt("image", Form::Ulid),
-        ]),
-        _ => {}
+    }
+    if kind_name == "dict" {
+        items.push(opt("values", Form::OneOf(&DICT_VALUE_NAMES)));
     }
     let before = c.errors();
     let owner = if FieldKind::NAMES.contains(&kind_name) {
@@ -634,13 +755,24 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
     if c.errors() > before || !FieldKind::NAMES.contains(&kind_name) {
         return None;
     }
+    if place != Place::Field && !VALUE_KINDS.contains(&kind_name) {
+        c.fail(
+            &format!("{at}.kind"),
+            format!(
+                "a {kind_name} field is a block of its own and cannot be inside a list or a dict"
+            ),
+        );
+        return None;
+    }
 
     let known = |n: &str| items.iter().any(|i| i.name == n);
     let flag = |n: &str| d.field(n) == Some(&Value::Bool(true));
     let s = |n: &str| string(d, n);
-    let (required, computed, multiple) = (flag("required"), flag("computed"), flag("multiple"));
+    let (required, computed) = (flag("required"), flag("computed"));
     let hidden = flag("hidden");
-    let term_list = kind_name == "list" && s("items").as_deref() == Some("taxonomy");
+    // The old `multiple = true`, which a list now says (types T2).
+    let mut multiple = flag("multiple") || place == Place::FieldItem;
+    let mut listed = false;
 
     let kind = match kind_name {
         "string" => FieldKind::String,
@@ -653,46 +785,8 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
             of: RangeOf::parse(s("of").as_deref()),
         },
         "url" => FieldKind::Url,
-        "select" => {
-            let options: Vec<String> = match d.field("options") {
-                Some(Value::List(l)) => l
-                    .iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect(),
-                _ => Vec::new(),
-            };
-            if options.is_empty() {
-                c.fail(&format!("{at}.options"), "needs at least one option");
-            }
-            let mut seen = HashSet::new();
-            for o in &options {
-                if !seen.insert(o) {
-                    c.fail(&format!("{at}.options"), format!("lists {o:?} twice"));
-                }
-            }
-            let option_labels: Vec<String> = match d.field("option_labels") {
-                Some(Value::List(l)) => l
-                    .iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect(),
-                _ => Vec::new(),
-            };
-            if d.field("option_labels").is_some() && option_labels.len() != options.len() {
-                c.fail(
-                    &format!("{at}.option_labels"),
-                    format!(
-                        "holds {} labels for {} options: give one label per option, in the same order",
-                        option_labels.len(),
-                        options.len()
-                    ),
-                );
-            }
-            FieldKind::Select {
-                options,
-                option_labels,
-            }
-        }
-        "taxonomy" | "list" if kind_name == "taxonomy" || term_list => {
+        "select" => select(c, d, at),
+        "taxonomy" => {
             let taxonomy = s("taxonomy").unwrap_or_default();
             if !is_name(&taxonomy) {
                 c.fail(
@@ -702,13 +796,58 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
             }
             FieldKind::Taxonomy { taxonomy }
         }
-        "reference" => FieldKind::Reference(reference(c, d, &name, type_name, multiple, at)?),
-        "list" => FieldKind::List {
-            items: Scalar::parse(&s("items").unwrap_or_default())?,
-        },
-        "dict" => FieldKind::Dict {
-            values: Scalar::parse(&s("values").unwrap_or_default())?,
-        },
+        "reference" => {
+            FieldKind::Reference(reference(c, d, &name, type_name, multiple, at, place)?)
+        }
+        "list" => {
+            let item_blocks: Vec<&DocBlock> = d.blocks_of("item").collect();
+            let item_doc = match (&shorthand_kind, item_blocks.as_slice()) {
+                (Some(_), [_, ..]) => {
+                    c.fail(
+                        at,
+                        "gives its item twice: either `items` or an `item` block",
+                    );
+                    return None;
+                }
+                (None, [b]) => b.body.clone(),
+                (None, [_, _, ..]) => {
+                    c.fail(at, "has more than one `item` block");
+                    return None;
+                }
+                (Some(k), []) => shorthand(d, k),
+                (None, []) => {
+                    c.fail(
+                        at,
+                        "needs `items`, the kind of its items, or an `item` block",
+                    );
+                    return None;
+                }
+            };
+            let item_kind = item_doc.field("kind").and_then(Value::as_str).unwrap_or("");
+            let several = MULTIPLE_KINDS.contains(&item_kind)
+                && item_doc.field("multiple") != Some(&Value::Bool(true));
+            let item_place = match (place, several) {
+                (Place::Field, true) => Place::FieldItem,
+                _ => Place::Item,
+            };
+            let item_at = if item_blocks.is_empty() {
+                at.to_owned()
+            } else {
+                format!("{at} > item")
+            };
+            let item = field_def(c, &item_doc, name.clone(), type_name, &item_at, item_place)?;
+            if several {
+                // A list of selects, terms, references or assets is that kind holding several.
+                multiple = true;
+                listed = true;
+                item.kind
+            } else {
+                FieldKind::List {
+                    item: Box::new(item),
+                }
+            }
+        }
+        "dict" => dict(c, d, &name, type_name, at)?,
         "location" => {
             let image = s("image");
             match (s("map").as_deref(), &image) {
@@ -731,7 +870,7 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         _ => return None,
     };
 
-    if multiple && !MULTIPLE_KINDS.contains(&kind_name) {
+    if flag("multiple") && !MULTIPLE_KINDS.contains(&kind_name) {
         c.fail(
             &format!("{at}.multiple"),
             format!("is not allowed on a {kind_name} field"),
@@ -743,6 +882,19 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
     if hidden && required {
         c.fail(at, "a hidden field cannot also be required");
     }
+    // The item of a list takes its accept from the item; a list takes it from its item.
+    let accept_from = |doc: &Doc| {
+        if string(doc, "accept").as_deref() == Some("image") {
+            Accept::Image
+        } else {
+            Accept::Any
+        }
+    };
+    let accept = if matches!(kind, FieldKind::Asset) {
+        accept_from(d)
+    } else {
+        Accept::Any
+    };
 
     let def = FieldDef {
         label: s("label").unwrap_or_else(|| name.clone()),
@@ -752,29 +904,134 @@ fn field(c: &mut Check, b: &DocBlock, type_name: &str, at: &str) -> Option<Field
         required,
         computed,
         hidden,
-        // A list of terms holds several terms, as a multiple taxonomy field does.
-        multiple: multiple || term_list,
-        term_list,
+        multiple,
+        listed,
         default: d.field("default").cloned(),
         // An attribute this kind does not have is ignored, as a newer release's would be.
         labels: s("labels").filter(|_| known("labels")),
-        accept: if known("accept") && s("accept").as_deref() == Some("image") {
-            Accept::Image
-        } else {
-            Accept::Any
-        },
+        accept,
         extra: unknown(d, &items, &["default"]),
         implied: false,
     };
     if let Some(v) = &def.default {
         let path = format!("{at}.default");
-        if !DEFAULT_KINDS.contains(&kind_name) {
-            c.fail(&path, format!("is not allowed on a {kind_name} field"));
+        let kind_named = if listed { "list" } else { kind_name };
+        if !DEFAULT_KINDS.contains(&kind_named) {
+            c.fail(&path, format!("is not allowed on a {kind_named} field"));
         } else {
             check_value(&def, v, None, c, &path);
         }
     }
     Some(def)
+}
+
+/// A select's options and their labels.
+fn select(c: &mut Check, d: &Doc, at: &str) -> FieldKind {
+    let options: Vec<String> = match d.field("options") {
+        Some(Value::List(l)) => l
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    };
+    if options.is_empty() {
+        c.fail(&format!("{at}.options"), "needs at least one option");
+    }
+    let mut seen = HashSet::new();
+    for o in &options {
+        if !seen.insert(o) {
+            c.fail(&format!("{at}.options"), format!("lists {o:?} twice"));
+        }
+    }
+    let option_labels: Vec<String> = match d.field("option_labels") {
+        Some(Value::List(l)) => l
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    };
+    if d.field("option_labels").is_some() && option_labels.len() != options.len() {
+        c.fail(
+            &format!("{at}.option_labels"),
+            format!(
+                "holds {} labels for {} options: give one label per option, in the same order",
+                option_labels.len(),
+                options.len()
+            ),
+        );
+    }
+    FieldKind::Select {
+        options,
+        option_labels,
+    }
+}
+
+/// A dict's declared keys and what its other entries may be (types T2).
+fn dict(c: &mut Check, d: &Doc, name: &str, type_name: &str, at: &str) -> Option<FieldKind> {
+    let mut keys = Vec::new();
+    let mut names = HashSet::new();
+    for b in d.blocks_of("key") {
+        let path = format!("{at} > {}", b.name());
+        let key = match b.labels.as_slice() {
+            [l] if crate::encoding::is_ident(l) => l.clone(),
+            [l] => {
+                c.fail(
+                    &path,
+                    format!(
+                        "{l:?} is not a key name: letters, digits and _, not starting with a digit"
+                    ),
+                );
+                continue;
+            }
+            _ => {
+                c.fail(&path, "needs exactly one label, the key name");
+                continue;
+            }
+        };
+        if !names.insert(key.clone()) {
+            c.fail(&path, "names a key twice");
+            continue;
+        }
+        if let Some(def) = field_def(c, &b.body, key, type_name, &path, Place::Key) {
+            keys.push(def);
+        }
+    }
+    let blocks: Vec<&DocBlock> = d.blocks_of("values").collect();
+    let values = match (string(d, "values"), blocks.as_slice()) {
+        (Some(_), [_, ..]) => {
+            c.fail(
+                at,
+                "says what its other entries are twice: either `values` or a `values` block",
+            );
+            return None;
+        }
+        (None, [_, _, ..]) => {
+            c.fail(at, "has more than one `values` block");
+            return None;
+        }
+        (None, [b]) => DictValues::Of(Box::new(field_def(
+            c,
+            &b.body,
+            name.to_owned(),
+            type_name,
+            &format!("{at} > values"),
+            Place::Values,
+        )?)),
+        (Some(v), []) if v == "any" => DictValues::Any,
+        (Some(v), []) => DictValues::Of(Box::new(field_def(
+            c,
+            &shorthand(d, &v),
+            name.to_owned(),
+            type_name,
+            at,
+            Place::Values,
+        )?)),
+        (None, []) => DictValues::None,
+    };
+    if keys.is_empty() && values == DictValues::None {
+        c.fail(at, "needs `key` blocks, `values`, or both");
+    }
+    Some(FieldKind::Dict { keys, values })
 }
 
 /// Every `labels` names another list-of-string field of the type, and no field is named by two.
@@ -789,22 +1046,14 @@ fn check_labels(c: &mut Check, fields: &[FieldDef]) {
         }
         match fields.iter().find(|g| &g.name == l) {
             None => c.fail(&at, format!("the type has no field {l:?}")),
-            Some(g)
-                if !matches!(
-                    g.kind,
-                    FieldKind::List {
-                        items: Scalar::String
-                    }
-                ) =>
-            {
-                c.fail(
+            Some(g) if g.kind.item().and_then(|i| i.kind.scalar()) != Some(Scalar::String) => c
+                .fail(
                     &at,
                     format!(
                         "{l:?} must be a list of strings, and it is a {} field",
                         g.kind.name()
                     ),
-                )
-            }
+                ),
             Some(_) => {
                 if let Some((other, _)) = named.iter().find(|(_, n)| *n == l.as_str()) {
                     c.fail(
@@ -826,6 +1075,7 @@ fn reference(
     type_name: &str,
     multiple: bool,
     at: &str,
+    place: Place,
 ) -> Option<Reference> {
     let target = string(d, "target").unwrap_or_default();
     let relation = match string(d, "relation").as_deref() {
@@ -879,9 +1129,17 @@ fn reference(
         }
         _ => {}
     }
+    // Mirroring follows a type's fields: inside a dict, or in a list of lists, a reference is
+    // one way (types T2).
+    if relation != Relation::OneWay && !matches!(place, Place::Field | Place::FieldItem) {
+        c.fail(
+            &format!("{at}.relation"),
+            "inside a dict or a nested list a reference is one_way",
+        );
+    }
     if relation == Relation::Peer {
         if !multiple {
-            c.fail(at, "a peer reference must be multiple");
+            c.fail(at, "a peer reference must be a list of references");
         }
         if target.as_deref() != Some(type_name) {
             c.fail(

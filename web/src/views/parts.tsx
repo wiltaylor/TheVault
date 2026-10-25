@@ -33,7 +33,10 @@ function SlotValue(props: { row: Row; doc?: NoteDoc; slot: string; label: string
     <div class="query-slot" data-field={f.name}>
       <span class="query-slot-label">{label}</span>
       <span class="query-slot-value">
-        <Show when={f.compound} fallback={<FieldValue field={f} value={fields()[f.name]} fields={fields()} size="card" />}>
+        <Show
+          when={f.compound && f.kind !== "dict"}
+          fallback={<FieldValue field={f} value={props.doc ? fieldValue(props.doc, f) : fields()[f.name]} fields={fields()} size="card" />}
+        >
           <Show when={props.doc}>{(doc) => <Blocks blocks={compoundBlock(doc(), f)?.blocks ?? []} />}</Show>
         </Show>
       </span>

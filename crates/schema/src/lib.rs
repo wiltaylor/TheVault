@@ -56,9 +56,9 @@ pub use skills::{
 };
 pub use taxonomy::{Taxonomy, Term};
 pub use types::{
-    Accept, EVENTS, FieldDef, FieldKind, Handler, LIST_PAGE_SIZE_MAX, LIST_PAGE_SIZE_MIN,
-    LIST_PAGE_VIEWS, ListPage, OnDelete, RESERVED_FIELDS, RangeOf, Reference, Relation, Scalar,
-    Tab, TabItem, Template, TypeDef, is_image_filename,
+    Accept, DictValues, EVENTS, FieldDef, FieldKind, Handler, LIST_PAGE_SIZE_MAX,
+    LIST_PAGE_SIZE_MIN, LIST_PAGE_VIEWS, ListPage, OnDelete, RESERVED_FIELDS, RangeOf, Reference,
+    Relation, Scalar, Tab, TabItem, Template, TypeDef, VALUE_KINDS, is_image_filename,
 };
 
 /// How much an [`Issue`] matters. An error makes the file invalid. A warning does not: it reports
@@ -186,7 +186,7 @@ fn imply_inverses(types: &mut [TypeDef]) {
                     computed: false,
                     hidden: false,
                     multiple: true,
-                    term_list: false,
+                    listed: false,
                     default: None,
                     labels: None,
                     accept: Accept::Any,
@@ -200,6 +200,49 @@ fn imply_inverses(types: &mut [TypeDef]) {
         if let Some(t) = types.iter_mut().find(|t| t.name == on) {
             t.fields.push(field);
         }
+    }
+}
+
+/// The definitions inside `f`, a list's item and a dict's keys and other values, at any depth.
+fn nested(f: &FieldDef) -> Vec<(&FieldDef, String)> {
+    let mut out = Vec::new();
+    match &f.kind {
+        FieldKind::List { item } => out.push((item.as_ref(), "item".to_owned())),
+        FieldKind::Dict { keys, values } => {
+            out.extend(keys.iter().map(|k| (k, format!("key {}", k.name))));
+            if let types::DictValues::Of(v) = values {
+                out.push((v.as_ref(), "values".to_owned()));
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Check what the definitions inside `f` name: taxonomies and reference targets.
+fn nested_check(schema: &Schema, f: &FieldDef, at: &str, issues: &mut Vec<Issue>) {
+    for (d, part) in nested(f) {
+        let path = format!("{at} > {part}");
+        match &d.kind {
+            FieldKind::Taxonomy { taxonomy } if schema.taxonomy(taxonomy).is_none() => {
+                issues.push(Issue::new(
+                    format!("{path}.taxonomy"),
+                    format!("there is no taxonomy {taxonomy:?}"),
+                ))
+            }
+            FieldKind::Reference(r) => {
+                if let Some(target) = &r.target
+                    && schema.type_def(target).is_none()
+                {
+                    issues.push(Issue::new(
+                        format!("{path}.target"),
+                        format!("there is no type {target:?}"),
+                    ));
+                }
+            }
+            _ => {}
+        }
+        nested_check(schema, d, &path, issues);
     }
 }
 
@@ -351,6 +394,10 @@ impl Schema {
     /// The rules between one type and the rest of the schema.
     fn cross_check(&self, t: &TypeDef) -> Vec<Issue> {
         let mut issues = Vec::new();
+        for f in &t.fields {
+            // Inside lists and dicts, a taxonomy and a reference's target must exist (types T4).
+            nested_check(self, f, &format!("field {}", f.name), &mut issues);
+        }
         for f in &t.fields {
             let at = format!("field {}", f.name);
             match &f.kind {

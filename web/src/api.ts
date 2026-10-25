@@ -54,9 +54,19 @@ export interface FieldDef {
   target?: string;
   relation?: "one_way" | "two_way" | "peer";
   inverse?: string | null;
-  /** `list`: the item kind. On a multiple `taxonomy` field, `"taxonomy"` says it was declared as a list of terms. */
+  /**
+   * Declared as a list: a select, taxonomy, reference or asset field holding several values
+   * (`multiple`), which the type file writes as a list of that kind (types T7).
+   */
+  listed?: boolean;
+  /** `list`: the item kind; on a `listed` field, the field's own kind. */
   items?: string;
-  values?: string;
+  /** `list` other than a listed one: the item's whole definition. */
+  item?: FieldDef;
+  /** `dict`: its declared keys, each a definition named by its key, in the file's order. */
+  keys?: FieldDef[];
+  /** `dict`: what entries no key declares are: none (`null`), each its own kind (`"any"`), or one definition. */
+  values?: FieldDef | "any" | null;
   /** `location`: the image an image map's pins sit on, null on a real-world map. */
   image?: string | null;
   /** A list of strings: the field holding one label per value, in the same order. */

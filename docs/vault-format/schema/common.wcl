@@ -90,6 +90,12 @@ type Mermaid {
   source: utf8
 }
 
+# A card shows the note it names and links to it, as a mention does.
+@block("card", required_fields = ["note"])
+type NoteCard {
+  note: utf8
+}
+
 # ---------------------------------------------------------------------------
 # Ink (D18, D29). The same block is an ink content block (no label) and an
 # ink field value (labelled with the field name).
@@ -189,6 +195,7 @@ type CanvasNode {
   @children("control")    controls:    list<Control>
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
+  @children("card")       cards:       list<NoteCard>
 }
 
 @block("edge", required_fields = ["from", "to"])
@@ -268,6 +275,7 @@ type Toggle {
   @children("control")    controls:    list<Control>
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
+  @children("card")       cards:       list<NoteCard>
 }
 
 @block("admonition", required_fields = ["kind"])
@@ -291,6 +299,7 @@ type Admonition {
   @children("control")    controls:    list<Control>
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
+  @children("card")       cards:       list<NoteCard>
 }
 
 # ---------------------------------------------------------------------------
@@ -321,6 +330,7 @@ type Admonition {
   @children("control")    controls:    list<Control>
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
+  @children("card")       cards:       list<NoteCard>
 }
 
 @block("columns") type Columns {
@@ -344,6 +354,7 @@ type Admonition {
   @children("control")    controls:    list<Control>
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
+  @children("card")       cards:       list<NoteCard>
 }
 
 @doc("A dict field value. Keys are identifiers; TheVault checks every value against the field's value kind.")

@@ -303,6 +303,14 @@ export function ContentEditor(props: {
         submenu: props.template ? imageItems : undefined,
       },
       {
+        id: "card",
+        label: "Note card",
+        section: "Blocks",
+        keywords: "card record link embed note reference",
+        // The card opens on a search for its note.
+        run: () => place({ type: "vaultBlock", attrs: { block: fresh({ kind: "card", fields: {} }) } }),
+      },
+      {
         id: "file",
         label: "File",
         section: "Blocks",

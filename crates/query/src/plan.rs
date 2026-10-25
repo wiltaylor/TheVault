@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::types::{Value as Sql, ValueRef};
 use rusqlite::{Connection, params_from_iter};
-use schema::{FieldKind, Scalar};
+use schema::FieldKind;
 
 use crate::ast::{BinOp, Dir, Expr, Lit, Path, Query, UnOp};
 use crate::run::{
@@ -74,12 +74,8 @@ fn class_of(kind: &FieldKind) -> Option<Class> {
         FieldKind::Date | FieldKind::Datetime => Class::Time,
         FieldKind::Taxonomy { taxonomy } => Class::Tax(taxonomy.clone()),
         FieldKind::Reference(_) => Class::Ref,
-        FieldKind::List { items } => match items {
-            Scalar::String | Scalar::Url => Class::Text,
-            Scalar::Int | Scalar::Float => Class::Num,
-            Scalar::Bool => Class::Bool,
-            Scalar::Date | Scalar::Datetime => Class::Time,
-        },
+        // A list of scalars plans as its items do; any other list goes to the evaluator.
+        FieldKind::List { item } if item.kind.scalar().is_some() => return class_of(&item.kind),
         _ => return None,
     })
 }

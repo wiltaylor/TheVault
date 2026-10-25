@@ -137,7 +137,10 @@ export function opsFor(f: FieldDef): [Op, string][] {
     case "reference":
       return [["is", "is"], ...empties];
     case "list":
-      return [["has", "contains"], ...empties];
+      // A list of date ranges, locations, lists or dicts holds no item a typed value matches.
+      return ["string", "int", "float", "bool", "date", "datetime", "url"].includes(f.items ?? "string")
+        ? [["has", "contains"], ...empties]
+        : empties;
     case "date":
     case "datetime":
     case "date_range":

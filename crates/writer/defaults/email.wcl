@@ -17,10 +17,10 @@ field from_raw {
 }
 
 field to {
-  kind     = "reference"
-  label    = "To"
-  target   = "person"
-  multiple = true
+  kind   = "list"
+  items  = "reference"
+  label  = "To"
+  target = "person"
 }
 
 field to_raw {
@@ -31,10 +31,10 @@ field to_raw {
 }
 
 field cc {
-  kind     = "reference"
-  label    = "Cc"
-  target   = "person"
-  multiple = true
+  kind   = "list"
+  items  = "reference"
+  label  = "Cc"
+  target = "person"
 }
 
 field cc_raw {
@@ -56,10 +56,10 @@ field thread {
 }
 
 field labels {
-  kind     = "taxonomy"
+  kind     = "list"
+  items    = "taxonomy"
   label    = "Labels"
   taxonomy = "gmail_label"
-  multiple = true
 }
 
 field snippet {
@@ -80,9 +80,9 @@ field html {
 }
 
 field attachments {
-  kind     = "asset"
-  label    = "Attachments"
-  multiple = true
+  kind  = "list"
+  items = "asset"
+  label = "Attachments"
 }
 
 field processed {
