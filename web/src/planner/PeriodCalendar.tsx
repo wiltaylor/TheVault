@@ -4,7 +4,7 @@
 // are plain in-app links, so a click opens them in this pane and a middle or Ctrl/Cmd+click in a
 // background tab, as any link does.
 
-import { For, Show, createMemo, createResource, createSignal, useContext } from "solid-js";
+import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount, useContext } from "solid-js";
 import { type Block, type Row, api } from "../api";
 import { changes } from "../changes";
 import { FieldRefs } from "../components/fieldRefs";
@@ -14,6 +14,7 @@ import { calendarEvent, dateField, narrow, visibleWindow, type CalendarEvent } f
 import { useThisNote } from "../views/thisNote";
 import { MONTHS, DAY, longDay, periodEnd, periodStart, periodTitle, plannerHref, shiftDay, shiftPeriod } from "./period";
 import { type CalendarPeriod, eventTime, eventsByDay, readPeriodCalendar, sortDay } from "./periodCalendar";
+import { type TimedSegment, allDayBars, clock, hourRange, scrollHour, timedSegments } from "./weekGrid";
 import "./planner.css";
 
 const PAGE_SIZE = 1000;
@@ -77,7 +78,8 @@ function PeriodCalendarBody(props: { period: CalendarPeriod; query: string; date
       return all.flatMap((r) => calendarEvent(r, k.f) ?? []);
     },
   );
-  const byDay = createMemo(() => eventsByDay(rows.error ? [] : (rows.latest ?? []), first(), last()));
+  const events = createMemo(() => (rows.error ? [] : (rows.latest ?? [])));
+  const byDay = createMemo(() => eventsByDay(events(), first(), last()));
   const eventsOn = (day: string) => sortDay(byDay().get(day) ?? []);
   const today = todayDay();
 
@@ -96,19 +98,7 @@ function PeriodCalendarBody(props: { period: CalendarPeriod; query: string; date
       {/* A query that fails, or a field it cannot place notes by, shows the problem in place of the calendar. */}
       <Show when={!check().problem && !rows.error}>
       <Show when={props.period === "week"}>
-        <div class="period-week">
-          <For each={Array.from({ length: 7 }, (_, i) => shiftDay(first(), i))}>
-            {(day, i) => (
-              <div class="period-week-day" classList={{ today: day === today }} data-day={day}>
-                <a class="period-day-link" href={plannerHref("day", day, today)} aria-label={longDay(day)} data-testid="period-day">
-                  <span class="period-weekday">{WEEKDAYS[i()]}</span>
-                  <span class="period-date">{local(day).getDate()}</span>
-                </a>
-                <EventList events={eventsOn(day)} day={day} />
-              </div>
-            )}
-          </For>
-        </div>
+        <WeekCalendar first={first()} today={today} events={events()} ready={rows.state === "ready"} eventsOn={eventsOn} />
       </Show>
       <Show when={props.period === "month" || props.period === "quarter"}>
         <div class="period-months">
@@ -121,6 +111,182 @@ function PeriodCalendarBody(props: { period: CalendarPeriod; query: string; date
         <YearGrid first={first()} today={today} eventsOn={eventsOn} />
       </Show>
       </Show>
+    </div>
+  );
+}
+
+/** Below this width a week lists its days one under another rather than in seven columns. */
+export const NARROW_WEEK = 560;
+
+/**
+ * A week: a time grid of seven equal day columns where there is room, else its days one under
+ * another. A ResizeObserver picks between them, so only one is ever in the page.
+ */
+function WeekCalendar(props: {
+  first: string;
+  today: string;
+  events: CalendarEvent[];
+  ready: boolean;
+  eventsOn: (day: string) => CalendarEvent[];
+}) {
+  let box!: HTMLDivElement;
+  const [width, setWidth] = createSignal(0);
+  onMount(() => {
+    setWidth(box.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setWidth(box.clientWidth));
+    ro.observe(box);
+    onCleanup(() => ro.disconnect());
+  });
+  const days = () => Array.from({ length: 7 }, (_, i) => shiftDay(props.first, i));
+  // An unmeasured box, as in a test without layout, shows the grid.
+  const narrowPane = () => width() > 0 && width() < NARROW_WEEK;
+  return (
+    <div ref={box} class="period-week-box">
+      <Show
+        when={!narrowPane()}
+        fallback={
+          <div class="period-week" data-testid="period-week-list">
+            <For each={days()}>
+              {(day, i) => (
+                <div class="period-week-day" classList={{ today: day === props.today }} data-day={day}>
+                  <a class="period-day-link" href={plannerHref("day", day, props.today)} aria-label={longDay(day)} data-testid="period-day">
+                    <span class="period-weekday">{WEEKDAYS[i()]}</span>
+                    <span class="period-date">{local(day).getDate()}</span>
+                  </a>
+                  <EventList events={props.eventsOn(day)} day={day} />
+                </div>
+              )}
+            </For>
+          </div>
+        }
+      >
+        <WeekGrid days={days()} today={props.today} events={props.events} ready={props.ready} />
+      </Show>
+    </div>
+  );
+}
+
+/** Minutes since local midnight, now, kept up to date to the minute. */
+function useNowMinutes() {
+  const read = () => {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  };
+  const [now, setNow] = createSignal(read());
+  const timer = setInterval(() => setNow(read()), 60_000);
+  onCleanup(() => clearInterval(timer));
+  return now;
+}
+
+/**
+ * The time grid: day headers and the all-day row above, hour rows down the left, each timed
+ * event a block placed by its start and sized by its length, overlapping ones side by side.
+ */
+function WeekGrid(props: { days: string[]; today: string; events: CalendarEvent[]; ready: boolean }) {
+  let scroller!: HTMLDivElement;
+  let body!: HTMLDivElement;
+  const segments = createMemo(() => timedSegments(props.events, props.days[0]!, props.days[6]!));
+  const all = () => [...segments().values()].flat();
+  const hours = createMemo(() => hourRange(all()));
+  const bars = createMemo(() => allDayBars(props.events, props.days[0]!));
+  const allDayRows = () => bars().reduce((n, b) => Math.max(n, b.row + 1), 0);
+  const now = useNowMinutes();
+  const hourList = () => Array.from({ length: hours().last - hours().first }, (_, i) => hours().first + i);
+  /** A time's offset down the grid, in hour rows. */
+  const rows = (minutes: number) => (minutes - hours().first * 60) / 60;
+
+  // Open at the week's earliest event, or 08:00, once its events are in; later refreshes keep
+  // wherever the grid has been scrolled to.
+  let scrolled = false;
+  createEffect(() => {
+    if (scrolled || !props.ready) return;
+    scrolled = true;
+    const perHour = body.offsetHeight / Math.max(1, hours().last - hours().first);
+    scroller.scrollTop = Math.max(0, (scrollHour(all()) - hours().first) * perHour);
+  });
+
+  const style = (s: TimedSegment) => ({
+    top: `calc(var(--hour-height) * ${rows(s.start)})`,
+    height: `calc(var(--hour-height) * ${(s.end - s.start) / 60} - 2px)`,
+    left: `calc(${(s.lane / s.lanes) * 100}% + 1px)`,
+    width: `calc(${100 / s.lanes}% - 3px)`,
+  });
+
+  return (
+    <div class="week-grid" data-testid="period-week-grid" style={{ "--hours": hours().last - hours().first }}>
+      <div class="week-scroll" ref={scroller}>
+        <div class="week-head" style={{ "--allday-rows": allDayRows() }}>
+          <div class="week-corner" />
+          <For each={props.days}>
+            {(day, i) => (
+              <div class="week-head-day" classList={{ today: day === props.today }} data-day={day} style={{ "grid-column": i() + 2 }}>
+                <a class="period-day-link" href={plannerHref("day", day, props.today)} aria-label={longDay(day)} data-testid="period-day">
+                  <span class="period-weekday">{WEEKDAYS[i()]}</span>
+                  <span class="period-date">{local(day).getDate()}</span>
+                </a>
+              </div>
+            )}
+          </For>
+          <Show when={bars().length}>
+            <div class="week-allday-label" style={{ "grid-row": `2 / span ${allDayRows()}` }}>
+              All day
+            </div>
+            <For each={bars()}>
+              {(b) => (
+                <a
+                  class="period-event all-day week-allday"
+                  classList={{ "continues-before": b.continuesBefore, "continues-after": b.continuesAfter }}
+                  style={{ "grid-column": `${b.column + 2} / span ${b.span}`, "grid-row": b.row + 2 }}
+                  href={`/notes/${b.event.id}`}
+                  data-testid="period-event"
+                  data-id={b.event.id}
+                  data-days={b.days.join(" ")}
+                  title={b.event.title}
+                >
+                  <span class="period-event-title">{b.event.title}</span>
+                </a>
+              )}
+            </For>
+          </Show>
+        </div>
+        <div class="week-body" ref={body}>
+          <div class="week-gutter" aria-hidden="true">
+            <For each={hourList()}>
+              {(h) => (
+                <span class="week-hour" style={{ top: `calc(var(--hour-height) * ${h - hours().first})` }}>
+                  {clock(h * 60)}
+                </span>
+              )}
+            </For>
+          </div>
+          <For each={props.days}>
+            {(day) => (
+              <div class="week-col" classList={{ today: day === props.today }} data-day={day}>
+                <For each={segments().get(day) ?? []}>
+                  {(s) => (
+                    <a
+                      class="period-event week-event"
+                      classList={{ "continues-before": s.continuesBefore, "continues-after": s.continuesAfter, short: s.end - s.start < 45 }}
+                      style={style(s)}
+                      href={`/notes/${s.event.id}`}
+                      data-testid="period-event"
+                      data-id={s.event.id}
+                      title={s.continuesBefore ? s.event.title : `${clock(s.start)} ${s.event.title}`}
+                    >
+                      <span class="period-event-time">{s.continuesBefore ? "" : clock(s.start)}</span>
+                      <span class="period-event-title">{s.event.title}</span>
+                    </a>
+                  )}
+                </For>
+                <Show when={day === props.today && now() >= hours().first * 60 && now() <= hours().last * 60}>
+                  <div class="week-now" data-testid="period-now" style={{ top: `calc(var(--hour-height) * ${rows(now())})` }} />
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
+      </div>
     </div>
   );
 }

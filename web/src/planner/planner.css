@@ -73,26 +73,26 @@
   white-space: nowrap;
 }
 
-/* A week: seven columns, Monday to Sunday. */
+/* A week in a narrow pane: its days one under another. */
 .period-week {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   border: 1px solid var(--line);
   border-radius: 0.5rem;
   overflow: hidden;
 }
 
 .period-week-day {
-  min-height: 7rem;
   padding: 0.35rem;
-  border-left: 1px solid var(--line);
+  border-top: 1px solid var(--line);
 }
 
 .period-week-day:first-child {
-  border-left: none;
+  border-top: none;
 }
 
-.period-week-day .period-day-link {
+.period-week-day .period-day-link,
+.week-head-day .period-day-link {
   display: flex;
   align-items: baseline;
   gap: 0.35rem;
@@ -111,26 +111,158 @@
 }
 
 .period-week-day.today .period-date,
+.week-head-day.today .period-date,
 .period-month-grid td.today .period-day-link,
 .period-mini-grid td.today button {
   color: var(--accent);
   font-weight: 700;
 }
 
-@container (max-width: 560px) {
-  .period-week {
-    grid-template-columns: 1fr;
-  }
+/* A week where there is room: a time gutter and seven equal day columns, the hours in rows of
+   one height, scrolling down when the hours shown are many. */
+.week-grid {
+  --hour-height: 3rem;
+  --gutter: 3.25rem;
+  --week-columns: var(--gutter) repeat(7, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
 
-  .period-week-day {
-    min-height: 0;
-    border-left: none;
-    border-top: 1px solid var(--line);
-  }
+.week-scroll {
+  max-height: 32rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
-  .period-week-day:first-child {
-    border-top: none;
-  }
+.week-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: var(--week-columns);
+  grid-auto-rows: auto;
+  row-gap: 2px;
+  padding-bottom: 2px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.week-head-day {
+  grid-row: 1;
+  min-width: 0;
+  padding: 0.3rem 0.25rem;
+  border-left: 1px solid var(--line);
+}
+
+.week-head-day .period-day-link {
+  justify-content: center;
+}
+
+.week-head-day.today {
+  background: var(--accent-soft);
+}
+
+.week-allday-label {
+  grid-column: 1;
+  align-self: center;
+  padding-right: 0.35rem;
+  color: var(--muted);
+  font-size: 0.65rem;
+  text-align: right;
+}
+
+.period-event.week-allday {
+  min-width: 0;
+  margin: 0 2px;
+  border-left: none;
+}
+
+.period-event.continues-before {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.period-event.continues-after {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.week-body {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--week-columns);
+  height: calc(var(--hour-height) * var(--hours));
+  margin-top: 0.5rem;
+}
+
+.week-gutter {
+  position: relative;
+}
+
+.week-hour {
+  position: absolute;
+  right: 0.4rem;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.week-col {
+  position: relative;
+  min-width: 0;
+  border-left: 1px solid var(--line);
+  background-image: linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: 100% var(--hour-height);
+}
+
+.week-col.today {
+  background-color: color-mix(in srgb, var(--accent-soft) 45%, transparent);
+}
+
+.period-event.week-event {
+  position: absolute;
+  z-index: 1;
+  box-sizing: border-box;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--bg);
+  border-left: 3px solid var(--palette-blue);
+}
+
+.period-event.week-event.short {
+  flex-direction: row;
+  gap: 0.3rem;
+  align-items: baseline;
+}
+
+.week-event .period-event-time {
+  font-size: 0.7rem;
+}
+
+.week-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: 2px;
+  background: var(--palette-red);
+  pointer-events: none;
+}
+
+.week-now::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: inherit;
 }
 
 /* A month, and a quarter's three. */

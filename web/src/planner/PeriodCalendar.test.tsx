@@ -105,8 +105,11 @@ describe("the week calendar", () => {
     expect(q).toContain('when.start < "2026-10-26"');
     expect(q).toContain('when.end >= "2026-10-19"');
 
+    // A timed event sits in its day's column; an all-day one spans the days it covers above.
     const on = (day: string) =>
-      [...document.querySelectorAll(`[data-day="${day}"] [data-testid="period-event"]`)].map((e) => e.querySelector(".period-event-title")!.textContent);
+      [...document.querySelectorAll(`.week-col[data-day="${day}"] [data-testid="period-event"], [data-testid="period-event"][data-days~="${day}"]`)].map(
+        (e) => e.querySelector(".period-event-title")!.textContent,
+      );
     await waitFor(() => expect(on("2026-10-19")).toEqual(["Conference"]));
     expect(on("2026-10-20")).toEqual(["Conference"]);
     expect(on("2026-10-21")).toEqual(["Offsite"]);
@@ -114,9 +117,36 @@ describe("the week calendar", () => {
     expect(on("2026-10-23")).toEqual(["Offsite"]);
     expect(on("2026-10-24")).toEqual(["Standup"]);
     expect(on("2026-10-25")).toEqual([]);
-    const standup = document.querySelector('[data-day="2026-10-24"] [data-testid="period-event"]')!;
+    const standup = document.querySelector('.week-col[data-day="2026-10-24"] [data-testid="period-event"]')!;
     expect(standup.getAttribute("href")).toBe("/notes/01C");
     expect(standup.querySelector(".period-event-time")?.textContent).toBe("09:30");
+    expect(standup.getAttribute("title")).toBe("09:30 Standup");
+    // Its block starts 2.5 hour rows below 07:00 and is half a row tall.
+    expect((standup as HTMLElement).style.top).toBe("calc(var(--hour-height) * 2.5)");
+    expect((standup as HTMLElement).style.height).toBe("calc(var(--hour-height) * 0.5 - 2px)");
+    // The all-day events span their days of the week in rows of their own.
+    const bar = (title: string) => screen.getByTitle(title) as HTMLElement;
+    expect(bar("Conference").style.gridColumn).toBe("2 / span 2");
+    expect(bar("Offsite").style.gridColumn).toBe("4 / span 3");
+    expect(bar("Conference").classList.contains("continues-before")).toBe(true);
+    // The hours down the side run from 07:00 to 20:00, the start of the last row.
+    const hours = [...document.querySelectorAll(".week-hour")].map((h) => h.textContent);
+    expect(hours[0]).toBe("07:00");
+    expect(hours.at(-1)).toBe("20:00");
+  });
+
+  it("lists the days one under another in a narrow pane", async () => {
+    const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(400);
+    try {
+      query.mockResolvedValue({ rows: [ALL_DAY, MEETING], next: null, total: 2 });
+      render(() => <PeriodCalendar block={block("week")} date="2026-10-21" />);
+      expect(await screen.findByTestId("period-week-list")).toBeTruthy();
+      expect(screen.queryByTestId("period-week-grid")).toBeNull();
+      expect(screen.getAllByTestId("period-day")).toHaveLength(7);
+      await waitFor(() => expect(document.querySelectorAll('[data-day="2026-10-22"] [data-testid="period-event"]')).toHaveLength(1));
+    } finally {
+      width.mockRestore();
+    }
   });
 
   it("shows the problem in place of the calendar for a field it cannot place notes by", () => {

@@ -21,6 +21,10 @@ async function event(admin: APIRequestContext, title: string, start: string, end
 const switcher = (page: Page) => activePane(page).getByRole("group", { name: "Period" });
 const calendar = (page: Page) => activePane(page).getByTestId("period-calendar");
 
+/** The events a calendar shows on `day`: in its cell or column, or spanning it in a week's all-day row. */
+const onDay = (page: Page, day: string) =>
+  calendar(page).locator(`[data-day="${day}"] [data-testid="period-event"], [data-testid="period-event"][data-days~="${day}"]`);
+
 /**
  * The note the planner made for the period holding today, as the server has it. The page makes
  * it as the period opens, so this waits until it is there.
@@ -57,7 +61,7 @@ test("each period opens its current note, whose calendar shows the events in the
     await expect(calendar(page)).toBeVisible();
     const note = await made(admin, period, today);
     await expect(activePane(page).getByRole("heading", { name: note.title, exact: true })).toBeVisible();
-    await expect(calendar(page).locator(`[data-day="${today}"]`).getByTestId("period-event").filter({ hasText: inside })).toBeVisible();
+    await expect(onDay(page, today).filter({ hasText: inside })).toBeVisible();
     await expect(calendar(page).getByText(outside)).toHaveCount(0);
   }
 
@@ -92,6 +96,71 @@ test("a day of a week's calendar opens that day's daily note", async ({ page }) 
   await expect(page).toHaveURL(/\/planner\/day$/);
   await expect(activePane(page).getByRole("navigation", { name: "Day" }).getByLabel("Day", { exact: true })).toHaveValue(today);
   await expect(activePane(page).getByText("Daily note", { exact: true })).toBeVisible();
+});
+
+test.describe("a week's time grid", () => {
+  // A zone without daylight saving, so the times written are the times shown.
+  test.use({ timezoneId: "Australia/Brisbane", viewport: { width: 1400, height: 900 } });
+
+  test("shows seven equal day columns, timed events by the hour and all-day ones above", async ({ page, admin }) => {
+    // A Monday early in a year no other test uses.
+    const jan = new Date(Date.UTC(3000 + Math.floor(Math.random() * 900), 0, 7));
+    const monday = jan.getTime() - ((jan.getUTCDay() + 6) % 7) * 86_400_000;
+    const day = (i: number) => new Date(monday + i * 86_400_000).toISOString().slice(0, 10);
+    const at = (i: number, time: string) => `${day(i)}T${time}:00+10:00`;
+    const tag = `W${Math.random().toString(36).slice(2, 8)}`;
+    await event(admin, `${tag} standup`, at(0, "09:00"), at(0, "10:00"));
+    await event(admin, `${tag} review`, at(0, "09:30"), at(0, "11:00"));
+    await event(admin, `${tag} gym`, at(2, "06:00"), at(2, "07:00"));
+    await event(admin, `${tag} holiday`, day(3), day(3));
+    await event(admin, `${tag} trip`, day(4), day(6));
+
+    await logIn(page, `/planner/week/${day(0)}`);
+    await activePane(page).getByRole("button", { name: "Create note for this week" }).click();
+    await expect(calendar(page).getByTestId("period-week-grid")).toBeVisible();
+
+    // Seven columns of one width, each under its own header.
+    const cols = calendar(page).locator(".week-col");
+    await expect(cols).toHaveCount(7);
+    const boxes = await Promise.all(Array.from({ length: 7 }, (_, i) => cols.nth(i).boundingBox()));
+    const widths = boxes.map((b) => b!.width);
+    expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+    const heads = calendar(page).locator(".week-head-day");
+    for (let i = 0; i < 7; i++) {
+      const head = (await heads.nth(i).boundingBox())!;
+      expect(Math.abs(head.x - boxes[i]!.x)).toBeLessThanOrEqual(1);
+    }
+
+    // The two that overlap sit side by side, each half the column.
+    const standup = onDay(page, day(0)).filter({ hasText: `${tag} standup` });
+    const review = onDay(page, day(0)).filter({ hasText: `${tag} review` });
+    const s = (await standup.boundingBox())!;
+    const r = (await review.boundingBox())!;
+    expect(r.x).toBeGreaterThan(s.x + s.width - 2);
+    expect(Math.abs(s.width - r.width)).toBeLessThanOrEqual(1);
+    expect(s.width).toBeLessThan(widths[0]! / 2);
+    // Half an hour later starts half an hour row lower; an hour and a half is half again as tall.
+    expect(r.height / s.height).toBeCloseTo(1.5, 1);
+    // The early event widens the hours shown to 06:00, and the grid opens there.
+    await expect(calendar(page).locator(".week-hour").first()).toHaveText("06:00");
+    const gym = (await onDay(page, day(2)).filter({ hasText: `${tag} gym` }).boundingBox())!;
+    const scroller = (await calendar(page).locator(".week-scroll").boundingBox())!;
+    expect(gym.y).toBeGreaterThanOrEqual(scroller.y);
+    expect(gym.y + gym.height).toBeLessThanOrEqual(scroller.y + scroller.height);
+
+    // All-day events span their days in the row above.
+    const holiday = onDay(page, day(3)).filter({ hasText: `${tag} holiday` });
+    await expect(holiday).toHaveAttribute("data-days", day(3));
+    const trip = onDay(page, day(5)).filter({ hasText: `${tag} trip` });
+    await expect(trip).toHaveAttribute("data-days", `${day(4)} ${day(5)} ${day(6)}`);
+    const t = (await trip.boundingBox())!;
+    expect(Math.abs(t.x - boxes[4]!.x)).toBeLessThanOrEqual(4);
+    expect(Math.abs(t.x + t.width - (boxes[6]!.x + boxes[6]!.width))).toBeLessThanOrEqual(4);
+
+    // A click opens the event.
+    await review.click();
+    await expect(page).toHaveURL(/\/notes\/[0-9A-Z]+$/);
+  });
 });
 
 test("another period with no note offers to create one", async ({ page, admin }) => {
