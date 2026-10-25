@@ -7,7 +7,10 @@
 //!
 //! - `two_way`: gaining B puts this note into B's inverse field, and losing B takes it out. A
 //!   single inverse field that pointed elsewhere is overwritten, and that change is mirrored in
-//!   turn, so the displaced note loses B.
+//!   turn, so the displaced note loses B. A field that is its own inverse, such as `siblings` on
+//!   `person`, mirrors into the same field of B; B's own mirroring then finds this note already
+//!   there. Unlike `peer`, it is pairwise: B and C on this note's list are not put on each
+//!   other's. A note cannot list itself in such a field: [`lists_itself`] refuses it.
 //! - `peer`: gaining B makes this note's group, itself and its list, a complete group: every
 //!   member lists every other. Losing B takes B out of the group: B drops every member and every
 //!   member drops B.
@@ -21,7 +24,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use schema::{Doc, FieldDef, OnDelete, Relation, Value};
+use schema::{Doc, FieldDef, Issue, OnDelete, Relation, Schema, Value};
 
 use crate::{Error, Event, Inner, Input, NoteChange, Result, Writer, note, note_path, time};
 
@@ -445,6 +448,31 @@ impl Work<'_> {
         }
         Ok(out)
     }
+}
+
+/// An issue for each field of note `id` that is its own inverse and holds the note itself: a
+/// note is not its own sibling or its own spouse.
+pub(crate) fn lists_itself(schema: &Schema, type_name: &str, id: &str, doc: &Doc) -> Vec<Issue> {
+    let Some(ty) = schema.type_def(type_name) else {
+        return Vec::new();
+    };
+    ty.fields
+        .iter()
+        .filter(|f| {
+            f.reference().is_some_and(|r| {
+                r.relation == Relation::TwoWay
+                    && r.target.as_deref() == Some(type_name)
+                    && r.inverse.as_deref() == Some(f.name.as_str())
+            })
+        })
+        .filter(|f| ids(doc, &f.name).iter().any(|x| x == id))
+        .map(|f| {
+            Issue::new(
+                f.name.clone(),
+                "cannot hold the note itself: the field is its own inverse",
+            )
+        })
+        .collect()
 }
 
 /// The note ids a reference field holds: one for a single field, every string for a list.

@@ -20,7 +20,9 @@ import {
   changeKind,
   emptyType,
   fieldDefOf,
+  inverseChoices,
   isName,
+  isOwnInverse,
   itemKind,
   itemPlace,
   needsDefault,
@@ -122,6 +124,8 @@ interface SettingsProps {
   id: (part: string) => string;
   /** The type being edited, offered as a reference target before it is saved. */
   typeName: string;
+  /** The field this definition is, or is the item of; empty for a dict's key or other entries. */
+  fieldName: string;
 }
 
 /** A picker of the kinds a list item, a dict key or a dict's other entries may be (types T1). */
@@ -238,12 +242,24 @@ function KindSettings(props: SettingsProps) {
             onInput={(e) => set((x) => (x.inverse = e.currentTarget.value))}
           />
           <datalist id={id("inverse-list")}>
-            <For each={targetFields()}>{(t) => <option value={t.name} />}</For>
+            <For each={inverseChoices(props.typeName, props.fieldName, f().target, targetFields())}>
+              {(c) => <option value={c.value} label={c.label} />}
+            </For>
           </datalist>
-          <p class="muted hint">
-            The field on {f().target || "the target type"} that holds the other side. When it has no field by that
-            name, it gets one on save: a two-way reference back that holds several notes.
-          </p>
+          <Show
+            when={isOwnInverse(props.typeName, props.fieldName, f())}
+            fallback={
+              <p class="muted hint">
+                The field on {f().target || "the target type"} that holds the other side. When it has no field by that
+                name, it gets one on save: a two-way reference back that holds several notes.
+              </p>
+            }
+          >
+            <p class="muted hint">
+              This field is its own other side: when a note lists another here, the other lists it back here too.
+              Unlike a peer group, the notes it lists are not linked to each other.
+            </p>
+          </Show>
         </Show>
         <label for={id("on_delete")}>When the target is deleted</label>
         <select id={id("on_delete")} onChange={(e) => set((x) => (x.on_delete = e.currentTarget.value as FieldModel["on_delete"]))}>
@@ -338,6 +354,7 @@ function KindSettings(props: SettingsProps) {
                   place={itemPlace(props.place, item().kind)}
                   id={(part) => id(`item-${part}`)}
                   typeName={props.typeName}
+                  fieldName={props.fieldName}
                 />
               </div>
             </div>
@@ -436,6 +453,7 @@ function DictSettings(props: SettingsProps) {
                     place="values"
                     id={(part) => id(`values-${part}`)}
                     typeName={props.typeName}
+                    fieldName=""
                   />
                 </div>
               </div>
@@ -520,7 +538,7 @@ function KeyRow(props: SettingsProps & { keyDef: FieldModel; index: number; coun
           <div class="form-grid">
             <label for={id("description")}>Description</label>
             <input id={id("description")} value={k().description} onInput={(e) => set((x) => (x.description = e.currentTarget.value))} />
-            <KindSettings def={k()} set={set} place="key" id={id} typeName={props.typeName} />
+            <KindSettings def={k()} set={set} place="key" id={id} typeName={props.typeName} fieldName="" />
           </div>
         </div>
       </Show>
@@ -880,7 +898,7 @@ export function TypeEditor() {
                   value={f().description}
                   onInput={(e) => set((x) => (x.description = e.currentTarget.value))}
                 />
-                <KindSettings def={f()} set={set} place="field" id={id} typeName={name()} />
+                <KindSettings def={f()} set={set} place="field" id={id} typeName={name()} fieldName={f().name} />
                 <Show when={takesDefault(f())}>
                   <label for={id("default")}>Default</label>
                   <Show when={`${f().kind}/${itemKind(f())}/${f().of}/${f().taxonomy}/${f().item?.taxonomy}/${f().item?.of}`} keyed>

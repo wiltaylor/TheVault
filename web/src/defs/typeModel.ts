@@ -112,6 +112,30 @@ export function relationsAt(place: Place): readonly (typeof RELATIONS)[number][]
   return ["one_way"];
 }
 
+/**
+ * Whether two-way reference `f`, field `fieldName` of type `typeName`, is its own inverse: a
+ * `siblings` on `person` whose other side is `siblings` again. Listing B on A then lists A on B in
+ * the same field, pair by pair, unlike a peer group.
+ */
+export function isOwnInverse(typeName: string, fieldName: string, f: Pick<FieldModel, "relation" | "target" | "inverse">): boolean {
+  return f.relation === "two_way" && !!fieldName && f.target === typeName && f.inverse === fieldName;
+}
+
+/**
+ * The fields a two-way reference's inverse picker offers: the reference fields of the target
+ * type, and, when the target is the reference's own type, the field itself first.
+ */
+export function inverseChoices(
+  typeName: string,
+  fieldName: string,
+  target: string,
+  targetFields: readonly { name: string }[],
+): { value: string; label: string }[] {
+  const own = !!fieldName && target === typeName;
+  const rest = targetFields.filter((t) => !own || t.name !== fieldName).map((t) => ({ value: t.name, label: t.name }));
+  return own ? [{ value: fieldName, label: `${fieldName} (this field: links both ways)` }, ...rest] : rest;
+}
+
 const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Whether `s` may name a dict key: letters, digits and _, not starting with a digit. */

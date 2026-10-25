@@ -836,7 +836,18 @@ The relations:
 
 - `one_way` is stored only on this note.
 - `two_way` is stored on both notes. The `inverse` field must be a `two_way` reference field on the target type whose own `inverse` names this field. Either side may be a single reference or a list of references. The writer updates both files in one commit. When the target type has no field by the `inverse` name, the schema gives it one: a `two_way` reference back to this type, `multiple`, whose `inverse` is this field. The target's type file does not hold it, so one type file sets up both sides; `GET /api/types` lists it with `implied: true`, and the properties sidebar shows it. Writing the field into the target's type file makes it that file's own, single or `multiple` as written, and the target's notes keep their values. A field another type's reference already gets this way is not given again: a second `two_way` reference naming the same missing field is refused as not its inverse.
-- `peer` is a symmetric group. The field must be a list of references and its `target` must be this type. Every member stores the list of the other members, so adding a note to one member's list adds it to every member's list.
+- A `two_way` field whose `target` is its own type may name itself as its `inverse`. It is then its own other side: when note A lists note B, the writer adds A to B's same field, and when A drops B, B drops A. A single field works the same way: setting A's `spouse` to B sets B's `spouse` to A, and the note B named before loses B. No field is implied for it. A note cannot hold itself in such a field: the write is refused. On a field whose `target` is another type, `inverse` names a field of that type, which must name this field back.
+- `peer` is a symmetric group. The field must be a list of references and its `target` must be this type. Every member stores the list of the other members, so adding a note to one member's list adds it to every member's list. A `two_way` field that is its own inverse differs: it links pairs only. When A lists B and C, B and C each list A, but not each other.
+
+```wcl
+field siblings {
+  kind     = "list"
+  items    = "reference"
+  target   = "person"
+  relation = "two_way"
+  inverse  = "siblings"
+}
+```
 
 `on_delete` is read from the field on the note that holds the reference. Take a note A whose field points at note B, and delete B:
 

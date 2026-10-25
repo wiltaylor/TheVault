@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Json } from "../api";
-import { type SchemaType, changeKind, fieldDefOf, newField, problems, takesDefault, typeFromSchema, typeWcl } from "./typeModel";
+import { type SchemaType, changeKind, fieldDefOf, inverseChoices, isOwnInverse, newField, problems, takesDefault, typeFromSchema, typeWcl } from "./typeModel";
 
 /** A field as `GET /api/schema` describes it, with the attributes every definition has. */
 function def(name: string, kind: string, more: Record<string, Json> = {}): Record<string, Json> {
@@ -276,5 +276,39 @@ describe("lists and dicts in the type model (types T8)", () => {
     m.fields.push(f, d);
     expect(typeWcl(m)).toContain(`field x {\n  kind = "list"\n  items = "string"\n}`);
     expect(typeWcl(m)).toContain(`field y {\n  kind = "dict"\n  values = "string"\n}`);
+  });
+});
+
+describe("a two-way reference that is its own inverse", () => {
+  it("passes the model's checks and writes inverse as the field's own name", () => {
+    const m = typeFromSchema(
+      typeOf(
+        def("siblings", "reference", { multiple: true, listed: true, items: "reference", target: "project", relation: "two_way", inverse: "siblings", on_delete: "unlink" }),
+        def("partner", "reference", { target: "project", relation: "two_way", inverse: "partner", on_delete: "unlink" }),
+      ),
+    );
+    expect(problems(m)).toEqual([]);
+    expect(isOwnInverse("project", "siblings", m.fields[0]!.item!)).toBe(true);
+    expect(isOwnInverse("project", "partner", m.fields[1]!)).toBe(true);
+    // On another type the same names are an ordinary inverse.
+    expect(isOwnInverse("task", "siblings", m.fields[0]!.item!)).toBe(false);
+    const text = typeWcl(m);
+    expect(block(text, "siblings")).toContain('inverse = "siblings"');
+    expect(block(text, "partner")).toContain('inverse = "partner"');
+  });
+
+  it("is offered first in the inverse picker when the target is the field's own type", () => {
+    const fields = [{ name: "siblings" }, { name: "partner" }];
+    expect(inverseChoices("person", "siblings", "person", fields)).toEqual([
+      { value: "siblings", label: "siblings (this field: links both ways)" },
+      { value: "partner", label: "partner" },
+    ]);
+    // A field not yet saved is offered too.
+    expect(inverseChoices("person", "cousins", "person", fields)[0]).toEqual({ value: "cousins", label: "cousins (this field: links both ways)" });
+    // Another type's fields only, for a reference to another type.
+    expect(inverseChoices("club", "members", "person", fields)).toEqual([
+      { value: "siblings", label: "siblings" },
+      { value: "partner", label: "partner" },
+    ]);
   });
 });

@@ -801,9 +801,7 @@ fn field_def(
             }
             FieldKind::Taxonomy { taxonomy }
         }
-        "reference" => {
-            FieldKind::Reference(reference(c, d, &name, type_name, multiple, at, place)?)
-        }
+        "reference" => FieldKind::Reference(reference(c, d, type_name, multiple, at, place)?),
         "list" => {
             let item_blocks: Vec<&DocBlock> = d.blocks_of("item").collect();
             let item_doc = match (&shorthand_kind, item_blocks.as_slice()) {
@@ -1040,7 +1038,6 @@ fn dict(c: &mut Check, d: &Doc, name: &str, type_name: &str, at: &str) -> Option
 fn reference(
     c: &mut Check,
     d: &Doc,
-    field: &str,
     type_name: &str,
     multiple: bool,
     at: &str,
@@ -1085,9 +1082,6 @@ fn reference(
                 &format!("{at}.inverse"),
                 format!("{i:?} is not a field name"),
             ),
-            Some(i) if target.as_deref() == Some(type_name) && i == field => {
-                c.fail(&format!("{at}.inverse"), "cannot name the field itself")
-            }
             _ => {}
         },
         _ if inverse.is_some() => {

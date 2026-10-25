@@ -1646,6 +1646,10 @@ impl Writer {
                         issues,
                     })
                 })?;
+            let issues = refs::lists_itself(schema, &c.type_name, &c.id, &doc);
+            if !issues.is_empty() {
+                return Err(Error::Invalid(Invalid { file: path, issues }));
+            }
             out.push(Rendered {
                 change: c.clone(),
                 text: Some(text),

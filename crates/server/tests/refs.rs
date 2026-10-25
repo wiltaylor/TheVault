@@ -57,7 +57,24 @@ field task {
 }
 "#;
 
-const PERSON: &str = "label = \"Person\"\n";
+/// A person's siblings and spouse are each their own inverse: listing B lists this person on B.
+const PERSON: &str = r#"label = "Person"
+
+field siblings {
+  kind     = "list"
+  items    = "reference"
+  target   = "person"
+  relation = "two_way"
+  inverse  = "siblings"
+}
+
+field spouse {
+  kind     = "reference"
+  target   = "person"
+  relation = "two_way"
+  inverse  = "spouse"
+}
+"#;
 
 /// A meeting loses an attendee who is deleted.
 const MEETING: &str = r#"label = "Meeting"
@@ -645,4 +662,127 @@ fn a_reference_in_a_dict_key_is_unlinked_when_its_target_goes_and_dict_keys_are_
     assert!(file.contains(&bo), "{file}");
     assert!(!file.contains("owner"), "{file}");
     assert!(file.contains("weight"), "{file}");
+}
+
+#[test]
+fn a_field_that_is_its_own_inverse_lists_back_pairwise() {
+    let api = Api::start();
+    let ann = api.create("person", "title = \"Ann\"\n");
+    let bob = api.create("person", "title = \"Bob\"\n");
+    let cy = api.create("person", "title = \"Cy\"\n");
+
+    // Ann gains Bob: Bob's siblings gain Ann in the same write.
+    let res = api.update(&ann, &format!("title = \"Ann\"\nsiblings = [\"{bob}\"]\n"));
+    assert_eq!(also_ids(&res), [bob.as_str()]);
+    assert_eq!(api.refs("person", &bob, "siblings"), [ann.as_str()]);
+
+    // Ann gains Cy too: Cy lists Ann, and Bob and Cy do not list each other, as peers would.
+    let res = api.update(
+        &ann,
+        &format!("title = \"Ann\"\nsiblings = [\"{bob}\", \"{cy}\"]\n"),
+    );
+    assert_eq!(also_ids(&res), [cy.as_str()]);
+    assert_eq!(api.refs("person", &cy, "siblings"), [ann.as_str()]);
+    assert_eq!(api.refs("person", &bob, "siblings"), [ann.as_str()]);
+
+    // The graph holds each pair as a link each way through the one field, and none between Bob
+    // and Cy.
+    let g = expect(
+        api.client
+            .get(api.server.url(&format!("/api/notes/{bob}/graph")))
+            .send()
+            .unwrap(),
+        200,
+    );
+    let mut edges: Vec<(String, String, String)> = g["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                s(&e["from"]).to_owned(),
+                s(&e["to"]).to_owned(),
+                s(&e["field"]).to_owned(),
+            )
+        })
+        .collect();
+    edges.sort();
+    let mut want = vec![
+        (ann.clone(), bob.clone(), "siblings".to_owned()),
+        (bob.clone(), ann.clone(), "siblings".to_owned()),
+    ];
+    want.sort();
+    assert_eq!(edges, want);
+
+    // Ann drops Bob: Bob drops Ann, and his field goes with its last value.
+    let res = api.update(&ann, &format!("title = \"Ann\"\nsiblings = [\"{cy}\"]\n"));
+    assert_eq!(also_ids(&res), [bob.as_str()]);
+    let text = api.file("person", &bob).unwrap();
+    assert!(!text.contains("siblings"), "{text}");
+    assert_eq!(api.refs("person", &ann, "siblings"), [cy.as_str()]);
+
+    // From the other side: Cy drops Ann, and Ann drops Cy.
+    api.update(&cy, "title = \"Cy\"\n");
+    let text = api.file("person", &ann).unwrap();
+    assert!(!text.contains("siblings"), "{text}");
+}
+
+#[test]
+fn a_single_field_that_is_its_own_inverse_clears_the_partner_it_replaces() {
+    let api = Api::start();
+    let ann = api.create("person", "title = \"Ann\"\n");
+    let bob = api.create("person", "title = \"Bob\"\n");
+    let cy = api.create("person", "title = \"Cy\"\n");
+
+    api.update(&ann, &format!("title = \"Ann\"\nspouse = \"{bob}\"\n"));
+    assert_eq!(api.refs("person", &bob, "spouse"), [ann.as_str()]);
+
+    // Cy marries Bob: Bob's spouse becomes Cy, and Ann, whom Bob no longer names, loses Bob.
+    let res = api.update(&cy, &format!("title = \"Cy\"\nspouse = \"{bob}\"\n"));
+    assert_eq!(also_ids(&res), sorted(vec![ann.clone(), bob.clone()]));
+    assert_eq!(api.refs("person", &bob, "spouse"), [cy.as_str()]);
+    assert_eq!(api.refs("person", &cy, "spouse"), [bob.as_str()]);
+    let text = api.file("person", &ann).unwrap();
+    assert!(!text.contains("spouse"), "{text}");
+}
+
+#[test]
+fn a_note_cannot_list_itself_in_a_field_that_is_its_own_inverse() {
+    let api = Api::start();
+    let ann = api.create("person", "title = \"Ann\"\n");
+    let bob = api.create("person", "title = \"Bob\"\n");
+    let base = api.version(&ann);
+    for wcl in [
+        format!("title = \"Ann\"\nsiblings = [\"{bob}\", \"{ann}\"]\n"),
+        format!("title = \"Ann\"\nspouse = \"{ann}\"\n"),
+    ] {
+        let body = expect(api.update_at(&ann, &base, &wcl), 400);
+        assert!(
+            body.to_string().contains("cannot hold the note itself"),
+            "{body}"
+        );
+    }
+    // Nothing was written, on either note.
+    assert_eq!(api.version(&ann), base);
+    assert!(api.refs("person", &bob, "siblings").is_empty());
+}
+
+#[test]
+fn deleting_a_note_unlinks_it_from_a_field_that_is_its_own_inverse() {
+    let api = Api::start();
+    let ann = api.create("person", "title = \"Ann\"\n");
+    let bob = api.create("person", "title = \"Bob\"\n");
+    let cy = api.create("person", "title = \"Cy\"\n");
+    api.update(
+        &ann,
+        &format!("title = \"Ann\"\nsiblings = [\"{bob}\", \"{cy}\"]\nspouse = \"{cy}\"\n"),
+    );
+    assert_eq!(api.refs("person", &cy, "spouse"), [ann.as_str()]);
+
+    let res = expect(api.delete(&ann), 200);
+    assert_eq!(also_ids(&res), sorted(vec![bob.clone(), cy.clone()]));
+    for id in [&bob, &cy] {
+        let text = api.file("person", id).unwrap();
+        assert!(!text.contains(&ann), "{text}");
+    }
 }

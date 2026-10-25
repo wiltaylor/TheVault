@@ -83,7 +83,7 @@ Every vault has nine built-in types, marked `"builtin": true` in `vault type lis
 
 ### Two-way references
 
-A `reference` field with `relation = "two_way"` names its `inverse`, a field on the target type that holds the other side. In the starter types, a task's `project` and a project's `tasks` are the two sides of one link. Set one side only. The server writes the other side in the same commit: give a task a `project` and the task's id is added to that project's `tasks`. A write reports the other notes it changed this way under `also`.
+A `reference` field with `relation = "two_way"` names its `inverse`, a field on the target type that holds the other side. In the starter types, a task's `project` and a project's `tasks` are the two sides of one link. Set one side only. The server writes the other side in the same commit: give a task a `project` and the task's id is added to that project's `tasks`. A write reports the other notes it changed this way under `also`. A field may be its own inverse on its own type, such as a person's `siblings` with `inverse = "siblings"`: list B on A and A is added to B's `siblings`. Unlike `peer`, it links pairs, so two notes on A's list are not put on each other's.
 
 ## 2. Read notes
 
@@ -465,7 +465,7 @@ Each field takes `kind` (step 1's table), and optionally `label`, `description`,
 |------|-------|
 | `select` | `options = ["low", "high"]`, required |
 | `taxonomy` | `taxonomy = "<name>"`, required |
-| `reference` | `target = "<type>"`, required, or `"*"` for any type. `relation`: `one_way` (the default), `two_way` with `inverse = "<field on the target>"` naming a field that names this one back, or `peer` (a list of references, target this type). `on_delete`: `unlink` (the default), `restrict` or `cascade` |
+| `reference` | `target = "<type>"`, required, or `"*"` for any type. `relation`: `one_way` (the default), `two_way` with `inverse = "<field on the target>"` naming a field that names this one back (a field targeting its own type may name itself: `siblings` with `inverse = "siblings"` links pairs both ways), or `peer` (a list of references, target this type). `on_delete`: `unlink` (the default), `restrict` or `cascade` |
 | `list` | `items = "<kind>"` with that kind's own items beside it (`items = "reference"` with `target`, `items = "select"` with `options`, `items = "taxonomy"` with `taxonomy`), or an `item { kind = ... }` block for a list of lists or of dicts. Any kind but `content`, `ink` and `canvas`. A list of dicts with an optional `label` key holds values with labels, as a person's `phones` (step 1) |
 | `dict` | `key <name> { kind = ... }` blocks, each a whole definition of any kind a list item may be, and `values` for other entries: a kind such as `"string"`, `"any"` for any value, or a `values { ... }` block. Without `values` only the declared keys are allowed. A note writes `dict <field> { key = value }`. A reference inside a dict or a nested list is `one_way` |
 | `date_range` | `of`: `date` (the default), `datetime` or `date_or_datetime` |

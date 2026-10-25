@@ -2031,3 +2031,37 @@ fn typed_list_and_dict_definitions_are_checked() {
         );
     }
 }
+
+#[test]
+fn a_two_way_reference_may_be_its_own_inverse_on_its_own_type() {
+    let tpl = "template default {\n  tab \"T\" {\n    slot \"title\"\n  }\n}\n";
+    let person = format!(
+        "label = \"Person\"\nfield siblings {{\n  kind     = \"list\"\n  items    = \"reference\"\n  target   = \"person\"\n  relation = \"two_way\"\n  inverse  = \"siblings\"\n}}\nfield spouse {{\n  kind     = \"reference\"\n  target   = \"person\"\n  relation = \"two_way\"\n  inverse  = \"spouse\"\n}}\n{tpl}"
+    );
+    let schema = Schema::from_sources(&[("person", &person)], &[]).unwrap();
+    let t = schema.type_def("person").unwrap();
+    // The field is its own other side: no second field is implied for it.
+    assert_eq!(t.fields.iter().filter(|f| f.implied).count(), 0);
+    for (name, multiple) in [("siblings", true), ("spouse", false)] {
+        let f = t.field(name).unwrap();
+        assert_eq!(f.multiple, multiple, "{name}");
+        let r = f.reference().unwrap();
+        assert_eq!(r.relation, Relation::TwoWay);
+        assert_eq!(r.inverse.as_deref(), Some(name));
+    }
+
+    // On another type the field names itself only as a field of that type, which must name it
+    // back.
+    let club = format!(
+        "label = \"Club\"\nfield siblings {{\n  kind     = \"list\"\n  items    = \"reference\"\n  target   = \"person\"\n  relation = \"two_way\"\n  inverse  = \"siblings\"\n}}\n{tpl}"
+    );
+    let e = Schema::from_sources(&[("person", &person), ("club", &club)], &[])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains(
+            "person.siblings must be a two_way reference to club whose inverse is \"siblings\""
+        ),
+        "{e}"
+    );
+}
