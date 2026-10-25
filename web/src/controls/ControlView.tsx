@@ -8,7 +8,7 @@ import { ChipPicker, matches } from "../components/ChipPicker";
 import { termPicker } from "../components/termPicker";
 import { Combobox, type Suggestion } from "../components/Combobox";
 import { datetimeInput, datetimeValue, findNotes, knownLabels, termOptions } from "../components/FieldInput";
-import { LabelledList, labelled, labelledWrite } from "../components/LabelledList";
+import { LabelledList, type LabelledShape, labelled, labelledShape, labelledValue } from "../components/LabelledList";
 import { optionChoices, optionText } from "../options";
 import { noteTitle } from "../editor/titles";
 import { TITLE_FIELD } from "../notes";
@@ -268,9 +268,7 @@ function KindInput(props: Part & { kindOk: boolean }) {
       <Match when={kind() === "radio"}>
         <RadioInput {...props} />
       </Match>
-      <Match when={kind() === "chips" && f().kind === "list" && f().labels}>
-        <LabelledChips {...props} />
-      </Match>
+      <Match when={kind() === "chips" && labelledShape(f())}>{(shape) => <LabelledChips {...props} shape={shape()} />}</Match>
       <Match when={kind() === "chips"}>
         <ChipsInput {...props} />
       </Match>
@@ -538,17 +536,10 @@ function ReferenceDropdown(props: Part) {
   );
 }
 
-/**
- * Chips for a list with `labels`: each value with its label, and both lists written in one edit.
- * Where the note cannot take a write of two fields, it is read-only.
- */
-function LabelledChips(props: Part) {
+/** Chips for a list of labelled values: each value with its label. */
+function LabelledChips(props: Part & { shape: LabelledShape }) {
   const binding = useControlBinding();
-  const labelsField = () => binding?.type()?.fields.find((g) => g.name === props.field.labels);
-  const l = () => {
-    const lf = labelsField();
-    return labelled(props.value(), lf ? binding?.value(lf) : undefined);
-  };
+  const l = () => labelled(props.value(), props.shape.key);
   return (
     <LabelledList
       class="control-chips"
@@ -558,14 +549,9 @@ function LabelledChips(props: Part) {
       describedBy={props.describedBy}
       values={l().values}
       labels={l().labels}
-      disabled={props.disabled || !binding?.setMany || !labelsField()}
-      knownLabels={() => knownLabels(binding?.type()?.name, props.field.labels ?? "")}
-      onChange={(next) => {
-        const refused = refusal(props.field, props.label, next.values.length ? next.values : undefined);
-        props.complain(refused);
-        if (refused || !binding?.setMany) return;
-        binding.setMany(labelledWrite(next, props.field.name, props.field.labels!));
-      }}
+      disabled={props.disabled}
+      knownLabels={() => knownLabels(binding?.type()?.name, props.field.name)}
+      onChange={(next) => props.commit(labelledValue(next, props.shape))}
     />
   );
 }

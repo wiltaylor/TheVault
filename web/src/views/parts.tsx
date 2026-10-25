@@ -7,7 +7,7 @@ import { FieldRefs } from "../components/fieldRefs";
 import { refText } from "../components/refText";
 import { BlockView, Blocks, ColumnsView, FieldValue } from "../components/Render";
 import { slotOfBlock } from "../blocks/columns";
-import { compoundBlock, fieldValue, labelFields, slotField, whenNote } from "../notes";
+import { compoundBlock, fieldValue, slotField, whenNote } from "../notes";
 import { shownTabs, whenHolds } from "../when";
 import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { typeDef } from "../session";
@@ -26,7 +26,7 @@ function SlotValue(props: { row: Row; doc?: NoteDoc; slot: string; label: string
   if (props.slot === "title") return null;
   const t = typeDef(props.row.type);
   const f = t ? slotField(t, props.slot) : undefined;
-  if (!f || labelFields(t!).has(f.name)) return null;
+  if (!f) return null;
   const label = props.label ?? f.label;
   const fields = () => (props.doc ? props.doc.fields : props.row.fields);
   return (
@@ -35,7 +35,7 @@ function SlotValue(props: { row: Row; doc?: NoteDoc; slot: string; label: string
       <span class="query-slot-value">
         <Show
           when={f.compound && f.kind !== "dict"}
-          fallback={<FieldValue field={f} value={props.doc ? fieldValue(props.doc, f) : fields()[f.name]} fields={fields()} size="card" />}
+          fallback={<FieldValue field={f} value={props.doc ? fieldValue(props.doc, f) : fields()[f.name]} size="card" />}
         >
           <Show when={props.doc}>{(doc) => <Blocks blocks={compoundBlock(doc(), f)?.blocks ?? []} />}</Show>
         </Show>

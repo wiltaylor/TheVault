@@ -929,7 +929,7 @@ fn the_skill_documents_how_batches_report_and_refer() {
         upsert(
             "person",
             "title",
-            json!({ "title": "Robin", "emails": ["robin@example.com"] })
+            json!({ "title": "Robin", "emails": [{ "address": "robin@example.com" }] })
         ),
         upsert("project", "title", json!({ "title": "Launch the shop" })),
     ])

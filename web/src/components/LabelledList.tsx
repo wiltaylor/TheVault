@@ -1,30 +1,36 @@
-// A list of strings whose values carry labels from another field (`labels = "<field>"`), such as a
-// person's phones: one chip per value with its label before it, each with Copy, Edit and Remove,
-// and a + that adds a value with its label. Every change is by index and gives both lists, so
-// duplicate values are kept apart and a label never moves to another value.
+// A list of labelled values, such as a person's phones: a list whose items are dicts of a value
+// key and a `label` key, both text (`[{ number: "+61400000020", label: "mobile" }]`). One chip per
+// value with its label before it, each with Copy, Edit and Remove, and a + that adds a value with
+// its label. Every change is by index, so duplicate values are kept apart and a label never moves
+// to another value.
 
 import { For, Show, createSignal, onCleanup } from "solid-js";
 import type { Json } from "../api";
+import type { LabelledShape } from "../labelled";
 import { copyText } from "../clipboard";
 import { chipColour } from "./ChipPicker";
+
+export { type LabelledShape, labelledShape } from "../labelled";
 
 /** The labels offered first, before those already used in the vault. */
 export const LABEL_SUGGESTIONS = ["mobile", "home", "work", "main", "other"];
 
-/** A list of strings and its labels, index-aligned: `labels` as long as `values`. */
+/** A list's values and their labels, index-aligned: `labels` as long as `values`. */
 export interface Labelled {
   values: string[];
   labels: string[];
 }
 
-const strings = (v: Json | undefined): string[] =>
-  (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]).map((x) => (typeof x === "string" ? x : String(x)));
+const isRecord = (v: Json | undefined): v is Record<string, Json> => !!v && typeof v === "object" && !Array.isArray(v);
+const text = (v: Json | undefined): string => (v === undefined || v === null ? "" : typeof v === "string" ? v : String(v));
 
-/** A field's values and its labels field's values, the labels padded or cut to match. */
-export function labelled(values: Json | undefined, labels: Json | undefined): Labelled {
-  const vs = strings(values);
-  const ls = strings(labels);
-  return { values: vs, labels: vs.map((_, i) => ls[i] ?? "") };
+/** A stored list's values and labels: each item's `key` and `label`; a bare item is a value with no label. */
+export function labelled(value: Json | undefined, key: string): Labelled {
+  const items = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+  return {
+    values: items.map((x) => (isRecord(x) ? text(x[key]) : text(x))),
+    labels: items.map((x) => (isRecord(x) ? text(x.label) : "")),
+  };
 }
 
 /** Value `i` and its label set to `value` and `label`. */
@@ -46,15 +52,15 @@ export function removeAt(l: Labelled, i: number): Labelled {
 }
 
 /**
- * The two fields' new values for one write: none of either for an empty list, and no labels when
- * no value has one.
+ * The list as it is stored: one record per value, with `label` left out where a value has none
+ * (unless the shape requires it), and nothing at all for an empty list.
  */
-export function labelledWrite(l: Labelled, field: string, labelsField: string): Record<string, Json | undefined> {
-  const any = l.labels.some((x) => x !== "");
-  return {
-    [field]: l.values.length ? l.values : undefined,
-    [labelsField]: l.values.length && any ? l.labels : undefined,
-  };
+export function labelledValue(l: Labelled, shape: LabelledShape): Json | undefined {
+  if (!l.values.length) return undefined;
+  return l.values.map((v, i) => {
+    const label = l.labels[i] ?? "";
+    return label || shape.labelRequired ? { [shape.key]: v, label } : { [shape.key]: v };
+  });
 }
 
 /** Read-only text: "mobile +61400000020, home +61400000021". */

@@ -66,7 +66,7 @@ function Cell(props: { row: Row; name: string }) {
   };
   return (
     <Show when={f()} fallback={formatValue(props.row.fields[props.name])}>
-      {(field) => <FieldValue field={field()} value={props.row.fields[props.name]} fields={props.row.fields} size="small" />}
+      {(field) => <FieldValue field={field()} value={props.row.fields[props.name]} size="small" />}
     </Show>
   );
 }

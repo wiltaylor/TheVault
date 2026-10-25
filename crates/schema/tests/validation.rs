@@ -42,7 +42,7 @@ fn text(issues: &[Issue]) -> Vec<String> {
 fn the_example_vault_is_valid() {
     let schema = example();
     let specimen = schema.type_def("specimen").unwrap();
-    assert_eq!(specimen.fields.len(), 29);
+    assert_eq!(specimen.fields.len(), 28);
     assert_eq!(specimen.plural, "Specimens");
     assert!(specimen.field("word_count").unwrap().computed);
     let parent = specimen.field("parent").unwrap().reference().unwrap();
@@ -1412,57 +1412,30 @@ fn type_with(fields: &str) -> String {
 
 const STRINGS: &str = "  kind  = \"list\"\n  items = \"string\"";
 
+/// The old `labels` attribute on a list of strings, which a list of dicts now says, still loads
+/// whatever field it names, with no warning: the home server rewrites it on its next start.
 #[test]
-fn labels_names_another_list_of_strings() {
-    let source = type_with(&format!(
-        "field phones {{\n{STRINGS}\n  labels = \"phone_labels\"\n}}\nfield phone_labels {{\n{STRINGS}\n}}\n"
-    ));
-    let t = TypeDef::parse("t", &source).unwrap();
-    assert_eq!(
-        t.field("phones").unwrap().labels.as_deref(),
-        Some("phone_labels")
-    );
-    assert_eq!(t.field("phone_labels").unwrap().labels, None);
-}
-
-#[test]
-fn labels_is_refused_when_it_names_a_missing_field_a_non_list_itself_or_a_named_field() {
-    let cases = [
-        (
-            format!("field a {{\n{STRINGS}\n  labels = \"nope\"\n}}\n"),
-            "field a.labels: the type has no field \"nope\"",
+fn an_old_labels_attribute_on_a_list_of_strings_still_loads() {
+    for fields in [
+        format!(
+            "field phones {{\n{STRINGS}\n  labels = \"phone_labels\"\n}}\nfield phone_labels {{\n{STRINGS}\n}}\n"
         ),
-        (
-            format!(
-                "field a {{\n{STRINGS}\n  labels = \"b\"\n}}\nfield b {{\n  kind = \"string\"\n}}\n"
-            ),
-            "field a.labels: \"b\" must be a list of strings, and it is a string field",
+        format!("field a {{\n{STRINGS}\n  labels = \"nope\"\n}}\n"),
+        format!("field a {{\n{STRINGS}\n  labels = \"a\"\n}}\n"),
+        format!(
+            "field a {{\n{STRINGS}\n  labels = \"b\"\n}}\nfield b {{\n  kind = \"string\"\n}}\n"
         ),
-        (
-            format!(
-                "field a {{\n{STRINGS}\n  labels = \"b\"\n}}\nfield b {{\n  kind  = \"list\"\n  items = \"int\"\n}}\n"
-            ),
-            "field a.labels: \"b\" must be a list of strings",
-        ),
-        (
-            format!("field a {{\n{STRINGS}\n  labels = \"a\"\n}}\n"),
-            "field a.labels: cannot name the field itself",
-        ),
-        (
-            format!(
-                "field a {{\n{STRINGS}\n  labels = \"l\"\n}}\nfield b {{\n{STRINGS}\n  labels = \"l\"\n}}\nfield l {{\n{STRINGS}\n}}\n"
-            ),
-            "field b.labels: \"l\" already holds the labels of field \"a\"",
-        ),
-    ];
-    for (fields, want) in cases {
-        let issues = type_issues(&type_with(&fields));
+    ] {
+        let t =
+            TypeDef::parse("t", &type_with(&fields)).unwrap_or_else(|e| panic!("{fields}: {e:?}"));
+        assert!(t.warnings.is_empty(), "{fields}: {:?}", text(&t.warnings));
+        assert!(t.fields.iter().all(|f| f.extra.is_empty()), "{fields}");
         assert!(
-            issues.iter().any(|i| i.contains(want)),
-            "{want}: {issues:?}"
+            matches!(&t.fields[0].kind, schema::FieldKind::List { item } if item.kind == schema::FieldKind::String),
+            "{fields}"
         );
     }
-    // `labels` belongs to a list of strings only: on a list of ints it is ignored, with a warning.
+    // On a list of ints, which never took it, it is an unknown attribute: ignored, with a warning.
     let t = TypeDef::parse(
         "t",
         &type_with(
@@ -1476,7 +1449,6 @@ fn labels_is_refused_when_it_names_a_missing_field_a_non_list_itself_or_a_named_
             "warning: field a.labels: is not an attribute of list fields in this version; it is ignored"
         ]
     );
-    assert_eq!(t.field("a").unwrap().labels, None);
 }
 
 /// Assets by id with their file names.
@@ -1646,8 +1618,8 @@ fn a_malformed_value_of_a_known_attribute_stays_an_error_beside_an_unknown_one()
 fn the_newer_person_type_loads_on_a_reader_that_lacks_its_newest_attributes() {
     // A field attribute some later release adds, on the shipped person type.
     let person = include_str!("../../writer/defaults/person.wcl").replacen(
-        "  labels = \"email_labels\"\n",
-        "  labels = \"email_labels\"\n  verify = \"smtp\"\n",
+        "  label = \"Emails\"\n",
+        "  label = \"Emails\"\n  verify = \"smtp\"\n",
         1,
     );
     assert!(person.contains("verify = \"smtp\""));
@@ -1658,10 +1630,10 @@ fn the_newer_person_type_loads_on_a_reader_that_lacks_its_newest_attributes() {
             "warning: field emails.verify: is not an attribute of list fields in this version; it is ignored"
         ]
     );
-    assert_eq!(
-        t.field("emails").unwrap().labels.as_deref(),
-        Some("email_labels")
-    );
+    assert!(matches!(
+        &t.field("emails").unwrap().kind,
+        schema::FieldKind::List { item } if matches!(item.kind, schema::FieldKind::Dict { .. })
+    ));
 }
 
 #[test]
@@ -1781,7 +1753,6 @@ fn unknown_attributes_are_kept_on_the_definition_as_written() {
         t.field("g").unwrap().extra,
         [("labels".to_owned(), Value::Str("f".into()))]
     );
-    assert_eq!(t.field("g").unwrap().labels, None);
     let tpl = t.template("default").unwrap();
     assert_eq!(
         tpl.extra,

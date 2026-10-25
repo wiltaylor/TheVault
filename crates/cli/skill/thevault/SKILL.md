@@ -50,7 +50,7 @@ vault taxonomy get status
 - `options` for `select`, `taxonomy` for `taxonomy`, `target` for `reference`.
 - `item` for any other `list`: the item's whole definition. `keys` and `values` for a `dict`: the declared keys, each a definition, and what other entries may be (`null` for none, `"any"`, or a definition).
 - `relation` and `inverse` for `reference`: see "Two-way references" below.
-- `labels` for a list of strings: another list field holding one label per value, in the same order. Write both lists together, as a person's `phones = ["+61400000000"]` with `phone_labels = ["mobile"]`.
+- A person's `phones`, `emails` and `addresses` are lists of dicts: each entry holds its value under a key, `number` for a phone and `address` for an email or postal address, with an optional `label`, as `phones = [{ number: "+61400000000", label: "mobile" }]`. Leave `label` out when there is none.
 - `hidden`: the app's properties sidebar leaves the field out. It is still stored, written and queried like any field.
 
 Step 11 lists every attribute a type file can give a field.
@@ -110,7 +110,9 @@ A query is a `from` clause followed by optional clauses in this order: `include 
 |----------|-----------|
 | `under(status, "Active")` | A taxonomy field holds that term or a term below it |
 | `has(tags, "x")` | A list field contains the value |
-| `has_ci(emails, "Ann@Example.com")` | As `has()`, but text compares ignoring case, so an address matches however it was stored |
+| `has_ci(tags, "Urgent")` | As `has()`, but text compares ignoring case |
+| `any(phones, \|p\| p.number == "+61400000000")` | Any item of a list meets the condition; `all()` is every item. On a list of dicts, `p.number` reads the entry's key |
+| `any(emails, \|e\| has_ci(e.address, "Ann@Example.com"))` | The same, with text compared ignoring case, so an address matches however it was stored |
 | `contains(title, "plan")` | A text field, or any item of a text list, holds the text, ignoring case |
 | `empty(due)` | A field has no value: missing, blank text or an empty list |
 | `today()`, `now()`, `days(n)` | Date arithmetic, as in `due < today() + days(7)` |
@@ -244,7 +246,7 @@ cat > batch.json <<'EOF'
   { "op": "create", "type": "task",
     "wcl": "title = \"Send the invites\"\nstatus = \"Todo\"\npriority = \"high\"\n" },
   { "op": "upsert", "type": "person", "key": "title",
-    "note": { "fields": { "title": "Sam Sample", "emails": ["sam@example.com"] } } }
+    "note": { "fields": { "title": "Sam Sample", "emails": [{ "address": "sam@example.com" }] } } }
 ]
 EOF
 vault batch --dry-run --file batch.json
@@ -283,7 +285,7 @@ No item in a batch can refer to a note that another item in the same batch creat
 cat > first.json <<'EOF'
 [
   { "op": "upsert", "type": "person", "key": "title",
-    "note": { "fields": { "title": "Robin Rivera", "emails": ["robin@example.com"] } } },
+    "note": { "fields": { "title": "Robin Rivera", "emails": [{ "address": "robin@example.com" }] } } },
   { "op": "upsert", "type": "project", "key": "title",
     "note": { "fields": { "title": "Launch the shop", "status": "Todo" } } }
 ]
@@ -304,7 +306,7 @@ vault batch --dry-run --file second.json
 vault batch --file second.json
 ```
 
-The second report lists the project under `also`, because the server added the task to the project's `tasks`. Upserts make every stage safe to rerun. To find the ids of an earlier stage later, query by the key, as in `vault query 'from person where title == "Robin Rivera"'`, or by any field, as in `vault query 'from person where has(emails, "robin@example.com")'`.
+The second report lists the project under `also`, because the server added the task to the project's `tasks`. Upserts make every stage safe to rerun. To find the ids of an earlier stage later, query by the key, as in `vault query 'from person where title == "Robin Rivera"'`, or by any field, as in `vault query 'from person where any(emails, |e| e.address == "robin@example.com")'`.
 
 ## 5. Upsert by a key field
 
@@ -319,13 +321,13 @@ An upsert finds the note of the type whose `key` field holds the same value. It 
 vault upsert --type person --key homepage <<'EOF'
 title = "Alex Example"
 homepage = "https://alex.example"
-emails = ["alex@example.com"]
+emails = [{ address: "alex@example.com" }]
 organisation = "Example Co"
 EOF
 vault upsert --type person --key homepage --dry-run <<'EOF'
 title = "Alex Example"
 homepage = "https://alex.example"
-emails = ["alex@example.com"]
+emails = [{ address: "alex@example.com" }]
 organisation = "Example Co"
 EOF
 ```
@@ -463,7 +465,7 @@ Each field takes `kind` (step 1's table), and optionally `label`, `description`,
 | `select` | `options = ["low", "high"]`, required |
 | `taxonomy` | `taxonomy = "<name>"`, required |
 | `reference` | `target = "<type>"`, required, or `"*"` for any type. `relation`: `one_way` (the default), `two_way` with `inverse = "<field on the target>"` naming a field that names this one back, or `peer` (a list of references, target this type). `on_delete`: `unlink` (the default), `restrict` or `cascade` |
-| `list` | `items = "<kind>"` with that kind's own items beside it (`items = "reference"` with `target`, `items = "select"` with `options`, `items = "taxonomy"` with `taxonomy`), or an `item { kind = ... }` block for a list of lists or of dicts. Any kind but `content`, `ink` and `canvas`. With `items = "string"`, `labels = "<field>"` names the list of strings that labels its values (step 1) |
+| `list` | `items = "<kind>"` with that kind's own items beside it (`items = "reference"` with `target`, `items = "select"` with `options`, `items = "taxonomy"` with `taxonomy`), or an `item { kind = ... }` block for a list of lists or of dicts. Any kind but `content`, `ink` and `canvas`. A list of dicts with an optional `label` key holds values with labels, as a person's `phones` (step 1) |
 | `dict` | `key <name> { kind = ... }` blocks, each a whole definition of any kind a list item may be, and `values` for other entries: a kind such as `"string"`, `"any"` for any value, or a `values { ... }` block. Without `values` only the declared keys are allowed. A note writes `dict <field> { key = value }`. A reference inside a dict or a nested list is `one_way` |
 | `date_range` | `of`: `date` (the default), `datetime` or `date_or_datetime` |
 | `location` | `map`, required: `geo`, or `image` with `image = "<asset id>"` |

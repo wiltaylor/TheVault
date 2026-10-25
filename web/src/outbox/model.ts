@@ -237,13 +237,22 @@ export function isPhoneNumber(text: string): boolean {
   return /^\+?[\d\s().-]{3,}$/.test(text.trim()) && /\d/.test(text);
 }
 
+/** A person's phones, each `{ number, label }` in its `phones` list: the numbers, with their labels ("" for none). */
+export function phonesOf(person: NoteDoc): { number: string; label: string }[] {
+  const v = person.fields.phones;
+  return (Array.isArray(v) ? v : []).flatMap((p) => {
+    const rec = p && typeof p === "object" && !Array.isArray(p) ? p : null;
+    const number = rec ? rec.number : p;
+    const label = rec ? rec.label : undefined;
+    return typeof number === "string" && number ? [{ number, label: typeof label === "string" ? label : "" }] : [];
+  });
+}
+
 /** The number to text person note `person` at: its first mobile number, else its first number. */
 export function phoneOf(person: NoteDoc | null | undefined): string {
   if (!person) return "";
-  const phones = strs(person.fields, "phones");
-  const labels = person.fields.phone_labels;
-  const at = Array.isArray(labels) ? labels.findIndex((l) => l === "mobile") : -1;
-  return (at >= 0 && phones[at]) || phones[0] || "";
+  const phones = phonesOf(person);
+  return (phones.find((p) => p.label === "mobile") ?? phones[0])?.number ?? "";
 }
 
 /** An SMS draft to `phone` drafted by the user, titled `title`, with one paragraph per line. */
@@ -293,14 +302,13 @@ export function smsTargets(raws: readonly string[], people: readonly { doc: Note
     out.push({ number, name: name || number });
   };
   const holder = (number: string) =>
-    people.find((p) => p.doc && strs(p.doc.fields, "phones").some((n) => numberKey(n) === numberKey(number)))?.doc;
+    people.find((p) => p.doc && phonesOf(p.doc).some((n) => numberKey(n.number) === numberKey(number)))?.doc;
   for (const raw of raws) {
     if (isPhoneNumber(raw)) add(raw.trim(), str(holder(raw)?.fields ?? {}, "title"));
   }
   for (const p of people) {
     if (!p.doc) continue;
-    const phones = strs(p.doc.fields, "phones");
-    if (phones.some((n) => seen.has(numberKey(n)))) continue;
+    if (phonesOf(p.doc).some((n) => seen.has(numberKey(n.number)))) continue;
     add(phoneOf(p.doc), str(p.doc.fields, "title"));
   }
   return out;

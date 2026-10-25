@@ -24,13 +24,13 @@ type FieldDef {
   of:            utf8?
   map:           utf8?
   image:         utf8?
-  labels:        utf8?
   accept:        utf8?
   @children("key") keys: list<KeyDef>
   # A list's `item { ... }` block and a dict's `values { ... }` block take the
   # same attributes as a field, without a name. The `item` block name is also a
   # content list item (common.wcl), so neither is declared here: the server's
-  # schema checks them (docs/vault-format.md, `list` and `dict`).
+  # schema checks them (docs/vault-format.md, `list` and `dict`), and
+  # tolerated.mjs skips them.
 }
 
 # A dict's declared key: a whole definition, the attributes of a field.

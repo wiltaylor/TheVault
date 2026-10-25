@@ -14,7 +14,9 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// files the feed carries as `base64`, which an older device would read as deletes.
 /// 4: typed lists and dicts (types T6): `kind = "list"` of any kind in place of `multiple`, and
 /// `key` blocks in a dict, which an older reader refuses, failing the whole schema; and the
-/// `card` content block, which an older reader refuses in a note.
+/// `card` content block, which an older reader refuses in a note; and lists of dicts that hold
+/// each value with its label, a person's `phones`, `emails` and `addresses` among them, in place
+/// of the `labels` attribute naming a label list.
 pub const FORMAT_VERSION: u32 = 4;
 
 /// Who made a change (D13, D30).

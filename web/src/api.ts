@@ -69,8 +69,6 @@ export interface FieldDef {
   values?: FieldDef | "any" | null;
   /** `location`: the image an image map's pins sit on, null on a real-world map. */
   image?: string | null;
-  /** A list of strings: the field holding one label per value, in the same order. */
-  labels?: string | null;
   /** `asset`: `"image"` when the field takes only images. */
   accept?: "any" | "image";
   /** Attributes this version does not know, by name, as WCL source text; the editors write them back as they were. */

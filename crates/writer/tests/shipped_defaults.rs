@@ -132,14 +132,12 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             f.as_str()
         })
         .collect();
-    // Step 0002 added email_labels with the labels of emails.
+    // Step 0002 added email_labels with the labels of emails, which the lists of dicts then took.
     assert_eq!(
         fields,
         [
             "phones",
-            "phone_labels",
             "addresses",
-            "address_labels",
             "job_title",
             "nickname",
             "birthday",
@@ -191,14 +189,16 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
         assert!(person.field(f).is_some(), "person lacks {f}");
     }
 
-    // The one note the step edits: its email is now its first entry in emails, one version more.
+    // The one note the steps edit: its email is now its first entry in emails, then a dict, two
+    // versions more.
     let note_after = read(root, &note_path).unwrap();
     assert_ne!(note_after, note_before);
     let fields = fields_of(&w, &alex);
-    assert_eq!(fields["emails"], json!(["alex@example.com"]));
+    assert_eq!(fields["emails"], json!([{ "address": "alex@example.com" }]));
     assert!(fields.get("email").is_none(), "{fields}");
+    assert!(fields.get("email_labels").is_none(), "{fields}");
     assert_eq!(fields["homepage"], "https://example.com");
-    assert_eq!(w.history(&alex).unwrap().len(), versions_before + 1);
+    assert_eq!(w.history(&alex).unwrap().len(), versions_before + 2);
 
     // The device file, the device scripts, and the Google sync tasks and scripts.
     let paths: Vec<&str> = SHIPPED_FILES.iter().map(|f| f.path).collect();
@@ -223,7 +223,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
     assert!(notification_titles(&w).is_empty());
 
     // A person note can now hold phones.
-    let edited = format!("{ALEX}phones = [\"+61400000000\"]\n");
+    let edited = format!("{ALEX}phones = [{{ number: \"+61400000000\", label: \"mobile\" }}]\n");
     let base = w.current_version(&alex).unwrap();
     w.update(
         &alex,
@@ -406,9 +406,7 @@ fn a_field_the_user_changed_is_left_as_it_is() {
     assert_eq!(
         fields,
         [
-            "phone_labels",
             "addresses",
-            "address_labels",
             "job_title",
             "nickname",
             "birthday",
@@ -484,13 +482,13 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
     let schema = w.schema();
     let person = schema.type_def("person").unwrap();
     assert!(person.field("email").is_none());
+    for l in ["email_labels", "phone_labels", "address_labels"] {
+        assert!(person.field(l).is_none(), "person keeps {l}");
+    }
     for f in [
         "emails",
-        "email_labels",
         "phones",
-        "phone_labels",
         "addresses",
-        "address_labels",
         "organisation",
         "job_title",
         "nickname",
@@ -512,15 +510,18 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
     let f = fields_of(&w, &sam);
     assert_eq!(
         f["emails"],
-        json!(["Sam@Example.com", "sam@home.example"]),
+        json!([{ "address": "Sam@Example.com" }, { "address": "sam@home.example" }]),
         "{f}"
     );
-    assert_eq!(f["phones"], json!(["+61400000001"]));
+    assert_eq!(f["phones"], json!([{ "number": "+61400000001" }]));
     assert_eq!(f["homepage"], "https://sam.example");
     let f = fields_of(&w, &only_email);
-    assert_eq!(f["emails"], json!(["kim@example.com"]));
+    assert_eq!(f["emails"], json!([{ "address": "kim@example.com" }]));
     let f = fields_of(&w, &only_addresses);
-    assert_eq!(f["emails"], json!(["lee@example.com", "lee@work.example"]));
+    assert_eq!(
+        f["emails"],
+        json!([{ "address": "lee@example.com" }, { "address": "lee@work.example" }])
+    );
     for id in [&sam, &only_email, &only_addresses, &empty_email, &neither] {
         let f = fields_of(&w, id);
         assert!(f.get("email").is_none(), "{f}");
@@ -628,14 +629,28 @@ fn labelled_person(root: &Path, person_type: &str, photo_file: &str) -> String {
     .id
 }
 
+/// Whether `f` is a list of dicts holding its value under the required string key `key` beside
+/// an optional string `label`, and nothing else.
+fn is_labelled_dicts(f: &schema::FieldDef, key: &str) -> bool {
+    let Some(schema::FieldKind::Dict { keys, values }) = f.kind.item().map(|i| &i.kind) else {
+        return false;
+    };
+    *values == schema::DictValues::None
+        && keys.len() == 2
+        && keys[0].name == key
+        && keys[0].kind == schema::FieldKind::String
+        && keys[0].required
+        && keys[1].name == "label"
+        && keys[1].kind == schema::FieldKind::String
+        && !keys[1].required
+}
+
 #[test]
-fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
+fn a_0_1_6_vault_ends_with_lists_of_dicts_and_an_image_photo() {
     for (name, person_type) in [("starter", PERSON_0_1_6), ("default", DEFAULT_PERSON_0_1_6)] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let sam = labelled_person(root, person_type, "face.JPG");
-        let note_path = format!("notes/person/{sam}.wcl");
-        let note_before = read(root, &note_path).unwrap();
         let w = open(root);
         let versions_before = w.history(&sam).unwrap().len();
         let fields_before = fields_of(&w, &sam);
@@ -663,61 +678,77 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
             "{name}"
         );
 
+        // Step 0002 gave the lists their labels, and the start then made them lists of dicts.
         let schema = w.schema();
         let person = schema.type_def("person").unwrap();
-        for (v, l) in [
-            ("emails", "email_labels"),
-            ("phones", "phone_labels"),
-            ("addresses", "address_labels"),
-        ] {
-            assert_eq!(
-                person.field(v).unwrap().labels.as_deref(),
-                Some(l),
-                "{name}"
-            );
-            assert!(person.field(l).is_some(), "{name}: {l} kept");
+        let old = schema::TypeDef::parse("person", person_type).unwrap();
+        for f in &old.fields {
+            let now = person.field(&f.name);
+            match f.name.as_str() {
+                "email_labels" | "phone_labels" | "address_labels" => {
+                    assert!(now.is_none(), "{name}: {} kept", f.name)
+                }
+                "phones" | "emails" | "addresses" => {
+                    let key = if f.name == "phones" {
+                        "number"
+                    } else {
+                        "address"
+                    };
+                    let now = now.unwrap();
+                    assert!(is_labelled_dicts(now, key), "{name}: {now:?}");
+                    assert_eq!(
+                        (&now.label, &now.description),
+                        (&f.label, &f.description),
+                        "{name}"
+                    );
+                }
+                "photo" => assert_eq!(now.unwrap().accept, schema::Accept::Image, "{name}"),
+                _ => assert_eq!(now, Some(f), "{name}"),
+            }
         }
-        assert_eq!(person.field("photo").unwrap().accept, schema::Accept::Image);
         let wcl = w.read_type("person").unwrap();
-        for l in ["email_labels", "phone_labels", "address_labels"] {
-            assert!(!wcl.contains(&format!("slot \"{l}\"")), "{name}: {wcl}");
-        }
-        // Everything else the type held is as it was: the starter keeps its homepage and Work
-        // tab, the slots keep their order.
+        assert!(!wcl.contains("labels"), "{name}: {wcl}");
+        // The templates are as they were, without the slots of the label lists: the starter
+        // keeps its Work tab, the slots keep their order. Step 0007 adds the Correspondence tab
+        // at the end of the default template, and the seeding adds phone_contact's slot.
         let expect = store::canonical(person_type, "types/person.wcl")
             .unwrap()
             .replace("    slot \"email_labels\"\n", "")
             .replace("    slot \"phone_labels\"\n", "")
             .replace("    slot \"address_labels\"\n", "");
-        let strip = |t: &str| {
-            t.lines()
-                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-                .filter(|l| !l.starts_with("labels = ") && !l.starts_with("accept = "))
-                .collect::<Vec<_>>()
-        };
-        // Step 0007 adds the Correspondence tab at the end of the default template.
+        let templates = |t: &str| t[t.find("\ntemplate ").unwrap()..].to_owned();
         assert!(wcl.contains("tab \"Correspondence\""), "{name}: {wcl}");
-        // The seeding adds phone_contact, its field after contact_note and its slot after the
-        // contact note's; with both taken out, the type is the 0.1.6 one.
-        assert!(wcl.contains("slot \"phone_contact\""), "{name}: {wcl}");
-        let without_phone = |t: &str| {
-            let start = t
-                .find("field phone_contact {")
-                .expect("the field was added");
-            let end = start + t[start..].find("\n}\n").unwrap() + 3;
-            let t = format!("{}{}", &t[..start], t[end..].trim_start_matches('\n'));
-            t.replace("    slot \"phone_contact\"\n", "")
-        };
         assert_eq!(
-            strip(&without_phone(&without_correspondence(&wcl))),
-            strip(&expect),
+            templates(&without_correspondence(&wcl)).replace("    slot \"phone_contact\"\n", ""),
+            templates(&expect),
             "{name}"
         );
 
-        // No note changed.
-        assert_eq!(read(root, &note_path).unwrap(), note_before, "{name}");
-        assert_eq!(w.history(&sam).unwrap().len(), versions_before, "{name}");
-        assert_eq!(fields_of(&w, &sam), fields_before, "{name}");
+        // The note holds each value with its label, one version more.
+        let f = fields_of(&w, &sam);
+        assert_eq!(
+            f["phones"],
+            json!([
+                { "number": "+61400000020", "label": "mobile" },
+                { "number": "+61400000021", "label": "home" },
+                { "number": "+61400000020", "label": "work" },
+            ]),
+            "{name}"
+        );
+        assert_eq!(
+            f["emails"],
+            json!([{ "address": "sam@example.com", "label": "home" }]),
+            "{name}"
+        );
+        for l in ["email_labels", "phone_labels", "address_labels"] {
+            assert!(f.get(l).is_none(), "{name}: {f}");
+        }
+        assert_eq!(f["photo"], fields_before["photo"], "{name}");
+        assert_eq!(
+            w.history(&sam).unwrap().len(),
+            versions_before + 1,
+            "{name}"
+        );
         assert!(w.flagged().unwrap().is_empty());
         drop(w);
 
@@ -744,10 +775,7 @@ fn a_photo_that_is_not_an_image_keeps_the_photo_field_open_to_any_asset() {
     let schema = w.schema();
     let person = schema.type_def("person").unwrap();
     assert_eq!(person.field("photo").unwrap().accept, schema::Accept::Any);
-    assert_eq!(
-        person.field("phones").unwrap().labels.as_deref(),
-        Some("phone_labels")
-    );
+    assert!(is_labelled_dicts(person.field("phones").unwrap(), "number"));
     assert!(fields_of(&w, &sam)["photo"].is_string());
 }
 
@@ -819,11 +847,12 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0009_outbox_statuses"
         ]
     );
-    // One more for step 0007's Correspondence tab on the person type, and one for each of the
-    // three types whose `multiple` fields become lists.
+    // One more for step 0007's Correspondence tab on the person type, one for each of the
+    // three types whose `multiple` fields become lists, and one for the person's lists of dicts
+    // after the seeding.
     assert_eq!(
         generation(root).trim().parse::<u64>().unwrap(),
-        before + 4 + 3
+        before + 4 + 3 + 1
     );
     // The message type 0.1.6 had gains only `processed`.
     assert!(
@@ -833,7 +862,12 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
         "{:?}",
         done.fields_added
     );
-    assert_eq!(w.history(&alex).unwrap().len(), versions_before);
+    // The person's email moved into a dict.
+    assert_eq!(w.history(&alex).unwrap().len(), versions_before + 1);
+    assert_eq!(
+        fields_of(&w, &alex)["emails"],
+        json!([{ "address": "alex@example.com" }])
+    );
 
     let sources = [
         ("email", writer::DEFAULT_EMAIL_TYPE),
@@ -2337,4 +2371,185 @@ fn outbox_statuses_the_user_changed_are_left_alone() {
     );
     assert_eq!(read(root, path).unwrap(), edited);
     assert_eq!(outbox_status(&w, &review), "review");
+}
+
+/// The `person` type as it was before its lists became lists of dicts: `emails`, `phones` and
+/// `addresses` lists of strings, each with `labels` naming its label list.
+const PERSON_WITH_LABELS: &str = include_str!("../defaults/old/person_72a45ec.wcl");
+
+#[test]
+fn a_person_type_with_labels_becomes_lists_of_dicts_with_every_note_on_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/person.wcl"), PERSON_WITH_LABELS).unwrap();
+    let w = open(root);
+    let make = |fields: serde_json::Value| {
+        w.create(
+            "person",
+            &writer::Input::Json(json!({ "fields": fields })),
+            &author(),
+        )
+        .unwrap()
+        .id
+    };
+    // Labels short of the values, past them, empty, and missing altogether.
+    let sam = make(json!({
+        "title": "Sam",
+        "phones": ["+61400000020", "+61400000021", "+61400000022"],
+        "phone_labels": ["mobile", ""],
+        "emails": ["sam@example.com"],
+        "email_labels": ["home", "work", "other"],
+        "addresses": ["1 Main St, Town"],
+    }));
+    let kim = make(json!({ "title": "Kim", "phones": ["+61400000030"] }));
+    let bo = make(json!({ "title": "Bo", "phone_labels": ["mobile"] }));
+    drop(w);
+
+    let w = open(root);
+    let versions = |id: &str| w.history(id).unwrap().len();
+    let before = [versions(&sam), versions(&kim), versions(&bo)];
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+
+    // The type is the shipped one, field for field.
+    assert_eq!(
+        w.read_type("person").unwrap(),
+        store::canonical(writer::DEFAULT_PERSON_TYPE, "types/person.wcl").unwrap()
+    );
+    let f = fields_of(&w, &sam);
+    assert_eq!(
+        f["phones"],
+        json!([
+            { "number": "+61400000020", "label": "mobile" },
+            { "number": "+61400000021" },
+            { "number": "+61400000022" },
+        ])
+    );
+    assert_eq!(
+        f["emails"],
+        json!([{ "address": "sam@example.com", "label": "home" }])
+    );
+    assert_eq!(f["addresses"], json!([{ "address": "1 Main St, Town" }]));
+    assert_eq!(
+        fields_of(&w, &kim)["phones"],
+        json!([{ "number": "+61400000030" }])
+    );
+    // A note with labels and no values only loses the labels.
+    let f = fields_of(&w, &bo);
+    assert!(
+        f.get("phones").is_none() && f.get("phone_labels").is_none(),
+        "{f}"
+    );
+    for (id, n) in [&sam, &kim, &bo].into_iter().zip(before) {
+        assert_eq!(versions(id), n + 1, "{id}");
+    }
+    assert!(w.flagged().unwrap().is_empty());
+    drop(w);
+
+    // The next start finds nothing to do.
+    let gen_before = generation(root);
+    let w = open(root);
+    assert_eq!(
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap(),
+        Upgraded::default()
+    );
+    assert_eq!(generation(root), gen_before);
+}
+
+/// A type of the user's with two lists of strings that say `labels`: one naming its label list,
+/// one naming a field the type lacks.
+const BOAT: &str = r#"label = "Boat"
+
+field radios {
+  kind   = "list"
+  label  = "Radios"
+  items  = "string"
+  labels = "radio_labels"
+}
+
+field radio_labels {
+  kind  = "list"
+  items = "string"
+}
+
+field flags {
+  kind   = "list"
+  items  = "string"
+  labels = "nope"
+}
+
+template default {
+  tab "Boat" {
+    slot "title"
+    slot "radios"
+    slot "radio_labels"
+    slot "flags"
+  }
+}
+"#;
+
+#[test]
+fn a_users_type_with_labels_holds_its_values_under_value_and_a_device_leaves_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("types")).unwrap();
+    std::fs::write(root.join("types/boat.wcl"), BOAT).unwrap();
+    let w = open(root);
+    let boat = w
+        .create(
+            "boat",
+            &writer::Input::Json(json!({ "fields": {
+                "title": "Wren",
+                "radios": ["VHF 16", "HF"],
+                "radio_labels": ["calling", "long range"],
+                "flags": ["blue"],
+            }})),
+            &author(),
+        )
+        .unwrap()
+        .id;
+
+    // A device's start leaves the type and the note to the home server.
+    w.upgrade_shipped_defaults(Upkeep::Device).unwrap();
+    assert_eq!(read(root, "types/boat.wcl").unwrap(), BOAT);
+    assert_eq!(fields_of(&w, &boat)["radios"], json!(["VHF 16", "HF"]));
+
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let wcl = w.read_type("boat").unwrap();
+    assert!(
+        !wcl.contains("labels") && !wcl.contains("radio_labels"),
+        "{wcl}"
+    );
+    let schema = w.schema();
+    let ty = schema.type_def("boat").unwrap();
+    for name in ["radios", "flags"] {
+        let Some(schema::FieldKind::Dict { keys, .. }) =
+            ty.field(name).unwrap().kind.item().map(|i| &i.kind)
+        else {
+            panic!("{name} is not a list of dicts: {wcl}");
+        };
+        let keys: Vec<&str> = keys.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(keys, ["value", "label"], "{name}");
+    }
+    assert_eq!(ty.field("radios").unwrap().label, "Radios");
+    assert!(ty.field("radio_labels").is_none());
+    let f = fields_of(&w, &boat);
+    assert_eq!(
+        f["radios"],
+        json!([
+            { "value": "VHF 16", "label": "calling" },
+            { "value": "HF", "label": "long range" },
+        ])
+    );
+    assert_eq!(f["flags"], json!([{ "value": "blue" }]));
+    assert!(f.get("radio_labels").is_none(), "{f}");
+    assert!(w.flagged().unwrap().is_empty());
+
+    // Once rewritten, a note in the new shape is kept as it is.
+    let gen_before = generation(root);
+    assert_eq!(
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap(),
+        Upgraded::default()
+    );
+    assert_eq!(generation(root), gen_before);
 }

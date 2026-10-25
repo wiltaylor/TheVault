@@ -3,7 +3,7 @@
 //! (D15, D16, D24; google-sync D19).
 //!
 //! [`Writer::upgrade_shipped_defaults`] runs on every start of the home server and of the
-//! embedded writer. It does four things:
+//! embedded writer. It does five things:
 //!
 //! 1. **Upgrade steps** ([`UPGRADE_STEPS`]), on the home server only, each applied once in order
 //!    and recorded in `state.db`. They run first, because a step such as a field rename must see
@@ -26,6 +26,10 @@
 //!    user hears once, under the bell, that a newer shipped version exists. A task file's `paused`
 //!    field is the user's pause switch, not an edit: [`shipped_hash`] leaves it out, and an
 //!    upgrade carries the vault's `paused` value into the new version (google-sync D19).
+//!
+//! 5. **Lists of dicts, not labels**, on the home server only ([`dicts_not_labels`]): a list of
+//!    strings whose `labels` names a label list becomes a list of dicts, with every note of its
+//!    type, in a commit of its own per type.
 //!
 //! Steps 2 to 4 are one commit, and a start that finds nothing to do commits nothing.
 
@@ -75,6 +79,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "cacc4fa862ca2b36215187e1ff71632930e357f8ee926f6faca3896280819b80",
             "ded1600480a80faf0bd741b9c26ef831f4ed53acc2c8e402beb4dba4ab4bc002",
             "9043adfca3f50b16e3c73812302569b85bbdca0059641d9e7ba6d66df160d696",
+            "e3a320ebb99a5c7d6263ec26ff53fb7bb5721815938fd050e5d15c6e7c42c621",
         ],
     },
     ShippedFile {
@@ -83,6 +88,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
         hashes: &[
             "35aac11b54ac323113df67c13c778e03f607dd910d5045cb6bb62518a9c82ef2",
             "99f1e44e976ad6961ab54f74784a8d20eb4a56ac6dff32c9f83cf3e6257af848",
+            "450dfda8bd7b889c043e8b5dd5e758e28714fb8df0f5529582265b609fd6f883",
         ],
     },
     ShippedFile {
@@ -94,6 +100,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "057f224d49972d84bb8bb7f41bf3f92b3ed344c9a6e74fc1b9500956781adab2",
             "6e72f49fc4eb2ca77f12d6771f8ce052d1cc7f2a568944113ffd207ba6953fa5",
             "f548a6f5f43ef61d41897ca7e8faf2e34ece8b00e384a5b27ef5bc1118bb759a",
+            "1a882c38c5c796f1bd0b71f743a804fb6c5a2e504deb8793ee5f6ed65e77c184",
         ],
     },
     ShippedFile {
@@ -125,6 +132,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "c8645c85e00a3fe1ede2ac7e41e98788d6936550744afc791261e7ce80a7266b",
             "a8caf6855a648b44dfe49dd682e246bb87a0ef921ba6b85cd3a36a9585f30da9",
             "05974f071ad03c95a1ad2627ece883f9b9acdf76ed1b33a42c7cc5c114579b24",
+            "a83e6b61ee1f2434128911c404f27e310c7d35037f02e00dd1f40c95f2838f1e",
         ],
     },
     ShippedFile {
@@ -145,6 +153,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "25bb9e337bdb15c08a696f5b96a2416ac078aafd43afd51673799528a188cd84",
             "b4782f4a6b52f51dedc82f1269f290d8a8fdad7404667526089afdee0b63b1aa",
             "72d25f21d756250ca02dc77802c24ed1b417138c99ed2644e0b8b387092fbb0a",
+            "e5881bf43ba5f4381156ccb56ef2d3f0e3d0d3ac349830b0b49f7d5e1595e307",
         ],
     },
     ShippedFile {
@@ -165,6 +174,7 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "dc7c8f91ab0b2c8bdda7e31ccd2422b4edc628f0beb7a11b7dbb45c52fe15b7b",
             "0d9a17a114dfdc774cef98bca4ec1b885218afeece1b4e52d8fc0bcaf3d4b573",
             "fc7f4cad0874863f6b121722b89c43034211cd5e8d0563e9ad5dc072766b4868",
+            "955b983dc5f14f0ac3aec3ec746102038561e7d4cf438f5e6e1d0a29446cf596",
         ],
     },
     // The Outbox's send handler, named by the shipped `outbox` type's handlers (outbox X3).
@@ -336,6 +346,202 @@ fn lists_not_multiple(w: &Writer) -> Result<()> {
     Ok(())
 }
 
+/// The key the values of list `field` of type `type_name` go under once it is a list of dicts:
+/// `number` for a person's phones, `address` for a person's emails and postal addresses, and
+/// `value` for any other.
+fn value_key(type_name: &str, field: &str) -> &'static str {
+    match (type_name, field) {
+        (PERSON_TYPE, "phones") => "number",
+        (PERSON_TYPE, "emails" | "addresses") => "address",
+        _ => "value",
+    }
+}
+
+/// A list of strings with `labels` that becomes a list of dicts: the field, the key of its
+/// values, and the field that held its labels, when the type has it as a list of strings.
+struct Labelled {
+    field: String,
+    key: &'static str,
+    labels: Option<String>,
+}
+
+/// Whether field block `b` is a list of strings written with `items`.
+fn is_strings_block(b: &Block) -> bool {
+    attr(b, "kind") == Some("list") && attr(b, "items") == Some("string")
+}
+
+/// Type file `ast` of type `name` with every list of strings that says `labels = "<field>"` as a
+/// list of dicts, and every field such a list names gone with its slots, with what changed. `None`
+/// when no field says `labels` on a list of strings.
+fn type_with_dicts(
+    name: &str,
+    mut ast: Source,
+    path: &str,
+) -> Result<Option<(String, Vec<Labelled>)>> {
+    let fields: Vec<&Block> = ast.items.iter().filter_map(|i| block(i, "field")).collect();
+    let mut labelled: Vec<Labelled> = Vec::new();
+    for f in &fields {
+        let (Some(field), Some(labels)) = (label(f), attr(f, "labels")) else {
+            continue;
+        };
+        if !is_strings_block(f) {
+            continue;
+        }
+        let names_list = labels != field
+            && fields.iter().any(|g| {
+                label(g) == Some(labels) && is_strings_block(g) && attr(g, "labels").is_none()
+            });
+        labelled.push(Labelled {
+            field: field.to_owned(),
+            key: value_key(name, field),
+            labels: names_list.then(|| labels.to_owned()),
+        });
+    }
+    if labelled.is_empty() {
+        return Ok(None);
+    }
+    // A person's lists take the shipped item, with its key labels; any other the plain one.
+    let shipped: Source = store::parse_data_only(DEFAULT_PERSON_TYPE, path)?;
+    let shipped_item = |field: &str| {
+        shipped
+            .items
+            .iter()
+            .filter_map(|i| block(i, "field"))
+            .find(|b| label(b) == Some(field))
+            .and_then(|b| b.items.iter().find(|i| block(i, "item").is_some()))
+            .cloned()
+    };
+    for l in &labelled {
+        let item = match shipped_item(&l.field).filter(|_| name == PERSON_TYPE) {
+            Some(item) => item,
+            None => {
+                let text = format!(
+                    "item {{\n  kind = \"dict\"\n\n  key {} {{\n    kind     = \"string\"\n    required = true\n  }}\n\n  key label {{\n    kind = \"string\"\n  }}\n}}\n",
+                    l.key
+                );
+                store::parse_data_only(&text, path)?
+                    .items
+                    .into_iter()
+                    .next()
+                    .expect("one item block")
+            }
+        };
+        let Some(field) = ast
+            .items
+            .iter_mut()
+            .filter_map(|i| block_mut(i, "field"))
+            .find(|b| label(b) == Some(l.field.as_str()))
+        else {
+            continue;
+        };
+        // A default list of strings would not be a list of dicts.
+        field.items.retain(|i| {
+            !matches!(i, Item::Field(f) if matches!(f.name.as_str(), "items" | "labels" | "default"))
+        });
+        field.items.push(item);
+    }
+    let gone: Vec<&str> = labelled
+        .iter()
+        .filter_map(|l| l.labels.as_deref())
+        .collect();
+    ast.items.retain(|i| {
+        !block(i, "field")
+            .and_then(label)
+            .is_some_and(|f| gone.contains(&f))
+    });
+    for item in &mut ast.items {
+        if let Some(template) = block_mut(item, "template") {
+            drop_slots(&mut template.items, &gone);
+        }
+    }
+    Ok(Some((store::to_canonical(&ast), labelled)))
+}
+
+/// The migration of [`dicts_not_labels`] for one note: each value of a list of `labelled`
+/// becomes `{ <key>: value, label: label }`, with the label at the same position in its label
+/// field (none past its end, and none when it is `""`), and the label field goes. A value that is
+/// already a dict is kept as it is.
+fn values_with_labels(doc: &mut Doc, labelled: &[Labelled]) {
+    let strings = |v: Option<&DocValue>| -> Vec<String> {
+        match v {
+            Some(DocValue::List(l)) => l
+                .iter()
+                .map(|v| v.as_str().unwrap_or_default().to_owned())
+                .collect(),
+            Some(DocValue::Str(s)) => vec![s.clone()],
+            _ => Vec::new(),
+        }
+    };
+    for l in labelled {
+        let labels = strings(l.labels.as_deref().and_then(|f| doc.field(f)));
+        if let Some((_, value)) = doc.fields.iter_mut().find(|(n, _)| *n == l.field) {
+            let items = match std::mem::replace(value, DocValue::List(Vec::new())) {
+                DocValue::List(items) => items,
+                one => vec![one],
+            };
+            let items = items
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| match v {
+                    DocValue::Str(s) => {
+                        let mut members = vec![(l.key.to_owned(), DocValue::Str(s))];
+                        if let Some(label) = labels.get(i).filter(|t| !t.is_empty()) {
+                            members.push(("label".to_owned(), DocValue::Str(label.clone())));
+                        }
+                        DocValue::Record(members)
+                    }
+                    other => other,
+                })
+                .collect();
+            *value = DocValue::List(items);
+        }
+        if let Some(field) = &l.labels {
+            doc.fields.retain(|(n, _)| n != field);
+        }
+    }
+}
+
+/// On every start of the home server, after the seeding: every list of strings that says
+/// `labels = "<field>"`, which named an index-aligned list holding a label per value, is a list
+/// of dicts instead, each value under a key of its own ([`value_key`]) beside an optional
+/// `label`, and the label list is gone with its template slots. Every note of the type moves its
+/// values and labels into the dicts in the same commit. It is not an upgrade step, for the reason
+/// [`lists_not_multiple`] is not: a type file in the old form can arrive any time. A type that
+/// does not load yet waits for a later start, and one whose notes would not validate is left as
+/// it is, each with one line in the log.
+fn dicts_not_labels(w: &Writer) -> Result<()> {
+    for (name, text) in w.definitions("types")? {
+        let path = type_path(&name);
+        let ast = store::parse_data_only(&text, &path)?;
+        let Some((wcl, labelled)) = type_with_dicts(&name, ast, &path)? else {
+            continue;
+        };
+        if w.schema().type_def(&name).is_none() {
+            eprintln!("type {name:?} still says labels: it does not load yet");
+            continue;
+        }
+        let change = TypeChange {
+            wcl,
+            ..TypeChange::default()
+        };
+        let run = |doc: &mut Doc| values_with_labels(doc, &labelled);
+        let native = NativeMigration {
+            script: SERVER_AUTHOR,
+            function: "dicts_not_labels",
+            run: &run,
+        };
+        if let Err(e) = w.apply_native_type_change(
+            &name,
+            &change,
+            &native,
+            &Author::Task(SERVER_AUTHOR.to_owned()),
+        ) {
+            eprintln!("type {name:?} still says labels: its lists of dicts were not written: {e}");
+        }
+    }
+    Ok(())
+}
+
 /// The `outbox` type as ticket 194 shipped it, whose status options, description and templates
 /// step `0009_outbox_statuses` replaces.
 const OUTBOX_TYPE_3A489B0: &str = include_str!("../defaults/old/outbox_3a489b0.wcl");
@@ -499,7 +705,7 @@ fn outbox_statuses(w: &Writer) -> Result<()> {
     let native = NativeMigration {
         script: SERVER_AUTHOR,
         function: "0009_outbox_statuses",
-        run: new_outbox_status,
+        run: &new_outbox_status,
     };
     w.apply_native_type_change(name, &change, &native, &author)?;
     Ok(())
@@ -1137,6 +1343,31 @@ const LABELLED: [(&str, &str); 3] = [
     ("addresses", "address_labels"),
 ];
 
+/// The `person` type as commit 72a45ec shipped it, the last whose `emails`, `phones` and
+/// `addresses` were lists of strings with `labels`. Steps `0001_person_emails` and
+/// `0002_person_labels` give an older vault's type those fields as they were then, and
+/// [`dicts_not_labels`] then makes them lists of dicts.
+const PERSON_TYPE_72A45EC: &str = include_str!("../defaults/old/person_72a45ec.wcl");
+
+/// Whether any field of type file `ast` says `labels`.
+fn says_labels(ast: &Source) -> bool {
+    ast.items
+        .iter()
+        .filter_map(|i| block(i, "field"))
+        .any(|f| attr(f, "labels").is_some())
+}
+
+/// The string value of attribute `name` of `b`.
+fn attr<'a>(b: &'a Block, name: &str) -> Option<&'a str> {
+    b.items.iter().find_map(|i| match i {
+        Item::Field(f) if f.name == name => match &f.expr {
+            Expr::Utf8(v) => Some(v.as_str()),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
 /// Step `0002_person_labels` (D16): `emails`, `phones` and `addresses` on a `person` type from
 /// before a value and its label were edited as one chip are lists of strings with no `labels`.
 /// One planned type change that edits no note gives each of the three that the type has its
@@ -1155,7 +1386,8 @@ fn person_labels(w: &Writer) -> Result<()> {
             f.kind.item().and_then(|i| i.kind.scalar()) == Some(schema::Scalar::String)
         })
     };
-    if ty.fields.iter().any(|f| f.labels.is_some()) {
+    let text = w.vault.read_text(&type_path(PERSON_TYPE))?;
+    if says_labels(&store::parse_data_only(&text, &type_path(PERSON_TYPE))?) {
         return Ok(());
     }
     // Each value field to label, and whether its label field must be added.
@@ -1171,7 +1403,6 @@ fn person_labels(w: &Writer) -> Result<()> {
         .field("photo")
         .is_some_and(|f| f.kind == schema::FieldKind::Asset && f.accept == schema::Accept::Any)
         && every_photo_is_an_image(w)?;
-    let text = w.vault.read_text(&type_path(PERSON_TYPE))?;
     let change = TypeChange {
         wcl: person_with_labels(&text, &labelled, photo_images)?,
         ..TypeChange::default()
@@ -1215,22 +1446,23 @@ fn every_photo_is_an_image(w: &Writer) -> Result<bool> {
 }
 
 /// The person type file `vault_text` with `labels` on each value field of `labelled`, the
-/// shipped label field after it where `labelled` says the type lacks it, `accept = "image"` on
-/// `photo` when `photo_images`, and no slot of a label field in the `default` template.
+/// label field as [`PERSON_TYPE_72A45EC`] shipped it after it where `labelled` says the type
+/// lacks it, `accept = "image"` on `photo` when `photo_images`, and no slot of a label field in
+/// the `default` template.
 fn person_with_labels(
     vault_text: &str,
     labelled: &[(&str, &str, bool)],
     photo_images: bool,
 ) -> Result<String> {
     let path = type_path(PERSON_TYPE);
-    let shipped: Source = store::parse_data_only(DEFAULT_PERSON_TYPE, &path)?;
+    let shipped: Source = store::parse_data_only(PERSON_TYPE_72A45EC, &path)?;
     let shipped_field = |name: &str| {
         shipped
             .items
             .iter()
             .find(|i| block(i, "field").and_then(label) == Some(name))
             .cloned()
-            .expect("the shipped person type has the label fields")
+            .expect("the old person type has the label fields")
     };
     let mut ast = store::parse_data_only(vault_text, &path)?;
     let attribute = |name: &str, value: &str| -> Result<Item> {
@@ -1313,7 +1545,7 @@ fn person_emails(w: &Writer) -> Result<()> {
     let native = NativeMigration {
         script: SERVER_AUTHOR,
         function: "0001_person_emails",
-        run: move_email_into_emails,
+        run: &move_email_into_emails,
     };
     w.apply_native_type_change(
         PERSON_TYPE,
@@ -1331,17 +1563,17 @@ fn awaits_person_emails(ty: &TypeDef) -> bool {
     ty.field("emails").is_none() && (ty.field("addresses").is_some() || ty.field("email").is_some())
 }
 
-/// The person type file `vault_text` with the shipped `emails` field where `email` was, else
+/// The person type file `vault_text` with `emails` as 0.1.6 shipped it where `email` was, else
 /// where `addresses` was, `email` and `addresses` gone, and every template slot of either naming
 /// `emails` instead, once per template.
 fn person_with_emails(vault_text: &str) -> Result<String> {
     let path = type_path(PERSON_TYPE);
-    let shipped: Source = store::parse_data_only(DEFAULT_PERSON_TYPE, &path)?;
+    let shipped: Source = store::parse_data_only(PERSON_TYPE_72A45EC, &path)?;
     let emails = shipped
         .items
         .iter()
         .find(|i| block(i, "field").and_then(label) == Some("emails"))
-        .expect("the shipped person type has emails")
+        .expect("the old person type has emails")
         .clone();
     // As 0.1.6 shipped it: `labels` and its field come with step `0002_person_labels`.
     let mut emails = emails;
@@ -1558,6 +1790,10 @@ impl Writer {
             Upkeep::Device => Vec::new(),
         };
         let mut done = self.seed_shipped_defaults_with(upkeep, &SHIPPED_FILES)?;
+        if upkeep == Upkeep::Home {
+            // After the seeding, which a type may need to load. Not a step either.
+            dicts_not_labels(self)?;
+        }
         done.steps = steps;
         Ok(done)
     }
@@ -2017,5 +2253,46 @@ mod tests {
         for file in SHIPPED_FILES.iter().filter(|f| f.path.ends_with(".wcl")) {
             assert_eq!(file.text().unwrap(), file.source, "{}", file.path);
         }
+    }
+
+    #[test]
+    fn values_pair_with_their_labels_and_dicts_pass_through() {
+        let s = |t: &str| DocValue::Str(t.to_owned());
+        let dict = |n: &str, l: Option<&str>| {
+            let mut m = vec![("number".to_owned(), s(n))];
+            m.extend(l.map(|l| ("label".to_owned(), s(l))));
+            DocValue::Record(m)
+        };
+        let labelled = [Labelled {
+            field: "phones".to_owned(),
+            key: "number",
+            labels: Some("phone_labels".to_owned()),
+        }];
+        let mut doc = Doc {
+            fields: vec![
+                ("title".to_owned(), s("Sam")),
+                (
+                    "phones".to_owned(),
+                    DocValue::List(vec![s("+1"), s("+2"), s("+3")]),
+                ),
+                (
+                    "phone_labels".to_owned(),
+                    DocValue::List(vec![s("mobile"), s(""), s("home"), s("work")]),
+                ),
+            ],
+            blocks: Vec::new(),
+        };
+        values_with_labels(&mut doc, &labelled);
+        let want = DocValue::List(vec![
+            dict("+1", Some("mobile")),
+            dict("+2", None),
+            dict("+3", Some("home")),
+        ]);
+        assert_eq!(doc.field("phones"), Some(&want));
+        assert_eq!(doc.field("phone_labels"), None);
+        // A second run, and a note already holding dicts, change nothing.
+        let once = doc.clone();
+        values_with_labels(&mut doc, &labelled);
+        assert_eq!(doc, once);
     }
 }

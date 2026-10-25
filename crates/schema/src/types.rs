@@ -292,9 +292,6 @@ pub struct FieldDef {
     /// the index.
     pub listed: bool,
     pub default: Option<Value>,
-    /// On a list of strings: another list-of-string field of the type that holds one label per
-    /// value, index-aligned. The named field is edited with this one and not shown on its own.
-    pub labels: Option<String>,
     /// On an asset field: which assets it may hold.
     pub accept: Accept,
     /// Attributes this version does not know, kept as written so an editor that rewrites the
@@ -349,7 +346,6 @@ pub(crate) fn title_field() -> FieldDef {
         multiple: false,
         listed: false,
         default: None,
-        labels: None,
         accept: Accept::Any,
         extra: Vec::new(),
         implied: false,
@@ -528,8 +524,6 @@ impl TypeDef {
                 }
             }
         }
-
-        check_labels(&mut c, &fields);
 
         // A control in a template binds a field of this type.
         c.fields = Some(&fields);
@@ -738,6 +732,8 @@ fn field_def(
                 items.push(opt(i.name, i.form));
             }
             if k == "string" {
+                // The old `labels`, which a list of dicts now says: read and ignored, and
+                // rewritten on the next start of the home server.
                 items.push(opt("labels", Form::Str));
             }
         }
@@ -765,7 +761,6 @@ fn field_def(
         return None;
     }
 
-    let known = |n: &str| items.iter().any(|i| i.name == n);
     let flag = |n: &str| d.field(n) == Some(&Value::Bool(true));
     let s = |n: &str| string(d, n);
     let (required, computed) = (flag("required"), flag("computed"));
@@ -907,8 +902,6 @@ fn field_def(
         multiple,
         listed,
         default: d.field("default").cloned(),
-        // An attribute this kind does not have is ignored, as a newer release's would be.
-        labels: s("labels").filter(|_| known("labels")),
         accept,
         extra: unknown(d, &items, &["default"]),
         implied: false,
@@ -1032,40 +1025,6 @@ fn dict(c: &mut Check, d: &Doc, name: &str, type_name: &str, at: &str) -> Option
         c.fail(at, "needs `key` blocks, `values`, or both");
     }
     Some(FieldKind::Dict { keys, values })
-}
-
-/// Every `labels` names another list-of-string field of the type, and no field is named by two.
-fn check_labels(c: &mut Check, fields: &[FieldDef]) {
-    let mut named: Vec<(&str, &str)> = Vec::new();
-    for f in fields {
-        let Some(l) = &f.labels else { continue };
-        let at = format!("field {}.labels", f.name);
-        if l == &f.name {
-            c.fail(&at, "cannot name the field itself");
-            continue;
-        }
-        match fields.iter().find(|g| &g.name == l) {
-            None => c.fail(&at, format!("the type has no field {l:?}")),
-            Some(g) if g.kind.item().and_then(|i| i.kind.scalar()) != Some(Scalar::String) => c
-                .fail(
-                    &at,
-                    format!(
-                        "{l:?} must be a list of strings, and it is a {} field",
-                        g.kind.name()
-                    ),
-                ),
-            Some(_) => {
-                if let Some((other, _)) = named.iter().find(|(_, n)| *n == l.as_str()) {
-                    c.fail(
-                        &at,
-                        format!("{l:?} already holds the labels of field {other:?}"),
-                    );
-                } else {
-                    named.push((f.name.as_str(), l.as_str()));
-                }
-            }
-        }
-    }
 }
 
 fn reference(

@@ -139,7 +139,6 @@ fn field_json(f: &FieldDef) -> Value {
         FieldKind::List { item } => {
             out.insert("items".into(), json!(item.kind.name()));
             out.insert("item".into(), field_json(item));
-            out.insert("labels".into(), json!(f.labels));
         }
         FieldKind::Asset => {
             out.insert("accept".into(), json!(f.accept.name()));

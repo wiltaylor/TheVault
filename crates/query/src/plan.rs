@@ -5,7 +5,9 @@
 //! evaluates that query note by note. The translation covers what the builder and the Search
 //! page write: a field compared with a value that does not depend on the note, `has()`,
 //! `under()`, `contains()` on text, `empty()` on a field held in the note's own fields, `start`
-//! and `end` of a date range compared with such a value, a bool field on its own, `&&`, `||` and
+//! and `end` of a date range compared with such a value, `any(list, |x| x.key == value)` and
+//! `any(list, |x| has_ci(x.key, value))` over a list of dicts that declare `key` as a string,
+//! number or bool, a bool field on its own, `&&`, `||` and
 //! `!`, and sorting or grouping by a field of the note itself. It never covers a comparison that
 //! would fail on a value of the field's kind, so a query that is an error note by note is still
 //! an error. It assumes each stored value has its field's kind, which validation ensures.
@@ -78,6 +80,43 @@ fn class_of(kind: &FieldKind) -> Option<Class> {
         FieldKind::List { item } if item.kind.scalar().is_some() => return class_of(&item.kind),
         _ => return None,
     })
+}
+
+/// `any(list, |x| x.key == value)`, either way round, or `any(list, |x| has_ci(x.key, value))`,
+/// with `value` the same for every note: the list, the key, the value, and whether text compares
+/// ignoring case.
+fn any_member(e: &Expr) -> Option<(&str, &str, &Expr, bool)> {
+    fn member<'e>(m: &'e Expr, param: &str) -> Option<&'e str> {
+        match m {
+            Expr::Field(base, key) if matches!(base.as_ref(), Expr::Name(n) if n == param) => {
+                Some(key.as_str())
+            }
+            _ => None,
+        }
+    }
+    let Expr::Call(f, args) = e else {
+        return None;
+    };
+    let [Expr::Name(list), Expr::Closure(params, body)] = args.as_slice() else {
+        return None;
+    };
+    let ([param], true) = (params.as_slice(), f == "any") else {
+        return None;
+    };
+    let member = |m| member(m, param);
+    let (key, v, ci) = match body.as_ref() {
+        Expr::Binary(BinOp::Eq, a, b) => match (member(a), member(b)) {
+            (Some(k), None) if constant(b) => (k, b.as_ref(), false),
+            (None, Some(k)) if constant(a) => (k, a.as_ref(), false),
+            _ => return None,
+        },
+        Expr::Call(g, a) if g == "has_ci" => match a.as_slice() {
+            [m, v] if constant(v) => (member(m)?, v, true),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    (!BUILTINS.contains(&list.as_str())).then_some((list.as_str(), key, v, ci))
 }
 
 /// A comparison of a field with a value: `=` for `==` and `has()`, or an ordering.
@@ -698,6 +737,12 @@ fn driver(filter: &Expr) -> Option<&Expr> {
             // Every row of the field is read and compared ignoring case.
             Expr::Call(f, args) if f == "has_ci" && args.first().is_some_and(field) => 4,
             Expr::Call(f, args) if f == "under" && args.first().is_some_and(field) => 1,
+            // A key of a list of dicts: an equality, or every row of the key read ignoring case.
+            Expr::Call(f, _) if f == "any" => match any_member(e) {
+                Some((.., true)) => 4,
+                Some(_) => 0,
+                None => return,
+            },
             Expr::Binary(BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, a, b)
                 if field(a) || field(b) =>
             {
@@ -1003,6 +1048,26 @@ impl Planner<'_, '_> {
                 let cond = |t: &str| format!("vault_same({t}str, {p})");
                 Some(self.field_rows(e, &field, list, cond, neg))
             }
+            Expr::Call(f, _) if f == "any" => {
+                let (list, key, v, ci) = any_member(e)?;
+                let class = self.dict_key(list, key)?;
+                let v = self.value(v)?;
+                let k = self.bind(Sql::Text(key.to_owned()));
+                match (&v, ci) {
+                    // `has_ci` compares text ignoring case, and any other value as `==` does.
+                    (V::Str(text), true) if class == Class::Text => {
+                        let p = self.bind(Sql::Text(text.to_lowercase()));
+                        let cond = |t: &str| format!("{t}part = {k} AND vault_same({t}str, {p})");
+                        Some(self.field_rows(e, list, true, cond, neg))
+                    }
+                    (V::Str(_), true) => None,
+                    _ => {
+                        let (col, p) = self.operand(&class, Cmp::Eq, &v)?;
+                        let cond = |t: &str| format!("{t}part = {k} AND {t}{col} = {p}");
+                        Some(self.field_rows(e, list, true, cond, neg))
+                    }
+                }
+            }
             Expr::Call(f, args) if f == "under" => {
                 let [Expr::Name(n), term] = args.as_slice() else {
                     return None;
@@ -1062,6 +1127,49 @@ impl Planner<'_, '_> {
                     (true, false)
                 }
                 _ => (false, several),
+            };
+            match &found {
+                Some(seen) if *seen != this => return None,
+                _ => found = Some(this),
+            }
+        }
+        found
+    }
+
+    /// How key `key` of the dicts of list field `name` compares, when every queried type that has
+    /// the field declares the key as a string, url, number or bool. A dict with an entry that
+    /// holds a record is left to the evaluator: the index stores a record's members under their
+    /// own keys, so they could pass for `key`.
+    fn dict_key(&self, name: &str, key: &str) -> Option<Class> {
+        let schema = self.r.ctx.schema;
+        let record = |k: &FieldKind| {
+            matches!(
+                k,
+                FieldKind::Dict { .. } | FieldKind::DateRange { .. } | FieldKind::Location { .. }
+            )
+        };
+        let mut found: Option<Class> = None;
+        for t in self.types {
+            let Some(def) = schema.type_def(t).and_then(|t| t.field(name)) else {
+                continue;
+            };
+            let FieldKind::Dict { keys, values } = &def.kind.item()?.kind else {
+                return None;
+            };
+            let open = match values {
+                schema::DictValues::None => false,
+                schema::DictValues::Of(d) => record(&d.kind),
+                schema::DictValues::Any => true,
+            };
+            if open || keys.iter().any(|k| record(&k.kind)) {
+                return None;
+            }
+            let k = keys.iter().find(|k| k.name == key && !k.multiple)?;
+            let this = match &k.kind {
+                FieldKind::String | FieldKind::Url => Class::Text,
+                FieldKind::Int | FieldKind::Float => Class::Num,
+                FieldKind::Bool => Class::Bool,
+                _ => return None,
             };
             match &found {
                 Some(seen) if *seen != this => return None,

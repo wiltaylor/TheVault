@@ -122,7 +122,6 @@ fn field_json(f: &FieldDef) -> Value {
         FieldKind::List { item } => json!({
             "items": item.kind.name(),
             "item": field_json(item),
-            "labels": f.labels,
         }),
         FieldKind::Asset => json!({ "accept": f.accept.name() }),
         FieldKind::Dict { keys, values } => json!({

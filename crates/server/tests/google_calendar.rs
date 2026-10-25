@@ -303,7 +303,7 @@ fn the_first_run_imports_single_events_all_day_as_dates_and_timed_with_offsets()
     let api = Api::start();
     let ann = api.create_note(
         "person",
-        json!({ "fields": { "title": "Ann", "emails": ["Ann@Example.com"] } }),
+        json!({ "fields": { "title": "Ann", "emails": [{ "address": "Ann@Example.com" }] } }),
     );
     api.google.put_event(
         "primary",

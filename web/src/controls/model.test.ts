@@ -60,6 +60,16 @@ const FIELDS: FieldDef[] = [
   field("links", "reference", { target: "t", multiple: true }),
   field("tags", "list", { items: "string" }),
   field("numbers", "list", { items: "int" }),
+  // A list of labelled values: chips with their labels.
+  field("phones", "list", {
+    items: "dict",
+    item: field("phones", "dict", { compound: false, keys: [field("number", "string"), field("label", "string")], values: null }),
+  }),
+  // Any other list of dicts fits no control.
+  field("contacts", "list", {
+    items: "dict",
+    item: field("contacts", "dict", { compound: false, keys: [field("number", "string"), field("kind", "string")], values: null }),
+  }),
   field("extra", "dict", { values: { ...field("extra", "string"), kind: "string" } }),
   field("place", "location"),
   field("body", "content"),
@@ -78,7 +88,7 @@ const FITS: Record<ControlKind, string[]> = {
   checkbox: ["done"],
   dropdown: ["size", "area", "parent"],
   radio: ["size"],
-  chips: ["sizes", "areas", "links", "tags"],
+  chips: ["sizes", "areas", "links", "tags", "phones"],
   calendar: ["due", "span"],
   datetime: ["at"],
   time: ["at"],

@@ -5,47 +5,68 @@ icon        = "user"
 colour      = "purple"
 
 field emails {
-  kind   = "list"
-  label  = "Emails"
-  items  = "string"
-  labels = "email_labels"
-}
+  kind  = "list"
+  label = "Emails"
 
-field email_labels {
-  kind        = "list"
-  label       = "Email labels"
-  description = "The label of each email address, in the same order: mobile, home, work, main, other, or the phone's own label."
-  items       = "string"
+  item {
+    kind = "dict"
+
+    key address {
+      kind     = "string"
+      label    = "Address"
+      required = true
+    }
+
+    key label {
+      kind        = "string"
+      label       = "Label"
+      description = "mobile, home, work, main, other, or the phone's own label."
+    }
+  }
 }
 
 field phones {
   kind        = "list"
   label       = "Phones"
   description = "Phone numbers in international (E.164) form, such as +61400000000."
-  items       = "string"
-  labels      = "phone_labels"
-}
 
-field phone_labels {
-  kind        = "list"
-  label       = "Phone labels"
-  description = "The label of each phone number, in the same order: mobile, home, work, main, other, or the phone's own label."
-  items       = "string"
+  item {
+    kind = "dict"
+
+    key number {
+      kind     = "string"
+      label    = "Number"
+      required = true
+    }
+
+    key label {
+      kind        = "string"
+      label       = "Label"
+      description = "mobile, home, work, main, other, or the phone's own label."
+    }
+  }
 }
 
 field addresses {
   kind        = "list"
   label       = "Addresses"
   description = "Postal addresses, each on one line with its lines joined by commas."
-  items       = "string"
-  labels      = "address_labels"
-}
 
-field address_labels {
-  kind        = "list"
-  label       = "Address labels"
-  description = "The label of each postal address, in the same order: home, work, other, or the phone's own label."
-  items       = "string"
+  item {
+    kind = "dict"
+
+    key address {
+      kind     = "string"
+      label    = "Address"
+      required = true
+    }
+
+    key label {
+      kind        = "string"
+      label       = "Label"
+      description = "home, work, other, or the phone's own label."
+    }
+  }
 }
 
 field organisation {

@@ -187,9 +187,26 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
     let person = find(&types, "person");
     assert_eq!(person["builtin"], false);
     assert_eq!(field(person, "phones")["kind"], "list");
-    assert_eq!(field(person, "phones")["items"], "string");
-    assert_eq!(field(person, "emails")["items"], "string");
-    assert_eq!(field(person, "addresses")["items"], "string");
+    for (list, key) in [
+        ("phones", "number"),
+        ("emails", "address"),
+        ("addresses", "address"),
+    ] {
+        let item = &field(person, list)["item"];
+        assert_eq!(field(person, list)["items"], "dict", "{list}");
+        assert_eq!(item["kind"], "dict", "{list}");
+        assert_eq!(item["values"], Value::Null, "{list}");
+        let keys: Vec<&str> = item["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(keys, [key, "label"], "{list}");
+        assert_eq!(item["keys"][0]["kind"], "string", "{list}");
+        assert_eq!(item["keys"][0]["required"], true, "{list}");
+        assert_eq!(item["keys"][1]["required"], false, "{list}");
+    }
     assert_eq!(field(person, "websites")["items"], "url");
     assert_eq!(field(person, "photo")["kind"], "asset");
     assert_eq!(field(person, "device_contacts")["kind"], "dict");
@@ -230,11 +247,8 @@ fn an_existing_vault_gets_the_phone_types_and_keeps_its_own_person_with_the_phon
         field_names(person),
         [
             "emails",
-            "email_labels",
             "phones",
-            "phone_labels",
             "addresses",
-            "address_labels",
             "organisation",
             "job_title",
             "nickname",
@@ -289,7 +303,7 @@ fn a_conversation_page_queries_its_messages() {
     let api = Api::new(TestServer::start());
     let alex = api.create(
         "person",
-        json!({ "fields": { "title": "Alex", "phones": ["+61400000001"] } }),
+        json!({ "fields": { "title": "Alex", "phones": [{ "number": "+61400000001" }] } }),
     );
     let thread = api.create(
         "conversation",

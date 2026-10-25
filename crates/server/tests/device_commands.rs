@@ -588,12 +588,12 @@ fn a_person_saved_on_the_server_queues_upsert_contact_for_each_phone_without_its
         &api.admin,
         json!({
             "title": "Carla Created",
-            "phones": ["+16502530005", "+16502530015"],
-            "phone_labels": ["mobile"],
-            "emails": ["carla@example.com"],
-            "email_labels": ["work"],
-            "addresses": ["1 Main St, Springfield"],
-            "address_labels": ["home"],
+            "phones": [
+                { "number": "+16502530005", "label": "mobile" },
+                { "number": "+16502530015" },
+            ],
+            "emails": [{ "address": "carla@example.com", "label": "work" }],
+            "addresses": [{ "address": "1 Main St, Springfield", "label": "home" }],
             "organisation": "Example Co",
             "job_title": "Engineer",
             "nickname": "Carlie",
@@ -692,10 +692,11 @@ fn a_person_saved_on_the_server_queues_upsert_contact_for_each_phone_without_its
     // back to the Pixel as a command; the Tablet still hears of it.
     let from_phone = api.create_person(
         &pixel_client,
-        json!({ "title": "Dana Phone", "phones": ["+16502530006"] }),
+        json!({ "title": "Dana Phone", "phones": [{ "number": "+16502530006" }] }),
     );
     let mut changed = api.note(&id);
-    changed["note"]["fields"]["phones"] = json!(["+16502530005", "+16502530007"]);
+    changed["note"]["fields"]["phones"] =
+        json!([{ "number": "+16502530005" }, { "number": "+16502530007" }]);
     api.update_note(&pixel_client, &changed);
     assert_eq!(api.upserts(&pixel).len(), 1);
     let tablet_upserts = api.upserts(&tablet);
@@ -709,7 +710,7 @@ fn a_person_saved_on_the_server_queues_upsert_contact_for_each_phone_without_its
     // A person with only an email address is one a contact can hold.
     api.create_person(
         &api.admin,
-        json!({ "title": "Email Only", "emails": ["only@example.com"] }),
+        json!({ "title": "Email Only", "emails": [{ "address": "only@example.com" }] }),
     );
     assert_eq!(api.upserts(&pixel).len(), 2);
     assert_eq!(api.upserts(&tablet).len(), 5);
@@ -1017,7 +1018,7 @@ fn a_person_kept_off_the_phones_gets_no_contact_until_ticked_again_even_from_the
     // Unticked from the start: nothing for the phone.
     let erin = api.create_person(
         &api.admin,
-        json!({ "title": "Erin Off", "phones": ["+16502530009"], "phone_contact": false }),
+        json!({ "title": "Erin Off", "phones": [{ "number": "+16502530009" }], "phone_contact": false }),
     );
     assert!(api.upserts(&pixel).is_empty());
     let mut renamed = erin.clone();

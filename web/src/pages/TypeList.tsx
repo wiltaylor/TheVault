@@ -388,7 +388,7 @@ function ListTable(props: { type: TypeDef; rows: Row[]; sort: ListSort; onSort: 
                 <For each={columns()}>
                   {(f) => (
                     <td>
-                      <FieldValue field={f} value={row.fields[f.name]} fields={row.fields} size="small" />
+                      <FieldValue field={f} value={row.fields[f.name]} size="small" />
                     </td>
                   )}
                 </For>

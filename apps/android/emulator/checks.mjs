@@ -493,7 +493,8 @@ async function people() {
   const list = await rows("from person");
   return Promise.all(list.map(async (r) => ({ id: r.id, ...(await note(r.id)) })));
 }
-const phonesOf = (p) => p.note.fields.phones ?? [];
+// A person holds its phones as dicts, `{ number, label }`.
+const phonesOf = (p) => (p.note.fields.phones ?? []).map((x) => x.number);
 const linksOf = (p) => p.note.blocks.find((b) => b.kind === "dict" && b.labels?.[0] === "device_contacts")?.fields ?? p.note.fields.device_contacts ?? {};
 
 /** Message or call notes whose fields satisfy `pred`, with the full note. */
@@ -1052,7 +1053,7 @@ async function main() {
   // 29 to 33: messages and calls, with the app in the foreground (sync loop running).
   openApp();
   await sleep(3_000);
-  const knownPerson = await createNote("person", { title: "Kim Known", phones: [KNOWN_E164] });
+  const knownPerson = await createNote("person", { title: "Kim Known", phones: [{ number: KNOWN_E164 }] });
   await foreground();
   await until("the person on the phone", () => onPhone(knownPerson.id), { timeout: 60_000 });
   const knownContact = addContact("Kim Known", KNOWN_E164);
@@ -1281,7 +1282,7 @@ async function main() {
 
   let carla;
   await check(38, async () => {
-    carla = await createNote("person", { title: "Carla Created", phones: ["+16502530005"] });
+    carla = await createNote("person", { title: "Carla Created", phones: [{ number: "+16502530005" }] });
     const r = await openThenNudge("a phone contact", () => phoneContacts().includes("display_name=Carla Created"), 30_000, 60_000);
     const data = contactData("data1='+16502530005'");
     return [data.includes("+16502530005") ? "pass" : "fail", `Contact "Carla Created" appeared on the phone ${r.took} after the person was created, with its number${r.nudged ? " (after the app came back to the foreground: an open app does not pull server changes by itself)" : ""}.`, []];

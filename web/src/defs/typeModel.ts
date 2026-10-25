@@ -153,8 +153,6 @@ export interface FieldModel {
   of: (typeof RANGE_OF)[number]["value"];
   map: "geo" | "image";
   image: string;
-  /** A list of strings: the list-of-strings field holding one label per value, or "". */
-  labels: string;
   /** An asset field: which assets it takes. */
   accept: "any" | "image";
   /** Attributes this version does not model, by name, as WCL source text: written back as read. */
@@ -300,7 +298,6 @@ export function newField(name = "", kind: FieldKind = "string"): FieldModel {
     of: "date",
     map: "geo",
     image: "",
-    labels: "",
     accept: "any",
     extra: {},
   };
@@ -365,7 +362,6 @@ function kindFromSchema(m: FieldModel, f: Record<string, Json>) {
   if (f.of) m.of = f.of as FieldModel["of"];
   m.image = str(f.image);
   m.map = f.map === "image" || m.image ? "image" : "geo";
-  m.labels = str(f.labels);
   if (f.accept === "image") m.accept = "image";
   if (m.kind === "list") {
     if (isObject(f.item)) m.item = fieldFromSchema(f.item);
@@ -472,12 +468,6 @@ function defProblems(m: TypeModel, f: FieldModel, who: string, place: Place, out
       return;
     }
     if (!(VALUE_KINDS as readonly string[]).includes(item.kind)) out.push(`${who}: a list cannot hold ${item.kind} items.`);
-    if (place === "field" && item.kind === "string" && f.labels) {
-      const l = m.fields.find((g) => g.name === f.labels || g.original === f.labels);
-      if (f.labels === f.name) out.push(`${who}: labels cannot name the field itself.`);
-      else if (!l) out.push(`${who}: labels names no field ${JSON.stringify(f.labels)}.`);
-      else if (itemKind(l) !== "string") out.push(`${who}: labels must name a list of strings.`);
-    }
     defProblems(m, item, place === "field" ? who : `${who} item`, itemPlace(place, item.kind), out);
   }
   if (f.kind === "dict") {
@@ -509,8 +499,8 @@ export function hasValue(v: Json | undefined): boolean {
   return v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && v.length === 0);
 }
 
-function fieldWcl(f: FieldModel, renamed: Record<string, string> = {}): string {
-  return `field ${f.name} {\n${defWcl(f, "  ", "field", renamed)}}\n`;
+function fieldWcl(f: FieldModel): string {
+  return `field ${f.name} {\n${defWcl(f, "  ", "field")}}\n`;
 }
 
 /** Whether a list's item is written as `items = "<kind>"` with its attributes beside it, not as an `item` block. */
@@ -538,7 +528,7 @@ function shorthandValues(v: FieldModel): boolean {
 }
 
 /** A definition's body at `place`, each line indented by `i`: its attributes, then its blocks. */
-function defWcl(f: FieldModel, i: string, place: Place, renamed: Record<string, string>): string {
+function defWcl(f: FieldModel, i: string, place: Place): string {
   let out = wclField("kind", f.kind, i);
   if (f.label && f.label !== f.name) out += wclField("label", f.label, i);
   if (f.description) out += wclField("description", f.description, i);
@@ -559,18 +549,16 @@ function defWcl(f: FieldModel, i: string, place: Place, renamed: Record<string, 
       if (shorthandItem(item)) {
         out += wclField("items", item.kind, i);
         out += kindWcl(item, i);
-        // A renamed label field is followed.
-        if (item.kind === "string" && f.labels) out += wclField("labels", renamed[f.labels] ?? f.labels, i);
       } else {
-        blocks += `${i}item {\n${defWcl(item, inner, itemPlace(place, item.kind), renamed)}${i}}\n`;
+        blocks += `${i}item {\n${defWcl(item, inner, itemPlace(place, item.kind))}${i}}\n`;
       }
       break;
     }
     case "dict":
-      for (const k of f.keys) blocks += `${i}key ${k.name} {\n${defWcl(k, inner, "key", renamed)}${i}}\n`;
+      for (const k of f.keys) blocks += `${i}key ${k.name} {\n${defWcl(k, inner, "key")}${i}}\n`;
       if (f.values === "any") out += wclField("values", "any", i);
       else if (f.values && shorthandValues(f.values)) out += wclField("values", f.values.kind, i);
-      else if (f.values) blocks += `${i}values {\n${defWcl(f.values, inner, "values", renamed)}${i}}\n`;
+      else if (f.values) blocks += `${i}values {\n${defWcl(f.values, inner, "values")}${i}}\n`;
       break;
     default:
       out += kindWcl(f, i);
@@ -637,7 +625,6 @@ export function fieldDefOf(f: FieldModel): FieldDef {
     const item = f.item ?? newField(f.name);
     d.items = item.kind;
     d.item = fieldDefOf(item);
-    d.labels = f.labels || null;
   }
   if (f.kind === "dict") {
     d.keys = f.keys.map(fieldDefOf);
@@ -659,7 +646,7 @@ function ownDef(f: FieldModel) {
 
 /**
  * The attributes this version does not model, written back as they were read, after `written`:
- * one the editor now writes itself, such as `labels` on a field that became a list of strings,
+ * one the editor now writes itself, such as `options` on a field that became a select,
  * is left out so it is not written twice.
  */
 function extraWcl(extra: Record<string, string> | undefined, written: string, indent: string): string {
@@ -813,19 +800,14 @@ export function typeWcl(m: TypeModel): string {
   if (m.icon.trim()) head += wclField("icon", m.icon.trim());
   if (m.colour) head += wclField("colour", m.colour);
   head += extraWcl(m.extra, head, "");
-  const renamed = renames(m);
-  const blocks = [...m.fields.map((f) => fieldWcl(f, renamed)), ...followFields(m).map(templateWcl), ...m.handlers.map(handlerWcl)];
+  const blocks = [...m.fields.map((f) => fieldWcl(f)), ...followFields(m).map(templateWcl), ...m.handlers.map(handlerWcl)];
   const listPage = listPageWcl(m);
   if (listPage) blocks.push(listPage);
   return [head, ...blocks].join("\n");
 }
 
-/**
- * Every field a template does not place yet, in type order, with `title` first. A field holding
- * another field's labels is edited with that field, so it is not offered.
- */
-export function unplaced(t: TemplateModel, fields: { name: string; labels?: string | null }[]): string[] {
+/** Every field a template does not place yet, in type order, with `title` first. */
+export function unplaced(t: TemplateModel, fields: { name: string }[]): string[] {
   const placed = new Set(t.tabs.flatMap((tab) => slotsOf(tab.items)));
-  const labelFields = new Set(fields.map((f) => f.labels).filter(Boolean));
-  return ["title", ...fields.map((f) => f.name)].filter((n) => !placed.has(n) && !labelFields.has(n));
+  return ["title", ...fields.map((f) => f.name)].filter((n) => !placed.has(n));
 }

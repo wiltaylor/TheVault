@@ -219,22 +219,7 @@ export function templatePlaces(type: TypeDef, name: string): boolean {
 export function unplacedFields(type: TypeDef, doc?: NoteDoc): FieldDef[] {
   const placed = slottedFields(type);
   for (const name of controlledFields(type, doc)) placed.add(name);
-  const labels = labelFields(type);
-  return type.fields.filter((f) => !placed.has(f.name) && !f.hidden && !labels.has(f.name));
-}
-
-/**
- * The fields of the type that hold another field's labels (`labels = "<field>"`). Each is edited
- * and shown with the field whose labels it holds, never on its own.
- */
-export function labelFields(type: TypeDef): Set<string> {
-  return new Set(type.fields.flatMap((f) => (f.labels ? [f.labels] : [])));
-}
-
-/** The field holding `f`'s labels, when `f` is a list of strings with `labels`. */
-export function labelsField(type: TypeDef | undefined, f: FieldDef): FieldDef | undefined {
-  if (!type || !f.labels || f.kind !== "list") return undefined;
-  return type.fields.find((g) => g.name === f.labels);
+  return type.fields.filter((f) => !placed.has(f.name) && !f.hidden);
 }
 
 /**

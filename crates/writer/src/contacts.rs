@@ -67,12 +67,31 @@ fn text(note: &Json, field: &str) -> String {
         .to_owned()
 }
 
-/// The lists a contact holds with a label list beside each, as `(values, labels)`.
-const LABELLED: [(&str, &str); 3] = [
-    ("phones", "phone_labels"),
-    ("emails", "email_labels"),
-    ("addresses", "address_labels"),
+/// The lists a contact holds with a label list beside each, as `(values, labels, key)`: the
+/// person holds each as a list of dicts, its value under `key` beside an optional `label`.
+const LABELLED: [(&str, &str, &str); 3] = [
+    ("phones", "phone_labels", "number"),
+    ("emails", "email_labels", "address"),
+    ("addresses", "address_labels", "address"),
 ];
+
+/// The values of the person's list of dicts `field` and the label of each, `""` where it has
+/// none. A plain string, as a type from before the dicts holds, is a value with no label.
+fn values_and_labels(note: &Json, field: &str, key: &str) -> (Vec<String>, Vec<String>) {
+    note["fields"][field]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| match item {
+            Json::String(s) => Some((s.clone(), String::new())),
+            Json::Object(_) => Some((
+                item[key].as_str()?.to_owned(),
+                item["label"].as_str().unwrap_or_default().to_owned(),
+            )),
+            _ => None,
+        })
+        .unzip()
+}
 
 /// The single-string details a contact holds.
 const DETAILS: [&str; 5] = [
@@ -83,16 +102,15 @@ const DETAILS: [&str; 5] = [
     "contact_note",
 ];
 
-/// What a contact mirrors of a person, as the detail keys of the `upsert_contact` payload: the
-/// name, each list with its labels (one label per value, `""` where the person has none), the
+/// What a contact mirrors of a person, as the detail keys of the `upsert_contact` payload, which
+/// carries each list of dicts as a list of values and a list of labels: the name, each list with
+/// its labels (one label per value, `""` where the person has none), the
 /// single details, the websites, and the photo's asset id or null.
 fn contact_fields(note: &Json) -> Map<String, Json> {
     let mut out = Map::new();
     out.insert("name".into(), json!(text(note, "title")));
-    for (values, labels) in LABELLED {
-        let v = strings(note, values);
-        let mut l = strings(note, labels);
-        l.resize(v.len(), String::new());
+    for (values, labels, key) in LABELLED {
+        let (v, l) = values_and_labels(note, values, key);
         out.insert(values.into(), json!(v));
         out.insert(labels.into(), json!(l));
     }

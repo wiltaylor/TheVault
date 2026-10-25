@@ -660,12 +660,12 @@ fn threads_group_messages_and_senders_link_to_people_by_email() {
     let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
     let alex = gmail.create(
         "person",
-        json!({ "title": "Alex", "emails": ["alex@example.com"] }),
+        json!({ "title": "Alex", "emails": [{ "address": "alex@example.com" }] }),
     );
     let sam = gmail.create(
         "person",
         // Stored in mixed case, unlike any address the messages give: matched ignoring case.
-        json!({ "title": "Sam", "emails": ["work@sam.example", "Sam@Example.COM"] }),
+        json!({ "title": "Sam", "emails": [{ "address": "work@sam.example" }, { "address": "Sam@Example.COM", "label": "home" }] }),
     );
     gmail.run_ok();
 

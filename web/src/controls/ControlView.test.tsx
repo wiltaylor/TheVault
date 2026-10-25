@@ -29,6 +29,10 @@ const TYPE: TypeDef = {
     field("done", "bool"),
     field("stars", "int"),
     field("words", "int", { computed: true }),
+    field("phones", "list", {
+      items: "dict",
+      item: field("phones", "dict", { keys: [field("number", "string", { required: true }), field("label", "string")], values: null }),
+    }),
   ],
   templates: [],
 };
@@ -59,6 +63,18 @@ function mount(blocks: Block[], start: Record<string, Json> = {}) {
 }
 
 describe("ControlBlock", () => {
+  it("a chips control on a list of labelled values shows each value with its label and writes the records", () => {
+    const phones = [
+      { number: "+61400000020", label: "mobile" },
+      { number: "+61400000021", label: "home" },
+    ];
+    const { container, getByRole, values } = mount([ctl("phones", "chips")], { phones });
+    const chips = [...container.querySelectorAll(".labelled-chip")].map((c) => c.textContent?.replace("×", "").trim());
+    expect(chips).toEqual(["mobile+61400000020", "home+61400000021"]);
+    fireEvent.click(getByRole("button", { name: "Remove mobile +61400000020" }));
+    expect(values().phones).toEqual([{ number: "+61400000021", label: "home" }]);
+  });
+
   it("two controls on one field agree, and each writes the field", () => {
     const { getByRole, values } = mount([ctl("done", "toggle"), ctl("done", "checkbox", { label: "Box" })]);
     const toggle = getByRole("switch", { name: "Done" });

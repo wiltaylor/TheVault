@@ -49,15 +49,22 @@ test("a person's phones are labelled chips that copy and edit, and the photo til
 }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const name = unique("Sam");
+  // A label another person's phone uses, offered when Sam's are edited.
+  const pager = `pager${Date.now().toString(36)}`;
+  const other = await admin.post("/api/notes?type=person", {
+    data: { note: { fields: { title: unique("Kim"), phones: [{ number: "+61400000029", label: pager }] }, blocks: [] } },
+  });
+  expect(other.status(), await other.text()).toBe(201);
   const res = await admin.post("/api/notes?type=person", {
     data: {
       note: {
         fields: {
           title: name,
-          phones: ["+61400000020", "+61400000021"],
-          phone_labels: ["mobile", "home"],
-          emails: ["sam@example.com"],
-          email_labels: ["work"],
+          phones: [
+            { number: "+61400000020", label: "mobile" },
+            { number: "+61400000021", label: "home" },
+          ],
+          emails: [{ address: "sam@example.com", label: "work" }],
         },
         blocks: [],
       },
@@ -69,14 +76,12 @@ test("a person's phones are labelled chips that copy and edit, and the photo til
   const pane = activePane(page);
   const phones = pane.getByTestId("field-phones");
 
-  // One chip per value, the label beside the number; the label lists have no slot of their own.
+  // One chip per value, the label beside the number.
   await expect(phones.locator(".labelled-chip")).toHaveCount(2);
   const mobile = phones.locator(".labelled-chip").first();
   await expect(mobile.locator(".chip-label")).toHaveText("mobile");
   await expect(mobile.locator(".chip-value")).toHaveText("+61400000020");
   await expect(phones.locator(".labelled-chip").nth(1)).toContainText("home+61400000021");
-  await expect(pane.getByTestId("field-phone_labels")).toHaveCount(0);
-  await expect(pane.getByTestId("field-email_labels")).toHaveCount(0);
   await expect(pane.getByTestId("field-emails").locator(".chip-label")).toHaveText("work");
 
   // The empty photo tile, with the chips, for the user.
@@ -98,6 +103,7 @@ test("a person's phones are labelled chips that copy and edit, and the photo til
   await phones.getByRole("button", { name: "home +61400000021", exact: true }).click();
   const popover = phones.getByRole("dialog", { name: "Edit home +61400000021" });
   await expect(popover).toBeVisible();
+  await expect(phones.locator(`datalist option[value="${pager}"]`)).toHaveCount(1);
   await shot(page, "chip-edit-popover", phones.locator("xpath=.."));
   await popover.getByRole("combobox", { name: "Label" }).fill("work");
   await popover.getByRole("textbox", { name: "Value" }).fill("+61299990000");
@@ -105,13 +111,10 @@ test("a person's phones are labelled chips that copy and edit, and the photo til
   await expect(popover).toHaveCount(0);
   await expect(phones.locator(".labelled-chip").nth(1)).toContainText("work+61299990000");
   await expect
-    .poll(async () => {
-      const f = await fieldsOf(admin, id);
-      return [f.phones, f.phone_labels];
-    })
+    .poll(async () => (await fieldsOf(admin, id)).phones)
     .toEqual([
-      ["+61400000020", "+61299990000"],
-      ["mobile", "work"],
+      { number: "+61400000020", label: "mobile" },
+      { number: "+61299990000", label: "work" },
     ]);
 
   // The photo tile opens the picker; an upload there sets the field.

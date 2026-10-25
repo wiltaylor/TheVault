@@ -471,14 +471,14 @@ fn merge(google: Map[string, string], snapshot: Map[string, string], mine: Map[s
 
 // ---- the note -------------------------------------------------------------------------------
 
-// The person whose `emails` holds `address`, ignoring case, or "".
+// The person with an email whose `address` is `address`, ignoring case, or "".
 fn person_for(ctx: Ctx, address: string) -> Result[string, string] {
     let wanted = address.to_lower()
     if let Some(id) = ctx.people.get(wanted) {
         return Ok(id)
     }
     let found = ""
-    for row in vault::query("from person where has_ci(emails, " + quoted(wanted) + ") limit 1")? {
+    for row in vault::query("from person where any(emails, |e| has_ci(e.address, " + quoted(wanted) + ")) limit 1")? {
         found = text_of(row, "id")
     }
     ctx.people[wanted] = found

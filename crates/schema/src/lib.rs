@@ -188,7 +188,6 @@ fn imply_inverses(types: &mut [TypeDef]) {
                     multiple: true,
                     listed: false,
                     default: None,
-                    labels: None,
                     accept: Accept::Any,
                     extra: Vec::new(),
                     implied: true,

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Note, NoteDoc, TypeDef } from "../api";
+import type { Json, Note, NoteDoc, TypeDef } from "../api";
 
 // The note page's Outbox buttons (outbox X8, X13): Reply, Reply all and Forward on an email or an
 // SMS, Propose a change on an event, and Ready, Approve and send, Reject and Retry on an item.
@@ -43,7 +43,7 @@ const GROUP_EMAIL: NoteDoc = {
 /** The notes `api.note` reads: people and a conversation. */
 const notes: Record<string, NoteDoc> = {};
 const person = (title: string, phones: string[], labels: string[] = []): NoteDoc => ({
-  fields: { title, phones, phone_labels: labels },
+  fields: { title, phones: phones.map((number, i): Json => (labels[i] ? { number, label: labels[i] } : { number })) },
   blocks: [],
 });
 const sms = (fields: Record<string, unknown>, text = "On my way"): NoteDoc => ({

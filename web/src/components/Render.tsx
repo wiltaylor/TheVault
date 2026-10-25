@@ -15,7 +15,7 @@ import { InkSurface } from "../ink/InkSurface";
 import { TypeIcon } from "./Icon";
 import { ImageThumb } from "./ImageField";
 import { Inline } from "./Inline";
-import { labelled, labelledText } from "./LabelledList";
+import { labelled, labelledShape, labelledText } from "./LabelledList";
 import { optionText } from "../options";
 import { noteTitle } from "../editor/titles";
 import { assetName } from "./assetNames";
@@ -34,16 +34,15 @@ export function formatValue(value: Json | undefined): string {
 }
 
 /**
- * A field's value as plain text, with the note's other `fields` at hand: a list with `labels`
- * shows each value after its label, "mobile +61400000020, home +61400000021". A select shows its
- * options' labels, a reference its notes' titles and an asset its file names, in lists and dicts
- * too; a date range its start to its end; a dict each entry after its key's label. Reactive, as titles and names load.
+ * A field's value as plain text: a list of labelled values shows each value after its label,
+ * "mobile +61400000020, home +61400000021". A select shows its options' labels, a reference its
+ * notes' titles and an asset its file names, in lists and dicts too; a date range its start to its
+ * end; a dict each entry after its key's label. Reactive, as titles and names load.
  */
-export function fieldText(f: FieldDef, value: Json | undefined, fields?: Record<string, Json | undefined>): string {
+export function fieldText(f: FieldDef, value: Json | undefined): string {
   if (value === undefined || value === null) return "";
-  if (f.kind === "list" && f.labels && Array.isArray(value)) {
-    return labelledText(labelled(value, fields?.[f.labels]));
-  }
+  const shape = labelledShape(f);
+  if (shape && Array.isArray(value)) return labelledText(labelled(value, shape.key));
   if (Array.isArray(value)) {
     const item = f.kind === "list" ? (f.item ?? null) : { ...f, multiple: false };
     // Items that are lists or records are told apart by semicolons.
@@ -95,13 +94,12 @@ function dictText(f: FieldDef, value: Json): string {
 export function FieldValue(props: {
   field: FieldDef;
   value: Json | undefined;
-  fields?: Record<string, Json | undefined>;
   size?: "small" | "card";
 }) {
   return (
     <Show
       when={props.field.kind === "asset" && props.field.accept === "image" && typeof props.value === "string" && props.value}
-      fallback={fieldText(props.field, props.value, props.fields)}
+      fallback={fieldText(props.field, props.value)}
     >
       {(id) => <ImageThumb id={id() as string} alt={props.field.label} size={props.size} />}
     </Show>

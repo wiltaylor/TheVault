@@ -25,6 +25,7 @@ import {
   unplaced,
 } from "./typeModel";
 import { wclBlock, wclString, wclValue } from "./wcl";
+import { labelledShape } from "../labelled";
 
 describe("wcl", () => {
   it("escapes strings with the subset's escapes only", () => {
@@ -131,7 +132,7 @@ describe("type model", () => {
           required: false,
           computed: false,
           multiple: false,
-          extra: { sparkline: "true", stops: '[1, 2.5, "x"]', labels: '"ranks"' },
+          extra: { sparkline: "true", stops: '[1, 2.5, "x"]', of: '"datetime"' },
         },
       ],
       templates: [
@@ -164,7 +165,7 @@ field rank {
   kind = "int"
   sparkline = true
   stops = [1, 2.5, "x"]
-  labels = "ranks"
+  of = "datetime"
 }
 
 template default {
@@ -181,12 +182,11 @@ template default {
 }
 `);
     // An attribute the editor now writes itself is not written twice.
-    m.fields[0]!.kind = "list";
-    m.fields[0]!.item = newField("rank");
-    m.fields[0]!.labels = "other";
+    m.fields[0]!.kind = "date_range";
+    m.fields[0]!.of = "date";
     const wcl = typeWcl(m);
-    expect(wcl.match(/labels = /g)).toHaveLength(1);
-    expect(wcl).toContain('labels = "other"');
+    expect(wcl.match(/of = /g)).toHaveLength(1);
+    expect(wcl).toContain('of = "date"');
   });
 
   it("writes a stored type back in the documented order", () => {
@@ -246,29 +246,39 @@ handler "before_update" {
     expect(typeWcl(m)).toContain('field device_contacts {\n  kind = "dict"\n  hidden = true\n  values = "string"\n}');
   });
 
-  it("keeps a list's labels and an asset field's accept, and labels follows a renamed field", () => {
+  it("keeps a list of labelled values (a dict of a value and a label) and an asset field's accept", () => {
+    const str = (name: string, required = false) => ({ name, kind: "string", label: name, description: null, required, computed: false, multiple: false });
     const person: SchemaType = {
       ...stored,
       fields: [
-        { name: "phones", kind: "list", label: "Phones", required: false, computed: false, multiple: false, items: "string", labels: "phone_labels" },
-        { name: "phone_labels", kind: "list", label: "Phone labels", required: false, computed: false, multiple: false, items: "string", labels: null },
+        {
+          name: "phones",
+          kind: "list",
+          label: "Phones",
+          required: false,
+          computed: false,
+          multiple: false,
+          items: "dict",
+          item: { name: "phones", kind: "dict", label: "phones", description: null, required: false, computed: false, multiple: false, keys: [str("number", true), str("label")], values: null },
+        },
         { name: "photo", kind: "asset", label: "Photo", required: false, computed: false, multiple: false, accept: "image" },
       ],
       templates: [],
       handlers: [],
     };
     const m = typeFromSchema(person);
-    expect(m.fields.map((f) => [f.labels, f.accept])).toEqual([
-      ["phone_labels", "any"],
-      ["", "any"],
-      ["", "image"],
-    ]);
-    m.fields[1]!.name = "labels_of_phones";
+    expect(m.fields.map((f) => f.accept)).toEqual(["any", "image"]);
     const text = typeWcl(m);
-    expect(text).toContain('field phones {\n  kind = "list"\n  label = "Phones"\n  items = "string"\n  labels = "labels_of_phones"\n}');
+    expect(text).toContain(
+      'field phones {\n  kind = "list"\n  label = "Phones"\n  item {\n    kind = "dict"\n    key number {\n      kind = "string"\n      required = true\n    }\n    key label {\n      kind = "string"\n    }\n  }\n}',
+    );
+    expect(text).not.toContain("labels");
     expect(text).toContain('field photo {\n  kind = "asset"\n  label = "Photo"\n  accept = "image"\n}');
-    m.fields[0]!.labels = "nope";
-    expect(problems(m)).toContain('phones: labels names no field "nope".');
+    // The note page gets it as a list of dicts, with no `labels`, and shows it as labelled chips.
+    const phones = fieldDefOf(m.fields[0]!);
+    expect(phones).not.toHaveProperty("labels");
+    expect(labelledShape(phones)).toEqual({ key: "number", labelRequired: false });
+    expect(problems(m)).toEqual([]);
   });
 
   it("reads a list of terms, and a multiple taxonomy, as a list whose items are a taxonomy, and writes both so", () => {

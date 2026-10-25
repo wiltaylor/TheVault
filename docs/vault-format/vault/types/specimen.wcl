@@ -126,16 +126,21 @@ field related {
 }
 
 field aliases {
-  kind   = "list"
-  label  = "Aliases"
-  items  = "string"
-  labels = "alias_labels"
-}
-
-field alias_labels {
   kind  = "list"
-  label = "Alias labels"
-  items = "string"
+  label = "Aliases"
+
+  item {
+    kind = "dict"
+
+    key name {
+      kind     = "string"
+      required = true
+    }
+
+    key label {
+      kind = "string"
+    }
+  }
 }
 
 field import_ref {

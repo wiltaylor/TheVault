@@ -16,7 +16,7 @@ async function create(admin: APIRequestContext, type: string, fields: Record<str
 
 test("a conversation's page shows its own messages, oldest first", async ({ page, admin }) => {
   const name = unique("Sam");
-  const sam = await create(admin, "person", { title: name, phones: ["+61400000002"] });
+  const sam = await create(admin, "person", { title: name, phones: [{ number: "+61400000002", label: "mobile" }] });
   const title = unique("Thread");
   const thread = await create(admin, "conversation", { title, participants: [sam.id], channel: "sms" });
   const other = await create(admin, "conversation", { title: unique("Other thread"), channel: "sms" });

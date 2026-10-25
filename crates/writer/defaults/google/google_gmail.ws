@@ -462,7 +462,8 @@ fn address_of(raw: string) -> string {
     }
 }
 
-// The person whose `emails` hold the address of `raw`, or "". No person is created (D5).
+// The person with an email whose `address` is the address of `raw`, or "". No person is created
+// (D5).
 fn person_of(ctx: Ctx, raw: string) -> Result[string, string] {
     let address = address_of(raw)
     if address == "" {
@@ -473,7 +474,7 @@ fn person_of(ctx: Ctx, raw: string) -> Result[string, string] {
         None => {},
     }
     // An address matches ignoring case, however the person stores it.
-    let id = text_of(first_row("from person where has_ci(emails, " + quoted(address) + ") limit 1")?, "id")
+    let id = text_of(first_row("from person where any(emails, |e| has_ci(e.address, " + quoted(address) + ")) limit 1")?, "id")
     ctx.people[address] = id
     Ok(id)
 }

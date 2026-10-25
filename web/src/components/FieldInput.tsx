@@ -20,7 +20,7 @@ import { AssetInput } from "./AssetField";
 import { ChipPicker, matches } from "./ChipPicker";
 import type { Suggestion } from "./Combobox";
 import { ImageField } from "./ImageField";
-import { LabelledList, labelled, labelledWrite } from "./LabelledList";
+import { LabelledList, type LabelledShape, labelled, labelledShape, labelledValue } from "./LabelledList";
 import { optionChoices, optionText } from "../options";
 import { termPicker } from "./termPicker";
 
@@ -34,26 +34,19 @@ export interface FieldInputProps {
   placeholder?: string;
   /** Offer no new terms, even for a field on an open taxonomy, as for a field's default. */
   fixedTerms?: boolean;
-  /**
-   * The note's other fields, for an editor that writes more than one field in one edit: a list
-   * with `labels` writes its values and their labels together. Without it, such a list is edited
-   * as a plain list.
-   */
+  /** The note the field belongs to, for suggestions drawn from other notes of its type. */
   related?: RelatedFields;
 }
 
-/** The fields of the note a field belongs to. */
+/** The note a field belongs to. */
 export interface RelatedFields {
   /** The note's type name, for suggestions drawn from other notes of the type. */
   type?: string;
-  value: (name: string) => Json | undefined;
-  /** Write several fields in one edit, `undefined` removing one. */
-  set: (values: Record<string, Json | undefined>) => void;
 }
 
 /**
- * The labels notes of `type` hold in field `name`, most used first; fetched once per type and
- * field while the page is open.
+ * The labels notes of `type` give the values of field `name`, a list of labelled values (each
+ * item's `label`), most used first; fetched once per type and field while the page is open.
  */
 const knownLabelCache = new Map<string, Promise<string[]>>();
 export function knownLabels(type: string | undefined, name: string): Promise<string[]> {
@@ -67,7 +60,8 @@ export function knownLabels(type: string | undefined, name: string): Promise<str
         const counts = new Map<string, number>();
         for (const r of page.rows) {
           const v = r.fields[name];
-          for (const l of Array.isArray(v) ? v : []) {
+          for (const item of Array.isArray(v) ? v : []) {
+            const l = item && typeof item === "object" && !Array.isArray(item) ? item.label : undefined;
             if (typeof l === "string" && l.trim()) counts.set(l.trim(), (counts.get(l.trim()) ?? 0) + 1);
           }
         }
@@ -82,9 +76,9 @@ export function knownLabels(type: string | undefined, name: string): Promise<str
   return p;
 }
 
-/** A list of strings with `labels`: one chip per value with its label, both lists written together. */
-function LabelledInput(props: FieldInputProps & { related: RelatedFields; labelsField: string }) {
-  const l = () => labelled(props.value, props.related.value(props.labelsField));
+/** A list of labelled values: one chip per value with its label. */
+function LabelledInput(props: FieldInputProps & { shape: LabelledShape }) {
+  const l = () => labelled(props.value, props.shape.key);
   return (
     <LabelledList
       id={props.id}
@@ -92,8 +86,8 @@ function LabelledInput(props: FieldInputProps & { related: RelatedFields; labels
       values={l().values}
       labels={l().labels}
       emptyText={props.placeholder}
-      knownLabels={() => knownLabels(props.related.type, props.labelsField)}
-      onChange={(next) => props.related.set(labelledWrite(next, props.field.name, props.labelsField))}
+      knownLabels={() => knownLabels(props.related?.type, props.field.name)}
+      onChange={(next) => props.onChange(labelledValue(next, props.shape))}
     />
   );
 }
@@ -916,9 +910,7 @@ export function FieldInput(props: FieldInputProps) {
       <Match when={f().kind === "asset"}>
         <AssetInput {...props} />
       </Match>
-      <Match when={f().kind === "list" && (f().items ?? "string") === "string" && f().labels && props.related}>
-        <LabelledInput {...props} related={props.related!} labelsField={f().labels!} />
-      </Match>
+      <Match when={labelledShape(f())}>{(shape) => <LabelledInput {...props} shape={shape()} />}</Match>
       <Match when={f().kind === "list" && (f().items ?? "string") === "string"}>
         <Picker {...props} freeText suggest={() => []} />
       </Match>

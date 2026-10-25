@@ -4,7 +4,6 @@
 
 import type { FieldDef, Template, TypeDef } from "./api";
 import { slotsOf } from "./blocks/columns";
-import { labelFields } from "./notes";
 import { lit } from "./search/searchModel";
 
 /** The views the asset library remembers with `loadTypeView`. */
@@ -156,16 +155,14 @@ export const FALLBACK_COLUMNS = 3;
  */
 export function listColumns(type: TypeDef): FieldDef[] {
   const card = cardTemplate(type);
-  // A field holding another's labels shows within that field's column.
-  const labels = labelFields(type);
-  const byName = new Map(type.fields.filter((f) => !labels.has(f.name)).map((f) => [f.name, f]));
+  const byName = new Map(type.fields.map((f) => [f.name, f]));
   if (card) {
     const placed = [...new Set(card.tabs.slice(0, 1).flatMap((tab) => slotsOf(tab.items)))]
       .map((s) => byName.get(s))
       .filter((f): f is FieldDef => !!f && scalar(f));
     if (placed.length) return placed;
   }
-  return type.fields.filter((f) => scalar(f) && !labels.has(f.name)).slice(0, FALLBACK_COLUMNS);
+  return type.fields.filter(scalar).slice(0, FALLBACK_COLUMNS);
 }
 
 /**

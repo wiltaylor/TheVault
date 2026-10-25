@@ -3,6 +3,7 @@
 // fit table, a control's items, and how each control kind turns a gesture into a field value.
 
 import type { Block, FieldDef, Json, NoteDoc, TypeDef } from "../api";
+import { labelledShape } from "../labelled";
 
 export const CONTROL_KINDS = [
   "text",
@@ -68,7 +69,7 @@ export function controlFits(kind: ControlKind, f: FieldDef): boolean {
     case "radio":
       return f.kind === "select" && !f.multiple;
     case "chips":
-      return (choice && f.multiple) || (f.kind === "list" && (f.items ?? "string") === "string");
+      return (choice && f.multiple) || (f.kind === "list" && (f.items ?? "string") === "string") || !!labelledShape(f);
     case "calendar":
       return f.kind === "date" || (f.kind === "date_range" && (f.of ?? "date") === "date");
     case "datetime":

@@ -37,7 +37,7 @@ async function shots(page: Page, name: string) {
 
 test("a plain text message shows no image placeholder and no empty box", async ({ page, admin }) => {
   const name = unique("Sam");
-  const sam = await create(admin, "person", { title: name, phones: ["+61400000002"] });
+  const sam = await create(admin, "person", { title: name, phones: [{ number: "+61400000002", label: "mobile" }] });
   const thread = await create(admin, "conversation", { title: unique("Thread"), participants: [sam.id], channel: "sms" });
   const text = unique("Running ten minutes late, see you at the cafe");
   const message = await create(

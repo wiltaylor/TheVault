@@ -74,6 +74,32 @@ field numbers {
   kind  = "list"
   items = "int"
 }
+field phones {
+  kind = "list"
+  item {
+    kind = "dict"
+    key number {
+      kind     = "string"
+      required = true
+    }
+    key label {
+      kind = "string"
+    }
+  }
+}
+field rows {
+  kind = "list"
+  item {
+    kind   = "dict"
+    values = "string"
+    key value {
+      kind = "string"
+    }
+    key label {
+      kind = "string"
+    }
+  }
+}
 field extra {
   kind   = "dict"
   values = "string"
@@ -113,7 +139,7 @@ const FITS: &[(&str, &[&str])] = &[
     ("checkbox", &["done"]),
     ("dropdown", &["size", "status", "parent"]),
     ("radio", &["size"]),
-    ("chips", &["tags", "sizes", "statuses", "links"]),
+    ("chips", &["tags", "phones", "sizes", "statuses", "links"]),
     ("calendar", &["due", "span"]),
     ("datetime", &["at"]),
     ("time", &["at"]),
@@ -122,6 +148,8 @@ const FITS: &[(&str, &[&str])] = &[
 
 const ALL: &[&str] = &[
     "title",
+    "phones",
+    "rows",
     "name",
     "site",
     "count",

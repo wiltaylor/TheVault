@@ -34,7 +34,7 @@ fn call_ended(event: Value) -> Result[(), string] {
     let person = if number == "" {
         None
     } else {
-        first("from person where has(phones, " + quoted(number) + ") limit 1")?
+        first("from person where any(phones, |p| p.number == " + quoted(number) + ") limit 1")?
     }
     let contact_name = match data.get("contact") {
         Some(c) => text_of(c, "name"),

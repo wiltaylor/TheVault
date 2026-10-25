@@ -116,13 +116,13 @@ fn person(w: &Writer, limits: &Limits, id: &str) -> Result<Option<(String, Value
     Ok(Some((title, fields)))
 }
 
-/// `to`, an address or a person note's id, as an address from the person's `field` list, and
-/// the name to show for it.
+/// `to`, an address or a person note's id, as the first address from the person's `field`, a
+/// list of dicts holding each address under `key`, and the name to show for it.
 fn resolve(
     w: &Writer,
     limits: &Limits,
     to: &str,
-    field: &str,
+    (field, key): (&str, &str),
     what: &str,
 ) -> Result<(String, String), ToolOut> {
     if looks_like_id(to)
@@ -132,7 +132,7 @@ fn resolve(
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(Value::as_str)
+            .filter_map(|v| v[key].as_str().or(v.as_str()))
             .map(str::trim)
             .find(|s| !s.is_empty());
         return match first {
@@ -152,7 +152,7 @@ fn resolve_all(
     let mut addresses = Vec::new();
     let mut names = Vec::new();
     for to in list {
-        let (a, n) = resolve(w, limits, to, "emails", "email address")?;
+        let (a, n) = resolve(w, limits, to, ("emails", "address"), "email address")?;
         if !a.contains('@') {
             return Err(ToolOut::error(format!(
                 "{to:?} is not an email address or a person note's id"
@@ -301,7 +301,7 @@ fn sms(w: &Writer, limits: &Limits, input: &Value) -> Result<Drafted, ToolOut> {
             "to must be a phone number or a person note's id",
         ));
     }
-    let (phone, name) = resolve(w, limits, to, "phones", "phone number")?;
+    let (phone, name) = resolve(w, limits, to, ("phones", "number"), "phone number")?;
     if !phone.chars().any(|c| c.is_ascii_digit()) {
         return Err(ToolOut::error(format!(
             "{to:?} is not a phone number or a person note's id"

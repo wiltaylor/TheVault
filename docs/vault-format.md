@@ -209,7 +209,7 @@ A reader tolerates an attribute of a type, or of a field, that it does not know.
 
 - The reader ignores the attribute. The type loads, and notes of the type are written and checked against what the reader knows.
 - The reader reports the attribute as a warning, `<path>: is not an attribute of <owner> in this version; it is ignored`. `GET /api/types` and `GET /api/schema` list each type's `warnings`, the JSON answer of `PUT /api/types/<name>` carries them, and the type editor shows them, so a misspelt attribute is seen. Each warning is `{ "at", "message", "severity": "warning" }`.
-- The file keeps the attribute, and so does the type editor. The definition the reader builds holds each ignored attribute of the type, a field, a template, a tab or a slot, and `GET /api/schema` lists them as `extra`, an object from attribute name to the value as WCL source text, such as `"extra": { "unit": "\"cm\"" }`. Saving the type from the type editor writes each one back as it was, after the attributes the editor knows. One that the editor now writes itself, such as `labels` on a field that became a list of strings, is written once, with the editor's value. A fixed content block in a template is kept whole, so its attributes stay as they are.
+- The file keeps the attribute, and so does the type editor. The definition the reader builds holds each ignored attribute of the type, a field, a template, a tab or a slot, and `GET /api/schema` lists them as `extra`, an object from attribute name to the value as WCL source text, such as `"extra": { "unit": "\"cm\"" }`. Saving the type from the type editor writes each one back as it was, after the attributes the editor knows. One that the editor now writes itself, such as `accept` on a field that became an asset field, is written once, with the editor's value. A fixed content block in a template is kept whole, so its attributes stay as they are.
 
 Everything else stays an error that refuses the type: a malformed value of an attribute the reader knows, such as `accept = "video"` or `required = "yes"`, a missing required attribute, a `kind` the reader does not know, an unknown block, inside a template or anywhere else, and an unknown handler item. A change that an older reader would misread rather than ignore still raises the format version (D27).
 
@@ -295,7 +295,7 @@ template default {
 }
 ```
 
-The fields of the Google sync types, as a new vault gets them. The Gmail and calendar syncs link a sender, recipient or attendee to the person whose `emails` holds the address, ignoring case, with the query `from person where has_ci(emails, "<address>")`, and create no person (google-sync D5):
+The fields of the Google sync types, as a new vault gets them. The Gmail and calendar syncs link a sender, recipient or attendee to the person with an email of that address, ignoring case, with the query `from person where any(emails, |e| has_ci(e.address, "<address>"))`, and create no person (google-sync D5):
 
 | Type | Field | Kind | Meaning |
 |------|-------|------|---------|
@@ -396,47 +396,68 @@ The `person` type, both the starter pack's and the one added with the phone data
 
 ```wcl
 field emails {
-  kind   = "list"
-  label  = "Emails"
-  items  = "string"
-  labels = "email_labels"
-}
+  kind  = "list"
+  label = "Emails"
 
-field email_labels {
-  kind        = "list"
-  label       = "Email labels"
-  description = "The label of each email address, in the same order: mobile, home, work, main, other, or the phone's own label."
-  items       = "string"
+  item {
+    kind = "dict"
+
+    key address {
+      kind     = "string"
+      label    = "Address"
+      required = true
+    }
+
+    key label {
+      kind        = "string"
+      label       = "Label"
+      description = "mobile, home, work, main, other, or the phone's own label."
+    }
+  }
 }
 
 field phones {
   kind        = "list"
   label       = "Phones"
   description = "Phone numbers in international (E.164) form, such as +61400000000."
-  items       = "string"
-  labels      = "phone_labels"
-}
 
-field phone_labels {
-  kind        = "list"
-  label       = "Phone labels"
-  description = "The label of each phone number, in the same order: mobile, home, work, main, other, or the phone's own label."
-  items       = "string"
+  item {
+    kind = "dict"
+
+    key number {
+      kind     = "string"
+      label    = "Number"
+      required = true
+    }
+
+    key label {
+      kind        = "string"
+      label       = "Label"
+      description = "mobile, home, work, main, other, or the phone's own label."
+    }
+  }
 }
 
 field addresses {
   kind        = "list"
   label       = "Addresses"
   description = "Postal addresses, each on one line with its lines joined by commas."
-  items       = "string"
-  labels      = "address_labels"
-}
 
-field address_labels {
-  kind        = "list"
-  label       = "Address labels"
-  description = "The label of each postal address, in the same order: home, work, other, or the phone's own label."
-  items       = "string"
+  item {
+    kind = "dict"
+
+    key address {
+      kind     = "string"
+      label    = "Address"
+      required = true
+    }
+
+    key label {
+      kind        = "string"
+      label       = "Label"
+      description = "home, work, other, or the phone's own label."
+    }
+  }
 }
 
 field organisation {
@@ -487,13 +508,15 @@ field device_contacts {
 }
 ```
 
-`phones`, `emails` and `addresses` each have a label list beside them, index-aligned and named by their [`labels`](#list): the label of `phones[0]` is `phone_labels[0]`. The default template places `photo` first, then the name, and no slot of a label list; the card shows the photo and the title first. A label is `mobile`, `home`, `work`, `main`, `other`, or the phone's custom label text, and `""` for none. `phones` are E.164, so `has(phones, "+61400000000")` finds the person by a number. `addresses` are postal addresses, each the phone's formatted address with its line breaks joined by `", "`. `birthday` is `YYYY-MM-DD`, or `--MM-DD` when the year is not known. `contact_note` is the note on the phone contact, kept apart from `body`, which is the person's own content. `photo` is the contact photo. `phone_contact` (**On the phone**, default `true`, and `true` when a note holds none) says whether the person is kept as a contact on the phones that sync contacts: unticked, each phone deletes the contact linked to the person and the link on its next round, and a contact found only by a shared number is left alone, never linked to the person; ticked again, the home server queues an `upsert_contact` for each phone, the phone that ticked it included, even when no detail changed. A contact deleted on the phone, or by a `delete_contact` command, unticks it too, so the contact does not come back until the person is ticked again. Android deletes the whole contact, so one held in a Google account goes from that account as well. The starter's `person` also has `homepage` and a Work tab.
+`phones`, `emails` and `addresses` are lists of [dicts](#dict): each entry holds its value, `number` for a phone and `address` for an email or postal address, and an optional free-text `label`, as `phones = [{ number: "+61400000000", label: "mobile" }]`. An entry with no label has no `label` member. The default template places `photo` first, then the name; the card shows the photo and the title first. A label is `mobile`, `home`, `work`, `main`, `other`, or the phone's custom label text. `phones` are E.164, so `any(phones, |p| p.number == "+61400000000")` finds the person by a number, and `any(emails, |e| has_ci(e.address, "Ann@Example.com"))` by an email address whatever its case; both read the index rather than every person. The phone still hears and reports each list as values with an index-aligned label list (`phones` with `phone_labels`, see `docs/scripts.md`): the device scripts convert between the two. `addresses` are postal addresses, each the phone's formatted address with its line breaks joined by `", "`. `birthday` is `YYYY-MM-DD`, or `--MM-DD` when the year is not known. `contact_note` is the note on the phone contact, kept apart from `body`, which is the person's own content. `photo` is the contact photo. `phone_contact` (**On the phone**, default `true`, and `true` when a note holds none) says whether the person is kept as a contact on the phones that sync contacts: unticked, each phone deletes the contact linked to the person and the link on its next round, and a contact found only by a shared number is left alone, never linked to the person; ticked again, the home server queues an `upsert_contact` for each phone, the phone that ticked it included, even when no detail changed. A contact deleted on the phone, or by a `delete_contact` command, unticks it too, so the contact does not come back until the person is ticked again. Android deletes the whole contact, so one held in a Google account goes from that account as well. The starter's `person` also has `homepage` and a Work tab.
 
 The default template has a second tab, Correspondence, with two query views: Messages, `from conversation where has(participants, this) sort updated desc`, the person's SMS and other phone conversations, and Email, `from email where from == this || has(to, this) || has(cc, this) sort sent desc`, every email the person sent or received. A vault whose `person` predates the tab gains it from the upgrade step `0007_person_correspondence`, at the end of its default template, when that template has no tab of the name and the type has the `emails` and `phones` lists; the rest of the file stays as the user left it.
 
 A vault from before people carried every contact detail has `addresses` holding email addresses and a separate single `email`. The upgrade step `0001_person_emails` renames that `addresses` to `emails`, moves a non-empty `email` value to the front of `emails` (an equal address further on, ignoring case, is dropped), and removes `email`, as one planned type change that edits every person note it applies to; see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades). The template slots of `email` and `addresses` become one slot of `emails`. Fields the user added stay, and the seeding that follows adds the other new fields, postal `addresses` among them. A device's local vault adds no field to such a `person` type, and waits for the home server's step to sync.
 
-A vault from before values and their labels were edited together has `emails`, `phones` and `addresses` with no `labels`, and slots for the three label lists in the default template. The upgrade step `0002_person_labels` gives each of the three that the type has its `labels`, adding the shipped label list after it when the type lacks one; gives `photo` `accept = "image"` when every photo in the vault is an image asset; and removes the slots of `email_labels`, `phone_labels` and `address_labels` from the `default` template. It is one planned type change that edits no note, and it changes nothing else the user changed in the type. It does nothing to a `person` type where any field already has `labels`.
+A vault from before values and their labels were edited together has `emails`, `phones` and `addresses` as lists of strings with no `labels`, and slots for the three label lists in the default template. The upgrade step `0002_person_labels` gives each of the three that is a list of strings its `labels`, adding the label list as the app last shipped it after it when the type lacks one; gives `photo` `accept = "image"` when every photo in the vault is an image asset; and removes the slots of `email_labels`, `phone_labels` and `address_labels` from the `default` template. It is one planned type change that edits no note, and it changes nothing else the user changed in the type. It does nothing to a `person` type where any field already has `labels`, or whose lists are lists of dicts.
+
+A vault from before the lists of dicts has `emails`, `phones` and `addresses` as lists of strings, each with `labels` naming the index-aligned label list `email_labels`, `phone_labels` or `address_labels`. The home server makes each a list of dicts on its next start, with the shipped `item`, and every person note with it: the value at each position becomes the entry's `number` or `address`, and the label at the same position its `label` (a label past the last value is dropped, and an empty or missing one gives no `label`). The label lists go, with their template slots. See [Lists with labels](#lists-with-labels).
 
 `device_contacts` maps each device to the id of the contact on that device that is linked to the person. The key is `device_` followed by the device id, as in `device_01JB8Z4K2MQ7V3X9T5R6W8Y2ZB`, because a dict key must be an identifier and a device id starts with a digit. It is hidden: the device scripts write it, and the app does not show it.
 
@@ -846,7 +869,6 @@ An ordered list of values, every one of one definition: its item. The item may b
 |------|------|---------|
 | `items` | string | The item's kind, with the item's own items beside it in the field block: `target`, `relation`, `inverse` and `on_delete` for references, `options` and `option_labels` for selects, `taxonomy`, `accept`, `of`, `map` and `image` |
 | `item { ... }` | block | The item as a whole definition, the way a `field` block is written, with no label: needed for a list of lists, or of dicts with keys |
-| `labels` | string | Allowed only with `items = "string"`. Another field of the type, a list of strings, that holds one label per value in the same order |
 
 A list gives `items` or an `item` block, not both. `label`, `description`, `required`, `computed`, `hidden` and `default` belong to the list. A list of `select`, `taxonomy`, `reference` or `asset` items is that kind holding several values in every respect: a value can appear once, queries such as `has()` and `under()` read it, a list of references can be `two_way` or `peer` (the [`reference`](#reference) rules), and a kanban view cannot group by it. Inside a dict, or in a list inside a list, a reference is `one_way`.
 
@@ -875,25 +897,34 @@ field tags {
 tags = ["Gardening", "Gardening/Roses"]
 ```
 
-A list of strings with `labels` names a second list that labels its values, index-aligned: the label of `phones[0]` is `phone_labels[0]`, and `""` is no label. The two lists are edited together: the app shows one chip per value with its label before it, each with Copy, Edit and Remove, and writes both lists in one save, so a value may appear twice and a label stays with its value. The field `labels` names is not shown on its own: the properties sidebar leaves it out and the note page shows no slot for it, even when a template places it. Cards and tables show the pairs as text, such as `mobile +61400000020, home +61400000021`. The schema rejects `labels` that names a field the type lacks ("the type has no field ..."), a field that is not a list of strings ("... must be a list of strings, and it is a ... field"), the field itself ("cannot name the field itself"), or a field another field already names ("... already holds the labels of field ...").
+A list of values with labels is a list of dicts with a key for the value and an optional `label`, as a person's `phones` (see [Built-in types](#built-in-types)). A value may appear twice, and a label stays with its value.
 
 ```wcl
 field phones {
-  kind   = "list"
-  items  = "string"
-  labels = "phone_labels"
-}
+  kind = "list"
 
-field phone_labels {
-  kind  = "list"
-  items = "string"
+  item {
+    kind = "dict"
+
+    key number {
+      kind     = "string"
+      required = true
+    }
+
+    key label {
+      kind = "string"
+    }
+  }
 }
 ```
 
 ```wcl
-phones       = ["+61400000020", "+61400000021"]
-phone_labels = ["mobile", "home"]
+phones = [{ number: "+61400000020", label: "mobile" }, { number: "+61400000021" }]
 ```
+
+#### Lists with labels
+
+A type file from before format 4 may give a list of strings `labels = "<field>"`, naming another list of strings of the type that held one label per value, index-aligned. A reader still loads it, reading the list as a list of strings and ignoring `labels`. The home server rewrites it on its next start, as it does `multiple = true` (types T6): the list becomes a list of dicts with a required string key for the value and an optional string `label`, and the field `labels` named goes, with every template slot of it. The value key is `number` for a person's `phones`, `address` for a person's `emails` and `addresses`, and `value` for any other list. Every note of the type changes in the same commit, authored by `task server`: the value at each position becomes the dict's value key, and the label at the same position its `label`, with none for an empty label or past the end of the label list; a label past the last value is dropped. A value that is already a dict is kept as it is. A `labels` naming a field the type lacks, or one that is not a list of strings, gives dicts with no labels, and that field stays. A type whose notes would then not validate is left as it is, with one line in the log, and so is a type that does not load. A device's local vault leaves the type to the home server.
 
 Items with items of their own, and lists of lists:
 
@@ -1159,7 +1190,7 @@ A tab with `when` shows only for a note that meets the condition (D14). The cond
 
 - The names are the type's fields and the built-ins `id`, `type`, `title`, `created`, `updated` and `archived`. `this` is the note shown, so `this.status` is `status`.
 - The operators are `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, the arithmetic operators, and parentheses, with the query language's literals and precedence.
-- The functions are `has()`, `has_ci()`, `under()`, `contains()`, `empty()`, `any()`, `all()`, `today()`, `now()` and `days()`. `linked_from()` reads other notes, so a condition refuses it. `has_ci(list, value)` is `has()` with text compared ignoring case, as `has_ci(emails, "Ann@Example.com")`; any other value compares as `has()` compares it.
+- The functions are `has()`, `has_ci()`, `under()`, `contains()`, `empty()`, `any()`, `all()`, `today()`, `now()` and `days()`. `linked_from()` reads other notes, so a condition refuses it. `has_ci(list, value)` is `has()` with text compared ignoring case, as `has_ci(tags, "Urgent")`, and on a single value it is `==` ignoring case, as `any(emails, |e| has_ci(e.address, "Ann@Example.com"))`; any other value compares as `has()` compares it.
 - `.` reads the `start` or `end` of a date range, and the members of a location or dict field. It does not follow a reference, since that reads another note.
 - A missing value behaves as in a query: it is false in a condition and never compares as less or greater than anything, so `!(due < today())` holds for a note with no `due`. A condition that fails to evaluate, such as `estimate == "3"` on an `int` field, is false.
 
@@ -1771,7 +1802,7 @@ The control kinds, and the fields each fits:
 | `checkbox` | A checkbox | `bool` |
 | `dropdown` | A list to choose one value from: a taxonomy's terms with their hierarchy, or a note search for a reference | single `select`, `taxonomy` or `reference` |
 | `radio` | One radio button per option | single `select` |
-| `chips` | The values as chips, removed one at a time, with a box that adds one and suggests values. On an open taxonomy the box can add a new term | `list` of strings or terms, multiple `select`, `taxonomy` or `reference` |
+| `chips` | The values as chips, removed one at a time, with a box that adds one and suggests values. On an open taxonomy the box can add a new term | `list` of strings, terms or labelled values (a dict of exactly two string keys, one `label`, and no other entries), multiple `select`, `taxonomy` or `reference` |
 | `calendar` | A month calendar in place. For a range, the first click picks the start and the second the end | `date`, `date_range` of dates |
 | `datetime` | A date and time box | `datetime` |
 | `time` | The time of day of a datetime. A new time keeps the date the field has, or takes today's when it is empty | `datetime` |
@@ -1873,7 +1904,9 @@ A `query_view` block runs one query and shows its results through one or more sa
 
 In the query's `search "<text>"` clause every word must appear in the note's title or text, ignoring case. Earlier words match whole words, and the last word also matches as a prefix: `search "meet"` finds `meeting`. A trailing space, as in `search "meet "`, or a last word of one character, makes the last word whole. A prefix stands for at most the 50 most frequent words it starts.
 
-Beside the functions of PRD Appendix B, a `where` expression has `has_ci(list, value)`: `has()` with text compared ignoring case, so `from person where has_ci(emails, "Ann@Example.com")` finds a person who stored `ann@example.com`. A value that is not text compares as `has()` compares it.
+Beside the functions of PRD Appendix B, a `where` expression has `has_ci(list, value)`: `has()` with text compared ignoring case, so `from task where has_ci(tags, "Urgent")` finds a task tagged `urgent`. Given a single value rather than a list it compares that value, so inside `any()` it reads one key of a list of dicts: `from person where any(emails, |e| has_ci(e.address, "Ann@Example.com"))` finds a person who stored `ann@example.com`. A value that is not text compares as `has()` compares it.
+
+`any(<list field>, |x| x.<key> == <value>)`, either side of `==`, and `any(<list field>, |x| has_ci(x.<key>, <value>))` over a list of dicts read the index, as `has()` does, when every queried type that has the field declares `key` as a `string`, `url`, `int`, `float` or `bool` and no key or `values` of the dicts holds a record. The value must be the same for every note: a literal, `this`, `today()` or arithmetic on them. Any other `any()` reads the queried notes one by one, with the same result.
 
 Each `view` holds a `kind` and the items that kind uses:
 
@@ -2515,7 +2548,7 @@ The app ships defaults into every vault: the built-in types (and the `person` ty
    | Step | Does |
    |------|------|
    | `0001_person_emails` | A `person` type with `addresses` or `email` and no `emails`: `addresses` becomes `emails`, `email` moves into it and goes (see [Built-in types](#built-in-types)). Its note versions are authored by `task server` |
-   | `0002_person_labels` | A `person` type whose `emails`, `phones` and `addresses` have no `labels`: each gains its `labels`, `photo` gains `accept = "image"` when every photo is an image, and the label lists' slots leave the `default` template (see [Built-in types](#built-in-types)). It edits no note |
+   | `0002_person_labels` | A `person` type whose `emails`, `phones` and `addresses` are lists of strings with no `labels`: each gains its `labels`, `photo` gains `accept = "image"` when every photo is an image, and the label lists' slots leave the `default` template (see [Built-in types](#built-in-types)). It edits no note. The lists of dicts that follow (step 5) then take the labels |
    | `0003_event_google_handler` | An `event` type with no handler naming `google_event`, as main wrote it before the Google Calendar write-back: it gains the shipped type's three `handler` blocks, before its first template (see [Built-in types](#built-in-types)). The seeding below only adds fields, so it would not carry them. It edits no note. A user's own `event` type (see step 2) is skipped |
    | `0004_remove_google_sync` | The Google sync's settings move from the 0.1.7 `google_sync` note type into secrets (google-sync D21). Every `event` handler naming `google_event` gains the `google_settings` secret, as a planned type change that edits no note. When the vault has a `google_sync` note, the first one's settings, cursors and `account` move into `google_settings`, `google_gmail_state`, `google_calendar_state` and `google_account`, each key only where the secret does not hold it already; `calendar_sync_tokens` keys such as `c_me_40example_2ecom` become calendar ids such as `me@example.com`. Then every `google_sync` note is deleted for good, not to the trash, and the type is deleted. A vault with the type and no note just loses the type. A `google_sync` type without the 0.1.7 type's `gmail_history_id` field is the user's own: the step leaves it and its notes alone. Moving a note needs the secrets key: without it the step changes nothing more, keeps the type and the note, and runs again on the next start |
    | `0005_list_page_defaults` | An `email` or `message` type with no `list_page` block, as every release before lists L5 shipped it: it gains the shipped type's block (details view, `sent desc`, 50 a page) after its last item, as one planned type change that edits no note (lists L5). The rest of the file stays as it is, so a type the user edited, such as one with a slot added to its card, keeps the edit; the seeding below only adds fields, so it would not carry the block. A type that has a `list_page` block, whatever it holds, is left alone, and so is a user's own type holding the name (see step 2). A type without the `sent` field gains the block without its `sort` |
@@ -2526,6 +2559,8 @@ The app ships defaults into every vault: the built-in types (and the `person` ty
 4. **Newer shipped files.** `state.db` records the content hash of each shipped device file, task or script the server writes. The app carries the hash of every version of each that it has ever shipped. On start, a file whose content is still a version the app shipped, or still what the server wrote, is replaced by the current shipped version, so a vault that skipped releases is upgraded too. A file the user changed is left alone. When a newer shipped version exists than the one the user changed, the server adds one notification under the bell that names the file and says a newer version exists. It adds no other for that version, on any later start. A file the user changed with no record of what the server wrote, as in a vault from before these records, counts as based on an older version. A device's local vault never adds the notification, since the home server does.
 
    A task file's top-level `paused` field is the user's pause switch, set by Connect and Disconnect in Settings > Integrations and by pausing a task in Settings > Scheduled, so the comparison ignores it (google-sync D19). The hash of a task file, both the shipped versions' hashes and the one `state.db` records, is taken over its canonical form with `paused` removed. Pausing or unpausing a shipped task therefore leaves it unedited: the next start changes nothing and adds no notification, and a newer shipped version still replaces it. The replacement takes the vault file's `paused` value in place of the shipped one, or has no `paused` when the vault file has none, so an upgrade never pauses or unpauses a task. Any other change to a task file, such as its `schedule`, `timeout` or `allow_domains`, is an edit, and the file is kept as above.
+
+5. **Lists of dicts.** After the seeding, the home server rewrites every list of strings whose `labels` names a label list as a list of dicts, with every note of its type, one commit per type (see [Lists with labels](#lists-with-labels)). It is not a step: a type file in the old form can arrive any time, by the CLI or a copy. A device's local vault does not do it.
 
 Steps 2 to 4 make one commit. A start that finds nothing to do makes no commit, no change-feed entry and no note version.
 
@@ -2569,6 +2604,7 @@ A note's top-level fields depend on its type, so its `@document` is generated fr
   | `location` with `map = "geo"` | `GeoPoint` |
   | `location` with `map = "image"` | `ImagePoint` |
   | `list` | `list<T>`, where `T` is the WCL type of `items` |
+  | `list` of `dict` with `key` blocks | `list<R>`, where `R` is a record type named after the type and the field in PascalCase with an `Item` suffix, declared above the document type with one member per key, optional unless `required = true`, as `type SpecimenAliasesItem { name: utf8  label: utf8? }` |
 
 - For each compound kind the type uses, add one gather field: `@children("content", max = 1) contents: list<Content>`. The same pattern covers `dict` (`Dict`), `ink` (`Ink`) and `canvas` (`Canvas`). If the type has two fields of one compound kind, raise `max` to the number of those fields.
 

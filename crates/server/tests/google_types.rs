@@ -343,7 +343,7 @@ fn a_thread_page_queries_its_emails_oldest_first() {
     let api = Api::new();
     let alex = api.create(
         "person",
-        json!({ "title": "Alex", "emails": ["alex@example.com"] }),
+        json!({ "title": "Alex", "emails": [{ "address": "alex@example.com" }] }),
     );
     let thread = api.create(
         "email_thread",

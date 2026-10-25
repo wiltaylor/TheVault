@@ -127,7 +127,7 @@ fn the_oldest_starter_vault_is_brought_up_to_date_once() {
     // The upgrade step moved the single email into emails.
     assert_eq!(
         alex["note"]["fields"]["emails"],
-        serde_json::json!(["alex@example.com"]),
+        serde_json::json!([{ "address": "alex@example.com" }]),
         "{alex}"
     );
     assert!(alex["note"]["fields"].get("email").is_none(), "{alex}");
@@ -203,15 +203,18 @@ fn a_0_1_5_vault_starts_with_every_email_in_emails() {
     let sam = get(&server, &format!("/api/notes/{SAM_ID}"))["note"]["fields"].clone();
     assert_eq!(
         sam["emails"],
-        serde_json::json!(["sam@example.com", "sam@home.example"]),
+        serde_json::json!([{ "address": "sam@example.com" }, { "address": "sam@home.example" }]),
         "{sam}"
     );
-    assert_eq!(sam["phones"], serde_json::json!(["+61400000001"]));
+    assert_eq!(
+        sam["phones"],
+        serde_json::json!([{ "number": "+61400000001" }])
+    );
     assert_eq!(sam["homepage"], "https://sam.example");
     let alex = get(&server, &format!("/api/notes/{ALEX_ID}"))["note"]["fields"].clone();
     assert_eq!(
         alex["emails"],
-        serde_json::json!(["alex@example.com"]),
+        serde_json::json!([{ "address": "alex@example.com" }]),
         "{alex}"
     );
     assert_eq!(alex["homepage"], "https://example.com");

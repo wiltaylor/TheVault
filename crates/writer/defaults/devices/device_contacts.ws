@@ -7,7 +7,9 @@ use regex
 // linked through the person's hidden `device_contacts` dict, which maps `device_<device id>` to
 // the contact's id on that device, and the contact holds the person's id (D24). Every detail a
 // contact holds syncs field by field: the name; the phones, emails and postal addresses, each with
-// its labels as one field; organisation, job title, nickname, birthday, websites and the contact
+// its labels as one field (the person holds each as a list of dicts, `{ number, label }` for a
+// phone and `{ address, label }` for an email or postal address, and the contact as a list of
+// values and a list of labels); organisation, job title, nickname, birthday, websites and the contact
 // note; and the photo, compared by its hash. The contact also holds what the two sides last agreed
 // on, so a field changed on one side only takes that side, and a field changed on both takes the
 // side changed most recently. A detail the event does not report, as from an older app, is left
@@ -115,7 +117,7 @@ fn linked(key: string, contact_id: string) -> Result[Option[Value], string] {
 
 fn by_phone(phones: List[Value]) -> Result[Option[Value], string] {
     for phone in phones {
-        let rows = vault::query("from person where has(phones, " + quoted(phone.as_string().unwrap_or("")) + ") limit 1")?
+        let rows = vault::query("from person where any(phones, |p| p.number == " + quoted(phone.as_string().unwrap_or("")) + ") limit 1")?
         if let Some(row) = rows.get(0) {
             return Ok(Some(vault::get(text_of(row, "id"))?))
         }
@@ -135,10 +137,41 @@ fn stored(id: string) -> Result[Option[Value], string] {
     }
 }
 
-// The lists a contact holds with a label list beside each, as `[values, labels]`. A list and its
-// labels settle as one field.
+// The lists a contact holds with a label list beside each, as `[values, labels, key]`: the person
+// holds each as a list of dicts with the value under `key`. A list and its labels settle as one
+// field.
 fn labelled() -> List[List[string]] {
-    [["phones", "phone_labels"], ["emails", "email_labels"], ["addresses", "address_labels"]]
+    [["phones", "phone_labels", "number"], ["emails", "email_labels", "address"], ["addresses", "address_labels", "address"]]
+}
+
+// The values of the person's list of dicts `field[0]`. A plain string, as a type from before the
+// dicts holds, is a value with no label.
+fn items_of(fields: Value, field: List[string]) -> List[string] {
+    list_of(fields, field[0]).map(|d| match d {
+        Value::String(s) => s,
+        _ => text_of(d, field[2]),
+    })
+}
+
+// The label of each value of the person's list of dicts `field[0]`, "" where it has none.
+fn labels_of(fields: Value, field: List[string]) -> List[string] {
+    list_of(fields, field[0]).map(|d| text_of(d, "label"))
+}
+
+// Values and their labels as the person's list of dicts: each value under `key`, with a `label`
+// only where it has one.
+fn entries(items: List[string], labels: List[string], key: string) -> Value {
+    let out: List[Value] = []
+    for i in 0..items.len() {
+        let entry: Map[string, Value] = #{}
+        entry[key] = Value::String(items[i]);
+        let label = labels.get(i).unwrap_or("")
+        if label != "" {
+            entry["label"] = Value::String(label);
+        }
+        out.push(Value::Map(entry))
+    }
+    Value::List(out)
 }
 
 // The single-string details a contact holds.
@@ -314,8 +347,7 @@ fn new_person(title: string, data: Value) -> Map[string, Value] {
     for field in labelled() {
         let p = pair_of(data, field, [], [])
         if !is_empty(p) {
-            fields[field[0]] = Value::List(values(pair_items(p)));
-            fields[field[1]] = Value::List(values(pair_labels(p)));
+            fields[field[0]] = entries(pair_items(p), pair_labels(p), field[2]);
         }
     }
     for key in details() {
@@ -339,9 +371,8 @@ fn new_person(title: string, data: Value) -> Map[string, Value] {
 fn contact_of(fields: Value) -> Map[string, Value] {
     let out: Map[string, Value] = #{ "name": Value::String(text_of(fields, "title")) }
     for field in labelled() {
-        let items = strings(list_of(fields, field[0]))
-        out[field[0]] = Value::List(values(items));
-        out[field[1]] = Value::List(values(pad(strings(list_of(fields, field[1])), items.len())));
+        out[field[0]] = Value::List(values(items_of(fields, field)));
+        out[field[1]] = Value::List(values(labels_of(fields, field)));
     }
     for key in details() {
         out[key] = Value::String(text_of(fields, key));
@@ -466,8 +497,8 @@ fn contact_changed(event: Value) -> Result[(), string] {
         if !has(data, field[0]) {
             continue
         }
-        let person_items = strings(list_of(fields, field[0]))
-        let person_labels = pad(strings(list_of(fields, field[1])), person_items.len())
+        let person_items = items_of(fields, field)
+        let person_labels = labels_of(fields, field)
         let c = pair_of(data, field, person_items, person_labels)
         // A person that never had labels for the same values takes the contact's.
         let p = if person_labels.all(|l| l == "") && same(Value::List(values(person_items)), Value::List(values(pair_items(c)))) { c } else { pair(person_items, person_labels) }
@@ -475,8 +506,7 @@ fn contact_changed(event: Value) -> Result[(), string] {
         let b = pair_of(synced, field, person_items, person_labels)
         let settled = if contact_wins(c, p, has_base, b, contact_newer) { c } else { p }
         if !same(settled, pair(person_items, person_labels)) {
-            put(changes, field[0], Value::List(values(pair_items(settled))));
-            put(changes, field[1], Value::List(values(pair_labels(settled))));
+            put(changes, field[0], entries(pair_items(settled), pair_labels(settled), field[2]));
         }
         behind = behind || !same(settled, c)
         agreed = agreed && agrees(has_base, b, c, p, settled)

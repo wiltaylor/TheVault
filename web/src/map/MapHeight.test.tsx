@@ -179,7 +179,7 @@ describe("a location field's map height", () => {
         onChange={(v) => values.push(v)}
         label="Place"
         id="place"
-        related={{ type, value: () => undefined, set: () => {} }}
+        related={{ type }}
       />
     ));
     return { r, values, map: () => r.getByTestId("map"), handle: () => r.getByRole("separator", { name: "Place map height" }) };

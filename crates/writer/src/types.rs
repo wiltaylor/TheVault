@@ -56,10 +56,10 @@ pub struct Migration {
 /// A migration written in Rust, which the server's one-time upgrade steps use: `run` changes one
 /// note, already through the change's simple rules, in place. The plan names it as
 /// `script`/`function`.
-pub(crate) struct NativeMigration {
+pub(crate) struct NativeMigration<'a> {
     pub(crate) script: &'static str,
     pub(crate) function: &'static str,
-    pub(crate) run: fn(&mut Doc),
+    pub(crate) run: &'a dyn Fn(&mut Doc),
 }
 
 /// What a type change would do, from [`Writer::plan_type_change`].
@@ -130,7 +130,7 @@ impl Writer {
         &self,
         name: &str,
         change: &TypeChange,
-        native: &NativeMigration,
+        native: &NativeMigration<'_>,
         author: &Author,
     ) -> Result<(TypePlan, Vec<Saved>)> {
         let _w = self.write_lock();
@@ -341,7 +341,7 @@ impl Writer {
         current: &Schema,
         name: &str,
         change: &TypeChange,
-        native: Option<&NativeMigration>,
+        native: Option<&NativeMigration<'_>>,
     ) -> Result<Worked> {
         let old = current
             .type_def(name)

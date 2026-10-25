@@ -1,0 +1,156 @@
+label       = "Person"
+plural      = "People"
+description = "Someone you know."
+icon        = "user"
+colour      = "purple"
+
+field emails {
+  kind   = "list"
+  label  = "Emails"
+  items  = "string"
+  labels = "email_labels"
+}
+
+field email_labels {
+  kind        = "list"
+  label       = "Email labels"
+  description = "The label of each email address, in the same order: mobile, home, work, main, other, or the phone's own label."
+  items       = "string"
+}
+
+field phones {
+  kind        = "list"
+  label       = "Phones"
+  description = "Phone numbers in international (E.164) form, such as +61400000000."
+  items       = "string"
+  labels      = "phone_labels"
+}
+
+field phone_labels {
+  kind        = "list"
+  label       = "Phone labels"
+  description = "The label of each phone number, in the same order: mobile, home, work, main, other, or the phone's own label."
+  items       = "string"
+}
+
+field addresses {
+  kind        = "list"
+  label       = "Addresses"
+  description = "Postal addresses, each on one line with its lines joined by commas."
+  items       = "string"
+  labels      = "address_labels"
+}
+
+field address_labels {
+  kind        = "list"
+  label       = "Address labels"
+  description = "The label of each postal address, in the same order: home, work, other, or the phone's own label."
+  items       = "string"
+}
+
+field organisation {
+  kind  = "string"
+  label = "Organisation"
+}
+
+field job_title {
+  kind  = "string"
+  label = "Job title"
+}
+
+field nickname {
+  kind  = "string"
+  label = "Nickname"
+}
+
+field birthday {
+  kind        = "string"
+  label       = "Birthday"
+  description = "YYYY-MM-DD, or --MM-DD when the year is not known."
+}
+
+field websites {
+  kind  = "list"
+  label = "Websites"
+  items = "url"
+}
+
+field contact_note {
+  kind        = "string"
+  label       = "Contact note"
+  description = "The note on the phone contact."
+}
+
+field phone_contact {
+  kind        = "bool"
+  label       = "On the phone"
+  description = "Keep this person as a contact on the phones that sync contacts. Untick it to take the contact off them; tick it to put it back."
+  default     = true
+}
+
+field photo {
+  kind   = "asset"
+  label  = "Photo"
+  accept = "image"
+}
+
+field device_contacts {
+  kind        = "dict"
+  label       = "Device contacts"
+  description = "The phone contact linked to this person, by device id."
+  values      = "string"
+  hidden      = true
+}
+
+field body {
+  kind  = "content"
+  label = "Notes"
+}
+
+template default {
+  tab "Person" {
+    slot "photo"
+    slot "title" {
+      label = "Name"
+    }
+    slot "emails"
+    slot "phones"
+    slot "addresses"
+    slot "organisation"
+    slot "job_title"
+    slot "nickname"
+    slot "birthday"
+    slot "websites"
+    slot "contact_note"
+    slot "phone_contact"
+    slot "body"
+  }
+  tab "Correspondence" {
+    query_view {
+      title = "Messages"
+      query = "from conversation where has(participants, this) sort updated desc"
+
+      view table {
+        kind    = "table"
+        columns = ["title", "channel"]
+      }
+    }
+    query_view {
+      title = "Email"
+      query = "from email where from == this || has(to, this) || has(cc, this) sort sent desc"
+
+      view table {
+        kind    = "table"
+        columns = ["sent", "from_raw", "title"]
+      }
+    }
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "photo"
+    slot "title"
+    slot "emails"
+  }
+}

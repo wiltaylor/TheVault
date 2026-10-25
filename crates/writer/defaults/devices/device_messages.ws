@@ -51,7 +51,7 @@ fn person_by_number(number: string) -> Result[string, string] {
     if number == "" {
         return Ok("")
     }
-    first_id("from person where has(phones, " + quoted(number) + ") limit 1")
+    first_id("from person where any(phones, |p| p.number == " + quoted(number) + ") limit 1")
 }
 
 // The person an RCS sender's display name belongs to: the person of that name, or the person

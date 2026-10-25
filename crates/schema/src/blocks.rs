@@ -114,7 +114,9 @@ pub fn control_fits_text(kind: &str) -> &'static str {
         "toggle" | "checkbox" => "a bool field",
         "dropdown" => "a single select, taxonomy or reference field",
         "radio" => "a single select field",
-        "chips" => "a list of strings, or a multiple select, taxonomy or reference field",
+        "chips" => {
+            "a list of strings or of labelled values, or a multiple select, taxonomy or reference field"
+        }
         "calendar" => "a date field or a date range of dates",
         "datetime" | "time" => "a datetime field",
         "rating" => "an int field",
@@ -139,12 +141,26 @@ pub fn control_fits(kind: &str, f: &FieldDef) -> bool {
         "chips" => {
             (choice && f.multiple)
                 || f.kind.item().and_then(|i| i.kind.scalar()) == Some(crate::types::Scalar::String)
+                || f.kind.item().is_some_and(labelled)
         }
         "calendar" => matches!(f.kind, K::Date | K::DateRange { of: RangeOf::Date }),
         "datetime" | "time" => matches!(f.kind, K::Datetime),
         "rating" => matches!(f.kind, K::Int),
         _ => false,
     }
+}
+
+/// A labelled value, the item of a list that chips show with a label each: a dict of exactly two
+/// string keys, one of them `label`, that takes no other entries (`docs/vault-format.md`, "control").
+fn labelled(item: &FieldDef) -> bool {
+    use crate::types::Scalar;
+    let FieldKind::Dict { keys, values } = &item.kind else {
+        return false;
+    };
+    matches!(values, crate::types::DictValues::None)
+        && keys.len() == 2
+        && keys.iter().any(|k| k.name == "label")
+        && keys.iter().all(|k| k.kind.scalar() == Some(Scalar::String))
 }
 
 /// A field's kind in words: `a list of select field`, `a list of int field`.

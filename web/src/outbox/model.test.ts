@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { NoteDoc } from "../api";
-import { TABS, addressOf, bodyText, changeDraft, draftingAgent, eventChanges, newDraft, replyDraft, replySubject, statusQuery, tabByKey, tabOf } from "./model";
+import {
+  TABS,
+  addressOf,
+  bodyText,
+  changeDraft,
+  draftingAgent,
+  eventChanges,
+  newDraft,
+  phoneOf,
+  phonesOf,
+  replyDraft,
+  replySubject,
+  smsTargets,
+  statusQuery,
+  tabByKey,
+  tabOf,
+} from "./model";
 
 const EMAIL: NoteDoc = {
   fields: { title: "Lunch on Friday", from_raw: "Ada Lovelace <ada@example.com>", sent: "2026-10-20T09:30:00Z" },
@@ -88,5 +104,33 @@ describe("the Outbox model", () => {
     expect(draftingAgent({ drafted_by: "user" })).toBeNull();
     expect(draftingAgent({})).toBeNull();
     expect(draftingAgent({ drafted_by: "clerk" })).toBe("clerk");
+  });
+});
+
+describe("a person's phones", () => {
+  const person = (title: string, phones: unknown): NoteDoc => ({ fields: { title, phones } as NoteDoc["fields"], blocks: [] });
+
+  it("reads each phone's number and label from the list of records", () => {
+    expect(phonesOf(person("Bo", [{ number: "+61400000009", label: "home" }, { number: "+61400000002" }, { label: "no number" }]))).toEqual([
+      { number: "+61400000009", label: "home" },
+      { number: "+61400000002", label: "" },
+    ]);
+    expect(phonesOf(person("Cy", undefined))).toEqual([]);
+  });
+
+  it("texts the first mobile number, else the first number", () => {
+    expect(phoneOf(person("Bo", [{ number: "+61400000009", label: "home" }, { number: "+61400000002", label: "mobile" }]))).toBe("+61400000002");
+    expect(phoneOf(person("Bo", [{ number: "+61400000009", label: "home" }, { number: "+61400000002" }]))).toBe("+61400000009");
+    expect(phoneOf(person("Cy", []))).toBe("");
+    expect(phoneOf(null)).toBe("");
+  });
+
+  it("names a number by the person holding it, compared by digits, and adds people with no number given", () => {
+    const bo = person("Bo", [{ number: "+61 400 000 002", label: "mobile" }]);
+    const cy = person("Cy", [{ number: "+61400000003", label: "work" }]);
+    expect(smsTargets(["+61400000002"], [{ doc: bo }, { doc: cy }])).toEqual([
+      { number: "+61400000002", name: "Bo" },
+      { number: "+61400000003", name: "Cy" },
+    ]);
   });
 });

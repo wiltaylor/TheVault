@@ -1456,6 +1456,163 @@ fn a_note_matching_several_list_items_is_one_result() {
     assert_eq!(ids.len(), 2, "{ids:?}");
 }
 
+/// A person type whose phones and emails are lists of dicts, as the shipped `person` holds them,
+/// beside a `meta` list whose dicts hold a record, which the planner leaves to the evaluator.
+const CONTACT: &str = r#"label = "Contact"
+
+field phones {
+  kind = "list"
+
+  item {
+    kind = "dict"
+
+    key number {
+      kind     = "string"
+      required = true
+    }
+
+    key label {
+      kind = "string"
+    }
+
+    key rank {
+      kind = "int"
+    }
+
+    key main {
+      kind = "bool"
+    }
+  }
+}
+
+field emails {
+  kind = "list"
+
+  item {
+    kind = "dict"
+
+    key address {
+      kind     = "string"
+      required = true
+    }
+
+    key label {
+      kind = "string"
+    }
+  }
+}
+
+field meta {
+  kind = "list"
+
+  item {
+    kind = "dict"
+
+    key number {
+      kind = "string"
+    }
+
+    key inner {
+      kind = "dict"
+
+      key number {
+        kind = "string"
+      }
+    }
+  }
+}
+"#;
+
+fn contacts() -> Fixture {
+    let mut files = vec![("types/contact.wcl".to_owned(), with_template(CONTACT))];
+    let people = [
+        "phones = [{ number: \"+61400000001\", label: \"mobile\", rank: 1, main: true }, { number: \"+61400000002\" }]\nemails = [{ address: \"Ann@Example.com\", label: \"work\" }]\n",
+        "phones = [{ number: \"+61400000002\", label: \"home\", rank: 2 }]\nemails = [{ address: \"bo@example.com\" }, { address: \"ann@example.com\" }]\n",
+        "phones = [{ number: \"mobile\" }]\nmeta = [{ inner: { number: \"+61400000001\" } }]\n",
+        "",
+    ];
+    for (i, fields) in people.iter().enumerate() {
+        let id = format!("01JB8Z4K2MQ7V3X9T5R6W8Y2C{i}");
+        files.push((
+            format!("notes/contact/{id}.wcl"),
+            note(&format!("Contact {i}"), "2026-10-02T09:00:00Z", fields),
+        ));
+    }
+    build(&files, people.len())
+}
+
+/// `any()` over a list of dicts, comparing one declared key with a value, reads the key's rows
+/// from the index, case-sensitive with `==` and ignoring case with `has_ci()`, and returns what
+/// the note-by-note scan returns.
+#[test]
+fn any_over_a_list_of_dicts_by_one_key_runs_as_sql_and_agrees_with_the_scan() {
+    let f = contacts();
+    let planned = [
+        "from contact where any(phones, |p| p.number == \"+61400000002\")",
+        "from contact where any(phones, |p| \"+61400000001\" == p.number) sort title desc",
+        "from contact where !any(phones, |p| p.number == \"+61400000002\")",
+        "from contact where any(phones, |p| p.label == \"mobile\")",
+        "from contact where any(phones, |p| p.rank == 2)",
+        "from contact where any(phones, |p| p.main == true)",
+        "from contact where any(emails, |e| has_ci(e.address, \"ANN@example.COM\"))",
+        "from contact where !any(emails, |e| has_ci(e.address, \"ann@example.com\")) sort title",
+        "from contact where any(emails, |e| e.address == \"ann@example.com\")",
+        "from contact where any(emails, |e| has_ci(e.address, \"ann\"))",
+        "from contact where any(phones, |p| p.number == \"+61400000002\") && any(emails, |e| has_ci(e.address, \"BO@EXAMPLE.COM\"))",
+        "from contact where any(phones, |p| p.number == \"+61400000002\") || empty(phones)",
+        // has_ci() compares a value that is not text as == does.
+        "from contact where any(phones, |p| has_ci(p.rank, 2))",
+    ];
+    // A record inside the dicts, a key the dicts do not declare, a comparison that is not one
+    // equality, and a value that differs by note run note by note.
+    let scanned = [
+        "from contact where any(meta, |m| m.number == \"+61400000001\")",
+        "from contact where any(phones, |p| p.nope == \"x\")",
+        "from contact where any(phones, |p| p.number != \"+61400000002\")",
+        "from contact where any(phones, |p| p.number == p.label)",
+    ];
+    for text in planned.iter().chain(&scanned) {
+        let q = query::parse(text).unwrap();
+        assert_eq!(
+            query::is_planned(&q, &f.ctx()).unwrap(),
+            planned.contains(text),
+            "{text}"
+        );
+        for size in [0, 1, 2] {
+            let a = every_page(&f, text, None, size, false);
+            let b = every_page(&f, text, None, size, true);
+            match (a, b) {
+                (Ok(a), Ok(b)) => assert!(
+                    same_pages(&a, &b),
+                    "{text} (pages of {size})\n{a:#?}\n{b:#?}"
+                ),
+                (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "{text}"),
+                (a, b) => panic!("{text}\n  planned {a:?}\n  scanned {b:?}"),
+            }
+        }
+    }
+    let ids = |text: &str| ids(&f, text, None).unwrap();
+    assert_eq!(
+        ids("from contact where any(phones, |p| p.number == \"+61400000002\") sort title"),
+        ["01JB8Z4K2MQ7V3X9T5R6W8Y2C0", "01JB8Z4K2MQ7V3X9T5R6W8Y2C1"]
+    );
+    assert_eq!(
+        ids(
+            "from contact where any(emails, |e| has_ci(e.address, \"ANN@EXAMPLE.COM\")) sort title"
+        ),
+        ["01JB8Z4K2MQ7V3X9T5R6W8Y2C0", "01JB8Z4K2MQ7V3X9T5R6W8Y2C1"]
+    );
+    // The label "mobile" is not a number, and a record's member is not the dict's key.
+    assert_eq!(
+        ids("from contact where any(phones, |p| p.number == \"mobile\")"),
+        ["01JB8Z4K2MQ7V3X9T5R6W8Y2C2"]
+    );
+    assert_eq!(
+        ids("from contact where any(meta, |m| m.number == \"+61400000001\")"),
+        Vec::<String>::new()
+    );
+}
+
 /// A `date_or_datetime` range holds dates on some notes and datetimes on others. Filters and
 /// sorts read both forms on one time line, a date as the start of its day in UTC, and the SQL
 /// plan agrees with the note-by-note scan (google-sync D15).

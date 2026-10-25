@@ -278,7 +278,7 @@ fn the_draft_tools_create_drafts_resolving_people() {
     let api = Api::start(&fake);
     let ann = api.note(
         "person",
-        json!({ "title": "Ann Lee", "emails": ["ann@example.com"], "phones": ["+61 400 000 001"] }),
+        json!({ "title": "Ann Lee", "emails": [{ "address": "ann@example.com" }], "phones": [{ "number": "+61 400 000 001" }] }),
     );
 
     // Assistant has every tool, so the draft tools are offered.

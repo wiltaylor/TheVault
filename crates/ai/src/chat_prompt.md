@@ -95,7 +95,9 @@ A query is a `from` clause followed by optional clauses in this order: `include 
 |----------|-----------|
 | `under(status, "Active")` | A taxonomy field holds that term or a term below it |
 | `has(tags, "x")` | A list field contains the value |
-| `has_ci(emails, "Ann@Example.com")` | As `has()`, ignoring case |
+| `has_ci(tags, "Urgent")` | As `has()`, ignoring case |
+| `any(phones, \|p\| p.number == "+61400000000")` | Any item of a list meets the condition. A person's `phones`, `emails` and `addresses` are lists of dicts: `{ number, label }` for a phone, `{ address, label }` for an email or postal address |
+| `any(emails, \|e\| has_ci(e.address, "Ann@Example.com"))` | The same, ignoring case: find a person by email address |
 | `contains(title, "plan")` | A text field, or any item of a text list, holds the text, ignoring case |
 | `empty(due)` | A field has no value: missing, blank text or an empty list |
 | `today()`, `now()`, `days(n)` | Date arithmetic, as in `due < today() + days(7)` |

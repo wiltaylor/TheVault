@@ -204,7 +204,7 @@ fn sms_become_messages_in_a_conversation_linked_to_the_person_with_the_number() 
     let d = Device::open();
     let alex = d.create(
         "person",
-        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+        json!({ "title": "Alex Doe", "phones": [{ "number": "+61400000001" }] }),
     );
 
     d.send(
@@ -311,7 +311,7 @@ fn an_unknown_number_creates_no_person() {
     let d = Device::open();
     d.create(
         "person",
-        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+        json!({ "title": "Alex Doe", "phones": [{ "number": "+61400000001" }] }),
     );
     d.send(
         "sms_received",
@@ -343,11 +343,11 @@ fn a_group_mms_links_every_known_recipient_and_keeps_its_attachments() {
     let d = Device::open();
     let alex = d.create(
         "person",
-        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+        json!({ "title": "Alex Doe", "phones": [{ "number": "+61400000001" }] }),
     );
     let sam = d.create(
         "person",
-        json!({ "title": "Sam Lee", "phones": ["+61400000002"] }),
+        json!({ "title": "Sam Lee", "phones": [{ "number": "+61400000002" }] }),
     );
     let photo = d
         .writer()
@@ -432,11 +432,11 @@ fn rcs_senders_match_by_name_or_by_the_phone_contact_and_are_partial() {
     let d = Device::open();
     let alex = d.create(
         "person",
-        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+        json!({ "title": "Alex Doe", "phones": [{ "number": "+61400000001" }] }),
     );
     let sam = d.create(
         "person",
-        json!({ "title": "Samuel Lee", "phones": ["+61400000002"] }),
+        json!({ "title": "Samuel Lee", "phones": [{ "number": "+61400000002" }] }),
     );
     // The phone knows Samuel as "Sammy".
     d.phone.contacts.lock().unwrap().push(json!({
@@ -485,7 +485,7 @@ fn calls_become_call_notes_once_each() {
     let d = Device::open();
     let alex = d.create(
         "person",
-        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+        json!({ "title": "Alex Doe", "phones": [{ "number": "+61400000001" }] }),
     );
     let call = |key: &str, direction: &str, number: &str, duration: i64| {
         json!({
@@ -633,8 +633,8 @@ fn contacts_sync_with_people_both_ways_and_deletes_only_unlink() {
     let sam = people[0]["id"].as_str().unwrap().to_owned();
     let f = d.fields(&sam);
     assert_eq!(f["title"], "Sam Lee");
-    assert_eq!(f["phones"], json!(["+61400000002"]));
-    assert_eq!(f["emails"], json!(["sam@example.com"]));
+    assert_eq!(f["phones"], json!([{ "number": "+61400000002" }]));
+    assert_eq!(f["emails"], json!([{ "address": "sam@example.com" }]));
     assert_eq!(d.links(&sam), json!({ SLOT: "c9" }));
 
     // A later change on the phone wins over the person.
@@ -649,7 +649,10 @@ fn contacts_sync_with_people_both_ways_and_deletes_only_unlink() {
     );
     let f = d.fields(&sam);
     assert_eq!(f["title"], "Samuel Lee");
-    assert_eq!(f["phones"], json!(["+61400000002", "+61400000022"]));
+    assert_eq!(
+        f["phones"],
+        json!([{ "number": "+61400000002" }, { "number": "+61400000022" }])
+    );
     assert_eq!(d.query("from person").len(), 1);
 
     // A phone change older than the person's last edit gives way: the phone takes the person's
@@ -686,7 +689,7 @@ fn contacts_sync_with_people_both_ways_and_deletes_only_unlink() {
     // An existing person with the contact's number is linked, not duplicated.
     let alex = d.create(
         "person",
-        json!({ "title": "Alex Doe", "phones": ["+61400000001"] }),
+        json!({ "title": "Alex Doe", "phones": [{ "number": "+61400000001" }] }),
     );
     d.send(
         "contact_changed",
@@ -783,7 +786,10 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
     );
     let f = d.fields(&kim);
     assert_eq!(f["title"], "Kim Park-Lee");
-    assert_eq!(f["phones"], json!(["+61400000005", "+61400000055"]));
+    assert_eq!(
+        f["phones"],
+        json!([{ "number": "+61400000005" }, { "number": "+61400000055" }])
+    );
     let up = last_upsert(&d.phone);
     assert_eq!(up["name"], "Kim Park-Lee");
     assert_eq!(up["phones"], json!(["+61400000005", "+61400000055"]));
@@ -851,7 +857,7 @@ fn contacts_settle_field_by_field_and_person_changes_reach_the_phone() {
     Vault::patch(
         &**d.writer(),
         &kim,
-        json!({ "emails": ["kim@example.com"] }),
+        json!({ "emails": [{ "address": "kim@example.com" }] }),
         "",
         &Author::Session("test".into()),
     )
@@ -948,12 +954,24 @@ fn a_contact_brings_every_detail_and_a_person_change_reaches_every_detail_of_the
     let robin = d.query("from person")[0]["id"].as_str().unwrap().to_owned();
     let f = d.fields(&robin);
     assert_eq!(f["title"], "Robin Rivera");
-    assert_eq!(f["phones"], json!(["+61400000007", "+61290000007"]));
-    assert_eq!(f["phone_labels"], json!(["mobile", "work"]));
-    assert_eq!(f["emails"], json!(["robin@example.com"]));
-    assert_eq!(f["email_labels"], json!(["home"]));
-    assert_eq!(f["addresses"], json!(["1 Main St, Springfield, 2000"]));
-    assert_eq!(f["address_labels"], json!(["Holiday house"]));
+    assert_eq!(
+        f["phones"],
+        json!([
+            { "number": "+61400000007", "label": "mobile" },
+            { "number": "+61290000007", "label": "work" },
+        ])
+    );
+    assert_eq!(
+        f["emails"],
+        json!([{ "address": "robin@example.com", "label": "home" }])
+    );
+    assert_eq!(
+        f["addresses"],
+        json!([{ "address": "1 Main St, Springfield, 2000", "label": "Holiday house" }])
+    );
+    for l in ["phone_labels", "email_labels", "address_labels"] {
+        assert!(f.get(l).is_none(), "{f}");
+    }
     assert_eq!(f["organisation"], "Example Co");
     assert_eq!(f["job_title"], "Engineer");
     assert_eq!(f["nickname"], "Rob");
@@ -971,13 +989,14 @@ fn a_contact_brings_every_detail_and_a_person_change_reaches_every_detail_of_the
     assert_eq!(up["person"], robin.as_str());
     assert_eq!(up["photo"], photo.as_str());
     assert_eq!(up["websites"], f["websites"]);
+    // The phone hears each list of dicts as it always has: the values, and a label per value.
+    assert_eq!(up["phones"], json!(["+61400000007", "+61290000007"]));
+    assert_eq!(up["phone_labels"], json!(["mobile", "work"]));
+    assert_eq!(up["emails"], json!(["robin@example.com"]));
+    assert_eq!(up["email_labels"], json!(["home"]));
+    assert_eq!(up["addresses"], json!(["1 Main St, Springfield, 2000"]));
+    assert_eq!(up["address_labels"], json!(["Holiday house"]));
     for key in [
-        "phones",
-        "phone_labels",
-        "emails",
-        "email_labels",
-        "addresses",
-        "address_labels",
         "organisation",
         "job_title",
         "nickname",
@@ -986,6 +1005,77 @@ fn a_contact_brings_every_detail_and_a_person_change_reaches_every_detail_of_the
     ] {
         assert_eq!(up[key], f[key], "{key}");
     }
+}
+
+/// The phone protocol is the one it always was: the phone reports and hears each list as values
+/// beside an index-aligned label list, while the person holds one dict per value, with a label
+/// only where there is one.
+#[test]
+fn the_phone_hears_values_and_labels_while_the_person_holds_dicts() {
+    let d = Device::open();
+    d.settings(json!({ "contacts_write": true }));
+    let contact = json!({
+        "contact_id": "c3",
+        "name": "Ira Moss",
+        "phones": ["+61400000003", "+61400000033"],
+        "phone_labels": ["", "Boat"],
+        "emails": ["ira@example.com"],
+        "email_labels": ["work"],
+        "addresses": [],
+        "address_labels": [],
+        "updated": "2020-01-01T00:00:00Z",
+    });
+    d.send("contact_changed", contact.clone());
+    let ira = d.query("from person")[0]["id"].as_str().unwrap().to_owned();
+    let f = d.fields(&ira);
+    assert_eq!(
+        f["phones"],
+        json!([{ "number": "+61400000003" }, { "number": "+61400000033", "label": "Boat" }])
+    );
+    assert_eq!(
+        f["emails"],
+        json!([{ "address": "ira@example.com", "label": "work" }])
+    );
+    assert!(f.get("addresses").is_none(), "{f}");
+    let up = last_upsert(&d.phone);
+    assert_eq!(up["phones"], contact["phones"]);
+    assert_eq!(up["phone_labels"], contact["phone_labels"]);
+    assert_eq!(up["addresses"], json!([]));
+    assert_eq!(up["address_labels"], json!([]));
+
+    // The person labels a number and adds an email with no label: the phone hears both in its
+    // own shape.
+    let synced = synced_from(&up);
+    d.patch(
+        &ira,
+        json!({
+            "phones": [
+                { "number": "+61400000003", "label": "mobile" },
+                { "number": "+61400000033", "label": "Boat" },
+            ],
+            "emails": [
+                { "address": "ira@example.com", "label": "work" },
+                { "address": "ira@home.example" },
+            ],
+        }),
+    );
+    let mut contact = contact;
+    contact["updated"] = json!("2000-01-01T00:00:00Z");
+    contact["person"] = json!(ira);
+    contact["synced"] = synced;
+    d.send("contact_changed", contact);
+    let up = last_upsert(&d.phone);
+    assert_eq!(up["phones"], json!(["+61400000003", "+61400000033"]));
+    assert_eq!(up["phone_labels"], json!(["mobile", "Boat"]));
+    assert_eq!(up["emails"], json!(["ira@example.com", "ira@home.example"]));
+    assert_eq!(up["email_labels"], json!(["work", ""]));
+    assert_eq!(
+        d.fields(&ira)["emails"],
+        json!([
+            { "address": "ira@example.com", "label": "work" },
+            { "address": "ira@home.example" },
+        ])
+    );
 }
 
 #[test]
@@ -1006,8 +1096,10 @@ fn every_detail_settles_field_by_field_and_labels_follow_their_values() {
         json!({
             "job_title": "Lead Engineer",
             "birthday": "1990-04-01",
-            "phones": ["+61290000007", "+61400000007"],
-            "phone_labels": ["work", "mobile"],
+            "phones": [
+                { "number": "+61290000007", "label": "work" },
+                { "number": "+61400000007", "label": "mobile" },
+            ],
         }),
     );
     let mut contact = full_contact(&photo, "h1");
@@ -1023,10 +1115,17 @@ fn every_detail_settles_field_by_field_and_labels_follow_their_values() {
     assert_eq!(f["birthday"], "1990-04-01");
     assert_eq!(f["organisation"], "Other Co");
     assert_eq!(f["nickname"], "Robbie");
-    assert_eq!(f["emails"], json!(["robin@example.com"]));
-    assert_eq!(f["email_labels"], json!(["work"]));
-    assert_eq!(f["phones"], json!(["+61290000007", "+61400000007"]));
-    assert_eq!(f["phone_labels"], json!(["work", "mobile"]));
+    assert_eq!(
+        f["emails"],
+        json!([{ "address": "robin@example.com", "label": "work" }])
+    );
+    assert_eq!(
+        f["phones"],
+        json!([
+            { "number": "+61290000007", "label": "work" },
+            { "number": "+61400000007", "label": "mobile" },
+        ])
+    );
     let up = last_upsert(&d.phone);
     assert_eq!(up["job_title"], "Lead Engineer");
     assert_eq!(up["birthday"], "1990-04-01");
@@ -1071,7 +1170,13 @@ fn every_detail_settles_field_by_field_and_labels_follow_their_values() {
     contact["person"] = json!(robin);
     contact["synced"] = synced;
     d.send("contact_changed", contact);
-    assert_eq!(d.fields(&robin)["phone_labels"], json!(["main", "mobile"]));
+    assert_eq!(
+        d.fields(&robin)["phones"],
+        json!([
+            { "number": "+61290000007", "label": "main" },
+            { "number": "+61400000007", "label": "mobile" },
+        ])
+    );
 }
 
 #[test]
@@ -1097,9 +1202,7 @@ fn a_detail_the_phone_does_not_report_is_left_alone() {
     let after = d.fields(&robin);
     for key in [
         "emails",
-        "email_labels",
         "addresses",
-        "address_labels",
         "organisation",
         "job_title",
         "nickname",
@@ -1126,7 +1229,7 @@ fn a_detail_the_phone_does_not_report_is_left_alone() {
     );
     let old = d.query("from person where title == \"Old App\"").remove(0);
     let f = d.fields(old["id"].as_str().unwrap());
-    assert_eq!(f["emails"], json!(["old@example.com"]));
+    assert_eq!(f["emails"], json!([{ "address": "old@example.com" }]));
     assert!(f.get("addresses").is_none(), "{f}");
     let up = last_upsert(&d.phone);
     assert_eq!(up["addresses"], json!(["old@example.com"]));
