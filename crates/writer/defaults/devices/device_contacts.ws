@@ -413,6 +413,30 @@ fn contact_changed(event: Value) -> Result[(), string] {
     let id = text_of(person, "id")
     let fields = person.get("note").unwrap().get("fields").unwrap_or(Value::Null)
     let links = links_of(person)
+    // A person kept off the phone (`phone_contact` unticked): the contact linked to it goes, and
+    // the link with it; a contact that only shares a number is left alone, never linked to it.
+    let off_phone = match fields.get("phone_contact") {
+        Some(Value::Bool(on)) => !on,
+        _ => false,
+    }
+    if off_phone {
+        if text_of(Value::Map(links), key) == contact_id || held == id {
+            match device::contacts_delete(contact_id) {
+                Ok(_) => {}
+                Err(e) => {
+                    vault::log("contact " + contact_id + " not removed for person " + id + ": " + e)
+                    return Ok(())
+                }
+            }
+            if text_of(Value::Map(links), key) != "" {
+                links.remove(key)
+                save(person, #{}, links)?
+            }
+        } else {
+            vault::log("contact " + contact_id + " left alone: person " + id + " is kept off the phone")
+        }
+        return Ok(())
+    }
     let title = text_of(fields, "title")
     let newer = vault::query("from person where id == " + quoted(id) + " && updated > " + quoted(updated))?
     let contact_newer = updated == "" || newer.len() == 0
@@ -525,14 +549,15 @@ fn contact_changed(event: Value) -> Result[(), string] {
     Ok(())
 }
 
-// A contact deleted on the phone unlinks its person and keeps it.
+// A contact deleted on the phone unlinks its person, keeps it, and takes it off the phones
+// (`phone_contact` unticked), so the contact does not come back until the person is ticked again.
 fn contact_deleted(event: Value) -> Result[(), string] {
     let key = slot(text_of(event, "device"))
     let contact_id = text_of(event.get("data").unwrap(), "contact_id")
     if let Some(person) = linked(key, contact_id)? {
         let links = links_of(person)
         links.remove(key)
-        save(person, #{}, links)?
+        save(person, #{ "phone_contact": Value::Bool(false) }, links)?
     }
     Ok(())
 }
@@ -562,7 +587,8 @@ fn upsert_contact(command: Value) -> Result[Value, string] {
     Ok(Value::Map(#{ "contact_id": Value::String(contact_id) }))
 }
 
-// The `delete_contact` command: `{ contact_id }`. The person it was linked to is kept, unlinked.
+// The `delete_contact` command: `{ contact_id }`. The person it was linked to is kept, unlinked
+// and off the phones, as after a delete on the phone.
 fn delete_contact(command: Value) -> Result[Value, string] {
     let contact_id = text_of(command.get("payload").unwrap(), "contact_id")
     if contact_id == "" {
@@ -573,7 +599,7 @@ fn delete_contact(command: Value) -> Result[Value, string] {
     if let Some(person) = linked(key, contact_id)? {
         let links = links_of(person)
         links.remove(key)
-        save(person, #{}, links)?
+        save(person, #{ "phone_contact": Value::Bool(false) }, links)?
     }
     Ok(Value::Map(#{}))
 }

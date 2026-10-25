@@ -145,6 +145,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "birthday",
             "websites",
             "contact_note",
+            "phone_contact",
             "photo",
             "device_contacts",
         ]
@@ -413,6 +414,7 @@ fn a_field_the_user_changed_is_left_as_it_is() {
             "birthday",
             "websites",
             "contact_note",
+            "phone_contact",
             "photo",
             "device_contacts"
         ]
@@ -495,6 +497,7 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
         "birthday",
         "websites",
         "contact_note",
+        "phone_contact",
         "photo",
         "homepage",
         "device_contacts",
@@ -653,10 +656,11 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
             ],
             "{name}"
         );
-        assert!(
-            done.fields_added.is_empty(),
-            "{name}: {:?}",
-            done.fields_added
+        // phone_contact came after 0.1.6: the one field it gains.
+        assert_eq!(
+            done.fields_added,
+            [("person".to_owned(), "phone_contact".to_owned())],
+            "{name}"
         );
 
         let schema = w.schema();
@@ -693,8 +697,19 @@ fn a_0_1_6_vault_gains_labels_and_an_image_photo_and_no_note_changes() {
         };
         // Step 0007 adds the Correspondence tab at the end of the default template.
         assert!(wcl.contains("tab \"Correspondence\""), "{name}: {wcl}");
+        // The seeding adds phone_contact, its field after contact_note and its slot after the
+        // contact note's; with both taken out, the type is the 0.1.6 one.
+        assert!(wcl.contains("slot \"phone_contact\""), "{name}: {wcl}");
+        let without_phone = |t: &str| {
+            let start = t
+                .find("field phone_contact {")
+                .expect("the field was added");
+            let end = start + t[start..].find("\n}\n").unwrap() + 3;
+            let t = format!("{}{}", &t[..start], t[end..].trim_start_matches('\n'));
+            t.replace("    slot \"phone_contact\"\n", "")
+        };
         assert_eq!(
-            strip(&without_correspondence(&wcl)),
+            strip(&without_phone(&without_correspondence(&wcl))),
             strip(&expect),
             "{name}"
         );

@@ -607,7 +607,8 @@ export function FieldInput(props: FieldInputProps) {
       fallback={
         <ScalarInput
           kind={f().kind}
-          value={props.value}
+          // A checkbox of a note from before the field shows the field's default.
+          value={f().kind === "bool" && (props.value === undefined || props.value === null) ? f().default : props.value}
           onChange={props.onChange}
           label={props.label}
           id={props.id}

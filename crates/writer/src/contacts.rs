@@ -128,6 +128,11 @@ fn linked_contact<'a>(note: &'a Json, device_id: &str) -> Option<&'a str> {
         .filter(|c| !c.is_empty())
 }
 
+/// Whether the person is kept as a contact on the phones: `phone_contact`, missing meaning yes.
+fn on_phone(note: &Json) -> bool {
+    note["fields"]["phone_contact"] != false
+}
+
 /// Whether the device's settings let a person be written to its contacts.
 fn writes_contacts(device: &Device) -> bool {
     let settings: Json = serde_json::from_str(&device.settings).unwrap_or_default();
@@ -160,15 +165,22 @@ impl Writer {
             return;
         }
         for change in changes {
+            // A person kept off the phones gets no contact; the phone takes away the one it had.
+            if !on_phone(&change.after) {
+                continue;
+            }
             let fields = contact_fields(&change.after);
             if !worth_a_contact(&fields) {
                 continue;
             }
-            if change.before.as_ref().map(contact_fields).as_ref() == Some(&fields) {
+            // Ticked again: the contact goes back even though no detail changed, and also to the
+            // phone that ticked it.
+            let ticked = change.before.as_ref().is_some_and(|b| !on_phone(b));
+            if !ticked && change.before.as_ref().map(contact_fields).as_ref() == Some(&fields) {
                 continue;
             }
             for device in &devices {
-                if by_device(&change.author, device)
+                if (by_device(&change.author, device) && !ticked)
                     || linked_contact(&change.after, &device.id).is_some()
                 {
                     continue;

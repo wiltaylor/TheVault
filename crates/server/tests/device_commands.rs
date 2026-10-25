@@ -1004,3 +1004,43 @@ fn a_device_event_that_failed_for_good_becomes_one_bell_notification_from_the_de
     let made = send(api.req(&phone, "POST", &path).json(&call), 201);
     assert_eq!(made["title"], "A call could not be saved");
 }
+
+#[test]
+fn a_person_kept_off_the_phones_gets_no_contact_until_ticked_again_even_from_the_phone() {
+    let api = Api::start_seeded(seed_defaults);
+    let (pixel, pixel_client) = api.pair("Pixel");
+    api.settings(
+        &pixel,
+        json!({ "contacts_write": true, "commands": ["upsert_contact", "delete_contact"] }),
+    );
+
+    // Unticked from the start: nothing for the phone.
+    let erin = api.create_person(
+        &api.admin,
+        json!({ "title": "Erin Off", "phones": ["+16502530009"], "phone_contact": false }),
+    );
+    assert!(api.upserts(&pixel).is_empty());
+    let mut renamed = erin.clone();
+    renamed["note"]["fields"]["title"] = json!("Erin Still Off");
+    let erin = api.update_note(&api.admin, &renamed);
+    assert!(api.upserts(&pixel).is_empty());
+
+    // Ticked again, with no detail changed: the contact goes back.
+    let mut on = erin.clone();
+    on["note"]["fields"]["phone_contact"] = json!(true);
+    let erin = api.update_note(&api.admin, &on);
+    let queued = api.upserts(&pixel);
+    assert_eq!(queued.len(), 1, "{queued:?}");
+    assert_eq!(queued[0]["payload"]["name"], "Erin Still Off");
+    assert_eq!(queued[0]["payload"]["contact_id"], Value::Null);
+
+    // Off again, then ticked on the phone itself: the phone gets the contact back too.
+    let mut off = erin.clone();
+    off["note"]["fields"]["phone_contact"] = json!(false);
+    let erin = api.update_note(&api.admin, &off);
+    assert_eq!(api.upserts(&pixel).len(), 1);
+    let mut on = erin.clone();
+    on["note"]["fields"]["phone_contact"] = json!(true);
+    api.update_note(&pixel_client, &on);
+    assert_eq!(api.upserts(&pixel).len(), 2);
+}

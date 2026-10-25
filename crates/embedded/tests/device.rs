@@ -700,10 +700,12 @@ fn contacts_sync_with_people_both_ways_and_deletes_only_unlink() {
     assert_eq!(d.query("from person").len(), 2);
     assert_eq!(d.links(&alex), json!({ SLOT: "c1" }));
 
-    // Deleting the contact on the phone unlinks the person and keeps it.
+    // Deleting the contact on the phone unlinks the person, keeps it, and takes it off the
+    // phones, so the contact does not come back.
     d.send("contact_deleted", json!({ "contact_id": "c9" }));
     let f = d.fields(&sam);
     assert_eq!(f["title"], "Samuel Lee");
+    assert_eq!(f["phone_contact"], false);
     assert_eq!(d.links(&sam), Json::Null);
     assert_eq!(d.query("from person").len(), 2);
 }
@@ -1869,4 +1871,51 @@ fn a_sent_sms_is_linked_by_number_text_and_time_while_its_item_waits_for_the_pho
         ),
     );
     assert!(d.fields(&bob).get("result").is_none());
+}
+
+#[test]
+fn a_person_kept_off_the_phone_loses_its_contact_and_a_contact_with_its_number_is_not_relinked() {
+    let d = Device::open();
+    d.settings(json!({ "contacts_write": true }));
+    d.send(
+        "contact_changed",
+        json!({ "contact_id": "c7", "name": "Ola Berg", "phones": ["+61400000007"], "emails": [], "updated": "2020-01-01T00:00:00Z" }),
+    );
+    let ola = d.query("from person")[0]["id"].as_str().unwrap().to_owned();
+    // Captured from the phone, the person is on it.
+    assert_eq!(d.fields(&ola)["phone_contact"], true);
+    assert_eq!(d.links(&ola)[SLOT], "c7");
+
+    // Unticked: the next contact event for it takes the contact off the phone, and the link.
+    Vault::patch(
+        &**d.writer(),
+        &ola,
+        json!({ "phone_contact": false }),
+        "",
+        &Author::Session("test".into()),
+    )
+    .unwrap();
+    let before = d.phone.actions().len();
+    d.send(
+        "contact_changed",
+        json!({ "contact_id": "c7", "name": "Ola Berg", "phones": ["+61400000007"], "emails": [], "updated": "2020-01-02T00:00:00Z", "person": ola }),
+    );
+    let after: Vec<String> = d.phone.actions()[before..].to_vec();
+    assert_eq!(after, ["delete c7"], "{after:?}");
+    assert_eq!(d.links(&ola).get(SLOT), None, "{}", d.links(&ola));
+    assert_eq!(d.fields(&ola)["title"], "Ola Berg", "the person is kept");
+
+    // A contact added again on the phone with the same number is left alone: no link, no new person.
+    let before = d.phone.actions().len();
+    d.send(
+        "contact_changed",
+        json!({ "contact_id": "c8", "name": "Ola", "phones": ["+61400000007"], "emails": [], "updated": "2020-01-03T00:00:00Z" }),
+    );
+    assert!(
+        d.phone.actions()[before..].is_empty(),
+        "{:?}",
+        d.phone.actions()
+    );
+    assert_eq!(d.links(&ola).get(SLOT), None);
+    assert_eq!(d.query("from person").len(), 1);
 }

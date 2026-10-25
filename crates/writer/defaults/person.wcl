@@ -81,6 +81,13 @@ field contact_note {
   description = "The note on the phone contact."
 }
 
+field phone_contact {
+  kind        = "bool"
+  label       = "On the phone"
+  description = "Keep this person as a contact on the phones that sync contacts. Untick it to take the contact off them; tick it to put it back."
+  default     = true
+}
+
 field photo {
   kind   = "asset"
   label  = "Photo"
@@ -115,6 +122,7 @@ template default {
     slot "birthday"
     slot "websites"
     slot "contact_note"
+    slot "phone_contact"
     slot "body"
   }
   tab "Correspondence" {

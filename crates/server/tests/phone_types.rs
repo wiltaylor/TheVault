@@ -241,6 +241,7 @@ fn an_existing_vault_gets_the_phone_types_and_keeps_its_own_person_with_the_phon
             "birthday",
             "websites",
             "contact_note",
+            "phone_contact",
             "photo",
             "device_contacts",
             "body"
