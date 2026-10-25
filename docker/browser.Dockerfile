@@ -9,7 +9,7 @@
 # It needs BROWSER_TOKEN, the bearer token the exec service takes, and refuses to start without.
 
 # The exec service, linked statically against musl like the vault CLI.
-FROM rust:1.97-bookworm AS rust
+FROM rust:1.99-bookworm AS rust
 ARG TARGETARCH
 RUN apt-get update \
  && apt-get install -y --no-install-recommends musl-tools \

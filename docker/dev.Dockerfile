@@ -1,7 +1,7 @@
 # Development toolchain for TheVault. Every build, test and run command goes
 # through this image via ./dev, so the host needs only docker. ./dev tags the
 # image with a hash of this file, so editing it rebuilds on the next call.
-FROM rust:1.97-bookworm
+FROM rust:1.99-bookworm
 
 ARG NODE_VERSION=22.20.0
 ARG JUST_VERSION=1.43.0
@@ -41,7 +41,7 @@ RUN curl -fsSL $CURL_RETRY -o /tmp/node.tar.xz \
       "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
  && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
  && rm /tmp/node.tar.xz \
- && retry npm install -g pnpm@10
+ && retry npm install -g pnpm@12.14.0
 
 RUN curl -fsSL $CURL_RETRY -o /tmp/just.tar.gz \
       "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
@@ -85,7 +85,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN retry npx -y playwright@1.56.1 install --with-deps chromium \
  && chmod -R a+rX /opt/playwright
 
-ENV CARGO_HOME=/cargo PNPM_HOME=/pnpm-store GRADLE_USER_HOME=/gradle
+# pnpm 12 no longer reads store-dir from web/.npmrc, so the shared store is named here.
+ENV CARGO_HOME=/cargo PNPM_HOME=/pnpm-store pnpm_config_store_dir=/pnpm-store/store GRADLE_USER_HOME=/gradle
 RUN mkdir -p /cargo /pnpm-store /gradle && chmod 1777 /cargo /pnpm-store /gradle
 
 # The Secret Service the desktop app keeps its device token in, for its S6 tests, and nss_wrapper,

@@ -13,7 +13,9 @@
 FROM scratch AS clients
 
 FROM node:22.20.0-bookworm-slim AS web
-RUN npm install -g pnpm@10
+RUN npm install -g pnpm@12.14.0
+# pnpm 12 no longer reads store-dir from web/.npmrc; this keeps the store in the build cache.
+ENV pnpm_config_store_dir=/pnpm-store/store
 WORKDIR /src
 # vite.config.ts reads the workspace version from the root Cargo.toml.
 COPY Cargo.toml ./
@@ -24,7 +26,7 @@ COPY web web
 ARG THEVAULT_WEB_COMMIT=""
 RUN THEVAULT_WEB_COMMIT="${THEVAULT_WEB_COMMIT}" pnpm -C web build
 
-FROM rust:1.97-bookworm AS rust
+FROM rust:1.99-bookworm AS rust
 WORKDIR /src
 COPY Cargo.toml Cargo.lock clippy.toml ./
 COPY crates crates

@@ -476,7 +476,7 @@ impl Home {
             Some(r) => r,
             None => match self.open_relay(turn).await {
                 Ok(r) => r,
-                Err(res) => return res,
+                Err(res) => return *res,
             },
         };
         relay.lock().asked = Some(Instant::now());
@@ -514,15 +514,15 @@ impl Home {
     }
 
     /// Open `turn`'s event stream on the home server and start reading it into a relay.
-    async fn open_relay(&self, turn: &str) -> Result<Arc<Relay>, Response<Body>> {
+    async fn open_relay(&self, turn: &str) -> Result<Arc<Relay>, Box<Response<Body>>> {
         let ask = Request::get(format!("/api/ai/chat/turns/{turn}/events"))
             .header(header::ACCEPT, "text/event-stream")
             .body(Body::empty())
             .unwrap_or_default();
         let res = match self.send(ask).await {
             Ok(res) if res.status().is_success() => res,
-            Ok(res) => return Err(pass(res)),
-            Err(_) => return Err(ai_needs_server()),
+            Ok(res) => return Err(Box::new(pass(res))),
+            Err(_) => return Err(Box::new(ai_needs_server())),
         };
         let relay = Arc::new(Relay {
             state: Mutex::new(Relayed {
