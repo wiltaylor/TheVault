@@ -3,20 +3,21 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { dropAccount, useAccount } from "./ai";
+import { aiAccounts, alone, dropAccount, useAccount, withDefault } from "./ai";
 import { activePane, expect, logIn, test } from "./fixtures";
 
-// The AI panel (ai D14, D23) against the fake Anthropic API, which an account of its own, the
-// default, points at (accounts A12): ask beside a note, watch the answer arrive, apply the edit the model
-// proposed, and see the note change; apply a proposed template change (ai D18) and see it on a
-// note of that type; apply a proposed delete and create (ai D20) and see the note in the trash and
-// the new note open; and, with notes confirmation off (ai D22), see an edit land in the open note
-// without pressing Apply; and, in an app (ai D23), run a turn through the turns form and apply
-// on the home server, asking for a sync round; and the panel's thread picker lists the thread a
-// message started and opens it in the agent screen as the same conversation (agents G18); and in
-// the agent screen's chat, Enter sends and Shift+Enter starts a line, the model dropdown at the
-// box's foot chooses the model a turn uses, starting from an agent's own model when it names one,
-// and the session picker's search, Archive and Delete act on the chosen session.
+// The AI panel (ai D14, D23) against the fake Anthropic API, which an account of the worker's own
+// points at, chosen at the chat's foot (accounts A12): ask beside a note, watch the answer arrive,
+// apply the edit the model proposed, and see the note change; apply a proposed template change
+// (ai D18) and see it on a note of that type; apply a proposed delete and create (ai D20) and see
+// the note in the trash and the new note open; and, with notes confirmation off (ai D22), see an
+// edit land in the open note without pressing Apply; and, in an app (ai D23), run a turn through
+// the turns form and apply on the home server, asking for a sync round; and the panel's thread
+// picker lists the thread a message started and opens it in the agent screen as the same
+// conversation (agents G18); and in the agent screen's chat, Enter sends and Shift+Enter starts a
+// line, the model dropdown at the box's foot chooses the model a turn uses, starting from an
+// agent's own model when it names one, and the session picker's search, Archive and Delete act on
+// the chosen session.
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -68,6 +69,8 @@ async function startFake(env: string, name: string, args: string[] = []): Promis
 
 let anthropic: Running;
 let fake: Fake;
+/** This worker's account on its fake, by name; the default is global-setup's, which no test scripts. */
+let fakeAccount: string;
 
 /** Send a command to the fake Anthropic API and wait until it has taken effect. */
 function tell(line: string): Promise<Record<string, unknown>> {
@@ -77,6 +80,7 @@ function tell(line: string): Promise<Record<string, unknown>> {
 test.beforeAll(async () => {
   anthropic = await startFake("TESTKIT_FAKE_ANTHROPIC_BIN", "testkit-fake-anthropic");
   fake = anthropic.fake;
+  fakeAccount = `Fake Anthropic ${new URL(fake.base_url).port}`;
 });
 
 test.afterAll(() => {
@@ -108,7 +112,7 @@ test("the AI panel answers beside a note and an applied proposal changes the not
   await page.keyboard.press("Control+Shift+L");
   const panel = page.getByRole("complementary", { name: "AI" });
   await expect(panel).toBeVisible();
-  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await pickFake(panel);
   await panel.getByLabel("Ask AI").fill("Add eggs to this list.");
   await panel.getByLabel("Ask AI").press("Enter");
 
@@ -151,7 +155,7 @@ test("a create and a delete proposed in the AI panel apply: the new note opens a
   await expect(activePane(page)).toContainText("Bread");
   await page.keyboard.press("Control+Shift+L");
   const panel = page.getByRole("complementary", { name: "AI" });
-  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await pickFake(panel);
   await panel.getByLabel("Ask AI").fill("Replace this list with a new one.");
   await panel.getByLabel("Ask AI").press("Enter");
 
@@ -204,7 +208,7 @@ test("a type change proposed in the AI panel and applied shows on a note of that
   await expect(activePane(page)).not.toContainText("Reviewed weekly");
   await page.keyboard.press("Control+Shift+L");
   const panel = page.getByRole("complementary", { name: "AI" });
-  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await pickFake(panel);
   await panel.getByLabel("Ask AI").fill("Add a Reviewed weekly line to this type's template.");
   await panel.getByLabel("Ask AI").press("Enter");
 
@@ -227,12 +231,14 @@ test("a type change proposed in the AI panel and applied shows on a note of that
 
 test("with notes confirmation off, an edit asked for in the AI panel shows in the open note without Apply", async ({ page, admin }) => {
   await useFake(admin);
-  // The chat's confirmation switches are Assistant's (agents G6); the settings route still writes them there.
-  const put = await admin.put("/api/integrations/ai/settings", { data: { confirm: { notes: false } } });
+  // The confirmation switches are the agent's (agents G6). Assistant's are every test's on this
+  // server, so an agent of the test's own turns notes confirmation off, on this worker's fake.
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const agent = `errands_${stamp}`;
+  const wcl = `label = "Errands ${stamp}"\naccount = "${fakeAccount}"\npermissions {\n  confirm {\n    notes = false\n  }\n}\n`;
+  const put = await admin.put(`/api/agents/${agent}`, { data: { wcl } });
   expect(put.ok(), await put.text()).toBe(true);
-  const accounts = (await (await admin.get("/api/ai/accounts")).json()) as { confirm: Record<string, boolean> };
-  expect(accounts.confirm).toMatchObject({ notes: false, archive: true, delete: true, types: true });
-  const title = `Errands ${Date.now().toString(36)}`;
+  const title = `Errands ${stamp}`;
   const created = await admin.post("/api/notes?type=note", { data: { note: shopping(title, ["Post office"]) } });
   expect(created.status(), await created.text()).toBe(201);
   const note = (await created.json()) as { id: string; version: string };
@@ -246,7 +252,7 @@ test("with notes confirmation off, an edit asked for in the AI panel shows in th
   await expect(activePane(page)).not.toContainText("Pharmacy");
   await page.keyboard.press("Control+Shift+L");
   const panel = page.getByRole("complementary", { name: "AI" });
-  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await panel.getByLabel("Agent").selectOption(agent);
   await panel.getByLabel("Ask AI").fill("Add the pharmacy to this list.");
   await panel.getByLabel("Ask AI").press("Enter");
 
@@ -259,9 +265,7 @@ test("with notes confirmation off, an edit asked for in the AI panel shows in th
   const after = (await (await admin.get(`/api/notes/${note.id}`)).json()) as { version: string; note: unknown };
   expect(after.version).not.toBe(note.version);
   expect(JSON.stringify(after.note)).toContain("Pharmacy");
-  // Assistant is shared by every test on this server: ask before edits again.
-  const back = await admin.put("/api/integrations/ai/settings", { data: { confirm: { notes: true } } });
-  expect(back.ok(), await back.text()).toBe(true);
+  expect((await admin.delete(`/api/agents/${agent}`)).ok()).toBe(true);
 });
 
 // In the desktop and Android apps (ai D23) the panel runs a turn in the turns form and polls the
@@ -313,9 +317,9 @@ test("in an app, the AI panel runs a turn through the turns form and Apply asks 
   await logIn(page, `/notes/${note.id}`);
   await expect(activePane(page)).toContainText("Dishes");
   await page.keyboard.press("Control+Shift+L");
-  await expect(page.getByRole("tab", { name: "AI" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "AI", exact: true })).toHaveAttribute("aria-selected", "true");
   const panel = page.getByRole("complementary", { name: "AI" });
-  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await pickFake(panel);
   await panel.getByLabel("Ask AI").fill("Add the laundry.");
   await panel.getByLabel("Ask AI").press("Enter");
 
@@ -343,7 +347,7 @@ test("the AI panel's thread opens in the agent screen as the same conversation, 
   await logIn(page, "/daily");
   await page.keyboard.press("Control+Shift+L");
   const panel = page.getByRole("complementary", { name: "AI" });
-  await expect(panel.getByLabel("Model")).toHaveValue("claude-opus-5");
+  await pickFake(panel);
   await expect(panel.getByRole("button", { name: "Open in agent screen" })).toBeDisabled();
   await panel.getByLabel("Ask AI").fill(`Say hello ${stamp}.`);
   await panel.getByLabel("Ask AI").press("Enter");
@@ -390,8 +394,8 @@ test("the agent screen's chat sends on Enter, keeps Shift+Enter as a new line, a
 
   await logIn(page, `/agents/${name}`);
   const chat = activePane(page).getByRole("region", { name: "Chat" });
+  await pickFake(chat);
   const model = chat.getByLabel("Model");
-  await expect(model).toHaveValue("claude-opus-5");
   // The dropdown sits at the bottom right, beside Send.
   const send = (await chat.getByRole("button", { name: "Send" }).boundingBox())!;
   const picked = (await model.boundingBox())!;
@@ -432,7 +436,7 @@ test("an agent's chat starts on the agent's own model, and a model picked at its
   await useFake(admin);
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const name = `owner_${stamp}`;
-  const put = await admin.put(`/api/agents/${name}`, { data: { wcl: `label = "Owner ${stamp}"\naccount = "Fake Anthropic"\nmodel = "claude-sonnet-5"\n` } });
+  const put = await admin.put(`/api/agents/${name}`, { data: { wcl: `label = "Owner ${stamp}"\naccount = "${fakeAccount}"\nmodel = "claude-sonnet-5"\n` } });
   expect(put.ok(), await put.text()).toBe(true);
   await tell(`push ${JSON.stringify({ text: `On its own ${stamp}.` })}`);
   await tell(`push ${JSON.stringify({ text: `On the pick ${stamp}.` })}`);
@@ -441,7 +445,7 @@ test("an agent's chat starts on the agent's own model, and a model picked at its
   const chat = activePane(page).getByRole("region", { name: "Chat" });
   const account = chat.getByLabel("Account");
   const model = chat.getByLabel("Model");
-  await expect(account.locator("option:checked")).toHaveText("Agent's account (Fake Anthropic)");
+  await expect(account.locator("option:checked")).toHaveText(`Agent's account (${fakeAccount})`);
   await expect(model.locator("option:checked")).toHaveText("Agent's model (claude-sonnet-5)");
   await expect(model.locator("option")).toContainText(["Agent's model (claude-sonnet-5)", "Claude Opus 5", "Claude Haiku 4.5"]);
 
@@ -530,6 +534,7 @@ test("the chat shows how full the context is, and /compact summarizes the thread
   await useFake(admin);
   const title = `Context ${Date.now().toString(36)}`;
   await logIn(page, "/agents/assistant");
+  await pickFake(page.locator(".agent-chat"));
   const box = page.getByRole("textbox", { name: "Ask AI" });
   await tell(`push ${JSON.stringify({ text: `${title}: a long answer.`, usage: [170_000, 2_000] })}`);
   await box.fill(`${title} question`);
@@ -560,9 +565,15 @@ test("the chat shows how full the context is, and /compact summarizes the thread
   await expect(page.getByTestId("context-meter")).toContainText("300 / 200k");
 });
 
-/** Point the server at this file's fake Anthropic: an account of its own, made the default (accounts A12). */
+/** Point an account at this worker's fake Anthropic (accounts A12); its id. */
 async function useFake(admin: import("@playwright/test").APIRequestContext): Promise<string> {
-  return useAccount(admin, { name: "Fake Anthropic", kind: "anthropic", base_url: fake.base_url, key: fake.api_key, model: "claude-opus-5", default: true });
+  return useAccount(admin, { name: fakeAccount, kind: "anthropic", base_url: fake.base_url, key: fake.api_key, model: "claude-opus-5" });
+}
+
+/** Choose this worker's fake at the chat's foot, which starts on its model. */
+async function pickFake(chat: import("@playwright/test").Locator) {
+  await chat.getByLabel("Account").selectOption({ label: fakeAccount });
+  await expect(chat.getByLabel("Model")).toHaveValue("claude-opus-5");
 }
 
 /** Where the conversation's messages and its box sit: the box stays in view under the messages, which scroll on their own. */
@@ -603,6 +614,7 @@ for (const where of ["agent screen", "side panel"] as const) {
       await page.keyboard.press("Control+Shift+L");
       root = page.getByRole("complementary", { name: "AI" });
     }
+    await pickFake(root);
     const box = root.getByRole("textbox", { name: "Ask AI" });
     await box.fill(`Write a lot ${tag}`);
     await box.press("Enter");
@@ -620,6 +632,7 @@ test("pasted and picked files are uploaded as assets and named to the model by t
   await useFake(admin);
   const tag = Date.now().toString(36);
   await logIn(page, "/agents/assistant");
+  await pickFake(page.locator(".agent-chat"));
   const box = page.getByRole("textbox", { name: "Ask AI" });
   // A pasted screenshot arrives as image.png.
   await box.evaluate((el) => {
@@ -666,6 +679,7 @@ test("the conversation follows new text at the end, stops when scrolled up, and 
   const long = Array.from({ length: 60 }, (_, i) => `Row ${i + 1} ${tag}.`).join("\n\n");
   await tell(`push ${JSON.stringify({ text: long })}`);
   await logIn(page, "/agents/assistant");
+  await pickFake(page.locator(".agent-chat"));
   const box = page.getByRole("textbox", { name: "Ask AI" });
   await box.fill(`Follow ${tag}`);
   await box.press("Enter");
@@ -679,9 +693,21 @@ test("the conversation follows new text at the end, stops when scrolled up, and 
       li.style.height = "300px";
       el.querySelector("ol")!.appendChild(li);
     });
+  // Scroll the view by `by` pixels or to the end, and wait for the page to see the scroll before
+  // anything grows: under load both can fall in one frame, and the scroll then arrives after the
+  // growth it came before.
+  const scrollView = (by: number | "end") =>
+    scroll.evaluate(
+      (el, by) =>
+        new Promise<void>((seen) => {
+          el.addEventListener("scroll", () => seen(), { once: true });
+          el.scrollTop = by === "end" ? el.scrollHeight : el.scrollTop + by;
+        }),
+      by,
+    );
 
   // Scrolled up a little, growth leaves the view where it is.
-  await scroll.evaluate((el) => (el.scrollTop -= 40));
+  await scrollView(-40);
   const top = await scroll.evaluate((el) => el.scrollTop);
   await grow();
   await page.waitForTimeout(200);
@@ -689,7 +715,7 @@ test("the conversation follows new text at the end, stops when scrolled up, and 
   expect(await atEnd()).toBe(false);
 
   // Back at the end, it follows again.
-  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await scrollView("end");
   await grow();
   await expect.poll(atEnd).toBe(true);
 });
@@ -700,6 +726,7 @@ test("messages sent while an answer runs are queued, Edit takes them back, and t
   await tell(`push ${JSON.stringify({ text: `Slow answer ${tag}.`, delay_ms: 400 })}`);
   await tell(`push ${JSON.stringify({ text: `Answer to the queue ${tag}.` })}`);
   await logIn(page, "/agents/assistant");
+  await pickFake(page.locator(".agent-chat"));
   const box = page.getByRole("textbox", { name: "Ask AI" });
   await box.fill(`First ${tag}`);
   await box.press("Enter");
@@ -728,6 +755,7 @@ test("Edit cuts the chat back to a question for the box, and Fork opens a new ch
   await tell(`push ${JSON.stringify({ text: `A1 ${tag}` })}`);
   await tell(`push ${JSON.stringify({ text: `A2 ${tag}` })}`);
   await logIn(page, "/agents/assistant");
+  await pickFake(page.locator(".agent-chat"));
   const box = page.getByRole("textbox", { name: "Ask AI" });
   await box.fill(`Q1 ${tag}`);
   await box.press("Enter");
@@ -766,7 +794,6 @@ test("Edit cuts the chat back to a question for the box, and Fork opens a new ch
 
 // Named AI accounts (accounts A11, A12, A13): accounts added in Settings > AI, chatted on from the
 // foot picker, renamed with the agents that name them following, and a ChatGPT account's usage.
-// They run in this file, one at a time with the tests above, as they change the default account.
 test.describe("AI accounts", () => {
   let compatible: Running;
   let plan: Running;
@@ -817,19 +844,22 @@ test.describe("AI accounts", () => {
     await expect(edit.getByLabel("Header 1 value")).toHaveValue(`TheVault ${tag}`);
     await edit.getByRole("button", { name: "Close" }).click();
 
-    // Make it the default: the table marks it.
-    await page.getByRole("row", { name: router }).getByRole("button", { name: `Make ${router} the default` }).click();
-    await expect(page.getByRole("row", { name: router }).getByText("Default", { exact: true })).toBeVisible();
-    const status = (await (await admin.get("/api/integrations/ai")).json()) as { default: string; accounts: { id: string; name: string }[] };
-    expect(status.accounts.find((a) => a.id === status.default)?.name).toBe(router);
-
-    // The chat starts on the default account, and its extra headers go with the call.
-    await compatible.tell(`push ${JSON.stringify({ text: `From the router ${tag}.` })}`);
-    await page.goto("/agents/assistant");
+    // Make it the default: the table marks it, and the chat starts on it. The default goes back
+    // before the router's reply is queued, so no other turn takes it; the chat keeps its account.
     const chat = page.locator(".agent-chat");
     const account = chat.getByLabel("Account");
-    await expect(account.locator("option:checked")).toHaveText(router);
-    await expect(chat.getByLabel("Model")).not.toHaveValue("");
+    await withDefault(admin, async () => {
+      await page.getByRole("row", { name: router }).getByRole("button", { name: `Make ${router} the default` }).click();
+      await expect(page.getByRole("row", { name: router }).getByText("Default", { exact: true })).toBeVisible();
+      const status = await aiAccounts(admin);
+      expect(status.accounts.find((a) => a.id === status.default)?.name).toBe(router);
+      await page.goto("/agents/assistant");
+      await expect(account.locator("option:checked")).toHaveText(router);
+      await expect(chat.getByLabel("Model")).not.toHaveValue("");
+    });
+
+    // Its extra headers go with the call.
+    await compatible.tell(`push ${JSON.stringify({ text: `From the router ${tag}.` })}`);
     const box = chat.getByRole("textbox", { name: "Ask AI" });
     await box.fill(`Router question ${tag}`);
     await box.press("Enter");
@@ -848,13 +878,10 @@ test.describe("AI accounts", () => {
     await expect(chat.getByText(`From Claude ${tag}.`)).toBeVisible();
     expect((await tell("requests")).count).toBe(before + 1);
 
-    // Back to this file's own default for the tests that follow.
-    await useFake(admin);
     for (const name of [claude, router]) await dropAccount(admin, name);
   });
 
   test("renaming an account rewrites the agents that name it, and the agent page follows", async ({ page, admin }) => {
-    await useFake(admin);
     const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     const old = `Rename me ${tag}`;
     const renamed = `Renamed ${tag}`;
@@ -893,22 +920,25 @@ test.describe("AI accounts", () => {
   });
 
   test("a ChatGPT account shows its plan's usage as bars, and the chat foot its used percent", async ({ page, admin }) => {
-    await useFake(admin);
     const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     const name = `E2E plan ${tag}`;
     const id = await useAccount(admin, { name, kind: "chatgpt" });
-    await signInPlan(admin, id, plan.fake.base_url);
-    // A plan response carries the usage headers, which the server keeps as the account's reading.
-    await plan.tell(`push ${JSON.stringify({ text: `From the plan ${tag}.` })}`);
-
-    await logIn(page, "/agents/assistant");
     const chat = page.locator(".agent-chat");
-    await chat.getByLabel("Account").selectOption({ label: name });
-    await expect(chat.getByLabel("Model")).not.toHaveValue("");
-    const box = chat.getByRole("textbox", { name: "Ask AI" });
-    await box.fill(`Plan question ${tag}`);
-    await box.press("Enter");
-    await expect(chat.getByText(`From the plan ${tag}.`)).toBeVisible();
+    // The seam that points plans at a fake is the server's one setting, so this worker's holds it
+    // until its turn is answered.
+    await alone("chatgpt-endpoint", async () => {
+      await signInPlan(admin, id, plan.fake.base_url);
+      // A plan response carries the usage headers, which the server keeps as the account's reading.
+      await plan.tell(`push ${JSON.stringify({ text: `From the plan ${tag}.` })}`);
+
+      await logIn(page, "/agents/assistant");
+      await chat.getByLabel("Account").selectOption({ label: name });
+      await expect(chat.getByLabel("Model")).not.toHaveValue("");
+      const box = chat.getByRole("textbox", { name: "Ask AI" });
+      await box.fill(`Plan question ${tag}`);
+      await box.press("Enter");
+      await expect(chat.getByText(`From the plan ${tag}.`)).toBeVisible();
+    });
 
     await page.goto("/settings/ai");
     const bars = page.getByRole("group", { name: `${name} usage` });

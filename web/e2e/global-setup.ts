@@ -98,6 +98,28 @@ function listenAddress(server: ChildProcess): Promise<string> {
   });
 }
 
+const DEFAULT_ACCOUNT = "E2E default";
+
+/**
+ * Add an AI account with no key and make it the default (accounts A5). A turn no one chose an
+ * account for, such as the run of a call committed in a note, takes the default; with this one it
+ * fails at once, so it never takes a reply a test queued on a fake of its own. The tests that chat
+ * pick their own account.
+ */
+async function seedDefaultAccount(base: string, token: string) {
+  const call = async (method: string, path: string, body: unknown) => {
+    const res = await fetch(`${base}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`);
+    return (await res.json()) as { id: string };
+  };
+  const { id } = await call("POST", "/api/integrations/ai/accounts", { kind: "anthropic", name: DEFAULT_ACCOUNT });
+  await call("PUT", "/api/integrations/ai/default", { id });
+}
+
 // Starts vault-server on a seeded temporary vault and port 0, serving web/dist, and hands the
 // URL, credentials and vault folder to the tests through the environment (S5). The server gets a
 // secret key file, so secrets can be stored.
@@ -123,6 +145,7 @@ export default async function globalSetup() {
   let address: string;
   try {
     address = await listenAddress(server);
+    await seedDefaultAccount(`http://${address}`, seeded.admin_token);
   } catch (e) {
     server.kill();
     rmSync(vault, { recursive: true, force: true });

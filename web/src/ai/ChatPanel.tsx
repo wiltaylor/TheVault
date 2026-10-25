@@ -9,7 +9,7 @@
 // Android apps, whose chat runs on the home server. `Conversation` is the view the panel and the
 // agent screen share, with the provider and model picker at the foot of its message box.
 
-import { For, type JSX, Match, Show, Switch, createEffect, createRoot, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, type JSX, Match, Show, Switch, createEffect, createMemo, createRoot, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { agentLabel, agents } from "../agents";
 import { type AgentThreadSummary, type AiAccountChoice, type AiAccounts, type AiModel, type Json, type NoteDoc, api, assetUrl } from "../api";
 import { TypeIcon } from "../components/Icon";
@@ -1720,7 +1720,8 @@ export function threadHref(agent: string, id: string): string {
 function ThreadPicker() {
   const [threads, setThreads] = createSignal<AgentThreadSummary[]>([]);
   const [open, setOpen] = createSignal(false);
-  const listed = () => agents().some((a) => a.name === chat.agent);
+  // A memo, so another agent added or changed elsewhere does not close the menu or reread the list.
+  const listed = createMemo(() => agents().some((a) => a.name === chat.agent));
   let anchor: HTMLButtonElement | undefined;
   let asked = 0;
   let poll: ReturnType<typeof setTimeout> | undefined;

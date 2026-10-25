@@ -96,9 +96,12 @@ export function AgentChat(props: {
   }
   const session = createChatSession({ agent: props.agent, threads: true, onChange: () => void refresh() });
   onCleanup(() => session.close());
+  // A memo, so the agent list read again (another agent added or changed anywhere) is no new agent:
+  // the list of chats is not emptied and read again under the user.
+  const agentName = createMemo(() => props.agent);
   createEffect(
     on(
-      () => props.agent,
+      agentName,
       (agent) => {
         session.setAgent(agent);
         setThreads([]);

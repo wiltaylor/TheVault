@@ -7,6 +7,7 @@
 // (agents G18).
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentThread, Json, StreamEvent } from "../api";
 import { turnsOver } from "./fakeTurns";
@@ -203,6 +204,17 @@ describe("the chat", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Search chats" }), { key: "Escape" });
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(screen.getByRole("button", { name: /^Chat session: / })).toHaveFocus();
+  });
+
+  it("keeps its list of chats when the agent is given again unchanged, as a reread agent list does", async () => {
+    const [agent, setAgentProp] = createSignal("triage", { equals: false });
+    render(() => <AgentChat agent={agent()} label="Triage" />);
+    const list = await sessions();
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(3));
+    const reads = agentThreads.mock.calls.length;
+    setAgentProp("triage");
+    expect(list.getAllByRole("option")).toHaveLength(3);
+    expect(agentThreads.mock.calls.length).toBe(reads);
   });
 
   it("moves through the chats with the arrow keys, New chat first", async () => {
@@ -917,6 +929,26 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
     expect(panel.getByRole("button", { name: "Thread: New thread" })).toBeTruthy();
     await sendIn(panel, "Sort my inbox");
     expect(live!.body).toMatchObject({ agent: "triage", thread: "01JNEW", note_id: "01JNOTE" });
+  });
+
+  it("keeps the thread menu open while another agent is added", async () => {
+    await withAgents();
+    const { panel } = both();
+    fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
+    fireEvent.click(await panel.findByRole("button", { name: /^Thread: / }));
+    const menu = await panel.findByRole("menu", { name: "Threads" });
+    await waitFor(() => expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(2));
+    agentsList.mockResolvedValue({
+      agents: [
+        { name: "assistant", label: "Assistant", built_in: true, enabled: true },
+        { name: "triage", label: "Triage", built_in: false, enabled: true, account: "anthropic", model: "claude-sonnet-5" },
+        { name: "scout", label: "Scout", built_in: false, enabled: true },
+      ],
+      tools: [],
+    });
+    await refreshAgents();
+    expect(panel.getByRole("menu", { name: "Threads" })).toBe(menu);
+    expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(2);
   });
 
   it("shows one stream in the panel and the agent screen, and a Stop in one ends it in both", async () => {
