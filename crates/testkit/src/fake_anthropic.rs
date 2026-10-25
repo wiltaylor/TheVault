@@ -534,6 +534,7 @@ fn messages(shared: &Shared, request: &Request) -> Answer {
                     frames: m.frames(&model, &id),
                     cut_after: m.cut_after,
                     delay: m.delay,
+                    headers: Vec::new(),
                 })
             } else {
                 Answer::Whole(Reply::json(200, &m.whole(&model, &id)))

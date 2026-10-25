@@ -6,59 +6,113 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The three credentials (ai D1). `anthropic` speaks the Messages API; `openai` and `chatgpt`
-/// speak the Responses API, with an API key and with a ChatGPT plan token; `openai` with a custom
-/// API URL may speak Chat Completions instead (ai D25).
+/// The kind of an AI account (accounts A1): it fixes the account's wire format and its auth.
+/// `anthropic` speaks the Messages API with an `x-api-key`; `openai` the Responses API with a
+/// bearer key; `openai_compatible` Chat Completions with an optional bearer key, for OpenRouter,
+/// Z.ai, Ollama and the like (ai D25); `chatgpt` the Responses API under the ChatGPT plan's rules
+/// with a Sign in with ChatGPT token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
+pub enum Kind {
+    #[serde(rename = "anthropic")]
     Anthropic,
     #[serde(rename = "openai")]
     OpenAi,
+    #[serde(rename = "openai_compatible")]
+    OpenAiCompatible,
     #[serde(rename = "chatgpt")]
     ChatGpt,
 }
 
-impl Provider {
-    /// Every provider, in the order Settings > AI shows them.
-    pub const ALL: [Provider; 3] = [Provider::Anthropic, Provider::OpenAi, Provider::ChatGpt];
+impl Kind {
+    /// Every kind, in the order Settings > AI offers them.
+    pub const ALL: [Kind; 4] = [
+        Kind::Anthropic,
+        Kind::OpenAi,
+        Kind::OpenAiCompatible,
+        Kind::ChatGpt,
+    ];
 
-    /// `anthropic`, `openai` or `chatgpt`: the name in settings, routes, scripts and trail lines.
+    /// `anthropic`, `openai`, `openai_compatible` or `chatgpt`: the name in `ai_accounts`, the
+    /// routes and trail lines.
     pub fn as_str(self) -> &'static str {
         match self {
-            Provider::Anthropic => "anthropic",
-            Provider::OpenAi => "openai",
-            Provider::ChatGpt => "chatgpt",
+            Kind::Anthropic => "anthropic",
+            Kind::OpenAi => "openai",
+            Kind::OpenAiCompatible => "openai_compatible",
+            Kind::ChatGpt => "chatgpt",
         }
     }
 
-    /// The name the user reads: `Anthropic`, `OpenAI` or `ChatGPT`.
+    /// The kind as Settings > AI labels it: `Anthropic API`, `OpenAI API`, `OpenAI-compatible`
+    /// or `ChatGPT subscription`.
     pub fn label(self) -> &'static str {
         match self {
-            Provider::Anthropic => "Anthropic",
-            Provider::OpenAi => "OpenAI",
-            Provider::ChatGpt => "ChatGPT",
+            Kind::Anthropic => "Anthropic API",
+            Kind::OpenAi => "OpenAI API",
+            Kind::OpenAiCompatible => "OpenAI-compatible",
+            Kind::ChatGpt => "ChatGPT subscription",
+        }
+    }
+
+    /// The short name a credential with no account name goes by in messages: `Anthropic`,
+    /// `OpenAI`, `OpenAI-compatible` or `ChatGPT`.
+    pub fn short(self) -> &'static str {
+        match self {
+            Kind::Anthropic => "Anthropic",
+            Kind::OpenAi => "OpenAI",
+            Kind::OpenAiCompatible => "OpenAI-compatible",
+            Kind::ChatGpt => "ChatGPT",
+        }
+    }
+
+    /// The wire format the kind's calls speak.
+    pub fn wire(self) -> Wire {
+        match self {
+            Kind::Anthropic => Wire::Messages,
+            Kind::OpenAi | Kind::ChatGpt => Wire::Responses,
+            Kind::OpenAiCompatible => Wire::ChatCompletions,
         }
     }
 }
 
-impl fmt::Display for Provider {
+impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl FromStr for Provider {
+impl FromStr for Kind {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim() {
-            "anthropic" => Ok(Provider::Anthropic),
-            "openai" => Ok(Provider::OpenAi),
-            "chatgpt" => Ok(Provider::ChatGpt),
+            "anthropic" => Ok(Kind::Anthropic),
+            "openai" => Ok(Kind::OpenAi),
+            "openai_compatible" => Ok(Kind::OpenAiCompatible),
+            "chatgpt" => Ok(Kind::ChatGpt),
             other => Err(format!(
-                "unknown AI provider {other:?}: expected anthropic, openai or chatgpt"
+                "unknown AI account kind {other:?}: expected anthropic, openai, openai_compatible or chatgpt"
             )),
+        }
+    }
+}
+
+/// The wire format of a call (accounts A8): Anthropic's Messages API, OpenAI's Responses API
+/// (the OpenAI API and the ChatGPT plan alike), or Chat Completions (ai D25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Wire {
+    Messages,
+    Responses,
+    ChatCompletions,
+}
+
+impl Wire {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Wire::Messages => "messages",
+            Wire::Responses => "responses",
+            Wire::ChatCompletions => "chat_completions",
         }
     }
 }
@@ -214,15 +268,83 @@ pub(crate) fn unloaded(asset_id: &str) -> String {
 }
 
 /// The provider's own record of an assistant turn (ai D10): Anthropic's content blocks with
-/// `thinking` and its `signature`, or OpenAI's output items with `reasoning` and its
-/// `encrypted_content`. It is opaque to everyone but this crate, which replays `output` when
-/// the next request goes to the same provider and model and drops it otherwise.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// `thinking` and its `signature`, OpenAI's output items with `reasoning` and its
+/// `encrypted_content`, or a Chat Completions assistant message. It is opaque to everyone but
+/// this crate, which replays `output` only when the next request goes to the same account
+/// (`account`, its id), over the same wire and to the same model, and drops it otherwise
+/// (accounts A8).
+///
+/// A transcript from before accounts says `provider: "anthropic" | "openai" | "chatgpt"` in
+/// place of `account` and `wire`: it reads with `account` the provider name, which
+/// [`crate::Credential::legacy`] maps to the account the migration made for it, and the wire
+/// that provider used. A state naming anything else reads as none.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProviderState {
-    pub provider: Provider,
+    /// The account's id, or a provider name for a state from before accounts.
+    pub account: String,
+    pub wire: Wire,
     pub model: String,
     /// A JSON array: the content blocks or output items.
     pub output: Value,
+}
+
+impl ProviderState {
+    /// Read a stored state leniently: the current form, or the form from before accounts.
+    /// `None` when it is neither.
+    pub fn from_value(v: Value) -> Option<ProviderState> {
+        let obj = v.as_object()?;
+        let model = obj.get("model")?.as_str()?.to_owned();
+        let output = obj.get("output").cloned().unwrap_or(Value::Null);
+        if let (Some(account), Some(wire)) = (obj.get("account"), obj.get("wire")) {
+            return Some(ProviderState {
+                account: account.as_str()?.to_owned(),
+                wire: serde_json::from_value(wire.clone()).ok()?,
+                model,
+                output,
+            });
+        }
+        let provider = obj.get("provider")?.as_str()?;
+        let wire = match provider {
+            "anthropic" => Wire::Messages,
+            "chatgpt" => Wire::Responses,
+            // An OpenAI state with a custom API URL may hold a Chat Completions message.
+            "openai" if is_chat_message(&output) => Wire::ChatCompletions,
+            "openai" => Wire::Responses,
+            _ => return None,
+        };
+        Some(ProviderState {
+            account: provider.to_owned(),
+            wire,
+            model,
+            output,
+        })
+    }
+}
+
+/// Whether `output` is one Chat Completions assistant message rather than Responses items.
+fn is_chat_message(output: &Value) -> bool {
+    match output.as_array().map(Vec::as_slice) {
+        Some([msg]) => {
+            msg.get("role").and_then(Value::as_str) == Some("assistant")
+                && msg.get("type").is_none()
+        }
+        _ => false,
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderState {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(d)?;
+        ProviderState::from_value(v).ok_or_else(|| serde::de::Error::custom("not a provider state"))
+    }
+}
+
+/// `provider_state` read leniently: one this build cannot replay reads as none.
+fn lenient_state<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<ProviderState>, D::Error> {
+    let v = Option::<Value>::deserialize(d)?;
+    Ok(v.and_then(ProviderState::from_value))
 }
 
 /// One turn of a transcript (ai D10). Transcripts are append-only: nothing edits or reorders
@@ -231,7 +353,11 @@ pub struct ProviderState {
 pub struct Message {
     pub role: Role,
     pub content: Vec<Content>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_state"
+    )]
     pub provider_state: Option<ProviderState>,
 }
 
@@ -278,7 +404,6 @@ pub struct ToolSpec {
 /// One call to a model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
-    pub provider: Provider,
     pub model: String,
     /// The system prompt: Anthropic's `system`, OpenAI's `instructions`.
     #[serde(default)]
@@ -301,9 +426,8 @@ pub struct Request {
 
 impl Request {
     /// A request of one user message, with nothing else set.
-    pub fn new(provider: Provider, model: impl Into<String>, prompt: impl Into<String>) -> Self {
+    pub fn new(model: impl Into<String>, prompt: impl Into<String>) -> Self {
         Request {
-            provider,
             model: model.into(),
             system: None,
             messages: vec![Message::user(prompt)],
@@ -315,10 +439,10 @@ impl Request {
     }
 
     /// The short request Settings > AI's Test button sends: "Reply with OK", at most 16 tokens.
-    pub fn test(provider: Provider, model: impl Into<String>) -> Self {
+    pub fn test(model: impl Into<String>) -> Self {
         Request {
             max_tokens: Some(16),
-            ..Request::new(provider, model, "Reply with OK.")
+            ..Request::new(model, "Reply with OK.")
         }
     }
 }
@@ -391,7 +515,11 @@ pub enum Event {
 /// A finished call, as [`crate::complete`] and [`crate::complete_blocking`] return it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reply {
-    pub provider: Provider,
+    /// The id of the account that answered; empty for a credential made without one.
+    pub account: String,
+    /// The account's name.
+    pub name: String,
+    pub kind: Kind,
     pub model: String,
     /// All the text, joined.
     pub text: String,
@@ -402,6 +530,8 @@ pub struct Reply {
     /// `EndTurn`, `ToolUse` or `MaxTokens`: a refusal is an error ([`crate::ErrorKind::Refusal`]).
     pub stop: Stop,
     pub provider_state: Option<ProviderState>,
+    /// The usage a ChatGPT plan reported with the answer (accounts A13).
+    pub plan_usage: Option<crate::PlanUsage>,
 }
 
 impl Reply {
@@ -433,4 +563,55 @@ impl Reply {
 pub struct Model {
     pub id: String,
     pub display_name: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn provider_state_reads_the_form_from_before_accounts() {
+        let m: Message = serde_json::from_value(json!({
+            "role": "assistant", "content": [],
+            "provider_state": {"provider": "anthropic", "model": "m", "output": []},
+        }))
+        .unwrap();
+        let s = m.provider_state.unwrap();
+        assert_eq!((s.account.as_str(), s.wire), ("anthropic", Wire::Messages));
+        let chat = json!([{"role": "assistant", "content": "hi"}]);
+        let s =
+            ProviderState::from_value(json!({"provider": "openai", "model": "m", "output": chat}))
+                .unwrap();
+        assert_eq!(s.wire, Wire::ChatCompletions);
+        let s = ProviderState::from_value(
+            json!({"provider": "openai", "model": "m", "output": [{"type": "message"}]}),
+        )
+        .unwrap();
+        assert_eq!(s.wire, Wire::Responses);
+        let s =
+            ProviderState::from_value(json!({"provider": "chatgpt", "model": "m", "output": []}))
+                .unwrap();
+        assert_eq!((s.account.as_str(), s.wire), ("chatgpt", Wire::Responses));
+
+        // Anything else reads as no state, and the message still reads.
+        let m: Message = serde_json::from_value(json!({
+            "role": "assistant", "content": [],
+            "provider_state": {"provider": "gemini", "model": "m", "output": []},
+        }))
+        .unwrap();
+        assert_eq!(m.provider_state, None);
+
+        // The current form round-trips.
+        let s = ProviderState {
+            account: "01JACCOUNT".into(),
+            wire: Wire::ChatCompletions,
+            model: "m".into(),
+            output: json!([]),
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["account"], json!("01JACCOUNT"));
+        assert_eq!(v["wire"], json!("chat_completions"));
+        assert_eq!(ProviderState::from_value(v), Some(s));
+    }
 }

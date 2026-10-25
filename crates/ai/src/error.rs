@@ -5,7 +5,7 @@ use std::fmt;
 
 use serde_json::Value;
 
-use crate::types::{Provider, Usage};
+use crate::types::Usage;
 
 /// What went wrong, as scripts see it in `kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,12 +57,13 @@ impl fmt::Display for ErrorKind {
 pub struct AiError {
     pub kind: ErrorKind,
     pub message: String,
-    pub provider: Option<Provider>,
-    pub model: Option<String>,
+    /// The name of the account the call went to. Boxed, as `model` is, to keep the error small.
+    pub account: Option<Box<str>>,
+    pub model: Option<Box<str>>,
     /// The HTTP status, when the provider answered one.
     pub status: Option<u16>,
     /// A refusal's category, such as `cyber`, when the provider named one.
-    pub category: Option<String>,
+    pub category: Option<Box<str>>,
     /// A refusal's explanation, when the provider gave one.
     pub explanation: Option<String>,
     /// The tokens the call used before it failed, for the trail line.
@@ -74,7 +75,7 @@ impl AiError {
         AiError {
             kind,
             message: message.into(),
-            provider: None,
+            account: None,
             model: None,
             status: None,
             category: None,
@@ -93,12 +94,12 @@ impl AiError {
 
     /// The error a refusal surfaces as (ai D11).
     pub fn refusal(
-        provider: Provider,
+        account: &str,
         model: &str,
         category: Option<String>,
         explanation: Option<String>,
     ) -> AiError {
-        let mut message = format!("{} refused the request", model_label(provider, model));
+        let mut message = format!("{} refused the request", model_label(account, model));
         if let Some(c) = &category {
             message.push_str(&format!(" (category {c})"));
         }
@@ -106,9 +107,9 @@ impl AiError {
             message.push_str(&format!(": {}", e.trim()));
         }
         AiError {
-            category,
+            category: category.map(Into::into),
             explanation,
-            ..AiError::new(ErrorKind::Refusal, message).on(provider, model)
+            ..AiError::new(ErrorKind::Refusal, message).on(account, model)
         }
     }
 
@@ -120,11 +121,11 @@ impl AiError {
             && self.message.starts_with(crate::http::UNSUPPORTED_API)
     }
 
-    /// The same error, naming the provider and model it came from.
-    pub fn on(mut self, provider: Provider, model: &str) -> AiError {
-        self.provider = Some(provider);
+    /// The same error, naming the account and model it came from.
+    pub fn on(mut self, account: &str, model: &str) -> AiError {
+        self.account = Some(account.into());
         if !model.is_empty() {
-            self.model = Some(model.to_owned());
+            self.model = Some(model.into());
         }
         self
     }
@@ -155,11 +156,11 @@ impl fmt::Display for AiError {
 
 impl std::error::Error for AiError {}
 
-fn model_label(provider: Provider, model: &str) -> String {
+fn model_label(account: &str, model: &str) -> String {
     if model.is_empty() {
-        provider.label().to_owned()
+        account.to_owned()
     } else {
-        format!("{} {model}", provider.label())
+        format!("{account} {model}")
     }
 }
 
@@ -199,7 +200,7 @@ pub(crate) fn scrub(text: &str, secret: &str) -> String {
 /// The HTTP status and the provider's error body, sorted into an [`AiError`]. Understands
 /// Anthropic's `{type: "error", error: {type, message}}`, OpenAI's `{error: {message, type,
 /// code, param}}` and the ChatGPT plan's admission failures `{detail}`.
-pub(crate) fn from_response(provider: Provider, model: &str, status: u16, body: &str) -> AiError {
+pub(crate) fn from_response(account: &str, model: &str, status: u16, body: &str) -> AiError {
     let json: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let error = json.get("error");
     let code = error
@@ -233,7 +234,7 @@ pub(crate) fn from_response(provider: Provider, model: &str, status: u16, body: 
         500 | 502 | 503 | 529 => ErrorKind::Unavailable,
         _ => ErrorKind::Provider,
     });
-    let mut text = format!("{}: {message}", model_label(provider, model));
+    let mut text = format!("{}: {message}", model_label(account, model));
     if let Some(p) = param {
         text.push_str(&format!(" (parameter {p})"));
     }
@@ -241,7 +242,7 @@ pub(crate) fn from_response(provider: Provider, model: &str, status: u16, body: 
         text.push_str(". See your ChatGPT usage at https://chatgpt.com/settings/usage");
     }
     AiError::new(kind, text)
-        .on(provider, model)
+        .on(account, model)
         .with_status(status)
 }
 
@@ -316,18 +317,18 @@ mod tests {
     #[test]
     fn plan_codes_map_to_kinds() {
         let e = from_response(
-            Provider::ChatGpt,
+            "ChatGPT",
             "gpt-x",
             429,
             r#"{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"Limit reached"}}"#,
         );
         assert_eq!(e.kind, ErrorKind::RateLimit);
         assert_eq!(e.status, Some(429));
-        let e = from_response(Provider::ChatGpt, "gpt-x", 503, r#"{"detail":"Try later"}"#);
+        let e = from_response("ChatGPT", "gpt-x", 503, r#"{"detail":"Try later"}"#);
         assert_eq!(e.kind, ErrorKind::Unavailable);
         assert!(e.message.contains("Try later"));
         let e = from_response(
-            Provider::ChatGpt,
+            "ChatGPT",
             "gpt-x",
             400,
             r#"{"error":{"code":"subscription_sharing_unsupported_capability","message":"no","param":"tools"}}"#,
@@ -335,7 +336,7 @@ mod tests {
         assert_eq!(e.kind, ErrorKind::Invalid);
         assert!(e.message.contains("parameter tools"));
         let e = from_response(
-            Provider::Anthropic,
+            "Anthropic",
             "m",
             529,
             r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,

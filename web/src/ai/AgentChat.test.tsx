@@ -28,7 +28,7 @@ const agentThreadStart = vi.fn();
 const aiApply = vi.fn();
 const aiDiscard = vi.fn();
 const aiModels = vi.fn();
-const aiProviders = vi.fn();
+const aiAccounts = vi.fn();
 const agentsList = vi.fn();
 const app = vi.fn();
 const renameAgentThread = vi.fn();
@@ -45,7 +45,7 @@ vi.mock("../api", async (orig) => {
     ...real,
     streamEvents,
     streamTurn: turns.streamTurn,
-    api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiTurnPoll, agentThreads, agentThread, agentThreadStart, aiApply, aiDiscard, aiModels, aiProviders, agents: agentsList, app, renameAgentThread, deleteAgentThread, archiveNote, unarchiveNote },
+    api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiTurnPoll, agentThreads, agentThread, agentThreadStart, aiApply, aiDiscard, aiModels, aiAccounts, agents: agentsList, app, renameAgentThread, deleteAgentThread, archiveNote, unarchiveNote },
   };
 });
 /** The app the page runs in, for the tests of the apps' polling transport (ai D23); none by default. */
@@ -60,13 +60,13 @@ const { newConversation, resetThreads, setAgent, turnsFromThread } = await impor
 const { refreshAgents } = await import("../agents");
 const { hasNewReply, liveTurn, resetRunning } = await import("./running");
 
-const PROVIDERS = {
-  default_provider: "anthropic",
-  providers: {
-    anthropic: { configured: true, model: "claude-opus-5" },
-    openai: { configured: false, model: null },
-    chatgpt: { configured: false, model: null },
-  },
+const ACCOUNTS = {
+  default: "a1",
+  accounts: [
+    { id: "a1", name: "Anthropic", kind: "anthropic", kind_label: "Anthropic API", model: "claude-opus-5", configured: true },
+    { id: "r1", name: "OpenRouter", kind: "openai_compatible", kind_label: "OpenAI-compatible", model: "anthropic/claude-sonnet-5", configured: true },
+    { id: "c1", name: "ChatGPT", kind: "chatgpt", kind_label: "ChatGPT subscription", model: null, configured: false },
+  ],
   confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true, skills: true },
 };
 
@@ -115,8 +115,8 @@ function thread(over: Partial<AgentThread> = {}): AgentThread {
 
 beforeEach(() => {
   app.mockResolvedValue(null);
-  aiProviders.mockResolvedValue(PROVIDERS);
-  aiModels.mockResolvedValue({ provider: "anthropic", model: "claude-opus-5", models: [{ id: "claude-opus-5", display_name: "Claude Opus 5" }] });
+  aiAccounts.mockResolvedValue(ACCOUNTS);
+  aiModels.mockResolvedValue({ account: "a1", model: "claude-opus-5", models: [{ id: "claude-opus-5", display_name: "Claude Opus 5" }] });
   agentThreads.mockResolvedValue({
     threads: [
       { id: "01JTHREAD", title: "Groceries", pending: 1, last_activity: "2026-10-23T04:00:00+00:00" },
@@ -260,9 +260,9 @@ describe("the chat", () => {
     expect(live!.body.messages).toEqual([{ role: "user", content: [{ type: "text", text: "Line one\nLine two" }] }]);
   });
 
-  it("shows the provider and model picker at the foot of the message box, and a turn uses the model chosen", async () => {
+  it("shows the account and model picker at the foot of the message box, and a turn uses the model chosen", async () => {
     aiModels.mockResolvedValue({
-      provider: "anthropic",
+      account: "a1",
       model: "claude-opus-5",
       models: [
         { id: "claude-opus-5", display_name: "Claude Opus 5" },
@@ -275,7 +275,7 @@ describe("the chat", () => {
     await waitFor(() => expect(model.value).toBe("claude-opus-5"));
     fireEvent.change(model, { target: { value: "claude-sonnet-5" } });
     await send("Which model?");
-    expect(live!.body).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5" });
+    expect(live!.body).toMatchObject({ account: "a1", model: "claude-sonnet-5" });
   });
 
   it("opens the thread a trigger run links to, and says which thread it shows", async () => {
@@ -503,7 +503,7 @@ describe("the AI panel's agent picker", () => {
     agentsList.mockResolvedValue({
       agents: [
         { name: "assistant", label: "Assistant", built_in: true, enabled: true },
-        { name: "triage", label: "Triage", built_in: false, enabled: true, provider: "anthropic", model: "claude-sonnet-5" },
+        { name: "triage", label: "Triage", built_in: false, enabled: true, account: "anthropic", model: "claude-sonnet-5" },
         { name: "sleepy", label: "Sleepy", built_in: false, enabled: false },
       ],
       tools: [],
@@ -574,7 +574,7 @@ describe("the AI panel's agent picker", () => {
 
   beforeEach(() => {
     aiModels.mockResolvedValue({
-      provider: "anthropic",
+      account: "a1",
       model: "claude-opus-5",
       models: [
         { id: "claude-opus-5", display_name: "Claude Opus 5" },
@@ -589,15 +589,16 @@ describe("the AI panel's agent picker", () => {
     render(() => <ChatPanel noteId={() => ""} />);
     fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "triage" } });
     await waitFor(() => expect(optionTexts("Model")).toContain("Claude Haiku 5"));
-    expect(select("Provider")).toHaveProperty("value", "");
-    expect(optionTexts("Provider")[0]).toBe("Agent's provider (Anthropic)");
+    expect(select("Account")).toHaveProperty("value", "");
+    // The agent names its account in another case: names match without regard to it.
+    expect(optionTexts("Account")).toEqual(["Agent's account (Anthropic)", "OpenRouter", "ChatGPT"]);
     expect(select("Model")).toHaveProperty("value", "");
     // The agent's model is its first option, and not listed again.
     expect(optionTexts("Model")).toEqual(["Agent's model (claude-sonnet-5)", "Claude Opus 5", "Claude Haiku 5"]);
     await send("Sort my inbox");
     expect(agentThreadStart).toHaveBeenCalledWith("triage");
     expect(live!.body).toMatchObject({ agent: "triage", thread: "01JNEW" });
-    expect(live!.body).not.toHaveProperty("provider");
+    expect(live!.body).not.toHaveProperty("account");
     expect(live!.body).not.toHaveProperty("model");
   });
 
@@ -610,7 +611,7 @@ describe("the AI panel's agent picker", () => {
     expect(select("Model")).toHaveValue("claude-haiku-5");
     await send("Sort my inbox");
     expect(live!.body).toMatchObject({ agent: "triage", model: "claude-haiku-5" });
-    expect(live!.body).not.toHaveProperty("provider");
+    expect(live!.body).not.toHaveProperty("account");
     await finish();
     agentThread.mockResolvedValue(thread({ id: "01JNEW", agent: "triage" }));
     await send("And the rest");
@@ -626,7 +627,8 @@ describe("the AI panel's agent picker", () => {
     render(() => <ChatPanel noteId={() => ""} />);
     // The Assistant starts from Settings > AI's default model, and keeps what is picked.
     await waitFor(() => expect(select("Model")).toHaveValue("claude-opus-5"));
-    expect(optionTexts("Provider")).toEqual(["Anthropic", "OpenAI", "ChatGPT"]);
+    expect(optionTexts("Account")).toEqual(["Anthropic", "OpenRouter", "ChatGPT"]);
+    expect(select("Account")).toHaveValue("a1");
     fireEvent.change(select("Model"), { target: { value: "claude-sonnet-5" } });
     fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "triage" } });
     // Triage does not take the Assistant's choice.
@@ -638,12 +640,33 @@ describe("the AI panel's agent picker", () => {
     await waitFor(() => expect(select("Model")).toHaveValue("claude-sonnet-5"));
     agentThreadStart.mockResolvedValue({ id: "01JPANEL", title: "New thread", agent: "assistant", version: "p1", pending: 0 });
     await send("Hello");
-    expect(live!.body).toMatchObject({ agent: "assistant", provider: "anthropic", model: "claude-sonnet-5" });
+    expect(live!.body).toMatchObject({ agent: "assistant", account: "a1", model: "claude-sonnet-5" });
     await finish();
     // Choosing Triage again starts it on its own model.
     fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "triage" } });
     await waitFor(() => expect(optionTexts("Model")[0]).toBe("Agent's model (claude-sonnet-5)"));
     expect(select("Model")).toHaveProperty("value", "");
+  });
+
+  it("sends another account picked for the agent with its default model, and forgets it when the agent changes", async () => {
+    await withAgents();
+    render(() => <ChatPanel noteId={() => ""} />);
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "triage" } });
+    await waitFor(() => expect(optionTexts("Model")).toContain("Claude Haiku 5"));
+    aiModels.mockResolvedValue({ account: "r1", model: "anthropic/claude-sonnet-5", models: [{ id: "anthropic/claude-sonnet-5", display_name: null }, { id: "z-ai/glm-5", display_name: null }] });
+    fireEvent.change(select("Account"), { target: { value: "r1" } });
+    await waitFor(() => expect(aiModels).toHaveBeenLastCalledWith("r1"));
+    await waitFor(() => expect(optionTexts("Model")[0]).toBe("Account default (anthropic/claude-sonnet-5)"));
+    expect(optionTexts("Model")).toContain("z-ai/glm-5");
+    await send("Sort my inbox");
+    // An account with no model picked runs on that account's default, never the agent's model (accounts A5).
+    expect(live!.body).toMatchObject({ agent: "triage", account: "r1" });
+    expect(live!.body).not.toHaveProperty("model");
+    await finish();
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "assistant" } });
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "triage" } });
+    await waitFor(() => expect(select("Account")).toHaveProperty("value", ""));
+    expect(optionTexts("Model")[0]).toBe("Agent's model (claude-sonnet-5)");
   });
 
   it("offers the agent's own model on the agent screen too", async () => {
@@ -805,7 +828,7 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
     agentsList.mockResolvedValue({
       agents: [
         { name: "assistant", label: "Assistant", built_in: true, enabled: true },
-        { name: "triage", label: "Triage", built_in: false, enabled: true, provider: "anthropic", model: "claude-sonnet-5" },
+        { name: "triage", label: "Triage", built_in: false, enabled: true, account: "anthropic", model: "claude-sonnet-5" },
       ],
       tools: [],
     });

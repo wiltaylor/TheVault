@@ -301,7 +301,7 @@ Each task writes only its own state secret, so the two never overwrite each othe
 
 ## `ai`
 
-`after_*` handlers and scheduled scripts only. Each call sends a prompt to a large language model with the credentials set up in Settings > AI: an Anthropic API key, an OpenAI API key, or a ChatGPT plan sign-in.
+`after_*` handlers and scheduled scripts only. Each call sends a prompt to a large language model through one of the AI accounts set up in Settings > AI (see [AI accounts](ai.md)): the default account, or the one the `account` option names.
 
 | Function | Returns |
 |----------|---------|
@@ -310,17 +310,17 @@ Each task writes only its own state secret, so the two never overwrite each othe
 
 `ChatMessage` is `{ role: string, text: string }`, where `role` is `user` or `assistant`. Build one as `ChatMessage { role: "user", text: "..." }`.
 
-`Reply` is `{ text: string, json: Value, provider: string, model: string, input_tokens: int, output_tokens: int, stop: string }`. `json` is the answer parsed as JSON when the call sets `schema`, and `Value::Null` otherwise. `stop` is `end_turn`, or `max_tokens` when the output cap cut the answer off.
+`Reply` is `{ text: string, json: Value, account: string, kind: string, model: string, input_tokens: int, output_tokens: int, stop: string }`. `account` is the name of the account that answered and `kind` its kind: `anthropic`, `openai`, `openai_compatible` or `chatgpt`. `json` is the answer parsed as JSON when the call sets `schema`, and `Value::Null` otherwise. `stop` is `end_turn`, or `max_tokens` when the output cap cut the answer off.
 
-`AiError` is `{ kind: string, message: string, provider: string, model: string, category: string }`. A field the failure does not know is `""`. `kind` is one of these:
+`AiError` is `{ kind: string, message: string, account: string, model: string, category: string }`, `account` the name of the account the call went to. A field the failure does not know is `""`. `kind` is one of these:
 
 | `kind` | Means |
 |--------|-------|
-| `not_configured` | No provider or model is chosen, or the provider has no key or sign-in |
+| `not_configured` | No AI account is set up, no model is chosen, or the account has no key or sign-in |
 | `auth` | The provider refused the key or token, or the ChatGPT sign-in expired |
 | `rate_limit` | A rate or usage limit, a ChatGPT plan's limit included |
 | `refusal` | The model refused the request. `category`, such as `cyber`, says why when the provider names it |
-| `invalid` | A bad option, model or schema, or an answer that does not match `schema` |
+| `invalid` | A bad option, model or schema, an account that does not exist, or an answer that does not match `schema` |
 | `timeout` | The provider did not answer in time |
 | `unavailable` | The provider cannot be reached or is overloaded, or the call ran on a device |
 | `provider` | Any other failure the provider reported |
@@ -329,8 +329,9 @@ Every option is a string, and `#{}` takes every default. An empty value counts a
 
 | Option | Holds | When unset |
 |--------|-------|------------|
-| `provider` | `anthropic`, `openai` or `chatgpt` | The default provider of Settings > AI |
-| `model` | A model id the provider lists | The provider's default model in Settings > AI |
+| `account` | An AI account's name or id | The default account of Settings > AI |
+| `provider` | `anthropic`, `openai` or `chatgpt`: the provider of before accounts, naming the account made for it. `account` wins when both are set | The default account |
+| `model` | A model id the account's service lists | The account's default model, else the first its service lists (`claude-opus-5` for Anthropic) |
 | `system` | The system prompt | None |
 | `schema` | A JSON Schema object, as JSON text, that the answer must follow | Plain text |
 | `effort` | How hard the model thinks: `low`, `medium`, `high`, `xhigh` or `max` | The provider's default |
@@ -340,9 +341,9 @@ An unknown option is an `invalid` error, so a misspelt name is not ignored. A ws
 
 Rules:
 
-- The module reads the credentials itself. The run lists no `ai_*` secret in `secrets` and no provider host in `allow_domains`, and no function returns a key or token.
+- The module reads the accounts and credentials itself. The run lists no `ai_*` secret in `secrets` and no provider host in `allow_domains`, and no function returns a key or token.
 - A call blocks until the answer is complete. It ends at the run's time limit, like `http::get`: a call still waiting then ends the run as timed out. An `after_*` handler has the 30-second default limit, so put long generations in a scheduled script with a longer `timeout`, such as `timeout = "PT5M"`.
-- Every call adds one line to the run log, whether it succeeds or fails: `ai: provider=<p> model=<m> in=<input tokens> out=<output tokens> outcome=ok|refused|error:<kind> ms=<duration>`. The line never holds the prompt. When the call fails before a provider is chosen, `provider` and `model` are `-`.
+- Every call adds one line to the run log, whether it succeeds or fails: `ai: account=<name> kind=<kind> model=<m> in=<input tokens> out=<output tokens> outcome=ok|refused|error:<kind> ms=<duration>`. The line never holds the prompt. When the call fails before an account is chosen, `account` and `kind` are `-`, and `model` is `-` when none is named.
 - A refusal is never retried or sent to another model. It returns `Err` with kind `refusal`.
 - The prompt, and any note content in it, goes to the provider.
 - A `before_*` handler or a migration has no `ai` module, so a script that uses it there does not compile.

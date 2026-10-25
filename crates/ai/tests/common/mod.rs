@@ -1,10 +1,13 @@
-//! A fresh `state.db` with a key, its `ai_settings` pointed at the testkit fakes.
+//! A fresh `state.db` with a key and three accounts pointed at the testkit fakes: `Anthropic`
+//! (anthropic), `OpenAI` (openai) and `ChatGPT` (chatgpt, signed in by [`Env::sign_in`]).
 
 #![allow(dead_code)]
 
 use std::sync::Arc;
 
-use ai::{Credential, Credentials, Endpoints, Event, Provider, Settings};
+use ai::{
+    Account, AccountInput, Accounts, Credential, Credentials, Endpoints, Event, Kind, Settings,
+};
 use serde_json::{Value, json};
 use state::{SecretKey, State};
 use tempfile::TempDir;
@@ -16,6 +19,31 @@ pub struct Env {
     pub anthropic: FakeAnthropic,
     pub openai: FakeOpenAi,
     pub siwc: FakeSiwc,
+}
+
+/// Add an account named `name` of `kind` at `url` to the stored table, with `key` when given.
+pub fn add_account(
+    state: &State,
+    name: &str,
+    kind: Kind,
+    url: Option<&str>,
+    key: Option<&str>,
+) -> Account {
+    let mut all = Accounts::load(state).unwrap();
+    let a = all
+        .add(AccountInput {
+            name: Some(name.to_owned()),
+            kind: Some(kind),
+            base_url: Some(url.map(str::to_owned)),
+            ..AccountInput::default()
+        })
+        .unwrap()
+        .clone();
+    all.save(state).unwrap();
+    if let Some(k) = key {
+        state.set_secret(&ai::key_secret(&a.id), k).unwrap();
+    }
+    a
 }
 
 impl Env {
@@ -31,8 +59,6 @@ impl Env {
         let openai = FakeOpenAi::start();
         let settings = Settings {
             endpoints: Endpoints {
-                anthropic: Some(anthropic.base_url()),
-                openai: Some(openai.base_url()),
                 chatgpt: Some(openai.base_url()),
                 chatgpt_auth: Some(siwc.base_url()),
                 ..Endpoints::default()
@@ -40,12 +66,23 @@ impl Env {
             ..Settings::default()
         };
         settings.save(&state).expect("save settings");
-        state
-            .set_secret(ai::ANTHROPIC_API_KEY, anthropic.api_key())
-            .unwrap();
-        state
-            .set_secret(ai::OPENAI_API_KEY, openai.api_key())
-            .unwrap();
+        let a = anthropic.base_url();
+        add_account(
+            &state,
+            "Anthropic",
+            Kind::Anthropic,
+            Some(&a),
+            Some(anthropic.api_key()),
+        );
+        let o = openai.base_url();
+        add_account(
+            &state,
+            "OpenAI",
+            Kind::OpenAi,
+            Some(&o),
+            Some(openai.api_key()),
+        );
+        add_account(&state, "ChatGPT", Kind::ChatGpt, None, None);
         Env {
             _dir: dir,
             state: Arc::new(state),
@@ -55,8 +92,23 @@ impl Env {
         }
     }
 
-    pub fn cred(&self, provider: Provider) -> Credential {
-        Credentials::resolve(&self.state, provider).expect("resolve credential")
+    /// The first account of `kind`.
+    pub fn account(&self, kind: Kind) -> Account {
+        Accounts::load(&self.state)
+            .unwrap()
+            .accounts
+            .into_iter()
+            .find(|a| a.kind == kind)
+            .expect("an account of the kind")
+    }
+
+    pub fn cred(&self, kind: Kind) -> Credential {
+        Credentials::resolve(&self.state, &self.account(kind)).expect("resolve credential")
+    }
+
+    /// The ChatGPT account's secret.
+    pub fn chatgpt_name(&self) -> String {
+        ai::chatgpt_secret(&self.account(Kind::ChatGpt).id)
     }
 
     /// Store a ChatGPT sign-in whose access token expires `expires_in_ms` from now, with the
@@ -72,12 +124,19 @@ impl Env {
             "account": "me@example.com",
         });
         self.state
-            .set_secret(ai::CHATGPT, &auth.to_string())
+            .set_secret(&self.chatgpt_name(), &auth.to_string())
             .unwrap();
     }
 
     pub fn chatgpt_secret(&self) -> Value {
-        serde_json::from_str(&self.state.get_secret(ai::CHATGPT).unwrap().unwrap()).unwrap()
+        serde_json::from_str(
+            &self
+                .state
+                .get_secret(&self.chatgpt_name())
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap()
     }
 }
 

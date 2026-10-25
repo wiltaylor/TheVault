@@ -19,6 +19,7 @@ serde_json.workspace = true
 sha2.workspace = true
 state.workspace = true
 tokio = { workspace = true, features = ["time", "fs", "io-util"] }
+ulid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

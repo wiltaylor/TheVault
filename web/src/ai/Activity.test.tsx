@@ -19,14 +19,14 @@ const streamEvents = vi.fn(
     }),
 );
 const aiModels = vi.fn();
-const aiProviders = vi.fn();
+const aiAccounts = vi.fn();
 const app = vi.fn(async () => null);
 
 const turns = turnsOver(streamEvents);
 
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, streamTurn: turns.streamTurn, api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiModels, aiProviders, app } };
+  return { ...real, streamEvents, streamTurn: turns.streamTurn, api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiModels, aiAccounts, app } };
 });
 
 const { ChatPanel, activeLabel } = await import("./ChatPanel");
@@ -43,8 +43,8 @@ async function ask(m: ReturnType<typeof render>) {
 const verb = (m: ReturnType<typeof render>) => m.queryByText(/…$/, { selector: ".ai-activity [role=status]" });
 
 beforeEach(() => {
-  aiProviders.mockResolvedValue({ default_provider: "anthropic", providers: { anthropic: { configured: true, model: "m" } } });
-  aiModels.mockResolvedValue({ provider: "anthropic", model: "m", models: [{ id: "m", display_name: "M" }] });
+  aiAccounts.mockResolvedValue({ default: "a1", accounts: [{ id: "a1", name: "Anthropic", kind: "anthropic", kind_label: "Anthropic API", model: "m", configured: true }] });
+  aiModels.mockResolvedValue({ account: "a1", model: "m", models: [{ id: "m", display_name: "M" }] });
 });
 
 afterEach(() => {
@@ -106,7 +106,7 @@ describe("activity line", () => {
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await ask(m);
     await waitFor(() => expect(verb(m)).not.toBeNull());
-    live!.onEvent({ event: "refusal", data: { provider: "anthropic", model: "m", category: "cyber", explanation: null, messages: [] } });
+    live!.onEvent({ event: "refusal", data: { account: "a1", name: "Anthropic", kind: "anthropic", model: "m", category: "cyber", explanation: null, messages: [] } });
     await waitFor(() => expect(verb(m)).toBeNull());
   });
 

@@ -3,10 +3,11 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { dropAccount, useAccount } from "./ai";
 import { activePane, expect, logIn, test } from "./fixtures";
 
-// The AI panel (ai D14, D23) against the fake Anthropic API, which the `ai_settings` secret's
-// endpoints point at: ask beside a note, watch the answer arrive, apply the edit the model
+// The AI panel (ai D14, D23) against the fake Anthropic API, which an account of its own, the
+// default, points at (accounts A12): ask beside a note, watch the answer arrive, apply the edit the model
 // proposed, and see the note change; apply a proposed template change (ai D18) and see it on a
 // note of that type; apply a proposed delete and create (ai D20) and see the note in the trash and
 // the new note open; and, with notes confirmation off (ai D22), see an edit land in the open note
@@ -30,35 +31,56 @@ interface Fake {
   api_key: string;
 }
 
-let anthropic: ChildProcess;
-let fake: Fake;
-const answers: ((line: string) => void)[] = [];
-
-/** Send a command to the fake (see `testkit-fake-anthropic`) and wait until it has taken effect. */
-async function tell(line: string): Promise<Record<string, unknown>> {
-  const answer = new Promise<string>((resolve) => answers.push(resolve));
-  anthropic.stdin!.write(`${line}\n`);
-  const got = JSON.parse(await answer) as Record<string, unknown>;
-  expect(got.error).toBeUndefined();
-  return got;
+/** A fake AI API run as a child process: its address and key, and its commands on standard input. */
+interface Running {
+  fake: Fake;
+  /** Send a command and wait until it has taken effect. */
+  tell: (line: string) => Promise<Record<string, unknown>>;
+  stop: () => void;
 }
 
-test.beforeAll(async () => {
-  anthropic = spawn(binary("TESTKIT_FAKE_ANTHROPIC_BIN", "testkit-fake-anthropic"), [], { stdio: ["pipe", "pipe", "inherit"] });
-  fake = await new Promise<Fake>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("testkit-fake-anthropic did not report its address")), 30_000);
-    const lines = createInterface({ input: anthropic.stdout! });
+/** Start `name` (see `testkit-fake-anthropic` and `testkit-fake-openai`) and wait for its address. */
+async function startFake(env: string, name: string, args: string[] = []): Promise<Running> {
+  const proc: ChildProcess = spawn(binary(env, name), args, { stdio: ["pipe", "pipe", "inherit"] });
+  const answers: ((line: string) => void)[] = [];
+  const fake = await new Promise<Fake>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${name} did not report its address`)), 30_000);
+    const lines = createInterface({ input: proc.stdout! });
     lines.once("line", (line) => {
       clearTimeout(timer);
       resolve(JSON.parse(line) as Fake);
       lines.on("line", (answer) => answers.shift()?.(answer));
     });
-    anthropic.once("exit", (code) => reject(new Error(`testkit-fake-anthropic exited with ${code}`)));
+    proc.once("exit", (code) => reject(new Error(`${name} exited with ${code}`)));
   });
+  return {
+    fake,
+    tell: async (line) => {
+      const answer = new Promise<string>((resolve) => answers.push(resolve));
+      proc.stdin!.write(`${line}\n`);
+      const got = JSON.parse(await answer) as Record<string, unknown>;
+      expect(got.error).toBeUndefined();
+      return got;
+    },
+    stop: () => proc.kill(),
+  };
+}
+
+let anthropic: Running;
+let fake: Fake;
+
+/** Send a command to the fake Anthropic API and wait until it has taken effect. */
+function tell(line: string): Promise<Record<string, unknown>> {
+  return anthropic.tell(line);
+}
+
+test.beforeAll(async () => {
+  anthropic = await startFake("TESTKIT_FAKE_ANTHROPIC_BIN", "testkit-fake-anthropic");
+  fake = anthropic.fake;
 });
 
 test.afterAll(() => {
-  anthropic?.kill();
+  anthropic?.stop();
 });
 
 function shopping(title: string, items: string[]) {
@@ -69,13 +91,7 @@ function shopping(title: string, items: string[]) {
 }
 
 test("the AI panel answers beside a note and an applied proposal changes the note", async ({ page, admin }) => {
-  for (const [name, value] of [
-    ["ai_anthropic_api_key", fake.api_key],
-    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
-  ]) {
-    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
-    expect(res.ok(), await res.text()).toBe(true);
-  }
+  await useFake(admin);
   const title = `Shopping ${Date.now().toString(36)}`;
   const created = await admin.post("/api/notes?type=note", { data: { note: shopping(title, ["Milk"]) } });
   expect(created.status(), await created.text()).toBe(201);
@@ -117,13 +133,7 @@ test("the AI panel answers beside a note and an applied proposal changes the not
 });
 
 test("a create and a delete proposed in the AI panel apply: the new note opens and the old one is in the trash", async ({ page, admin }) => {
-  for (const [name, value] of [
-    ["ai_anthropic_api_key", fake.api_key],
-    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
-  ]) {
-    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
-    expect(res.ok(), await res.text()).toBe(true);
-  }
+  await useFake(admin);
   const stamp = Date.now().toString(36);
   const oldTitle = `Old list ${stamp}`;
   const newTitle = `New list ${stamp}`;
@@ -173,13 +183,7 @@ test("a create and a delete proposed in the AI panel apply: the new note opens a
 });
 
 test("a type change proposed in the AI panel and applied shows on a note of that type", async ({ page, admin }) => {
-  for (const [name, value] of [
-    ["ai_anthropic_api_key", fake.api_key],
-    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
-  ]) {
-    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
-    expect(res.ok(), await res.text()).toBe(true);
-  }
+  await useFake(admin);
   const type = `memo_${Date.now().toString(36)}`;
   const wcl = `label = "Memo"\n\nfield body {\n  kind = "content"\n}\n\ntemplate default {\n  tab "Main" {\n    slot "title"\n    slot "body"\n  }\n}\n`;
   const put = await admin.put(`/api/types/${type}`, { data: { wcl } });
@@ -222,25 +226,12 @@ test("a type change proposed in the AI panel and applied shows on a note of that
 });
 
 test("with notes confirmation off, an edit asked for in the AI panel shows in the open note without Apply", async ({ page, admin }) => {
-  for (const [name, value] of [
-    ["ai_anthropic_api_key", fake.api_key],
-    [
-      "ai_settings",
-      JSON.stringify({
-        default_provider: "anthropic",
-        models: { anthropic: "claude-opus-5" },
-        endpoints: { anthropic: fake.base_url },
-      }),
-    ],
-  ]) {
-    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
-    expect(res.ok(), await res.text()).toBe(true);
-  }
+  await useFake(admin);
   // The chat's confirmation switches are Assistant's (agents G6); the settings route still writes them there.
   const put = await admin.put("/api/integrations/ai/settings", { data: { confirm: { notes: false } } });
   expect(put.ok(), await put.text()).toBe(true);
-  const providers = (await (await admin.get("/api/ai/providers")).json()) as { confirm: Record<string, boolean> };
-  expect(providers.confirm).toMatchObject({ notes: false, archive: true, delete: true, types: true });
+  const accounts = (await (await admin.get("/api/ai/accounts")).json()) as { confirm: Record<string, boolean> };
+  expect(accounts.confirm).toMatchObject({ notes: false, archive: true, delete: true, types: true });
   const title = `Errands ${Date.now().toString(36)}`;
   const created = await admin.post("/api/notes?type=note", { data: { note: shopping(title, ["Post office"]) } });
   expect(created.status(), await created.text()).toBe(201);
@@ -279,13 +270,7 @@ test("with notes confirmation off, an edit asked for in the AI panel shows in th
 // page runs in an app, `GET /api/app/ai/turns/{turn}` reads the turn's stream from the server,
 // and `/api/app/sync` records the round asked for.
 test("in an app, the AI panel runs a turn through the turns form and Apply asks for a sync", async ({ page, admin, baseURL }) => {
-  for (const [name, value] of [
-    ["ai_anthropic_api_key", fake.api_key],
-    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
-  ]) {
-    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
-    expect(res.ok(), await res.text()).toBe(true);
-  }
+  await useFake(admin);
   const title = `Chores ${Date.now().toString(36)}`;
   const created = await admin.post("/api/notes?type=note", { data: { note: shopping(title, ["Dishes"]) } });
   expect(created.status(), await created.text()).toBe(201);
@@ -351,13 +336,7 @@ test("in an app, the AI panel runs a turn through the turns form and Apply asks 
 });
 
 test("the AI panel's thread opens in the agent screen as the same conversation, and the picker lists it", async ({ page, admin }) => {
-  for (const [name, value] of [
-    ["ai_anthropic_api_key", fake.api_key],
-    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
-  ]) {
-    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
-    expect(res.ok(), await res.text()).toBe(true);
-  }
+  await useFake(admin);
   const stamp = Date.now().toString(36);
   await tell(`push ${JSON.stringify({ text: `Hello from thread ${stamp}.` })}`);
 
@@ -397,13 +376,7 @@ test("the AI panel's thread opens in the agent screen as the same conversation, 
 
 /** A fresh agent of no model of its own, so the chat's model dropdown decides; its name. */
 async function freshAgent(admin: import("@playwright/test").APIRequestContext, stamp: string): Promise<string> {
-  for (const [name, value] of [
-    ["ai_anthropic_api_key", fake.api_key],
-    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
-  ]) {
-    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
-    expect(res.ok(), await res.text()).toBe(true);
-  }
+  await useFake(admin);
   const name = `chatter_${stamp}`;
   const res = await admin.put(`/api/agents/${name}`, { data: { wcl: `label = "Chatter ${stamp}"\n` } });
   expect(res.ok(), await res.text()).toBe(true);
@@ -459,16 +432,16 @@ test("an agent's chat starts on the agent's own model, and a model picked at its
   await useFake(admin);
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const name = `owner_${stamp}`;
-  const put = await admin.put(`/api/agents/${name}`, { data: { wcl: `label = "Owner ${stamp}"\nprovider = "anthropic"\nmodel = "claude-sonnet-5"\n` } });
+  const put = await admin.put(`/api/agents/${name}`, { data: { wcl: `label = "Owner ${stamp}"\naccount = "Fake Anthropic"\nmodel = "claude-sonnet-5"\n` } });
   expect(put.ok(), await put.text()).toBe(true);
   await tell(`push ${JSON.stringify({ text: `On its own ${stamp}.` })}`);
   await tell(`push ${JSON.stringify({ text: `On the pick ${stamp}.` })}`);
 
   await logIn(page, `/agents/${name}`);
   const chat = activePane(page).getByRole("region", { name: "Chat" });
-  const provider = chat.getByLabel("Provider");
+  const account = chat.getByLabel("Account");
   const model = chat.getByLabel("Model");
-  await expect(provider.locator("option:checked")).toHaveText("Agent's provider (Anthropic)");
+  await expect(account.locator("option:checked")).toHaveText("Agent's account (Fake Anthropic)");
   await expect(model.locator("option:checked")).toHaveText("Agent's model (claude-sonnet-5)");
   await expect(model.locator("option")).toContainText(["Agent's model (claude-sonnet-5)", "Claude Opus 5", "Claude Haiku 4.5"]);
 
@@ -587,15 +560,9 @@ test("the chat shows how full the context is, and /compact summarizes the thread
   await expect(page.getByTestId("context-meter")).toContainText("300 / 200k");
 });
 
-/** Point the server at this file's fake Anthropic. */
-async function useFake(admin: import("@playwright/test").APIRequestContext) {
-  for (const [name, value] of [
-    ["ai_anthropic_api_key", fake.api_key],
-    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
-  ]) {
-    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
-    expect(res.ok(), await res.text()).toBe(true);
-  }
+/** Point the server at this file's fake Anthropic: an account of its own, made the default (accounts A12). */
+async function useFake(admin: import("@playwright/test").APIRequestContext): Promise<string> {
+  return useAccount(admin, { name: "Fake Anthropic", kind: "anthropic", base_url: fake.base_url, key: fake.api_key, model: "claude-opus-5", default: true });
 }
 
 /** Where the conversation's messages and its box sit: the box stays in view under the messages, which scroll on their own. */
@@ -796,3 +763,192 @@ test("Edit cuts the chat back to a question for the box, and Fork opens a new ch
   const cut = (await (await admin.get(`/api/agents/assistant/threads/${original}`)).json()) as { messages: unknown[] };
   expect(cut.messages).toHaveLength(2);
 });
+
+// Named AI accounts (accounts A11, A12, A13): accounts added in Settings > AI, chatted on from the
+// foot picker, renamed with the agents that name them following, and a ChatGPT account's usage.
+// They run in this file, one at a time with the tests above, as they change the default account.
+test.describe("AI accounts", () => {
+  let compatible: Running;
+  let plan: Running;
+
+  test.beforeAll(async () => {
+    compatible = await startFake("TESTKIT_FAKE_OPENAI_BIN", "testkit-fake-openai", ["chat_completions"]);
+    plan = await startFake("TESTKIT_FAKE_OPENAI_BIN", "testkit-fake-openai", ["plan"]);
+  });
+
+  test.afterAll(() => {
+    compatible?.stop();
+    plan?.stop();
+  });
+
+  test("Settings > AI adds an Anthropic and an OpenAI-compatible account, makes one the default, and the chat runs on each", async ({ page, admin }) => {
+    const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const claude = `E2E Claude ${tag}`;
+    const router = `E2E Router ${tag}`;
+    await logIn(page, "/settings/ai");
+    const accounts = page.getByRole("region", { name: "Accounts" });
+
+    // An Anthropic account: the kind first, then its fields.
+    await accounts.getByRole("button", { name: "Add account" }).click();
+    let form = page.getByRole("region", { name: "Add an account" });
+    await form.getByLabel("Kind").selectOption({ label: "Anthropic API" });
+    await form.getByLabel("Name", { exact: true }).fill(claude);
+    await form.getByLabel("Base URL").fill(fake.base_url);
+    await form.getByLabel("API key").fill(fake.api_key);
+    await form.getByLabel("Model").fill("claude-opus-5");
+    await form.getByRole("button", { name: "Add account" }).click();
+    await expect(page.getByRole("region", { name: `Edit ${claude}` })).toBeVisible();
+    await page.getByRole("region", { name: `Edit ${claude}` }).getByRole("button", { name: "Close" }).click();
+    await expect(page.getByRole("row", { name: claude })).toContainText("Key set");
+
+    // An OpenAI-compatible account on an OpenRouter-style URL, with extra headers.
+    await accounts.getByRole("button", { name: "Add account" }).click();
+    form = page.getByRole("region", { name: "Add an account" });
+    await form.getByLabel("Kind").selectOption({ label: "OpenAI-compatible" });
+    await form.getByLabel("Name", { exact: true }).fill(router);
+    await form.getByLabel("Base URL").fill(`${compatible.fake.base_url.replace(/\/+$/, "")}/api/v1`);
+    await form.getByLabel("API key").fill(compatible.fake.api_key);
+    await form.getByRole("button", { name: "Add header" }).click();
+    await form.getByLabel("Header 1 name").fill("X-Title");
+    await form.getByLabel("Header 1 value").fill(`TheVault ${tag}`);
+    await form.getByRole("button", { name: "Add account" }).click();
+    const edit = page.getByRole("region", { name: `Edit ${router}` });
+    await expect(edit).toBeVisible();
+    await expect(edit.getByLabel("Header 1 value")).toHaveValue(`TheVault ${tag}`);
+    await edit.getByRole("button", { name: "Close" }).click();
+
+    // Make it the default: the table marks it.
+    await page.getByRole("row", { name: router }).getByRole("button", { name: `Make ${router} the default` }).click();
+    await expect(page.getByRole("row", { name: router }).getByText("Default", { exact: true })).toBeVisible();
+    const status = (await (await admin.get("/api/integrations/ai")).json()) as { default: string; accounts: { id: string; name: string }[] };
+    expect(status.accounts.find((a) => a.id === status.default)?.name).toBe(router);
+
+    // The chat starts on the default account, and its extra headers go with the call.
+    await compatible.tell(`push ${JSON.stringify({ text: `From the router ${tag}.` })}`);
+    await page.goto("/agents/assistant");
+    const chat = page.locator(".agent-chat");
+    const account = chat.getByLabel("Account");
+    await expect(account.locator("option:checked")).toHaveText(router);
+    await expect(chat.getByLabel("Model")).not.toHaveValue("");
+    const box = chat.getByRole("textbox", { name: "Ask AI" });
+    await box.fill(`Router question ${tag}`);
+    await box.press("Enter");
+    await expect(chat.getByText(`From the router ${tag}.`)).toBeVisible();
+    const headers = (await compatible.tell("last_headers")).headers as Record<string, string>;
+    expect(headers["x-title"]).toBe(`TheVault ${tag}`);
+    expect(headers.authorization).toBe(`Bearer ${compatible.fake.api_key}`);
+
+    // Another account picked at the foot runs the next turn.
+    await tell(`push ${JSON.stringify({ text: `From Claude ${tag}.` })}`);
+    const before = (await tell("requests")).count as number;
+    await account.selectOption({ label: claude });
+    await expect(chat.getByLabel("Model")).toHaveValue("claude-opus-5");
+    await box.fill(`Claude question ${tag}`);
+    await box.press("Enter");
+    await expect(chat.getByText(`From Claude ${tag}.`)).toBeVisible();
+    expect((await tell("requests")).count).toBe(before + 1);
+
+    // Back to this file's own default for the tests that follow.
+    await useFake(admin);
+    for (const name of [claude, router]) await dropAccount(admin, name);
+  });
+
+  test("renaming an account rewrites the agents that name it, and the agent page follows", async ({ page, admin }) => {
+    await useFake(admin);
+    const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const old = `Rename me ${tag}`;
+    const renamed = `Renamed ${tag}`;
+    await useAccount(admin, { name: old, kind: "anthropic", base_url: fake.base_url, key: fake.api_key });
+    const agent = `named_${tag}`;
+    const put = await admin.put(`/api/agents/${agent}`, { data: { wcl: `label = "Named ${tag}"\naccount = "${old}"\n` } });
+    expect(put.ok(), await put.text()).toBe(true);
+
+    await logIn(page, `/agents/${agent}/settings`);
+    const settings = activePane(page).getByRole("region", { name: "General" });
+    await expect(settings.getByLabel("Account").locator("option:checked")).toHaveText(old);
+
+    await page.goto("/settings/ai");
+    await page.getByRole("row", { name: old }).getByRole("button", { name: `Edit ${old}` }).click();
+    const form = page.getByRole("region", { name: `Edit ${old}` });
+    await form.getByLabel("Name", { exact: true }).fill(renamed);
+    await form.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("region", { name: `Edit ${renamed}` })).toBeVisible();
+    await expect(page.getByRole("row", { name: renamed })).toBeVisible();
+    await expect
+      .poll(async () => ((await (await admin.get(`/api/agents/${agent}`)).json()) as { account?: string }).account)
+      .toBe(renamed);
+
+    await page.goto(`/agents/${agent}/settings`);
+    const again = activePane(page).getByRole("region", { name: "General" });
+    await expect(again.getByLabel("Account").locator("option:checked")).toHaveText(renamed);
+    await expect(again.getByText(/does not exist/)).toHaveCount(0);
+
+    // Deleted, the agent names an account that is gone: it says so, and runs on the default.
+    await dropAccount(admin, renamed);
+    await page.reload();
+    await expect(activePane(page).getByRole("region", { name: "General" }).getByRole("alert")).toHaveText(
+      `Account ${renamed} does not exist; this agent uses the default account.`,
+    );
+    expect((await admin.delete(`/api/agents/${agent}`)).ok()).toBe(true);
+  });
+
+  test("a ChatGPT account shows its plan's usage as bars, and the chat foot its used percent", async ({ page, admin }) => {
+    await useFake(admin);
+    const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const name = `E2E plan ${tag}`;
+    const id = await useAccount(admin, { name, kind: "chatgpt" });
+    await signInPlan(admin, id, plan.fake.base_url);
+    // A plan response carries the usage headers, which the server keeps as the account's reading.
+    await plan.tell(`push ${JSON.stringify({ text: `From the plan ${tag}.` })}`);
+
+    await logIn(page, "/agents/assistant");
+    const chat = page.locator(".agent-chat");
+    await chat.getByLabel("Account").selectOption({ label: name });
+    await expect(chat.getByLabel("Model")).not.toHaveValue("");
+    const box = chat.getByRole("textbox", { name: "Ask AI" });
+    await box.fill(`Plan question ${tag}`);
+    await box.press("Enter");
+    await expect(chat.getByText(`From the plan ${tag}.`)).toBeVisible();
+
+    await page.goto("/settings/ai");
+    const bars = page.getByRole("group", { name: `${name} usage` });
+    await expect(bars.getByRole("meter")).not.toHaveCount(0);
+    await expect(bars).toContainText(/\d+% used, resets in /);
+    await expect(bars).toContainText(/as of /i);
+
+    // The chat foot shows how much of the plan is used next to the account.
+    await page.goto("/agents/assistant");
+    const option = chat.getByLabel("Account").locator("option", { hasText: name });
+    await expect(option).toHaveText(new RegExp(`^${name} \\(\\d+% used\\)$`));
+    await chat.getByLabel("Account").selectOption({ label: (await option.textContent())! });
+    await expect(chat.getByTestId("account-used")).toHaveText(/^\d+% used$/);
+
+    await dropAccount(admin, name);
+  });
+});
+
+/**
+ * Sign ChatGPT account `id` in against the fake plan server: its stored sign-in, a token good for
+ * a day, and the hidden test seam that points the plan's calls at the fake (accounts A1).
+ */
+async function signInPlan(admin: import("@playwright/test").APIRequestContext, id: string, base: string) {
+  const day = Date.now() + 86_400_000;
+  for (const [name, value] of [
+    ["ai_settings", JSON.stringify({ endpoints: { chatgpt: base } })],
+    [
+      `ai_account_chatgpt_${id.toLowerCase()}`,
+      JSON.stringify({
+        client_id: "oaiapp_test",
+        host_id: "urn:uuid:00000000-0000-4000-8000-000000000000",
+        // The fake plan takes any token but its API key.
+        access_token: "plan-access-token",
+        refresh_token: "plan-refresh-token",
+        expires_ms: day,
+        account: "e2e@example.com",
+      }),
+    ],
+  ]) {
+    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
+    expect(res.ok(), await res.text()).toBe(true);
+  }
+}

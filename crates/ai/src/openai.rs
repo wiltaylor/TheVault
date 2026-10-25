@@ -17,21 +17,22 @@ use std::collections::VecDeque;
 
 use serde_json::{Map, Value, json};
 
+use crate::credentials::Credential;
 use crate::error::{AiError, ErrorKind, kind_of_code};
-use crate::turn::{Turn, parse_input};
+use crate::turn::{Turn, Who, parse_input};
 use crate::types::{
-    Content, Effort, Event, Message, Model, Part, Provider, ProviderState, Request, Role, Stop,
+    Content, Effort, Event, Kind, Message, Model, Part, ProviderState, Request, Role, Stop, Wire,
     unloaded,
 };
 
 /// The request body. `plan` applies the ChatGPT plan's rules.
-pub(crate) fn body(req: &Request, plan: bool, stream: bool) -> Value {
+pub(crate) fn body(cred: &Credential, req: &Request, plan: bool, stream: bool) -> Value {
     let mut b = Map::new();
     b.insert("model".into(), json!(req.model));
     if let Some(system) = req.system.as_deref().filter(|s| !s.trim().is_empty()) {
         b.insert("instructions".into(), json!(system));
     }
-    b.insert("input".into(), Value::Array(input(req)));
+    b.insert("input".into(), Value::Array(input(cred, req)));
     b.insert("store".into(), json!(false));
     b.insert("stream".into(), json!(plan || stream));
     b.insert("include".into(), json!(["reasoning.encrypted_content"]));
@@ -70,12 +71,12 @@ pub(crate) fn body(req: &Request, plan: bool, stream: bool) -> Value {
     Value::Object(b)
 }
 
-fn input(req: &Request) -> Vec<Value> {
+fn input(cred: &Credential, req: &Request) -> Vec<Value> {
     let mut items = Vec::new();
     for m in &req.messages {
         match m.role {
             Role::User => user_items(m, &mut items),
-            Role::Assistant => assistant_items(req, m, &mut items),
+            Role::Assistant => assistant_items(cred, req, m, &mut items),
         }
     }
     items
@@ -143,10 +144,9 @@ fn output_items(text: String, parts: &[Part]) -> Value {
     Value::Array(out)
 }
 
-fn assistant_items(req: &Request, m: &Message, items: &mut Vec<Value>) {
+fn assistant_items(cred: &Credential, req: &Request, m: &Message, items: &mut Vec<Value>) {
     if let Some(state) = &m.provider_state
-        && state.provider == req.provider
-        && state.model == req.model
+        && cred.replays(state, &req.model)
         && let Some(output) = state.output.as_array()
         // Responses output items, not a Chat Completions message (ai D25).
         && output.iter().all(|i| i.get("type").is_some())
@@ -186,7 +186,7 @@ fn usage_of(turn: &mut Turn, response: &Value) {
 }
 
 /// The error a failed response carries.
-fn failure(req: &Request, error: Option<&Value>, turn: &Turn) -> AiError {
+fn failure(who: &Who, req: &Request, error: Option<&Value>, turn: &Turn) -> AiError {
     let code = error
         .and_then(|e| e.get("code"))
         .and_then(Value::as_str)
@@ -196,7 +196,7 @@ fn failure(req: &Request, error: Option<&Value>, turn: &Turn) -> AiError {
         .and_then(Value::as_str)
         .unwrap_or("the response failed");
     let kind = kind_of_code(code).unwrap_or(ErrorKind::Provider);
-    let mut text = format!("{} {}: {message}", req.provider.label(), req.model);
+    let mut text = format!("{} {}: {message}", who.name, req.model);
     if code == "subscription_sharing_usage_limit_exceeded" {
         text.push_str(". See your ChatGPT usage at https://chatgpt.com/settings/usage");
     }
@@ -205,6 +205,7 @@ fn failure(req: &Request, error: Option<&Value>, turn: &Turn) -> AiError {
 
 /// The tool calls and refusal among the output items, then the end of the turn.
 fn finish_items(
+    who: &Who,
     req: &Request,
     turn: &mut Turn,
     items: Vec<Value>,
@@ -245,12 +246,12 @@ fn finish_items(
             category: Some("content_filter".to_owned()),
             explanation: None,
         },
-        (None, Some(reason)) if req.provider == Provider::ChatGpt => {
+        (None, Some(reason)) if who.kind == Kind::ChatGpt => {
             return Err(AiError::new(
                 ErrorKind::Provider,
                 format!(
-                    "ChatGPT {}: the response ended incomplete ({reason}) before response.completed",
-                    req.model
+                    "{} {}: the response ended incomplete ({reason}) before response.completed",
+                    who.name, req.model
                 ),
             )
             .with_usage(turn.usage));
@@ -260,7 +261,8 @@ fn finish_items(
         (None, None) => Stop::EndTurn,
     };
     let state = ProviderState {
-        provider: req.provider,
+        account: who.account.clone(),
+        wire: Wire::Responses,
         model: req.model.clone(),
         output: Value::Array(items),
     };
@@ -269,7 +271,12 @@ fn finish_items(
 }
 
 /// A whole, non-streamed response as events.
-pub(crate) fn parse_response(req: &Request, resp: &Value) -> Result<VecDeque<Event>, AiError> {
+pub(crate) fn parse_response(
+    cred: &Credential,
+    req: &Request,
+    resp: &Value,
+) -> Result<VecDeque<Event>, AiError> {
+    let who = Who::of(cred);
     let mut out = VecDeque::new();
     let mut turn = Turn::new(req);
     usage_of(&mut turn, resp);
@@ -278,7 +285,7 @@ pub(crate) fn parse_response(req: &Request, resp: &Value) -> Result<VecDeque<Eve
         .and_then(Value::as_str)
         .unwrap_or("completed");
     if status == "failed" {
-        return Err(failure(req, resp.get("error"), &turn));
+        return Err(failure(&who, req, resp.get("error"), &turn));
     }
     let items = resp
         .get("output")
@@ -307,12 +314,13 @@ pub(crate) fn parse_response(req: &Request, resp: &Value) -> Result<VecDeque<Eve
             .and_then(Value::as_str)
             .unwrap_or("unknown")
     });
-    finish_items(req, &mut turn, items, incomplete, &mut out)?;
+    finish_items(&who, req, &mut turn, items, incomplete, &mut out)?;
     Ok(out)
 }
 
 /// The streamed response's events, as its frames arrive.
 pub(crate) struct StreamDecoder {
+    who: Who,
     req: Request,
     turn: Turn,
     items: Vec<(u64, Value)>,
@@ -320,13 +328,14 @@ pub(crate) struct StreamDecoder {
 }
 
 impl StreamDecoder {
-    pub fn new(req: &Request) -> StreamDecoder {
+    pub fn new(cred: &Credential, req: &Request) -> StreamDecoder {
         // The decoder needs the provider, model and tools, not the history.
         let req = Request {
             messages: Vec::new(),
             ..req.clone()
         };
         StreamDecoder {
+            who: Who::of(cred),
             turn: Turn::new(&req),
             req,
             items: Vec::new(),
@@ -375,13 +384,13 @@ impl StreamDecoder {
                         .unwrap_or("unknown")
                 });
                 self.done = true;
-                finish_items(&self.req, &mut self.turn, items, incomplete, out)?;
+                finish_items(&self.who, &self.req, &mut self.turn, items, incomplete, out)?;
             }
             "response.failed" => {
                 let resp = data.get("response").cloned().unwrap_or_default();
                 usage_of(&mut self.turn, &resp);
                 self.done = true;
-                return Err(failure(&self.req, resp.get("error"), &self.turn));
+                return Err(failure(&self.who, &self.req, resp.get("error"), &self.turn));
             }
             "error" => {
                 self.done = true;
@@ -389,7 +398,7 @@ impl StreamDecoder {
                     Some(e) if e.is_object() => e.clone(),
                     _ => data.clone(),
                 };
-                return Err(failure(&self.req, Some(&error), &self.turn));
+                return Err(failure(&self.who, &self.req, Some(&error), &self.turn));
             }
             _ => {}
         }
@@ -399,8 +408,8 @@ impl StreamDecoder {
 
 /// The models of `GET /v1/models`: `data[].id` with an API key, and `models[]` with
 /// `visibility == "list"` with a ChatGPT plan token (ai D6).
-pub(crate) fn models(provider: Provider, page: &Value) -> Vec<Model> {
-    let mut models: Vec<Model> = if provider == Provider::ChatGpt {
+pub(crate) fn models(kind: Kind, page: &Value) -> Vec<Model> {
+    let mut models: Vec<Model> = if kind == Kind::ChatGpt {
         page.get("models")
             .and_then(Value::as_array)
             .into_iter()

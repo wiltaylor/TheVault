@@ -55,7 +55,7 @@ pub fn agent_format_text() -> &'static str {
     })
 }
 
-/// `list_agents`: each agent's name, label, description, provider, model, whether it is enabled
+/// `list_agents`: each agent's name, label, description, account, model, whether it is enabled
 /// and built in, and its trigger count. A file that does not parse shows its error.
 pub(crate) fn list(w: &Writer) -> Result<ToolOut, ToolOut> {
     let mut agents = w.agents().map_err(|e| ToolOut::error(e.to_string()))?;
@@ -67,7 +67,7 @@ pub(crate) fn list(w: &Writer) -> Result<ToolOut, ToolOut> {
                 "name": a.name,
                 "label": a.label,
                 "description": a.description,
-                "provider": a.provider,
+                "account": crate::ai_settings::agent_account_name(w, a),
                 "model": a.model,
                 "enabled": a.enabled,
                 "builtin": a.is_built_in(),
@@ -91,7 +91,11 @@ pub(crate) fn get(w: &Writer, input: &Value) -> Result<ToolOut, ToolOut> {
         .read_agent(name)
         .map_err(|e| ToolOut::error(e.to_string()))?;
     let (agent, error) = match Agent::parse(name, &wcl) {
-        Ok(a) => (crate::agent_files::agent_json(&a), Value::Null),
+        Ok(a) => {
+            let mut v = crate::agent_files::agent_json(&a);
+            v["account"] = json!(crate::ai_settings::agent_account_name(w, &a));
+            (v, Value::Null)
+        }
         Err(e) => (Value::Null, json!(e.to_string())),
     };
     Ok(out(

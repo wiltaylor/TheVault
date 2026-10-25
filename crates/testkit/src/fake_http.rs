@@ -28,6 +28,8 @@ pub(crate) struct Streamed {
     pub cut_after: Option<usize>,
     /// The pause after each frame.
     pub delay: Duration,
+    /// Response headers beyond the content type.
+    pub headers: Vec<(String, String)>,
 }
 
 /// One SSE frame: `event: <event>\ndata: <data>\n\n`.
@@ -37,9 +39,14 @@ pub(crate) fn frame(event: &str, data: &Value) -> String {
 
 fn write_stream(conn: TcpStream, s: &Streamed) -> std::io::Result<()> {
     let mut out = conn;
-    out.write_all(
-        b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n",
-    )?;
+    let mut head = String::from(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n",
+    );
+    for (n, v) in &s.headers {
+        head.push_str(&format!("{n}: {v}\r\n"));
+    }
+    head.push_str("\r\n");
+    out.write_all(head.as_bytes())?;
     out.flush()?;
     let n = s.cut_after.unwrap_or(s.frames.len()).min(s.frames.len());
     for f in &s.frames[..n] {

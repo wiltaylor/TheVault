@@ -23,7 +23,9 @@ use crate::{Invalid, Issue, Schema};
 /// cannot be deleted or disabled.
 pub const ASSISTANT_AGENT: &str = "assistant";
 
-/// The providers an agent may name. Absent means the Settings > AI default.
+/// The providers an agent file from before AI accounts may name in `provider` (accounts A6). It
+/// reads as the account the migration made for that provider; the home server rewrites it to
+/// `account` on start.
 pub const AGENT_PROVIDERS: [&str; 3] = ["anthropic", "openai", "chatgpt"];
 
 /// The efforts an agent may ask for, lowest first.
@@ -55,11 +57,12 @@ pub const TRIGGER_OPS: [&str; 3] = ["create", "update", "delete"];
 pub const AGENT_PROMPT_MAX: usize = 32_000;
 
 /// The top-level fields of an agent file.
-const FIELDS: [&str; 9] = [
+const FIELDS: [&str; 10] = [
     "label",
     "description",
     "icon",
     "enabled",
+    "account",
     "provider",
     "model",
     "effort",
@@ -80,9 +83,13 @@ pub struct Agent {
     pub icon: Option<String>,
     /// `false` keeps the file but runs no trigger and refuses new turns.
     pub enabled: bool,
-    /// One of [`AGENT_PROVIDERS`]; `None` is the Settings > AI default provider.
+    /// The name of the AI account the agent runs on (accounts A6); `None` is the default
+    /// account. The schema cannot check it: accounts live in state.db, not in the vault.
+    pub account: Option<String>,
+    /// One of [`AGENT_PROVIDERS`], from a file of before accounts; read only when `account` is
+    /// absent, as the account the migration made for it. The server never writes it.
     pub provider: Option<String>,
-    /// `None` is the provider's default model in Settings > AI.
+    /// `None` is the account's default model.
     pub model: Option<String>,
     /// One of [`AGENT_EFFORTS`]; `None` is the provider's default.
     pub effort: Option<String>,
@@ -374,6 +381,16 @@ pub fn parse_cron(s: &str) -> Result<Cron, String> {
 }
 
 impl Agent {
+    /// What the agent names as its AI account: `account`, else a legacy `provider`, which the
+    /// accounts resolve through their legacy names (accounts A6).
+    pub fn account_ref(&self) -> Option<&str> {
+        self.account
+            .as_deref()
+            .or(self.provider.as_deref())
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+    }
+
     /// The agent named `name` with nothing set: every default.
     pub fn new(name: &str) -> Agent {
         Agent {
@@ -382,6 +399,7 @@ impl Agent {
             description: None,
             icon: None,
             enabled: true,
+            account: None,
             provider: None,
             model: None,
             effort: None,
@@ -467,6 +485,17 @@ impl Agent {
         agent.description = r.string(doc, "description", "description");
         agent.icon = r.form(doc, "icon", "icon", Form::Icon);
         agent.enabled = r.bool(doc, "enabled", "enabled").unwrap_or(true);
+        agent.account = r.string(doc, "account", "account");
+        if agent
+            .account
+            .as_deref()
+            .is_some_and(|a| a.trim().is_empty())
+        {
+            r.c.fail(
+                "account",
+                "must not be empty; leave it out for the default account",
+            );
+        }
         agent.provider = r.form(doc, "provider", "provider", Form::OneOf(&AGENT_PROVIDERS));
         agent.model = r.string(doc, "model", "model");
         if agent.model.as_deref().is_some_and(|m| m.trim().is_empty()) {
@@ -560,8 +589,12 @@ impl Agent {
         if !self.enabled {
             field(&mut out, "", "enabled", "false");
         }
+        // A legacy `provider` is written back only while the agent names no account, so a file
+        // the start rewrite has not reached yet keeps its meaning (accounts A6).
+        let provider = self.provider.as_ref().filter(|_| self.account.is_none());
         let strings = [
-            ("provider", &self.provider),
+            ("account", &self.account),
+            ("provider", &provider.cloned()),
             ("model", &self.model),
             ("effort", &self.effort),
             ("system_prompt", &self.system_prompt),

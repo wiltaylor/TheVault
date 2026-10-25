@@ -3,23 +3,23 @@
 
 mod common;
 
-use ai::{Content, Credential, ErrorKind, Event, Message, Provider, Request, Secret, Stop};
+use ai::{Content, Credential, ErrorKind, Event, Kind, Message, Request, Secret, Stop};
 use common::{Env, events, get_note_tool, text_of};
 use serde_json::{Value, json};
 use testkit::{OpenAiReply, OpenAiResponse, fake_openai::PLAN_FORBIDDEN};
 
 fn request(prompt: &str) -> Request {
-    Request::new(Provider::OpenAi, "gpt-6", prompt)
+    Request::new("gpt-6", prompt)
 }
 
 fn plan_request(prompt: &str) -> Request {
-    Request::new(Provider::ChatGpt, "gpt-6.1-sol", prompt)
+    Request::new("gpt-6.1-sol", prompt)
 }
 
 /// A plan credential with a fixed access token, so no refresh runs.
 fn plan_cred(env: &Env) -> Credential {
     Credential::new(
-        Provider::ChatGpt,
+        Kind::ChatGpt,
         env.openai.base_url(),
         Secret::new("fake-plan-access-token"),
     )
@@ -51,7 +51,7 @@ async fn streams_text_with_an_api_key() {
     );
     let mut req = request("roof?");
     req.system = Some("Answer from the notes.".to_owned());
-    let mut s = ai::stream(&ai::client(), &env.cred(Provider::OpenAi), &req)
+    let mut s = ai::stream(&ai::client(), &env.cred(Kind::OpenAi), &req)
         .await
         .unwrap();
     let (evs, err) = events(&mut s).await;
@@ -105,7 +105,7 @@ async fn a_function_call_is_a_checked_tool_call() {
     );
     let mut req = request("roof?");
     req.tools = vec![get_note_tool()];
-    let reply = ai::complete(&ai::client(), &env.cred(Provider::OpenAi), &req)
+    let reply = ai::complete(&ai::client(), &env.cred(Kind::OpenAi), &req)
         .await
         .unwrap();
     assert_eq!(reply.stop, Stop::ToolUse);
@@ -141,7 +141,7 @@ async fn a_function_call_is_a_checked_tool_call() {
             parts: vec![],
         }]),
     ];
-    ai::complete(&ai::client(), &env.cred(Provider::OpenAi), &next)
+    ai::complete(&ai::client(), &env.cred(Kind::OpenAi), &next)
         .await
         .unwrap();
     let input = env.openai.response_requests()[1].json()["input"].clone();
@@ -162,7 +162,7 @@ async fn refusal_content_is_a_refusal() {
     let env = Env::new();
     env.openai
         .push(OpenAiResponse::new().refusal("I can't help with that."));
-    let mut s = ai::stream(&ai::client(), &env.cred(Provider::OpenAi), &request("x"))
+    let mut s = ai::stream(&ai::client(), &env.cred(Kind::OpenAi), &request("x"))
         .await
         .unwrap();
     let (evs, _) = events(&mut s).await;
@@ -177,7 +177,7 @@ async fn refusal_content_is_a_refusal() {
         })
     );
     env.openai.push(OpenAiResponse::new().refusal("No."));
-    let e = ai::complete(&ai::client(), &env.cred(Provider::OpenAi), &request("x"))
+    let e = ai::complete(&ai::client(), &env.cred(Kind::OpenAi), &request("x"))
         .await
         .unwrap_err();
     assert_eq!(e.kind, ErrorKind::Refusal);
@@ -192,7 +192,7 @@ async fn response_failed_is_an_error_after_the_text_so_far() {
             .failed("rate_limit_exceeded", "Slow down")
             .usage(9, 3),
     );
-    let mut s = ai::stream(&ai::client(), &env.cred(Provider::OpenAi), &request("x"))
+    let mut s = ai::stream(&ai::client(), &env.cred(Kind::OpenAi), &request("x"))
         .await
         .unwrap();
     let (evs, err) = events(&mut s).await;
@@ -200,7 +200,7 @@ async fn response_failed_is_an_error_after_the_text_so_far() {
     let e = err.expect("failed");
     assert_eq!(e.kind, ErrorKind::RateLimit, "{e}");
     assert!(e.message.contains("Slow down"));
-    assert_eq!(e.provider, Some(Provider::OpenAi));
+    assert_eq!(e.account.as_deref(), Some("OpenAI"));
     assert_eq!(
         env.openai.response_requests().len(),
         1,
@@ -214,13 +214,8 @@ fn a_blocking_api_key_call_is_answered_whole_and_may_cap_output() {
     env.openai.push(OpenAiResponse::text("Done."));
     let mut req = request("x");
     req.max_tokens = Some(300);
-    let reply = ai::complete_blocking(
-        &ai::blocking_client(),
-        &env.cred(Provider::OpenAi),
-        &req,
-        None,
-    )
-    .unwrap();
+    let reply =
+        ai::complete_blocking(&ai::blocking_client(), &env.cred(Kind::OpenAi), &req, None).unwrap();
     assert_eq!(reply.text, "Done.");
     let body = env.openai.response_requests()[0].json();
     assert_eq!(body["stream"], json!(false));
@@ -349,7 +344,7 @@ async fn reasoning_is_replayed_to_the_same_model_only() {
             .with_text("Slate."),
     );
     let http = ai::client();
-    let cred = env.cred(Provider::OpenAi);
+    let cred = env.cred(Kind::OpenAi);
     let first = request("roof?");
     let reply = ai::complete(&http, &cred, &first).await.unwrap();
     let assistant = reply.message();
@@ -373,7 +368,7 @@ async fn reasoning_is_replayed_to_the_same_model_only() {
     assert_eq!(input[2]["content"][0]["text"], json!("Slate."));
     assert!(input[2].get("id").is_none());
 
-    let mut other = Request::new(Provider::OpenAi, "gpt-6-mini", "");
+    let mut other = Request::new("gpt-6-mini", "");
     other.messages = history;
     ai::complete(&http, &cred, &other).await.unwrap();
     let input = env.openai.response_requests()[2].json()["input"].clone();
@@ -395,9 +390,9 @@ async fn plan_state_does_not_cross_to_the_api_key() {
     let reply = ai::complete(&ai::client(), &plan_cred(&env), &plan_request("x"))
         .await
         .unwrap();
-    let mut req = Request::new(Provider::OpenAi, "gpt-6.1-sol", "");
+    let mut req = Request::new("gpt-6.1-sol", "");
     req.messages = vec![Message::user("x"), reply.message(), Message::user("y")];
-    ai::complete(&ai::client(), &env.cred(Provider::OpenAi), &req)
+    ai::complete(&ai::client(), &env.cred(Kind::OpenAi), &req)
         .await
         .unwrap();
     let input = env.openai.response_requests()[1].json()["input"].clone();
@@ -408,15 +403,16 @@ async fn plan_state_does_not_cross_to_the_api_key() {
 #[tokio::test(flavor = "multi_thread")]
 async fn model_lists_have_both_shapes() {
     let env = Env::new();
-    let api = ai::list_models(&ai::client(), &env.cred(Provider::OpenAi))
+    let api = ai::list_models(&ai::client(), &env.cred(Kind::OpenAi))
         .await
         .unwrap();
     let ids: Vec<&str> = api.iter().map(|m| m.id.as_str()).collect();
     assert_eq!(ids, ["gpt-6", "gpt-6-mini", "text-embedding-4"]);
     assert!(api.iter().all(|m| m.display_name.is_none()));
-    assert!(
-        ai::preselect(Provider::OpenAi, &api).is_none(),
-        "no OpenAI id is hard-coded"
+    assert_eq!(
+        ai::preselect(Kind::OpenAi, &api).map(|m| m.id.as_str()),
+        Some("gpt-6"),
+        "no OpenAI id is hard-coded: the first listed is the default"
     );
 
     let plan = ai::list_models(&ai::client(), &plan_cred(&env))
@@ -439,21 +435,83 @@ async fn model_lists_have_both_shapes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_request_for_another_provider_is_refused_before_sending() {
+async fn a_request_with_no_model_is_refused_before_sending() {
     let env = Env::new();
-    let e = ai::complete(
-        &ai::client(),
-        &env.cred(Provider::OpenAi),
-        &plan_request("x"),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(e.kind, ErrorKind::Invalid);
     let mut req = request("x");
     req.model = String::new();
-    let e = ai::complete(&ai::client(), &env.cred(Provider::OpenAi), &req)
+    let e = ai::complete(&ai::client(), &env.cred(Kind::OpenAi), &req)
         .await
         .unwrap_err();
     assert_eq!(e.kind, ErrorKind::NotConfigured);
     assert!(env.openai.response_requests().is_empty());
+}
+
+#[test]
+fn a_plan_answer_reports_the_plans_usage() {
+    let env = Env::new();
+    env.openai.set_plan_usage(Some((33.0, 71.5)));
+    let reply = ai::complete_blocking(
+        &ai::blocking_client(),
+        &plan_cred(&env),
+        &plan_request("x"),
+        None,
+    )
+    .unwrap();
+    let usage = reply.plan_usage.expect("the plan's usage");
+    assert_eq!(usage.windows.len(), 2);
+    assert_eq!(usage.windows[0].label, "5-hour");
+    assert_eq!(usage.windows[0].used_percent, 33.0);
+    assert_eq!(usage.windows[0].window_minutes, Some(300));
+    assert!(usage.windows[0].resets_at_ms.unwrap() > usage.read_at_ms);
+    assert_eq!(usage.windows[1].label, "Weekly");
+    assert_eq!(usage.windows[1].used_percent, 71.5);
+
+    // The API key reports none, and neither does a plan answer without the headers.
+    let reply = ai::complete_blocking(
+        &ai::blocking_client(),
+        &env.cred(Kind::OpenAi),
+        &request("x"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(reply.plan_usage, None);
+    env.openai.set_plan_usage(None);
+    let reply = ai::complete_blocking(
+        &ai::blocking_client(),
+        &plan_cred(&env),
+        &plan_request("x"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(reply.plan_usage, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn state_does_not_cross_between_two_accounts_of_one_kind() {
+    let env = Env::new();
+    let other = common::add_account(
+        &env.state,
+        "Second key",
+        Kind::OpenAi,
+        Some(&env.openai.base_url()),
+        Some(env.openai.api_key()),
+    );
+    env.openai.push(
+        OpenAiResponse::new()
+            .reasoning("r", "enc-first")
+            .with_text("Hi"),
+    );
+    let first = env.cred(Kind::OpenAi);
+    let reply = ai::complete(&ai::client(), &first, &request("x"))
+        .await
+        .unwrap();
+    let mut next = request("");
+    next.messages = vec![Message::user("x"), reply.message(), Message::user("y")];
+    let second = ai::Credentials::resolve(&env.state, &other).unwrap();
+    ai::complete(&ai::client(), &second, &next).await.unwrap();
+    let input = env.openai.response_requests()[1].json()["input"].clone();
+    assert!(!input.to_string().contains("enc-first"), "{input}");
+    ai::complete(&ai::client(), &first, &next).await.unwrap();
+    let input = env.openai.response_requests()[2].json()["input"].clone();
+    assert!(input.to_string().contains("enc-first"), "{input}");
 }

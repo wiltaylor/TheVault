@@ -22,7 +22,7 @@ const aiApply = vi.fn();
 const putType = vi.fn();
 const changeType = vi.fn();
 const aiModels = vi.fn();
-const aiProviders = vi.fn();
+const aiAccounts = vi.fn();
 const app = vi.fn(async () => null);
 const reloadDefinitions = vi.fn(async () => undefined);
 
@@ -30,7 +30,7 @@ const turns = turnsOver(streamEvents);
 
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, streamEvents, streamTurn: turns.streamTurn, api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiApply, putType, changeType, aiModels, aiProviders, app } };
+  return { ...real, streamEvents, streamTurn: turns.streamTurn, api: { ...real.api, aiTurnStart: turns.aiTurnStart, aiTurnStop: turns.aiTurnStop, aiApply, putType, changeType, aiModels, aiAccounts, app } };
 });
 vi.mock("../session", () => ({ reloadDefinitions }));
 
@@ -54,8 +54,8 @@ async function propose(m: ReturnType<typeof render>, proposal: unknown) {
 }
 
 beforeEach(() => {
-  aiProviders.mockResolvedValue({ default_provider: "anthropic", providers: { anthropic: { configured: true, model: "m" } } });
-  aiModels.mockResolvedValue({ provider: "anthropic", model: "m", models: [{ id: "m", display_name: "M" }] });
+  aiAccounts.mockResolvedValue({ default: "a1", accounts: [{ id: "a1", name: "Anthropic", kind: "anthropic", kind_label: "Anthropic API", model: "m", configured: true }] });
+  aiModels.mockResolvedValue({ account: "a1", model: "m", models: [{ id: "m", display_name: "M" }] });
 });
 
 afterEach(() => {

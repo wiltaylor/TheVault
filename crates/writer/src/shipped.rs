@@ -192,7 +192,10 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
     ShippedFile {
         path: "agents/assistant.wcl",
         source: include_str!("../defaults/agents/assistant.wcl"),
-        hashes: &["8662bc8dbbf4601e72392d38c20a4cd01fdf554b0bf90d3b1a083557d64dc7ba"],
+        hashes: &[
+            "8662bc8dbbf4601e72392d38c20a4cd01fdf554b0bf90d3b1a083557d64dc7ba",
+            "13ba050f704d74c6fa10f1fbd9d95cd5698e326c7ac0a61007fb736e205f47ec",
+        ],
     },
 ];
 
@@ -257,6 +260,10 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
     UpgradeStep {
         id: "0009_outbox_statuses",
         run: outbox_statuses,
+    },
+    UpgradeStep {
+        id: "0010_ai_accounts",
+        run: ai_accounts,
     },
 ];
 
@@ -967,6 +974,183 @@ fn assistant_settings(w: &Writer) -> Result<()> {
     }
     let text = Value::Object(settings).to_string();
     w.state.set_secret(AI_SETTINGS, &text)?;
+    Ok(())
+}
+
+/// The secret holding the AI accounts (crates/ai's `ai_accounts`, accounts A4).
+const AI_ACCOUNTS: &str = "ai_accounts";
+
+/// The secrets of before accounts, by provider: the API keys and the ChatGPT sign-in.
+const OLD_AI_SECRETS: [(&str, &str); 3] = [
+    ("anthropic", "ai_anthropic_api_key"),
+    ("openai", "ai_openai_api_key"),
+    ("chatgpt", "ai_chatgpt"),
+];
+
+/// Read secret `name`, deferring the step when the secrets key is missing.
+fn step_secret(w: &Writer, step: &str, name: &str) -> Result<Option<String>> {
+    match w.state.get_secret(name) {
+        Ok(v) => Ok(v),
+        Err(state::Error::KeyMissing { .. }) => Err(crate::Error::StepDeferred(format!(
+            "step {step} needs the secrets key to read {name}: start the server with its key \
+             file to finish it"
+        ))),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Step `0010_ai_accounts` (accounts A9): the three fixed providers of Settings > AI become
+/// named accounts in `ai_accounts`.
+///
+/// - `Anthropic` (kind `anthropic`) when an Anthropic key or API URL is set, with the key, the
+///   URL, `models.anthropic` and `context.anthropic`.
+/// - `OpenAI` when an OpenAI key or API URL is set: kind `openai_compatible` when the URL is set
+///   and `endpoints.openai_api` says `chat_completions`, else `openai`; with the key, the URL,
+///   `models.openai` and `context.openai`.
+/// - `ChatGPT` (kind `chatgpt`) when a ChatGPT sign-in is stored, its tokens moved to the
+///   account's own secret, with `models.chatgpt` and `context.chatgpt`.
+///
+/// The default is the account made from `default_provider`, else the first. `legacy` maps each
+/// provider name to the account made for it, so agent files and saved turns naming a provider
+/// still resolve. The new secrets are written first, then `ai_accounts`, and the old secrets are
+/// deleted last. The step does nothing when `ai_accounts` exists or nothing was set up, and it
+/// defers without the secrets key. The provider-keyed settings stay in `ai_settings`, unread.
+fn ai_accounts(w: &Writer) -> Result<()> {
+    use serde_json::{Map, Value, json};
+
+    const STEP: &str = "0010_ai_accounts";
+    if step_secret(w, STEP, AI_ACCOUNTS)?.is_some() {
+        return Ok(());
+    }
+    let settings: Value = step_secret(w, STEP, AI_SETTINGS)?
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(Value::Null);
+    let mut old = BTreeSet::new();
+    let mut secret = std::collections::BTreeMap::new();
+    for (provider, name) in OLD_AI_SECRETS {
+        if let Some(v) = step_secret(w, STEP, name)? {
+            old.insert(name);
+            secret.insert(provider, v);
+        }
+    }
+    let text = |v: &Value| {
+        v.as_str()
+            .map(|s| s.trim().trim_end_matches('/').to_owned())
+            .filter(|s| !s.is_empty())
+    };
+    let setting = |path: &str| settings.pointer(path).and_then(text);
+    let window = |provider: &str| {
+        settings
+            .pointer(&format!("/context/{provider}"))
+            .and_then(Value::as_u64)
+            .map(|n| json!({ "window": n }))
+            .unwrap_or(Value::Null)
+    };
+    let key = |provider: &str| {
+        secret
+            .get(provider)
+            .map(|k| k.trim().to_owned())
+            .filter(|k| !k.is_empty())
+    };
+    let mut accounts = Vec::new();
+    let mut legacy = Map::new();
+    let mut keys = Vec::new();
+    let mut add = |provider: &str, name: &str, kind: &str, url: Option<String>| {
+        let id = ulid::Ulid::new().to_string();
+        accounts.push(json!({
+            "id": id,
+            "name": name,
+            "kind": kind,
+            "base_url": url,
+            "model": setting(&format!("/models/{provider}")),
+            "headers": [],
+            "context": window(provider),
+        }));
+        legacy.insert(provider.to_owned(), json!(id));
+        id
+    };
+    let url = setting("/endpoints/anthropic");
+    if key("anthropic").is_some() || url.is_some() {
+        let id = add("anthropic", "Anthropic", "anthropic", url);
+        if let Some(k) = key("anthropic") {
+            keys.push((format!("ai_account_key_{}", id.to_ascii_lowercase()), k));
+        }
+    }
+    let url = setting("/endpoints/openai");
+    if key("openai").is_some() || url.is_some() {
+        let chat = url.is_some()
+            && setting("/endpoints/openai_api").as_deref() == Some("chat_completions");
+        let kind = if chat { "openai_compatible" } else { "openai" };
+        let id = add("openai", "OpenAI", kind, url);
+        if let Some(k) = key("openai") {
+            keys.push((format!("ai_account_key_{}", id.to_ascii_lowercase()), k));
+        }
+    }
+    if let Some(auth) = secret
+        .get("chatgpt")
+        .filter(|t| serde_json::from_str::<Value>(t).is_ok_and(|v| v.is_object()))
+    {
+        let id = add("chatgpt", "ChatGPT", "chatgpt", None);
+        keys.push((
+            format!("ai_account_chatgpt_{}", id.to_ascii_lowercase()),
+            auth.clone(),
+        ));
+    }
+    if accounts.is_empty() {
+        return Ok(());
+    }
+    let default = settings
+        .get("default_provider")
+        .and_then(Value::as_str)
+        .and_then(|p| legacy.get(p).cloned())
+        .unwrap_or_else(|| accounts[0]["id"].clone());
+    for (name, value) in &keys {
+        w.state.set_secret(name, value)?;
+    }
+    let table = json!({ "accounts": accounts, "default": default, "legacy": legacy });
+    w.state.set_secret(AI_ACCOUNTS, &table.to_string())?;
+    for name in old {
+        match w.state.delete_secret(name) {
+            Ok(()) | Err(state::Error::UnknownSecret(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
+/// On every start of the home server (accounts A6): an agent file that names a provider of
+/// before accounts, `provider = "anthropic" | "openai" | "chatgpt"`, names the account the
+/// migration made for it instead, `account = "<name>"`, in one commit authored `task server`. A
+/// provider no account was made for is left as it is: the agent runs on the default account.
+/// Without the secrets key, or with no accounts, nothing changes.
+fn agents_name_accounts(w: &Writer) -> Result<()> {
+    use serde_json::Value;
+
+    let table: Value = match w.state.get_secret(AI_ACCOUNTS) {
+        Ok(Some(t)) => serde_json::from_str(&t).unwrap_or(Value::Null),
+        Ok(None) | Err(state::Error::KeyMissing { .. }) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    let name_of = |provider: &str| -> Option<String> {
+        let id = table.pointer(&format!("/legacy/{provider}"))?.as_str()?;
+        table["accounts"]
+            .as_array()?
+            .iter()
+            .find(|a| a["id"].as_str() == Some(id))?["name"]
+            .as_str()
+            .map(str::to_owned)
+    };
+    let _acting = crate::acting_as(&Author::Task(SERVER_AUTHOR.to_owned()));
+    let changed = w.set_agent_accounts(|agent| match (&agent.account, &agent.provider) {
+        (None, Some(p)) => name_of(p),
+        _ => None,
+    })?;
+    if !changed.is_empty() {
+        eprintln!(
+            "agents {} name their AI account in place of a provider",
+            changed.join(", ")
+        );
+    }
     Ok(())
 }
 
@@ -1785,6 +1969,8 @@ impl Writer {
                 // Not a step: a type file in the old form can arrive any time, by the CLI or a
                 // copy, and is brought to the list form on the next start.
                 lists_not_multiple(self)?;
+                // Likewise an agent file naming a provider of before accounts.
+                agents_name_accounts(self)?;
                 steps
             }
             Upkeep::Device => Vec::new(),

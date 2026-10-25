@@ -18,7 +18,7 @@ const streamEvents = vi.fn(
 const updateNote = vi.fn();
 const aiApply = vi.fn();
 const aiModels = vi.fn();
-const aiProviders = vi.fn();
+const aiAccounts = vi.fn();
 const app = vi.fn();
 const turns = turnsOver(streamEvents);
 const { aiTurnStart, aiTurnStop, streamTurn } = turns;
@@ -32,7 +32,7 @@ vi.mock("../api", async (orig) => {
     ...real,
     streamEvents,
     streamTurn,
-    api: { ...real.api, updateNote, aiApply, aiModels, aiProviders, app, aiTurnStart, aiTurnPoll, aiTurnStop, appSync, appSyncNow },
+    api: { ...real.api, updateNote, aiApply, aiModels, aiAccounts, app, aiTurnStart, aiTurnPoll, aiTurnStop, appSync, appSyncNow },
   };
 });
 
@@ -44,18 +44,34 @@ const { changes, onNoteChangedElsewhere } = await import("../changes");
 const { renderMarkdown } = await import("./markdown");
 const { blockLines, lineDiff } = await import("./diff");
 
+const ANTHROPIC = { id: "a1", name: "Anthropic", kind: "anthropic", kind_label: "Anthropic API", model: "claude-opus-5", configured: true };
 const STATUS = {
-  default_provider: "anthropic",
-  providers: {
-    anthropic: { configured: true, model: "claude-opus-5" },
-    openai: { configured: false, model: null },
-    chatgpt: { configured: false, model: null },
-  },
+  default: "a1",
+  accounts: [
+    ANTHROPIC,
+    { id: "o1", name: "OpenAI", kind: "openai", kind_label: "OpenAI API", model: null, configured: false },
+    {
+      id: "c1",
+      name: "ChatGPT",
+      kind: "chatgpt",
+      kind_label: "ChatGPT subscription",
+      model: null,
+      configured: true,
+      usage: {
+        read_at_ms: 0,
+        plan: "plus",
+        windows: [
+          { label: "5 h", used_percent: 12, window_minutes: 300, resets_at_ms: null },
+          { label: "Weekly", used_percent: 41.6, window_minutes: 10080, resets_at_ms: null },
+        ],
+      },
+    },
+  ],
   confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true, skills: true },
 };
 
 const MODELS = {
-  provider: "anthropic",
+  account: "a1",
   model: "claude-opus-5",
   models: [
     { id: "claude-opus-5", display_name: "Claude Opus 5" },
@@ -85,7 +101,7 @@ async function askIt(m: ReturnType<typeof render>, text = "What is on my list?")
 
 beforeEach(() => {
   app.mockResolvedValue(null);
-  aiProviders.mockResolvedValue(STATUS);
+  aiAccounts.mockResolvedValue(STATUS);
   aiModels.mockResolvedValue(MODELS);
 });
 
@@ -103,7 +119,7 @@ describe("ChatPanel", () => {
     const m = render(() => <ChatPanel noteId={() => "01JOPEN"} />);
     await waitFor(() => expect(m.getByLabelText("Model")).toHaveValue("claude-opus-5"));
     await askIt(m);
-    expect(live!.body).toMatchObject({ provider: "anthropic", model: "claude-opus-5", note_id: "01JOPEN", messages: [{ role: "user" }] });
+    expect(live!.body).toMatchObject({ account: "a1", model: "claude-opus-5", note_id: "01JOPEN", messages: [{ role: "user" }] });
     emit("text", { delta: "You need " });
     await waitFor(() => expect(m.getByRole("list", { name: "Conversation" })).toHaveTextContent("You need"));
     expect(m.getByRole("list", { name: "Conversation" })).not.toHaveTextContent("milk");
@@ -296,7 +312,9 @@ describe("ChatPanel", () => {
     await askIt(m);
     emit("text", { delta: "Partial" });
     emit("refusal", {
-      provider: "anthropic",
+      account: "a1",
+      name: "Anthropic",
+      kind: "anthropic",
       model: "claude-opus-5",
       category: "cyber",
       explanation: null,
@@ -353,10 +371,30 @@ describe("ChatPanel", () => {
     expect(m.getByRole("list", { name: "Conversation" })).toBeEmptyDOMElement();
   });
 
-  it("offers the configured providers and the default model", async () => {
+  it("offers the accounts set up, the default account's default model, and how much of a plan is used", async () => {
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await waitFor(() => expect(m.getByLabelText("Model")).toHaveValue("claude-opus-5"));
+    expect(m.getByLabelText("Account")).toHaveValue("a1");
     expect((m.getByRole("option", { name: "OpenAI" }) as HTMLOptionElement).disabled).toBe(true);
+    expect(m.getByRole("option", { name: "ChatGPT (42% used)" })).toBeInTheDocument();
+    expect(m.queryByTestId("account-used")).toBeNull();
+    expect(m.getByText(/Answers come from Anthropic;/)).toBeInTheDocument();
+
+    // A ChatGPT account with a reading shows its most used limit beside the picker, and the turn names it.
+    aiModels.mockResolvedValue({ account: "c1", model: "gpt-6", models: [{ id: "gpt-6", display_name: null }] });
+    fireEvent.change(m.getByLabelText("Account"), { target: { value: "c1" } });
+    await waitFor(() => expect(m.getByLabelText("Model")).toHaveValue("gpt-6"));
+    expect(aiModels).toHaveBeenLastCalledWith("c1");
+    expect(m.getByTestId("account-used")).toHaveTextContent("42% used");
+    await askIt(m);
+    expect(live!.body).toMatchObject({ account: "c1", model: "gpt-6" });
+    emit("done", { stop: "end_turn", messages: [] });
+    live!.end();
+    // The panel keeps its choice: back to the default account for the tests that follow.
+    aiModels.mockResolvedValue(MODELS);
+    await waitFor(() => expect(m.getByRole("button", { name: "Send" })).toBeInTheDocument());
+    fireEvent.change(m.getByLabelText("Account"), { target: { value: "a1" } });
+    await waitFor(() => expect(m.getByLabelText("Model")).toHaveValue("claude-opus-5"));
   });
 });
 
@@ -398,13 +436,13 @@ describe("ChatPanel in the desktop and Android apps", () => {
     await waitFor(() => expect(m.getByRole("button", { name: "Send" })).toBeInTheDocument());
     expect(streamEvents).not.toHaveBeenCalled();
     expect(streamTurn).not.toHaveBeenCalled();
-    expect(aiTurnStart).toHaveBeenCalledWith(expect.objectContaining({ provider: "anthropic", note_id: "01JOPEN", messages: [expect.objectContaining({ role: "user" })] }));
+    expect(aiTurnStart).toHaveBeenCalledWith(expect.objectContaining({ account: "a1", note_id: "01JOPEN", messages: [expect.objectContaining({ role: "user" })] }));
     expect(aiTurnPoll.mock.calls.map((c) => c.slice(0, 2))).toEqual([
       ["turn-1", 0],
       ["turn-1", 2],
     ]);
     expect(transcriptNow()[1]).toEqual(answer);
-    expect(aiProviders).toHaveBeenCalled();
+    expect(aiAccounts).toHaveBeenCalled();
   });
 
   it("shows the activity line from polled events too (ai D30)", async () => {
@@ -446,11 +484,7 @@ describe("ChatPanel in the desktop and Android apps", () => {
   });
 
   it("shows Set up AI in the web app, linking to the home server, when nothing is configured", async () => {
-    aiProviders.mockResolvedValue({
-      ...STATUS,
-      default_provider: null,
-      providers: { anthropic: { configured: false, model: null }, openai: { configured: false, model: null }, chatgpt: { configured: false, model: null } },
-    });
+    aiAccounts.mockResolvedValue({ ...STATUS, default: null, accounts: [] });
     const m = render(() => <ChatPanel noteId={() => ""} />);
     const link = await m.findByRole("link", { name: "Set up AI in the web app" });
     expect(link).toHaveAttribute("href", "https://home.example/settings/ai");

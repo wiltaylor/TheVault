@@ -53,6 +53,7 @@ const SETTINGS: [string, string, string[]][] = [
   ["/settings/scheduled", "Scheduled", ["tasks", "cron", "jobs", "scripts"]],
   ["/settings/secrets", "Secrets", ["keys", "passwords"]],
   ["/settings/tokens", "API tokens", ["access", "agents"]],
+  ["/settings/ai", "AI", ["AI accounts", "API keys", "models", "Sign in with ChatGPT", "usage"]],
 ];
 
 /** "New …" and "Go to …" for each type. The daily note type has no "New": each day has one. */
@@ -134,7 +135,7 @@ export function generalActions(opts: { phone: boolean; dark: boolean; androidApp
       id: "ai:ask",
       section: "Go to",
       label: "Ask AI",
-      keywords: ["AI chat", "Assistant", "Chat about notes", "Claude", "ChatGPT"],
+      keywords: ["AI chat", "Assistant", "Chat about notes"],
       icon: { glyph: "ai" },
       shortcut: "Ctrl+Shift+L",
       run: () => focusPanel("ai"),

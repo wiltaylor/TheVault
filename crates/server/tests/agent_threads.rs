@@ -9,7 +9,7 @@ use std::time::Duration;
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
-use testkit::{AnthropicMessage, FakeAnthropic, TestServer};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, TestAccount, TestServer};
 
 const MEMO: &str = r#"label = "Memo"
 
@@ -53,20 +53,16 @@ impl Api {
             .build()
             .unwrap();
         let api = Api { server, client };
-        api.send(
-            "PUT",
-            "/api/secrets/ai_anthropic_api_key",
-            json!({ "value": fake.api_key() }),
-        );
-        api.send(
-            "PUT",
-            "/api/secrets/ai_settings",
-            json!({ "value": json!({
-                "default_provider": "anthropic",
-                "models": { "anthropic": MODEL },
-                "endpoints": { "anthropic": fake.base_url() },
-            }).to_string() }),
-        );
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(fake).model(MODEL))
+            .secrets()
+        {
+            api.send(
+                "PUT",
+                &format!("/api/secrets/{name}"),
+                json!({ "value": value }),
+            );
+        }
         api
     }
 
@@ -238,7 +234,7 @@ fn tool_names(fake: &FakeAnthropic, request: usize) -> Vec<String> {
 }
 
 const RESEARCHER: &str = r#"label         = "Researcher"
-provider      = "anthropic"
+account       = "Anthropic"
 model         = "claude-sonnet-5"
 effort        = "high"
 system_prompt = "You research the vault."
@@ -815,7 +811,7 @@ fn a_disabled_agent_takes_no_turn() {
 }
 
 #[test]
-fn the_chat_settings_are_the_assistants_and_providers_answers_them() {
+fn the_chat_settings_are_the_assistants_and_accounts_answers_them() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent(
@@ -823,7 +819,7 @@ fn the_chat_settings_are_the_assistants_and_providers_answers_them() {
         "label = \"Assistant\"\nsystem_prompt = \"Be brief.\"\n\npermissions {\n  confirm {\n    delete = false\n  }\n\n  web {\n    read = false\n  }\n}\n",
     );
     let reader = api.token_of("reader", "read");
-    let res = api.request_as(&reader, "GET", "/api/ai/providers", None);
+    let res = api.request_as(&reader, "GET", "/api/ai/accounts", None);
     let p: Value = res.json().unwrap();
     assert_eq!(p["confirm"]["delete"], false, "{p}");
     assert_eq!(p["confirm"]["notes"], true);
@@ -1015,10 +1011,16 @@ fn each_call_reports_the_context_and_compact_summarizes_the_thread_for_the_model
 fn a_thread_that_filled_its_window_is_compacted_before_the_next_turn() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
+    // The account's own window (accounts A2), and when to compact.
+    api.send(
+        "PUT",
+        "/api/integrations/ai/accounts/acct_anthropic",
+        json!({ "context": { "window": 10_000 } }),
+    );
     api.send(
         "PUT",
         "/api/integrations/ai/settings",
-        json!({ "context": { "windows": { "anthropic": 10_000 }, "compact_at": 60 } }),
+        json!({ "context": { "compact_at": 60 } }),
     );
     let thread = api.thread("assistant");
     fake.push(AnthropicMessage::text("A long answer.").usage(5_000, 500));
@@ -1071,16 +1073,14 @@ fn a_thread_that_filled_its_window_is_compacted_before_the_next_turn() {
     let settings = api.get("/api/integrations/ai");
     assert_eq!(
         settings["context"],
-        json!({
-            "windows": {
-                "anthropic": { "window": 10_000, "set": true },
-                "openai": { "window": 400_000, "set": false },
-                "chatgpt": { "window": 272_000, "set": false },
-            },
-            "auto_compact": false,
-            "compact_at": 60,
-        })
+        json!({ "auto_compact": false, "compact_at": 60 })
     );
+    assert_eq!(settings["accounts"][0]["window"], 10_000);
+    assert_eq!(
+        settings["accounts"][0]["context"],
+        json!({ "window": 10_000 })
+    );
+    assert_eq!(settings["accounts"][0]["default_window"], 200_000);
 }
 
 #[test]
@@ -1094,17 +1094,18 @@ fn compact_needs_a_thread_and_settings_refuse_a_window_out_of_range() {
         Some(json!({ "messages": [], "compact": true })),
     );
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    for body in [
-        json!({ "context": { "windows": { "anthropic": 10 } } }),
-        json!({ "context": { "compact_at": 99 } }),
-    ] {
-        let res = api.request_as(
-            &api.token(),
-            "PUT",
+    for (path, body) in [
+        (
+            "/api/integrations/ai/accounts/acct_anthropic",
+            json!({ "context": { "window": 10 } }),
+        ),
+        (
             "/api/integrations/ai/settings",
-            Some(body),
-        );
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+            json!({ "context": { "compact_at": 99 } }),
+        ),
+    ] {
+        let res = api.request_as(&api.token(), "PUT", path, Some(body));
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{path}");
     }
 }
 
@@ -1192,7 +1193,7 @@ fn a_thread_cut_back_to_a_question_drops_it_and_what_followed_and_a_fork_copies_
 }
 
 #[test]
-fn the_chat_boxs_provider_and_model_win_over_the_agents_own() {
+fn the_chat_boxs_account_and_model_win_over_the_agents_own() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("researcher", RESEARCHER);
@@ -1213,12 +1214,14 @@ fn the_chat_boxs_provider_and_model_win_over_the_agents_own() {
     };
     // No choice, or an empty one: the agent's own model.
     ask(json!({}));
-    ask(json!({ "provider": "", "model": "" }));
-    // A model alone runs on the agent's provider.
+    ask(json!({ "account": "", "model": "" }));
+    // A model alone runs on the agent's account.
     ask(json!({ "model": "claude-haiku-5" }));
-    // Both, as the chat box sends them.
-    ask(json!({ "provider": "anthropic", "model": "claude-fable-5" }));
-    // A provider alone takes that provider's default from Settings > AI, not the agent's model.
+    // Both, as the chat box sends them, the account by id.
+    ask(json!({ "account": "acct_anthropic", "model": "claude-fable-5" }));
+    // An account alone takes that account's model, not the agent's.
+    ask(json!({ "account": "Anthropic" }));
+    // The provider name of before accounts still names the account.
     ask(json!({ "provider": "anthropic" }));
     assert_eq!(
         models(&fake),
@@ -1227,6 +1230,7 @@ fn the_chat_boxs_provider_and_model_win_over_the_agents_own() {
             "claude-sonnet-5",
             "claude-haiku-5",
             "claude-fable-5",
+            MODEL,
             MODEL
         ]
     );

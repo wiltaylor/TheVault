@@ -8,7 +8,8 @@ use std::thread;
 use std::time::Duration;
 
 use ai::{
-    ChatGptAuth, Credentials, ErrorKind, Outcome, Provider, Request, Secret, Settings, Usage, siwc,
+    Accounts, ChatGptAuth, Credentials, ErrorKind, Kind, Outcome, Request, Secret, Settings, Usage,
+    siwc,
 };
 use common::{Env, now_ms};
 use serde_json::json;
@@ -17,25 +18,39 @@ use testkit::{FakeSiwc, OpenAiReply, Reply, StandIn};
 #[test]
 fn keys_resolve_from_the_secrets() {
     let env = Env::new();
-    let cred = env.cred(Provider::Anthropic);
+    let cred = env.cred(Kind::Anthropic);
     assert_eq!(cred.secret.expose(), env.anthropic.api_key());
     assert_eq!(cred.base_url, env.anthropic.base_url());
-    let cred = env.cred(Provider::OpenAi);
+    let cred = env.cred(Kind::OpenAi);
     assert_eq!(cred.base_url, env.openai.base_url());
-    assert!(Credentials::configured(&env.state, Provider::OpenAi).unwrap());
-    assert!(!Credentials::configured(&env.state, Provider::ChatGpt).unwrap());
+    assert_eq!(cred.name, "OpenAI");
+    assert_eq!(cred.account, env.account(Kind::OpenAi).id);
+    assert!(Credentials::configured(&env.state, &env.account(Kind::OpenAi)).unwrap());
+    assert!(!Credentials::configured(&env.state, &env.account(Kind::ChatGpt)).unwrap());
 
-    // With no key, the custom API URL the fake is still resolves, keyless (ai D24); with the
+    // With no key, the account's own URL, the fake, still resolves, keyless (ai D24); with the
     // official API too, it is not configured.
-    env.state.delete_secret(ai::ANTHROPIC_API_KEY).unwrap();
-    assert!(env.cred(Provider::Anthropic).secret.is_empty());
-    let mut settings = Settings::load(&env.state).unwrap();
-    settings.endpoints.anthropic = None;
-    settings.save(&env.state).unwrap();
-    assert!(!Credentials::configured(&env.state, Provider::Anthropic).unwrap());
-    let e = Credentials::resolve(&env.state, Provider::Anthropic).unwrap_err();
+    let anthropic = env.account(Kind::Anthropic);
+    env.state
+        .delete_secret(&ai::key_secret(&anthropic.id))
+        .unwrap();
+    assert!(env.cred(Kind::Anthropic).secret.is_empty());
+    let mut all = Accounts::load(&env.state).unwrap();
+    all.update(
+        &anthropic.id,
+        ai::AccountInput {
+            base_url: Some(None),
+            ..ai::AccountInput::default()
+        },
+    )
+    .unwrap();
+    all.save(&env.state).unwrap();
+    let anthropic = env.account(Kind::Anthropic);
+    assert!(!Credentials::configured(&env.state, &anthropic).unwrap());
+    let e = Credentials::resolve(&env.state, &anthropic).unwrap_err();
     assert_eq!(e.kind, ErrorKind::NotConfigured);
-    let e = Credentials::resolve(&env.state, Provider::ChatGpt).unwrap_err();
+    assert!(e.message.contains("Anthropic"), "{e}");
+    let e = Credentials::resolve(&env.state, &env.account(Kind::ChatGpt)).unwrap_err();
     assert_eq!(e.kind, ErrorKind::NotConfigured);
 }
 
@@ -43,10 +58,10 @@ fn keys_resolve_from_the_secrets() {
 fn a_fresh_plan_token_is_used_as_it_is() {
     let env = Env::new();
     env.sign_in("fresh-access", 60 * 60 * 1000);
-    let cred = env.cred(Provider::ChatGpt);
+    let cred = env.cred(Kind::ChatGpt);
     assert_eq!(cred.secret.expose(), "fresh-access");
     assert_eq!(cred.base_url, env.openai.base_url());
-    assert_eq!(cred.account.as_deref(), Some("me@example.com"));
+    assert_eq!(cred.signed_in_as.as_deref(), Some("me@example.com"));
     assert!(env.siwc.requests().is_empty());
 }
 
@@ -65,10 +80,10 @@ fn a_token_near_expiry_is_refreshed_once_for_eight_threads() {
         .map(|_| {
             let state = env.state.clone();
             let barrier = barrier.clone();
+            let account = env.account(Kind::ChatGpt);
             thread::spawn(move || {
                 barrier.wait();
-                Credentials::resolve(&state, Provider::ChatGpt)
-                    .map(|c| c.secret.expose().to_owned())
+                Credentials::resolve(&state, &account).map(|c| c.secret.expose().to_owned())
             })
         })
         .collect();
@@ -113,7 +128,7 @@ fn a_token_near_expiry_is_refreshed_once_for_eight_threads() {
     );
 
     // The new token is fresh, so the next call refreshes nothing.
-    Credentials::resolve(&env.state, Provider::ChatGpt).unwrap();
+    Credentials::resolve(&env.state, &env.account(Kind::ChatGpt)).unwrap();
     assert_eq!(env.siwc.refresh_count(), 1);
 }
 
@@ -121,10 +136,11 @@ fn a_token_near_expiry_is_refreshed_once_for_eight_threads() {
 fn no_refresh_before_earliest_refresh() {
     let env = Env::new();
     env.sign_in("old-access", 2 * 60 * 1000);
-    let mut auth = ChatGptAuth::load(&env.state).unwrap();
+    let id = env.account(Kind::ChatGpt).id;
+    let mut auth = ChatGptAuth::load(&env.state, &id).unwrap();
     auth.earliest_refresh_ms = Some(now_ms() + 60 * 1000);
-    auth.save(&env.state).unwrap();
-    assert_eq!(env.cred(Provider::ChatGpt).secret.expose(), "old-access");
+    auth.save(&env.state, &id).unwrap();
+    assert_eq!(env.cred(Kind::ChatGpt).secret.expose(), "old-access");
     assert_eq!(env.siwc.refresh_count(), 0);
 }
 
@@ -133,7 +149,7 @@ fn invalid_grant_signs_out_and_notifies_once() {
     let env = Env::new();
     env.sign_in("old-access", 60 * 1000);
     env.siwc.set_invalid_grant(true);
-    let e = Credentials::resolve(&env.state, Provider::ChatGpt).unwrap_err();
+    let e = Credentials::resolve(&env.state, &env.account(Kind::ChatGpt)).unwrap_err();
     assert_eq!(e.kind, ErrorKind::Auth, "{e}");
     assert!(e.message.contains("Settings > AI"));
 
@@ -147,12 +163,17 @@ fn invalid_grant_signs_out_and_notifies_once() {
         assert!(stored.get(gone).is_none(), "{gone} kept: {stored}");
     }
 
-    let e = Credentials::resolve(&env.state, Provider::ChatGpt).unwrap_err();
+    let e = Credentials::resolve(&env.state, &env.account(Kind::ChatGpt)).unwrap_err();
     assert_eq!(e.kind, ErrorKind::NotConfigured);
     let page = env.state.notifications(false, 50, None).unwrap();
     assert_eq!(page.items.len(), 1, "one notification");
     let n = &page.items[0];
     assert_eq!(n.title, ai::EXPIRED_TITLE);
+    assert!(
+        n.body.as_deref().is_some_and(|b| b.contains("ChatGPT")),
+        "{:?}",
+        n.body
+    );
     assert_eq!(n.url.as_deref(), Some(ai::SETTINGS_URL));
     assert_eq!(n.source, "system");
 }
@@ -166,7 +187,7 @@ fn a_failed_refresh_keeps_a_token_that_still_works() {
     let mut settings = Settings::load(&env.state).unwrap();
     settings.endpoints.chatgpt_auth = Some(down.url(""));
     settings.save(&env.state).unwrap();
-    assert_eq!(env.cred(Provider::ChatGpt).secret.expose(), "still-good");
+    assert_eq!(env.cred(Kind::ChatGpt).secret.expose(), "still-good");
     assert_eq!(down.requests().len(), 1, "it tried");
     assert_eq!(env.chatgpt_secret()["access_token"], json!("still-good"));
 }
@@ -382,48 +403,65 @@ fn a_grant_without_the_plan_scope_is_noticed() {
 }
 
 #[test]
-fn settings_round_trip_and_pick_defaults() {
+fn settings_round_trip_and_keep_what_they_do_not_know() {
     let env = Env::new();
     let mut s = Settings::load(&env.state).unwrap();
-    assert_eq!(
-        s.pick(None, None).unwrap_err().kind,
-        ErrorKind::NotConfigured
-    );
-    s.default_provider = Some(Provider::Anthropic);
-    s.set_model(Provider::Anthropic, Some("claude-opus-5".into()));
     s.other.insert("future".into(), json!(1));
+    s.context.compact_at = Some(70);
     s.save(&env.state).unwrap();
     let back = Settings::load(&env.state).unwrap();
     assert_eq!(back, s);
-    assert_eq!(
-        back.pick(None, None).unwrap(),
-        (Provider::Anthropic, "claude-opus-5".into())
-    );
-    assert_eq!(
-        back.pick(Some(Provider::OpenAi), Some("gpt-6")).unwrap(),
-        (Provider::OpenAi, "gpt-6".into())
-    );
-    assert_eq!(
-        back.pick(Some(Provider::ChatGpt), None).unwrap_err().kind,
-        ErrorKind::NotConfigured
-    );
     let raw: serde_json::Value =
         serde_json::from_str(&env.state.get_secret(ai::SETTINGS).unwrap().unwrap()).unwrap();
-    assert_eq!(raw["default_provider"], json!("anthropic"));
-    assert_eq!(raw["models"]["anthropic"], json!("claude-opus-5"));
-    assert_eq!(
-        raw["endpoints"]["anthropic"],
-        json!(env.anthropic.base_url())
-    );
     assert_eq!(raw["future"], json!(1));
+    assert_eq!(raw["endpoints"]["chatgpt"], json!(env.openai.base_url()));
     assert_eq!(
-        Settings::default().endpoints.api_base(Provider::ChatGpt),
+        Settings::default().endpoints.chatgpt_base(),
         ai::OPENAI_BASE
     );
     assert_eq!(
         Settings::default().endpoints.chatgpt_auth_base(),
         ai::CHATGPT_AUTH_BASE
     );
+}
+
+#[test]
+fn accounts_round_trip_and_keep_what_they_do_not_know() {
+    let env = Env::new();
+    let mut all = Accounts::load(&env.state).unwrap();
+    assert_eq!(all.accounts.len(), 3);
+    assert_eq!(all.default.as_deref(), Some(all.accounts[0].id.as_str()));
+    all.other.insert("future".into(), json!(true));
+    all.accounts[1].other.insert("note".into(), json!("x"));
+    all.save(&env.state).unwrap();
+    assert_eq!(Accounts::load(&env.state).unwrap(), all);
+    let raw: serde_json::Value =
+        serde_json::from_str(&env.state.get_secret(ai::ACCOUNTS).unwrap().unwrap()).unwrap();
+    assert_eq!(raw["accounts"][0]["name"], json!("Anthropic"));
+    assert_eq!(raw["accounts"][0]["kind"], json!("anthropic"));
+    assert_eq!(raw["accounts"][1]["note"], json!("x"));
+    assert_eq!(raw["future"], json!(true));
+}
+
+#[test]
+fn two_chatgpt_accounts_keep_their_own_sign_ins() {
+    let env = Env::new();
+    env.sign_in("first-access", 60 * 60 * 1000);
+    let second = common::add_account(&env.state, "Work plan", Kind::ChatGpt, None, None);
+    assert!(!Credentials::configured(&env.state, &second).unwrap());
+    let auth = json!({
+        "client_id": "c", "access_token": "second-access", "refresh_token": "r",
+        "expires_ms": now_ms() + 3_600_000, "account": "work@example.com",
+    });
+    env.state
+        .set_secret(&ai::chatgpt_secret(&second.id), &auth.to_string())
+        .unwrap();
+    let a = env.cred(Kind::ChatGpt);
+    let b = Credentials::resolve(&env.state, &second).unwrap();
+    assert_eq!(a.secret.expose(), "first-access");
+    assert_eq!(b.secret.expose(), "second-access");
+    assert_eq!(b.name, "Work plan");
+    assert_eq!(b.signed_in_as.as_deref(), Some("work@example.com"));
 }
 
 #[test]
@@ -441,10 +479,13 @@ fn no_key_or_token_shows_in_debug_errors_or_trail_lines() {
             assert!(!text.contains(s.as_str()), "{s} leaked in {text}");
         }
     };
-    for p in Provider::ALL {
+    for p in [Kind::Anthropic, Kind::OpenAi, Kind::ChatGpt] {
         leaks(&format!("{:?}", env.cred(p)));
     }
-    leaks(&format!("{:?}", ChatGptAuth::load(&env.state).unwrap()));
+    leaks(&format!(
+        "{:?}",
+        ChatGptAuth::load(&env.state, &env.account(Kind::ChatGpt).id).unwrap()
+    ));
     leaks(&format!(
         "{:?} {}",
         Secret::new(env.openai.api_key()),
@@ -472,26 +513,25 @@ fn no_key_or_token_shows_in_debug_errors_or_trail_lines() {
         "invalid_api_key",
         &format!("Incorrect API key provided: {key}. Also sk-test-openai-01***789."),
     ));
-    let req = Request::new(Provider::OpenAi, "gpt-6", "x");
+    let req = Request::new("gpt-6", "x");
     let began = std::time::Instant::now();
-    let result = ai::complete_blocking(
-        &ai::blocking_client(),
-        &env.cred(Provider::OpenAi),
-        &req,
-        None,
-    );
+    let cred = env.cred(Kind::OpenAi);
+    let result = ai::complete_blocking(&ai::blocking_client(), &cred, &req, None);
     let e = result.as_ref().unwrap_err();
     assert_eq!(e.kind, ErrorKind::Auth);
     leaks(&format!("{e} {e:?}"));
     assert!(!e.message.contains("sk-test-openai-01"), "{}", e.message);
-    let line = ai::trail_for(Provider::OpenAi, &req.model, &result, began.elapsed(), None);
+    let line = ai::trail_for(&cred, &req.model, &result, began.elapsed());
     leaks(&line);
     assert!(
-        line.starts_with("ai: provider=openai model=gpt-6 in=0 out=0 outcome=error:auth ms="),
+        line.starts_with(
+            "ai: account=OpenAI kind=openai model=gpt-6 in=0 out=0 outcome=error:auth ms="
+        ),
         "{line}"
     );
     let line = ai::trail_line(
-        Provider::ChatGpt,
+        "ChatGPT",
+        Kind::ChatGpt,
         "gpt-6.1-sol",
         Usage {
             input: 1,
@@ -503,6 +543,62 @@ fn no_key_or_token_shows_in_debug_errors_or_trail_lines() {
     );
     assert_eq!(
         line,
-        "ai: provider=chatgpt model=gpt-6.1-sol in=1 out=2 outcome=ok ms=3"
+        "ai: account=ChatGPT kind=chatgpt model=gpt-6.1-sol in=1 out=2 outcome=ok ms=3"
     );
+}
+
+#[test]
+fn changes_to_the_accounts_at_once_are_all_kept() {
+    let env = Env::new();
+    let handles: Vec<_> = (0..16)
+        .map(|n| {
+            let state = env.state.clone();
+            thread::spawn(move || {
+                Accounts::change(
+                    &state,
+                    |e| e,
+                    |all| {
+                        let id = all
+                            .add(ai::AccountInput {
+                                name: Some(format!("Account {n}")),
+                                kind: Some(Kind::OpenAi),
+                                ..ai::AccountInput::default()
+                            })?
+                            .id
+                            .clone();
+                        all.update(
+                            &id,
+                            ai::AccountInput {
+                                model: Some(Some(format!("model-{n}"))),
+                                ..ai::AccountInput::default()
+                            },
+                        )?;
+                        Ok(id)
+                    },
+                )
+                .unwrap()
+            })
+        })
+        .collect();
+    let ids: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let all = Accounts::load(&env.state).unwrap();
+    assert_eq!(all.accounts.len(), 3 + 16);
+    for (n, id) in ids.iter().enumerate() {
+        assert_eq!(
+            all.get(id).unwrap().model(),
+            Some(format!("model-{n}").as_str())
+        );
+    }
+    // A change that fails saves nothing.
+    let before = Accounts::load(&env.state).unwrap();
+    let e = Accounts::change(
+        &env.state,
+        |e| e,
+        |all| {
+            all.remove(&before.accounts[0].id)?;
+            Err::<(), _>(ai::AiError::invalid("no"))
+        },
+    );
+    assert!(e.is_err());
+    assert_eq!(Accounts::load(&env.state).unwrap(), before);
 }

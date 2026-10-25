@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use testkit::fake_google::{
     DEFAULT_ACCOUNT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN,
 };
-use testkit::{AnthropicMessage, FakeAnthropic, FakeGoogle, TestServer};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, FakeGoogle, TestAccount, TestServer};
 
 /// Monday 2026-01-05, half past midnight UTC.
 const START: &str = "2026-01-05T00:30:00Z";
@@ -185,16 +185,12 @@ fn an_agent_run_that_drafts_items_leaves_one_notification_counting_them() {
         std::fs::create_dir_all(vault.join("types")).unwrap();
         std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
     });
-    api.put_secret("ai_anthropic_api_key", fake.api_key());
-    api.put_secret(
-        "ai_settings",
-        &json!({
-            "default_provider": "anthropic",
-            "models": { "anthropic": "claude-opus-5" },
-            "endpoints": { "anthropic": fake.base_url() },
-        })
-        .to_string(),
-    );
+    for (name, value) in AiSeed::new()
+        .account(TestAccount::anthropic(&fake).model("claude-opus-5"))
+        .secrets()
+    {
+        api.put_secret(&name, &value);
+    }
     api.put_text("/api/agents/clerk", CLERK.to_owned());
 
     // One run drafting two items in one message and a third in the next.
@@ -259,16 +255,12 @@ fn email_input(subject: &str) -> Value {
 fn a_chat_turn_that_drafts_leaves_one_notification_for_the_turn() {
     let fake = FakeAnthropic::start();
     let api = Api::start(|_| {});
-    api.put_secret("ai_anthropic_api_key", fake.api_key());
-    api.put_secret(
-        "ai_settings",
-        &json!({
-            "default_provider": "anthropic",
-            "models": { "anthropic": "claude-opus-5" },
-            "endpoints": { "anthropic": fake.base_url() },
-        })
-        .to_string(),
-    );
+    for (name, value) in AiSeed::new()
+        .account(TestAccount::anthropic(&fake).model("claude-opus-5"))
+        .secrets()
+    {
+        api.put_secret(&name, &value);
+    }
     let chat = || {
         let res = api
             .client

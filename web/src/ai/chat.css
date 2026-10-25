@@ -56,6 +56,14 @@
   max-width: 11rem;
 }
 
+/* How much of the chosen account's plan is used (accounts A13). */
+.ai-used {
+  align-self: center;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .ai-empty {
   margin: 0;
   font-size: 0.9em;

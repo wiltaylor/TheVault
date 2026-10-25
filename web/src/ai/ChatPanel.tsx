@@ -11,7 +11,7 @@
 
 import { For, type JSX, Match, Show, Switch, createEffect, createRoot, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { agentLabel, agents } from "../agents";
-import { type AgentThreadSummary, type AiModel, type AiProvider, type AiProviders, type Json, type NoteDoc, api, assetUrl } from "../api";
+import { type AgentThreadSummary, type AiAccountChoice, type AiAccounts, type AiModel, type Json, type NoteDoc, api, assetUrl } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { formatValue } from "../components/Render";
 import { Spinner } from "../components/SyncStatus";
@@ -20,6 +20,7 @@ import { navigatePane, openBeside, workspace } from "../workspace/store";
 import { paneAt, wantsNewTab } from "../workspace/events";
 import { AgentProposalCard } from "./AgentProposalCard";
 import { MemoryProposalCard, memoryHref } from "./MemoryProposalCard";
+import { accountChoiceLabel, accountFor, usedPercent } from "./accounts";
 import { blockLines, lineDiff } from "./diff";
 import { DownloadCard } from "./DownloadCard";
 import { Markdown } from "./markdown";
@@ -34,6 +35,7 @@ import {
   ChatContext,
   type Attachment,
   type ChatSession,
+  type ChatState,
   type ContextUse,
   attachmentsSynced,
   type DraftRef,
@@ -49,7 +51,6 @@ import {
   ownsModel,
   panelSession,
   pending,
-  providerLabel,
   setAgent,
   useChatSession,
 } from "./store";
@@ -932,12 +933,7 @@ let compactAtAsked = false;
 function ContextMeter(props: { use: ContextUse }) {
   if (!compactAtAsked) {
     compactAtAsked = true;
-    void api
-      .aiProviders()
-      .then((s) => {
-        if (s.context?.compact_at) setCompactAt(s.context.compact_at);
-      })
-      .catch(() => undefined);
+    void loadAccounts().catch(() => undefined);
   }
   const pct = () => Math.min(100, Math.round((props.use.used / Math.max(1, props.use.window)) * 100));
   const level = () => (pct() >= 95 ? "full" : pct() >= compactAt() ? "high" : "ok");
@@ -987,8 +983,18 @@ function ActivityLine() {
   );
 }
 
-/** The providers in the order Settings > AI shows them. */
-const PROVIDERS: AiProvider[] = ["anthropic", "openai", "chatgpt"];
+/**
+ * The accounts Settings > AI has, from `GET /api/ai/accounts` in every client (accounts A7), as the
+ * last picker read them: each picker reads them afresh when it opens.
+ */
+const [accountList, setAccountList] = createSignal<AiAccounts | null>(null);
+
+async function loadAccounts(): Promise<AiAccounts> {
+  const got = await api.aiAccounts();
+  setAccountList(got);
+  if (got.context?.compact_at) setCompactAt(got.context.compact_at);
+  return got;
+}
 
 /** Where Settings > AI is: the home server's page in an app, this server's in the web app. */
 function settingsUrl(): string {
@@ -996,19 +1002,19 @@ function settingsUrl(): string {
   return server ? `${server.replace(/\/+$/, "")}/settings/ai` : "/settings/ai";
 }
 
-/** What the picker says when Settings > AI has no provider set up. */
-function NoProvider() {
+/** What the picker says when Settings > AI has no account set up. */
+function NoAccount() {
   return (
     <Show
       when={inApp()}
       fallback={
         <p class="muted">
-          No AI provider is set up. Add one in <a href="/settings/ai">Settings &gt; AI</a>.
+          No AI account is set up. Add one in <a href="/settings/ai">Settings &gt; AI</a>.
         </p>
       }
     >
       <p class="muted">
-        No AI provider is set up.{" "}
+        No AI account is set up.{" "}
         <a href={settingsUrl()} target="_blank" rel="noopener">
           Set up AI in the web app
         </a>
@@ -1018,41 +1024,57 @@ function NoProvider() {
   );
 }
 
+/** How much of the chosen account's plan is used, beside the picker, when it has a reading (accounts A13). */
+function UsedBadge(props: { account: AiAccountChoice | null | undefined }) {
+  const used = () => usedPercent(props.account?.usage);
+  return (
+    <Show when={used() !== null}>
+      <span
+        class="ai-used"
+        data-testid="account-used"
+        title={props.account!.usage!.windows.map((w) => `${w.label}: ${Math.round(w.used_percent)}% used`).join("\n")}
+      >
+        {used()}% used
+      </span>
+    </Show>
+  );
+}
+
 /**
- * The provider and model picker: the providers Settings > AI has set up, from
- * `GET /api/ai/providers` in every client (ai D23), and each one's live model list (ai D6),
- * starting from the defaults chosen there.
+ * The account and model picker: the accounts Settings > AI has set up (accounts A7), and each
+ * one's live model list (ai D6), starting from the default account and its default model.
  */
 function Picker(props: { session: ChatSession }) {
-  const { chat, setProvider, setModel } = props.session;
-  const [status, setStatus] = createSignal<AiProviders | null>(null);
+  const { chat, setAccount, setModel } = props.session;
   const [models, setModels] = createSignal<AiModel[]>([]);
   const [error, setError] = createSignal<string | null>(null);
-  const configured = () => PROVIDERS.filter((p) => status()?.providers[p]?.configured);
+  const [loaded, setLoaded] = createSignal(false);
+  const configured = () => (accountList()?.accounts ?? []).filter((a) => a.configured);
+  const byId = (id: string | null) => accountList()?.accounts.find((a) => a.id === id);
   // A picker gone, its agent changed to one that names its own model, chooses nothing more.
   let gone = false;
   onCleanup(() => (gone = true));
-  async function loadModels(p: AiProvider) {
+  async function loadModels(id: string) {
     if (gone) return;
-    setProvider(p, chat.provider === p ? chat.model : (status()?.providers[p]?.model ?? null));
+    setAccount(id, chat.account === id ? chat.model : (byId(id)?.model ?? null));
     try {
-      const got = await api.aiModels(p);
-      if (gone || chat.provider !== p) return;
+      const got = await api.aiModels(id);
+      if (gone || chat.account !== id) return;
       setModels(got.models);
       setError(null);
       if (!chat.model || !got.models.some((m) => m.id === chat.model)) setModel(got.model);
     } catch (e) {
-      if (chat.provider !== p) return;
+      if (chat.account !== id) return;
       setModels([]);
       setError(e instanceof Error ? e.message : String(e));
     }
   }
   onMount(async () => {
     try {
-      const s = await api.aiProviders();
-      setStatus(s);
-      const ready = configured();
-      const pick = [chat.provider, s.default_provider].find((p): p is AiProvider => !!p && ready.includes(p as AiProvider)) ?? ready[0];
+      const s = await loadAccounts();
+      setLoaded(true);
+      const ready = configured().map((a) => a.id);
+      const pick = [chat.account, s.default].find((id): id is string => !!id && ready.includes(id)) ?? ready[0];
       if (pick) await loadModels(pick);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1060,19 +1082,20 @@ function Picker(props: { session: ChatSession }) {
   });
   return (
     <div class="ai-picker">
-      <Show when={status() && configured().length === 0}>
-        <NoProvider />
+      <Show when={loaded() && configured().length === 0}>
+        <NoAccount />
       </Show>
-      <Show when={configured().length > 0}>
-        <select aria-label="Provider" value={chat.provider ?? ""} onChange={(e) => void loadModels(e.currentTarget.value as AiProvider)}>
-          <For each={PROVIDERS}>
-            {(p) => (
-              <option value={p} disabled={!configured().includes(p)}>
-                {providerLabel(p)}
+      <Show when={loaded() && configured().length > 0}>
+        <select aria-label="Account" value={chat.account ?? ""} onChange={(e) => void loadModels(e.currentTarget.value)}>
+          <For each={accountList()?.accounts ?? []}>
+            {(a) => (
+              <option value={a.id} disabled={!a.configured}>
+                {accountChoiceLabel(a)}
               </option>
             )}
           </For>
         </select>
+        <UsedBadge account={byId(chat.account)} />
         <select aria-label="Model" value={chat.model ?? ""} onChange={(e) => setModel(e.currentTarget.value || null)}>
           <Show when={!chat.model}>
             <option value="">Choose a model</option>
@@ -1108,44 +1131,46 @@ function AgentPicker() {
 }
 
 /**
- * The provider and model picker of an agent that names its own: the agent's choice first, which
+ * The account and model picker of an agent that names its own: the agent's choice first, which
  * sends none, so the server runs the agent's own; another picked overrides it for the
  * conversation's next turns (agents G1). Nothing is chosen for the user, so another agent's or the
  * Assistant's choice never carries over.
  */
 function OwnModelPicker(props: { session: ChatSession; agent: string }) {
-  const { chat, setProvider, setModel } = props.session;
-  const [status, setStatus] = createSignal<AiProviders | null>(null);
-  const [list, setList] = createSignal<{ provider: AiProvider; models: AiModel[]; model: string | null } | null>(null);
+  const { chat, setAccount, setModel } = props.session;
+  const [list, setList] = createSignal<{ account: string; models: AiModel[]; model: string | null } | null>(null);
   const [error, setError] = createSignal<string | null>(null);
-  const configured = () => PROVIDERS.filter((p) => status()?.providers[p]?.configured);
+  const [loaded, setLoaded] = createSignal(false);
+  const configured = () => (accountList()?.accounts ?? []).filter((a) => a.configured);
   const agent = () => agents().find((a) => a.name === props.agent);
-  /** The provider the agent runs on: its own, or Settings > AI's default. */
-  const ownProvider = () => (agent()?.provider ?? status()?.default_provider ?? null) as AiProvider | null;
-  /** The provider whose models are listed: the one picked, or the agent's. */
-  const shown = () => (chat.provider ?? ownProvider()) as AiProvider | null;
-  const models = () => (list()?.provider === shown() ? list()!.models : []);
-  const defaultOf = (p: AiProvider | null) => (list()?.provider === p ? list()!.model : null) ?? (p ? status()?.providers[p]?.model : null) ?? null;
-  const ownModel = () => agent()?.model ?? defaultOf(ownProvider());
+  /** The account the agent runs on: its own, else Settings > AI's default (accounts A5). */
+  const own = () => accountFor(accountList(), agent()?.account);
+  /** The account whose models are listed: the one picked, or the agent's. */
+  const shown = () => chat.account ?? own()?.id ?? null;
+  const byId = (id: string | null) => accountList()?.accounts.find((a) => a.id === id);
+  const models = () => (list()?.account === shown() ? list()!.models : []);
+  const defaultOf = (id: string | null) => (list()?.account === id ? list()!.model : null) ?? byId(id)?.model ?? null;
+  const ownModel = () => agent()?.model ?? defaultOf(own()?.id ?? null);
   /** The agent's own model is its first option, so the list leaves it out. */
-  const listed = () => models().filter((m) => chat.provider || m.id !== agent()?.model);
+  const listed = () => models().filter((m) => chat.account || m.id !== agent()?.model);
   onMount(async () => {
     try {
-      setStatus(await api.aiProviders());
+      await loadAccounts();
+      setLoaded(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   });
   createEffect(
-    on([shown, status], async ([p]) => {
-      if (!p || !status()?.providers[p]?.configured) return;
+    on([shown, accountList], async ([id]) => {
+      if (!id || !byId(id)?.configured) return;
       try {
-        const got = await api.aiModels(p);
-        if (shown() !== p) return;
-        setList({ provider: p, models: got.models, model: got.model });
+        const got = await api.aiModels(id);
+        if (shown() !== id) return;
+        setList({ account: id, models: got.models, model: got.model });
         setError(null);
       } catch (e) {
-        if (shown() !== p) return;
+        if (shown() !== id) return;
         setList(null);
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -1153,26 +1178,24 @@ function OwnModelPicker(props: { session: ChatSession; agent: string }) {
   );
   return (
     <div class="ai-picker">
-      <Show when={status() && configured().length === 0}>
-        <NoProvider />
+      <Show when={loaded() && configured().length === 0}>
+        <NoAccount />
       </Show>
-      <Show when={configured().length > 0}>
-        <select aria-label="Provider" value={chat.provider ?? ""} onChange={(e) => setProvider(e.currentTarget.value || null, null)}>
-          <option value="">Agent's provider ({ownProvider() ? providerLabel(ownProvider()) : "Settings > AI"})</option>
-          <For each={PROVIDERS.filter((p) => p !== ownProvider())}>
-            {(p) => (
-              <option value={p} disabled={!configured().includes(p)}>
-                {providerLabel(p)}
+      <Show when={loaded() && configured().length > 0}>
+        <select aria-label="Account" value={chat.account ?? ""} onChange={(e) => setAccount(e.currentTarget.value || null, null)}>
+          <option value="">Agent's account ({own() ? accountChoiceLabel(own()!) : "Settings > AI"})</option>
+          <For each={(accountList()?.accounts ?? []).filter((a) => a.id !== own()?.id)}>
+            {(a) => (
+              <option value={a.id} disabled={!a.configured}>
+                {accountChoiceLabel(a)}
               </option>
             )}
           </For>
         </select>
+        <UsedBadge account={byId(shown())} />
         <select aria-label="Model" value={chat.model ?? ""} onChange={(e) => setModel(e.currentTarget.value || null)}>
-          <Show
-            when={chat.provider}
-            fallback={<option value="">Agent's model ({ownModel() ?? "provider default"})</option>}
-          >
-            <option value="">Provider default{defaultOf(shown()) ? ` (${defaultOf(shown())})` : ""}</option>
+          <Show when={chat.account} fallback={<option value="">Agent's model ({ownModel() ?? "account default"})</option>}>
+            <option value="">Account default{defaultOf(shown()) ? ` (${defaultOf(shown())})` : ""}</option>
           </Show>
           <Show when={chat.model && !listed().some((m) => m.id === chat.model)}>
             <option value={chat.model!}>{chat.model}</option>
@@ -1189,6 +1212,13 @@ function OwnModelPicker(props: { session: ChatSession; agent: string }) {
   );
 }
 
+/** The name of the account the conversation's next turn goes to, as the disclosure line names it. */
+function accountShown(chat: ChatState): string {
+  const list = accountList();
+  const picked = list?.accounts.find((a) => a.id === chat.account);
+  const agent = agents().find((a) => a.name === chat.agent);
+  return (picked ?? accountFor(list, agent?.account))?.name ?? "your AI account";
+}
 
 /** A file in the box: uploading, stored as an asset, or failed. */
 interface Upload {
@@ -1874,7 +1904,7 @@ export function ChatPanel(props: { noteId: () => string }) {
         noteId={props.noteId}
         empty={
           <p class="muted ai-empty">
-            Ask about your notes. Answers come from {providerLabel(chat.provider)}; the notes it reads are sent there. Edits are proposals you apply, unless the agent's permissions let them go ahead without asking.
+            Ask about your notes. Answers come from {accountShown(chat)}; the notes it reads are sent there. Edits are proposals you apply, unless the agent's permissions let them go ahead without asking.
           </p>
         }
       />

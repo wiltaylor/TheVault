@@ -3,12 +3,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ai::{Endpoints, Models, Provider, Settings};
 use script::{Ai, Error, Host, Job, Kind, Limits, Outcome, Vault};
 use serde_json::{Value, json};
 use state::{SecretKey, State};
 use tempfile::TempDir;
-use testkit::{AnthropicMessage, AnthropicReply, FakeAnthropic, FakeOpenAi, OpenAiResponse, Reply};
+use testkit::{
+    AiSeed, AnthropicMessage, AnthropicReply, FakeAnthropic, FakeOpenAi, OpenAiResponse, Reply,
+    TestAccount,
+};
 use writer::Writer;
 
 struct Fixture {
@@ -19,35 +21,17 @@ struct Fixture {
     openai: FakeOpenAi,
 }
 
-/// A vault whose `ai_settings` point at the fakes, with Anthropic's `claude-test` the default
-/// and both API keys stored.
+/// A vault with two accounts at the fakes, `Anthropic` with `claude-test`, the default, and
+/// `OpenAI` with `gpt-test`, each with its key, and the provider names of before accounts
+/// mapped to them.
 fn fixture() -> Fixture {
     let f = bare();
-    Settings {
-        default_provider: Some(Provider::Anthropic),
-        models: Models {
-            anthropic: Some("claude-test".into()),
-            openai: Some("gpt-test".into()),
-            chatgpt: None,
-        },
-        endpoints: Endpoints {
-            anthropic: Some(f.anthropic.base_url()),
-            openai: Some(f.openai.base_url()),
-            chatgpt: None,
-            chatgpt_auth: None,
-            openai_api: None,
-        },
-        ..Settings::default()
-    }
-    .save(f.writer.state())
-    .unwrap();
-    let state = f.writer.state();
-    state
-        .set_secret(ai::ANTHROPIC_API_KEY, f.anthropic.api_key())
-        .unwrap();
-    state
-        .set_secret(ai::OPENAI_API_KEY, f.openai.api_key())
-        .unwrap();
+    AiSeed::new()
+        .account(TestAccount::anthropic(&f.anthropic).model("claude-test"))
+        .account(TestAccount::openai(&f.openai).model("gpt-test"))
+        .legacy("anthropic", "Anthropic")
+        .legacy("openai", "OpenAI")
+        .store(f.writer.state());
     f
 }
 
@@ -104,7 +88,7 @@ fn ok(out: &Outcome) -> Value {
 fn trail(out: &Outcome) -> Vec<String> {
     let lines: Vec<String> = out.log.lines().map(str::to_owned).collect();
     for l in &lines {
-        assert!(l.starts_with("ai: provider="), "not a trail line: {l}");
+        assert!(l.starts_with("ai: account="), "not a trail line: {l}");
     }
     lines
 }
@@ -126,7 +110,8 @@ fn complete_returns_the_text_and_token_counts_and_leaves_one_trail_line() {
     );
     let reply = ok(&out);
     assert_eq!(reply["text"], json!("The roof needs new tiles."));
-    assert_eq!(reply["provider"], json!("anthropic"));
+    assert_eq!(reply["account"], json!("Anthropic"));
+    assert_eq!(reply["kind"], json!("anthropic"));
     assert_eq!(reply["model"], json!("claude-test"));
     assert_eq!(reply["input_tokens"], json!(42));
     assert_eq!(reply["output_tokens"], json!(7));
@@ -136,7 +121,9 @@ fn complete_returns_the_text_and_token_counts_and_leaves_one_trail_line() {
     let lines = trail(&out);
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(
-        lines[0].starts_with("ai: provider=anthropic model=claude-test in=42 out=7 outcome=ok ms="),
+        lines[0].starts_with(
+            "ai: account=Anthropic kind=anthropic model=claude-test in=42 out=7 outcome=ok ms="
+        ),
         "{}",
         lines[0]
     );
@@ -257,9 +244,10 @@ fn run() -> Result[List[Reply], AiError] {
 "#,
     );
     let replies = ok(&out);
-    assert_eq!(replies[0]["provider"], json!("openai"));
+    assert_eq!(replies[0]["account"], json!("OpenAI"));
+    assert_eq!(replies[0]["kind"], json!("openai"));
     assert_eq!(replies[0]["model"], json!("gpt-other"));
-    assert_eq!(replies[1]["provider"], json!("anthropic"));
+    assert_eq!(replies[1]["account"], json!("Anthropic"));
     assert_eq!(replies[1]["model"], json!("claude-other"));
 
     let o = f.openai.response_requests()[0].json();
@@ -274,40 +262,28 @@ fn run() -> Result[List[Reply], AiError] {
 
     let lines = trail(&out);
     assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(lines[0].starts_with("ai: provider=openai model=gpt-other in=10 out=3 outcome=ok"));
-    assert!(lines[1].starts_with("ai: provider=anthropic model=claude-other "));
+    assert!(
+        lines[0]
+            .starts_with("ai: account=OpenAI kind=openai model=gpt-other in=10 out=3 outcome=ok")
+    );
+    assert!(lines[1].starts_with("ai: account=Anthropic kind=anthropic model=claude-other "));
 }
 
 #[test]
 fn complete_works_over_chat_completions() {
     let f = bare();
     let zai = FakeOpenAi::builder().chat_completions().start();
-    Settings {
-        default_provider: Some(Provider::OpenAi),
-        models: Models {
-            openai: Some("glm-5.3-flash".into()),
-            ..Models::default()
-        },
-        endpoints: Endpoints {
-            openai: Some(zai.base_url()),
-            openai_api: Some(ai::OpenAiApi::ChatCompletions),
-            ..Endpoints::default()
-        },
-        ..Settings::default()
-    }
-    .save(f.writer.state())
-    .unwrap();
-    f.writer
-        .state()
-        .set_secret(ai::OPENAI_API_KEY, zai.api_key())
-        .unwrap();
+    AiSeed::new()
+        .account(TestAccount::openai_compatible(&zai).model("glm-5.3-flash"))
+        .store(f.writer.state());
     zai.push(OpenAiResponse::text("The roof needs new tiles.").usage(21, 6));
     let out = f.task(
         "use ai\nfn run() -> Result[Reply, AiError] {\n    ai::complete(\"Summarise: the roof\", #{ \"system\": \"Be brief.\" })\n}\n",
     );
     let reply = ok(&out);
     assert_eq!(reply["text"], json!("The roof needs new tiles."));
-    assert_eq!(reply["provider"], json!("openai"));
+    assert_eq!(reply["account"], json!("Z.ai"));
+    assert_eq!(reply["kind"], json!("openai_compatible"));
     assert_eq!(reply["model"], json!("glm-5.3-flash"));
     let sent = zai.requests();
     assert_eq!(sent.len(), 1);
@@ -321,7 +297,9 @@ fn complete_works_over_chat_completions() {
     let lines = trail(&out);
     assert_eq!(lines.len(), 1);
     assert!(
-        lines[0].starts_with("ai: provider=openai model=glm-5.3-flash in=21 out=6 outcome=ok"),
+        lines[0].starts_with(
+            "ai: account=Z.ai kind=openai_compatible model=glm-5.3-flash in=21 out=6 outcome=ok"
+        ),
         "{lines:?}"
     );
 }
@@ -360,14 +338,14 @@ fn a_refusal_is_an_err_with_its_kind_and_category() {
     let e = ok(&out);
     assert_eq!(e["kind"], json!("refusal"));
     assert_eq!(e["category"], json!("cyber"));
-    assert_eq!(e["provider"], json!("anthropic"));
+    assert_eq!(e["account"], json!("Anthropic"));
     assert_eq!(e["model"], json!("claude-test"));
     assert!(e["message"].as_str().unwrap().contains("refused"), "{e}");
     let lines = trail(&out);
     assert_eq!(lines.len(), 1);
     assert!(
         lines[0].starts_with(
-            "ai: provider=anthropic model=claude-test in=20 out=0 outcome=refused ms="
+            "ai: account=Anthropic kind=anthropic model=claude-test in=20 out=0 outcome=refused ms="
         ),
         "{}",
         lines[0]
@@ -397,7 +375,7 @@ fn with_nothing_configured_a_call_is_not_configured() {
     let out = f.task(&failing("ai::complete(\"x\", #{})"));
     let e = ok(&out);
     assert_eq!(e["kind"], json!("not_configured"));
-    assert_eq!(e["provider"], json!(""));
+    assert_eq!(e["account"], json!(""));
     assert!(
         e["message"].as_str().unwrap().contains("Settings > AI"),
         "{e}"
@@ -405,20 +383,31 @@ fn with_nothing_configured_a_call_is_not_configured() {
     let lines = trail(&out);
     assert_eq!(lines.len(), 1);
     assert!(
-        lines[0].starts_with("ai: provider=- model=- in=0 out=0 outcome=error:not_configured ms="),
+        lines[0].starts_with(
+            "ai: account=- kind=- model=- in=0 out=0 outcome=error:not_configured ms="
+        ),
         "{}",
         lines[0]
     );
 
-    // A provider and model named, but no key stored for it.
+    // An account and model named, but no key stored for it.
+    AiSeed::new()
+        .account(TestAccount::openai(&f.openai).keyless().base_url(""))
+        .store(f.writer.state());
     let out = f.task(&failing(
-        "ai::complete(\"x\", #{ \"provider\": \"openai\", \"model\": \"gpt-test\" })",
+        "ai::complete(\"x\", #{ \"account\": \"OpenAI\", \"model\": \"gpt-test\" })",
     ));
     let e = ok(&out);
     assert_eq!(e["kind"], json!("not_configured"));
-    assert_eq!(e["provider"], json!("openai"));
+    assert_eq!(e["account"], json!("OpenAI"));
     assert_eq!(e["model"], json!("gpt-test"));
-    assert!(trail(&out)[0].starts_with("ai: provider=openai model=gpt-test "));
+    assert!(trail(&out)[0].starts_with("ai: account=OpenAI kind=openai model=gpt-test "));
+
+    // An account that does not exist is invalid, before any account is chosen.
+    let out = f.task(&failing("ai::complete(\"x\", #{ \"account\": \"Gone\" })"));
+    let e = ok(&out);
+    assert_eq!(e["kind"], json!("invalid"));
+    assert!(trail(&out)[0].starts_with("ai: account=- kind=- "));
     assert!(f.openai.response_requests().is_empty());
 }
 

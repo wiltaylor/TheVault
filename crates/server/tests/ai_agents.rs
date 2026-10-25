@@ -12,7 +12,7 @@ use std::time::Duration;
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
-use testkit::{AnthropicMessage, FakeAnthropic, TestServer};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, TestAccount, TestServer};
 
 const MEMO: &str = r#"label = "Memo"
 
@@ -101,16 +101,12 @@ impl Api {
 
     /// The fake as the default provider, with Assistant's confirmation switches `confirm`.
     fn anthropic(&self, fake: &FakeAnthropic, confirm: Value) {
-        self.secret("ai_anthropic_api_key", fake.api_key());
-        self.secret(
-            "ai_settings",
-            &json!({
-                "default_provider": "anthropic",
-                "models": { "anthropic": MODEL },
-                "endpoints": { "anthropic": fake.base_url() },
-            })
-            .to_string(),
-        );
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(fake).model(MODEL))
+            .secrets()
+        {
+            self.secret(&name, &value);
+        }
         let res = self
             .client
             .put(self.server.url("/api/integrations/ai/settings"))

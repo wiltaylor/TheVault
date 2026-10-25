@@ -1,9 +1,12 @@
 //! The `ai` host module: `ai::complete` and `ai::chat` for `after_*` handlers and scheduled tasks
 //! (ai D11, D12, D13).
 //!
-//! The module reads the AI credentials and `ai_settings` from `state.db` itself, through
+//! The module reads the AI accounts and their credentials from `state.db` itself, through
 //! `crates/ai`: a script lists neither the `ai_*` secrets in `secrets` nor the providers' hosts in
-//! `allow_domains`, and no function hands it a key. Calls block and end at the run's deadline,
+//! `allow_domains`, and no function hands it a key. The `account` option names the account, by
+//! id or name; without it a call uses the default account (accounts A5). The `provider` option
+//! of before accounts (`anthropic`, `openai` or `chatgpt`) still works: it names the account the
+//! migration made for that provider. Calls block and end at the run's deadline,
 //! as `http` calls do. Every call, whatever its outcome, appends one trail line to the run log
 //! (ai D12), which never holds the prompt.
 //!
@@ -16,7 +19,7 @@ use std::str::FromStr;
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use ::ai::{Credentials, Effort, ErrorKind, Message, Outcome, Provider, Request, Settings, Usage};
+use ::ai::{Accounts, Credentials, Effort, ErrorKind, Kind, Message, Outcome, Request, Usage};
 use reqwest::blocking::Client;
 use serde_json::Value as Json;
 use writer::Writer;
@@ -34,8 +37,10 @@ pub struct Reply {
     /// With `schema` set: the answer parsed as JSON and checked against the schema. `null`
     /// otherwise.
     pub json: DynValue,
-    /// `anthropic`, `openai` or `chatgpt`.
-    pub provider: String,
+    /// The name of the account that answered.
+    pub account: String,
+    /// The account's kind: `anthropic`, `openai`, `openai_compatible` or `chatgpt`.
+    pub kind: String,
     pub model: String,
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -51,7 +56,8 @@ pub struct AiError {
     /// `provider`.
     pub kind: String,
     pub message: String,
-    pub provider: String,
+    /// The name of the account the call went to, when one was chosen.
+    pub account: String,
     pub model: String,
     /// A refusal's category, such as `cyber`, when the provider named one.
     pub category: String,
@@ -144,10 +150,10 @@ fn history(messages: Vec<ChatMessage>) -> Result<Vec<Message>, ::ai::AiError> {
         .collect()
 }
 
-/// What a call's `options` ask for. Unset means the default of `ai_settings` or the provider.
+/// What a call's `options` ask for. Unset means the default account, or its default model.
 #[derive(Debug, Default)]
 struct Options {
-    provider: Option<Provider>,
+    account: Option<String>,
     model: Option<String>,
     system: Option<String>,
     schema: Option<Json>,
@@ -156,7 +162,8 @@ struct Options {
 }
 
 /// The option names `ai::complete` and `ai::chat` take.
-const OPTIONS: [&str; 6] = [
+const OPTIONS: [&str; 7] = [
+    "account",
     "provider",
     "model",
     "system",
@@ -166,18 +173,31 @@ const OPTIONS: [&str; 6] = [
 ];
 
 impl Options {
-    /// Read `options`, where an empty value counts as unset. The provider is read first, so an
-    /// error in a later option still names it.
-    fn parse(options: &HashMap<String, String>) -> (Option<Provider>, Result<Options, String>) {
+    /// Read `options`, where an empty value counts as unset. The account is read first, so an
+    /// error in a later option still names it. A legacy `provider` must be one of the three
+    /// names of before accounts.
+    fn parse(options: &HashMap<String, String>) -> (Option<String>, Result<Options, String>) {
         let get = |name: &str| {
             options
                 .get(name)
                 .map(|v| v.trim())
                 .filter(|v| !v.is_empty())
         };
-        let provider = match get("provider").map(Provider::from_str).transpose() {
-            Ok(p) => p,
-            Err(e) => return (None, Err(e)),
+        let account = match (get("account"), get("provider")) {
+            (Some(a), _) => Some(a.to_owned()),
+            (None, Some(p)) if ["anthropic", "openai", "chatgpt"].contains(&p) => {
+                Some(p.to_owned())
+            }
+            (None, Some(p)) => {
+                return (
+                    None,
+                    Err(format!(
+                        "unknown AI provider {p:?}: expected anthropic, openai or chatgpt, or name \
+                         an account with the account option"
+                    )),
+                );
+            }
+            (None, None) => None,
         };
         let parsed = (|| {
             let mut unknown: Vec<&str> = options
@@ -213,7 +233,7 @@ impl Options {
                 },
             };
             Ok(Options {
-                provider,
+                account: account.clone(),
                 model: get("model").map(str::to_owned),
                 // The system prompt is kept as written, spaces and all.
                 system: options
@@ -225,7 +245,7 @@ impl Options {
                 max_tokens,
             })
         })();
-        (provider, parsed)
+        (account, parsed)
     }
 }
 
@@ -235,13 +255,8 @@ fn refused_early(
     e: ::ai::AiError,
 ) -> Result<Result<Reply, AiError>, HostError> {
     run::with(|r| r.remaining())?;
-    let (provider, _) = Options::parse(options);
     let model = options.get("model").map(|m| m.trim()).unwrap_or_default();
-    let e = match provider {
-        Some(p) => e.on(p, model),
-        None => e,
-    };
-    finish(provider, model, Err(e), Duration::ZERO, None)
+    finish(None, model, Err(e), Duration::ZERO)
 }
 
 /// Make one call. `Ok(Err(..))` is a failure the script sees; `Err(..)` faults the run, which
@@ -256,74 +271,96 @@ fn call(
         Ok(r.deadline)
     })?;
     let began = Instant::now();
-    let (asked, parsed) = Options::parse(options);
+    let (_, parsed) = Options::parse(options);
     let model = options.get("model").map(|m| m.trim()).unwrap_or_default();
     let Some((binding, client)) = &access.0 else {
         let e = ::ai::AiError::new(
             ErrorKind::Unavailable,
             "AI is not available on this device: a script that calls ai runs on the home server",
         );
-        return finish(asked, model, Err(e), began.elapsed(), None);
+        return finish(None, model, Err(e), began.elapsed());
     };
     let opts = match parsed {
         Ok(o) => o,
         Err(message) => {
-            let mut e = ::ai::AiError::invalid(message);
-            if let Some(p) = asked {
-                e = e.on(p, model);
-            }
-            return finish(asked, model, Err(e), began.elapsed(), None);
+            let e = ::ai::AiError::invalid(message);
+            return finish(None, model, Err(e), began.elapsed());
         }
     };
     let Some(writer) = binding.get().and_then(Weak::upgrade) else {
         let e = ::ai::AiError::new(ErrorKind::Unavailable, "the vault is not open");
-        return finish(asked, model, Err(e), began.elapsed(), None);
+        return finish(None, model, Err(e), began.elapsed());
     };
     let state = writer.state();
-    let picked = Settings::load(state).and_then(|s| s.pick(opts.provider, opts.model.as_deref()));
-    let (provider, model) = match picked {
-        Ok(p) => p,
-        Err(e) => {
-            let provider = e.provider.or(asked);
-            return finish(provider, model, Err(e), began.elapsed(), None);
-        }
+    let account =
+        Accounts::load(state).and_then(|all| all.pick(opts.account.as_deref(), None).cloned());
+    let account = match account {
+        Ok(a) => a,
+        Err(e) => return finish(None, model, Err(e), began.elapsed()),
     };
-    let mut host = None;
-    let result = Credentials::resolve(state, provider).and_then(|cred| {
-        host = cred.custom_host.clone();
-        let req = Request {
-            provider,
-            model: model.clone(),
-            system: opts.system,
-            messages,
-            tools: Vec::new(),
-            schema: opts.schema,
-            effort: opts.effort,
-            max_tokens: opts.max_tokens,
-        };
-        ::ai::complete_blocking(client, &cred, &req, Some(deadline))
-    });
+    let cred = match Credentials::resolve(state, &account) {
+        Ok(c) => c,
+        Err(e) => return finish(Some((&account, None)), model, Err(e), began.elapsed()),
+    };
+    let model = match opts
+        .model
+        .clone()
+        .or_else(|| account.model().map(str::to_owned))
+    {
+        Some(m) => m,
+        None => match ::ai::default_model_blocking(client, &cred, Some(deadline)) {
+            Ok(m) => m,
+            Err(e) => return finish(Some((&account, Some(&cred))), "", Err(e), began.elapsed()),
+        },
+    };
+    let req = Request {
+        model: model.clone(),
+        system: opts.system,
+        messages,
+        tools: Vec::new(),
+        schema: opts.schema,
+        effort: opts.effort,
+        max_tokens: opts.max_tokens,
+    };
+    let result = ::ai::complete_blocking(client, &cred, &req, Some(deadline));
+    if let Ok(reply) = &result
+        && let Some(usage) = &reply.plan_usage
+        && let Err(e) = usage.save(state, &account.id)
+    {
+        eprintln!("ai: keeping the plan usage of {}: {e}", account.name);
+    }
     finish(
-        Some(provider),
+        Some((&account, Some(&cred))),
         &model,
         result,
         began.elapsed(),
-        host.as_deref(),
     )
 }
 
 /// Log the call's trail line, end the run when the call outlasted its deadline, and hand the
-/// script its answer. `host` is the custom API URL's the call went to (ai D24).
+/// script its answer. `to` is the account the call went to, with its credential once resolved,
+/// whose custom host the trail line names (ai D24).
 fn finish(
-    provider: Option<Provider>,
+    to: Option<(&::ai::Account, Option<&::ai::Credential>)>,
     model: &str,
     result: Result<::ai::Reply, ::ai::AiError>,
     took: Duration,
-    host: Option<&str>,
 ) -> Result<Result<Reply, AiError>, HostError> {
-    let line = match provider {
-        Some(p) => ::ai::trail_for(p, model, &result, took, host),
-        None => no_provider_trail(model, &result, took),
+    let line = match to {
+        Some((_, Some(cred))) => ::ai::trail_for(cred, model, &result, took),
+        Some((a, None)) => {
+            let usage = result.as_ref().map_or_else(|e| e.usage, |r| r.usage);
+            ::ai::trail_line(
+                &a.name,
+                a.kind,
+                model,
+                usage,
+                Outcome::of(&result),
+                took,
+                None,
+            )
+        }
+        None => no_account_trail(model, &result, took),
     };
     run::with(|r| {
         r.log(&line, true);
@@ -331,11 +368,13 @@ fn finish(
     })?;
     // A call cut short by the run's own deadline ends the run, as an `http` call does.
     run::with(|r| r.remaining())?;
+    let name = to.map(|(a, _)| a.name.clone()).unwrap_or_default();
     Ok(match result {
         Ok(reply) => Ok(Reply {
             text: reply.text,
             json: reply.json.map_or(DynValue::Null, convert::to_dyn),
-            provider: reply.provider.as_str().to_owned(),
+            account: reply.name,
+            kind: reply.kind.as_str().to_owned(),
             model: reply.model,
             input_tokens: tokens(reply.usage.input),
             output_tokens: tokens(reply.usage.output),
@@ -344,37 +383,29 @@ fn finish(
         Err(e) => Err(AiError {
             kind: e.kind.as_str().to_owned(),
             message: e.message,
-            provider: e
-                .provider
-                .or(provider)
-                .map(Provider::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            model: e.model.unwrap_or_else(|| model.to_owned()),
-            category: e.category.unwrap_or_default(),
+            account: e.account.map_or(name, String::from),
+            model: e.model.map_or_else(|| model.to_owned(), String::from),
+            category: e.category.map(String::from).unwrap_or_default(),
         }),
     })
 }
 
-/// The trail line of a call that failed before a provider was chosen: `provider=-`.
-fn no_provider_trail(
+/// The trail line of a call that failed before an account was chosen: `account=- kind=-`.
+fn no_account_trail(
     model: &str,
     result: &Result<::ai::Reply, ::ai::AiError>,
     took: Duration,
 ) -> String {
     let line = ::ai::trail_line(
-        Provider::Anthropic,
+        "",
+        Kind::Anthropic,
         model,
         Usage::default(),
         Outcome::of(result),
         took,
         None,
     );
-    line.replacen(
-        &format!("provider={}", Provider::Anthropic),
-        "provider=-",
-        1,
-    )
+    line.replacen("account=- kind=anthropic", "account=- kind=-", 1)
 }
 
 fn tokens(n: u64) -> i64 {

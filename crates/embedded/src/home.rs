@@ -170,7 +170,7 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     }
     if under(path, "/api/ai/chat")
         || path == "/api/ai/models"
-        || path == "/api/ai/providers"
+        || path == "/api/ai/accounts"
         || path == "/api/ai/apply"
         || path == "/api/ai/discard"
         || is_agent_threads(path)
@@ -868,7 +868,8 @@ mod tests {
             Route::NeedsWebApp
         );
         assert_eq!(route(&get, "/api/ai/models"), Route::Ai);
-        assert_eq!(route(&get, "/api/ai/providers"), Route::Ai);
+        assert_eq!(route(&get, "/api/ai/accounts"), Route::Ai);
+        assert_eq!(route(&get, "/api/ai/providers"), Route::NeedsWebApp);
         assert_eq!(route(&post, "/api/ai/chat"), Route::Ai);
         assert_eq!(route(&post, "/api/ai/chat/turns"), Route::Ai);
         assert_eq!(route(&get, "/api/ai/chat/turns/t/events"), Route::Ai);

@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use crate::error::{AiError, ErrorKind};
-use crate::types::{Provider, Reply, Stop, Usage};
+use crate::types::{Kind, Reply, Stop, Usage};
 
 /// How a call ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,30 +48,33 @@ impl Outcome {
     }
 }
 
-/// `ai: provider=<p> model=<m> in=<input tokens> out=<output tokens> outcome=ok|refused|error:<kind> ms=<duration>`,
-/// with ` host=<host>` after it when the call went to a custom API URL (ai D24): pass
-/// [`crate::Credential::custom_host`]. The model id and host are cut to the characters they use,
-/// so nothing can break the line.
+/// `ai: account=<name> kind=<kind> model=<m> in=<input tokens> out=<output tokens> outcome=ok|refused|error:<kind> ms=<duration>`,
+/// with ` host=<host>` after it when the call went to an account's own base URL (ai D24): pass
+/// [`crate::Credential::custom_host`]. The account name has each space as `_` and the name,
+/// model id and host are cut to the characters they use, so nothing can break the line
+/// (accounts A8).
 pub fn trail_line(
-    provider: Provider,
+    name: &str,
+    kind: Kind,
     model: &str,
     usage: Usage,
     outcome: Outcome,
     took: Duration,
     host: Option<&str>,
 ) -> String {
-    let model: String = model
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':' | '/' | '@'))
-        .take(100)
-        .collect();
-    let model = if model.is_empty() {
-        "-".to_owned()
-    } else {
-        model
+    let token = |s: &str, extra: &[char], max: usize, spaces: bool| {
+        let t: String = s
+            .chars()
+            .map(|c| if spaces && c == ' ' { '_' } else { c })
+            .filter(|c| c.is_alphanumeric() || extra.contains(c))
+            .take(max)
+            .collect();
+        if t.is_empty() { "-".to_owned() } else { t }
     };
+    let name = token(name, &['-', '_', '.', '@'], 60, true);
+    let model = token(model, &['-', '_', '.', ':', '/', '@'], 100, false);
     let mut line = format!(
-        "ai: provider={provider} model={model} in={} out={} outcome={} ms={}",
+        "ai: account={name} kind={kind} model={model} in={} out={} outcome={} ms={}",
         usage.input,
         usage.output,
         outcome.as_string(),
@@ -89,20 +92,26 @@ pub fn trail_line(
     line
 }
 
-/// [`trail_line`] for a finished call of `provider` and `model`, to `host` when it is a custom
-/// API URL's.
+/// [`trail_line`] for a finished call with credential `cred` to `model`.
 pub fn trail_for(
-    provider: Provider,
+    cred: &crate::Credential,
     model: &str,
     result: &Result<Reply, AiError>,
     took: Duration,
-    host: Option<&str>,
 ) -> String {
     let usage = match result {
         Ok(r) => r.usage,
         Err(e) => e.usage,
     };
-    trail_line(provider, model, usage, Outcome::of(result), took, host)
+    trail_line(
+        &cred.name,
+        cred.kind,
+        model,
+        usage,
+        Outcome::of(result),
+        took,
+        cred.custom_host.as_deref(),
+    )
 }
 
 #[cfg(test)]
@@ -112,7 +121,8 @@ mod tests {
     #[test]
     fn formats_the_line() {
         let line = trail_line(
-            Provider::Anthropic,
+            "Anthropic",
+            Kind::Anthropic,
             "claude-opus-5",
             Usage {
                 input: 12,
@@ -124,10 +134,11 @@ mod tests {
         );
         assert_eq!(
             line,
-            "ai: provider=anthropic model=claude-opus-5 in=12 out=34 outcome=ok ms=1234"
+            "ai: account=Anthropic kind=anthropic model=claude-opus-5 in=12 out=34 outcome=ok ms=1234"
         );
         let line = trail_line(
-            Provider::ChatGpt,
+            "My plan\nx=1",
+            Kind::ChatGpt,
             "gpt x\nsecret=1",
             Usage::default(),
             Outcome::Error(ErrorKind::RateLimit),
@@ -136,29 +147,31 @@ mod tests {
         );
         assert_eq!(
             line,
-            "ai: provider=chatgpt model=gptxsecret1 in=0 out=0 outcome=error:rate_limit ms=0"
+            "ai: account=My_planx1 kind=chatgpt model=gptxsecret1 in=0 out=0 outcome=error:rate_limit ms=0"
         );
         assert!(
             trail_line(
-                Provider::OpenAi,
+                "",
+                Kind::OpenAi,
                 "m",
                 Usage::default(),
                 Outcome::Refused,
                 Duration::ZERO,
                 None
             )
-            .contains("outcome=refused")
+            .contains("account=- kind=openai model=m in=0 out=0 outcome=refused")
         );
         assert_eq!(
             trail_line(
-                Provider::OpenAi,
+                "Ollama",
+                Kind::OpenAiCompatible,
                 "m",
                 Usage::default(),
                 Outcome::Ok,
                 Duration::ZERO,
                 Some("10.0.0.5:11434\nx=1 y")
             ),
-            "ai: provider=openai model=m in=0 out=0 outcome=ok ms=0 host=10.0.0.5:11434x1y"
+            "ai: account=Ollama kind=openai_compatible model=m in=0 out=0 outcome=ok ms=0 host=10.0.0.5:11434x1y"
         );
     }
 }

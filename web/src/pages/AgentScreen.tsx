@@ -43,13 +43,14 @@ import {
   type Agent,
   type AgentEffort,
   type AgentForm,
+  type AiAccounts,
   type AiModel,
-  type AiProvider,
   type AiStatus,
   ApiError,
   api,
 } from "../api";
 import { AgentChat } from "../ai/AgentChat";
+import { accountFor, accountNamed } from "../ai/accounts";
 import { logHref } from "../activity/model";
 import { IconPicker } from "../components/IconPicker";
 import { TypeIcon } from "../components/Icon";
@@ -62,12 +63,6 @@ import { MemoryTab } from "./AgentMemory";
 import { TriggersTab } from "./AgentTriggers";
 import { modelLabel } from "./Ai";
 import { errorText } from "./TypeEditor";
-
-export const PROVIDERS: [AiProvider, string][] = [
-  ["anthropic", "Anthropic"],
-  ["openai", "OpenAI"],
-  ["chatgpt", "ChatGPT"],
-];
 
 export const EFFORTS: [AgentEffort, string][] = [
   ["low", "Low"],
@@ -92,6 +87,8 @@ export interface AgentTabProps {
   readOnly: boolean;
   /** Settings > AI as it stands, in the web app; null in the apps or before it loads. */
   ai: AiStatus | null;
+  /** The AI accounts, from `GET /api/ai/accounts` in every client (accounts A7); null before they load or when they cannot be read. */
+  accounts: AiAccounts | null;
   /** A prefix for element ids, unique to this screen. */
   id: string;
 }
@@ -197,33 +194,34 @@ export function SaveBar(props: { dirty: boolean; readOnly: boolean; save: () => 
 }
 
 /**
- * The model: chosen from the provider's live list, with the provider's default first, or typed
- * when the list cannot be read (ai D6, D24). Empty means the provider's default model.
+ * The model: chosen from the account's live list, with the account's default first, or typed
+ * when the list cannot be read (ai D6, D24). Empty means the account's default model.
  */
 export function ModelPicker(props: {
   id: string;
-  provider: AiProvider | null;
+  /** The account's id. */
+  account: string | null;
   value: string | null;
   onChange: (model: string | null) => void;
   disabled: boolean;
-  /** Whether to ask the provider for its models: not in the apps. */
+  /** Whether to ask the account for its models: not in the apps. */
   live: boolean;
 }) {
   const [list] = createResource(
-    () => (props.live && props.provider ? props.provider : null),
-    async (p) => {
+    () => (props.live && props.account ? props.account : null),
+    async (id) => {
       try {
-        const l = await api.aiModels(p);
+        const l = await api.aiModels(id);
         return { models: l.models, model: l.model, error: null as string | null };
       } catch (e) {
         return { models: [] as AiModel[], model: null, error: errorText(e) };
       }
     },
   );
-  const typed = () => !props.live || !props.provider || !!list()?.error;
+  const typed = () => !props.live || !props.account || !!list()?.error;
   const defaultLabel = () => {
     const m = list()?.model;
-    return m ? `Provider default (${m})` : "Provider default";
+    return m ? `Account default (${m})` : "Account default";
   };
   return (
     <>
@@ -236,7 +234,7 @@ export function ModelPicker(props: {
               list={`${props.id}-ids`}
               autocomplete="off"
               spellcheck={false}
-              placeholder="Provider default"
+              placeholder="Account default"
               value={props.value ?? ""}
               disabled={props.disabled}
               onChange={(e) => props.onChange(e.currentTarget.value.trim() || null)}
@@ -266,9 +264,9 @@ export function ModelPicker(props: {
       </Show>
       <Show when={props.live && typed()}>
         <p class="muted agent-model-note">
-          {props.provider
-            ? `The model list could not be read${list()?.error ? ` (${list()!.error})` : ""}: type a model id, or leave it empty for the provider's default.`
-            : "No default provider is set in Settings > AI: choose a provider, or type a model id."}
+          {props.account
+            ? `The model list could not be read${list()?.error ? ` (${list()!.error})` : ""}: type a model id, or leave it empty for the account's default.`
+            : "No AI account is set up in Settings > AI: add one, or type a model id."}
         </p>
       </Show>
     </>
@@ -278,9 +276,12 @@ export function ModelPicker(props: {
 function SettingsTab(p: AgentTabProps) {
   const id = (what: string) => `${p.id}-${what}`;
   const set = (patch: Partial<AgentForm>) => p.setDraft((d) => ({ ...d, ...patch }));
-  const defaultProvider = () => p.ai?.default_provider ?? null;
-  const provider = () => p.draft.provider ?? defaultProvider();
-  const providerLabel = (name: AiProvider | null) => PROVIDERS.find(([n]) => n === name)?.[1];
+  const accounts = () => p.accounts?.accounts ?? [];
+  const defaultAccount = () => accountFor(p.accounts, null);
+  /** The account the agent runs on (accounts A5): the one it names, else the default. */
+  const account = () => accountFor(p.accounts, p.draft.account);
+  /** The account the agent names when no account has that name (accounts A6). */
+  const missing = () => (p.accounts && p.draft.account && !accountNamed(accounts(), p.draft.account) ? p.draft.account : null);
   const prompt = () => p.draft.system_prompt ?? "";
   const length = () => [...prompt()].length;
   return (
@@ -312,22 +313,40 @@ function SettingsTab(p: AgentTabProps) {
               ? `${agentLabel(p.agent)} is built in and always enabled.`
               : "Enabled: off keeps the file but runs no trigger and starts no chat."}
           </label>
-          <label for={id("provider")}>Provider</label>
-          <select
-            id={id("provider")}
-            value={p.draft.provider ?? ""}
-            onChange={(e) => set({ provider: (e.currentTarget.value || null) as AiProvider | null, model: null })}
-          >
-            <option value="">
-              {defaultProvider() ? `Settings > AI default (${providerLabel(defaultProvider())})` : "Settings > AI default"}
-            </option>
-            <For each={PROVIDERS}>{([v, l]) => <option value={v}>{l}</option>}</For>
-          </select>
+          <label for={id("account")}>Account</label>
+          <div>
+            <select id={id("account")} onChange={(e) => set({ account: e.currentTarget.value || null, model: null })}>
+              <option value="" selected={!p.draft.account}>
+                {defaultAccount() ? `Default account (${defaultAccount()!.name})` : "Default account"}
+              </option>
+              <For each={accounts()}>
+                {(a) => (
+                  <option value={a.name} selected={accountNamed([a], p.draft.account) !== undefined}>
+                    {a.name}
+                  </option>
+                )}
+              </For>
+              <Show when={missing()}>
+                {(name) => (
+                  <option value={name()} selected>
+                    {name()} (missing)
+                  </option>
+                )}
+              </Show>
+            </select>
+            <Show when={missing()}>
+              {(name) => (
+                <p class="error agent-account-missing" role="alert">
+                  Account {name()} does not exist; this agent uses the default account.
+                </p>
+              )}
+            </Show>
+          </div>
           <label for={id("model")}>Model</label>
           <div>
             <ModelPicker
               id={id("model")}
-              provider={provider()}
+              account={account()?.id ?? null}
               value={p.draft.model}
               disabled={p.readOnly}
               live={!p.readOnly}
@@ -340,7 +359,7 @@ function SettingsTab(p: AgentTabProps) {
             value={p.draft.effort ?? ""}
             onChange={(e) => set({ effort: (e.currentTarget.value || null) as AgentEffort | null })}
           >
-            <option value="">Provider default</option>
+            <option value="">Model default</option>
             <For each={EFFORTS}>{([v, l]) => <option value={v}>{l}</option>}</For>
           </select>
         </div>
@@ -664,6 +683,9 @@ export function AgentScreen() {
     () => (app.state === "ready" && app() === null ? true : null),
     () => api.aiStatus().catch(() => null),
   );
+  // The accounts are read in every client: an app forwards the route to the home server.
+  // A renamed account rewrites the agents that name it (accounts A6), so read them again then.
+  const [accounts] = createResource(() => [agentsVersion()], () => api.aiAccounts().catch(() => null));
   const [agent, setAgent] = createSignal<Agent | null>(null);
   const [draft, setDraftSignal] = createSignal<AgentForm | null>(null);
   const [error, setError] = createSignal<string | null>(null);
@@ -861,6 +883,9 @@ export function AgentScreen() {
                     },
                     get ai() {
                       return ai() ?? null;
+                    },
+                    get accounts() {
+                      return accounts() ?? null;
                     },
                     id: uid,
                   })}

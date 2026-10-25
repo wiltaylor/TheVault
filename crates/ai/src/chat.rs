@@ -21,10 +21,12 @@ use std::collections::VecDeque;
 
 use serde_json::{Map, Value, json};
 
+use crate::credentials::Credential;
 use crate::error::{AiError, ErrorKind, kind_of_code};
-use crate::turn::{Turn, parse_input};
+use crate::turn::{Turn, Who, parse_input};
 use crate::types::{
-    Content, Effort, Event, Message, Part, ProviderState, Request, Role, Stop, Usage, unloaded,
+    Content, Effort, Event, Message, Part, ProviderState, Request, Role, Stop, Usage, Wire,
+    unloaded,
 };
 
 /// The path a Chat Completions call posts to, under the API root.
@@ -32,10 +34,13 @@ pub(crate) const PATH: &str = "/v1/chat/completions";
 
 /// The request body. `json_object` is the fallback for a service that refused `json_schema`:
 /// `response_format: {type: "json_object"}` with the schema in the system text.
-pub(crate) fn body(req: &Request, stream: bool, json_object: bool) -> Value {
+pub(crate) fn body(cred: &Credential, req: &Request, stream: bool, json_object: bool) -> Value {
     let mut b = Map::new();
     b.insert("model".into(), json!(req.model));
-    b.insert("messages".into(), Value::Array(messages(req, json_object)));
+    b.insert(
+        "messages".into(),
+        Value::Array(messages(cred, req, json_object)),
+    );
     if stream {
         b.insert("stream".into(), json!(true));
         b.insert("stream_options".into(), json!({ "include_usage": true }));
@@ -102,7 +107,7 @@ fn system_text(req: &Request, json_object: bool) -> Option<String> {
     }
 }
 
-fn messages(req: &Request, json_object: bool) -> Vec<Value> {
+fn messages(cred: &Credential, req: &Request, json_object: bool) -> Vec<Value> {
     let mut out = Vec::new();
     if let Some(system) = system_text(req, json_object) {
         out.push(json!({ "role": "system", "content": system }));
@@ -111,7 +116,7 @@ fn messages(req: &Request, json_object: bool) -> Vec<Value> {
         match m.role {
             Role::User => user_messages(m, &mut out),
             Role::Assistant => {
-                if let Some(msg) = assistant_message(req, m) {
+                if let Some(msg) = assistant_message(cred, req, m) {
                     out.push(msg);
                 }
             }
@@ -188,9 +193,9 @@ fn user_messages(m: &Message, out: &mut Vec<Value>) {
 }
 
 /// Whether `state`'s output is a Chat Completions assistant message this request can replay.
-fn replayable<'a>(req: &Request, m: &'a Message) -> Option<&'a Value> {
+fn replayable<'a>(cred: &Credential, req: &Request, m: &'a Message) -> Option<&'a Value> {
     let state = m.provider_state.as_ref()?;
-    if state.provider != req.provider || state.model != req.model {
+    if !cred.replays(state, &req.model) {
         return None;
     }
     match state.output.as_array().map(Vec::as_slice) {
@@ -204,8 +209,8 @@ fn replayable<'a>(req: &Request, m: &'a Message) -> Option<&'a Value> {
     }
 }
 
-fn assistant_message(req: &Request, m: &Message) -> Option<Value> {
-    if let Some(msg) = replayable(req, m) {
+fn assistant_message(cred: &Credential, req: &Request, m: &Message) -> Option<Value> {
+    if let Some(msg) = replayable(cred, req, m) {
         return Some(msg.clone());
     }
     let text: String = m
@@ -247,16 +252,12 @@ fn assistant_json(text: &str, calls: Vec<Value>) -> Value {
 }
 
 /// The error an `{error: {code, message}}` body or frame carries.
-fn failure(req: &Request, error: &Value, usage: Usage) -> AiError {
+fn failure(who: &Who, req: &Request, error: &Value, usage: Usage) -> AiError {
     let s = |k: &str| error.get(k).and_then(Value::as_str);
     let code = s("code").or_else(|| s("type")).unwrap_or_default();
     let message = s("message").unwrap_or("the request failed");
     let kind = kind_of_code(code).unwrap_or(ErrorKind::Provider);
-    AiError::new(
-        kind,
-        format!("{} {}: {message}", req.provider.label(), req.model),
-    )
-    .with_usage(usage)
+    AiError::new(kind, format!("{} {}: {message}", who.name, req.model)).with_usage(usage)
 }
 
 /// A tool call coming in, piece by piece.
@@ -270,6 +271,7 @@ struct PartialCall {
 
 /// A Chat Completions answer as it arrives, streamed or whole.
 pub(crate) struct StreamDecoder {
+    who: Who,
     req: Request,
     turn: Turn,
     text: String,
@@ -280,13 +282,14 @@ pub(crate) struct StreamDecoder {
 }
 
 impl StreamDecoder {
-    pub fn new(req: &Request) -> StreamDecoder {
+    pub fn new(cred: &Credential, req: &Request) -> StreamDecoder {
         // The decoder needs the provider, model, tools and schema, not the history.
         let req = Request {
             messages: Vec::new(),
             ..req.clone()
         };
         StreamDecoder {
+            who: Who::of(cred),
             turn: Turn::new(&req),
             req,
             text: String::new(),
@@ -368,7 +371,7 @@ impl StreamDecoder {
     pub fn frame(&mut self, data: &Value, out: &mut VecDeque<Event>) -> Result<(), AiError> {
         if let Some(e) = data.get("error").filter(|e| e.is_object()) {
             self.done = true;
-            return Err(failure(&self.req, e, self.turn.usage));
+            return Err(failure(&self.who, &self.req, e, self.turn.usage));
         }
         self.usage_of(data);
         let Some(choice) = data
@@ -436,7 +439,8 @@ impl StreamDecoder {
             (None, _) => Stop::EndTurn,
         };
         let state = ProviderState {
-            provider: self.req.provider,
+            account: self.who.account.clone(),
+            wire: Wire::ChatCompletions,
             model: self.req.model.clone(),
             output: json!([assistant_json(&self.text, sent)]),
         };
@@ -446,11 +450,15 @@ impl StreamDecoder {
 }
 
 /// A whole, non-streamed `chat.completion` as events.
-pub(crate) fn parse_completion(req: &Request, body: &Value) -> Result<VecDeque<Event>, AiError> {
+pub(crate) fn parse_completion(
+    cred: &Credential,
+    req: &Request,
+    body: &Value,
+) -> Result<VecDeque<Event>, AiError> {
     let mut out = VecDeque::new();
-    let mut d = StreamDecoder::new(req);
+    let mut d = StreamDecoder::new(cred, req);
     if let Some(e) = body.get("error").filter(|e| e.is_object()) {
-        return Err(failure(req, e, Usage::default()));
+        return Err(failure(&d.who, req, e, Usage::default()));
     }
     d.usage_of(body);
     let choice = body
@@ -460,11 +468,7 @@ pub(crate) fn parse_completion(req: &Request, body: &Value) -> Result<VecDeque<E
         .ok_or_else(|| {
             AiError::new(
                 ErrorKind::Provider,
-                format!(
-                    "{} {}: the answer has no choices",
-                    req.provider.label(),
-                    req.model
-                ),
+                format!("{} {}: the answer has no choices", d.who.name, req.model),
             )
             .with_usage(d.usage())
         })?;

@@ -610,3 +610,28 @@ fn the_skills_confirmation_is_on_unless_the_file_turns_it_off() {
     assert!(a.to_wcl().contains("skills = false"), "{}", a.to_wcl());
     assert_eq!(Agent::parse("curator", &a.to_wcl()).unwrap(), a);
 }
+
+#[test]
+fn an_agent_names_its_account_and_a_provider_still_reads() {
+    let a = Agent::parse("helper", "account = \"OpenRouter work\"\nmodel = \"x\"\n").unwrap();
+    assert_eq!(a.account.as_deref(), Some("OpenRouter work"));
+    assert_eq!(a.account_ref(), Some("OpenRouter work"));
+    assert_eq!(a.provider, None);
+    let wcl = a.to_wcl();
+    assert!(wcl.contains("account = \"OpenRouter work\""), "{wcl}");
+    assert!(!wcl.contains("provider"), "{wcl}");
+
+    // A file of before accounts: `provider` reads as the account the migration made for it.
+    let a = Agent::parse("helper", "provider = \"chatgpt\"\n").unwrap();
+    assert_eq!(a.account, None);
+    assert_eq!(a.account_ref(), Some("chatgpt"));
+    assert!(a.to_wcl().contains("provider = \"chatgpt\""));
+    // With an account too, the account wins and the provider is not written back.
+    let a = Agent::parse("helper", "account = \"Work\"\nprovider = \"openai\"\n").unwrap();
+    assert_eq!(a.account_ref(), Some("Work"));
+    assert!(!a.to_wcl().contains("provider"));
+
+    assert_eq!(at("account = \"\"\n"), ["account"]);
+    assert_eq!(at("account = 3\n"), ["account"]);
+    assert_eq!(at("provider = \"gemini\"\n"), ["provider"]);
+}

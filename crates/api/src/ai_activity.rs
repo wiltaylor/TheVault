@@ -1,5 +1,5 @@
 //! What an AI chat turn records in the activity log (activity Y2): `ai.turn.start` and
-//! `ai.turn.end` (agent, provider, model, thread, origin; at the end the tokens, time and
+//! `ai.turn.end` (agent, account, kind, model, thread, origin; at the end the tokens, time and
 //! outcome), `ai.tool` for each tool call with a short summary of its arguments, `ai.browser` for
 //! each browser command with its exit code, `ai.skill` for each `use_skill`, `read_skill_file`
 //! and `install_skill_in_browser` with the skill and file (skills S7), and `ai.proposal` and `ai.applied` for the changes
@@ -45,7 +45,8 @@ pub(crate) struct TurnActivity {
 
 #[derive(Default)]
 struct Inner {
-    provider: Option<String>,
+    /// The name and kind of the account the last call went to (accounts A8).
+    account: Option<(String, String)>,
     model: Option<String>,
     input: u64,
     output: u64,
@@ -222,10 +223,10 @@ impl TurnActivity {
         ));
     }
 
-    /// One model call ended, with its provider, model and tokens.
-    pub(crate) fn called(&self, provider: &str, model: &str, input: u64, output: u64) {
+    /// One model call ended, with its account's name and kind, its model and tokens.
+    pub(crate) fn called(&self, account: &str, kind: &str, model: &str, input: u64, output: u64) {
         let mut i = self.lock();
-        i.provider = Some(provider.to_owned());
+        i.account = Some((account.to_owned(), kind.to_owned()));
         i.model = Some(model.to_owned());
         i.input += input;
         i.output += output;
@@ -310,14 +311,14 @@ impl TurnActivity {
     /// The turn ended with `outcome` (`done`, `refused`, `error` or `stopped`), and `why` for a
     /// refusal's category or an error's kind.
     pub(crate) fn end(&self, outcome: &str, why: Option<&str>) {
-        let (provider, model, input, output, calls, tools) = {
+        let (account, model, input, output, calls, tools) = {
             let mut i = self.lock();
             if i.ended {
                 return;
             }
             i.ended = true;
             (
-                i.provider.clone(),
+                i.account.clone(),
                 i.model.clone(),
                 i.input,
                 i.output,
@@ -339,7 +340,8 @@ impl TurnActivity {
             json!({
                 "outcome": outcome,
                 "why": why.map(|w| one_line(w, 200)),
-                "provider": provider,
+                "account": account.as_ref().map(|a| &a.0),
+                "kind": account.as_ref().map(|a| &a.1),
                 "model": model,
                 "input_tokens": input,
                 "output_tokens": output,

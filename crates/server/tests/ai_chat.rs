@@ -3,12 +3,14 @@
 //! (ai D5, D10, D11, D14, D15).
 
 use std::io::{BufRead, BufReader};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
-use testkit::{AnthropicMessage, FakeAnthropic, FakeOpenAi, OpenAiResponse, TestServer};
+use testkit::{
+    AiSeed, AnthropicMessage, FakeAnthropic, FakeOpenAi, OpenAiResponse, TestAccount, TestServer,
+};
 
 const MEMO: &str = r#"label = "Memo"
 
@@ -66,46 +68,22 @@ impl Api {
     }
 
     fn anthropic(&self, fake: &FakeAnthropic) {
-        self.secret("ai_anthropic_api_key", fake.api_key());
-        self.secret(
-            "ai_settings",
-            &json!({
-                "default_provider": "anthropic",
-                "models": { "anthropic": MODEL },
-                "endpoints": { "anthropic": fake.base_url() },
-            })
-            .to_string(),
-        );
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(fake).model(MODEL))
+            .secrets()
+        {
+            self.secret(&name, &value);
+        }
     }
 
-    /// The ChatGPT plan: a signed-in `ai_chatgpt` whose access token is not the API key, so the
-    /// fake treats it as a plan token.
+    /// The ChatGPT plan: a signed-in `chatgpt` account whose access token is not the API key,
+    /// so the fake treats it as a plan token.
     fn chatgpt(&self, fake: &FakeOpenAi) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        self.secret(
-            "ai_chatgpt",
-            &json!({
-                "client_id": "oaiapp_test",
-                "host_id": "urn:uuid:00000000-0000-4000-8000-000000000000",
-                "access_token": "plan-access-token",
-                "refresh_token": "plan-refresh-token",
-                "expires_ms": now + 3_600_000,
-                "account": "me@example.com",
-            })
-            .to_string(),
-        );
-        self.secret(
-            "ai_settings",
-            &json!({
-                "default_provider": "chatgpt",
-                "models": { "chatgpt": PLAN_MODEL },
-                "endpoints": { "chatgpt": fake.base_url() },
-            })
-            .to_string(),
-        );
+        let seed = AiSeed::new()
+            .account(TestAccount::chatgpt(fake, "plan-access-token").model(PLAN_MODEL));
+        for (name, value) in seed.secrets() {
+            self.secret(&name, &value);
+        }
     }
 
     fn memo(&self, title: &str, body: &str) -> (String, String) {
@@ -409,16 +387,10 @@ fn a_chatgpt_plan_turn_searches_reads_answers_and_replays_unedited() {
 fn a_chat_completions_turn_searches_answers_and_replays_unedited() {
     let api = Api::start();
     let fake = FakeOpenAi::builder().chat_completions().start();
-    api.secret("ai_openai_api_key", fake.api_key());
-    api.secret(
-        "ai_settings",
-        &json!({
-            "default_provider": "openai",
-            "models": { "openai": "glm-5.3-flash" },
-            "endpoints": { "openai": fake.base_url(), "openai_api": "chat_completions" },
-        })
-        .to_string(),
-    );
+    let seed = AiSeed::new().account(TestAccount::openai_compatible(&fake).model("glm-5.3-flash"));
+    for (name, value) in seed.secrets() {
+        api.secret(&name, &value);
+    }
     api.memo("Boiler service", "The boiler was serviced in May.");
 
     fake.push(
@@ -591,7 +563,9 @@ fn a_refusal_ends_the_stream_with_the_model_and_category() {
     let (name, r) = events.last().unwrap();
     assert_eq!(name, "refusal", "{events:?}");
     assert_eq!(r["model"], MODEL);
-    assert_eq!(r["provider"], "anthropic");
+    assert_eq!(r["account"], "acct_anthropic");
+    assert_eq!(r["name"], "Anthropic");
+    assert_eq!(r["kind"], "anthropic");
     assert_eq!(r["category"], "cyber");
     assert_eq!(r["explanation"], "This touches on attacks.");
     assert_eq!(text_of(&events), "Here is the start");
@@ -1010,9 +984,9 @@ fn the_system_prompt_setting_replaces_the_default_for_every_provider() {
     assert_eq!(status["system_prompt"], custom);
     assert_eq!(status["default_system_prompt"], ai::CHAT_PROMPT);
     assert_eq!(status["system_prompt_custom"], true);
-    // Other settings are untouched by the prompt.
-    assert_eq!(status["default_provider"], "anthropic");
-    assert_eq!(status["providers"]["anthropic"]["model"], MODEL);
+    // The accounts are untouched by the prompt.
+    assert_eq!(status["default"], "acct_anthropic");
+    assert_eq!(status["accounts"][0]["model"], MODEL);
     fake.push(AnthropicMessage::text("Hi."));
     let res = api.chat_as(
         &api.token(),
@@ -1542,8 +1516,8 @@ fn confirm_defaults_to_on_and_takes_a_partial_change() {
         status["confirm"],
         json!({ "notes": false, "archive": true, "delete": false, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true })
     );
-    // The other settings are kept.
-    assert_eq!(status["default_provider"], "anthropic");
+    // The accounts are kept.
+    assert_eq!(status["default"], "acct_anthropic");
     let res = api
         .client
         .put(api.server.url("/api/integrations/ai/settings"))
@@ -2068,41 +2042,40 @@ fn a_fifth_running_turn_for_one_caller_is_refused() {
 }
 
 #[test]
-fn get_providers_answers_a_read_token_with_no_key_token_or_account() {
+fn get_accounts_answers_a_read_token_with_no_key_token_url_or_sign_in() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     let plan = FakeOpenAi::start();
-    api.chatgpt(&plan);
-    api.secret("ai_anthropic_api_key", fake.api_key());
-    api.secret(
-        "ai_settings",
-        &json!({
-            "default_provider": "anthropic",
-            "models": { "anthropic": MODEL, "chatgpt": PLAN_MODEL },
-            "endpoints": { "anthropic": fake.base_url(), "chatgpt": plan.base_url() },
-        })
-        .to_string(),
-    );
+    let seed = AiSeed::new()
+        .account(TestAccount::anthropic(&fake).model(MODEL))
+        .account(TestAccount::chatgpt(&plan, "plan-access-token").model(PLAN_MODEL))
+        .account(TestAccount::openai(&plan).keyless().base_url(""));
+    for (name, value) in seed.secrets() {
+        api.secret(&name, &value);
+    }
     let reader = api.token_of("reader", "read");
     let res = api
         .client
-        .get(api.server.url("/api/ai/providers"))
+        .get(api.server.url("/api/ai/accounts"))
         .bearer_auth(&reader)
         .send()
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let text = res.text().unwrap();
     let v: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(v["default_provider"], "anthropic", "{v}");
+    assert_eq!(v["default"], "acct_anthropic", "{v}");
     assert_eq!(
-        v["providers"]["anthropic"],
-        json!({ "configured": true, "model": MODEL })
+        v["accounts"][0],
+        json!({
+            "id": "acct_anthropic", "name": "Anthropic", "kind": "anthropic",
+            "kind_label": "Anthropic API", "model": MODEL, "configured": true,
+            "window": 200000, "usage": null,
+        })
     );
-    assert_eq!(
-        v["providers"]["chatgpt"],
-        json!({ "configured": true, "model": PLAN_MODEL })
-    );
-    assert_eq!(v["providers"]["openai"]["configured"], false);
+    assert_eq!(v["accounts"][1]["kind"], "chatgpt");
+    assert_eq!(v["accounts"][1]["configured"], true);
+    assert_eq!(v["accounts"][1]["model"], PLAN_MODEL);
+    assert_eq!(v["accounts"][2]["configured"], false);
     assert_eq!(
         v["confirm"],
         json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true })
@@ -2113,10 +2086,11 @@ fn get_providers_answers_a_read_token_with_no_key_token_or_account() {
         "plan-refresh-token",
         "me@example.com",
         "oaiapp_test",
-        "account",
+        "signed_in",
+        "headers",
         "system_prompt",
-        // No API URL either (ai D24).
-        "url",
+        // No account's API URL either (ai D24); `kinds` names only the kinds' public defaults.
+        "base_url",
         fake.base_url().as_str(),
         "127.0.0.1",
     ] {
@@ -2444,4 +2418,164 @@ fn a_type_delete_is_proposed_applied_or_refused_while_the_type_has_notes() {
     assert_eq!(a["op"], "type_delete");
     assert_eq!(a["type_name"], "book");
     assert_eq!(api.type_wcl("book"), None);
+}
+
+#[test]
+fn a_plan_turn_keeps_the_plans_usage_for_its_account() {
+    let api = Api::start();
+    let fake = FakeOpenAi::start();
+    api.chatgpt(&fake);
+    let accounts = |api: &Api| -> Value {
+        api.client
+            .get(api.server.url("/api/ai/accounts"))
+            .bearer_auth(api.token())
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    assert_eq!(accounts(&api)["accounts"][0]["usage"], Value::Null);
+    fake.set_plan_usage(Some((25.0, 60.0)));
+    fake.push(OpenAiResponse::text("Hi."));
+    let events = api.chat(json!([user("Hello")]));
+    assert!(events.iter().any(|(n, _)| n == "done"), "{events:?}");
+    let usage = &accounts(&api)["accounts"][0]["usage"];
+    assert_eq!(usage["windows"][0]["label"], "5-hour", "{usage}");
+    assert_eq!(usage["windows"][0]["used_percent"], 25.0);
+    assert_eq!(usage["windows"][0]["window_minutes"], 300);
+    assert!(
+        usage["windows"][0]["resets_at_ms"].as_i64().unwrap()
+            > usage["read_at_ms"].as_i64().unwrap()
+    );
+    assert_eq!(usage["windows"][1]["label"], "Weekly");
+    assert_eq!(usage["windows"][1]["used_percent"], 60.0);
+    assert_eq!(usage["plan"], Value::Null);
+    // Settings > AI shows the same reading on the account.
+    let status = api.ai_status();
+    assert_eq!(&status["accounts"][0]["usage"], usage);
+}
+
+#[test]
+fn two_accounts_of_one_kind_in_one_thread_never_replay_each_others_state() {
+    let api = Api::start();
+    let first = FakeAnthropic::start();
+    let second = FakeAnthropic::start();
+    let seed = AiSeed::new()
+        .account(TestAccount::anthropic(&first).model(MODEL))
+        .account(TestAccount::anthropic(&second).named("Work").model(MODEL));
+    for (name, value) in seed.secrets() {
+        api.secret(&name, &value);
+    }
+    first.push(
+        AnthropicMessage::new()
+            .thinking("Recall the roof.", "sig-first")
+            .with_text("Slate."),
+    );
+    let sent = json!([user("Roof?")]);
+    let events = api.chat_as(&api.token(), json!({ "messages": sent.clone() }));
+    let events = read_events(events, |_| false);
+    let done = last(&events, "done");
+    assert_eq!(
+        done["messages"][0]["provider_state"]["account"],
+        "acct_anthropic"
+    );
+    assert_eq!(done["messages"][0]["provider_state"]["wire"], "messages");
+
+    // The next turn on the other account sends the plain transcript.
+    second.push(AnthropicMessage::text("Still slate."));
+    let history = next_history(&sent, done, "Why?");
+    let res = api.chat_as(
+        &api.token(),
+        json!({ "account": "acct_work", "messages": history.clone() }),
+    );
+    let events = read_events(res, |_| false);
+    assert!(events.iter().any(|(n, _)| n == "done"), "{events:?}");
+    let body = second.message_requests()[0].json();
+    assert!(!body.to_string().contains("sig-first"), "{body}");
+    let usage = last(&events, "usage");
+    assert_eq!(usage["account"], "acct_work");
+    assert_eq!(usage["name"], "Work");
+
+    // Back on the first account, its own state is replayed.
+    first.push(AnthropicMessage::text("Slate, again."));
+    let res = api.chat_as(
+        &api.token(),
+        json!({ "account": "Anthropic", "messages": history }),
+    );
+    read_events(res, |_| false);
+    let body = first.message_requests()[1].json();
+    assert!(body.to_string().contains("sig-first"), "{body}");
+}
+
+#[test]
+fn an_agent_naming_a_provider_of_before_accounts_runs_on_the_account_made_for_it() {
+    let api = Api::start();
+    let anthropic = FakeAnthropic::start();
+    let openai = FakeOpenAi::start();
+    let seed = AiSeed::new()
+        .account(TestAccount::anthropic(&anthropic).model(MODEL))
+        .account(
+            TestAccount::openai(&openai)
+                .named("Work GPT")
+                .model("gpt-6"),
+        )
+        .legacy("openai", "Work GPT");
+    for (name, value) in seed.secrets() {
+        api.secret(&name, &value);
+    }
+    let res = api
+        .client
+        .put(api.server.url("/api/agents/helper"))
+        .bearer_auth(api.token())
+        .header("content-type", "text/plain")
+        .body("label = \"Helper\"\nprovider = \"openai\"\n")
+        .send()
+        .unwrap();
+    assert!(res.status().is_success(), "{}", res.text().unwrap());
+    let agent: Value = api
+        .client
+        .get(api.server.url("/api/agents/helper"))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(agent["account"], "Work GPT", "{agent}");
+
+    openai.push(OpenAiResponse::text("Hi."));
+    let res = api.chat_as(
+        &api.token(),
+        json!({ "agent": "helper", "messages": [user("Hello")] }),
+    );
+    let events = read_events(res, |_| false);
+    assert_eq!(last(&events, "usage")["name"], "Work GPT", "{events:?}");
+    assert_eq!(openai.response_requests()[0].json()["model"], "gpt-6");
+    assert!(anthropic.message_requests().is_empty());
+
+    // An agent naming an account that does not exist runs on the default one.
+    let res = api
+        .client
+        .put(api.server.url("/api/agents/helper"))
+        .bearer_auth(api.token())
+        .header("content-type", "text/plain")
+        .body("label = \"Helper\"\naccount = \"Gone\"\n")
+        .send()
+        .unwrap();
+    assert!(res.status().is_success());
+    anthropic.push(AnthropicMessage::text("Hi."));
+    let res = api.chat_as(
+        &api.token(),
+        json!({ "agent": "helper", "messages": [user("Hello")] }),
+    );
+    let events = read_events(res, |_| false);
+    assert_eq!(last(&events, "usage")["name"], "Anthropic", "{events:?}");
+    // A request naming an account that does not exist is an error.
+    let res = api.chat_as(
+        &api.token(),
+        json!({ "account": "Gone", "messages": [user("Hello")] }),
+    );
+    let events = read_events(res, |_| false);
+    let (name, e) = events.last().unwrap();
+    assert_eq!(name, "error", "{events:?}");
+    assert_eq!(e["kind"], "invalid");
 }

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
-use testkit::{AnthropicMessage, AnthropicReply, FakeAnthropic, TestServer};
+use testkit::{AiSeed, AnthropicMessage, AnthropicReply, FakeAnthropic, TestAccount, TestServer};
 
 /// Monday 2026-01-05, half past midnight UTC.
 const START: &str = "2026-01-05T00:30:00Z";
@@ -49,20 +49,16 @@ impl Api {
             .build()
             .unwrap();
         let api = Api { server, client };
-        api.send(
-            "PUT",
-            "/api/secrets/ai_anthropic_api_key",
-            json!({ "value": fake.api_key() }),
-        );
-        api.send(
-            "PUT",
-            "/api/secrets/ai_settings",
-            json!({ "value": json!({
-                "default_provider": "anthropic",
-                "models": { "anthropic": MODEL },
-                "endpoints": { "anthropic": fake.base_url() },
-            }).to_string() }),
-        );
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(fake).model(MODEL))
+            .secrets()
+        {
+            api.send(
+                "PUT",
+                &format!("/api/secrets/{name}"),
+                json!({ "value": value }),
+            );
+        }
         api
     }
 

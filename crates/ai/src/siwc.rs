@@ -18,7 +18,6 @@ use sha2::{Digest, Sha256};
 
 use crate::credentials::Secret;
 use crate::error::{AiError, ErrorKind, scrub};
-use crate::types::Provider;
 
 /// The authorize page, under the sign-in base.
 pub const AUTHORIZE_PATH: &str = "/api/accounts/authorize";
@@ -144,7 +143,7 @@ fn token_call(
         for s in secrets {
             message = scrub(&message, s);
         }
-        RefreshError::Other(AiError::new(kind, message).on(Provider::ChatGpt, ""))
+        RefreshError::Other(AiError::new(kind, message).on("ChatGPT", ""))
     };
     let resp = http
         .post(&url)
@@ -248,7 +247,7 @@ pub fn exchange_code(
             ErrorKind::Auth,
             "the ChatGPT sign-in code was refused: start the sign-in again",
         )
-        .on(Provider::ChatGpt, ""),
+        .on("ChatGPT", ""),
         RefreshError::Other(e) => e,
     })
 }
@@ -356,7 +355,7 @@ pub struct OpenIdConfiguration {
 }
 
 fn get_json(http: &reqwest::blocking::Client, url: &str, what: &str) -> Result<Value, AiError> {
-    let fail = |m: String| AiError::new(ErrorKind::Unavailable, m).on(Provider::ChatGpt, "");
+    let fail = |m: String| AiError::new(ErrorKind::Unavailable, m).on("ChatGPT", "");
     let resp = http
         .get(url)
         .header("accept", "application/json")
@@ -416,8 +415,7 @@ pub fn verify_id_token(
     now_ms: i64,
 ) -> Result<IdClaims, AiError> {
     let bad = |why: &str| {
-        AiError::new(ErrorKind::Auth, format!("the ChatGPT ID token {why}"))
-            .on(Provider::ChatGpt, "")
+        AiError::new(ErrorKind::Auth, format!("the ChatGPT ID token {why}")).on("ChatGPT", "")
     };
     let mut parts = id_token.split('.');
     let (Some(h), Some(p), Some(sig), None) =
@@ -505,8 +503,7 @@ pub fn revoke(
     refresh_token: &Secret,
 ) -> Result<(), AiError> {
     let fail = |m: String| {
-        AiError::new(ErrorKind::Unavailable, scrub(&m, refresh_token.expose()))
-            .on(Provider::ChatGpt, "")
+        AiError::new(ErrorKind::Unavailable, scrub(&m, refresh_token.expose())).on("ChatGPT", "")
     };
     let resp = http
         .post(revocation_endpoint)

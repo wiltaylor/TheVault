@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::credentials::Credential;
 use crate::error::{self, AiError, ErrorKind};
-use crate::types::Provider;
+use crate::types::Kind;
 
 /// Retries after the first attempt.
 pub const MAX_RETRIES: u32 = 2;
@@ -53,9 +53,10 @@ pub(crate) const UNSUPPORTED_API: &str = "This service does not support";
 pub(crate) struct Call {
     pub get: bool,
     pub url: String,
-    pub headers: Vec<(&'static str, String)>,
+    pub headers: Vec<(String, String)>,
     pub body: Option<Value>,
-    pub provider: Provider,
+    /// The account's name, for error messages.
+    pub name: String,
     pub model: String,
     /// The key or token, scrubbed out of any error message.
     pub secret: String,
@@ -69,28 +70,33 @@ impl Call {
     /// A GET of `path` under `cred`'s base URL. An empty secret, a custom API URL with no key,
     /// sends no auth header (ai D24).
     pub fn new(cred: &Credential, model: &str, path: &str) -> Call {
-        let mut headers = Vec::new();
         let secret = cred.secret.expose();
         let keyed = !cred.secret.is_empty();
-        match cred.provider {
-            Provider::Anthropic => {
+        let mut headers: Vec<(String, String)> = Vec::new();
+        match cred.kind {
+            Kind::Anthropic => {
                 if keyed {
-                    headers.push(("x-api-key", secret.to_owned()));
+                    headers.push(("x-api-key".into(), secret.to_owned()));
                 }
-                headers.push(("anthropic-version", crate::anthropic::VERSION.to_owned()));
+                headers.push((
+                    "anthropic-version".into(),
+                    crate::anthropic::VERSION.to_owned(),
+                ));
             }
-            Provider::OpenAi | Provider::ChatGpt => {
+            Kind::OpenAi | Kind::OpenAiCompatible | Kind::ChatGpt => {
                 if keyed {
-                    headers.push(("authorization", format!("Bearer {secret}")));
+                    headers.push(("authorization".into(), format!("Bearer {secret}")));
                 }
             }
         }
+        // An account's extra headers (accounts A3), checked when they were saved.
+        headers.extend(cred.headers.iter().cloned());
         Call {
             get: true,
             url: crate::settings::api_url(&cred.base_url, path),
             headers,
             body: None,
-            provider: cred.provider,
+            name: cred.name.clone(),
             model: model.to_owned(),
             secret: secret.to_owned(),
             path: path.to_owned(),
@@ -101,9 +107,9 @@ impl Call {
     pub fn post(mut self, body: Value, stream: bool) -> Call {
         self.get = false;
         self.headers
-            .push(("content-type", "application/json".to_owned()));
+            .push(("content-type".into(), "application/json".to_owned()));
         self.headers.push((
-            "accept",
+            "accept".into(),
             if stream {
                 "text/event-stream"
             } else {
@@ -116,7 +122,7 @@ impl Call {
     }
 
     pub fn fail(&self, e: AiError) -> AiError {
-        e.on(self.provider, &self.model).scrubbed(&self.secret)
+        e.on(&self.name, &self.model).scrubbed(&self.secret)
     }
 
     fn status_error(&self, status: u16, body: &str) -> AiError {
@@ -136,12 +142,7 @@ impl Call {
             return self
                 .fail(AiError::invalid(format!("{UNSUPPORTED_API} {api}.")).with_status(status));
         }
-        self.fail(error::from_response(
-            self.provider,
-            &self.model,
-            status,
-            body,
-        ))
+        self.fail(error::from_response(&self.name, &self.model, status, body))
     }
 
     fn send_error(&self, e: &reqwest::Error) -> AiError {
@@ -160,7 +161,7 @@ impl Call {
         let detail = without_url(e);
         self.fail(AiError::new(
             kind,
-            format!("{} {what}: {detail}", self.provider.label()),
+            format!("{} {what}: {detail}", self.name),
         ))
     }
 
@@ -171,7 +172,7 @@ impl Call {
             http.post(&self.url)
         };
         for (n, v) in &self.headers {
-            b = b.header(*n, v);
+            b = b.header(n.as_str(), v);
         }
         if let Some(body) = &self.body {
             b = b.body(body.to_string());
@@ -189,7 +190,7 @@ impl Call {
             http.post(&self.url)
         };
         for (n, v) in &self.headers {
-            b = b.header(*n, v);
+            b = b.header(n.as_str(), v);
         }
         if let Some(body) = &self.body {
             b = b.body(body.to_string());
@@ -299,7 +300,7 @@ pub(crate) fn remaining(
 fn out_of_time(call: &Call) -> AiError {
     call.fail(AiError::new(
         ErrorKind::Timeout,
-        format!("the {} call ran out of time", call.provider.label()),
+        format!("the {} call ran out of time", call.name),
     ))
 }
 
@@ -355,7 +356,7 @@ pub(crate) fn read_error(call: &Call, e: &dyn std::fmt::Display, timeout: bool) 
     };
     call.fail(AiError::new(
         kind,
-        format!("{} answer broke off: {e}", call.provider.label()),
+        format!("{} answer broke off: {e}", call.name),
     ))
 }
 

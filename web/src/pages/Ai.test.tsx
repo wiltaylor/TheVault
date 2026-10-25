@@ -1,10 +1,15 @@
 import { Route, Router } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AiStatus } from "../api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AiAccountStatus, AiStatus } from "../api";
 
 const aiStatus = vi.fn();
 const aiSaveSettings = vi.fn();
+const aiCreateAccount = vi.fn();
+const aiUpdateAccount = vi.fn();
+const aiDeleteAccount = vi.fn();
+const aiOrderAccounts = vi.fn();
+const aiSetDefault = vi.fn();
 const aiPutKey = vi.fn();
 const aiTest = vi.fn();
 const aiModels = vi.fn();
@@ -20,6 +25,11 @@ vi.mock("../api", async (orig) => {
       ...real.api,
       aiStatus,
       aiSaveSettings,
+      aiCreateAccount,
+      aiUpdateAccount,
+      aiDeleteAccount,
+      aiOrderAccounts,
+      aiSetDefault,
       aiPutKey,
       aiTest,
       aiModels,
@@ -31,31 +41,61 @@ vi.mock("../api", async (orig) => {
   };
 });
 
-const { Ai, CHATGPT_USAGE_URL, testText } = await import("./Ai");
+const { Ai, CHATGPT_USAGE_URL, testText, untilText, usageText, uniqueName } = await import("./Ai");
 const { SettingsLayout, WEB_APP_ONLY } = await import("./SettingsLayout");
 const { forgetAppInfo } = await import("../inApp");
 
-function status(over: Partial<Record<"anthropic" | "openai" | "chatgpt", object>> = {}, def: AiStatus["default_provider"] = null): AiStatus {
+const KINDS: AiStatus["kinds"] = [
+  { kind: "anthropic", label: "Anthropic API", default_url: "https://api.anthropic.com", default_window: 200000 },
+  { kind: "openai", label: "OpenAI API", default_url: "https://api.openai.com", default_window: 400000 },
+  { kind: "openai_compatible", label: "OpenAI-compatible", default_url: null, default_window: 128000 },
+  { kind: "chatgpt", label: "ChatGPT subscription", default_url: null, default_window: 272000 },
+];
+
+function account(over: Partial<AiAccountStatus> & Pick<AiAccountStatus, "id" | "name" | "kind">): AiAccountStatus {
+  const kind = KINDS.find((k) => k.kind === over.kind)!;
   return {
-    secrets_key: true,
-    default_provider: def,
-    providers: {
-      anthropic: { configured: false, model: null, ...over.anthropic },
-      openai: { configured: false, model: null, ...over.openai },
-      chatgpt: { configured: false, model: null, account: null, ...over.chatgpt },
-    },
-    system_prompt: DEFAULT_PROMPT,
-    default_system_prompt: DEFAULT_PROMPT,
-    system_prompt_custom: false,
-    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true, skills: true },
-    web: { search: true, read: true, download: true },
+    base_url: null,
+    model: null,
+    headers: [],
+    context: null,
+    configured: false,
+    key_set: false,
+    signed_in: null,
+    kind_label: kind.label,
+    default_base_url: kind.default_url,
+    default_window: kind.default_window,
+    window: over.context?.window ?? kind.default_window,
+    agents: [],
+    usage: null,
+    ...over,
   };
 }
 
-const DEFAULT_PROMPT = "You are the assistant inside TheVault.\n";
+const CLAUDE = account({ id: "a1", name: "Claude", kind: "anthropic", model: "claude-opus-5", configured: true, key_set: true });
+const ROUTER = account({
+  id: "r1",
+  name: "OpenRouter",
+  kind: "openai_compatible",
+  base_url: "https://openrouter.ai/api/v1",
+  headers: [["X-Title", "TheVault"]],
+  configured: true,
+});
+
+function status(accounts: AiAccountStatus[] = [], def: string | null = accounts[0]?.id ?? null): AiStatus {
+  return {
+    secrets_key: true,
+    accounts,
+    default: def,
+    kinds: KINDS,
+    confirm: { notes: true, archive: true, delete: true, types: true, downloads: true, taxonomies: true, agents: true, skills: true },
+    web: { search: true, read: true, download: true },
+    context: { auto_compact: true, compact_at: 80 },
+  };
+}
 
 const ANTHROPIC_MODELS = {
-  provider: "anthropic",
+  account: "a1",
   model: "claude-opus-5",
   models: [
     { id: "claude-opus-5", display_name: "Claude Opus 5" },
@@ -65,227 +105,454 @@ const ANTHROPIC_MODELS = {
 
 const AUTH_URL = "https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&state=s1";
 
+beforeEach(() => {
+  aiModels.mockResolvedValue(ANTHROPIC_MODELS);
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
   forgetAppInfo();
 });
 
-/** Wait for the cards to show. */
+/** Wait for the accounts card to show. */
 async function ready() {
-  await screen.findByRole("region", { name: "ChatGPT" });
+  await screen.findByRole("region", { name: "Accounts" });
 }
 
-function card(name: string) {
+function region(name: string) {
   return within(screen.getByRole("region", { name }));
+}
+
+function row(name: string) {
+  return within(screen.getByRole("row", { name }));
 }
 
 describe("testText", () => {
   it("names the model on success and the kind on failure", () => {
-    expect(testText({ ok: true, provider: "anthropic", model: "claude-opus-5", ms: 12, text: "OK", error: null })).toBe(
+    expect(testText({ ok: true, account: "a1", model: "claude-opus-5", ms: 12, text: "OK", error: null })).toBe(
       "OK from claude-opus-5 in 12 ms",
     );
     expect(
-      testText({
-        ok: false,
-        provider: "openai",
-        model: "gpt-6",
-        ms: 3,
-        text: null,
-        error: { kind: "auth", message: "OpenAI refused the key" },
-      }),
+      testText({ ok: false, account: "o1", model: "gpt-6", ms: 3, text: null, error: { kind: "auth", message: "OpenAI refused the key" } }),
     ).toBe("Failed (auth): OpenAI refused the key");
   });
 });
 
-describe("Settings > AI", () => {
-  it("stores a key, shows it as set and never fills it back in", async () => {
+describe("usage text (accounts A13)", () => {
+  it("says how much is used and when it resets", () => {
+    const now = 1_000_000_000;
+    expect(untilText(now + 130 * 60_000, now)).toBe("2 h 10 min");
+    expect(untilText(now + 59 * 60_000 + 1, now)).toBe("1 h");
+    expect(untilText(now + 5 * 60_000, now)).toBe("5 min");
+    expect(untilText(now + (3 * 24 + 4) * 3_600_000, now)).toBe("3 d 4 h");
+    expect(untilText(now - 1, now)).toBe("now");
+    expect(usageText({ label: "5 h", used_percent: 41.6, window_minutes: 300, resets_at_ms: now + 130 * 60_000 }, now)).toBe(
+      "42% used, resets in 2 h 10 min",
+    );
+    expect(usageText({ label: "Weekly", used_percent: 3, window_minutes: null, resets_at_ms: null }, now)).toBe("3% used");
+  });
+
+  it("makes a name unique without regard to case", () => {
+    expect(uniqueName("OpenAI API", [{ name: "Claude" }])).toBe("OpenAI API");
+    expect(uniqueName("OpenAI API", [{ name: "openai api" }, { name: "OpenAI API 2" }])).toBe("OpenAI API 3");
+  });
+});
+
+describe("Settings > AI accounts (accounts A11)", () => {
+  it("lists the accounts with their kind, model, state and the default", async () => {
+    const chatgpt = account({ id: "c1", name: "ChatGPT", kind: "chatgpt", configured: true, signed_in: { account: "me@example.com", expired: false } });
+    const expired = account({ id: "c2", name: "Old plan", kind: "chatgpt", signed_in: { account: null, expired: true } });
+    aiStatus.mockResolvedValue({ ...status([CLAUDE, ROUTER, chatgpt, expired], "r1"), secrets_key: false });
+    render(() => <Ai />);
+    await ready();
+    expect(screen.getByRole("alert")).toHaveTextContent("This server has no secrets key");
+    const rows = within(screen.getByRole("table", { name: "AI accounts" }))
+      .getAllByRole("row")
+      .filter((r) => r.hasAttribute("data-account"))
+      .map((r) => [...r.querySelectorAll("td")].slice(0, 5).map((td) => td.textContent));
+    expect(rows).toEqual([
+      ["Claude", "Anthropic API", "claude-opus-5", "Key set", "Make default"],
+      ["OpenRouter", "OpenAI-compatible", "Kind default", "No key", "Default"],
+      ["ChatGPT", "ChatGPT subscription", "Kind default", "Signed in as me@example.com", "Make default"],
+      ["Old plan", "ChatGPT subscription", "Kind default", "Sign-in expired", "Make default"],
+    ]);
+    expect(row("Old plan").getByRole("button", { name: "Test Old plan" })).toBeDisabled();
+    expect(row("Claude").getByRole("button", { name: "Move Claude up" })).toBeDisabled();
+    expect(row("Old plan").getByRole("button", { name: "Move Old plan down" })).toBeDisabled();
+  });
+
+  it("says there is no account yet", async () => {
     aiStatus.mockResolvedValue(status());
-    aiPutKey.mockResolvedValue(status({ anthropic: { configured: true } }, "anthropic"));
-    aiModels.mockResolvedValue(ANTHROPIC_MODELS);
+    render(() => <Ai />);
+    await ready();
+    expect(screen.getByText("No AI account yet. Add one to use the chat and agents.")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("adds an Anthropic account: the kind first, then its fields, and the key never comes back", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE]));
+    const made = account({ id: "a2", name: "Anthropic API", kind: "anthropic", base_url: "https://api.z.ai/api/anthropic", configured: false });
+    aiCreateAccount.mockResolvedValue({ ...made, configured: true, key_set: true });
+    aiStatus.mockResolvedValueOnce(status([CLAUDE])).mockResolvedValue(status([CLAUDE, { ...made, configured: true, key_set: true }]));
     render(() => <Ai />);
     await ready();
 
-    const anthropic = await screen.findByRole("region", { name: "Anthropic" });
-    const input = within(anthropic).getByLabelText("API key") as HTMLInputElement;
-    expect(input.type).toBe("password");
-    expect(input.placeholder).toBe("Paste a key");
-    fireEvent.input(input, { target: { value: " sk-ant-secret " } });
-    fireEvent.click(within(anthropic).getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    const form = region("Add an account");
+    expect(form.queryByLabelText("Name")).toBeNull();
+    expect(form.getByRole("button", { name: "Add account" })).toBeDisabled();
+    const kinds = form.getByLabelText("Kind") as HTMLSelectElement;
+    expect([...kinds.options].map((o) => o.textContent)).toEqual([
+      "Choose a kind",
+      "Anthropic API",
+      "OpenAI API",
+      "OpenAI-compatible",
+      "ChatGPT subscription",
+    ]);
+    fireEvent.change(kinds, { target: { value: "anthropic" } });
+    expect(form.getByLabelText("Name")).toHaveValue("Anthropic API");
+    expect(form.getByLabelText("Base URL")).toHaveAttribute("placeholder", "https://api.anthropic.com");
+    expect(form.getByLabelText("Context window, tokens")).toHaveAttribute("placeholder", "200000");
+    expect(form.queryByText("Extra headers")).toBeNull();
+    const key = form.getByLabelText("API key") as HTMLInputElement;
+    expect(key.type).toBe("password");
+    expect(key.placeholder).toBe("Paste a key");
+    fireEvent.input(form.getByLabelText("Base URL"), { target: { value: " https://api.z.ai/api/anthropic " } });
+    fireEvent.input(key, { target: { value: " sk-ant-secret " } });
+    fireEvent.input(form.getByLabelText("Model"), { target: { value: "glm-5" } });
+    fireEvent.click(form.getByRole("button", { name: "Add account" }));
 
-    await waitFor(() => expect(aiPutKey).toHaveBeenCalledWith("anthropic", "sk-ant-secret"));
-    expect(await card("Anthropic").findByText("A key is set. Paste another to replace it.")).toBeTruthy();
-    const after = card("Anthropic").getByLabelText("API key") as HTMLInputElement;
-    expect(after.value).toBe("");
-    expect(after.placeholder).toBe("set");
+    await waitFor(() =>
+      expect(aiCreateAccount).toHaveBeenCalledWith({
+        kind: "anthropic",
+        name: "Anthropic API",
+        base_url: "https://api.z.ai/api/anthropic",
+        model: "glm-5",
+        headers: [],
+        context: null,
+        key: "sk-ant-secret",
+      }),
+    );
+    expect(aiPutKey).not.toHaveBeenCalled();
+    // The form is the new account's now.
+    const edit = within(await screen.findByRole("region", { name: "Edit Anthropic API" }));
+    expect((edit.getByLabelText("API key") as HTMLInputElement).value).toBe("");
+    expect(edit.getByLabelText("API key")).toHaveAttribute("placeholder", "set");
     expect(document.body.textContent).not.toContain("sk-ant-secret");
-    await waitFor(() => expect(aiModels).toHaveBeenCalledWith("anthropic"));
+    expect(row("Anthropic API").getByText("Key set")).toBeTruthy();
   });
 
-  it("saves the API URL and the key with one Save, URL first, and holds Test until they are saved", async () => {
-    const url = "https://api.z.ai/api/anthropic";
-    aiStatus.mockResolvedValue(status({ anthropic: { configured: true } }, "anthropic"));
-    aiModels.mockResolvedValue(ANTHROPIC_MODELS);
-    aiSaveSettings.mockResolvedValue(status({ anthropic: { configured: true, url, has_key: true } }, "anthropic"));
-    aiPutKey.mockResolvedValue(status({ anthropic: { configured: true, url, has_key: true } }, "anthropic"));
+  it("adds an OpenAI-compatible account with a base URL, extra headers and no key", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE]));
+    const made = account({ id: "r2", name: "Z.ai", kind: "openai_compatible", configured: true });
+    aiCreateAccount.mockResolvedValue(made);
     render(() => <Ai />);
     await ready();
 
-    const test = (await card("Anthropic").findByRole("button", { name: "Test" })) as HTMLButtonElement;
-    expect(test.disabled).toBe(false);
-    fireEvent.input(card("Anthropic").getByLabelText("API URL"), { target: { value: url } });
-    fireEvent.input(card("Anthropic").getByLabelText("API key"), { target: { value: "zai-key" } });
-    expect(test.disabled).toBe(true);
-    expect(card("Anthropic").getByText(/Save the key and API URL first/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    const form = region("Add an account");
+    fireEvent.change(form.getByLabelText("Kind"), { target: { value: "openai_compatible" } });
+    expect(form.getByLabelText("Name")).toHaveValue("OpenAI-compatible");
+    expect(form.getByLabelText("API key")).toHaveAttribute("placeholder", "Optional: some services need none");
+    fireEvent.input(form.getByLabelText("Name"), { target: { value: "Z.ai" } });
+    // The base URL is required.
+    fireEvent.click(form.getByRole("button", { name: "Add account" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("An OpenAI-compatible account needs its base URL.");
+    expect(aiCreateAccount).not.toHaveBeenCalled();
+    fireEvent.input(form.getByLabelText("Base URL"), { target: { value: "https://api.z.ai/api/paas/v4" } });
+    fireEvent.input(form.getByLabelText("Context window, tokens"), { target: { value: "64000" } });
 
-    fireEvent.click(card("Anthropic").getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(aiPutKey).toHaveBeenCalledWith("anthropic", "zai-key"));
-    expect(aiSaveSettings).toHaveBeenCalledWith({ urls: { anthropic: url } });
-    expect(aiSaveSettings.mock.invocationCallOrder[0]!).toBeLessThan(aiPutKey.mock.invocationCallOrder[0]!);
-    expect(await card("Anthropic").findByText(`Saved. Calls go to ${url}.`)).toBeTruthy();
-    await waitFor(() => expect(test.disabled).toBe(false));
+    expect(form.getByText("No extra headers.")).toBeTruthy();
+    fireEvent.click(form.getByRole("button", { name: "Add header" }));
+    fireEvent.click(form.getByRole("button", { name: "Add header" }));
+    fireEvent.click(form.getByRole("button", { name: "Add header" }));
+    fireEvent.input(form.getByLabelText("Header 1 name"), { target: { value: "HTTP-Referer" } });
+    fireEvent.input(form.getByLabelText("Header 1 value"), { target: { value: "https://vault.example" } });
+    fireEvent.input(form.getByLabelText("Header 2 name"), { target: { value: "X-Drop" } });
+    fireEvent.input(form.getByLabelText("Header 3 name"), { target: { value: " X-Title " } });
+    fireEvent.input(form.getByLabelText("Header 3 value"), { target: { value: "TheVault" } });
+    fireEvent.click(form.getByRole("button", { name: "Remove header 2" }));
+    expect(form.getByLabelText("Header 2 name")).toHaveValue(" X-Title ");
+    fireEvent.click(form.getByRole("button", { name: "Add account" }));
+
+    await waitFor(() =>
+      expect(aiCreateAccount).toHaveBeenCalledWith({
+        kind: "openai_compatible",
+        name: "Z.ai",
+        base_url: "https://api.z.ai/api/paas/v4",
+        model: null,
+        headers: [
+          ["HTTP-Referer", "https://vault.example"],
+          ["X-Title", "TheVault"],
+        ],
+        context: { window: 64000 },
+      }),
+    );
+    expect(aiPutKey).not.toHaveBeenCalled();
   });
 
-  it("removes a key after confirming", async () => {
-    aiStatus.mockResolvedValue(status({ openai: { configured: true } }));
-    aiModels.mockResolvedValue({ provider: "openai", model: null, models: [{ id: "gpt-6", display_name: null }] });
-    aiPutKey.mockResolvedValue(status());
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    render(() => <Ai />);
-    await ready();
-    fireEvent.click(await card("OpenAI").findByRole("button", { name: "Remove key" }));
-    await waitFor(() => expect(aiPutKey).toHaveBeenCalledWith("openai", ""));
-    await waitFor(() => expect(card("OpenAI").queryByRole("button", { name: "Remove key" })).toBeNull());
-    confirm.mockRestore();
-  });
-
-  it("picks the model from the live list, saves it, and tests it", async () => {
-    aiStatus.mockResolvedValue(status({ anthropic: { configured: true } }, "anthropic"));
-    aiModels.mockResolvedValue(ANTHROPIC_MODELS);
-    aiSaveSettings.mockResolvedValue(status({ anthropic: { configured: true, model: "claude-sonnet-5" } }, "anthropic"));
-    aiTest.mockResolvedValue({ ok: true, provider: "anthropic", model: "claude-sonnet-5", ms: 40, text: "OK", error: null });
+  it("edits an account: renames it, picks the model from the live list and saves it in one", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE, ROUTER]));
+    aiUpdateAccount.mockResolvedValue(status([{ ...CLAUDE, name: "Work Claude", model: "claude-sonnet-5" }, ROUTER]));
     render(() => <Ai />);
     await ready();
 
-    const select = (await card("Anthropic").findByLabelText("Model")) as HTMLSelectElement;
-    // The preselected model shows before any is saved.
-    expect(select.value).toBe("claude-opus-5");
-    expect([...select.options].map((o) => o.textContent)).toEqual([
+    fireEvent.click(row("Claude").getByRole("button", { name: "Edit Claude" }));
+    const form = region("Edit Claude");
+    expect(form.getByText("Anthropic API")).toBeTruthy();
+    expect(form.queryByLabelText("Kind")?.tagName).not.toBe("SELECT");
+    await waitFor(() => expect(form.getByLabelText("Model").tagName).toBe("SELECT"));
+    expect(aiModels).toHaveBeenCalledWith("a1");
+    const model = form.getByLabelText("Model") as HTMLSelectElement;
+    expect([...model.options].map((o) => o.textContent)).toEqual([
+      "Default (claude-opus-5)",
       "Claude Opus 5 (claude-opus-5)",
       "Claude Sonnet 5 (claude-sonnet-5)",
     ]);
-    fireEvent.change(select, { target: { value: "claude-sonnet-5" } });
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ models: { anthropic: "claude-sonnet-5" } }));
-    await waitFor(() => expect((card("Anthropic").getByLabelText("Model") as HTMLSelectElement).value).toBe("claude-sonnet-5"));
+    expect(model.value).toBe("claude-opus-5");
+    fireEvent.change(model, { target: { value: "claude-sonnet-5" } });
+    fireEvent.input(form.getByLabelText("Name"), { target: { value: "Work Claude" } });
+    fireEvent.click(form.getByRole("button", { name: "Save" }));
 
-    fireEvent.click(card("Anthropic").getByRole("button", { name: "Test" }));
-    await waitFor(() => expect(aiTest).toHaveBeenCalledWith("anthropic", "claude-sonnet-5"));
-    expect((await card("Anthropic").findByRole("status")).textContent).toBe("OK from claude-sonnet-5 in 40 ms");
+    await waitFor(() =>
+      expect(aiUpdateAccount).toHaveBeenCalledWith("a1", {
+        name: "Work Claude",
+        base_url: null,
+        model: "claude-sonnet-5",
+        headers: [],
+        context: null,
+      }),
+    );
+    expect(aiPutKey).not.toHaveBeenCalled();
+    expect(await screen.findByRole("region", { name: "Edit Work Claude" })).toBeTruthy();
+    expect(row("Work Claude").getByText("claude-sonnet-5")).toBeTruthy();
   });
 
-  it("shows a failed Test's kind and message", async () => {
-    aiStatus.mockResolvedValue(status({ openai: { configured: true, model: "gpt-6" } }, "openai"));
-    aiModels.mockResolvedValue({ provider: "openai", model: "gpt-6", models: [{ id: "gpt-6", display_name: null }] });
-    aiTest.mockResolvedValue({
-      ok: false,
-      provider: "openai",
-      model: "gpt-6",
-      ms: 5,
-      text: null,
-      error: { kind: "rate_limit", message: "OpenAI answered 429: Slow down" },
-    });
+  it("keeps an OpenAI-compatible account's headers in its form, and types the model when the list fails", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE, ROUTER]));
+    const { ApiError } = await import("../api");
+    aiModels.mockRejectedValue(new ApiError(502, { error: "upstream", message: "the service answered 404" }));
     render(() => <Ai />);
     await ready();
-    await card("OpenAI").findByLabelText("Model");
-    fireEvent.click(card("OpenAI").getByRole("button", { name: "Test" }));
-    expect((await card("OpenAI").findByRole("status")).textContent).toBe(
-      "Failed (rate_limit): OpenAI answered 429: Slow down",
+    fireEvent.click(row("OpenRouter").getByRole("button", { name: "Edit OpenRouter" }));
+    const form = region("Edit OpenRouter");
+    expect(form.getByLabelText("Base URL")).toHaveValue("https://openrouter.ai/api/v1");
+    expect(form.getByLabelText("Header 1 name")).toHaveValue("X-Title");
+    expect(form.getByLabelText("Header 1 value")).toHaveValue("TheVault");
+    expect(await form.findByText(/The model list could not be read \(the service answered 404\): type a model id/)).toBeTruthy();
+    expect(form.getByLabelText("Model").tagName).toBe("INPUT");
+  });
+
+  it("removes a key after confirming", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE]));
+    aiPutKey.mockResolvedValue(status([{ ...CLAUDE, key_set: false, configured: false }]));
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(() => <Ai />);
+    await ready();
+    fireEvent.click(row("Claude").getByRole("button", { name: "Edit Claude" }));
+    fireEvent.click(region("Edit Claude").getByRole("button", { name: "Remove key" }));
+    expect(ask).toHaveBeenCalledWith("Remove the API key of Claude? TheVault forgets it.");
+    await waitFor(() => expect(aiPutKey).toHaveBeenCalledWith("a1", ""));
+    expect(await row("Claude").findByText("Not set up")).toBeTruthy();
+  });
+
+  it("tests an account and shows how it went", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE, ROUTER]));
+    aiTest
+      .mockResolvedValueOnce({ ok: true, account: "a1", model: "claude-opus-5", ms: 42, text: "OK", error: null })
+      .mockResolvedValueOnce({ ok: false, account: "r1", model: null, ms: 7, text: null, error: { kind: "unsupported", message: "this service does not speak Chat Completions" } });
+    render(() => <Ai />);
+    await ready();
+    fireEvent.click(row("Claude").getByRole("button", { name: "Test Claude" }));
+    await waitFor(() => expect(aiTest).toHaveBeenCalledWith("a1"));
+    expect(await screen.findByText("Claude: OK from claude-opus-5 in 42 ms")).toBeTruthy();
+    fireEvent.click(row("OpenRouter").getByRole("button", { name: "Test OpenRouter" }));
+    expect(await screen.findByText("OpenRouter: Failed (unsupported): this service does not speak Chat Completions")).toBeTruthy();
+    // A Test with no model chosen saves the preselected one, so the status is read again.
+    await waitFor(() => expect(aiStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it("makes an account the default and reorders the table", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE, ROUTER], "a1"));
+    aiSetDefault.mockResolvedValue(status([CLAUDE, ROUTER], "r1"));
+    aiOrderAccounts.mockResolvedValue(status([ROUTER, CLAUDE], "r1"));
+    render(() => <Ai />);
+    await ready();
+    expect(row("Claude").getByText("Default")).toBeTruthy();
+    fireEvent.click(row("OpenRouter").getByRole("button", { name: "Make OpenRouter the default" }));
+    await waitFor(() => expect(aiSetDefault).toHaveBeenCalledWith("r1"));
+    expect(await row("Claude").findByRole("button", { name: "Make Claude the default" })).toBeTruthy();
+    fireEvent.click(row("Claude").getByRole("button", { name: "Move Claude down" }));
+    await waitFor(() => expect(aiOrderAccounts).toHaveBeenCalledWith(["r1", "a1"]));
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("row")
+          .filter((r) => r.hasAttribute("data-account"))
+          .map((r) => r.getAttribute("aria-label")),
+      ).toEqual(["OpenRouter", "Claude"]),
     );
   });
 
-  it("makes a provider the default", async () => {
-    aiStatus.mockResolvedValue(status({ anthropic: { configured: true }, openai: { configured: true } }, "anthropic"));
-    aiModels.mockResolvedValue(ANTHROPIC_MODELS);
-    aiSaveSettings.mockResolvedValue(status({ anthropic: { configured: true }, openai: { configured: true } }, "openai"));
+  it("deletes an account after a confirm that names the agents using it", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE, { ...ROUTER, agents: ["triage", "digest"] }]));
+    aiDeleteAccount.mockResolvedValue(status([CLAUDE]));
+    const ask = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
     render(() => <Ai />);
     await ready();
-    const anthropic = (await card("Anthropic").findByLabelText("Use Anthropic by default")) as HTMLInputElement;
-    expect(anthropic.checked).toBe(true);
-    fireEvent.click(card("OpenAI").getByLabelText("Use OpenAI by default"));
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ default_provider: "openai" }));
-    await waitFor(() => expect((card("OpenAI").getByLabelText("Use OpenAI by default") as HTMLInputElement).checked).toBe(true));
+    fireEvent.click(row("OpenRouter").getByRole("button", { name: "Delete OpenRouter" }));
+    await waitFor(() =>
+      expect(ask).toHaveBeenCalledWith("Delete OpenRouter? The agents triage, digest name it and will use the default account instead."),
+    );
+    expect(aiDeleteAccount).not.toHaveBeenCalled();
+    fireEvent.click(row("OpenRouter").getByRole("button", { name: "Delete OpenRouter" }));
+    await waitFor(() => expect(aiDeleteAccount).toHaveBeenCalledWith("r1"));
+    await waitFor(() => expect(screen.queryByRole("row", { name: "OpenRouter" })).toBeNull());
   });
 
-  it("signs in with ChatGPT through the pasted address", async () => {
-    aiStatus.mockResolvedValue(status());
+  it("deletes an account no agent names with a plain confirm", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE, ROUTER]));
+    aiDeleteAccount.mockResolvedValue(status([ROUTER]));
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(() => <Ai />);
+    await ready();
+    fireEvent.click(row("Claude").getByRole("button", { name: "Delete Claude" }));
+    await waitFor(() => expect(aiDeleteAccount).toHaveBeenCalledWith("a1"));
+    expect(ask).toHaveBeenCalledWith("Delete Claude? TheVault forgets its key or sign-in.");
+  });
+});
+
+describe("Settings > AI ChatGPT accounts", () => {
+  const plan = account({ id: "c1", name: "ChatGPT subscription", kind: "chatgpt" });
+
+  it("adds a ChatGPT account, then signs it in through the pasted address", async () => {
+    aiStatus.mockResolvedValueOnce(status([CLAUDE])).mockResolvedValue(status([CLAUDE, plan]));
+    aiCreateAccount.mockResolvedValue(plan);
     chatgptStart.mockResolvedValue({ auth_url: AUTH_URL });
-    chatgptFinish.mockResolvedValue(status({ chatgpt: { configured: true, account: "me@example.com" } }, "chatgpt"));
-    aiModels.mockResolvedValue({ provider: "chatgpt", model: null, models: [{ id: "gpt-6.1-sol", display_name: "GPT-6.1 Sol" }] });
+    const signedIn = { ...plan, configured: true, signed_in: { account: "me@example.com", expired: false } };
+    chatgptFinish.mockResolvedValue(status([CLAUDE, signedIn]));
     render(() => <Ai />);
     await ready();
 
-    fireEvent.click(await card("ChatGPT").findByRole("button", { name: "Continue with ChatGPT" }));
-    await waitFor(() => expect(chatgptStart).toHaveBeenCalled());
-    const open = await card("ChatGPT").findByRole("link", { name: "Open the ChatGPT sign-in page" });
-    expect(open.getAttribute("href")).toBe(AUTH_URL);
-    expect(open.getAttribute("target")).toBe("_blank");
-    const pasted = "http://127.0.0.1:53683/auth/callback?code=c1&state=s1&client_id=oaiapp_x";
-    fireEvent.input(card("ChatGPT").getByLabelText("Address from the browser"), { target: { value: ` ${pasted} ` } });
-    fireEvent.click(card("ChatGPT").getByRole("button", { name: "Finish signing in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    const form = region("Add an account");
+    fireEvent.change(form.getByLabelText("Kind"), { target: { value: "chatgpt" } });
+    expect(form.queryByLabelText("Base URL")).toBeNull();
+    expect(form.queryByLabelText("API key")).toBeNull();
+    expect(form.getByText("Add the account, then sign in with ChatGPT.")).toBeTruthy();
+    fireEvent.click(form.getByRole("button", { name: "Add account" }));
+    await waitFor(() =>
+      expect(aiCreateAccount).toHaveBeenCalledWith({
+        kind: "chatgpt",
+        name: "ChatGPT subscription",
+        base_url: null,
+        model: null,
+        headers: [],
+        context: null,
+      }),
+    );
 
-    await waitFor(() => expect(chatgptFinish).toHaveBeenCalledWith(pasted));
-    expect(await card("ChatGPT").findByText("Using ChatGPT plan as me@example.com")).toBeTruthy();
-    expect(card("ChatGPT").getByRole("link", { name: "Manage usage" }).getAttribute("href")).toBe(CHATGPT_USAGE_URL);
-    expect(card("ChatGPT").queryByLabelText("Address from the browser")).toBeNull();
-    await waitFor(() => expect(aiModels).toHaveBeenCalledWith("chatgpt"));
+    const edit = within(await screen.findByRole("region", { name: "Edit ChatGPT subscription" }));
+    fireEvent.click(edit.getByRole("button", { name: "Continue with ChatGPT" }));
+    await waitFor(() => expect(chatgptStart).toHaveBeenCalledWith("c1"));
+    const link = await edit.findByRole("link", { name: "Open the ChatGPT sign-in page" });
+    expect(link.getAttribute("href")).toBe(AUTH_URL);
+    const pasted = "http://127.0.0.1:53683/auth/callback?code=abc&state=s1";
+    fireEvent.input(edit.getByLabelText("Address from the browser"), { target: { value: ` ${pasted} ` } });
+    fireEvent.click(edit.getByRole("button", { name: "Finish signing in" }));
+    await waitFor(() => expect(chatgptFinish).toHaveBeenCalledWith("c1", pasted));
+    expect(await screen.findByText("Using a ChatGPT plan as me@example.com")).toBeTruthy();
+    expect(row("ChatGPT subscription").getByText("Signed in as me@example.com")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Manage usage" }).getAttribute("href")).toBe(CHATGPT_USAGE_URL);
   });
 
   it("keeps the paste box and shows the refusal when finishing fails", async () => {
-    aiStatus.mockResolvedValue(status());
+    aiStatus.mockResolvedValue(status([plan]));
     chatgptStart.mockResolvedValue({ auth_url: AUTH_URL });
     const { ApiError } = await import("../api");
-    chatgptFinish.mockRejectedValue(new ApiError(400, { error: "chatgpt", message: "the ChatGPT ID token carries the wrong nonce" }));
+    chatgptFinish.mockRejectedValue(new ApiError(400, { error: "bad_state", message: "The sign-in expired: start again." }));
     render(() => <Ai />);
     await ready();
-    fireEvent.click(await card("ChatGPT").findByRole("button", { name: "Continue with ChatGPT" }));
-    fireEvent.input(await card("ChatGPT").findByLabelText("Address from the browser"), {
-      target: { value: "http://127.0.0.1:53683/auth/callback?code=x" },
-    });
-    fireEvent.click(card("ChatGPT").getByRole("button", { name: "Finish signing in" }));
-    expect((await card("ChatGPT").findByRole("alert")).textContent).toContain("wrong nonce");
-    expect(card("ChatGPT").getByLabelText("Address from the browser")).toBeTruthy();
+    fireEvent.click(row("ChatGPT subscription").getByRole("button", { name: "Edit ChatGPT subscription" }));
+    const edit = region("Edit ChatGPT subscription");
+    fireEvent.click(edit.getByRole("button", { name: "Continue with ChatGPT" }));
+    fireEvent.input(await edit.findByLabelText("Address from the browser"), { target: { value: "http://127.0.0.1:53683/auth/callback?code=x" } });
+    fireEvent.click(edit.getByRole("button", { name: "Finish signing in" }));
+    expect(await edit.findByText("The sign-in expired: start again.")).toBeTruthy();
+    expect(edit.getByLabelText("Address from the browser")).toBeTruthy();
   });
 
-  it("disconnects ChatGPT", async () => {
-    aiStatus.mockResolvedValue(status({ chatgpt: { configured: true, account: "me@example.com", model: "gpt-6.1-sol" } }));
-    aiModels.mockResolvedValue({ provider: "chatgpt", model: "gpt-6.1-sol", models: [{ id: "gpt-6.1-sol", display_name: "GPT-6.1 Sol" }] });
-    chatgptDisconnect.mockResolvedValue(status());
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("disconnects a ChatGPT account", async () => {
+    const signedIn = { ...plan, configured: true, signed_in: { account: "me@example.com", expired: false } };
+    aiStatus.mockResolvedValue(status([signedIn]));
+    chatgptDisconnect.mockResolvedValue(status([plan]));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(() => <Ai />);
     await ready();
-    fireEvent.click(await card("ChatGPT").findByRole("button", { name: "Disconnect" }));
-    await waitFor(() => expect(chatgptDisconnect).toHaveBeenCalled());
-    expect(await card("ChatGPT").findByRole("button", { name: "Continue with ChatGPT" })).toBeTruthy();
-    expect(screen.queryByText(/Using ChatGPT plan/)).toBeNull();
-    confirm.mockRestore();
+    fireEvent.click(row("ChatGPT subscription").getByRole("button", { name: "Edit ChatGPT subscription" }));
+    fireEvent.click(region("Edit ChatGPT subscription").getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(chatgptDisconnect).toHaveBeenCalledWith("c1"));
+    expect(await region("Edit ChatGPT subscription").findByRole("button", { name: "Continue with ChatGPT" })).toBeTruthy();
+  });
+
+  it("shows the plan's usage windows as bars, and a Test reads them again", async () => {
+    const now = Date.now();
+    const usage = {
+      read_at_ms: now - 60_000,
+      plan: "Plus",
+      windows: [
+        { label: "5 hours", used_percent: 41.6, window_minutes: 300, resets_at_ms: now + 130 * 60_000 + 30_000 },
+        { label: "Weekly", used_percent: 7, window_minutes: 10080, resets_at_ms: null },
+      ],
+    };
+    const signedIn = { ...plan, configured: true, signed_in: { account: "me@example.com", expired: false }, usage };
+    aiStatus
+      .mockResolvedValueOnce(status([CLAUDE, signedIn]))
+      .mockResolvedValue(
+        status([CLAUDE, { ...signedIn, usage: { ...usage, windows: [{ ...usage.windows[0]!, used_percent: 50 }, usage.windows[1]!] } }]),
+      );
+    aiTest.mockResolvedValue({ ok: true, account: "c1", model: "gpt-6", ms: 30, text: "OK", error: null });
+    render(() => <Ai />);
+    await ready();
+    const bars = within(screen.getByRole("group", { name: "ChatGPT subscription usage" }));
+    expect(bars.getByRole("meter", { name: "5 hours used" })).toHaveAttribute("aria-valuenow", "42");
+    expect(bars.getByText("42% used, resets in 2 h 11 min")).toBeTruthy();
+    expect(bars.getByText("7% used")).toBeTruthy();
+    expect(bars.getByText(/^Plus plan, as of /)).toBeTruthy();
+    // API-key accounts show none.
+    expect(screen.queryByRole("group", { name: "Claude usage" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Test ChatGPT subscription" }));
+    await waitFor(() => expect(aiTest).toHaveBeenCalledWith("c1"));
+    expect(await screen.findByText(/^50% used, resets in/)).toBeTruthy();
+  });
+});
+
+describe("the Context card", () => {
+  it("saves the compaction switch and share", async () => {
+    aiStatus.mockResolvedValue(status([CLAUDE]));
+    aiSaveSettings.mockResolvedValue({ ...status([CLAUDE]), context: { auto_compact: false, compact_at: 80 } });
+    render(() => <Ai />);
+    await ready();
+    const c = region("Context");
+    fireEvent.click(c.getByLabelText("Compact long chats on their own"));
+    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ context: { auto_compact: false } }));
+    await waitFor(() => expect(c.getByLabelText("Compact at, percent of the window")).toBeDisabled());
   });
 });
 
 describe("the chat settings moved to Assistant (agents G6)", () => {
   it("links to Assistant's agent screen in place of the system prompt and switch cards", async () => {
-    aiStatus.mockResolvedValue(status());
+    aiStatus.mockResolvedValue(status([CLAUDE]));
     render(() => <Ai />);
     await ready();
     const link = screen.getByRole("link", { name: "Assistant agent" });
     expect(link.getAttribute("href")).toBe("/agents/assistant");
     expect(link.parentElement).toHaveTextContent("The chat panel's prompt and permissions are on the Assistant agent.");
-    expect(screen.queryByRole("region", { name: "Chat system prompt" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "Changes the AI makes" })).toBeNull();
     expect(screen.queryByLabelText("System prompt")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
-    // Settings > AI keeps the providers.
-    expect(screen.getByRole("region", { name: "Anthropic" })).toBeTruthy();
-    expect(screen.getByRole("region", { name: "OpenAI" })).toBeTruthy();
   });
 });
 
@@ -312,186 +579,5 @@ describe("the AI section", () => {
     await waitFor(() => expect(screen.queryByRole("link", { name: "Integrations" })).toBeNull());
     expect(screen.queryByRole("link", { name: "AI" })).toBeNull();
     expect(screen.getByRole("link", { name: "Devices" })).toBeTruthy();
-  });
-});
-
-describe("Settings > AI API URLs (ai D24)", () => {
-  it("saves an API URL and clears it back to the official API", async () => {
-    aiStatus.mockResolvedValue(status());
-    const custom = "https://openrouter.ai/api/v1";
-    aiSaveSettings
-      .mockResolvedValueOnce(status({ openai: { configured: true, url: custom, has_key: false } }))
-      .mockResolvedValueOnce(status());
-    aiModels.mockResolvedValue({ provider: "openai", model: null, models: [{ id: "gpt-6", display_name: null }] });
-    render(() => <Ai />);
-    await ready();
-
-    const input = card("OpenAI").getByLabelText("API URL") as HTMLInputElement;
-    expect(input.placeholder).toBe("https://api.openai.com/v1");
-    expect((card("Anthropic").getByLabelText("API URL") as HTMLInputElement).placeholder).toBe(
-      "https://api.anthropic.com/v1",
-    );
-    expect(card("OpenAI").getByText(/Leave the URL empty for the official API/)).toBeTruthy();
-    const save = card("OpenAI").getByRole("button", { name: "Save" }) as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
-    fireEvent.input(input, { target: { value: ` ${custom} ` } });
-    fireEvent.click(save);
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ urls: { openai: custom } }));
-    expect(await card("OpenAI").findByText(`Saved. Calls go to ${custom}.`)).toBeTruthy();
-    // Configured with no key: the key is optional and not shown as set.
-    const key = card("OpenAI").getByLabelText("API key") as HTMLInputElement;
-    expect(key.placeholder).toBe("Optional with a custom API URL");
-    expect(card("OpenAI").queryByRole("button", { name: "Remove key" })).toBeNull();
-    await waitFor(() => expect(aiModels).toHaveBeenCalledWith("openai"));
-
-    const after = card("OpenAI").getByLabelText("API URL") as HTMLInputElement;
-    expect(after.value).toBe(custom);
-    fireEvent.input(after, { target: { value: "" } });
-    fireEvent.click(card("OpenAI").getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenLastCalledWith({ urls: { openai: "" } }));
-    expect(await card("OpenAI").findByText("Saved. Calls go to the official OpenAI API.")).toBeTruthy();
-    expect((card("OpenAI").getByLabelText("API URL") as HTMLInputElement).value).toBe("");
-  });
-
-  it("shows a refused URL's message", async () => {
-    aiStatus.mockResolvedValue(status());
-    aiSaveSettings.mockRejectedValue(new Error("The API URL must start with http:// or https://."));
-    render(() => <Ai />);
-    await ready();
-    fireEvent.input(card("Anthropic").getByLabelText("API URL"), { target: { value: "ftp://example.com" } });
-    fireEvent.click(card("Anthropic").getByRole("button", { name: "Save" }));
-    expect((await card("Anthropic").findByRole("alert")).textContent).toContain("must start with http://");
-  });
-
-  it("types the model when a custom URL lists none", async () => {
-    const url = "http://10.0.0.5:11434";
-    aiStatus.mockResolvedValue(status({ openai: { configured: true, url, has_key: false } }));
-    aiModels.mockResolvedValue({ provider: "openai", model: null, models: [] });
-    aiSaveSettings.mockResolvedValue(status({ openai: { configured: true, url, has_key: false, model: "llama-4" } }));
-    render(() => <Ai />);
-    await ready();
-
-    const model = (await card("OpenAI").findByLabelText("Model")) as HTMLInputElement;
-    expect(model.tagName).toBe("INPUT");
-    expect(card("OpenAI").getByText(/lists no models/)).toBeTruthy();
-    fireEvent.input(model, { target: { value: " llama-4 " } });
-    fireEvent.change(model, { target: { value: " llama-4 " } });
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenCalledWith({ models: { openai: "llama-4" } }));
-    await waitFor(() => expect((card("OpenAI").getByLabelText("Model") as HTMLInputElement).value).toBe("llama-4"));
-  });
-
-  it("types the model when a custom URL's model list fails, and keeps the select otherwise", async () => {
-    aiStatus.mockResolvedValue(
-      status({
-        anthropic: { configured: true, url: "https://llm.example/v1", has_key: true, model: "my-model" },
-        openai: { configured: true, has_key: true },
-      }),
-    );
-    aiModels.mockImplementation(async (p: string) => {
-      if (p === "anthropic") throw new Error("Anthropic answered 404: Not found");
-      throw new Error("OpenAI answered 500: down");
-    });
-    render(() => <Ai />);
-    await ready();
-
-    const model = (await card("Anthropic").findByLabelText("Model")) as HTMLInputElement;
-    expect(model.tagName).toBe("INPUT");
-    await waitFor(() => expect((card("Anthropic").getByLabelText("Model") as HTMLInputElement).value).toBe("my-model"));
-    expect(card("Anthropic").getByText(/could not be read/)).toBeTruthy();
-    expect(card("Anthropic").getByRole("alert").textContent).toContain("404");
-    // A key is set too: it shows, and Remove key is offered.
-    expect(card("Anthropic").getByRole("button", { name: "Remove key" })).toBeTruthy();
-    // The official OpenAI API keeps the error and no model field to type in.
-    await waitFor(() => expect(card("OpenAI").getByRole("alert").textContent).toContain("500"));
-    expect(card("OpenAI").queryByRole("textbox", { name: "Model" })).toBeNull();
-  });
-});
-
-describe("Settings > AI API type (ai D25)", () => {
-  const url = "https://api.z.ai/api/coding/paas/v4";
-  const MODELS = { provider: "openai", model: "glm-5.3-flash", models: [{ id: "glm-5.3-flash", display_name: null }] };
-
-  it("names the API a Test went over", () => {
-    expect(
-      testText({
-        ok: true,
-        provider: "openai",
-        model: "glm-5.3-flash",
-        ms: 30,
-        text: "OK",
-        api: "chat_completions",
-        error: null,
-      }),
-    ).toBe("OK from glm-5.3-flash in 30 ms (Chat Completions API)");
-    expect(
-      testText({ ok: true, provider: "openai", model: "gpt-6", ms: 9, text: "OK", api: null, error: null }),
-    ).toBe("OK from gpt-6 in 9 ms");
-  });
-
-  it("shows the select only with a custom URL on the OpenAI card, and saves it with the card", async () => {
-    aiStatus.mockResolvedValue(status({ openai: { configured: true, has_key: true, api: "responses" } }));
-    aiModels.mockResolvedValue(MODELS);
-    aiSaveSettings.mockResolvedValue(
-      status({ openai: { configured: true, has_key: true, url, api: "chat_completions" } }),
-    );
-    render(() => <Ai />);
-    await ready();
-
-    expect(card("OpenAI").queryByLabelText("API type")).toBeNull();
-    fireEvent.input(card("OpenAI").getByLabelText("API URL"), { target: { value: url } });
-    const select = card("OpenAI").getByLabelText("API type") as HTMLSelectElement;
-    expect([...select.options].map((o) => o.textContent)).toEqual(["Responses API", "Chat Completions API"]);
-    expect(select.value).toBe("responses");
-    fireEvent.change(select, { target: { value: "chat_completions" } });
-    fireEvent.input(card("Anthropic").getByLabelText("API URL"), { target: { value: "https://x.example" } });
-    expect(card("Anthropic").queryByLabelText("API type")).toBeNull();
-
-    fireEvent.click(card("OpenAI").getByRole("button", { name: "Save" }));
-    await waitFor(() =>
-      expect(aiSaveSettings).toHaveBeenCalledWith({ urls: { openai: url }, openai_api: "chat_completions" }),
-    );
-    expect(aiSaveSettings).toHaveBeenCalledTimes(1);
-    expect(aiPutKey).not.toHaveBeenCalled();
-    expect(await card("OpenAI").findByText(`Saved. Calls go to ${url}.`)).toBeTruthy();
-    expect((card("OpenAI").getByLabelText("API type") as HTMLSelectElement).value).toBe("chat_completions");
-
-    // The type alone is a change to save, and holds Test until it is saved.
-    const test = card("OpenAI").getByRole("button", { name: "Test" }) as HTMLButtonElement;
-    expect(test.disabled).toBe(false);
-    fireEvent.change(card("OpenAI").getByLabelText("API type"), { target: { value: "responses" } });
-    expect(test.disabled).toBe(true);
-    fireEvent.click(card("OpenAI").getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(aiSaveSettings).toHaveBeenLastCalledWith({ openai_api: "responses" }));
-  });
-
-  it("shows the type a Test detected and the saved type after it", async () => {
-    aiStatus
-      .mockResolvedValueOnce(status({ openai: { configured: true, url, model: "glm-5.3-flash", api: "responses" } }))
-      .mockResolvedValue(status({ openai: { configured: true, url, model: "glm-5.3-flash", api: "chat_completions" } }));
-    aiModels.mockResolvedValue(MODELS);
-    aiTest.mockResolvedValue({
-      ok: true,
-      provider: "openai",
-      model: "glm-5.3-flash",
-      ms: 120,
-      text: "OK",
-      api: "chat_completions",
-      error: null,
-    });
-    render(() => <Ai />);
-    await ready();
-
-    expect((card("OpenAI").getByLabelText("API type") as HTMLSelectElement).value).toBe("responses");
-    await card("OpenAI").findByLabelText("Model");
-    fireEvent.click(card("OpenAI").getByRole("button", { name: "Test" }));
-    await waitFor(() => expect(aiTest).toHaveBeenCalledWith("openai", "glm-5.3-flash"));
-    expect((await card("OpenAI").findByRole("status")).textContent).toBe(
-      "OK from glm-5.3-flash in 120 ms (Chat Completions API)",
-    );
-    await waitFor(() =>
-      expect((card("OpenAI").getByLabelText("API type") as HTMLSelectElement).value).toBe("chat_completions"),
-    );
-    expect(aiStatus).toHaveBeenCalledTimes(2);
-    expect((card("OpenAI").getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

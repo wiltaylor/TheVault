@@ -447,15 +447,9 @@ export interface ContextUse {
   window: number;
 }
 
-const LABELS: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", chatgpt: "ChatGPT" };
-
-export function providerLabel(p: string | null | undefined): string {
-  return (p && LABELS[p]) || p || "The provider";
-}
-
-/** The refusal notice's text: who refused and the category they gave (ai D11). */
-export function refusalText(provider: string | null, model: string | null, category: string | null, explanation: string | null): string {
-  let t = `${providerLabel(provider)}${model ? ` ${model}` : ""} refused this request`;
+/** The refusal notice's text: the account that refused, by name, and the category it gave (ai D11). */
+export function refusalText(name: string | null, model: string | null, category: string | null, explanation: string | null): string {
+  let t = `${name || "The model"}${model ? ` ${model}` : ""} refused this request`;
   if (category) t += ` (category: ${category})`;
   t += ". The answer above is cut off.";
   if (explanation) t += ` ${explanation}`;
@@ -963,7 +957,8 @@ export type OpenResult = "open" | "archived" | "gone" | "error";
 /** What a view adds to the message it sends. */
 interface AskOptions {
   noteId?: string | undefined;
-  provider: string | null;
+  /** The account's id, or null for the agent's or the default (accounts A5). */
+  account: string | null;
   model: string | null;
   /** The message starts a thread of the agent, when the conversation has none yet. */
   startThread: boolean;
@@ -1144,7 +1139,7 @@ function createConversation(agent: string, id: string | null) {
           kind: "notice",
           notice: "refusal",
           category: s("category"),
-          text: refusalText(s("provider"), s("model"), s("category"), s("explanation")),
+          text: refusalText(s("name") ?? s("provider"), s("model"), s("category"), s("explanation")),
         });
         break;
       }
@@ -1289,7 +1284,7 @@ function createConversation(agent: string, id: string | null) {
       }
       const named = thread || agent !== ASSISTANT;
       const body = {
-        ...(o.provider ? { provider: o.provider } : {}),
+        ...(o.account ? { account: o.account } : {}),
         ...(o.model ? { model: o.model } : {}),
         messages: command ? (thread ? [] : transcript) : thread ? [user] : transcript,
         ...(o.noteId ? { note_id: o.noteId } : {}),
@@ -1941,16 +1936,16 @@ export function threadsHeld(): number {
   return conversations.size;
 }
 
-/** Whether agent `name` names its own provider or model, which the chat box's choice overrides. */
+/** Whether agent `name` names its own account or model, which the chat box's choice overrides. */
 export function ownsModel(name: string): boolean {
   const a = agents().find((x) => x.name === name);
-  return !!a && (!!a.provider || !!a.model);
+  return !!a && (!!a.account || !!a.model);
 }
 
 /** The conversation a view shows, as the views read it: the thread's, and the view's own choices. */
 export interface ChatState extends ConversationState {
-  /** The provider and model the next turn uses; null for Settings > AI's defaults. */
-  provider: string | null;
+  /** The account, by id, and model the next turn uses; null for the agent's or Settings > AI's defaults. */
+  account: string | null;
   model: string | null;
   /** The agent whose conversation this is (agents G6). */
   agent: string;
@@ -1958,7 +1953,7 @@ export interface ChatState extends ConversationState {
 
 /**
  * One view of conversations, such as the right sidebar's AI panel or an agent screen's chat:
- * the agent, provider and model it chose, and the conversation it shows, a new one or a thread's.
+ * the agent, account and model it chose, and the conversation it shows, a new one or a thread's.
  * A thread's conversation is shared with every other view showing that thread (agents G18), so
  * a reply streams in both, and sending, Stop, Apply and Discard in either show in both; each view
  * chooses its threads by itself.
@@ -1967,12 +1962,12 @@ export function createChatSession(options: ChatOptions = {}) {
   return createRoot((dispose) => {
     const [view, setView] = createStore({
       agent: options.agent ?? ASSISTANT,
-      provider: null as string | null,
+      account: null as string | null,
       model: null as string | null,
-      /** The choice for an agent that names its own model, which overrides it; null keeps the agent's. */
-      own: null as { agent: string; provider: string | null; model: string | null } | null,
+      /** The choice for an agent that names its own account or model, which overrides it; null keeps the agent's. */
+      own: null as { agent: string; account: string | null; model: string | null } | null,
     });
-    /** Whether the view's agent names its own provider or model, so the choice is its override. */
+    /** Whether the view's agent names its own account or model, so the choice is its override. */
     const owns = () => ownsModel(view.agent);
     const override = () => (view.own?.agent === view.agent ? view.own : null);
     /** While the panel checks that its thread can still take the next message. */
@@ -2018,8 +2013,8 @@ export function createChatSession(options: ChatOptions = {}) {
       get loading() {
         return current().chat.loading;
       },
-      get provider() {
-        return owns() ? (override()?.provider ?? null) : view.provider;
+      get account() {
+        return owns() ? (override()?.account ?? null) : view.account;
       },
       get model() {
         return owns() ? (override()?.model ?? null) : view.model;
@@ -2030,18 +2025,18 @@ export function createChatSession(options: ChatOptions = {}) {
     };
 
     /**
-     * Choose the provider and model of the next turns. For an agent that names its own, the choice
+     * Choose the account and model of the next turns. For an agent that names its own, the choice
      * is kept apart, for that agent only, so it never leaks to another conversation; both null is
      * the agent's own again.
      */
-    function setProvider(provider: string | null, model: string | null) {
-      if (!owns()) setView({ provider, model });
-      else setView("own", provider || model ? { agent: view.agent, provider, model } : null);
+    function setAccount(account: string | null, model: string | null) {
+      if (!owns()) setView({ account, model });
+      else setView("own", account || model ? { agent: view.agent, account, model } : null);
     }
 
     function setModel(model: string | null) {
       if (!owns()) setView("model", model);
-      else setProvider(override()?.provider ?? null, model);
+      else setAccount(override()?.account ?? null, model);
     }
 
     /** Start afresh. A turn in flight on a thread runs on, and its thread shows it when opened. */
@@ -2084,7 +2079,7 @@ export function createChatSession(options: ChatOptions = {}) {
       // The panel keeps threads only for an agent the server has listed, so a server from before
       // agents is never asked for one.
       const startThread = !!options.threads && (options.threads !== "listed" || agents().some((a) => a.name === view.agent));
-      await c.ask(question, { noteId, provider: chat.provider, model: chat.model, startThread, attachments });
+      await c.ask(question, { noteId, account: chat.account, model: chat.model, startThread, attachments });
     }
 
     /** Stop the turn in flight: on the server, the only way to end it early (agents G17). */
@@ -2105,7 +2100,7 @@ export function createChatSession(options: ChatOptions = {}) {
       stop,
       close,
       newConversation,
-      setProvider,
+      setAccount,
       setModel,
       setAgent,
       openThread,
@@ -2153,7 +2148,7 @@ export const chat = panel.chat;
 export const ask = panel.ask;
 export const stop = panel.stop;
 export const newConversation = panel.newConversation;
-export const setProvider = panel.setProvider;
+export const setAccount = panel.setAccount;
 export const setModel = panel.setModel;
 export const setAgent = panel.setAgent;
 export const openThread = panel.openThread;

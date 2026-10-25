@@ -8,8 +8,8 @@ mod common;
 use std::sync::Arc;
 
 use ai::{
-    Content, Credential, Credentials, Endpoints, ErrorKind, Event, ImageData, Message, OpenAiApi,
-    Part, Provider, Request, Role, Settings, Stop,
+    Accounts, Content, Credential, Credentials, ErrorKind, Event, ImageData, Kind, Message, Part,
+    Request, Role, Stop,
 };
 use common::{Env, events, get_note_tool, text_of};
 use serde_json::{Value, json};
@@ -20,7 +20,8 @@ use testkit::{FakeOpenAi, FakeOpenAiBuilder, OpenAiReply, OpenAiResponse};
 /// A one-pixel PNG.
 const PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-/// A `state.db` whose OpenAI card points at a Chat Completions fake, saved as such.
+/// A `state.db` with one account at the fake: `openai_compatible`, which speaks Chat
+/// Completions, unless made with [`Chat::saved`] as `openai`.
 struct Chat {
     _dir: TempDir,
     state: Arc<State>,
@@ -33,25 +34,19 @@ impl Chat {
     }
 
     fn with(builder: FakeOpenAiBuilder) -> Chat {
-        Chat::saved(builder.start(), Some(OpenAiApi::ChatCompletions))
+        Chat::saved(builder.start(), Kind::OpenAiCompatible)
     }
 
-    fn saved(fake: FakeOpenAi, api: Option<OpenAiApi>) -> Chat {
+    fn saved(fake: FakeOpenAi, kind: Kind) -> Chat {
         let dir = tempfile::tempdir().unwrap();
         let state = State::open(&dir.path().join("state.db"), Some(SecretKey::generate())).unwrap();
-        Settings {
-            endpoints: Endpoints {
-                openai: Some(fake.base_url()),
-                openai_api: api,
-                ..Endpoints::default()
-            },
-            ..Settings::default()
-        }
-        .save(&state)
-        .unwrap();
-        state
-            .set_secret(ai::OPENAI_API_KEY, fake.api_key())
-            .unwrap();
+        common::add_account(
+            &state,
+            "Z.ai",
+            kind,
+            Some(&fake.base_url()),
+            Some(fake.api_key()),
+        );
         Chat {
             _dir: dir,
             state: Arc::new(state),
@@ -60,7 +55,8 @@ impl Chat {
     }
 
     fn cred(&self) -> Credential {
-        Credentials::resolve(&self.state, Provider::OpenAi).unwrap()
+        let all = Accounts::load(&self.state).unwrap();
+        Credentials::resolve(&self.state, &all.accounts[0]).unwrap()
     }
 
     fn body(&self, n: usize) -> Value {
@@ -69,7 +65,7 @@ impl Chat {
 }
 
 fn request(prompt: &str) -> Request {
-    Request::new(Provider::OpenAi, "glm-5.3-flash", prompt)
+    Request::new("glm-5.3-flash", prompt)
 }
 
 /// No sampling parameter (ai D3) and no `strict` on a tool, which many services reject.
@@ -474,9 +470,12 @@ async fn an_image_result_is_a_tool_message_then_a_user_message_of_image_urls() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_saved_type_is_used_without_probing() {
-    // Saved Responses on a Chat Completions service: the named error, and no second try.
-    let env = Chat::saved(FakeOpenAi::builder().chat_completions().start(), None);
+async fn the_kind_picks_the_api_without_probing() {
+    // An OpenAI API account on a Chat Completions service: the named error, and no second try.
+    let env = Chat::saved(
+        FakeOpenAi::builder().chat_completions().start(),
+        Kind::OpenAi,
+    );
     let cred = env.cred();
     assert!(!cred.chat_completions());
     let e = ai::complete(&ai::client(), &cred, &request("x"))
@@ -486,8 +485,8 @@ async fn the_saved_type_is_used_without_probing() {
     assert!(e.message.contains("Responses API"), "{e}");
     assert!(env.fake.chat_requests().is_empty());
 
-    // Saved Chat Completions on a Responses service.
-    let env = Chat::saved(FakeOpenAi::start(), Some(OpenAiApi::ChatCompletions));
+    // An OpenAI-compatible account on a Responses-only service.
+    let env = Chat::saved(FakeOpenAi::start(), Kind::OpenAiCompatible);
     let e = ai::complete(&ai::client(), &env.cred(), &request("x"))
         .await
         .unwrap_err();
@@ -511,43 +510,21 @@ fn a_versioned_root_reaches_chat_completions_under_it() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_chatgpt_plan_and_the_official_api_always_use_responses() {
-    // The plan, with the OpenAI card saved as Chat Completions.
+async fn only_an_openai_compatible_account_uses_chat_completions() {
     let env = Env::new();
-    let mut settings = Settings::load(&env.state).unwrap();
-    settings.endpoints.openai_api = Some(OpenAiApi::ChatCompletions);
-    settings.save(&env.state).unwrap();
     env.sign_in("fake-plan-access-token", 60 * 60 * 1000);
-    let plan = env.cred(Provider::ChatGpt);
+    let plan = env.cred(Kind::ChatGpt);
     assert!(!plan.chat_completions());
-    let req = Request::new(Provider::ChatGpt, "gpt-6.1-sol", "x");
+    let req = Request::new("gpt-6.1-sol", "x");
     ai::complete(&ai::client(), &plan, &req).await.unwrap();
     assert_eq!(env.openai.response_requests().len(), 1);
-    // The API key on the same custom URL does use Chat Completions.
-    assert!(env.cred(Provider::OpenAi).chat_completions());
-
-    // The official API: no URL, so the saved type is not read.
-    let e = Endpoints {
-        openai_api: Some(OpenAiApi::ChatCompletions),
-        ..Endpoints::default()
-    };
-    assert_eq!(e.openai_api(), OpenAiApi::Responses);
-    let dir = tempfile::tempdir().unwrap();
-    let state = State::open(&dir.path().join("state.db"), Some(SecretKey::generate())).unwrap();
-    Settings {
-        endpoints: e,
-        ..Settings::default()
+    assert!(!env.cred(Kind::OpenAi).chat_completions());
+    for kind in [Kind::Anthropic, Kind::OpenAi, Kind::ChatGpt] {
+        let bare = Credential::new(kind, ai::OPENAI_BASE, ai::Secret::new("k"));
+        assert!(!bare.chat_completions(), "{kind}");
     }
-    .save(&state)
-    .unwrap();
-    state.set_secret(ai::OPENAI_API_KEY, "sk-x").unwrap();
-    let cred = Credentials::resolve(&state, Provider::OpenAi).unwrap();
-    assert_eq!(cred.base_url, ai::OPENAI_BASE);
-    assert!(!cred.chat_completions());
-    // A credential made without a custom host never speaks Chat Completions either.
-    let mut bare = Credential::new(Provider::OpenAi, ai::OPENAI_BASE, ai::Secret::new("k"));
-    bare.openai_api = OpenAiApi::ChatCompletions;
-    assert!(!bare.chat_completions());
+    let bare = Credential::new(Kind::OpenAiCompatible, "http://x", ai::Secret::new("k"));
+    assert!(bare.chat_completions());
 }
 
 #[test]

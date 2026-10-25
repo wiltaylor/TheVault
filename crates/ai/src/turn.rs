@@ -5,9 +5,29 @@ use std::collections::VecDeque;
 
 use serde_json::Value;
 
+use crate::credentials::Credential;
 use crate::error::AiError;
 use crate::schema;
-use crate::types::{Event, ProviderState, Reply, Request, Stop, ToolCall, ToolSpec, Usage};
+use crate::types::{Event, Kind, ProviderState, Reply, Request, Stop, ToolCall, ToolSpec, Usage};
+
+/// Which account a turn goes to, as its decoder needs it: the id its provider state records and
+/// the name and kind its messages use.
+#[derive(Debug, Clone)]
+pub(crate) struct Who {
+    pub account: String,
+    pub name: String,
+    pub kind: Kind,
+}
+
+impl Who {
+    pub fn of(cred: &Credential) -> Who {
+        Who {
+            account: cred.account.clone(),
+            name: cred.name.clone(),
+            kind: cred.kind,
+        }
+    }
+}
 
 /// One turn in progress.
 pub(crate) struct Turn {
@@ -84,10 +104,13 @@ pub(crate) struct Collector {
 }
 
 impl Collector {
-    pub fn new(req: &Request) -> Collector {
+    pub fn new(cred: &Credential, req: &Request) -> Collector {
         Collector {
             reply: Reply {
-                provider: req.provider,
+                account: cred.account.clone(),
+                name: cred.name.clone(),
+                kind: cred.kind,
+                plan_usage: None,
                 model: req.model.clone(),
                 text: String::new(),
                 json: None,
@@ -126,7 +149,7 @@ impl Collector {
                 crate::ErrorKind::Provider,
                 "the answer ended before the turn did",
             )
-            .on(r.provider, &r.model)
+            .on(&r.name, &r.model)
             .with_usage(r.usage));
         }
         if let Stop::Refusal {
@@ -134,13 +157,10 @@ impl Collector {
             explanation,
         } = &r.stop
         {
-            return Err(AiError::refusal(
-                r.provider,
-                &r.model,
-                category.clone(),
-                explanation.clone(),
-            )
-            .with_usage(r.usage));
+            return Err(
+                AiError::refusal(&r.name, &r.model, category.clone(), explanation.clone())
+                    .with_usage(r.usage),
+            );
         }
         if let Some(schema) = &self.schema
             && r.stop == Stop::EndTurn
@@ -149,12 +169,12 @@ impl Collector {
                 AiError::invalid(format!(
                     "the reply is not the JSON the schema asks for: {e}"
                 ))
-                .on(r.provider, &r.model)
+                .on(&r.name, &r.model)
                 .with_usage(r.usage)
             })?;
             schema::validate(schema, &parsed).map_err(|e| {
                 AiError::invalid(format!("the reply does not match the schema: {e}"))
-                    .on(r.provider, &r.model)
+                    .on(&r.name, &r.model)
                     .with_usage(r.usage)
             })?;
             self.reply.json = Some(parsed);

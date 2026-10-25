@@ -27,7 +27,7 @@
 //! The chat panel talks to the user's AI provider through `/api/ai/chat`, a stream of the
 //! answer with the server running read-only note tools (ai D14, D15), or through the turns form
 //! under `/api/ai/chat/turns`, which the apps use; `/api/ai/apply` applies a proposed change and
-//! `/api/ai/providers` lists the providers set up (ai D23).
+//! `/api/ai/accounts` lists the AI accounts set up (ai D23, accounts A7).
 //!
 //! Agent Skills live under `/api/skills`: read by any token, written, imported from a zip and
 //! deleted with `admin`, and exported as a zip (skills S3).
@@ -42,8 +42,9 @@
 //! `/api/integrations/browser`, and `/browser/` shows its desktop to a password login (browser
 //! B4).
 //!
-//! Settings > AI stores the provider keys and signs in with ChatGPT under
-//! `/api/integrations/ai`, and `/api/ai/models` lists a provider's models (ai D6, D8, D15).
+//! Settings > AI keeps the named AI accounts, their keys and their ChatGPT sign-ins under
+//! `/api/integrations/ai`, and `/api/ai/models` lists an account's models (ai D6, D8, D15,
+//! accounts A7).
 //!
 //! Scheduled tasks live under `/api/tasks`, with their run history and a route to run one now;
 //! the secrets they read are written, never read back, under `/api/secrets` (D10).
@@ -397,22 +398,39 @@ fn build() -> Built {
     let ai = Routes::new()
         .get("/api/integrations/ai", ai_settings::status)
         .put("/api/integrations/ai/settings", ai_settings::put_settings)
-        .put("/api/integrations/ai/{provider}/key", ai_settings::put_key)
-        .post("/api/integrations/ai/{provider}/test", ai_settings::test)
+        .put("/api/integrations/ai/default", ai_settings::put_default)
+        .post("/api/integrations/ai/accounts", ai_settings::create_account)
+        .put(
+            "/api/integrations/ai/accounts/order",
+            ai_settings::put_order,
+        )
+        .put(
+            "/api/integrations/ai/accounts/{id}",
+            ai_settings::update_account,
+        )
+        .delete(
+            "/api/integrations/ai/accounts/{id}",
+            ai_settings::delete_account,
+        )
+        .put(
+            "/api/integrations/ai/accounts/{id}/key",
+            ai_settings::put_key,
+        )
+        .post("/api/integrations/ai/accounts/{id}/test", ai_settings::test)
         .post(
-            "/api/integrations/ai/chatgpt/start",
+            "/api/integrations/ai/accounts/{id}/chatgpt/start",
             ai_settings::chatgpt_start,
         )
         .post(
-            "/api/integrations/ai/chatgpt/finish",
+            "/api/integrations/ai/accounts/{id}/chatgpt/finish",
             ai_settings::chatgpt_finish,
         )
         .post(
-            "/api/integrations/ai/chatgpt/disconnect",
+            "/api/integrations/ai/accounts/{id}/chatgpt/disconnect",
             ai_settings::chatgpt_disconnect,
         )
         .get("/api/ai/models", ai_settings::models)
-        .get("/api/ai/providers", ai_settings::providers)
+        .get("/api/ai/accounts", ai_settings::accounts)
         .post("/api/ai/chat/turns", ai_turns::start)
         .get("/api/ai/chat/turns/{turn}/events", ai_turns::events)
         .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)

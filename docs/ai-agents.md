@@ -2,19 +2,21 @@
 
 An agent is an AI chat with its own model, system prompt and permissions, defined by a file in the vault. You chat with it in threads, and it can also run on its own: on a schedule, when notes change, or when you call it from a note with the editor's `@` picker. The chat panel's default agent is the built-in **Assistant**.
 
-This page is about agents the vault runs with your own AI provider. To connect an outside AI agent, such as a coding assistant, to the vault through the CLI, see [Connecting an AI agent](agents.md). Setting up the providers themselves is in [AI providers](ai.md).
+This page is about agents the vault runs with your own AI accounts. To connect an outside AI agent, such as a coding assistant, to the vault through the CLI, see [Connecting an AI agent](agents.md). Setting up the accounts themselves is in [AI accounts](ai.md).
 
 ## Agent files
 
 Each agent is a file `agents/<name>.wcl`. The name is lower case letters, digits and `_`, starting with a letter, at most 64 characters. Agent files are definitions like types and tasks: they keep their history, they are in backups, they sync to the apps, and changing one needs `admin`. The apps show agents read only, with "Edit agents in the web app".
 
-The file names the label, description and icon, the `provider` and `model` (absent means the Settings > AI defaults; the chat box's provider and model menus can override them for a conversation, but runs the chat box does not start always use them), the `effort`, the `system_prompt` (absent means the shipped chat prompt), a `permissions` block and any `trigger` blocks. `enabled = false` keeps the file but starts no chat and runs no trigger. [Vault file format, Agent files](vault-format.md#agent-files) defines every item.
+The file names the label, description and icon, the `account` and `model` (absent means the default account in Settings > AI and its model; the chat box's account and model menus can override them for a conversation, but runs the chat box does not start always use them), the `effort`, the `system_prompt` (absent means the shipped chat prompt), a `permissions` block and any `trigger` blocks. `enabled = false` keeps the file but starts no chat and runs no trigger.
 
-In the web app, the left sidebar's **Agents** section lists every agent, Assistant first; **+** creates one. Each agent opens at `/agents/<name>` on its chat: a bar with the session picker, Rename, Archive and Delete for the chosen session and the settings cog, then the chosen session filling the pane, with the provider and model menus at the foot of the message box. [Threads](ai.md#threads) describes the chat. The cog opens the agent's settings at `/agents/<name>/settings`, with these tabs, each at `/agents/<name>/settings/<tab>`; the arrow at the top goes back to the chat:
+`account` names an AI account by its name in Settings > AI (accounts A6). The accounts live in the server's secrets, not in the vault, so nothing checks the name when the file is saved: an agent naming an account that does not exist runs on the default account, and its General tab says "Account <name> does not exist; this agent uses the default account." Renaming an account in Settings > AI rewrites every agent file naming it. Deleting an account the agents name asks first, listing them; they then run on the default account. A file from before accounts may say `provider = "anthropic"`, `"openai"` or `"chatgpt"` instead: it runs on the account made from that provider, and the home server rewrites it to `account` on its next start. [Vault file format, Agent files](vault-format.md#agent-files) defines every item.
+
+In the web app, the left sidebar's **Agents** section lists every agent, Assistant first; **+** creates one. Each agent opens at `/agents/<name>` on its chat: a bar with the session picker, Rename, Archive and Delete for the chosen session and the settings cog, then the chosen session filling the pane, with the account and model menus at the foot of the message box. [Threads](ai.md#threads) describes the chat. The cog opens the agent's settings at `/agents/<name>/settings`, with these tabs, each at `/agents/<name>/settings/<tab>`; the arrow at the top goes back to the chat:
 
 | Tab | Holds |
 |---|---|
-| General | Label, description, icon, enabled, provider, model, effort and system prompt |
+| General | Label, description, icon, enabled, account, model, effort and system prompt |
 | Permissions | Tools, confirmation switches, internet switches, skills and note types |
 | Memory | What the agent remembers |
 | Triggers | Schedules, note events and mentions, with each trigger's last runs |
@@ -44,7 +46,7 @@ An agent can read, create, change and delete other agents with four chat tools. 
 
 | Tool | What it does |
 |------|--------------|
-| `list_agents` | Every agent's name, label, description, provider, model, whether it is enabled and built in, and its trigger count |
+| `list_agents` | Every agent's name, label, description, AI account, model, whether it is enabled and built in, and its trigger count |
 | `get_agent` | One agent's file as stored, the agent parsed, and the agent-file vocabulary |
 | `propose_agent_change` | Proposes a whole agent file: a change to an existing agent, or a new agent under a new name. The server checks it as `PUT /api/agents/{name}` would, without writing it |
 | `propose_agent_delete` | Proposes deleting an agent. Its threads stay. The Assistant cannot be deleted |

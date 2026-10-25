@@ -48,6 +48,14 @@
 //! and, with [`FakeOpenAiBuilder::reject_json_schema`], when `response_format` is
 //! `json_schema`.
 //!
+//! A streamed plan answer carries the ChatGPT plan's usage headers as the Codex CLI reads them
+//! (`codex-rs/codex-api/src/rate_limits.rs`, accounts A13): `x-codex-primary-used-percent`,
+//! `x-codex-primary-window-minutes` and `x-codex-primary-reset-at` (Unix seconds), and the same
+//! three for `secondary`. [`FakeOpenAi::set_plan_usage`] sets the percents, or turns them off.
+//!
+//! A route is matched from its `/v1/` on, so a base URL with a path in front, such as
+//! OpenRouter's `/api/v1`, reaches the same routes.
+//!
 //! It binds `127.0.0.1` on a free port. Every request is recorded, whatever it was answered.
 
 use std::collections::VecDeque;
@@ -587,6 +595,7 @@ impl FakeOpenAiBuilder {
             requests: Mutex::default(),
             replies: Mutex::default(),
             served: Mutex::new(0),
+            plan_usage: Mutex::new(Some(DEFAULT_PLAN_USAGE)),
         });
         let s = shared.clone();
         let listener = listen("the fake OpenAI API", move |r| handle(&s, r));
@@ -599,6 +608,39 @@ struct Shared {
     requests: Mutex<Vec<Request>>,
     replies: Mutex<VecDeque<OpenAiReply>>,
     served: Mutex<u64>,
+    plan_usage: Mutex<Option<PlanUsage>>,
+}
+
+/// The usage a streamed plan answer reports: the primary window's and the secondary window's
+/// used percents. The primary window is 300 minutes and resets an hour from the answer; the
+/// secondary is a week and resets three days from it.
+pub type PlanUsage = (f64, f64);
+
+/// What a plan answer reports until [`FakeOpenAi::set_plan_usage`] changes it.
+pub const DEFAULT_PLAN_USAGE: PlanUsage = (12.5, 40.0);
+
+fn plan_usage_headers(usage: Option<PlanUsage>) -> Vec<(String, String)> {
+    let Some((primary, secondary)) = usage else {
+        return Vec::new();
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    vec![
+        ("x-codex-primary-used-percent".into(), primary.to_string()),
+        ("x-codex-primary-window-minutes".into(), "300".into()),
+        ("x-codex-primary-reset-at".into(), (now + 3600).to_string()),
+        (
+            "x-codex-secondary-used-percent".into(),
+            secondary.to_string(),
+        ),
+        ("x-codex-secondary-window-minutes".into(), "10080".into()),
+        (
+            "x-codex-secondary-reset-at".into(),
+            (now + 3 * 86_400).to_string(),
+        ),
+    ]
 }
 
 /// A running fake OpenAI API. Dropping it stops the server.
@@ -640,11 +682,16 @@ impl FakeOpenAi {
         lock(&self.shared.requests).clone()
     }
 
+    /// The used percents later streamed plan answers report, or `None` for no usage headers.
+    pub fn set_plan_usage(&self, usage: Option<PlanUsage>) {
+        *lock(&self.shared.plan_usage) = usage;
+    }
+
     /// The `POST /v1/responses` requests received so far.
     pub fn response_requests(&self) -> Vec<Request> {
         self.requests()
             .into_iter()
-            .filter(|r| r.method == "POST" && r.route() == "/v1/responses")
+            .filter(|r| r.method == "POST" && api_route(r) == "/v1/responses")
             .collect()
     }
 
@@ -652,7 +699,7 @@ impl FakeOpenAi {
     pub fn chat_requests(&self) -> Vec<Request> {
         self.requests()
             .into_iter()
-            .filter(|r| r.method == "POST" && r.route() == "/v1/chat/completions")
+            .filter(|r| r.method == "POST" && api_route(r) == "/v1/chat/completions")
             .collect()
     }
 
@@ -662,7 +709,7 @@ impl FakeOpenAi {
         self.requests()
             .iter()
             .filter(|r| r.method == "POST")
-            .filter_map(|r| match r.route() {
+            .filter_map(|r| match api_route(r).as_str() {
                 "/v1/responses" => Some(openai_images(&r.json()).unwrap_or_default()),
                 "/v1/chat/completions" => Some(chat_images(&r.json()).unwrap_or_default()),
                 _ => None,
@@ -672,6 +719,21 @@ impl FakeOpenAi {
 
     pub fn clear_requests(&self) {
         lock(&self.shared.requests).clear();
+    }
+}
+
+/// A request's route from its version segment on, read as `/v1/...`, so a base URL with a path
+/// in front, such as OpenRouter's `/api/v1` or Z.ai's `/api/paas/v4`, reaches the same routes.
+fn api_route(r: &Request) -> String {
+    let route = r.route();
+    let segments: Vec<&str> = route.split('/').collect();
+    let version = segments.iter().rposition(|s| {
+        s.strip_prefix('v')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    });
+    match version {
+        Some(i) => format!("/v1/{}", segments[i + 1..].join("/")),
+        None => route.to_owned(),
     }
 }
 
@@ -701,7 +763,7 @@ fn handle(shared: &Shared, request: &Request) -> Answer {
             );
         }
     };
-    match (request.method.as_str(), request.route()) {
+    match (request.method.as_str(), api_route(request).as_str()) {
         ("POST", "/v1/responses") if !shared.config.chat => responses(shared, request, plan),
         ("POST", "/v1/chat/completions") if shared.config.chat => chat(shared, request),
         ("GET", "/v1/models") => models(shared, plan),
@@ -766,6 +828,11 @@ fn responses(shared: &Shared, request: &Request, plan: bool) -> Answer {
                     frames: r.frames(&model, n),
                     cut_after: r.cut_after,
                     delay: r.delay,
+                    headers: if plan {
+                        plan_usage_headers(*lock(&shared.plan_usage))
+                    } else {
+                        Vec::new()
+                    },
                 })
             } else {
                 Answer::Whole(Reply::json(200, &r.whole(&model, n)))
@@ -870,6 +937,7 @@ fn chat(shared: &Shared, request: &Request) -> Answer {
                     frames: r.chat_frames(&model, n),
                     cut_after: r.cut_after,
                     delay: r.delay,
+                    headers: Vec::new(),
                 })
             } else if let Some(e) = r.chat_error() {
                 Answer::Whole(Reply::json(400, &e))

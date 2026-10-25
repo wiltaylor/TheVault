@@ -9,7 +9,7 @@ use std::time::Duration;
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
-use testkit::{AnthropicMessage, FakeAnthropic, FakeWeb, Reply, TestServer};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, FakeWeb, Reply, TestAccount, TestServer};
 
 const MODEL: &str = "claude-opus-5";
 
@@ -45,17 +45,13 @@ impl Api {
 
     /// The fake Anthropic as the provider, with `confirm` and `fetch_private`.
     fn anthropic(&self, fake: &FakeAnthropic, confirm: Value, fetch_private: bool) {
-        self.secret("ai_anthropic_api_key", fake.api_key());
-        self.secret(
-            "ai_settings",
-            &json!({
-                "default_provider": "anthropic",
-                "models": { "anthropic": MODEL },
-                "endpoints": { "anthropic": fake.base_url() },
-                "fetch_private": fetch_private,
-            })
-            .to_string(),
-        );
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(fake).model(MODEL))
+            .setting("fetch_private", json!(fetch_private))
+            .secrets()
+        {
+            self.secret(&name, &value);
+        }
         // The chat's switches are the built-in Assistant's (agents G6).
         let mut all = json!({
             "notes": true, "archive": true, "delete": true,
@@ -593,7 +589,7 @@ fn the_downloads_switch_defaults_to_on_and_saves() {
     assert_eq!(v["confirm"]["notes"], true);
     let p: Value = api
         .client
-        .get(api.server.url("/api/ai/providers"))
+        .get(api.server.url("/api/ai/accounts"))
         .bearer_auth(api.token())
         .send()
         .unwrap()

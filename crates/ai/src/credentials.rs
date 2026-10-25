@@ -1,16 +1,18 @@
-//! Credentials from the encrypted secrets (ai D7), and the ChatGPT plan's token refresh (ai D9).
+//! Credentials from the encrypted secrets (ai D7), per account (accounts A4), and the ChatGPT
+//! plan's token refresh (ai D9).
 //!
-//! - `ai_anthropic_api_key` and `ai_openai_api_key` hold the raw keys.
-//! - `ai_chatgpt` holds [`ChatGptAuth`]: the issued client id, the host id, the token pair, their
-//!   expiry, the ID token and the account's address.
+//! - `ai_account_key_<id>` holds an account's raw API key.
+//! - `ai_account_chatgpt_<id>` holds a `chatgpt` account's [`ChatGptAuth`]: the issued client id,
+//!   the host id, the token pair, their expiry, the ID token and the plan account's address.
 //!
 //! [`Credentials::resolve`] hands out what a call needs. For the ChatGPT plan it first refreshes
 //! the access token when under [`REFRESH_MARGIN_MS`] of it is left (and not before
 //! `earliest_refresh_ms`). The refresh token rotates, so the refresh runs under one process-wide
 //! lock and the rotated pair is written back before the lock is released: a second caller waits,
-//! reads the new pair and uses it. A refresh answered `invalid_grant` deletes the tokens, keeps
-//! the client id and host id, adds one bell notification and returns an `auth` error. Later
-//! calls find no tokens and return `not_configured` without notifying again.
+//! reads the new pair and uses it. A refresh answered `invalid_grant` deletes that account's
+//! tokens, keeps the client id and host id, adds one bell notification naming the account and
+//! returns an `auth` error. Later calls find no tokens and return `not_configured` without
+//! notifying again.
 
 use std::fmt;
 use std::sync::Mutex;
@@ -19,19 +21,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::accounts::{Account, chatgpt_secret, key_secret};
 use crate::error::{AiError, ErrorKind};
-use crate::settings::{OpenAiApi, Settings, state_error};
+use crate::settings::{Settings, state_error};
 use crate::siwc;
-use crate::types::Provider;
-
-/// The secret holding the Anthropic API key.
-pub const ANTHROPIC_API_KEY: &str = "ai_anthropic_api_key";
-
-/// The secret holding the OpenAI API key.
-pub const OPENAI_API_KEY: &str = "ai_openai_api_key";
-
-/// The secret holding [`ChatGptAuth`].
-pub const CHATGPT: &str = "ai_chatgpt";
+use crate::types::{Kind, ProviderState, Wire};
 
 /// The Settings page the expiry notification opens.
 pub const SETTINGS_URL: &str = "/settings/ai";
@@ -77,53 +71,68 @@ impl fmt::Display for Secret {
     }
 }
 
-/// What a call to `provider` needs: where to send it and the key or access token.
+/// What a call needs: which account it is, where to send it and the key or access token.
 #[derive(Clone, Debug)]
 pub struct Credential {
-    pub provider: Provider,
-    /// The API base URL, from `ai_settings.endpoints` or the real host.
+    pub kind: Kind,
+    /// The account's id; empty for a credential made by hand ([`Credential::new`]).
+    pub account: String,
+    /// The account's name, which error messages and the trail line use.
+    pub name: String,
+    /// The provider names of before accounts that map to this account (accounts A8): a saved
+    /// turn naming one of them replays as this account's.
+    pub legacy: Vec<String>,
+    /// The API base URL: the account's, else the kind's.
     pub base_url: String,
-    /// The key or token. Empty for a custom API URL with no key, which sends no auth header
-    /// (ai D24).
+    /// The key or token. Empty for an account with its own base URL and no key, which sends no
+    /// auth header (ai D24).
     pub secret: Secret,
-    /// The ChatGPT account's address, for the ChatGPT plan.
-    pub account: Option<String>,
-    /// The host of a custom API URL, for the trail line and the compatibility errors (ai D24).
-    /// `None` for the official API.
+    /// The ChatGPT plan account's address, for a `chatgpt` account.
+    pub signed_in_as: Option<String>,
+    /// The host of the account's own base URL, for the trail line and the compatibility errors
+    /// (ai D24). `None` for the kind's own host.
     pub custom_host: Option<String>,
-    /// The API an OpenAI call speaks (ai D25). Only an OpenAI credential with a custom API URL
-    /// uses Chat Completions: the official API and the ChatGPT plan always use Responses.
-    pub openai_api: OpenAiApi,
+    /// Extra headers sent on every request (accounts A3).
+    pub headers: Vec<(String, String)>,
 }
 
 impl Credential {
-    pub fn new(provider: Provider, base_url: impl Into<String>, secret: Secret) -> Credential {
+    /// A credential of `kind` with no account behind it, named by the kind's short name.
+    pub fn new(kind: Kind, base_url: impl Into<String>, secret: Secret) -> Credential {
         Credential {
-            provider,
+            kind,
+            account: String::new(),
+            name: kind.short().to_owned(),
+            legacy: Vec::new(),
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             secret,
-            account: None,
+            signed_in_as: None,
             custom_host: None,
-            openai_api: OpenAiApi::Responses,
+            headers: Vec::new(),
         }
     }
 
-    /// The API this credential's calls speak: the stored type for OpenAI with a custom API URL,
-    /// else Responses (ai D25). Anthropic's answer is meaningless.
-    pub fn api(&self) -> OpenAiApi {
-        match (self.provider, &self.custom_host) {
-            (Provider::OpenAi, Some(_)) => self.openai_api,
-            _ => OpenAiApi::Responses,
-        }
+    /// The wire this credential's calls speak.
+    pub fn wire(&self) -> Wire {
+        self.kind.wire()
     }
 
-    /// Whether calls go to `/chat/completions` rather than `/responses` (ai D25).
+    /// Whether calls go to `/chat/completions` (ai D25).
     pub fn chat_completions(&self) -> bool {
-        self.provider == Provider::OpenAi && self.api() == OpenAiApi::ChatCompletions
+        self.wire() == Wire::ChatCompletions
+    }
+
+    /// Whether `state` may be replayed on a request to `model` with this credential: the same
+    /// account, by id or by a legacy provider name, the same wire and the same model (accounts
+    /// A8).
+    pub fn replays(&self, state: &ProviderState, model: &str) -> bool {
+        state.wire == self.wire()
+            && state.model == model
+            && (state.account == self.account || self.legacy.contains(&state.account))
     }
 }
 
-/// The `ai_chatgpt` secret (ai D7). Keys this build does not know are kept through a load and
+/// A `chatgpt` account's sign-in, `ai_account_chatgpt_<id>` (ai D7, accounts A4). Keys this build does not know are kept through a load and
 /// save.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChatGptAuth {
@@ -168,17 +177,21 @@ impl fmt::Debug for ChatGptAuth {
 }
 
 impl ChatGptAuth {
-    /// The stored record, or an empty one when there is none.
-    pub fn load(state: &state::State) -> Result<ChatGptAuth, AiError> {
-        Ok(match state.get_secret(CHATGPT).map_err(state_error)? {
-            Some(text) => serde_json::from_str(&text).unwrap_or_default(),
-            None => ChatGptAuth::default(),
-        })
+    /// Account `id`'s stored record, or an empty one when there is none.
+    pub fn load(state: &state::State, id: &str) -> Result<ChatGptAuth, AiError> {
+        Ok(
+            match state.get_secret(&chatgpt_secret(id)).map_err(state_error)? {
+                Some(text) => serde_json::from_str(&text).unwrap_or_default(),
+                None => ChatGptAuth::default(),
+            },
+        )
     }
 
-    pub fn save(&self, state: &state::State) -> Result<(), AiError> {
+    pub fn save(&self, state: &state::State, id: &str) -> Result<(), AiError> {
         let text = serde_json::to_string(self).map_err(|e| AiError::invalid(e.to_string()))?;
-        state.set_secret(CHATGPT, &text).map_err(state_error)
+        state
+            .set_secret(&chatgpt_secret(id), &text)
+            .map_err(state_error)
     }
 
     /// Whether it holds a token pair to call with.
@@ -229,97 +242,98 @@ impl ChatGptAuth {
 pub struct Credentials;
 
 impl Credentials {
-    /// The credential for `provider`, with its base URL from `ai_settings.endpoints`. A ChatGPT
-    /// plan token close to expiry is refreshed first (see the module docs). Errors with
-    /// `not_configured` when the provider has no key or sign-in, and `auth` when the ChatGPT
-    /// sign-in has just expired. Anthropic or OpenAI with a custom API URL and no key resolves
-    /// to an empty secret, which sends no auth header (ai D24).
+    /// The credential for `account`. A ChatGPT plan token close to expiry is refreshed first
+    /// (see the module docs). Errors with `not_configured` when the account has no key or
+    /// sign-in, and `auth` when the ChatGPT sign-in has just expired. An `anthropic` or `openai`
+    /// account with its own base URL and no key, and an `openai_compatible` account with no key,
+    /// resolve to an empty secret, which sends no auth header (ai D24).
     ///
     /// It blocks on the refresh request: from async code call it inside
     /// `tokio::task::spawn_blocking`.
-    pub fn resolve(state: &state::State, provider: Provider) -> Result<Credential, AiError> {
+    pub fn resolve(state: &state::State, account: &Account) -> Result<Credential, AiError> {
         let settings = Settings::load(state)?;
-        let base = settings.endpoints.api_base(provider);
-        match provider {
-            Provider::Anthropic | Provider::OpenAi => {
-                let custom = settings.endpoints.url(provider).is_some();
-                let key = stored_key(state, provider)?;
-                if key.is_none() && !custom {
+        let all = crate::Accounts::load(state)?;
+        let base = account.api_base(&settings.endpoints);
+        let mut cred = Credential::new(account.kind, base, Secret::new(""));
+        cred.account = account.id.clone();
+        cred.name = account.name.clone();
+        cred.legacy = all.legacy_names(&account.id);
+        match account.kind {
+            Kind::Anthropic | Kind::OpenAi | Kind::OpenAiCompatible => {
+                let key = stored_key(state, &account.id)?;
+                if key.is_none() && account.url().is_none() {
                     return Err(AiError::not_configured(format!(
-                        "no {} API key is set: add one in Settings > AI",
-                        provider.label()
+                        "the AI account {} has no API key: add one in Settings > AI",
+                        account.name
                     ))
-                    .on(provider, ""));
+                    .on(&account.name, ""));
                 }
-                let mut cred =
-                    Credential::new(provider, base, Secret::new(key.unwrap_or_default()));
-                cred.custom_host = settings.endpoints.custom_host(provider);
-                if provider == Provider::OpenAi {
-                    cred.openai_api = settings.endpoints.openai_api();
+                cred.secret = Secret::new(key.unwrap_or_default());
+                cred.custom_host = account.custom_host();
+                if account.kind == Kind::OpenAiCompatible {
+                    cred.headers = account.headers.clone();
                 }
-                Ok(cred)
             }
-            Provider::ChatGpt => {
-                let auth = resolve_chatgpt(state, &settings.endpoints.chatgpt_auth_base())?;
-                let mut cred = Credential::new(
-                    provider,
-                    base,
-                    auth.access_token.clone().unwrap_or_else(|| Secret::new("")),
-                );
-                cred.account = auth.account.clone();
-                Ok(cred)
+            Kind::ChatGpt => {
+                let auth =
+                    resolve_chatgpt(state, account, &settings.endpoints.chatgpt_auth_base())?;
+                cred.secret = auth.access_token.clone().unwrap_or_else(|| Secret::new(""));
+                cred.signed_in_as = auth.account.clone();
             }
         }
+        Ok(cred)
     }
 
-    /// Whether `provider` has a key, a custom API URL (ai D24) or a ChatGPT sign-in, without
+    /// Whether `account` has a key, its own base URL (ai D24) or a ChatGPT sign-in, without
     /// refreshing anything.
-    pub fn configured(state: &state::State, provider: Provider) -> Result<bool, AiError> {
-        Ok(match provider {
-            Provider::Anthropic | Provider::OpenAi => {
-                stored_key(state, provider)?.is_some()
-                    || Settings::load(state)?.endpoints.url(provider).is_some()
-            }
-            Provider::ChatGpt => ChatGptAuth::load(state)?.signed_in(),
+    pub fn configured(state: &state::State, account: &Account) -> Result<bool, AiError> {
+        Ok(match account.kind {
+            Kind::ChatGpt => ChatGptAuth::load(state, &account.id)?.signed_in(),
+            _ => account.url().is_some() || stored_key(state, &account.id)?.is_some(),
         })
+    }
+
+    /// Whether account `id` has an API key stored.
+    pub fn key_set(state: &state::State, id: &str) -> Result<bool, AiError> {
+        Ok(stored_key(state, id)?.is_some())
     }
 }
 
-/// `provider`'s API key, trimmed, when one is stored.
-fn stored_key(state: &state::State, provider: Provider) -> Result<Option<String>, AiError> {
+/// Account `id`'s API key, trimmed, when one is stored.
+fn stored_key(state: &state::State, id: &str) -> Result<Option<String>, AiError> {
     Ok(state
-        .get_secret(key_secret(provider))
+        .get_secret(&key_secret(id))
         .map_err(state_error)?
         .map(|k| k.trim().to_owned())
         .filter(|k| !k.is_empty()))
 }
 
-/// The secret holding `provider`'s API key. The ChatGPT plan has none: it is [`CHATGPT`].
-pub fn key_secret(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Anthropic => ANTHROPIC_API_KEY,
-        Provider::OpenAi | Provider::ChatGpt => OPENAI_API_KEY,
-    }
+fn not_signed_in(account: &Account) -> AiError {
+    AiError::not_configured(format!(
+        "the ChatGPT account {} is not signed in: Continue with ChatGPT in Settings > AI",
+        account.name
+    ))
+    .on(&account.name, "")
 }
 
-fn not_signed_in() -> AiError {
-    AiError::not_configured("ChatGPT is not signed in: Continue with ChatGPT in Settings > AI")
-        .on(Provider::ChatGpt, "")
-}
-
-fn resolve_chatgpt(state: &state::State, auth_base: &str) -> Result<ChatGptAuth, AiError> {
-    let auth = ChatGptAuth::load(state)?;
+fn resolve_chatgpt(
+    state: &state::State,
+    account: &Account,
+    auth_base: &str,
+) -> Result<ChatGptAuth, AiError> {
+    let id = account.id.as_str();
+    let auth = ChatGptAuth::load(state, id)?;
     if !auth.signed_in() {
-        return Err(not_signed_in());
+        return Err(not_signed_in(account));
     }
     if !auth.needs_refresh(now_ms()) {
         return Ok(auth);
     }
     let _one = REFRESH.lock().unwrap_or_else(|e| e.into_inner());
     // Another caller may have refreshed while this one waited.
-    let mut auth = ChatGptAuth::load(state)?;
+    let mut auth = ChatGptAuth::load(state, id)?;
     if !auth.signed_in() {
-        return Err(not_signed_in());
+        return Err(not_signed_in(account));
     }
     let now = now_ms();
     if !auth.needs_refresh(now) {
@@ -327,7 +341,7 @@ fn resolve_chatgpt(state: &state::State, auth_base: &str) -> Result<ChatGptAuth,
     }
     let (Some(client_id), Some(refresh)) = (auth.client_id.clone(), auth.refresh_token.clone())
     else {
-        return Err(not_signed_in());
+        return Err(not_signed_in(account));
     };
     match siwc::refresh(
         &crate::http::blocking_client(),
@@ -337,19 +351,19 @@ fn resolve_chatgpt(state: &state::State, auth_base: &str) -> Result<ChatGptAuth,
     ) {
         Ok(tokens) => {
             auth.store_tokens(tokens, now);
-            auth.save(state)?;
+            auth.save(state, id)?;
             Ok(auth)
         }
         Err(siwc::RefreshError::InvalidGrant) => {
             auth.clear_tokens();
-            auth.save(state)?;
+            auth.save(state, id)?;
             let note = state::NewNotification {
                 title: EXPIRED_TITLE.to_owned(),
-                body: Some(
-                    "TheVault can no longer use your ChatGPT plan. Continue with ChatGPT again in \
-                     Settings > AI."
-                        .to_owned(),
-                ),
+                body: Some(format!(
+                    "TheVault can no longer use the ChatGPT plan of the account {}. Continue \
+                     with ChatGPT again in Settings > AI.",
+                    account.name
+                )),
                 note_id: None,
                 url: Some(SETTINGS_URL.to_owned()),
                 source: "system".to_owned(),
@@ -359,9 +373,12 @@ fn resolve_chatgpt(state: &state::State, auth_base: &str) -> Result<ChatGptAuth,
             }
             Err(AiError::new(
                 ErrorKind::Auth,
-                "the ChatGPT sign-in expired: Continue with ChatGPT again in Settings > AI",
+                format!(
+                    "the ChatGPT sign-in of {} expired: Continue with ChatGPT again in Settings > AI",
+                    account.name
+                ),
             )
-            .on(Provider::ChatGpt, ""))
+            .on(&account.name, ""))
         }
         // The old token still works for a while: use it, and refresh on a later call.
         Err(siwc::RefreshError::Other(_)) if auth.expires_ms.is_some_and(|e| now < e) => Ok(auth),

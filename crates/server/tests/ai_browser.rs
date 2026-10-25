@@ -12,7 +12,9 @@ use std::time::Duration;
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
-use testkit::{AnthropicMessage, BrowserRun, FakeAnthropic, FakeBrowser, TestServer};
+use testkit::{
+    AiSeed, AnthropicMessage, BrowserRun, FakeAnthropic, FakeBrowser, TestAccount, TestServer,
+};
 
 const MODEL: &str = "claude-opus-5";
 
@@ -42,16 +44,12 @@ impl Api {
             .build()
             .unwrap();
         let api = Api { server, client };
-        api.secret("ai_anthropic_api_key", fake.api_key());
-        api.secret(
-            "ai_settings",
-            &json!({
-                "default_provider": "anthropic",
-                "models": { "anthropic": MODEL },
-                "endpoints": { "anthropic": fake.base_url() },
-            })
-            .to_string(),
-        );
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(fake).model(MODEL))
+            .secrets()
+        {
+            api.secret(&name, &value);
+        }
         api
     }
 

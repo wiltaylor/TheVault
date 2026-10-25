@@ -15,10 +15,11 @@ use std::collections::{HashMap, VecDeque};
 
 use serde_json::{Map, Value, json};
 
+use crate::credentials::Credential;
 use crate::error::{AiError, ErrorKind, kind_of_code};
 use crate::turn::{Turn, parse_input};
 use crate::types::{
-    Content, Event, Message, Model, Part, Provider, ProviderState, Request, Role, Stop, unloaded,
+    Content, Event, Message, Model, Part, ProviderState, Request, Role, Stop, Wire, unloaded,
 };
 
 /// The API version every request names.
@@ -31,7 +32,7 @@ pub const STREAM_MAX_TOKENS: u32 = 64000;
 pub const MAX_TOKENS: u32 = 16000;
 
 /// The request body.
-pub(crate) fn body(req: &Request, stream: bool) -> Value {
+pub(crate) fn body(cred: &Credential, req: &Request, stream: bool) -> Value {
     let max = req.max_tokens.unwrap_or(if stream {
         STREAM_MAX_TOKENS
     } else {
@@ -43,7 +44,7 @@ pub(crate) fn body(req: &Request, stream: bool) -> Value {
     if let Some(system) = req.system.as_deref().filter(|s| !s.trim().is_empty()) {
         b.insert("system".into(), json!(system));
     }
-    b.insert("messages".into(), Value::Array(messages(req)));
+    b.insert("messages".into(), Value::Array(messages(cred, req)));
     if stream {
         b.insert("stream".into(), json!(true));
     }
@@ -83,12 +84,12 @@ pub(crate) fn body(req: &Request, stream: bool) -> Value {
     Value::Object(b)
 }
 
-fn messages(req: &Request) -> Vec<Value> {
+fn messages(cred: &Credential, req: &Request) -> Vec<Value> {
     req.messages
         .iter()
         .filter_map(|m| {
             let content = match m.role {
-                Role::Assistant => assistant_content(req, m),
+                Role::Assistant => assistant_content(cred, req, m),
                 Role::User => user_content(m),
             };
             if content.is_empty() {
@@ -103,10 +104,9 @@ fn messages(req: &Request) -> Vec<Value> {
         .collect()
 }
 
-fn assistant_content(req: &Request, m: &Message) -> Vec<Value> {
+fn assistant_content(cred: &Credential, req: &Request, m: &Message) -> Vec<Value> {
     if let Some(state) = &m.provider_state
-        && state.provider == Provider::Anthropic
-        && state.model == req.model
+        && cred.replays(state, &req.model)
         && let Some(blocks) = state.output.as_array()
     {
         return blocks.clone();
@@ -207,23 +207,30 @@ fn input_tokens(usage: &Value) -> Option<u64> {
     )
 }
 
-fn state(model: &str, blocks: Vec<Value>) -> ProviderState {
+fn state(account: &str, model: &str, blocks: Vec<Value>) -> ProviderState {
     ProviderState {
-        provider: Provider::Anthropic,
+        account: account.to_owned(),
+        wire: Wire::Messages,
         model: model.to_owned(),
         output: Value::Array(blocks),
     }
 }
 
 /// A whole, non-streamed message as events.
-pub(crate) fn parse_message(req: &Request, msg: &Value) -> Result<VecDeque<Event>, AiError> {
+pub(crate) fn parse_message(
+    cred: &Credential,
+    req: &Request,
+    msg: &Value,
+) -> Result<VecDeque<Event>, AiError> {
     let mut out = VecDeque::new();
     let mut turn = Turn::new(req);
     let blocks = msg
         .get("content")
         .and_then(Value::as_array)
         .cloned()
-        .ok_or_else(|| AiError::invalid("Anthropic answered a message with no content"))?;
+        .ok_or_else(|| {
+            AiError::invalid(format!("{} answered a message with no content", cred.name))
+        })?;
     for b in &blocks {
         match b.get("type").and_then(Value::as_str) {
             Some("text") => {
@@ -252,12 +259,18 @@ pub(crate) fn parse_message(req: &Request, msg: &Value) -> Result<VecDeque<Event
         msg.get("stop_reason").and_then(Value::as_str),
         msg.get("stop_details"),
     );
-    turn.finish(stop, Some(state(&req.model, blocks)), &mut out);
+    turn.finish(
+        stop,
+        Some(state(&cred.account, &req.model, blocks)),
+        &mut out,
+    );
     Ok(out)
 }
 
 /// The streamed message's events, as its frames arrive.
 pub(crate) struct StreamDecoder {
+    account: String,
+    name: String,
     model: String,
     turn: Turn,
     blocks: Vec<Value>,
@@ -267,8 +280,10 @@ pub(crate) struct StreamDecoder {
 }
 
 impl StreamDecoder {
-    pub fn new(req: &Request) -> StreamDecoder {
+    pub fn new(cred: &Credential, req: &Request) -> StreamDecoder {
         StreamDecoder {
+            account: cred.account.clone(),
+            name: cred.name.clone(),
             model: req.model.clone(),
             turn: Turn::new(req),
             blocks: Vec::new(),
@@ -370,7 +385,7 @@ impl StreamDecoder {
                 let stop = self.stop.take().unwrap_or(Stop::EndTurn);
                 let blocks = std::mem::take(&mut self.blocks);
                 self.turn
-                    .finish(stop, Some(state(&self.model, blocks)), out);
+                    .finish(stop, Some(state(&self.account, &self.model, blocks)), out);
                 self.done = true;
             }
             "error" => {
@@ -385,7 +400,7 @@ impl StreamDecoder {
                     .unwrap_or("the answer stream reported an error");
                 let kind = kind_of_code(code).unwrap_or(ErrorKind::Provider);
                 return Err(
-                    AiError::new(kind, format!("Anthropic {}: {message}", self.model))
+                    AiError::new(kind, format!("{} {}: {message}", self.name, self.model))
                         .with_usage(self.turn.usage),
                 );
             }

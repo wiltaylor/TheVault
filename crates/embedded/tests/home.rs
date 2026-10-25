@@ -733,15 +733,9 @@ fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
 impl Admin {
     /// Set up the fake Anthropic provider on the home server.
     fn anthropic(&self, fake: &testkit::FakeAnthropic) {
-        let settings = json!({
-            "default_provider": "anthropic",
-            "models": { "anthropic": "claude-opus-5" },
-            "endpoints": { "anthropic": fake.base_url() },
-        });
-        for (name, value) in [
-            ("ai_anthropic_api_key", fake.api_key().to_owned()),
-            ("ai_settings", settings.to_string()),
-        ] {
+        let seed = testkit::AiSeed::new()
+            .account(testkit::TestAccount::anthropic(fake).model("claude-opus-5"));
+        for (name, value) in seed.secrets() {
             let res = self
                 .client
                 .put(format!("{}/api/secrets/{name}", self.base))
@@ -816,9 +810,10 @@ fn the_ai_routes_go_to_the_home_server_with_the_device_token_and_stream_through(
     admin.anthropic(&fake);
     let device = Device::pair(&server, "Laptop");
 
-    let providers = device.call("GET", "/api/ai/providers", None, 200);
-    assert_eq!(providers["default_provider"], "anthropic", "{providers}");
-    assert_eq!(providers["providers"]["anthropic"]["configured"], true);
+    let accounts = device.call("GET", "/api/ai/accounts", None, 200);
+    assert_eq!(accounts["default"], "acct_anthropic", "{accounts}");
+    assert_eq!(accounts["accounts"][0]["name"], "Anthropic");
+    assert_eq!(accounts["accounts"][0]["configured"], true);
     // Settings > AI stays the web app's.
     let refused = device.call("GET", "/api/integrations/ai", None, 403);
     assert_eq!(refused["error"], "needs_web_app");
@@ -942,7 +937,7 @@ fn offline_or_unpaired_the_ai_routes_say_the_chat_needs_the_server() {
     device.go_offline();
     let check = |device: &Device| {
         for (method, path, body) in [
-            ("GET", "/api/ai/providers", None),
+            ("GET", "/api/ai/accounts", None),
             ("GET", "/api/ai/models", None),
             ("POST", "/api/ai/chat/turns", Some(ask("Hi"))),
             ("POST", "/api/ai/chat", Some(ask("Hi"))),

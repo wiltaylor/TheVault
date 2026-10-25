@@ -3414,11 +3414,6 @@ button.link {
   align-self: flex-start;
 }
 
-.ai-card #chatgpt-pasted {
-  width: 100%;
-  font-family: var(--mono);
-}
-
 /* The chat system prompt (ai D17). */
 .ai-card .ai-system-prompt {
   width: 100%;
@@ -3442,6 +3437,79 @@ button.link {
 
 .ai-test-ok {
   color: var(--ok, inherit);
+}
+
+/* Settings > AI's accounts table (accounts A11). */
+.ai-card .ai-accounts td.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.ai-default-mark {
+  font-weight: 600;
+}
+
+.ai-account-extra td {
+  border-bottom-style: dashed;
+}
+
+.ai-card .chatgpt-pasted {
+  width: 100%;
+  font-family: var(--mono);
+}
+
+.ai-headers {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.ai-headers > button {
+  justify-self: start;
+}
+
+.ai-header-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 2fr) auto;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+/* A subscription's usage windows (accounts A13). */
+.ai-usage {
+  display: grid;
+  gap: 0.3rem;
+  max-width: 32rem;
+  margin: 0.25rem 0;
+}
+
+.ai-usage-window {
+  display: grid;
+  grid-template-columns: 7rem 8rem 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.ai-usage-bar {
+  display: block;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.ai-usage-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.ai-usage-read {
+  font-size: 0.8rem;
 }
 
 .device-head h2 {

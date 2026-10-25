@@ -3,7 +3,7 @@
 
 mod common;
 
-use ai::{Content, ImageData, Message, Part, Provider, Request, Role};
+use ai::{Content, ImageData, Kind, Message, Part, Request, Role};
 use common::Env;
 use serde_json::json;
 
@@ -22,8 +22,9 @@ fn loaded(asset_id: &str) -> Part {
 }
 
 /// A request whose history read asset `01JPIC` through tool call `call`.
-fn request(provider: Provider, model: &str, call: &str, parts: Vec<Part>) -> Request {
-    let mut req = Request::new(provider, model, "");
+fn request(provider: Kind, model: &str, call: &str, parts: Vec<Part>) -> Request {
+    let _ = provider;
+    let mut req = Request::new(model, "");
     req.messages = vec![
         Message::user("what is in the picture?"),
         Message {
@@ -49,12 +50,12 @@ fn request(provider: Provider, model: &str, call: &str, parts: Vec<Part>) -> Req
 async fn an_image_part_becomes_an_image_block_in_the_anthropic_tool_result() {
     let env = Env::new();
     let req = request(
-        Provider::Anthropic,
+        Kind::Anthropic,
         "claude-opus-5",
         "toolu_1",
         vec![loaded("01JPIC"), Part::image("01JGONE", "image/png")],
     );
-    ai::complete(&ai::client(), &env.cred(Provider::Anthropic), &req)
+    ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &req)
         .await
         .unwrap();
     let body = env.anthropic.message_requests()[0].json();
@@ -75,8 +76,8 @@ async fn an_image_part_becomes_an_image_block_in_the_anthropic_tool_result() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_image_part_becomes_an_input_image_in_the_function_call_output() {
     let env = Env::new();
-    let req = request(Provider::OpenAi, "gpt-6", "call_1", vec![loaded("01JPIC")]);
-    ai::complete(&ai::client(), &env.cred(Provider::OpenAi), &req)
+    let req = request(Kind::OpenAi, "gpt-6", "call_1", vec![loaded("01JPIC")]);
+    ai::complete(&ai::client(), &env.cred(Kind::OpenAi), &req)
         .await
         .unwrap();
     let input = env.openai.response_requests()[0].json()["input"].clone();

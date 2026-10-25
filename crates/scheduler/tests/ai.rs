@@ -3,11 +3,10 @@
 
 use std::sync::Arc;
 
-use ai::{Endpoints, Models, Provider, Settings};
 use scheduler::Scheduler;
 use script::{Ai, Host, Limits};
 use state::{RunOutcome, SecretKey, State, SystemClock};
-use testkit::{AnthropicMessage, FakeAnthropic};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, TestAccount};
 use writer::Writer;
 
 const SUMMARISE: &str = r#"use ai
@@ -35,24 +34,9 @@ fn a_scheduled_task_calls_ai_and_its_run_keeps_the_trail_line() {
     .unwrap();
     let writer = Arc::new(Writer::open(vault, state).unwrap());
     let fake = FakeAnthropic::start();
-    Settings {
-        default_provider: Some(Provider::Anthropic),
-        models: Models {
-            anthropic: Some("claude-test".into()),
-            ..Models::default()
-        },
-        endpoints: Endpoints {
-            anthropic: Some(fake.base_url()),
-            ..Endpoints::default()
-        },
-        ..Settings::default()
-    }
-    .save(writer.state())
-    .unwrap();
-    writer
-        .state()
-        .set_secret(ai::ANTHROPIC_API_KEY, fake.api_key())
-        .unwrap();
+    AiSeed::new()
+        .account(TestAccount::anthropic(&fake).model("claude-test"))
+        .store(writer.state());
     fake.push(AnthropicMessage::text("Tiles are due.").usage(30, 4));
 
     let host = Arc::new(Host::new(
@@ -78,7 +62,9 @@ fn a_scheduled_task_calls_ai_and_its_run_keeps_the_trail_line() {
     let lines: Vec<&str> = kept[0].log.lines().collect();
     assert_eq!(lines.len(), 2, "{}", kept[0].log);
     assert!(
-        lines[0].starts_with("ai: provider=anthropic model=claude-test in=30 out=4 outcome=ok ms="),
+        lines[0].starts_with(
+            "ai: account=Anthropic kind=anthropic model=claude-test in=30 out=4 outcome=ok ms="
+        ),
         "{}",
         lines[0]
     );

@@ -1,11 +1,14 @@
 //! `POST /api/ai/chat`: the chat panel's conversation turn (ai D10, D11, D14).
 //!
-//! The body is `{ provider?, model?, messages, note_id?, agent?, thread?, update_skills?, compact? }`: the transcript so
-//! far, ending with the user's new message, in the neutral form of [`ai::Message`]. Provider and
-//! model default to Settings > AI's. The turn is run by `agent`, the built-in Assistant when it is
-//! absent (agents G4, G6): its provider and model when it names them and the body names neither
-//! (the chat box's choice wins over the agent's; a run not started from the chat box, such as a
-//! trigger's or a mention's, sends none), its prompt, effort, tools,
+//! The body is `{ account?, model?, messages, note_id?, agent?, thread?, update_skills?, compact? }`: the transcript so
+//! far, ending with the user's new message, in the neutral form of [`ai::Message`]. `account` is
+//! an AI account's id or name (accounts A5); `provider` (`anthropic`, `openai` or `chatgpt`) is
+//! still taken for one release and names the account the migration made for it. Account and
+//! model default to the agent's, then to Settings > AI's default account and its model. The turn
+//! is run by `agent`, the built-in Assistant when it is absent (agents G4, G6): its account and
+//! model when it names them and the body names neither (the chat box's choice wins over the
+//! agent's, and an account named without a model runs on that account's model; a run not started
+//! from the chat box, such as a trigger's or a mention's, sends none), its prompt, effort, tools,
 //! note types ([`Limits`]) and confirmation and internet switches; a named agent is the author of
 //! what the tools write (agents G11). With `thread`, a note of the agent's (agents G7), the server
 //! reads the transcript from the thread, `messages` holding only the new message, and writes the
@@ -39,14 +42,14 @@
 //! | `agent_memory_proposal` | a change to another agent's memories for the user to apply (agents G21), `kind` always `agent_memory`: `{id, kind, op, memory_agent, agent_label, memory_id, base_version, title, text, before, proposer}`, `op` `create` (`memory_id`, `base_version` and `before` null), `change` (`title` and `text` the new ones, `before` `{title, text}`) or `delete` |
 //! | `skill_proposal` | a skill change for the user to apply (skills S9), `kind` always `skill`: `{id, kind, op, name, path?, exists, before, after, issues, base, proposer, ...}`, `op` `create`, `change`, `file`, `file_delete` or `delete` (`crate::ai_skill_changes`) |
 //! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change`, `type_create` and `type_delete`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
-//! | `context` | `{used, window}` after each model call: the tokens the call took in and gave back, and the model's context window as Settings > AI has it |
+//! | `context` | `{used, window}` after each model call: the tokens the call took in and gave back, and the account's context window |
 //! | `compacting` | `{reason}`: a thread's compaction started, `auto` because its last call filled `compact_at` of the window, or `command` for `/compact` (`compact: true`) |
 //! | `compacted` | `{reason, upto, summary, before, after}`: the model now reads `summary` in place of the thread's first `upto` messages; `before` is the tokens it summarized and `after` the summary's. `/compact` then ends with `done` |
 //! | `compact_failed` | `{message}`: a compaction due on its own failed; the turn goes on with the thread as it was |
 //! | `skills_updated` | `{count, skills, message}`: first in an `update_skills` turn (skills S6), the new snapshot's skill count and names and the user message the server added, a notice and the text the model reads (`crate::ai_skills`) |
-//! | `usage` | `{provider, model, input, output}`: one model call's tokens |
-//! | `refusal` | `{provider, model, category, explanation, messages}`: the provider refused; ends the stream |
-//! | `error` | `{kind, message, messages}`: the turn failed; ends the stream |
+//! | `usage` | `{account, name, kind, model, input, output}`: one model call's tokens, with the account's id, name and kind |
+//! | `refusal` | `{account, name, kind, model, category, explanation, messages}`: the provider refused; ends the stream |
+//! | `error` | `{kind, message, account, model, messages}`: the turn failed, `account` the name of the account it went to when one was chosen; ends the stream |
 //! | `done` | `{stop, messages}`: the turn is over |
 //!
 //! `messages` is the turn's new transcript items, for the client to append and send back next
@@ -65,8 +68,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use ai::{
-    AiError, Content, Credential, Credentials, ErrorKind, Event as AiEvent, Message, Outcome,
-    Provider, ProviderState, Request, Role, Settings, Stop, ToolCall, ToolSpec, Usage,
+    Accounts, AiError, Content, Credential, Credentials, ErrorKind, Event as AiEvent, Message,
+    Outcome, ProviderState, Request, Role, Settings, Stop, ToolCall, ToolSpec, Usage,
 };
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -109,6 +112,10 @@ const SERVER_FIELDS: [&str; 2] = ["created", "updated"];
 /// The request body.
 #[derive(Debug, Deserialize)]
 pub struct ChatBody {
+    /// The AI account, by id or name (accounts A5).
+    #[serde(default)]
+    account: Option<String>,
+    /// `anthropic`, `openai` or `chatgpt`: the account of before accounts, for one release.
     #[serde(default)]
     provider: Option<String>,
     #[serde(default)]
@@ -209,6 +216,7 @@ pub(crate) async fn run_unattended(
 ) -> Unattended {
     let report: Report = Arc::default();
     let body = ChatBody {
+        account: None,
         provider: None,
         model: None,
         messages: vec![Message {
@@ -365,9 +373,24 @@ async fn start_with(
     stop: watch::Receiver<bool>,
     report: Option<Report>,
 ) -> Result<(mpsc::Receiver<Sent>, Arc<AtomicBool>), ApiError> {
-    let provider = match body.provider.as_deref().map(str::trim) {
-        Some(p) if !p.is_empty() => Some(p.parse::<Provider>().map_err(ApiError::bad_request)?),
-        _ => None,
+    let account = match (
+        body.account
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty()),
+        body.provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty()),
+    ) {
+        (Some(a), _) => Some(a.to_owned()),
+        (None, Some(p)) if schema::AGENT_PROVIDERS.contains(&p) => Some(p.to_owned()),
+        (None, Some(p)) => {
+            return Err(ApiError::bad_request(format!(
+                "unknown AI provider {p:?}: name an account with `account`"
+            )));
+        }
+        (None, None) => None,
     };
     if body.messages.is_empty() && !body.update_skills && !body.compact {
         return Err(ApiError::bad_request(
@@ -441,7 +464,7 @@ async fn start_with(
     let running = Arc::new(AtomicBool::new(true));
     let flag = running.clone();
     tokio::spawn(async move {
-        turn.run(agent, provider, model, history, note_id).await;
+        turn.run(agent, account, model, history, note_id).await;
         flag.store(false, Ordering::SeqCst);
     });
     Ok((rx, running))
@@ -756,7 +779,6 @@ impl Out {
 
 /// What a turn needs before the first call: the model and its credential, and the prompt.
 struct Setup {
-    provider: Provider,
     model: String,
     cred: Credential,
     system: String,
@@ -772,7 +794,7 @@ struct Setup {
     effort: Option<ai::Effort>,
     /// The tools the agent may use; `None` is every tool the server offers (agents G4).
     tools: Option<Vec<String>>,
-    /// The model's context window in tokens, as Settings > AI has it.
+    /// The account's context window in tokens.
     window: u64,
     /// The note types the agent's tools reach (agents G4, G7).
     limits: Limits,
@@ -938,28 +960,36 @@ fn setup(
     w: &Writer,
     scope: Scope,
     agent: &Agent,
-    provider: Option<Provider>,
+    account: Option<String>,
     model: Option<String>,
     note_id: Option<String>,
     skills: Option<&str>,
 ) -> Result<Setup, AiError> {
     let state = w.state();
     let settings = Settings::load(state)?;
-    // The request's choice, made in the chat box, wins; without one the agent's provider and
-    // model, and then Settings > AI's defaults (agents G1). A model alone runs on the agent's
-    // provider; a provider alone on that provider's default model, since the agent's model
-    // belongs to its own provider.
-    let own = agent
-        .provider
-        .as_deref()
-        .and_then(|p| p.parse::<Provider>().ok());
+    // The request's choice, made in the chat box, wins; without one the agent's account and
+    // model, and then the default account and its model (agents G1, accounts A5). A model alone
+    // runs on the agent's account; an account alone on that account's own model, since the
+    // agent's model belongs to the agent's account. An agent naming an account that does not
+    // exist runs on the default account.
+    let accounts = Accounts::load(state)?;
     let model = model.filter(|m| !m.trim().is_empty());
-    let (provider, model) = match (provider, model.as_deref()) {
-        (Some(p), m) => settings.pick(Some(p), m)?,
-        (None, Some(m)) => settings.pick(own, Some(m))?,
-        (None, None) => settings.pick(own, agent.model.as_deref())?,
+    let own = agent.account_ref();
+    let picked = accounts.pick(account.as_deref(), own)?.clone();
+    let model = match (account.is_some(), model) {
+        (_, Some(m)) => Some(m.trim().to_owned()),
+        (true, None) => picked.model().map(str::to_owned),
+        (false, None) => agent
+            .model
+            .clone()
+            .filter(|m| !m.trim().is_empty())
+            .or_else(|| picked.model().map(str::to_owned)),
     };
-    let cred = Credentials::resolve(state, provider)?;
+    let cred = Credentials::resolve(state, &picked)?;
+    let model = match model {
+        Some(m) => m,
+        None => ai::default_model_blocking(&ai::blocking_client(), &cred, None)?,
+    };
     // The agent's prompt, or the shipped one (ai D17, agents G6); the open note follows it.
     let mut system = agent
         .system_prompt
@@ -997,7 +1027,7 @@ fn setup(
         system.push_str(section);
     }
     Ok(Setup {
-        provider,
+        window: picked.window(),
         model,
         cred,
         system,
@@ -1006,7 +1036,6 @@ fn setup(
         fetch_private: settings.fetch_private,
         web: web_of(agent),
         effort: agent.effort.as_deref().and_then(|e| e.parse().ok()),
-        window: settings.window(provider),
         tools: agent.permissions.tools.clone(),
         limits: Limits::of(agent),
         agent: Arc::new(agent.clone()),
@@ -1086,7 +1115,7 @@ impl Turn {
     async fn run(
         self,
         agent: Agent,
-        provider: Option<Provider>,
+        account: Option<String>,
         model: Option<String>,
         history: Vec<Message>,
         note_id: Option<String>,
@@ -1097,7 +1126,7 @@ impl Turn {
         if let Some(data) = self.skills_updated.clone() {
             self.out.send("skills_updated", data).await;
         }
-        self.rounds(agent, provider, model, history, note_id, &mut added)
+        self.rounds(agent, account, model, history, note_id, &mut added)
             .await;
         // What the turn added before it stopped, the client gone or not.
         self.persist(&added).await;
@@ -1225,7 +1254,7 @@ impl Turn {
     async fn rounds(
         &self,
         agent: Agent,
-        provider: Option<Provider>,
+        account: Option<String>,
         model: Option<String>,
         history: Vec<Message>,
         note_id: Option<String>,
@@ -1240,7 +1269,7 @@ impl Turn {
                 &w,
                 scope,
                 &agent,
-                provider,
+                account,
                 model,
                 note_id,
                 skills.as_deref(),
@@ -1301,7 +1330,6 @@ impl Turn {
             messages.extend(added.iter().cloned());
             let messages = self.hydrate(messages).await;
             let req = Request {
-                provider: setup.provider,
                 model: setup.model.clone(),
                 system: Some(setup.system.clone()),
                 messages,
@@ -1317,7 +1345,8 @@ impl Turn {
             };
             let trail = |usage: Usage, outcome: Outcome| {
                 let line = ai::trail_line(
-                    setup.provider,
+                    &setup.cred.name,
+                    setup.cred.kind,
                     &setup.model,
                     usage,
                     outcome,
@@ -1327,7 +1356,8 @@ impl Turn {
                 eprintln!("{line}");
                 self.report(|r| r.log.push(line));
                 self.activity.called(
-                    setup.provider.as_str(),
+                    &setup.cred.name,
+                    setup.cred.kind.as_str(),
                     &setup.model,
                     usage.input,
                     usage.output,
@@ -1343,7 +1373,7 @@ impl Turn {
                     }
                     if error.kind == ErrorKind::Refusal {
                         let stop = Stop::Refusal {
-                            category: error.category.clone(),
+                            category: error.category.as_deref().map(str::to_owned),
                             explanation: error.explanation.clone(),
                         };
                         self.refused(&setup, content, &stop, added).await;
@@ -1781,7 +1811,6 @@ impl Turn {
         }
         messages.push(Message::user(COMPACT_PROMPT));
         let req = Request {
-            provider: setup.provider,
             model: setup.model.clone(),
             system: Some(setup.system.clone()),
             messages: self.hydrate(messages).await,
@@ -1806,8 +1835,10 @@ impl Turn {
                 AiEvent::ToolCall(_) => {}
             }
         }
+        self.keep_usage(&setup.cred, stream.plan_usage()).await;
         let line = ai::trail_line(
-            setup.provider,
+            &setup.cred.name,
+            setup.cred.kind,
             &setup.model,
             usage,
             if ended {
@@ -1824,7 +1855,7 @@ impl Turn {
         if !ended || summary.is_empty() {
             return Err(AiError::new(
                 ErrorKind::Provider,
-                format!("{} gave no summary", setup.provider.label()),
+                format!("{} gave no summary", setup.cred.name),
             ));
         }
         let compaction = agent_threads::Compaction {
@@ -1888,6 +1919,7 @@ impl Turn {
                 };
             }
         };
+        self.keep_usage(cred, stream.plan_usage()).await;
         let mut text = String::new();
         let mut calls = Vec::new();
         let mut usage = Usage::default();
@@ -1904,8 +1936,8 @@ impl Turn {
                 Ok(AiEvent::Usage(u)) => {
                     usage = u;
                     let data = json!({
-                        "provider": req.provider, "model": req.model,
-                        "input": u.input, "output": u.output,
+                        "account": cred.account, "name": cred.name, "kind": cred.kind,
+                        "model": req.model, "input": u.input, "output": u.output,
                     });
                     if !self.out.send("usage", data).await {
                         return Called::Gone;
@@ -1929,9 +1961,22 @@ impl Turn {
             text,
             error: AiError::new(
                 ErrorKind::Provider,
-                format!("{} stopped answering", req.provider.label()),
+                format!("{} stopped answering", cred.name),
             ),
         }
+    }
+
+    /// Keep the plan usage a ChatGPT answer reported as its account's latest (accounts A13).
+    async fn keep_usage(&self, cred: &Credential, usage: Option<&ai::PlanUsage>) {
+        let Some(usage) = usage.cloned() else {
+            return;
+        };
+        let w = self.writer.clone();
+        let id = cred.account.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::ai_settings::keep_usage(w.state(), &id, Some(&usage));
+        })
+        .await;
     }
 
     async fn done(&self, stop: &Stop, added: &[Message]) {
@@ -1953,7 +1998,7 @@ impl Turn {
                 json!({
                     "kind": e.kind.as_str(),
                     "message": e.message,
-                    "provider": e.provider,
+                    "account": e.account,
                     "model": e.model,
                     "messages": added,
                 }),
@@ -1976,7 +2021,7 @@ impl Turn {
             } => (category.clone(), explanation.clone()),
             _ => (None, None),
         };
-        let mut notice = format!("{} {} refused", setup.provider.label(), setup.model);
+        let mut notice = format!("{} {} refused", setup.cred.name, setup.model);
         if let Some(c) = &category {
             notice.push_str(&format!(" ({c})"));
         }
@@ -1998,7 +2043,9 @@ impl Turn {
             .send(
                 "refusal",
                 json!({
-                    "provider": setup.provider,
+                    "account": setup.cred.account,
+                    "name": setup.cred.name,
+                    "kind": setup.cred.kind,
                     "model": setup.model,
                     "category": category,
                     "explanation": explanation,
@@ -2158,7 +2205,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "list_agents",
-            "List every agent: its name, label, description, provider, model, whether it is enabled, whether it is built in, and how many triggers it has.",
+            "List every agent: its name, label, description, AI account, model, whether it is enabled, whether it is built in, and how many triggers it has.",
             json!({}),
         ),
         tool(

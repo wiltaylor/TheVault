@@ -1,21 +1,25 @@
 import type { Page } from "@playwright/test";
+import { dropAccount, useAccount } from "./ai";
 import { activePane, expect, logIn, test } from "./fixtures";
 
 // Agents in the left sidebar and the agent screen (agents G3, G5): create an agent from the
-// sidebar's +, which opens on its chat; open its settings with the cog, set its provider, model
+// sidebar's +, which opens on its chat; open its settings with the cog, set its account, model
 // and system prompt on the General tab with one Save, and see it listed in the sidebar and stored
-// in its file; the old tab addresses lead to the settings tabs. OpenAI is not set up in the test
-// server, so its model list cannot be read and the model is typed, as Settings > AI's fallback
-// does. On a phone the chat's bar fits the screen.
+// in its file; the old tab addresses lead to the settings tabs. The test's OpenAI account points
+// at a path of this server with no OpenAI API, so its model list cannot be read and the model is typed,
+// as Settings > AI's fallback does. On a phone the chat's bar fits the screen.
 
 function agentsNav(page: Page) {
   return page.getByRole("navigation", { name: "Agents" });
 }
 
-test("an agent created from the sidebar takes a model and prompt and is listed", async ({ page, admin }) => {
+test("an agent created from the sidebar takes a model and prompt and is listed", async ({ page, admin, baseURL }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const label = `Agent ${stamp}`;
   const name = `agent_${stamp}`;
+  const account = `Unreachable OpenAI ${stamp}`;
+  // This server, which has no OpenAI API under that path, so the model list fails at once.
+  await useAccount(admin, { name: account, kind: "openai", base_url: `${baseURL}/no-openai/v1`, key: "sk-e2e" });
 
   await logIn(page, "/daily");
   // Assistant is built in and listed first.
@@ -39,9 +43,9 @@ test("an agent created from the sidebar takes a model and prompt and is listed",
   await expect(pane.getByRole("heading", { name: label })).toBeVisible();
   await expect(pane.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
   const settings = pane.getByRole("region", { name: "General" });
-  await settings.getByLabel("Provider").selectOption("openai");
+  await settings.getByLabel("Account").selectOption(account);
   const model = settings.getByLabel("Model");
-  await expect(model).toHaveAttribute("placeholder", "Provider default");
+  await expect(model).toHaveAttribute("placeholder", "Account default");
   await model.fill("gpt-e2e");
   await model.press("Tab");
   const prompt = settings.getByLabel("System prompt");
@@ -52,8 +56,8 @@ test("an agent created from the sidebar takes a model and prompt and is listed",
 
   const res = await admin.get(`/api/agents/${name}`);
   expect(res.status(), await res.text()).toBe(200);
-  const saved = (await res.json()) as { label: string; provider: string; model: string; system_prompt: string };
-  expect(saved).toMatchObject({ label, provider: "openai", model: "gpt-e2e", system_prompt: "You sort the inbox. Be brief." });
+  const saved = (await res.json()) as { label: string; account: string; model: string; system_prompt: string };
+  expect(saved).toMatchObject({ label, account, model: "gpt-e2e", system_prompt: "You sort the inbox. Be brief." });
 
   // After a reload the sidebar still lists it, and its settings show what was saved.
   await page.reload();
@@ -74,6 +78,7 @@ test("an agent created from the sidebar takes a model and prompt and is listed",
 
   const del = await admin.delete(`/api/agents/${name}`);
   expect(del.ok(), await del.text()).toBe(true);
+  await dropAccount(admin, account);
 });
 
 test("the agent screen's old tab addresses lead to the settings tabs", async ({ page, admin }) => {

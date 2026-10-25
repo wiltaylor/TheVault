@@ -636,13 +636,18 @@ mod tests {
             (Method::GET, "/api/integrations/ai", Some(Scope::Admin)),
             (
                 Method::PUT,
-                "/api/integrations/ai/openai/key",
+                "/api/integrations/ai/accounts/01J/key",
+                Some(Scope::Admin),
+            ),
+            (
+                Method::POST,
+                "/api/integrations/ai/accounts",
                 Some(Scope::Admin),
             ),
             (Method::GET, "/api/ai/models", Some(Scope::Read)),
             (Method::POST, "/api/ai/chat", Some(Scope::Read)),
             // The turns form reads as the chat does; applying a change writes (ai D23).
-            (Method::GET, "/api/ai/providers", Some(Scope::Read)),
+            (Method::GET, "/api/ai/accounts", Some(Scope::Read)),
             (Method::POST, "/api/ai/chat/turns", Some(Scope::Read)),
             (
                 Method::GET,

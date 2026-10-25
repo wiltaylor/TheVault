@@ -1,51 +1,53 @@
-//! Settings > AI: the provider keys, Sign in with ChatGPT, the model lists and the Test button
-//! (ai D6, D7, D8, D15, D16). The calls themselves are `crates/ai`'s.
+//! Settings > AI: the table of named AI accounts, their keys, Sign in with ChatGPT per account,
+//! the model lists and the Test button (ai D6, D7, D8, D15, D16; accounts A1 to A7, A13). The
+//! calls themselves are `crates/ai`'s.
 //!
-//! - `GET /api/integrations/ai` answers `{ secrets_key, default_provider, providers: { anthropic:
-//!   { configured, model, url, has_key }, openai: { configured, model, url, has_key }, chatgpt: {
-//!   configured, account, model } } }, system_prompt, default_system_prompt, system_prompt_custom,
-//!   confirm }`, the OpenAI entry also with `api`, `responses` or `chat_completions`, the API its
-//!   calls speak (always `responses` without a custom URL, ai D25): each API URL as stored, or
-//!   null for the official API, and whether a key is
-//!   stored, which a custom URL makes optional (ai D24), the chat system prompt in
-//!   use, the shipped one, and whether they differ (ai D17), and `confirm: { notes, archive,
-//!   delete, types, downloads, taxonomies, agents, skills }` with every key filled (ai D22, D27, D31, agents G20, skills S9). A provider with a custom API URL counts as
-//!   configured without a key. No answer of these routes ever holds a key or a token.
-//! - `PUT /api/integrations/ai/settings` takes `{ default_provider?, models?: { anthropic?,
-//!   openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types?, downloads?, taxonomies?, agents?, skills? }, urls?:
-//!   { anthropic?, openai? }, openai_api? }`; a field sent replaces the stored one, and an empty
-//!   string clears it, which for `system_prompt` means the default, for a URL the official API
-//!   and for `openai_api` (`responses` or `chat_completions`, else a 400) Responses. A system
-//!   prompt over [`ai::SYSTEM_PROMPT_MAX`] characters is a 400; a URL [`ai::check_url`] refuses
-//!   is a 400 `invalid_url`. The rest of `endpoints`, the test seam, is kept.
-//! - `PUT /api/integrations/ai/{anthropic|openai}/key` takes `{ key }` and stores it in
-//!   `ai_<provider>_api_key`; an empty key deletes the secret.
-//! - `POST /api/integrations/ai/chatgpt/start` builds the authorize URL of ai D8 and holds the
-//!   PKCE verifier and nonce for [`PENDING_FOR`] under its `state`. The first sign-in sends
-//!   `client_id=dynamic_agent_client` with `agent_name_hint`; later ones send the issued client
-//!   id with `id_token_hint` and `login_hint`. The host id is made once and kept.
-//! - `POST /api/integrations/ai/chatgpt/finish` takes `{ url }`, the pasted callback address. It
-//!   checks the state, exchanges the code for the issued client id, verifies the ID token against
-//!   the issuer's JWKS, requires the plan scope, and stores `ai_chatgpt`. Every refusal is a 400.
-//! - `POST /api/integrations/ai/chatgpt/disconnect` revokes the refresh token (best effort) and
-//!   deletes `ai_chatgpt`.
-//! - `POST /api/integrations/ai/{provider}/test` takes an optional `{ model }` and sends the
-//!   16-token "Reply with OK" request to it, else to the provider's default model, else to the
-//!   model [`ai::preselect`] picks from the live list, which it then saves as the default. On
-//!   OpenAI with a custom API URL it detects the API (ai D25): when the saved one's path answers
-//!   404 or 405, it sends the same request on the other API's path, and when that path answers,
-//!   saves the other as `openai_api`. It answers 200 `{ ok, provider, model, ms, text, api,
-//!   error: null | { kind, message } }`, `api` being the OpenAI API the answer came over, or null
-//!   for the other providers and the official OpenAI API.
-//! - `GET /api/ai/providers` (scope `read`) answers `{ default_provider, providers: { <p>: {
-//!   configured, model } }, confirm, web }`, the chat panel's picker in every client (ai D23): no
-//!   account, no prompt, no API URL, never a secret.
+//! - `GET /api/integrations/ai` answers `{ secrets_key, accounts: [AccountStatus], default,
+//!   kinds, context: { auto_compact, compact_at }, confirm, web, fetch_private, system_prompt,
+//!   default_system_prompt, system_prompt_custom }`, `kinds` being `[{ kind, label,
+//!   default_url, default_window }]` for the four kinds in the order the Add form offers them. An `AccountStatus` is the account record
+//!   (`id, name, kind, base_url, model, headers, context`) with `kind_label`, `default_base_url`
+//!   (null for `openai_compatible`), `default_window`, `window` (the one in use), `configured`,
+//!   `key_set`, `signed_in` (`{ account, expired }` for a `chatgpt` account that has signed in,
+//!   else null), `agents` (the agents whose `account` names it) and `usage` (the plan's last
+//!   usage reading, accounts A13, or null). `confirm` and `web` have every key filled (ai D22,
+//!   D28). No answer of these routes ever holds a key or a token.
+//! - `POST /api/integrations/ai/accounts` takes `{ name, kind, base_url?, model?, headers?,
+//!   context?: { window } | null, key? }` and answers the new `AccountStatus`. `PUT
+//!   .../accounts/{id}` takes the same fields but `kind` and `key`, each sent replacing the
+//!   stored one (null or an empty string clearing it); a rename rewrites every agent file whose
+//!   `account` names the old name, in one commit (accounts A6). `DELETE .../accounts/{id}`
+//!   deletes the account with its secrets; agents naming it fall back to the default. `PUT
+//!   .../accounts/order` takes `{ ids }`, every account once. `PUT .../default` takes `{ id }`,
+//!   null or empty clearing it. A refusal is a 400; a bad URL is `invalid_url`.
+//! - `PUT .../accounts/{id}/key` takes `{ key }`; an empty key deletes it. A `chatgpt` account
+//!   takes none.
+//! - `POST .../accounts/{id}/chatgpt/start` builds the authorize URL of ai D8 and holds the PKCE
+//!   verifier and nonce for [`PENDING_FOR`] under its `state`, for that account. The first
+//!   sign-in sends `client_id=dynamic_agent_client` with `agent_name_hint`; later ones send the
+//!   issued client id with `id_token_hint` and `login_hint`. The host id is made once and kept.
+//! - `POST .../accounts/{id}/chatgpt/finish` takes `{ url }`, the pasted callback address. It
+//!   checks the state, exchanges the code for the issued client id, verifies the ID token
+//!   against the issuer's JWKS, requires the plan scope, and stores the account's sign-in. Every
+//!   refusal is a 400.
+//! - `POST .../accounts/{id}/chatgpt/disconnect` revokes the refresh token (best effort) and
+//!   deletes the account's sign-in.
+//! - `POST .../accounts/{id}/test` takes an optional `{ model }` and sends the 16-token "Reply
+//!   with OK" request to it, else to the account's model, else to the model [`ai::preselect`]
+//!   picks from the live list, which it then saves as the account's. It answers 200 `{ ok,
+//!   account, name, kind, model, ms, text, error: null | { kind, message } }`. A service that
+//!   lacks the kind's API answers the `invalid` "This service does not support ..." error.
+//! - `PUT /api/integrations/ai/settings` takes `{ system_prompt?, confirm?, web?, fetch_private?,
+//!   context?: { auto_compact?, compact_at? } }`, the settings that belong to no account.
+//! - `GET /api/ai/accounts` (scope `read`) answers `{ accounts: [{ id, name, kind, kind_label,
+//!   model, configured, window, usage }], default, kinds, confirm, web, context }`, the chat panel's
+//!   picker in every client (ai D23): no key, URL, header or sign-in.
+//! - `GET /api/ai/models?account=` (scope `read`) lists the account's models live, the default
+//!   account's without one, with its model, or the preselected one when it names none.
 //!
 //! The chat's system prompt and its `confirm` and `web` switches are the built-in Assistant's,
 //! `agents/assistant.wcl` (agents G6): both GETs answer them from it, and `PUT .../settings`
 //! writes the ones it is sent into it, checked as `PUT /api/agents/assistant` checks it.
-//! - `GET /api/ai/models?provider=` (scope `read`) lists the provider's models live, with the
-//!   default model, or the preselected one when none is chosen.
 //!
 //! Credential resolution and the sign-in calls block, so they run in `spawn_blocking`.
 
@@ -53,14 +55,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use ai::{AiError, ChatGptAuth, Credentials, ErrorKind, Provider, Settings, siwc};
+use ai::{
+    Account, AccountContext, AccountInput, Accounts, AiError, ChatGptAuth, Credentials, ErrorKind,
+    Kind, PlanUsage, Settings, siwc,
+};
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use reqwest::Url;
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use writer::Writer;
 
 use crate::ApiError;
@@ -102,6 +107,8 @@ type Shared = State<Arc<Ai>>;
 
 /// A ChatGPT sign-in waiting for its `finish`.
 struct Pending {
+    /// The account signing in.
+    account: String,
     verifier: String,
     nonce: String,
     /// The sign-in server the start used.
@@ -141,18 +148,17 @@ fn api_error(e: AiError) -> ApiError {
     ApiError::new(status, e.kind.as_str(), e.message)
 }
 
-/// A refused API URL (ai D24): a 400 `invalid_url`.
-fn url_error(e: AiError) -> ApiError {
-    ApiError::new(StatusCode::BAD_REQUEST, "invalid_url", e.message)
+/// A refused account change: a 400, `invalid_url` when the URL was the trouble (ai D24).
+fn account_error(e: AiError) -> ApiError {
+    if e.message.starts_with("The API URL") {
+        return ApiError::new(StatusCode::BAD_REQUEST, "invalid_url", e.message);
+    }
+    api_error(e)
 }
 
 /// A refused ChatGPT sign-in step: always a 400 the card shows as it is.
 fn chatgpt_error(message: impl Into<String>) -> ApiError {
     ApiError::new(StatusCode::BAD_REQUEST, "chatgpt", message)
-}
-
-fn provider(name: &str) -> Result<Provider, ApiError> {
-    name.parse::<Provider>().map_err(ApiError::bad_request)
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -169,14 +175,23 @@ fn delete_secret(s: &state::State, name: &str) -> Result<(), ApiError> {
     }
 }
 
-/// Make `p` the default provider when none is chosen yet.
-fn default_to(s: &state::State, p: Provider) -> Result<(), ApiError> {
-    let mut settings = Settings::load(s).map_err(api_error)?;
-    if settings.default_provider.is_none() {
-        settings.default_provider = Some(p);
-        settings.save(s).map_err(api_error)?;
+/// The accounts, or an empty table when the vault has no secrets key, which holds none.
+fn accounts_of(s: &state::State) -> Result<Accounts, ApiError> {
+    if !s.has_secret_key() {
+        return Ok(Accounts::default());
     }
-    Ok(())
+    Accounts::load(s).map_err(api_error)
+}
+
+/// The account `r` names, by id or name, or a 404.
+fn account(all: &Accounts, r: &str) -> Result<Account, ApiError> {
+    all.find(r).cloned().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("there is no AI account {r:?}"),
+        )
+    })
 }
 
 /// The built-in Assistant, which holds the chat panel's prompt and switches (agents G6): the
@@ -209,6 +224,78 @@ pub(crate) fn web_json(web: &schema::AgentWeb) -> Value {
     )
 }
 
+/// The account each agent names, for the `agents` of an account and its rename: `(agent,
+/// account id)` for every agent naming an account that exists (accounts A6).
+fn agents_by_account(w: &Writer, all: &Accounts) -> Vec<(String, String)> {
+    let Ok(agents) = w.agents() else {
+        return Vec::new();
+    };
+    agents
+        .into_iter()
+        .filter_map(|(name, a)| {
+            let a = a.ok()?;
+            let id = all.find(a.account_ref()?)?.id.clone();
+            Some((name, id))
+        })
+        .collect()
+}
+
+/// The name of the account agent `a` names, resolved through the accounts: a legacy provider
+/// reads as the name of the account made for it. The name as written when no account has it.
+pub(crate) fn agent_account_name(w: &Writer, a: &schema::Agent) -> Option<String> {
+    let r = a.account_ref()?;
+    let all = accounts_of(w.state()).unwrap_or_default();
+    Some(
+        all.find(r)
+            .map_or_else(|| r.to_owned(), |acc| acc.name.clone()),
+    )
+}
+
+/// One account as `GET /api/integrations/ai` answers it. Nothing in it is a key or a token.
+fn account_json(
+    s: &state::State,
+    a: &Account,
+    agents: &[(String, String)],
+) -> Result<Value, ApiError> {
+    let configured = Credentials::configured(s, a).map_err(api_error)?;
+    let key_set = a.kind != Kind::ChatGpt && Credentials::key_set(s, &a.id).map_err(api_error)?;
+    let signed_in = match a.kind {
+        Kind::ChatGpt => {
+            let auth = ChatGptAuth::load(s, &a.id).map_err(api_error)?;
+            (auth.signed_in() || auth.account.is_some())
+                .then(|| json!({ "account": auth.account, "expired": !auth.signed_in() }))
+        }
+        _ => None,
+    };
+    let usage = match a.kind {
+        Kind::ChatGpt => PlanUsage::load(s, &a.id).map_err(api_error)?,
+        _ => None,
+    };
+    let named: Vec<&str> = agents
+        .iter()
+        .filter(|(_, id)| *id == a.id)
+        .map(|(n, _)| n.as_str())
+        .collect();
+    Ok(json!({
+        "id": a.id,
+        "name": a.name,
+        "kind": a.kind,
+        "kind_label": a.kind.label(),
+        "base_url": a.url(),
+        "default_base_url": ai::default_base(a.kind),
+        "model": a.model(),
+        "headers": a.headers,
+        "context": a.context,
+        "default_window": ai::default_window(a.kind),
+        "window": a.window(),
+        "configured": configured,
+        "key_set": key_set,
+        "signed_in": signed_in,
+        "agents": named,
+        "usage": usage,
+    }))
+}
+
 /// What `GET /api/integrations/ai` answers. Nothing in it is a key or a token. The prompt and the
 /// switches are the built-in Assistant's (agents G6).
 fn status_of(w: &Writer) -> Result<Value, ApiError> {
@@ -216,72 +303,56 @@ fn status_of(w: &Writer) -> Result<Value, ApiError> {
     let agent = assistant(w)?;
     let custom = agent.system_prompt.clone().filter(|p| !p.trim().is_empty());
     let prompt = custom.clone().unwrap_or_else(|| ai::CHAT_PROMPT.to_owned());
-    let confirm = confirm_json(&agent.permissions.confirm);
-    let web = web_json(&agent.permissions.web);
-    if !s.has_secret_key() {
-        let context = context_json(&Settings::default());
-        let off = json!({ "configured": false, "model": null, "url": null, "has_key": false });
-        return Ok(json!({
-            "secrets_key": false,
-            "default_provider": null,
-            "providers": {
-                "anthropic": off,
-                "openai": off,
-                "chatgpt": { "configured": false, "account": null, "model": null },
-            },
-            "system_prompt": prompt,
-            "default_system_prompt": ai::CHAT_PROMPT,
-            "system_prompt_custom": custom.is_some(),
-            "confirm": confirm,
-            "web": web,
-            "context": context,
-        }));
-    }
-    let settings = Settings::load(s).map_err(api_error)?;
-    let mut providers = Map::new();
-    for p in Provider::ALL {
-        let configured = Credentials::configured(s, p).map_err(api_error)?;
-        let mut entry = json!({ "configured": configured, "model": settings.model(p) });
-        if p == Provider::ChatGpt {
-            let auth = ChatGptAuth::load(s).map_err(api_error)?;
-            entry["account"] = json!(auth.account.filter(|_| configured));
-        } else {
-            entry["url"] = json!(settings.endpoints.url(p));
-            if p == Provider::OpenAi {
-                entry["api"] = json!(settings.endpoints.openai_api().as_str());
-            }
-            let key = s.get_secret(ai::key_secret(p))?;
-            entry["has_key"] = json!(key.is_some_and(|k| !k.trim().is_empty()));
-        }
-        providers.insert(p.as_str().to_owned(), entry);
-    }
+    let keyed = s.has_secret_key();
+    let settings = if keyed {
+        Settings::load(s).map_err(api_error)?
+    } else {
+        Settings::default()
+    };
+    let all = accounts_of(s)?;
+    let agents = agents_by_account(w, &all);
+    let accounts = all
+        .accounts
+        .iter()
+        .map(|a| account_json(s, a, &agents))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(json!({
-        "secrets_key": true,
-        "default_provider": settings.default_provider,
-        "providers": providers,
+        "secrets_key": keyed,
+        "accounts": accounts,
+        "default": all.default_account().map(|a| a.id.clone()),
+        "kinds": kinds_json(),
+        "context": context_json(&settings),
+        "confirm": confirm_json(&agent.permissions.confirm),
+        "web": web_json(&agent.permissions.web),
+        "fetch_private": settings.fetch_private,
         "system_prompt": prompt,
         "default_system_prompt": ai::CHAT_PROMPT,
         "system_prompt_custom": custom.is_some(),
-        "confirm": confirm,
-        "web": web,
-        "context": context_json(&settings),
     }))
 }
 
-/// The context settings with every key filled: each provider's window in use and whether it is
-/// set or the default, whether threads compact themselves, and at what share of the window.
+/// The account kinds in the order Settings > AI offers them (accounts A1): each kind's name,
+/// label, default base URL (null for `openai_compatible`, whose URL is required) and default
+/// context window.
+fn kinds_json() -> Value {
+    Value::Array(
+        Kind::ALL
+            .iter()
+            .map(|&k| {
+                json!({
+                    "kind": k,
+                    "label": k.label(),
+                    "default_url": ai::default_base(k),
+                    "default_window": ai::default_window(k),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Whether threads compact themselves, and at what share of the window.
 fn context_json(settings: &Settings) -> Value {
-    let windows: Map<String, Value> = Provider::ALL
-        .iter()
-        .map(|&p| {
-            (
-                p.as_str().to_owned(),
-                json!({ "window": settings.window(p), "set": settings.context.set_window(p).is_some() }),
-            )
-        })
-        .collect();
     json!({
-        "windows": windows,
         "auto_compact": settings.context.auto_compact,
         "compact_at": settings.context.compact_at(),
     })
@@ -291,41 +362,250 @@ async fn status_answer(a: &Arc<Ai>) -> Result<Json<Value>, ApiError> {
     blocking_w(a, status_of).await.map(Json)
 }
 
-/// `GET /api/ai/providers` (read): which providers are set up and their default models, the
-/// default provider and the confirmation switches, for the chat panel's picker in every client
-/// (ai D23). Unlike `GET /api/integrations/ai` it holds no account and no system prompt.
-pub async fn providers(State(a): Shared) -> Result<Json<Value>, ApiError> {
+/// `GET /api/integrations/ai`.
+pub async fn status(State(a): Shared) -> Result<Json<Value>, ApiError> {
+    status_answer(&a).await
+}
+
+/// `GET /api/ai/accounts` (read): the accounts set up with their default models, the default
+/// account and the confirmation switches, for the chat panel's picker in every client (ai D23).
+/// Unlike `GET /api/integrations/ai` it holds no URL, header, sign-in or system prompt.
+pub async fn accounts(State(a): Shared) -> Result<Json<Value>, ApiError> {
     let status = blocking_w(&a, status_of).await?;
-    let mut providers = Map::new();
-    if let Some(all) = status["providers"].as_object() {
-        for (name, p) in all {
-            providers.insert(
-                name.clone(),
-                json!({ "configured": p["configured"], "model": p["model"] }),
-            );
-        }
-    }
+    let accounts: Vec<Value> = status["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|a| {
+            json!({
+                "id": a["id"], "name": a["name"], "kind": a["kind"], "kind_label": a["kind_label"],
+                "model": a["model"], "configured": a["configured"], "window": a["window"],
+                "usage": a["usage"],
+            })
+        })
+        .collect();
     Ok(Json(json!({
-        "default_provider": status["default_provider"],
-        "providers": providers,
+        "accounts": accounts,
+        "default": status["default"],
+        "kinds": status["kinds"],
         "confirm": status["confirm"],
         "web": status["web"],
         "context": status["context"],
     })))
 }
 
-/// `GET /api/integrations/ai`.
-pub async fn status(State(a): Shared) -> Result<Json<Value>, ApiError> {
-    status_answer(&a).await
+/// A header pair as the routes take it: `[name, value]`.
+type HeaderPair = (String, String);
+
+/// A new account (`POST`) or a change to one (`PUT`). `Some(None)` is a field sent as null.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AccountBody {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default, with = "double_option")]
+    base_url: Option<Option<String>>,
+    #[serde(default, with = "double_option")]
+    model: Option<Option<String>>,
+    #[serde(default)]
+    headers: Option<Vec<HeaderPair>>,
+    #[serde(default, with = "double_option")]
+    context: Option<Option<AccountContext>>,
+    /// `POST` only: the API key to store with the new account.
+    #[serde(default)]
+    key: Option<String>,
+}
+
+/// A field that tells absent (`None`) from null (`Some(None)`).
+mod double_option {
+    use serde::{Deserialize, Deserializer};
+
+    pub fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Option<T>>, D::Error> {
+        Option::<T>::deserialize(d).map(Some)
+    }
+}
+
+impl AccountBody {
+    fn input(self) -> Result<(AccountInput, Option<String>), ApiError> {
+        let kind = match self.kind.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(k) => Some(k.parse::<Kind>().map_err(ApiError::bad_request)?),
+        };
+        let text = |v: Option<Option<String>>| {
+            v.map(|v| v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()))
+        };
+        Ok((
+            AccountInput {
+                name: self.name,
+                kind,
+                base_url: text(self.base_url),
+                model: text(self.model),
+                headers: self.headers,
+                context: self.context,
+            },
+            self.key
+                .map(|k| k.trim().to_owned())
+                .filter(|k| !k.is_empty()),
+        ))
+    }
+}
+
+/// `POST /api/integrations/ai/accounts`.
+pub async fn create_account(
+    State(a): Shared,
+    Json(b): Json<AccountBody>,
+) -> Result<Json<Value>, ApiError> {
+    let (input, key) = b.input()?;
+    blocking_w(&a, move |w| {
+        let s = w.state();
+        let added = Accounts::change(s, api_error, |all| {
+            let added = all.add(input).map_err(account_error)?.clone();
+            if key.is_some() && added.kind == Kind::ChatGpt {
+                return Err(ApiError::bad_request(
+                    "a ChatGPT subscription takes no key: Continue with ChatGPT instead",
+                ));
+            }
+            if let Some(k) = &key {
+                s.set_secret(&ai::key_secret(&added.id), k)?;
+            }
+            Ok(added)
+        })?;
+        account_json(s, &added, &[])
+    })
+    .await
+    .map(Json)
+}
+
+/// `PUT /api/integrations/ai/accounts/{id}`.
+pub async fn update_account(
+    State(a): Shared,
+    crate::Caller(by): crate::Caller,
+    Path(id): Path<String>,
+    Json(b): Json<AccountBody>,
+) -> Result<Json<Value>, ApiError> {
+    if b.key.is_some() {
+        return Err(ApiError::bad_request(
+            "set the key with PUT /api/integrations/ai/accounts/{id}/key",
+        ));
+    }
+    let (input, _) = b.input()?;
+    blocking_w(&a, move |w| {
+        let s = w.state();
+        Accounts::change(s, api_error, |all| {
+            let id = account(all, &id)?.id;
+            let renamed = all.update(&id, input).map_err(account_error)?;
+            if let Some(old) = renamed {
+                let new = all.get(&id).map(|a| a.name.clone()).unwrap_or_default();
+                let _acting = writer::acting_as(&by);
+                // Every agent naming the old name, or the legacy provider this account was
+                // made for, names the new one (accounts A6), before the rename is saved.
+                let legacy = all.legacy_names(&id);
+                w.set_agent_accounts(|agent| {
+                    let r = agent.account_ref()?;
+                    (r.eq_ignore_ascii_case(&old) && agent.account.is_some()
+                        || agent.account.is_none() && legacy.iter().any(|l| l == r))
+                    .then(|| new.clone())
+                })?;
+            }
+            Ok(())
+        })?;
+        status_of(w)
+    })
+    .await
+    .map(Json)
+}
+
+/// `DELETE /api/integrations/ai/accounts/{id}`: the account and its secrets. Agents naming it
+/// fall back to the default account.
+pub async fn delete_account(
+    State(a): Shared,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let gone = blocking(&a, move |s| {
+        Accounts::change(s, api_error, |all| {
+            let id = account(all, &id)?.id;
+            all.remove(&id).map_err(api_error)
+        })
+    })
+    .await?;
+    if gone.kind == Kind::ChatGpt {
+        revoke(&a, &gone).await;
+    }
+    blocking_w(&a, move |w| {
+        let s = w.state();
+        for name in [
+            ai::key_secret(&gone.id),
+            ai::chatgpt_secret(&gone.id),
+            ai::usage_secret(&gone.id),
+        ] {
+            delete_secret(s, &name)?;
+        }
+        status_of(w)
+    })
+    .await
+    .map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrderBody {
+    ids: Vec<String>,
+}
+
+/// `PUT /api/integrations/ai/accounts/order`.
+pub async fn put_order(
+    State(a): Shared,
+    Json(b): Json<OrderBody>,
+) -> Result<Json<Value>, ApiError> {
+    blocking_w(&a, move |w| {
+        Accounts::change(w.state(), api_error, |all| {
+            all.reorder(&b.ids).map_err(api_error)
+        })?;
+        status_of(w)
+    })
+    .await
+    .map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefaultBody {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+/// `PUT /api/integrations/ai/default`.
+pub async fn put_default(
+    State(a): Shared,
+    Json(b): Json<DefaultBody>,
+) -> Result<Json<Value>, ApiError> {
+    blocking_w(&a, move |w| {
+        Accounts::change(w.state(), api_error, |all| {
+            all.set_default(b.id.as_deref()).map_err(api_error)
+        })?;
+        status_of(w)
+    })
+    .await
+    .map(Json)
+}
+
+/// A partial `context`: each switch sent replaces the stored one.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ContextBody {
+    #[serde(default)]
+    auto_compact: Option<bool>,
+    #[serde(default)]
+    compact_at: Option<u8>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsBody {
-    #[serde(default)]
-    default_provider: Option<String>,
-    #[serde(default)]
-    models: Option<HashMap<String, Option<String>>>,
     #[serde(default)]
     system_prompt: Option<String>,
     #[serde(default)]
@@ -333,24 +613,9 @@ pub struct SettingsBody {
     #[serde(default)]
     web: Option<WebBody>,
     #[serde(default)]
-    urls: Option<HashMap<String, Option<String>>>,
-    #[serde(default)]
-    openai_api: Option<String>,
+    fetch_private: Option<bool>,
     #[serde(default)]
     context: Option<ContextBody>,
-}
-
-/// A partial `context`: each window sent replaces the stored one, `null` putting back the
-/// default, and so does each switch.
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct ContextBody {
-    #[serde(default)]
-    windows: Option<HashMap<String, Option<u64>>>,
-    #[serde(default)]
-    auto_compact: Option<bool>,
-    #[serde(default)]
-    compact_at: Option<u8>,
 }
 
 /// A partial `confirm`: each switch sent replaces the stored one (ai D22).
@@ -393,50 +658,11 @@ pub async fn put_settings(
     crate::Caller(by): crate::Caller,
     Json(b): Json<SettingsBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let default = match b.default_provider.as_deref().map(str::trim) {
-        None => None,
-        Some("") => Some(None),
-        Some(p) => Some(Some(provider(p)?)),
-    };
-    let mut models = Vec::new();
-    for (name, model) in b.models.unwrap_or_default() {
-        models.push((provider(&name)?, model.map(|m| m.trim().to_owned())));
-    }
-    let mut urls = Vec::new();
-    for (name, url) in b.urls.unwrap_or_default() {
-        let p = provider(&name)?;
-        // Checked before anything is saved, so a bad URL changes nothing.
-        let url = match url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
-            Some(u) => Some(ai::check_url(u).map_err(url_error)?),
-            None => None,
-        };
-        urls.push((p, url));
-    }
-    let openai_api = match b.openai_api.as_deref().map(str::trim) {
-        None => None,
-        Some("") => Some(None),
-        Some(a) => Some(Some(
-            a.parse::<ai::OpenAiApi>().map_err(ApiError::bad_request)?,
-        )),
-    };
     let prompt = b.system_prompt;
     let confirm = b.confirm;
     let web = b.web;
+    let fetch_private = b.fetch_private;
     let context = b.context.unwrap_or_default();
-    let mut windows = Vec::new();
-    for (name, window) in context.windows.unwrap_or_default() {
-        let p = provider(&name)?;
-        if let Some(n) = window
-            && !ai::Context::WINDOW_RANGE.contains(&n)
-        {
-            return Err(ApiError::bad_request(format!(
-                "a context window is from {} to {} tokens",
-                ai::Context::WINDOW_RANGE.start(),
-                ai::Context::WINDOW_RANGE.end()
-            )));
-        }
-        windows.push((p, window));
-    }
     if let Some(n) = context.compact_at
         && !ai::Context::COMPACT_RANGE.contains(&n)
     {
@@ -449,16 +675,6 @@ pub async fn put_settings(
     blocking_w(&a, move |w| {
         let _acting = writer::acting_as(&by);
         let s = w.state();
-        let mut settings = Settings::load(s).map_err(api_error)?;
-        for (p, url) in urls {
-            settings
-                .endpoints
-                .set_url(p, url.as_deref())
-                .map_err(url_error)?;
-        }
-        if let Some(api) = openai_api {
-            settings.endpoints.openai_api = api;
-        }
         // The chat's prompt and switches are the built-in Assistant's (agents G6): written
         // there first, so a refused prompt changes nothing.
         if prompt.is_some() || confirm.is_some() || web.is_some() {
@@ -503,22 +719,20 @@ pub async fn put_settings(
                 crate::agent_files::unknown_tools,
             )?;
         }
-        if let Some(d) = default {
-            settings.default_provider = d;
+        if fetch_private.is_some() || context.auto_compact.is_some() || context.compact_at.is_some()
+        {
+            let mut settings = Settings::load(s).map_err(api_error)?;
+            if let Some(on) = fetch_private {
+                settings.fetch_private = on;
+            }
+            if let Some(on) = context.auto_compact {
+                settings.context.auto_compact = on;
+            }
+            if let Some(n) = context.compact_at {
+                settings.context.compact_at = (n != ai::Context::COMPACT_AT).then_some(n);
+            }
+            settings.save(s).map_err(api_error)?;
         }
-        for (p, m) in models {
-            settings.set_model(p, m);
-        }
-        for (p, window) in windows {
-            settings.context.put_window(p, window);
-        }
-        if let Some(on) = context.auto_compact {
-            settings.context.auto_compact = on;
-        }
-        if let Some(n) = context.compact_at {
-            settings.context.compact_at = (n != ai::Context::COMPACT_AT).then_some(n);
-        }
-        settings.save(s).map_err(api_error)?;
         status_of(w)
     })
     .await
@@ -531,27 +745,26 @@ pub struct KeyBody {
     key: String,
 }
 
-/// `PUT /api/integrations/ai/{provider}/key`.
+/// `PUT /api/integrations/ai/accounts/{id}/key`.
 pub async fn put_key(
     State(a): Shared,
-    Path(name): Path<String>,
+    Path(id): Path<String>,
     Json(b): Json<KeyBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let p = provider(&name)?;
-    if p == Provider::ChatGpt {
-        return Err(ApiError::bad_request(
-            "the ChatGPT plan takes no key: Continue with ChatGPT instead",
-        ));
-    }
     let key = b.key.trim().to_owned();
     blocking_w(&a, move |w| {
         let s = w.state();
-        let secret = ai::key_secret(p);
+        let acc = account(&Accounts::load(s).map_err(api_error)?, &id)?;
+        if acc.kind == Kind::ChatGpt {
+            return Err(ApiError::bad_request(
+                "a ChatGPT subscription takes no key: Continue with ChatGPT instead",
+            ));
+        }
+        let secret = ai::key_secret(&acc.id);
         if key.is_empty() {
-            delete_secret(s, secret)?;
+            delete_secret(s, &secret)?;
         } else {
-            s.set_secret(secret, &key)?;
-            default_to(s, p)?;
+            s.set_secret(&secret, &key)?;
         }
         status_of(w)
     })
@@ -559,16 +772,32 @@ pub async fn put_key(
     .map(Json)
 }
 
-/// `POST /api/integrations/ai/chatgpt/start`.
-pub async fn chatgpt_start(State(a): Shared) -> Result<Json<Value>, ApiError> {
-    let (auth, auth_base) = blocking(&a, |s| {
-        let mut auth = ChatGptAuth::load(s).map_err(api_error)?;
+/// The `chatgpt` account `id` names, or a 400.
+fn chatgpt_account(s: &state::State, id: &str) -> Result<Account, ApiError> {
+    let acc = account(&Accounts::load(s).map_err(api_error)?, id)?;
+    if acc.kind != Kind::ChatGpt {
+        return Err(ApiError::bad_request(format!(
+            "{} is not a ChatGPT subscription account",
+            acc.name
+        )));
+    }
+    Ok(acc)
+}
+
+/// `POST /api/integrations/ai/accounts/{id}/chatgpt/start`.
+pub async fn chatgpt_start(
+    State(a): Shared,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let (acc, auth, auth_base) = blocking(&a, move |s| {
+        let acc = chatgpt_account(s, &id)?;
+        let mut auth = ChatGptAuth::load(s, &acc.id).map_err(api_error)?;
         if auth.host_id.as_deref().is_none_or(str::is_empty) {
             auth.host_id = Some(siwc::new_host_id());
-            auth.save(s).map_err(api_error)?;
+            auth.save(s, &acc.id).map_err(api_error)?;
         }
         let settings = Settings::load(s).map_err(api_error)?;
-        Ok((auth, settings.endpoints.chatgpt_auth_base()))
+        Ok((acc, auth, settings.endpoints.chatgpt_auth_base()))
     })
     .await?;
     let (verifier, challenge) = siwc::pkce();
@@ -593,6 +822,7 @@ pub async fn chatgpt_start(State(a): Shared) -> Result<Json<Value>, ApiError> {
     a.pending().insert(
         state,
         Pending {
+            account: acc.id,
             verifier,
             nonce,
             auth_base,
@@ -608,9 +838,10 @@ pub struct FinishBody {
     url: String,
 }
 
-/// `POST /api/integrations/ai/chatgpt/finish`.
+/// `POST /api/integrations/ai/accounts/{id}/chatgpt/finish`.
 pub async fn chatgpt_finish(
     State(a): Shared,
+    Path(id): Path<String>,
     Json(b): Json<FinishBody>,
 ) -> Result<Json<Value>, ApiError> {
     let url = Url::parse(b.url.trim()).map_err(|_| {
@@ -643,7 +874,13 @@ pub async fn chatgpt_finish(
 
     blocking_w(&a, move |w| {
         let s = w.state();
-        let mut auth = ChatGptAuth::load(s).map_err(api_error)?;
+        let acc = chatgpt_account(s, &id)?;
+        if acc.id != pending.account {
+            return Err(chatgpt_error(
+                "this sign-in was started for another account: Continue with ChatGPT again",
+            ));
+        }
+        let mut auth = ChatGptAuth::load(s, &acc.id).map_err(api_error)?;
         let Some(client_id) = issued.or_else(|| auth.client_id.clone().filter(|c| !c.is_empty()))
         else {
             return Err(chatgpt_error(
@@ -698,19 +935,18 @@ pub async fn chatgpt_finish(
         auth.client_id = Some(client_id.clone());
         auth.store_tokens(tokens, now_ms());
         auth.account = claims.email.or(claims.subject);
-        auth.save(s).map_err(api_error)?;
-        default_to(s, Provider::ChatGpt)?;
+        auth.save(s, &acc.id).map_err(api_error)?;
         status_of(w)
     })
     .await
     .map(Json)
 }
 
-/// `POST /api/integrations/ai/chatgpt/disconnect`.
-pub async fn chatgpt_disconnect(State(a): Shared) -> Result<Json<Value>, ApiError> {
-    blocking_w(&a, |w| {
-        let s = w.state();
-        let auth = ChatGptAuth::load(s).map_err(api_error)?;
+/// Revoke `acc`'s ChatGPT refresh token, best effort.
+async fn revoke(a: &Arc<Ai>, acc: &Account) {
+    let id = acc.id.clone();
+    let done = blocking(a, move |s| {
+        let auth = ChatGptAuth::load(s, &id).map_err(api_error)?;
         if let (Some(client_id), Some(refresh)) = (&auth.client_id, &auth.refresh_token) {
             let base = Settings::load(s)
                 .map_err(api_error)?
@@ -729,7 +965,25 @@ pub async fn chatgpt_disconnect(State(a): Shared) -> Result<Json<Value>, ApiErro
                 eprintln!("ai: revoking the ChatGPT sign-in: {}", e.message);
             }
         }
-        delete_secret(s, ai::CHATGPT)?;
+        Ok(())
+    })
+    .await;
+    if let Err(e) = done {
+        eprintln!("ai: revoking the ChatGPT sign-in: {}", e.status);
+    }
+}
+
+/// `POST /api/integrations/ai/accounts/{id}/chatgpt/disconnect`.
+pub async fn chatgpt_disconnect(
+    State(a): Shared,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let acc = blocking(&a, move |s| chatgpt_account(s, &id)).await?;
+    revoke(&a, &acc).await;
+    blocking_w(&a, move |w| {
+        let s = w.state();
+        delete_secret(s, &ai::chatgpt_secret(&acc.id))?;
+        delete_secret(s, &ai::usage_secret(&acc.id))?;
         status_of(w)
     })
     .await
@@ -743,49 +997,62 @@ struct TestBody {
     model: Option<String>,
 }
 
-/// The credential for `p`, and the model a Test or a listing uses: the one asked for, else the
-/// default.
+/// The account `r` names, the default without one, and its credential.
 async fn credential(
     a: &Arc<Ai>,
-    p: Provider,
-) -> Result<Result<(ai::Credential, Settings), AiError>, ApiError> {
+    r: Option<String>,
+) -> Result<(Account, Result<ai::Credential, AiError>), ApiError> {
     blocking(a, move |s| {
-        Ok(Credentials::resolve(s, p).and_then(|c| Settings::load(s).map(|st| (c, st))))
+        let all = Accounts::load(s).map_err(api_error)?;
+        let acc = match r.as_deref() {
+            Some(r) => account(&all, r)?,
+            None => all.pick(None, None).map_err(api_error)?.clone(),
+        };
+        let cred = Credentials::resolve(s, &acc);
+        Ok((acc, cred))
     })
     .await
 }
 
-/// `POST /api/integrations/ai/{provider}/test`.
+/// Keep the plan usage a reply reported as `account`'s latest (accounts A13).
+pub(crate) fn keep_usage(s: &state::State, account: &str, usage: Option<&PlanUsage>) {
+    if let Some(u) = usage
+        && !account.is_empty()
+        && let Err(e) = u.save(s, account)
+    {
+        eprintln!("ai: keeping the plan usage: {e}");
+    }
+}
+
+/// `POST /api/integrations/ai/accounts/{id}/test`.
 pub async fn test(
     State(a): Shared,
-    Path(name): Path<String>,
+    Path(id): Path<String>,
     body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
-    let p = provider(&name)?;
     let b: TestBody = if body.iter().all(u8::is_ascii_whitespace) {
         TestBody::default()
     } else {
         serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(e.to_string()))?
     };
+    let (acc, cred) = credential(&a, Some(id)).await?;
     let began = Instant::now();
-    let answer_with =
-        move |model: Option<&str>, result: Result<String, AiError>, api: Option<ai::OpenAiApi>| {
-            let ms = began.elapsed().as_millis() as u64;
-            let api = api.map(ai::OpenAiApi::as_str);
-            match result {
-                Ok(text) => json!({
-                    "ok": true, "provider": p, "model": model, "ms": ms, "text": text, "api": api,
-                    "error": null,
-                }),
-                Err(e) => json!({
-                    "ok": false, "provider": p, "model": model, "ms": ms, "text": null, "api": api,
-                    "error": { "kind": e.kind.as_str(), "message": e.message },
-                }),
-            }
+    let answer = |model: Option<&str>, result: Result<String, AiError>| {
+        let ms = began.elapsed().as_millis() as u64;
+        let (ok, text, error) = match result {
+            Ok(text) => (true, json!(text), Value::Null),
+            Err(e) => (
+                false,
+                Value::Null,
+                json!({ "kind": e.kind.as_str(), "message": e.message }),
+            ),
         };
-    let answer =
-        |model: Option<&str>, result: Result<String, AiError>| answer_with(model, result, None);
-    let (cred, settings) = match credential(&a, p).await? {
+        json!({
+            "ok": ok, "account": acc.id, "name": acc.name, "kind": acc.kind, "model": model,
+            "ms": ms, "text": text, "error": error,
+        })
+    };
+    let cred = match cred {
         Ok(c) => c,
         Err(e) => return Ok(Json(answer(None, Err(e)))),
     };
@@ -793,57 +1060,53 @@ pub async fn test(
         .model
         .map(|m| m.trim().to_owned())
         .filter(|m| !m.is_empty());
-    let model = match asked.or_else(|| settings.model(p).map(str::to_owned)) {
+    let model = match asked.or_else(|| acc.model().map(str::to_owned)) {
         Some(m) => m,
         None => {
             let models = match ai::list_models(&a.http, &cred).await {
                 Ok(m) => m,
                 Err(e) => return Ok(Json(answer(None, Err(e)))),
             };
-            let Some(m) = ai::preselect(p, &models).map(|m| m.id.clone()) else {
+            let Some(m) = ai::preselect(acc.kind, &models).map(|m| m.id.clone()) else {
                 let e = AiError::not_configured(format!(
-                    "no {} model is chosen: pick one from the list",
-                    p.label()
+                    "no model is chosen for {}: pick one from the list",
+                    acc.name
                 ));
                 return Ok(Json(answer(None, Err(e))));
             };
             let keep = m.clone();
+            let id = acc.id.clone();
             blocking(&a, move |s| {
-                let mut settings = Settings::load(s).map_err(api_error)?;
-                if settings.model(p).is_none() {
-                    settings.set_model(p, Some(keep));
-                    settings.save(s).map_err(api_error)?;
-                }
-                Ok(())
+                Accounts::change(s, api_error, |all| {
+                    if all.get(&id).is_some_and(|a| a.model().is_none()) {
+                        all.update(
+                            &id,
+                            AccountInput {
+                                model: Some(Some(keep)),
+                                ..AccountInput::default()
+                            },
+                        )
+                        .map_err(api_error)?;
+                    }
+                    Ok(())
+                })
             })
             .await?;
             m
         }
     };
-    let req = ai::Request::test(p, model.clone());
-    let mut result = test_call(&a, &cred, &req).await;
-    // Only OpenAI with a custom API URL has a choice of API (ai D25).
-    let mut api = (p == Provider::OpenAi && cred.custom_host.is_some()).then(|| cred.api());
-    if let Some(saved) = api
-        && result.as_ref().is_err_and(AiError::is_unsupported_api)
-    {
-        let mut other = cred.clone();
-        other.openai_api = saved.other();
-        let second = test_call(&a, &other, &req).await;
-        // The other path answered, even with an error of its own: the service speaks it.
-        if !second.as_ref().is_err_and(AiError::is_unsupported_api) {
-            let found = saved.other();
-            blocking(&a, move |s| {
-                let mut settings = Settings::load(s).map_err(api_error)?;
-                settings.endpoints.openai_api = Some(found);
-                settings.save(s).map_err(api_error)
-            })
-            .await?;
-            api = Some(found);
-            result = second;
-        }
+    let req = ai::Request::test(model.clone());
+    let result = test_call(&a, &cred, &req).await;
+    if let Ok(reply) = &result {
+        let usage = reply.plan_usage.clone();
+        let id = acc.id.clone();
+        blocking(&a, move |s| {
+            keep_usage(s, &id, usage.as_ref());
+            Ok(())
+        })
+        .await?;
     }
-    Ok(Json(answer_with(Some(&model), result.map(|r| r.text), api)))
+    Ok(Json(answer(Some(&model), result.map(|r| r.text))))
 }
 
 /// One Test request, under [`TEST_TIMEOUT`], leaving its trail line.
@@ -852,7 +1115,6 @@ async fn test_call(
     cred: &ai::Credential,
     req: &ai::Request,
 ) -> Result<ai::Reply, AiError> {
-    let p = req.provider;
     let began = Instant::now();
     let result = match tokio::time::timeout(TEST_TIMEOUT, ai::complete(&a.http, cred, req)).await {
         Ok(r) => r,
@@ -860,15 +1122,14 @@ async fn test_call(
             ErrorKind::Timeout,
             format!(
                 "{} did not answer within {} seconds",
-                p.label(),
+                cred.name,
                 TEST_TIMEOUT.as_secs()
             ),
         )),
     };
-    let host = cred.custom_host.as_deref();
     eprintln!(
         "{}",
-        ai::trail_for(p, &req.model, &result, began.elapsed(), host)
+        ai::trail_for(cred, &req.model, &result, began.elapsed())
     );
     result
 }
@@ -876,42 +1137,26 @@ async fn test_call(
 #[derive(Deserialize)]
 pub struct ModelsQuery {
     #[serde(default)]
-    provider: Option<String>,
+    account: Option<String>,
 }
 
-/// `GET /api/ai/models?provider=`.
+/// `GET /api/ai/models?account=`.
 pub async fn models(
     State(a): Shared,
     Query(q): Query<ModelsQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let p = match q
-        .provider
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-    {
-        Some(name) => provider(name)?,
-        None => {
-            blocking(&a, |s| {
-                Settings::load(s)
-                    .map_err(api_error)?
-                    .default_provider
-                    .ok_or_else(|| {
-                        api_error(AiError::not_configured(
-                            "no AI provider is chosen: pick one in Settings > AI",
-                        ))
-                    })
-            })
-            .await?
-        }
-    };
-    let (cred, settings) = credential(&a, p).await?.map_err(api_error)?;
+    let r = q
+        .account
+        .map(|r| r.trim().to_owned())
+        .filter(|r| !r.is_empty());
+    let (acc, cred) = credential(&a, r).await?;
+    let cred = cred.map_err(api_error)?;
     let list = ai::list_models(&a.http, &cred).await.map_err(api_error)?;
-    let model = settings
-        .model(p)
+    let model = acc
+        .model()
         .map(str::to_owned)
-        .or_else(|| ai::preselect(p, &list).map(|m| m.id.clone()));
+        .or_else(|| ai::preselect(acc.kind, &list).map(|m| m.id.clone()));
     Ok(Json(
-        json!({ "provider": p, "model": model, "models": list }),
+        json!({ "account": acc.id, "model": model, "models": list }),
     ))
 }

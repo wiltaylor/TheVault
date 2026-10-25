@@ -71,7 +71,7 @@ pub fn agent_json(a: &Agent) -> Value {
         "description": a.description,
         "icon": a.icon,
         "enabled": a.enabled,
-        "provider": a.provider,
+        "account": a.account_ref(),
         "model": a.model,
         "effort": a.effort,
         "system_prompt": a.system_prompt,
@@ -170,7 +170,7 @@ fn summary_json(name: &str, agent: &Result<Agent, Invalid>) -> Value {
             "label": a.label,
             "description": a.description,
             "icon": a.icon,
-            "provider": a.provider,
+            "account": a.account_ref(),
             "model": a.model,
             "enabled": a.enabled,
             "triggers": a.triggers.len(),
@@ -188,12 +188,29 @@ fn summary_json(name: &str, agent: &Result<Agent, Invalid>) -> Value {
 
 /// `GET /api/agents`.
 pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
-    let mut agents = blocking(w, |w| w.agents()).await?;
-    agents.sort_by_key(|(name, _)| (name != schema::ASSISTANT_AGENT, name.clone()));
+    let mut agents = blocking(w, |w| {
+        let all = w.agents()?;
+        Ok::<_, ApiError>(
+            all.into_iter()
+                .map(|(n, a)| {
+                    let account = a
+                        .as_ref()
+                        .ok()
+                        .and_then(|a| crate::ai_settings::agent_account_name(w, a));
+                    (n, a, account)
+                })
+                .collect::<Vec<_>>(),
+        )
+    })
+    .await?;
+    agents.sort_by_key(|(name, _, _)| (name != schema::ASSISTANT_AGENT, name.clone()));
     let agents: Vec<Value> = agents
         .iter()
-        .map(|(n, a)| {
+        .map(|(n, a, account)| {
             let mut v = summary_json(n, a);
+            if a.is_ok() {
+                v["account"] = json!(account);
+            }
             v["running"] = json!(crate::agent_threads::running_of(n).len());
             v
         })
@@ -201,9 +218,16 @@ pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
     Ok(Json(json!({ "agents": agents, "tools": tool_names() })))
 }
 
-/// The response to a read or a write: the agent with its WCL.
-fn agent_response(headers: &HeaderMap, agent: &Agent, wcl: String) -> Response {
+/// The response to a read or a write: the agent with its WCL, and the name of the account it
+/// names, a legacy provider resolved to the account made for it (accounts A6).
+fn agent_response(
+    headers: &HeaderMap,
+    agent: &Agent,
+    wcl: String,
+    account: Option<String>,
+) -> Response {
     let mut out = agent_json(agent);
+    out["account"] = json!(account);
     out["wcl"] = json!(wcl);
     text_or_json(headers, wcl, out)
 }
@@ -216,17 +240,18 @@ pub async fn read(
 ) -> Result<Response, ApiError> {
     // A file that does not parse is a 400 `invalid` with its issues and its text, so the File
     // tab can show it to be fixed.
-    let (wcl, agent) = blocking(w, move |w| {
+    let (wcl, agent, account) = blocking(w, move |w| {
         let wcl = w.read_agent(&name)?;
         let agent = Agent::parse(&name, &wcl).map_err(|e| {
             let mut err = ApiError::from(writer::Error::Invalid(e));
             err.body["wcl"] = json!(wcl);
             err
         })?;
-        Ok::<_, ApiError>((wcl, agent))
+        let account = crate::ai_settings::agent_account_name(w, &agent);
+        Ok::<_, ApiError>((wcl, agent, account))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl))
+    Ok(agent_response(&headers, &agent, wcl, account))
 }
 
 /// The JSON body of `PUT /api/agents/{name}`: `wcl`, or the form `GET` answers. `name`, `kind`
@@ -243,6 +268,8 @@ pub struct AgentBody {
     description: Option<String>,
     icon: Option<String>,
     enabled: Option<bool>,
+    account: Option<String>,
+    /// From a client of before accounts: kept as the file's legacy `provider`.
     provider: Option<String>,
     model: Option<String>,
     effort: Option<String>,
@@ -302,6 +329,7 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
     agent.description = f.description;
     agent.icon = f.icon;
     agent.enabled = f.enabled.unwrap_or(true);
+    agent.account = f.account.filter(|a| !a.trim().is_empty());
     agent.provider = f.provider;
     agent.model = f.model;
     agent.effort = f.effort;
@@ -422,12 +450,14 @@ pub async fn put(
                 .to_wcl()
         }
     };
-    let (wcl, agent) = blocking(w, move |w| {
+    let (wcl, agent, account) = blocking(w, move |w| {
         let _acting = writer::acting_as(&by);
-        w.put_agent(&name, &source, unknown_tools)
+        let (wcl, agent) = w.put_agent(&name, &source, unknown_tools)?;
+        let account = crate::ai_settings::agent_account_name(w, &agent);
+        Ok::<_, ApiError>((wcl, agent, account))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl))
+    Ok(agent_response(&headers, &agent, wcl, account))
 }
 
 /// `DELETE /api/agents/{name}`.

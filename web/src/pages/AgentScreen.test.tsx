@@ -22,7 +22,7 @@ const types = vi.fn();
 const taxonomies = vi.fn();
 const appInfo = vi.fn();
 const agentThreads = vi.fn();
-const aiProviders = vi.fn();
+const aiAccounts = vi.fn();
 const agentRuns = vi.fn();
 const agentThread = vi.fn();
 const cron = vi.fn();
@@ -45,7 +45,7 @@ vi.mock("../api", async (orig) => {
       types,
       taxonomies,
       agentThreads,
-      aiProviders,
+      aiAccounts,
       agentRuns,
       agentThread,
       cron,
@@ -122,7 +122,7 @@ function triage(over: Partial<Agent> = {}): Agent {
     description: "Files new email.",
     icon: "bot",
     enabled: true,
-    provider: null,
+    account: null,
     model: null,
     effort: null,
     system_prompt: null,
@@ -140,15 +140,21 @@ function triage(over: Partial<Agent> = {}): Agent {
   };
 }
 
+const ACCOUNTS = {
+  default: "a1",
+  accounts: [
+    { id: "a1", name: "Claude", kind: "anthropic", kind_label: "Anthropic API", model: "claude-opus-5", configured: true },
+    { id: "o1", name: "Work OpenAI", kind: "openai", kind_label: "OpenAI API", model: null, configured: true },
+  ],
+};
+
 function status(): AiStatus {
   return {
     secrets_key: true,
-    default_provider: "anthropic",
-    providers: {
-      anthropic: { configured: true, model: "claude-opus-5" },
-      openai: { configured: false, model: null },
-      chatgpt: { configured: false, model: null, account: null },
-    },
+    accounts: [],
+    default: "a1",
+    kinds: [],
+    context: { auto_compact: true, compact_at: 80 },
     system_prompt: SHIPPED,
     default_system_prompt: SHIPPED,
     system_prompt_custom: false,
@@ -163,10 +169,10 @@ beforeEach(async () => {
     "wcl" in body ? triage({ wcl: body.wcl as string }) : { ...triage(), ...body, name, wcl: "saved\n" },
   );
   aiStatus.mockResolvedValue(status());
-  aiModels.mockImplementation(async (provider: string) => {
-    if (provider !== "anthropic") throw new ApiError(400, { error: "not_configured", message: "OpenAI is not set up" });
+  aiModels.mockImplementation(async (account: string) => {
+    if (account !== "a1") throw new ApiError(400, { error: "not_configured", message: "Work OpenAI is not set up" });
     return {
-      provider,
+      account,
       model: "claude-opus-5",
       models: [
         { id: "claude-opus-5", display_name: "Claude Opus 5" },
@@ -182,7 +188,7 @@ beforeEach(async () => {
   taxonomies.mockResolvedValue([]);
   appInfo.mockResolvedValue(null);
   agentThreads.mockResolvedValue({ threads: [] });
-  aiProviders.mockResolvedValue({ default_provider: "anthropic", providers: status().providers, confirm: status().confirm });
+  aiAccounts.mockResolvedValue(ACCOUNTS);
   agentRuns.mockResolvedValue({
     tools: ["search_notes", "get_note", "propose_edit"],
     triggers: [
@@ -369,15 +375,16 @@ describe("the General tab", () => {
     const s = within(screen.getByRole("region", { name: "General" }));
     const model = (await s.findByLabelText("Model")) as HTMLSelectElement;
     await waitFor(() => expect(model.tagName).toBe("SELECT"));
-    expect(aiModels).toHaveBeenCalledWith("anthropic");
+    expect(aiModels).toHaveBeenCalledWith("a1");
     expect([...model.options].map((o) => o.textContent)).toEqual([
-      "Provider default (claude-opus-5)",
+      "Account default (claude-opus-5)",
       "Claude Opus 5 (claude-opus-5)",
       "Claude Sonnet 5 (claude-sonnet-5)",
     ]);
-    expect((s.getByLabelText("Provider") as HTMLSelectElement).options[0]!.textContent).toBe(
-      "Settings > AI default (Anthropic)",
-    );
+    const account = s.getByLabelText("Account") as HTMLSelectElement;
+    expect([...account.options].map((o) => o.textContent)).toEqual(["Default account (Claude)", "Claude", "Work OpenAI"]);
+    expect(account.value).toBe("");
+    expect(s.queryByText(/does not exist/)).toBeNull();
     const prompt = s.getByLabelText("System prompt") as HTMLTextAreaElement;
     expect(prompt.value).toBe("");
     expect(prompt.placeholder).toBe(SHIPPED);
@@ -398,7 +405,7 @@ describe("the General tab", () => {
       description: "Files new email.",
       icon: "bot",
       enabled: true,
-      provider: null,
+      account: null,
       model: "claude-sonnet-5",
       effort: "high",
       system_prompt: "File email. Be brief.",
@@ -420,19 +427,35 @@ describe("the General tab", () => {
     await waitFor(() => expect(sent().system_prompt).toBeNull());
   });
 
-  it("types the model when the provider's list cannot be read, and a new provider clears the model", async () => {
-    agent.mockResolvedValue(triage({ provider: "anthropic", model: "claude-opus-5" }));
+  it("types the model when the account's list cannot be read, and a new account clears the model", async () => {
+    agent.mockResolvedValue(triage({ account: "Claude", model: "claude-opus-5" }));
     await open();
     const s = within(screen.getByRole("region", { name: "General" }));
     await waitFor(() => expect(s.getByLabelText("Model").tagName).toBe("SELECT"));
-    fireEvent.change(s.getByLabelText("Provider"), { target: { value: "openai" } });
-    await waitFor(() => expect(aiModels).toHaveBeenCalledWith("openai"));
-    const typed = (await s.findByPlaceholderText("Provider default")) as HTMLInputElement;
+    expect(s.getByLabelText("Account")).toHaveValue("Claude");
+    fireEvent.change(s.getByLabelText("Account"), { target: { value: "Work OpenAI" } });
+    await waitFor(() => expect(aiModels).toHaveBeenCalledWith("o1"));
+    const typed = (await s.findByPlaceholderText("Account default")) as HTMLInputElement;
     expect(typed.value).toBe("");
-    expect(s.getByText(/The model list could not be read \(OpenAI is not set up\)/)).toBeTruthy();
+    expect(s.getByText(/The model list could not be read \(Work OpenAI is not set up\)/)).toBeTruthy();
     fireEvent.change(typed, { target: { value: " gpt-6 " } });
     fireEvent.click(s.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(sent()).toMatchObject({ provider: "openai", model: "gpt-6" }));
+    await waitFor(() => expect(sent()).toMatchObject({ account: "Work OpenAI", model: "gpt-6" }));
+  });
+
+  it("warns when the agent names an account that does not exist, and lists the default's models", async () => {
+    agent.mockResolvedValue(triage({ account: "Old OpenRouter" }));
+    await open();
+    const s = within(screen.getByRole("region", { name: "General" }));
+    expect(await s.findByRole("alert")).toHaveTextContent("Account Old OpenRouter does not exist; this agent uses the default account.");
+    const account = s.getByLabelText("Account") as HTMLSelectElement;
+    expect(account.value).toBe("Old OpenRouter");
+    expect(account.options[account.selectedIndex]!.textContent).toBe("Old OpenRouter (missing)");
+    await waitFor(() => expect(aiModels).toHaveBeenCalledWith("a1"));
+    fireEvent.change(account, { target: { value: "" } });
+    await waitFor(() => expect(s.queryByText(/does not exist/)).toBeNull());
+    fireEvent.click(s.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent()).toMatchObject({ account: null }));
   });
 
   it("shows the server's issues when a save is refused", async () => {
@@ -785,13 +808,13 @@ describe("the File tab", () => {
 
   it("shows why a file is refused", async () => {
     putAgent.mockRejectedValue(
-      new ApiError(400, { error: "invalid", issues: [{ at: "provider", message: "is not anthropic, openai or chatgpt" }] }),
+      new ApiError(400, { error: "invalid", issues: [{ at: "effort", message: "is not low, medium, high, xhigh or max" }] }),
     );
     await open();
     const f = await tab("File");
-    fireEvent.input(f.getByLabelText("Agent file"), { target: { value: 'provider = "x"\n' } });
+    fireEvent.input(f.getByLabelText("Agent file"), { target: { value: 'effort = "x"\n' } });
     fireEvent.click(f.getByRole("button", { name: "Save" }));
-    expect(await f.findByRole("alert")).toHaveTextContent("provider: is not anthropic, openai or chatgpt");
+    expect(await f.findByRole("alert")).toHaveTextContent("effort: is not low, medium, high, xhigh or max");
   });
 });
 

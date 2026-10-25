@@ -775,6 +775,57 @@ impl Writer {
         Ok((text, agent))
     }
 
+    /// Point agents at another AI account in one commit (accounts A6): each agent file that
+    /// parses and for which `to` answers a name gets `account = "<name>"` in place of its
+    /// `account` or legacy `provider`, the rest of the file as it is. The account rename and the
+    /// start rewrite of `provider` both come here. Returns the names of the agents changed; none
+    /// changed commits nothing.
+    pub fn set_agent_accounts(&self, to: impl Fn(&Agent) -> Option<String>) -> Result<Vec<String>> {
+        let mut inner = self.lock();
+        let mut changes = Vec::new();
+        let mut names = Vec::new();
+        let mut files = self.definitions("agents")?;
+        files.sort();
+        for (name, text) in files {
+            if !schema::is_name(&name) {
+                continue;
+            }
+            let Ok(agent) = Agent::parse(&name, &text) else {
+                continue;
+            };
+            let Some(account) = to(&agent) else {
+                continue;
+            };
+            if agent.account.as_deref() == Some(account.as_str()) && agent.provider.is_none() {
+                continue;
+            }
+            let path = agent_path(&name);
+            let mut ast = store::parse_data_only(&text, &path)?;
+            let line = store::parse_data_only(&format!("account = {account:?}\n"), &path)?;
+            let field = line.items.into_iter().next().expect("one attribute");
+            let at = ast.items.iter().position(
+                |i| matches!(i, Item::Field(f) if f.name == "account" || f.name == "provider"),
+            );
+            ast.items.retain(
+                |i| !matches!(i, Item::Field(f) if f.name == "account" || f.name == "provider"),
+            );
+            ast.items
+                .insert(at.unwrap_or(0).min(ast.items.len()), field);
+            let wcl = store::to_canonical(&ast);
+            // A file the edit would break is left as it is.
+            if Agent::parse(&name, &wcl).is_err() {
+                continue;
+            }
+            changes.push(Change::write(path, wcl.as_bytes()));
+            names.push(name);
+        }
+        if !changes.is_empty() {
+            let generation = self.commit(changes)?;
+            inner.index.advance(generation)?;
+        }
+        Ok(names)
+    }
+
     /// Delete `agents/<name>.wcl`. The built-in agent cannot be deleted.
     pub fn delete_agent(&self, name: &str) -> Result<()> {
         let mut inner = self.lock();

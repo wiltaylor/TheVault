@@ -1,13 +1,15 @@
-//! The `ai_settings` secret (ai D7): the default provider, the default model per provider, and
-//! the base URLs the clients call: the API URLs of Settings > AI (ai D24), which tests point at
-//! the testkit fakes.
+//! The `ai_settings` secret (ai D7): the global AI settings that belong to no account (accounts
+//! A4), and the hidden test seams for the ChatGPT plan's hosts. The accounts themselves are
+//! `ai_accounts` ([`crate::Accounts`]). The provider-keyed settings of before accounts
+//! (`default_provider`, `models`, `endpoints.anthropic`, `endpoints.openai`,
+//! `endpoints.openai_api` and the per-provider `context` windows) are read only by the migration
+//! that made accounts of them (accounts A9); they are kept through a load and save.
 
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::error::{AiError, ErrorKind};
-use crate::types::Provider;
 
 /// The secret holding [`Settings`].
 pub const SETTINGS: &str = "ai_settings";
@@ -25,154 +27,32 @@ pub const CHATGPT_AUTH_BASE: &str = "https://auth.openai.com";
 /// Anthropic's model preselected when the live list has it (ai D6).
 pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-opus-5";
 
-/// The default model of each provider. `None` means the user has not picked one.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Models {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anthropic: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openai: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chatgpt: Option<String>,
-}
-
-/// Base URLs in place of the real hosts. Absent or empty means the real one.
-///
-/// `anthropic` and `openai` are the API URLs Settings > AI edits (ai D24); tests point them at
-/// the testkit fakes. The `anthropic` one takes `/v1/messages` and `/v1/models`, the `openai` one
-/// `/v1/responses` or `/v1/chat/completions` (as `openai_api` says, ai D25) and `/v1/models`. A URL whose path ends in a version segment such as `/v1` or
-/// `/v4` is the API root as it is; any other gets `/v1` appended (see [`api_url`]). `chatgpt` is the ChatGPT plan's base, a test seam that is not in
-/// the UI: the plan never follows `openai`. `chatgpt_auth` takes `/api/accounts/oauth/token` and
-/// `/.well-known/openid-configuration`.
+/// The hidden test seams in place of the ChatGPT plan's real hosts. Absent or empty means the
+/// real one. `chatgpt` is the plan's API base, which takes `/v1/responses` and `/v1/models`;
+/// `chatgpt_auth` the sign-in server's, which takes `/api/accounts/oauth/token` and
+/// `/.well-known/openid-configuration`. Neither is in the UI: tests point them at the testkit
+/// fakes. Keys this build does not know, such as the API URLs of before accounts, are kept.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Endpoints {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anthropic: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openai: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chatgpt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chatgpt_auth: Option<String>,
-    /// The API the OpenAI card's custom URL speaks (ai D25). Absent means Responses. Read only
-    /// with a custom OpenAI URL: the official API and the ChatGPT plan always use Responses.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openai_api: Option<OpenAiApi>,
-}
-
-/// The API an OpenAI-compatible service speaks (ai D25): `responses` (`POST /v1/responses`) or
-/// `chat_completions` (`POST /v1/chat/completions`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OpenAiApi {
-    #[default]
-    Responses,
-    ChatCompletions,
-}
-
-impl OpenAiApi {
-    /// `responses` or `chat_completions`, as stored and as the routes answer it.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            OpenAiApi::Responses => "responses",
-            OpenAiApi::ChatCompletions => "chat_completions",
-        }
-    }
-
-    /// `Responses API` or `Chat Completions API`, as the user reads it.
-    pub fn label(self) -> &'static str {
-        match self {
-            OpenAiApi::Responses => "Responses API",
-            OpenAiApi::ChatCompletions => "Chat Completions API",
-        }
-    }
-
-    /// The other one, which Test tries when a service lacks this one.
-    pub fn other(self) -> OpenAiApi {
-        match self {
-            OpenAiApi::Responses => OpenAiApi::ChatCompletions,
-            OpenAiApi::ChatCompletions => OpenAiApi::Responses,
-        }
-    }
-}
-
-impl std::str::FromStr for OpenAiApi {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim() {
-            "responses" => Ok(OpenAiApi::Responses),
-            "chat_completions" => Ok(OpenAiApi::ChatCompletions),
-            other => Err(format!(
-                "unknown OpenAI API type {other:?}: expected responses or chat_completions"
-            )),
-        }
-    }
+    #[serde(flatten)]
+    pub other: Map<String, Value>,
 }
 
 impl Endpoints {
-    /// The base URL `provider`'s inference and model calls go to: the custom API URL, else the
-    /// real host. [`api_url`] joins a call's `/v1/...` path to it. The ChatGPT plan uses `chatgpt` or
-    /// [`OPENAI_BASE`], never the OpenAI API URL (ai D24).
-    pub fn api_base(&self, provider: Provider) -> String {
-        let (set, real) = match provider {
-            Provider::Anthropic => (&self.anthropic, ANTHROPIC_BASE),
-            Provider::OpenAi => (&self.openai, OPENAI_BASE),
-            Provider::ChatGpt => (&self.chatgpt, OPENAI_BASE),
-        };
-        match set.as_deref().map(trimmed).filter(|s| !s.is_empty()) {
+    /// The base URL of the ChatGPT plan's calls: the seam, else [`OPENAI_BASE`].
+    pub fn chatgpt_base(&self) -> String {
+        match self
+            .chatgpt
+            .as_deref()
+            .map(trimmed)
+            .filter(|s| !s.is_empty())
+        {
             Some(s) => s.to_owned(),
-            None => real.to_owned(),
-        }
-    }
-
-    /// The API URL set for `provider`, as stored. Only Anthropic and OpenAI have one (ai D24).
-    pub fn url(&self, provider: Provider) -> Option<&str> {
-        match provider {
-            Provider::Anthropic => self.anthropic.as_deref(),
-            Provider::OpenAi => self.openai.as_deref(),
-            Provider::ChatGpt => None,
-        }
-        .map(trimmed)
-        .filter(|s| !s.is_empty())
-    }
-
-    /// The host, with its port when the URL names one, of `provider`'s custom API URL, for the
-    /// trail line (ai D24). `None` for the official API and for the ChatGPT plan.
-    pub fn custom_host(&self, provider: Provider) -> Option<String> {
-        let url = Url::parse(self.url(provider)?).ok()?;
-        let host = url.host_str()?;
-        Some(match url.port() {
-            Some(port) => format!("{host}:{port}"),
-            None => host.to_owned(),
-        })
-    }
-
-    /// Set `provider`'s API URL, checked by [`check_url`], or clear it with `None` or an empty
-    /// string. The ChatGPT plan takes none.
-    pub fn set_url(&mut self, provider: Provider, url: Option<&str>) -> Result<(), AiError> {
-        let slot = match provider {
-            Provider::Anthropic => &mut self.anthropic,
-            Provider::OpenAi => &mut self.openai,
-            Provider::ChatGpt => {
-                return Err(AiError::invalid(
-                    "the ChatGPT plan always uses OpenAI's own API: it takes no API URL",
-                ));
-            }
-        };
-        *slot = match url.map(trimmed).filter(|u| !u.is_empty()) {
-            Some(u) => Some(check_url(u)?),
-            None => None,
-        };
-        Ok(())
-    }
-
-    /// The API the OpenAI provider's calls speak (ai D25): the stored type with a custom OpenAI
-    /// URL, and always Responses without one.
-    pub fn openai_api(&self) -> OpenAiApi {
-        match self.url(Provider::OpenAi) {
-            Some(_) => self.openai_api.unwrap_or_default(),
-            None => OpenAiApi::Responses,
+            None => OPENAI_BASE.to_owned(),
         }
     }
 
@@ -249,10 +129,6 @@ pub const SYSTEM_PROMPT_MAX: usize = 32_000;
 /// The `ai_settings` secret. Keys this build does not know are kept through a load and save.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_provider: Option<Provider>,
-    #[serde(default)]
-    pub models: Models,
     #[serde(default, skip_serializing_if = "is_default")]
     pub endpoints: Endpoints,
     /// The chat panel's system prompt (ai D17). Absent or empty means [`crate::CHAT_PROMPT`].
@@ -275,16 +151,10 @@ pub struct Settings {
     pub other: Map<String, Value>,
 }
 
-/// The context windows of the providers and when a chat thread is compacted. A window left out
-/// is the provider's default ([`Context::DEFAULT_WINDOWS`]).
+/// When a chat thread is compacted. Each account has its own context window
+/// ([`crate::Account::window`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Context {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anthropic: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openai: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chatgpt: Option<u64>,
     /// Compact a thread before a turn once its last request filled [`Context::compact_at`] of
     /// the window.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
@@ -297,9 +167,6 @@ pub struct Context {
 impl Default for Context {
     fn default() -> Context {
         Context {
-            anthropic: None,
-            openai: None,
-            chatgpt: None,
             auto_compact: true,
             compact_at: None,
         }
@@ -307,56 +174,15 @@ impl Default for Context {
 }
 
 impl Context {
-    /// The windows a provider has when none is set: Anthropic's, the OpenAI API's, the ChatGPT
-    /// plan's, and a Chat Completions service's, which is often smaller.
-    pub const DEFAULT_WINDOWS: [(Provider, u64); 3] = [
-        (Provider::Anthropic, 200_000),
-        (Provider::OpenAi, 400_000),
-        (Provider::ChatGpt, 272_000),
-    ];
-    /// The window of a service the OpenAI card reaches over Chat Completions, when none is set.
-    pub const CHAT_COMPLETIONS_WINDOW: u64 = 128_000;
     /// The share of the window that starts a compaction when none is set.
     pub const COMPACT_AT: u8 = 80;
-    /// The windows the settings take.
+    /// The windows an account takes.
     pub const WINDOW_RANGE: std::ops::RangeInclusive<u64> = 4_000..=10_000_000;
     /// The shares the settings take.
     pub const COMPACT_RANGE: std::ops::RangeInclusive<u8> = 50..=95;
 
     fn is_default(&self) -> bool {
         *self == Context::default()
-    }
-
-    /// The window set for `p`, if one is.
-    pub fn set_window(&self, p: Provider) -> Option<u64> {
-        match p {
-            Provider::Anthropic => self.anthropic,
-            Provider::OpenAi => self.openai,
-            Provider::ChatGpt => self.chatgpt,
-        }
-    }
-
-    pub fn put_window(&mut self, p: Provider, window: Option<u64>) {
-        match p {
-            Provider::Anthropic => self.anthropic = window,
-            Provider::OpenAi => self.openai = window,
-            Provider::ChatGpt => self.chatgpt = window,
-        }
-    }
-
-    /// `p`'s window in tokens: the one set, else its default. `api` is the API the OpenAI card
-    /// speaks.
-    pub fn window(&self, p: Provider, api: OpenAiApi) -> u64 {
-        if let Some(w) = self.set_window(p) {
-            return w;
-        }
-        if p == Provider::OpenAi && api == OpenAiApi::ChatCompletions {
-            return Context::CHAT_COMPLETIONS_WINDOW;
-        }
-        Context::DEFAULT_WINDOWS
-            .iter()
-            .find(|(q, _)| *q == p)
-            .map_or(Context::CHAT_COMPLETIONS_WINDOW, |(_, w)| *w)
     }
 
     /// The share of the window, in percent, that starts a compaction.
@@ -502,11 +328,6 @@ impl Settings {
         state.set_secret(SETTINGS, &text).map_err(state_error)
     }
 
-    /// `p`'s context window in tokens, as set or by default.
-    pub fn window(&self, p: Provider) -> u64 {
-        self.context.window(p, self.endpoints.openai_api())
-    }
-
     /// Whether the chat system prompt is the user's own rather than the shipped default.
     pub fn system_prompt_custom(&self) -> bool {
         self.system_prompt
@@ -533,49 +354,6 @@ impl Settings {
         }
         self.system_prompt = Some(prompt.to_owned()).filter(|p| !p.trim().is_empty());
         Ok(())
-    }
-
-    /// The default model chosen for `provider`.
-    pub fn model(&self, provider: Provider) -> Option<&str> {
-        match provider {
-            Provider::Anthropic => self.models.anthropic.as_deref(),
-            Provider::OpenAi => self.models.openai.as_deref(),
-            Provider::ChatGpt => self.models.chatgpt.as_deref(),
-        }
-        .filter(|m| !m.trim().is_empty())
-    }
-
-    pub fn set_model(&mut self, provider: Provider, model: Option<String>) {
-        let slot = match provider {
-            Provider::Anthropic => &mut self.models.anthropic,
-            Provider::OpenAi => &mut self.models.openai,
-            Provider::ChatGpt => &mut self.models.chatgpt,
-        };
-        *slot = model.filter(|m| !m.trim().is_empty());
-    }
-
-    /// The provider and model a call uses: the ones asked for, else the defaults. Errors with
-    /// `not_configured` when no provider or model is chosen.
-    pub fn pick(
-        &self,
-        provider: Option<Provider>,
-        model: Option<&str>,
-    ) -> Result<(Provider, String), AiError> {
-        let provider = provider.or(self.default_provider).ok_or_else(|| {
-            AiError::not_configured("no AI provider is chosen: pick one in Settings > AI")
-        })?;
-        let model = model
-            .map(str::trim)
-            .filter(|m| !m.is_empty())
-            .or_else(|| self.model(provider))
-            .ok_or_else(|| {
-                AiError::not_configured(format!(
-                    "no {} model is chosen: pick one in Settings > AI",
-                    provider.label()
-                ))
-                .on(provider, "")
-            })?;
-        Ok((provider, model.to_owned()))
     }
 }
 

@@ -18,7 +18,7 @@ template default {
 "#;
 
 const TRIAGE: &str = r#"label = "Triage"
-provider = "openai"
+account = "OpenAI"
 
 permissions {
   tools = ["search_notes", "get_note", "web_search"]
@@ -109,9 +109,9 @@ fn the_vault_starts_with_the_assistant() {
         json!([{
             "name": "assistant",
             "label": "Assistant",
-            "description": "The chat panel's assistant. It uses the default provider and model in Settings > AI.",
+            "description": "The chat panel's assistant. It uses the default AI account and its model in Settings > AI.",
             "icon": "sparkles",
-            "provider": null,
+            "account": null,
             "model": null,
             "enabled": true,
             "triggers": 0,
@@ -163,7 +163,7 @@ fn read_lists_and_reads_write_cannot_change_admin_writes() {
         StatusCode::OK,
     );
     assert_eq!(created["name"], "triage");
-    assert_eq!(created["provider"], "openai");
+    assert_eq!(created["account"], "OpenAI");
     assert_eq!(created["permissions"]["confirm"]["notes"], false);
     assert_eq!(
         created["permissions"]["tools"],
@@ -272,7 +272,7 @@ fn the_json_form_is_written_as_canonical_wcl_and_reads_back() {
         std::fs::read_to_string(api.server.vault_path().join("agents/triage.wcl")).unwrap(),
         wcl
     );
-    assert!(wcl.starts_with("label    = \"Mail sorter\"\n"), "{wcl}");
+    assert!(wcl.starts_with("label   = \"Mail sorter\"\n"), "{wcl}");
     assert!(wcl.contains("trigger nightly {"), "{wcl}");
 
     // `{ "wcl": ... }` is the WCL text.

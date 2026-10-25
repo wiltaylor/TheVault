@@ -158,7 +158,7 @@ export function agentForm(a: Agent): AgentForm {
     description: a.description ?? null,
     icon: a.icon ?? null,
     enabled: a.enabled,
-    provider: a.provider ?? null,
+    account: a.account ?? null,
     model: a.model ?? null,
     effort: a.effort ?? null,
     system_prompt: a.system_prompt ?? null,

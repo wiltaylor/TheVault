@@ -1,69 +1,81 @@
-# AI providers
+# AI accounts
 
 TheVault can call large language models with your own credentials. Scripts call them through the `ai` module, and the web app's AI panel uses them to answer questions about the vault. The server makes every call itself: no third party sits between the vault and the provider.
 
-This page covers the three providers, how to connect each in Settings > AI, what the ChatGPT plan allows, what data leaves the server, and the log line every call leaves.
+This page covers AI accounts and their four kinds, how to add each in Settings > AI, what the ChatGPT plan allows, what data leaves the server, and the log line every call leaves.
 
-## Providers
+## Accounts and kinds
 
-| Provider | What you need | Where requests go |
-|---|---|---|
-| Anthropic | An API key from the [Anthropic Console](https://console.anthropic.com/) | `https://api.anthropic.com/v1/messages`, or the card's API URL |
-| OpenAI | An API key from the [OpenAI Platform](https://platform.openai.com/api-keys) | `https://api.openai.com/v1/responses`, or the card's API URL with its API type, Responses (`/responses`) or Chat Completions (`/chat/completions`) |
-| ChatGPT | A ChatGPT plan, signed in with OpenAI's Sign in with ChatGPT | `https://api.openai.com/v1/responses`, with the plan's access token |
+Settings > AI holds a table of named AI accounts. You can add as many as you like, of any kind, such as two Anthropic keys, an OpenRouter account and a ChatGPT subscription. Each account has a name, unique ignoring case, and one kind. The kind fixes the API the account's requests speak and how they sign in:
 
-The two API-key providers bill your API account per token. The ChatGPT provider uses the allowance of your ChatGPT plan instead.
+| Kind | Label | API | What you need | Base URL |
+|---|---|---|---|---|
+| `anthropic` | Anthropic API | Messages, `POST /v1/messages` | An API key from the [Anthropic Console](https://console.anthropic.com/) | `https://api.anthropic.com`, or your own |
+| `openai` | OpenAI API | Responses, `POST /v1/responses` | An API key from the [OpenAI Platform](https://platform.openai.com/api-keys) | `https://api.openai.com`, or your own |
+| `openai_compatible` | OpenAI-compatible | Chat Completions, `POST /v1/chat/completions` | The service's URL, and its key when it needs one | Required: OpenRouter, Z.ai, Ollama and similar services |
+| `chatgpt` | ChatGPT subscription | Responses, under the ChatGPT plan's rules | A ChatGPT plan, signed in with OpenAI's Sign in with ChatGPT | Fixed: `https://api.openai.com`, with the plan's access token |
 
-The Anthropic and OpenAI providers can also call another service that speaks the same API, such as a gateway or a model server on your network. See [Use another service](#use-another-service).
+The API-key kinds bill the service's account per token. A ChatGPT subscription uses the allowance of your ChatGPT plan instead.
+
+One account is the default: scripts, triggers and the AI panel use it when nothing names another. The first account you add becomes the default. An agent can name its own account (see [AI agents](ai-agents.md)), and the chat box and a script can name another account for one call.
+
+Each account also has:
+
+- A default model. Without one, an Anthropic account uses `claude-opus-5` when Anthropic lists it, and the other kinds use the first model their live list names. No other model id is built into TheVault.
+- A context window, for compaction (see [Context and compaction](#context-and-compaction)). Left unset it is 200,000 tokens for Anthropic, 400,000 for the OpenAI API, 128,000 for an OpenAI-compatible service and 272,000 for a ChatGPT subscription.
+- For `openai_compatible`, optional extra headers (see [Extra headers](#extra-headers)).
 
 ## Settings > AI
 
-Settings > AI is in the web app only. The desktop and Android apps pair with a device token, which cannot manage credentials, so the section is absent there; their AI panel uses the home server's settings.
+Settings > AI is in the web app only. The desktop and Android apps pair with a device token, which cannot manage credentials, so the section is absent there; their AI panel uses the home server's accounts.
 
-Each provider has a card with:
+The accounts table shows each account's name, kind, default model and status: key set, signed in, or not set up, and which account is the default. From the table you can:
 
-- Its credential: an API key field and an API URL field, or the ChatGPT sign-in.
-- A model list, read live from the provider each time the card opens. No model id is built into TheVault, except that the Anthropic card preselects `claude-opus-5` when Anthropic lists it. The model you pick is that provider's default.
-- A **Test** button. It sends a short "Reply with OK" request (16 output tokens at most) to the selected model and shows the result, such as `OK from claude-opus-5 in 840 ms`, or the error kind and message.
-- **Use <provider> by default**, which makes it the provider scripts and the AI panel use when they do not name one. The first provider you connect becomes the default.
+- **Add account**: pick the kind first, then fill in the fields that kind takes: the name, the base URL (the kind's default shows as the placeholder), the key or the sign-in, the default model from the live list or typed, the context window, and for an OpenAI-compatible account its headers.
+- **Edit** an account. Its kind cannot change: add an account of the other kind instead.
+- **Test** an account. It sends a short "Reply with OK" request (16 output tokens at most) to the account's model and shows the result, such as `OK from claude-opus-5 in 840 ms`, or the error kind and message. With no model chosen, Test picks the one the account would use and saves it as the account's model.
+- **Make default**, and move accounts up and down.
+- **Delete** an account. When agents name it, Settings > AI lists them and asks first; they then run on the default account.
 
-A script or the AI panel can still name another provider and model for one call.
+Renaming an account rewrites every agent file that names it to the new name, in one commit.
 
-### Add an API key
+The settings that belong to no account stay on their own: the confirmation and internet switches, the chat system prompt, and when to compact.
 
-1. Open Settings > AI.
-2. Paste the key into the Anthropic or OpenAI card's **API key** field and select **Save**.
-3. Pick a model from the list, then select **Test**.
+### Add an API-key account
 
-The server stores the key encrypted and never sends it back. The field then shows `set` as its placeholder. To replace the key, paste another and save. **Remove key** deletes it.
+1. Open Settings > AI and select **Add account**.
+2. Pick **Anthropic API**, **OpenAI API** or **OpenAI-compatible**.
+3. Name the account and paste the key. For an OpenAI-compatible service, type its base URL.
+4. Pick a model from the list, then select **Test**.
+
+The server stores the key encrypted and never sends it back: the form shows only that a key is set. To replace the key, paste another and save. Clearing the key deletes it.
 
 ### Use another service
 
-The Anthropic and OpenAI cards each have an **API URL** field. Leave it empty for the official API; the placeholder shows the official URL. To call another service with that card's API:
+An Anthropic or OpenAI API account can call another service that speaks the same API, such as a gateway or a model server on your network: set its base URL. Most services that call themselves OpenAI-compatible offer only Chat Completions; add those as an **OpenAI-compatible** account. TheVault does not promise that any named service works.
 
-1. Type the service's API URL into the **API URL** field.
-2. On the OpenAI card, an **API type** select appears beside the URL: **Responses API** or **Chat Completions API**. Leave it on Responses API if you do not know; **Test** finds out (see below).
-3. If the service needs a key, paste it into **API key**. With an API URL of its own, the key is optional: a card with a URL and no key counts as connected, and its requests carry no key at all.
-4. Select **Save**. It saves the URL and API type first, then the key. **Test** stays unavailable while the card holds an unsaved URL, API type or key, because it uses the saved ones.
-5. Pick a model and select **Test**.
+For example:
 
-How TheVault reads the URL:
+| Service | Kind | Base URL |
+|---|---|---|
+| OpenRouter | OpenAI-compatible | `https://openrouter.ai/api/v1` |
+| Z.ai | OpenAI-compatible | `https://api.z.ai/api/paas/v4` |
+| Z.ai, coding plan | OpenAI-compatible | `https://api.z.ai/api/coding/paas/v4` |
+| Ollama on your network | OpenAI-compatible | `http://10.0.0.5:11434` |
+| Z.ai's Anthropic endpoint | Anthropic API | `https://api.z.ai/api/anthropic` |
+
+How TheVault reads a base URL:
 
 - Spaces around it and trailing slashes are dropped.
-- A URL whose path ends in a version segment, such as `/v1` or `/v4`, is the API root as it is, and requests go straight under it. Any other URL gets `/v1` added. So `https://openrouter.ai/api/v1`, `https://openrouter.ai/api` and `http://10.0.0.5:11434` all work, and requests go to paths such as `https://openrouter.ai/api/v1/responses`; `https://api.z.ai/api/coding/paas/v4` sends to `https://api.z.ai/api/coding/paas/v4/responses`.
+- A URL whose path ends in a version segment, such as `/v1` or `/v4`, is the API root as it is, and requests go straight under it. Any other URL gets `/v1` added. So `https://openrouter.ai/api/v1` sends to `https://openrouter.ai/api/v1/chat/completions`, `http://10.0.0.5:11434` to `http://10.0.0.5:11434/v1/chat/completions`, and `https://api.z.ai/api/paas/v4` to `https://api.z.ai/api/paas/v4/chat/completions`.
 - It must start with `http://` or `https://`. `http` is allowed for servers on your own network; the key, when there is one, then crosses the network unencrypted.
-- It must not hold a user name or password (`https://user:pass@...`), a query or a fragment. Put a key in the **API key** field instead.
+- It must not hold a user name or password (`https://user:pass@...`), a query or a fragment. Put a key in the key field instead.
 
-A URL that breaks these rules is refused with the reason, and the stored URL stays as it was. To go back to the official API, empty the field and select **Save**.
+A URL that breaks these rules is refused with the reason, and the account stays as it was. To go back to the official API of an Anthropic or OpenAI API account, empty the field and save.
 
-The service must speak the card's API:
+An account with its own base URL needs no key: with none, its requests carry no key at all, and it counts as set up.
 
-- The OpenAI card needs the OpenAI Responses API, `POST /v1/responses`, or the Chat Completions API, `POST /v1/chat/completions`, as its **API type** says. Many services that call themselves OpenAI-compatible offer only Chat Completions. TheVault does not promise that any named service works.
-- The Anthropic card needs the Anthropic Messages API, `POST /v1/messages`.
-
-A service that answers 404 or 405 to that path fails with the error kind `invalid` and the message "This service does not support the OpenAI Responses API (POST /v1/responses).", "This service does not support the OpenAI Chat Completions API (POST /v1/chat/completions)." or "This service does not support the Anthropic Messages API (POST /v1/messages)." The paths in these messages are written as under `/v1`; with a versioned root such as `/v4` the request went to `.../v4/chat/completions`.
-
-**Test** detects the OpenAI API type. With a custom URL, when the saved type's path answers 404 or 405, Test sends the same request to the other type's path. When that path answers, Test saves that API type on the card and says so: "OK from glm-5.3-flash in 412 ms (Chat Completions API)". Chats and scripts never probe: they use the saved type, and fail with the message above when the service lacks it. The official OpenAI API (no URL) and the ChatGPT plan always use the Responses API, whatever the select says.
+A service that answers 404 or 405 to the kind's path fails with the error kind `invalid` and the message "This service does not support the OpenAI Responses API (POST /v1/responses).", "This service does not support the OpenAI Chat Completions API (POST /v1/chat/completions)." or "This service does not support the Anthropic Messages API (POST /v1/messages)." The paths in these messages are written as under `/v1`; with a versioned root such as `/v4` the request went to `.../v4/chat/completions`. A service with only the Responses API is not supported as OpenAI-compatible: add it as an OpenAI API account with its base URL. Nothing probes: each account speaks its kind's API.
 
 Over Chat Completions, everything works as over Responses, with these differences:
 
@@ -73,41 +85,54 @@ Over Chat Completions, everything works as over Responses, with these difference
 - A service's reasoning text (`reasoning_content`) is not shown and not kept.
 - `finish_reason` `length` means the answer was cut off, and `content_filter` is a refusal with category `content_filter`.
 
-The card lists the service's models from its `GET /v1/models`. When that list fails or is empty, the **Model** field becomes a text box: type the model id the service expects, then press Enter or move to another field.
+The form lists the service's models from its `GET /v1/models`. When that list fails or is empty, type the model id the service expects.
 
-The ChatGPT plan never uses the OpenAI card's API URL. Its token is for OpenAI alone, so plan requests always go to `https://api.openai.com`.
+### Extra headers
+
+An OpenAI-compatible account takes an ordered list of extra headers, sent on every request it makes: chat turns, scripts, model lists and Test. OpenRouter, for example, reads `HTTP-Referer` and `X-Title` to name your app:
+
+| Header | Value |
+|---|---|
+| `HTTP-Referer` | `https://vault.example.com` |
+| `X-Title` | `TheVault` |
+
+A name must be a valid HTTP header name, and a value a valid header value. `Authorization`, `Content-Type`, `Content-Length` and `Host` are the app's own and are refused. Header values are stored with the account, not as secrets, and Settings > AI shows them, so put a key in the key field, never in a header.
 
 ### Sign in with ChatGPT
 
-TheVault uses OpenAI's official Sign in with ChatGPT flow. It never uses the Codex CLI's client or its stored sign-in.
+TheVault uses OpenAI's official Sign in with ChatGPT flow. It never uses the Codex CLI's client or its stored sign-in. Each ChatGPT subscription account has its own sign-in, so two plans can sit side by side.
 
-1. In the ChatGPT card, select **Continue with ChatGPT**.
+1. Add a **ChatGPT subscription** account, or edit one, and select **Continue with ChatGPT**.
 2. Select **Open the ChatGPT sign-in page**. It opens in a new tab.
 3. Sign in to ChatGPT and allow TheVault to use your plan.
 4. The browser is then sent to `http://127.0.0.1:53683/auth/callback?...` and fails to load the page. That is expected: nothing listens on that address. Copy the whole address from the address bar.
-5. Paste it into **Address from the browser** and select **Finish signing in**. Do this within 10 minutes of step 1.
+5. Paste it into **Address from the browser** and select **Finish signing in**. Do this within 10 minutes of step 1, for the same account.
 
-The card then says **Using ChatGPT plan as** your account's address, with a **Manage usage** link to [ChatGPT's usage settings](https://chatgpt.com/settings/usage).
+The account then shows the plan's account address, with a **Manage usage** link to [ChatGPT's usage settings](https://chatgpt.com/settings/usage).
 
-When you finish, the server checks that the address belongs to the sign-in it started, exchanges the code, and verifies the ID token's signature, issuer, audience, expiry and nonce against OpenAI's published keys. It refuses the sign-in if the plan access (`chatgpt.tokens.use.direct`) was not granted.
+When you finish, the server checks that the address belongs to the sign-in it started for that account, exchanges the code, and verifies the ID token's signature, issuer, audience, expiry and nonce against OpenAI's published keys. It refuses the sign-in if the plan access (`chatgpt.tokens.use.direct`) was not granted.
 
-The first sign-in registers TheVault with OpenAI, which issues it a client id. Later sign-ins reuse that client id and the same host id, so OpenAI sees the same app on the same server.
+The first sign-in registers TheVault with OpenAI, which issues it a client id. Later sign-ins of the account reuse that client id and the same host id, so OpenAI sees the same app on the same server.
 
-**Disconnect** revokes the sign-in at OpenAI and deletes it from the server.
+**Disconnect** revokes the sign-in at OpenAI and deletes it from the server. Deleting the account does the same.
 
 #### Keeping the sign-in
 
-The server refreshes the plan's access token shortly before it expires, so the sign-in keeps working without you. If OpenAI ends the sign-in, for example because you revoked it in ChatGPT, the server forgets the tokens and adds one notification, "ChatGPT sign-in expired", that opens Settings > AI. Select **Continue with ChatGPT** again to reconnect.
+The server refreshes the plan's access token shortly before it expires, so the sign-in keeps working without you. If OpenAI ends the sign-in, for example because you revoked it in ChatGPT, the server forgets that account's tokens and adds one notification, "ChatGPT sign-in expired", naming the account and opening Settings > AI. Select **Continue with ChatGPT** again to reconnect.
 
 ## ChatGPT plan limits
 
-Requests through the ChatGPT provider count against your plan's usage, not an API account:
+Requests through a ChatGPT subscription count against your plan's usage, not an API account:
 
 - ChatGPT Pro has no 5-hour limit.
 - Each app has a weekly cap, which you can see and change in [ChatGPT's usage settings](https://chatgpt.com/settings/usage).
 - When a limit is reached, calls fail with the error kind `rate_limit` until the allowance resets.
 
 The plan also restricts what a request can do. TheVault keeps to these rules: plan requests always stream, are not stored at OpenAI, and carry no output token cap or hosted tools.
+
+### Plan usage
+
+When a plan answer reports how much of the plan's limits is used, the server keeps the latest reading for the account, with the time it was read: no extra request is made. It reads the headers the open-source Codex CLI reads (`codex-rs/codex-api/src/rate_limits.rs`): `x-codex-primary-used-percent`, `x-codex-primary-window-minutes` and `x-codex-primary-reset-at`, and the same three for `secondary`. Settings > AI shows each window as a bar, such as "40% used, resets in 2 h 10 min", with when it was read, and the chat foot shows the used percent beside a ChatGPT account. An account shows no usage until its first plan answer, and the API-key kinds show none. TheVault does not ask OpenAI for the usage on its own: the usage endpoint the Codex CLI calls belongs to Codex's own sign-in.
 
 ## What leaves the server
 
@@ -118,27 +143,33 @@ A call sends the provider the prompt and any text the caller includes:
 - The Test button sends only "Reply with OK."
 - With a Brave Search key stored, a `web_search` call sends Brave the query the model wrote; see [Web search](#web-search).
 - A `fetch_url` or `download_asset` call requests the address the model chose from the web, as TheVault, and `fetch_url` sends the provider what it read: a page's text, a PDF's text or an image. See [Read pages and download files](#read-pages-and-download-files).
+- An OpenAI-compatible account sends its extra headers with every request.
 
-Nothing else from the vault is sent. Responses API requests set `store: false`, so OpenAI keeps no stored response for later reuse. Chat Completions requests, which go only to a custom API URL, carry no such field; the service's own policy decides what it keeps. Each provider's own data policy applies to what it receives.
+Nothing else from the vault is sent. Responses API requests set `store: false`, so OpenAI keeps no stored response for later reuse. Chat Completions requests carry no such field; the service's own policy decides what it keeps. Each provider's own data policy applies to what it receives.
 
-The keys and tokens are stored encrypted in the server's secrets store, under the names `ai_anthropic_api_key`, `ai_openai_api_key`, `ai_chatgpt` and `ai_settings`. No API response carries a key or token, and error messages are scrubbed of them. A script cannot read them either: the `ai` module reads them itself.
+The accounts, keys and tokens are stored encrypted in the server's secrets store: `ai_accounts` holds the table, `ai_account_key_<id>` each account's key, `ai_account_chatgpt_<id>` each ChatGPT sign-in, `ai_account_usage_<id>` each plan's last usage reading, and `ai_settings` the settings that belong to no account. No API response carries a key or token, and error messages are scrubbed of them. A script cannot read them either: the `ai` module reads them itself.
+
+### From the three providers of earlier releases
+
+Before accounts, Settings > AI had three fixed providers. On its first start, the home server makes accounts of them, once: `Anthropic` when an Anthropic key or API URL was set, `OpenAI` when an OpenAI key or URL was set (OpenAI-compatible when its saved API type was Chat Completions), and `ChatGPT` when a ChatGPT sign-in was stored, each with its key or sign-in, URL, model and window. The provider that was the default makes the default account. The old secrets are deleted once the new ones are written. An agent file, a saved conversation or a script that names `anthropic`, `openai` or `chatgpt` still reaches the account made for it.
 
 ## The trail line
 
 Every completed or failed provider call writes one line:
 
 ```text
-ai: provider=anthropic model=claude-opus-5 in=1234 out=56 outcome=ok ms=840
+ai: account=Anthropic kind=anthropic model=claude-opus-5 in=1234 out=56 outcome=ok ms=840
 ```
 
 | Field | Meaning |
 |---|---|
-| `provider` | `anthropic`, `openai` or `chatgpt` |
+| `account` | The account's name, each space written as `_`, or `-` when the call failed before an account was chosen |
+| `kind` | `anthropic`, `openai`, `openai_compatible` or `chatgpt`, or `-` with no account |
 | `model` | The model id |
 | `in`, `out` | Input and output tokens |
 | `outcome` | `ok`, `refused` when the provider refused the request, or `error:<kind>` |
 | `ms` | How long the call took |
-| `host` | Only for a call to a custom API URL: the service's host, with its port when the URL names one, such as `host=openrouter.ai` |
+| `host` | Only for a call to an account's own base URL: the service's host, with its port when the URL names one, such as `host=openrouter.ai` |
 
 The error kinds are `not_configured`, `auth`, `rate_limit`, `refusal`, `invalid`, `timeout`, `unavailable` and `provider`.
 
@@ -146,11 +177,11 @@ A script's calls write the line to the run's log. The server's own calls, such a
 
 ## Chat panel
 
-The AI panel in the right sidebar answers questions about your notes and proposes edits to them. Open it with the AI tab, Ctrl+Shift+L (Cmd+Shift+L on a Mac), or Ask AI in the command palette (Ctrl+K). The **Agent** menu at the top picks whose conversation it is: the built-in Assistant first, chosen by default, then every enabled agent. The Assistant uses the default provider and model from Settings > AI, and the two menus at the foot of the message box, beside **Send**, pick another for this conversation. For an agent that names its own provider or model, the menus start on **Agent's provider** and **Agent's model**, which run the agent on its own; picking another provider or model runs this conversation's next turns on it instead, and choosing the agent's again goes back. Each agent starts on its own model whenever it is chosen: neither the Assistant's choice nor another agent's carries over. A run the chat box does not start, such as a trigger's or a call from a note, always uses the agent's own model.
+The AI panel in the right sidebar answers questions about your notes and proposes edits to them. Open it with the AI tab, Ctrl+Shift+L (Cmd+Shift+L on a Mac), or Ask AI in the command palette (Ctrl+K). The **Agent** menu at the top picks whose conversation it is: the built-in Assistant first, chosen by default, then every enabled agent. The Assistant uses the default account and its model from Settings > AI, and the two menus at the foot of the message box, beside **Send**, pick another account and model for this conversation. For an agent that names its own account or model, the menus start on **Agent's account (<name>)** and **Agent's model**, which run the agent on its own; picking another account or model runs this conversation's next turns on it instead, and choosing the agent's again goes back. An account picked without a model runs on that account's own model. Each agent starts on its own model whenever it is chosen: neither the Assistant's choice nor another agent's carries over. A run the chat box does not start, such as a trigger's or a call from a note, always uses the agent's own model.
 
 Every conversation in the panel is a thread of the chosen agent (agents G6, G7): see [Threads](#threads).
 
-The panel shows in the web app and in the desktop and Android apps. The chat always runs on the home server, which holds the credentials: an app's embedded server sends the panel's requests there with the device token, so an app needs to be paired and to reach its server. Offline or unpaired, the panel says "The AI chat needs the home server, which is not reachable." When no provider is set up, the app's panel says so and links to Settings > AI on the home server ("Set up AI in the web app"), since Settings > AI is in the web app only.
+The panel shows in the web app and in the desktop and Android apps. The chat always runs on the home server, which holds the credentials: an app's embedded server sends the panel's requests there with the device token, so an app needs to be paired and to reach its server. Offline or unpaired, the panel says "The AI chat needs the home server, which is not reachable." When no AI account is set up, the app's panel says so and links to Settings > AI on the home server ("Set up AI in the web app"), since Settings > AI is in the web app only.
 
 ### Ask a question
 
@@ -180,7 +211,7 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `taxonomy_format` | The taxonomy-file sections of the vault format, and the `taxonomy` field kind |
 | `propose_taxonomy_change` | Checks a whole new taxonomy file, for an existing taxonomy or a new name, with its term `renames`, and shows it to you; writes it only when confirmation is off. See [Apply a taxonomy change](#apply-a-taxonomy-change) |
 | `propose_taxonomy_delete` | Checks that a taxonomy exists and nothing uses it, and shows the delete to you; deletes it only when confirmation is off |
-| `list_agents` | Every agent's name, label, description, provider, model, whether it is enabled and built in, and its trigger count |
+| `list_agents` | Every agent's name, label, description, AI account, model, whether it is enabled and built in, and its trigger count |
 | `get_agent` | Reads one agent file's WCL, with the agent parsed and the agent-file vocabulary |
 | `propose_agent_change` | Checks a whole new agent file, for an existing agent or a new name, and shows it to you; writes it only when confirmation is off. Refused when it would give the agent more than the proposing agent has. See [Agents that manage agents](ai-agents.md#agents-that-manage-agents) |
 | `propose_agent_delete` | Checks that an agent exists and is not the Assistant or the proposing agent, and shows the delete to you; deletes it only when confirmation is off |
@@ -228,7 +259,7 @@ Both tools fetch through one guarded client:
 - Redirects are followed by the server itself, at most 5, and each target is checked as the first address was. A sixth is refused.
 - `fetch_url` has 30 seconds for the whole fetch, redirects and body included. A download has 30 seconds until the answer's headers arrive, then as long as it takes, provided some of the file arrives at least every 60 seconds; a download that stalls longer fails and stores nothing. Requests say `User-Agent: TheVault/<version> (+https://github.com/wiltaylor/TheVault)`.
 
-To let the tools reach servers on your own network, set `"fetch_private": true` in the `ai_settings` secret (`PUT /api/secrets/ai_settings` with the whole settings object). There is no switch for it in Settings > AI: it is an escape hatch, and it lets a page's text steer the model toward services on your network, so leave it off unless you need it.
+To let the tools reach servers on your own network, send `PUT /api/integrations/ai/settings` with `{ "fetch_private": true }`. There is no switch for it in Settings > AI: it is an escape hatch, and it lets a page's text steer the model toward services on your network, so leave it off unless you need it.
 
 ### The browser box
 
@@ -312,7 +343,7 @@ Applying a taxonomy change needs `admin`, as the taxonomy editor does; in the de
 
 ### Threads
 
-Each conversation with an agent is a note of the built-in type `agent_thread` (agents G7). The server writes it as the turn streams, so closing the tab loses nothing, and reads its transcript itself for the next turn, so the client sends only the new question. The thread holds the transcript the providers replay, every tool step, and every proposal with what became of it: pending, applied, discarded or failed (agents G8). The note's `body` is the conversation as plain text, so a search finds it, and its `title` is the first question until you rename it. Every write to a thread is authored by the agent.
+Each conversation with an agent is a note of the built-in type `agent_thread` (agents G7). The server writes it as the turn streams, so closing the tab loses nothing, and reads its transcript itself for the next turn, so the client sends only the new question. The thread holds the transcript the providers replay (each answer's own record replays only to the account and API that made it), every tool step, and every proposal with what became of it: pending, applied, discarded or failed (agents G8). The note's `body` is the conversation as plain text, so a search finds it, and its `title` is the first question until you rename it. Every write to a thread is authored by the agent.
 
 The agent screen, at `/agents/<name>`, opens on the agent's chat. The bar at its top holds the session picker, **Rename**, **Archive** and **Delete** for the chosen session, and the settings cog. The session picker lists the agent's threads, newest activity first, with a badge counting the proposals that still wait for you; its search box keeps the threads whose title holds every word typed, the arrow keys move through them, Enter opens the one highlighted and Escape closes the list. **New chat**, at the top of the list, starts another; its first message creates the note. The address names the open thread as `?thread=<id>`. Opening a thread shows it as it was, with Apply and Discard on its pending proposals. Apply and Discard are recorded in the thread, and the next question tells the model what became of each, as [What the model learns you applied](#what-the-model-learns-you-applied) describes. **Rename** edits the chosen thread's title in place, **Archive** archives it or, on an archived thread, **Unarchive** takes it out of the archive, and **Delete** asks first, then moves the note to the trash and starts a new chat. Archived threads are hidden from the list until **Show archived**, at its foot, lists them dimmed; an archived thread stays open after Archive, marked "Archived", and sending a message in it takes it out of the archive. The panel's thread, archived or deleted elsewhere, gives way to a new thread on the next message. Deleting an agent keeps its threads.
 
@@ -341,9 +372,9 @@ Compacting asks the model, with the agent's own instructions and no tools, for a
 - **On its own.** Before a turn, a thread whose last call filled the compaction point of the window, 80% unless Settings > AI says otherwise, is compacted first, and the turn then answers from the summary. If the summary fails, the turn goes on with the thread as it was and the panel says so.
 - **`/compact`.** Typed alone in the chat box, it compacts the thread now and ends the turn there. It works in a thread; the panel always has one.
 
-Settings > AI holds the context window of each provider, from 4,000 to 10,000,000 tokens, and when to compact, from 50% to 95%. A window left at its default is 200,000 for Anthropic, 400,000 for the OpenAI API (128,000 for a service the OpenAI card reaches over Chat Completions) and 272,000 for the ChatGPT plan. **Compact long chats on their own** turns the automatic compaction off; `/compact` still works. The windows are the sizes TheVault plans with, not limits it enforces: a model with a smaller window than the one set answers a full thread with an error.
+Each account in Settings > AI holds its context window, from 4,000 to 10,000,000 tokens, and Settings > AI holds when to compact, from 50% to 95%. A window left at its default is 200,000 for an Anthropic account, 400,000 for the OpenAI API, 128,000 for an OpenAI-compatible service and 272,000 for a ChatGPT subscription. **Compact long chats on their own** turns the automatic compaction off; `/compact` still works. The windows are the sizes TheVault plans with, not limits it enforces: a model with a smaller window than the one set answers a full thread with an error.
 
-`GET /api/integrations/ai` and `GET /api/ai/providers` answer `context: { windows: { <provider>: { window, set } }, auto_compact, compact_at }`; `PUT /api/integrations/ai/settings` takes `context: { windows?: { <provider>: <tokens> | null }, auto_compact?, compact_at? }`, `null` putting a window back to its default. A thread's JSON carries `context: { used, window }` and `compaction: { summary, upto, at_ms, before, reason }`.
+`GET /api/integrations/ai` and `GET /api/ai/accounts` answer `context: { auto_compact, compact_at }` and each account's `window`; `PUT /api/integrations/ai/settings` takes `context: { auto_compact?, compact_at? }`, and an account's `context: { window } | null` is set with the account, `null` putting it back to its kind's default. A thread's JSON carries `context: { used, window }` and `compaction: { summary, upto, at_ms, before, reason }`.
 
 ### The system prompt
 
@@ -385,7 +416,7 @@ The Permissions tab also has an **Internet** group, which decides which web tool
 | Let the AI read web pages | `fetch_url` |
 | Let the AI download files into the vault | `download_asset`, which still follows Ask before downloading files into the vault |
 
-With a switch off, the tool is left out of the tool list, so the model never sees it, and a call naming it anyway is refused without fetching anything. `GET /api/integrations/ai` and `GET /api/ai/providers` answer the Assistant's `confirm` and `web`, and `PUT /api/integrations/ai/settings` still takes a partial `confirm`, `web` and `system_prompt`, which it writes into the Assistant's file.
+With a switch off, the tool is left out of the tool list, so the model never sees it, and a call naming it anyway is refused without fetching anything. `GET /api/integrations/ai` and `GET /api/ai/accounts` answer the Assistant's `confirm` and `web`, and `PUT /api/integrations/ai/settings` still takes a partial `confirm`, `web` and `system_prompt`, which it writes into the Assistant's file.
 
 A change that does not check, or that fails, writes nothing and goes back to the model as an error. The model is told the change was made, with the note's new version.
 
@@ -399,7 +430,7 @@ When the provider refuses a request, the answer stops where it was and the panel
 
 ### The chat route
 
-`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal with `POST /api/ai/apply` needs `write`, and `admin` for a type or taxonomy proposal. A change the chat makes itself, its confirmation off, needs the same scope from the chat's caller; without it the chat proposes instead. The body is `{ provider?, model?, messages, note_id?, agent?, thread?, update_skills? }`, where `messages` is the conversation so far ending with the new question. `provider` and `model` are the chat box's choice and win over the agent's: a `model` alone runs on the agent's provider, or the default provider when the agent names none, and a `provider` alone on that provider's default model from Settings > AI; with neither the turn uses the agent's, and then Settings > AI's defaults. `agent` names the agent whose turn it is: its provider and model (when it names them and the body names neither), prompt, effort, tools, note types and switches apply, and a disabled agent is a 400 `agent_disabled`; without it the turn is the Assistant's. `thread` names one of the agent's threads: the server reads the transcript from the thread, so `messages` holds only the new question, and writes the turn to it; a thread of another agent is a 400, and a thread a turn is already running on a 409 `thread_busy`. `update_skills: true` is `/update-skills` (skills S6): the thread's snapshot of the agent's skills is taken again, `messages` holds none of the user's (an empty list on a thread), and the turn's user message is the server's, sent first as the `skills_updated` event (see [Using skills](ai-agents.md#using-skills)). With an agent named, each `proposal`, `type_proposal`, `taxonomy_proposal` and `applied` event also carries `agent`, and with a thread `thread`. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
+`POST /api/ai/chat` needs a `read` token or the web app's session. Applying a proposal with `POST /api/ai/apply` needs `write`, and `admin` for a type or taxonomy proposal. A change the chat makes itself, its confirmation off, needs the same scope from the chat's caller; without it the chat proposes instead. The body is `{ account?, model?, messages, note_id?, agent?, thread?, update_skills? }`, where `messages` is the conversation so far ending with the new question. `account` is an AI account's id or name; `provider` (`anthropic`, `openai` or `chatgpt`) is still taken in its place for one release and names the account made for that provider. `account` and `model` are the chat box's choice and win over the agent's: a `model` alone runs on the agent's account, or the default account when the agent names none or names one that does not exist, and an `account` alone on that account's own model; with neither the turn uses the agent's, and then the default account and its model. An account named that does not exist is an `invalid` error. `agent` names the agent whose turn it is: its account and model (when it names them and the body names neither), prompt, effort, tools, note types and switches apply, and a disabled agent is a 400 `agent_disabled`; without it the turn is the Assistant's. `thread` names one of the agent's threads: the server reads the transcript from the thread, so `messages` holds only the new question, and writes the turn to it; a thread of another agent is a 400, and a thread a turn is already running on a 409 `thread_busy`. `update_skills: true` is `/update-skills` (skills S6): the thread's snapshot of the agent's skills is taken again, `messages` holds none of the user's (an empty list on a thread), and the turn's user message is the server's, sent first as the `skills_updated` event (see [Using skills](ai-agents.md#using-skills)). With an agent named, each `proposal`, `type_proposal`, `taxonomy_proposal` and `applied` event also carries `agent`, and with a thread `thread`. The answer is a stream of server-sent events, with a heartbeat comment every 15 seconds:
 
 | Event | Data |
 |---|---|
@@ -411,8 +442,8 @@ When the provider refuses a request, the answer stops where it was and the panel
 | `taxonomy_proposal` | A taxonomy change to apply with `POST /api/ai/apply`, `kind` always `taxonomy`. `create` and `change`: `{ id, kind, op, name, exists, before, after, renames, issues, affected }`, where `before` is the file as stored (null for a new taxonomy), `after` the checked file in canonical form, `renames` the `[{ from, to }]` term paths and `affected` how many notes they rewrite. `delete`: `{ id, kind, op, name, before }` |
 | `applied` | A change the tool made itself, its confirmation off, sent in place of the proposal. For a note, `{ id, op, note_id, title, version }`, where `op` is `update`, `create`, `archive`, `unarchive` or `delete` and `version` is the note's new version (for a delete, the version that went to the trash). For a type, `{ id, op, type_name }`, where `op` is `type_change`, `type_create` or `type_delete`. For a taxonomy, `{ id, op, taxonomy_name, notes }`, where `op` is `taxonomy_change`, `taxonomy_create` or `taxonomy_delete` and `notes` the number of notes its renames rewrote. For a download, `{ id, op, asset_id, filename, media_type, size, url }` |
 | `skills_updated` | `{ count, skills, message }`, first in an `update_skills` turn: how many skills the new snapshot lists, their names, and the user message the server added, a `skills_updated` notice ("Skills updated (<n>)") and the text the model reads. A conversation with no thread appends `message` to the transcript it sends back |
-| `usage` | `{ provider, model, input, output }` for one model call |
-| `refusal` | `{ provider, model, category, explanation, messages }`; the last event |
+| `usage` | `{ account, name, kind, model, input, output }` for one model call: the account's id, name and kind |
+| `refusal` | `{ account, name, kind, model, category, explanation, messages }`; the last event |
 | `error` | `{ kind, message, messages }`; the last event |
 | `done` | `{ stop, messages }`; the last event |
 
@@ -454,16 +485,25 @@ The thread routes, `/api/agents/{name}/threads` (`GET` lists the agent's threads
 
 ## API
 
-Settings > AI uses these routes. Every route under `/api/integrations/ai` needs an `admin` token or the web app's session; `GET /api/ai/models` and `GET /api/ai/providers` need `read`.
+Settings > AI uses these routes. Every route under `/api/integrations/ai` needs an `admin` token or the web app's session; `GET /api/ai/models` and `GET /api/ai/accounts` need `read`. No answer ever holds a key or a token.
+
+An account in these answers is `{ id, name, kind, kind_label, base_url, default_base_url, model, headers, context, default_window, window, configured, key_set, signed_in, agents, usage }`: `base_url` null for the kind's own, `default_base_url` null for `openai_compatible`, `context` `{ window }` or null for the kind's default, `window` the one in use, `configured` whether it can be called (a key, its own base URL, or a ChatGPT sign-in), `signed_in` `{ account, expired }` for a ChatGPT subscription that has signed in and null otherwise, `agents` the names of the agents that name it, and `usage` `{ read_at_ms, plan, windows: [{ label, used_percent, window_minutes, resets_at_ms }] }` or null.
 
 | Method and path | Does |
 |---|---|
-| `GET /api/integrations/ai` | Each provider's state: `configured`, the default `model`, the ChatGPT `account`, and for Anthropic and OpenAI the API `url` (null for the official API) and `has_key`, and for OpenAI the `api` its calls use, `responses` or `chat_completions` (always `responses` without a URL); the `default_provider`; the chat `system_prompt` in use, the shipped `default_system_prompt`, and `system_prompt_custom`; and `confirm`, `{ notes, archive, delete, types, downloads, taxonomies, agents, skills }`, with every switch filled |
-| `PUT /api/integrations/ai/settings` | Saves `{ default_provider?, models?: { anthropic?, openai?, chatgpt? }, system_prompt?, confirm?: { notes?, archive?, delete?, types?, downloads?, taxonomies?, agents?, skills? }, urls?: { anthropic?, openai? }, openai_api? }`; an empty string clears a value, an empty `system_prompt` means the default, an empty URL the official API, and an empty `openai_api` the Responses API. Another `openai_api` than `responses` or `chat_completions` is a 400. A `confirm` sent changes only the switches it names. A `system_prompt` over 32,000 characters is a 400. A URL the rules above refuse is a 400 `invalid_url`, and nothing is saved |
-| `PUT /api/integrations/ai/{anthropic\|openai}/key` | Stores `{ key }`; an empty key deletes it |
-| `POST /api/integrations/ai/{provider}/test` | Sends the test request to `{ model }` or the default model, and answers `{ ok, model, ms, text, api, error }`. On OpenAI with a custom URL it detects and saves the API type as above, and `api` names the one the answer came over; otherwise `api` is null |
-| `POST /api/integrations/ai/chatgpt/start` | Answers `{ auth_url }`, the ChatGPT sign-in page |
-| `POST /api/integrations/ai/chatgpt/finish` | Takes `{ url }`, the pasted address, and stores the sign-in; a refused sign-in is a 400 with the reason |
-| `POST /api/integrations/ai/chatgpt/disconnect` | Revokes and deletes the ChatGPT sign-in |
-| `GET /api/ai/models?provider=` | The provider's models now, `{ provider, model, models: [{ id, display_name }] }`; without `provider`, the default one |
-| `GET /api/ai/providers` | The chat panel's picker in every client: `{ default_provider, providers: { anthropic, openai, chatgpt: { configured, model } }, confirm }`. It holds no account, no system prompt, no API URL and never a key or token |
+| `GET /api/integrations/ai` | `{ secrets_key, accounts, default, context: { auto_compact, compact_at }, confirm, web, fetch_private, system_prompt, default_system_prompt, system_prompt_custom }`: the accounts in the table's order, the default account's id, the chat `system_prompt` in use, the shipped one and whether they differ, and `confirm`, `{ notes, archive, delete, types, downloads, taxonomies, agents, skills }`, and `web` with every switch filled |
+| `PUT /api/integrations/ai/settings` | Saves `{ system_prompt?, confirm?, web?, fetch_private?, context?: { auto_compact?, compact_at? } }`, the settings that belong to no account. A `confirm` or `web` sent changes only the switches it names; an empty `system_prompt` means the default, and one over 32,000 characters is a 400. A `compact_at` outside 50 to 95 is a 400; a field of before accounts (`default_provider`, `models`, `urls`, `openai_api`, `context.windows`) is a 422 |
+| `POST /api/integrations/ai/accounts` | Adds an account: `{ name, kind, base_url?, model?, headers?: [[name, value]], context?: { window } \| null, key? }`, and answers it with its new id. A name in use (ignoring case), an `openai_compatible` account with no base URL, a base URL or key on a `chatgpt` account, headers on another kind than `openai_compatible`, a refused header and a window out of range are a 400 `invalid`; a URL the rules above refuse is a 400 `invalid_url` |
+| `PUT /api/integrations/ai/accounts/{id}` | Changes an account's `name`, `base_url`, `model`, `headers` or `context`, each sent replacing the stored one and null clearing it. The kind cannot change. A rename rewrites the agent files naming the old name, in one commit |
+| `DELETE /api/integrations/ai/accounts/{id}` | Deletes the account with its key, ChatGPT sign-in (revoked first) and usage reading; agents naming it run on the default account |
+| `PUT /api/integrations/ai/accounts/order` | Puts the accounts in the order `{ ids }`, which names each account once |
+| `PUT /api/integrations/ai/default` | Makes `{ id }` the default account; null or empty clears it, and the first account is then the default |
+| `PUT /api/integrations/ai/accounts/{id}/key` | Stores `{ key }`; an empty key deletes it. A ChatGPT subscription takes none |
+| `POST /api/integrations/ai/accounts/{id}/test` | Sends the test request to `{ model }` or the account's model, and answers `{ ok, account, name, kind, model, ms, text, error }` |
+| `POST /api/integrations/ai/accounts/{id}/chatgpt/start` | Answers `{ auth_url }`, the ChatGPT sign-in page, for a ChatGPT subscription account |
+| `POST /api/integrations/ai/accounts/{id}/chatgpt/finish` | Takes `{ url }`, the pasted address, and stores the account's sign-in; a refused sign-in, or one started for another account, is a 400 with the reason |
+| `POST /api/integrations/ai/accounts/{id}/chatgpt/disconnect` | Revokes and deletes the account's sign-in |
+| `GET /api/ai/models?account=` | The account's models now, `{ account, model, models: [{ id, display_name }] }`, `account` an id or a name; without it, the default account's. The request carries the account's extra headers |
+| `GET /api/ai/accounts` | The chat panel's picker in every client: `{ accounts: [{ id, name, kind, kind_label, model, configured, window, usage }], default, confirm, web, context }`. It holds no URL, header, sign-in, system prompt and never a key or token |
+
+An `{id}` is an account's id; an unknown one is a 404.

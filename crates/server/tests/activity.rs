@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde_json::{Value, json};
-use testkit::{AnthropicMessage, FakeAnthropic, PASSWORD, TestServer};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, PASSWORD, TestAccount, TestServer};
 
 /// Monday 2026-01-05, half past midnight UTC.
 const START: &str = "2026-01-05T00:30:00Z";
@@ -117,20 +117,16 @@ impl Api {
     }
 
     fn anthropic(&self, fake: &FakeAnthropic) {
-        self.send(
-            "PUT",
-            "/api/secrets/ai_anthropic_api_key",
-            json!({ "value": fake.api_key() }),
-        );
-        self.send(
-            "PUT",
-            "/api/secrets/ai_settings",
-            json!({ "value": json!({
-                "default_provider": "anthropic",
-                "models": { "anthropic": MODEL },
-                "endpoints": { "anthropic": fake.base_url() },
-            }).to_string() }),
-        );
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(fake).model(MODEL))
+            .secrets()
+        {
+            self.send(
+                "PUT",
+                &format!("/api/secrets/{name}"),
+                json!({ "value": value }),
+            );
+        }
     }
 
     fn memo(&self, title: &str, status: &str) -> (String, String) {
@@ -483,7 +479,8 @@ fn a_chat_turn_records_its_tool_calls_and_tokens_but_no_message_text() {
     assert_eq!(end["detail"]["input_tokens"], 600);
     assert_eq!(end["detail"]["output_tokens"], 90);
     assert_eq!(end["detail"]["model"], MODEL);
-    assert_eq!(end["detail"]["provider"], "anthropic");
+    assert_eq!(end["detail"]["account"], "Anthropic");
+    assert_eq!(end["detail"]["kind"], "anthropic");
     assert_eq!(end["detail"]["tools"], 2);
 
     // Applying the proposal: an ai.applied entry, and the note's update by the caller.

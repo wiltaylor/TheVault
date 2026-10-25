@@ -61,6 +61,7 @@ dependencies = [
  "sha2",
  "state",
  "tokio",
+ "ulid",
 ]
 
 [[package]]

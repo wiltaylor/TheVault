@@ -91,7 +91,7 @@ impl AgentRunner for Fake {
                 Some(m) => Err(m),
                 None => Ok(()),
             },
-            log: vec!["ai: provider=anthropic model=claude-test".to_owned()],
+            log: vec!["ai: account=Anthropic kind=anthropic model=claude-test".to_owned()],
         }
     }
 }
@@ -231,7 +231,7 @@ fn a_schedule_trigger_starts_a_thread_with_its_prompt() {
     assert_eq!(runs[0].thread.as_deref(), Some("thread1"));
     assert_eq!(runs[0].outcome, AgentRunOutcome::Succeeded);
     assert!(
-        runs[0].log.contains("provider=anthropic"),
+        runs[0].log.contains("account=Anthropic kind=anthropic"),
         "{}",
         runs[0].log
     );

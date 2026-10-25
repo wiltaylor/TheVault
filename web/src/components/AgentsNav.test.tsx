@@ -57,7 +57,7 @@ function full(s: AgentSummary): Agent {
     description: null,
     icon: s.icon ?? null,
     enabled: s.enabled ?? true,
-    provider: null,
+    account: null,
     model: null,
     effort: null,
     system_prompt: "Be brief.",

@@ -504,7 +504,8 @@ export interface AgentSummary {
   label: string;
   description?: string | null;
   icon?: string | null;
-  provider?: AiProvider | null;
+  /** The account the agent runs on, by name (accounts A6); null is the default account. */
+  account?: string | null;
   model?: string | null;
   enabled?: boolean;
   triggers?: number;
@@ -569,7 +570,8 @@ export interface AgentForm {
   description: string | null;
   icon: string | null;
   enabled: boolean;
-  provider: AiProvider | null;
+  /** The account, by name (accounts A6); null is the default account. */
+  account: string | null;
   model: string | null;
   effort: AgentEffort | null;
   system_prompt: string | null;
@@ -669,52 +671,91 @@ export interface GoogleStatus {
 /** How Google's consent page sends the browser back: to a loopback address to paste, or straight to this server. */
 export type GoogleRedirect = "loopback" | "direct";
 
-/** An AI provider (ai D1): an Anthropic key, an OpenAI key, or a ChatGPT plan. */
-export type AiProvider = "anthropic" | "openai" | "chatgpt";
+/** An AI account's kind (accounts A1), which fixes its API and how it signs in. */
+export type AiKind = "anthropic" | "openai" | "openai_compatible" | "chatgpt";
 
-/** The API an OpenAI-compatible service speaks (ai D25). */
-export type OpenAiApi = "responses" | "chat_completions";
-
-/** One provider in Settings > AI. Never a key or token (ai D7). */
-export interface AiProviderStatus {
-  /** Whether it has a key or a custom API URL, or for ChatGPT a sign-in. */
-  configured: boolean;
-  /** The default model chosen for it. */
-  model: string | null;
-  /** The signed-in ChatGPT account, for `chatgpt`. */
-  account?: string | null;
-  /** The custom API URL, for `anthropic` and `openai`; null means the official API (ai D24). */
-  url?: string | null;
-  /** Whether an API key is stored, for `anthropic` and `openai`: with a custom URL it is optional. */
-  has_key?: boolean;
-  /** For `openai`: the API its calls speak, always `responses` without a custom URL (ai D25). */
-  api?: OpenAiApi;
+/** One limit of a subscription, as its last response reported it (accounts A13). */
+export interface AiUsageWindow {
+  label: string;
+  /** How much of the limit is used, 0 to 100. */
+  used_percent: number;
+  window_minutes: number | null;
+  /** When the limit resets, in milliseconds since the epoch. */
+  resets_at_ms: number | null;
 }
 
-/** Settings > AI, from `GET /api/integrations/ai`. */
+/** A subscription's usage, read at `read_at_ms` (accounts A13); only `chatgpt` accounts have one. */
+export interface AiUsage {
+  read_at_ms: number;
+  windows: AiUsageWindow[];
+  plan: string | null;
+}
+
+/** An AI account's record (accounts A2). Never a key or token. */
+export interface AiAccount {
+  id: string;
+  name: string;
+  kind: AiKind;
+  /** Null is the kind's own URL. */
+  base_url: string | null;
+  /** The default model; null is the kind's default. */
+  model: string | null;
+  /** Extra request headers, `openai_compatible` only (accounts A3). */
+  headers: [string, string][];
+  /** The context window; null is the kind's default. */
+  context: { window: number } | null;
+}
+
+/** One account in Settings > AI (accounts A7). */
+export interface AiAccountStatus extends AiAccount {
+  configured: boolean;
+  key_set: boolean;
+  /** The ChatGPT sign-in, for `chatgpt`. */
+  signed_in?: { account: string | null; expired: boolean } | null;
+  kind_label: string;
+  /** The URL calls go to when `base_url` is null; null when the kind needs one. */
+  default_base_url: string | null;
+  default_window: number;
+  /** The window in use: the account's, or the kind's default. */
+  window: number;
+  /** The agents that name the account, by name (accounts A6). */
+  agents: string[];
+  usage?: AiUsage | null;
+}
+
+/** A kind as the Add form offers it. */
+export interface AiKindInfo {
+  kind: AiKind;
+  label: string;
+  /** The URL calls go to when the account sets none; null when the kind needs one. */
+  default_url: string | null;
+  default_window: number;
+}
+
+/** Settings > AI, from `GET /api/integrations/ai` (accounts A7): the accounts, in the table's order, and the global settings. */
 export interface AiStatus {
   /** Whether the server can store secrets at all. */
   secrets_key: boolean;
-  default_provider: AiProvider | null;
-  providers: Record<AiProvider, AiProviderStatus>;
+  accounts: AiAccountStatus[];
+  /** The default account's id. */
+  default: string | null;
+  /** The kinds an account may have, in the order the Add form offers them. */
+  kinds: AiKindInfo[];
   /** The chat panel's system prompt in use (ai D17). */
-  system_prompt: string;
+  system_prompt?: string;
   /** The shipped system prompt, used when none is set. */
-  default_system_prompt: string;
+  default_system_prompt?: string;
   /** Whether `system_prompt` is the user's own. */
-  system_prompt_custom: boolean;
+  system_prompt_custom?: boolean;
   /** Which kinds of chat change wait for the user; false lets the AI make them (ai D22). */
   confirm: AiConfirm;
   /** Which internet tools the chat gets (ai D28). */
   web: AiWeb;
-  /** Each provider's context window and when threads compact themselves; absent from a server before them. */
-  context?: AiContext;
+  context: AiContext;
 }
 
-/** Context windows and compaction, every key filled. */
+/** When threads compact themselves, every key filled. */
 export interface AiContext {
-  /** Each provider's window in tokens, and whether it is set rather than the default. */
-  windows: Record<AiProvider, { window: number; set: boolean }>;
   /** Whether a thread compacts itself before a turn once it fills `compact_at` of the window. */
   auto_compact: boolean;
   /** The share of the window, in percent, that starts a compaction. */
@@ -757,21 +798,34 @@ export interface AiModel {
   display_name: string | null;
 }
 
-/** A provider's live model list, with its default model or the preselected one. */
+/** An account's live model list, with its default model or the preselected one. */
 export interface AiModels {
-  provider: AiProvider;
+  account: string;
   model: string | null;
   models: AiModel[];
 }
 
-/** The chat panel's picker, from `GET /api/ai/providers` (ai D23): no account, never a key. */
-export interface AiProviders {
-  default_provider: AiProvider | null;
-  providers: Record<AiProvider, { configured: boolean; model: string | null }>;
-  confirm: AiConfirm;
+/** One account as the chat's picker reads it, in every client (accounts A7). Never a key. */
+export interface AiAccountChoice {
+  id: string;
+  name: string;
+  kind: AiKind;
+  kind_label: string;
+  model: string | null;
+  configured: boolean;
+  /** The context window in use. */
+  window?: number;
+  usage?: AiUsage | null;
+}
+
+/** The chat's picker, from `GET /api/ai/accounts` (accounts A7). */
+export interface AiAccounts {
+  accounts: AiAccountChoice[];
+  default: string | null;
+  confirm?: AiConfirm;
   /** The built-in Assistant's internet switches (agents G6). */
   web?: AiWeb;
-  /** The context windows and when threads compact themselves. */
+  /** When threads compact themselves. */
   context?: AiContext;
 }
 
@@ -807,12 +861,13 @@ export interface AiTurnPoll {
 /** What the Test button got back. */
 export interface AiTestResult {
   ok: boolean;
-  provider: AiProvider;
+  /** The account's id. */
+  account: string;
+  name?: string;
+  kind?: AiKind;
   model: string | null;
   ms: number;
   text: string | null;
-  /** The OpenAI API the Test went over, which Test detects and saves (ai D25); null otherwise. */
-  api?: OpenAiApi | null;
   error: { kind: string; message: string } | null;
 }
 
@@ -1725,35 +1780,28 @@ export const api = {
   braveTest: () => request<BraveTestResult>("POST", "/api/integrations/brave/test"),
   /** Whether the browser box is set up and answers, and its versions (browser B4). */
   browserStatus: () => request<BrowserStatus>("GET", "/api/integrations/browser"),
-  /** Settings > AI: each provider's sign-in and default model (ai D7). */
+  /** Settings > AI: the accounts and the global settings (accounts A7). */
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
-  /**
-   * Save the default provider, default models, chat system prompt, confirmation switches and
-   * API URLs, and the internet tool switches (`web`, partial like `confirm`, ai D28); an empty string clears one, which for the system prompt means the default and for
-   * a URL the official API (ai D24), and for `openai_api` Responses (ai D25). `confirm` may be
-   * partial. A URL that is not http or https, or holds a user name or password, is a 400
-   * `invalid_url`.
-   */
-  aiSaveSettings: (settings: {
-    default_provider?: AiProvider | "";
-    models?: Partial<Record<AiProvider, string>>;
-    system_prompt?: string;
-    confirm?: Partial<AiConfirm>;
-    web?: Partial<AiWeb>;
-    urls?: Partial<Record<"anthropic" | "openai", string>>;
-    openai_api?: OpenAiApi | "";
-    /** Windows to set, `null` putting one back to its default; the switch and the share. */
-    context?: { windows?: Partial<Record<AiProvider, number | null>>; auto_compact?: boolean; compact_at?: number };
-  }) =>
+  /** Save the global settings: the context switch and share, and the confirmation and internet switches, each partial. */
+  aiSaveSettings: (settings: { confirm?: Partial<AiConfirm>; web?: Partial<AiWeb>; context?: Partial<AiContext> }) =>
     request<AiStatus>("PUT", "/api/integrations/ai/settings", settings),
-  /** Store an Anthropic or OpenAI API key; an empty key deletes it. */
-  aiPutKey: (provider: "anthropic" | "openai", key: string) =>
-    request<AiStatus>("PUT", `/api/integrations/ai/${provider}/key`, { key }),
-  /** Send a short test request to the provider's default model, or `model`. */
-  aiTest: (provider: AiProvider, model?: string) =>
-    request<AiTestResult>("POST", `/api/integrations/ai/${provider}/test`, model ? { model } : {}),
-  /** The providers set up, for the chat panel's picker in every client (ai D23). */
-  aiProviders: () => request<AiProviders>("GET", "/api/ai/providers"),
+  /** Add an account, with its API key when one is given: the account as the status lists it. */
+  aiCreateAccount: (account: Omit<AiAccount, "id"> & { key?: string }) =>
+    request<AiAccountStatus>("POST", "/api/integrations/ai/accounts", account),
+  /** Change an account's fields; a new name rewrites the agents that name the old one (accounts A6). */
+  aiUpdateAccount: (id: string, patch: Partial<Omit<AiAccount, "id" | "kind">>) =>
+    request<AiStatus>("PUT", `/api/integrations/ai/accounts/${enc(id)}`, patch),
+  aiDeleteAccount: (id: string) => request<AiStatus>("DELETE", `/api/integrations/ai/accounts/${enc(id)}`),
+  /** Put the accounts in this order. */
+  aiOrderAccounts: (ids: string[]) => request<AiStatus>("PUT", "/api/integrations/ai/accounts/order", { ids }),
+  aiSetDefault: (id: string) => request<AiStatus>("PUT", "/api/integrations/ai/default", { id }),
+  /** Store an account's API key; an empty key deletes it. */
+  aiPutKey: (id: string, key: string) => request<AiStatus>("PUT", `/api/integrations/ai/accounts/${enc(id)}/key`, { key }),
+  /** Send a short test request to the account's default model, or `model`. */
+  aiTest: (id: string, model?: string) =>
+    request<AiTestResult>("POST", `/api/integrations/ai/accounts/${enc(id)}/test`, model ? { model } : {}),
+  /** The accounts, for the chat's picker in every client (accounts A7). */
+  aiAccounts: () => request<AiAccounts>("GET", "/api/ai/accounts"),
   /**
    * Apply a proposal or type proposal as the chat sent it, on the home server, at its base
    * version (ai D23). A stale one is a 409; a type change without admin a 403 `needs_admin`.
@@ -1768,14 +1816,16 @@ export const api = {
     request<AiTurnPoll>("GET", `/api/app/ai/turns/${enc(turn)}?after=${after}`, undefined, signal),
   /** Stop a chat turn. */
   aiTurnStop: (turn: string) => request<void>("DELETE", `/api/ai/chat/turns/${enc(turn)}`),
-  /** The models a provider offers now. */
-  aiModels: (provider: AiProvider) => request<AiModels>("GET", `/api/ai/models?provider=${enc(provider)}`),
-  /** Start Sign in with ChatGPT: the authorize page to open (ai D8). */
-  chatgptStart: () => request<{ auth_url: string }>("POST", "/api/integrations/ai/chatgpt/start"),
+  /** The models an account offers now. */
+  aiModels: (account: string) => request<AiModels>("GET", `/api/ai/models?account=${enc(account)}`),
+  /** Start Sign in with ChatGPT for a `chatgpt` account: the authorize page to open (ai D8). */
+  chatgptStart: (id: string) =>
+    request<{ auth_url: string }>("POST", `/api/integrations/ai/accounts/${enc(id)}/chatgpt/start`),
   /** Finish Sign in with ChatGPT with the address the browser failed to load. */
-  chatgptFinish: (url: string) => request<AiStatus>("POST", "/api/integrations/ai/chatgpt/finish", { url }),
-  /** Revoke and forget the ChatGPT sign-in. */
-  chatgptDisconnect: () => request<AiStatus>("POST", "/api/integrations/ai/chatgpt/disconnect"),
+  chatgptFinish: (id: string, url: string) =>
+    request<AiStatus>("POST", `/api/integrations/ai/accounts/${enc(id)}/chatgpt/finish`, { url }),
+  /** Revoke and forget the account's ChatGPT sign-in. */
+  chatgptDisconnect: (id: string) => request<AiStatus>("POST", `/api/integrations/ai/accounts/${enc(id)}/chatgpt/disconnect`),
   devices: async () => (await request<{ devices: Device[] }>("GET", "/api/devices")).devices,
   /** The app builds the server hands out. Public: it needs no session. */
   clients: () => request<{ clients: ClientBuild[]; enabled: boolean }>("GET", "/api/clients"),

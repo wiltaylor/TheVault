@@ -5,15 +5,14 @@ mod common;
 use std::time::Duration;
 
 use ai::{
-    Content, Effort, ErrorKind, Event, Message, Outcome, Provider, ProviderState, Request, Role,
-    Stop,
+    Content, Effort, ErrorKind, Event, Kind, Message, Outcome, ProviderState, Request, Role, Stop,
 };
 use common::{Env, events, get_note_tool, text_of};
 use serde_json::{Value, json};
 use testkit::{AnthropicMessage, AnthropicReply};
 
 fn request(prompt: &str) -> Request {
-    Request::new(Provider::Anthropic, "claude-opus-5", prompt)
+    Request::new("claude-opus-5", prompt)
 }
 
 fn assert_no_sampling(body: &Value) {
@@ -33,7 +32,7 @@ async fn streams_text_with_the_pinned_version() {
     let http = ai::client();
     let mut req = request("hi");
     req.system = Some("Be brief.".to_owned());
-    let mut s = ai::stream(&http, &env.cred(Provider::Anthropic), &req)
+    let mut s = ai::stream(&http, &env.cred(Kind::Anthropic), &req)
         .await
         .unwrap();
     let (evs, err) = events(&mut s).await;
@@ -86,7 +85,7 @@ async fn a_tool_call_arrives_whole_from_several_json_chunks() {
     let mut req = request("what about the roof?");
     req.tools = vec![get_note_tool()];
     let http = ai::client();
-    let mut s = ai::stream(&http, &env.cred(Provider::Anthropic), &req)
+    let mut s = ai::stream(&http, &env.cred(Kind::Anthropic), &req)
         .await
         .unwrap();
     let (evs, err) = events(&mut s).await;
@@ -134,7 +133,7 @@ async fn bad_tool_inputs_are_flagged_not_run() {
     );
     let mut req = request("go");
     req.tools = vec![get_note_tool()];
-    let reply = ai::complete(&ai::client(), &env.cred(Provider::Anthropic), &req)
+    let reply = ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &req)
         .await
         .unwrap();
     assert_eq!(reply.stop, Stop::ToolUse);
@@ -165,7 +164,7 @@ async fn no_tool_runs_on_a_turn_cut_off_by_max_tokens() {
     );
     let mut req = request("go");
     req.tools = vec![get_note_tool()];
-    let mut s = ai::stream(&ai::client(), &env.cred(Provider::Anthropic), &req)
+    let mut s = ai::stream(&ai::client(), &env.cred(Kind::Anthropic), &req)
         .await
         .unwrap();
     let (evs, err) = events(&mut s).await;
@@ -195,7 +194,7 @@ async fn a_schema_constrains_the_reply_and_effort_turns_on_adaptive_thinking() {
     let mut req = request("summarise");
     req.schema = Some(schema.clone());
     req.effort = Some(Effort::High);
-    let reply = ai::complete(&ai::client(), &env.cred(Provider::Anthropic), &req)
+    let reply = ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &req)
         .await
         .unwrap();
     assert_eq!(reply.json, Some(json!({"title": "Roof", "done": true})));
@@ -210,7 +209,7 @@ async fn a_schema_constrains_the_reply_and_effort_turns_on_adaptive_thinking() {
     // A reply that breaks the schema is an invalid error.
     env.anthropic
         .push(AnthropicMessage::text(r#"{"title": 3}"#));
-    let e = ai::complete(&ai::client(), &env.cred(Provider::Anthropic), &req)
+    let e = ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &req)
         .await
         .unwrap_err();
     assert_eq!(e.kind, ErrorKind::Invalid, "{e}");
@@ -226,7 +225,7 @@ fn a_blocking_call_is_answered_whole() {
     req.tools = vec![get_note_tool()];
     let reply = ai::complete_blocking(
         &ai::blocking_client(),
-        &env.cred(Provider::Anthropic),
+        &env.cred(Kind::Anthropic),
         &req,
         None,
     )
@@ -257,7 +256,7 @@ async fn a_refusal_ends_the_stream_and_is_an_error_when_collected() {
     };
     env.anthropic.push(refusal());
     let req = request("do the thing");
-    let mut s = ai::stream(&ai::client(), &env.cred(Provider::Anthropic), &req)
+    let mut s = ai::stream(&ai::client(), &env.cred(Kind::Anthropic), &req)
         .await
         .unwrap();
     let (evs, err) = events(&mut s).await;
@@ -275,20 +274,19 @@ async fn a_refusal_ends_the_stream_and_is_an_error_when_collected() {
     );
 
     env.anthropic.push(refusal());
-    let result = ai::complete(&ai::client(), &env.cred(Provider::Anthropic), &req).await;
+    let result = ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &req).await;
     let e = result.as_ref().unwrap_err();
     assert_eq!(e.kind, ErrorKind::Refusal);
     assert_eq!(e.category.as_deref(), Some("cyber"));
-    assert_eq!(e.provider, Some(Provider::Anthropic));
+    assert_eq!(e.account.as_deref(), Some("Anthropic"));
     assert_eq!(e.model.as_deref(), Some("claude-opus-5"));
     assert!(e.message.contains("cyber"), "{}", e.message);
     assert_eq!(Outcome::of(&result), Outcome::Refused);
     let line = ai::trail_for(
-        Provider::Anthropic,
+        &env.cred(Kind::Anthropic),
         &req.model,
         &result,
         Duration::from_millis(5),
-        None,
     );
     assert!(line.contains("outcome=refused"), "{line}");
     assert_eq!(
@@ -304,13 +302,9 @@ async fn a_429_is_retried_after_retry_after() {
     env.anthropic.push(AnthropicReply::rate_limited(1));
     env.anthropic.push(AnthropicMessage::text("Fine now"));
     let began = std::time::Instant::now();
-    let reply = ai::complete(
-        &ai::client(),
-        &env.cred(Provider::Anthropic),
-        &request("hi"),
-    )
-    .await
-    .unwrap();
+    let reply = ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &request("hi"))
+        .await
+        .unwrap();
     assert_eq!(reply.text, "Fine now");
     assert!(
         began.elapsed() >= Duration::from_millis(900),
@@ -330,13 +324,9 @@ async fn retries_stop_after_two() {
     for _ in 0..3 {
         env.anthropic.push(AnthropicReply::rate_limited(0));
     }
-    let e = ai::complete(
-        &ai::client(),
-        &env.cred(Provider::Anthropic),
-        &request("hi"),
-    )
-    .await
-    .unwrap_err();
+    let e = ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &request("hi"))
+        .await
+        .unwrap_err();
     assert_eq!(e.kind, ErrorKind::RateLimit);
     assert_eq!(e.status, Some(429));
     assert_eq!(env.anthropic.message_requests().len(), 3);
@@ -350,13 +340,9 @@ async fn a_stream_broken_off_is_an_error_and_not_retried() {
             .chunk(2)
             .cut_after(5),
     );
-    let mut s = ai::stream(
-        &ai::client(),
-        &env.cred(Provider::Anthropic),
-        &request("hi"),
-    )
-    .await
-    .unwrap();
+    let mut s = ai::stream(&ai::client(), &env.cred(Kind::Anthropic), &request("hi"))
+        .await
+        .unwrap();
     let (evs, err) = events(&mut s).await;
     let e = err.expect("an error");
     assert_eq!(e.kind, ErrorKind::Provider, "{e}");
@@ -370,13 +356,9 @@ async fn a_stream_broken_off_is_an_error_and_not_retried() {
             "overloaded_error",
             "Overloaded",
         ));
-    let e = ai::complete(
-        &ai::client(),
-        &env.cred(Provider::Anthropic),
-        &request("hi"),
-    )
-    .await
-    .unwrap_err();
+    let e = ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &request("hi"))
+        .await
+        .unwrap_err();
     assert_eq!(e.kind, ErrorKind::Unavailable, "{e}");
     assert_eq!(env.anthropic.message_requests().len(), 2);
 }
@@ -390,11 +372,12 @@ async fn thinking_is_replayed_to_the_same_model_only() {
             .with_text("You chose slate."),
     );
     let http = ai::client();
-    let cred = env.cred(Provider::Anthropic);
+    let cred = env.cred(Kind::Anthropic);
     let first = request("roof?");
     let reply = ai::complete(&http, &cred, &first).await.unwrap();
     let state: ProviderState = reply.provider_state.clone().expect("provider state");
-    assert_eq!(state.provider, Provider::Anthropic);
+    assert_eq!(state.wire, ai::Wire::Messages);
+    assert_eq!(state.account, cred.account);
     assert_eq!(state.model, "claude-opus-5");
     let assistant = reply.message();
     assert_eq!(assistant.role, Role::Assistant);
@@ -415,7 +398,7 @@ async fn thinking_is_replayed_to_the_same_model_only() {
         ])
     );
 
-    let mut other = Request::new(Provider::Anthropic, "claude-sonnet-5", "");
+    let mut other = Request::new("claude-sonnet-5", "");
     other.messages = history;
     ai::complete(&http, &cred, &other).await.unwrap();
     let body = env.anthropic.message_requests()[2].json();
@@ -454,7 +437,7 @@ async fn tool_results_go_first_in_the_user_turn() {
             },
         ]),
     ];
-    ai::complete(&ai::client(), &env.cred(Provider::Anthropic), &req)
+    ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &req)
         .await
         .unwrap();
     let body = env.anthropic.message_requests()[0].json();
@@ -476,7 +459,7 @@ async fn models_are_listed_across_pages() {
     let env = Env::new();
     let fake = testkit::FakeAnthropic::builder().page_size(1).start();
     let cred = ai::Credential::new(
-        Provider::Anthropic,
+        Kind::Anthropic,
         fake.base_url(),
         ai::Secret::new(fake.api_key()),
     );
@@ -489,7 +472,7 @@ async fn models_are_listed_across_pages() {
     assert_eq!(models[0].display_name.as_deref(), Some("Claude Opus 5"));
     assert_eq!(fake.requests().len(), 3, "one request per page");
     assert_eq!(
-        ai::preselect(Provider::Anthropic, &models).map(|m| m.id.as_str()),
+        ai::preselect(Kind::Anthropic, &models).map(|m| m.id.as_str()),
         Some("claude-opus-5")
     );
     drop(env);
@@ -499,8 +482,7 @@ async fn models_are_listed_across_pages() {
 fn models_are_listed_blocking_too() {
     let env = Env::new();
     let models =
-        ai::list_models_blocking(&ai::blocking_client(), &env.cred(Provider::Anthropic), None)
-            .unwrap();
+        ai::list_models_blocking(&ai::blocking_client(), &env.cred(Kind::Anthropic), None).unwrap();
     assert_eq!(models.len(), 3);
 }
 
@@ -508,7 +490,7 @@ fn models_are_listed_blocking_too() {
 async fn a_wrong_key_is_an_auth_error_without_the_key() {
     let env = Env::new();
     let cred = ai::Credential::new(
-        Provider::Anthropic,
+        Kind::Anthropic,
         env.anthropic.base_url(),
         ai::Secret::new("sk-ant-wrong-key-9876543210"),
     );

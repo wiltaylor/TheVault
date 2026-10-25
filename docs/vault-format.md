@@ -2392,8 +2392,9 @@ write_paths   = ["/srv/exports"]
 | `description` | string | none | Help text |
 | `icon` | icon name | none | An icon from the type icon set, such as `"bot"` |
 | `enabled` | bool | `true` | `false` keeps the file but runs no trigger and refuses new turns |
-| `provider` | `anthropic`, `openai` or `chatgpt` | the Settings > AI default | The AI provider |
-| `model` | string | the provider's default model | The model id. Not blank |
+| `account` | string | the default account of Settings > AI | The name of the AI account the agent runs on (accounts A6). Not blank. Nothing checks it when the file is saved: the accounts live in the server's secrets, not in the vault. A name no account has runs on the default account |
+| `provider` | `anthropic`, `openai` or `chatgpt` | none | From before AI accounts: read only when `account` is absent, as the account the home server made for that provider. The server never writes it, and rewrites a file holding it to `account` on start |
+| `model` | string | the account's default model | The model id. Not blank |
 | `effort` | `low`, `medium`, `high`, `xhigh` or `max` | the provider's default | How hard the model thinks |
 | `system_prompt` | string | the shipped chat prompt | At most 32000 characters. Not blank |
 | `permissions { ... }` | block | everything allowed | At most one. See below |
@@ -2428,7 +2429,7 @@ A call is a link in a note's inline markup whose URL is `agent:<name>?call=<id>`
 label         = "Inbox triage"
 description   = "Files new email."
 icon          = "bot"
-provider      = "anthropic"
+account       = "Anthropic"
 effort        = "medium"
 system_prompt = "You file email into the right projects. Be brief."
 
@@ -2467,9 +2468,11 @@ trigger asked {
 
 How triggers run, what an unattended run may do, and their limits are in [AI agents in the vault](ai-agents.md#triggers).
 
-The vault ships one agent, `agents/assistant.wcl`, labelled "Assistant": the chat panel's default (agents G6). It names no provider, model or system prompt, so it follows Settings > AI, and it allows every tool and type and has no triggers. It can be edited like any agent, but it cannot be deleted, and `enabled = false` is refused for it. A server that does not find it writes it on start, as it does the other shipped files (see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades)).
+The vault ships one agent, `agents/assistant.wcl`, labelled "Assistant": the chat panel's default (agents G6). It names no account, model or system prompt, so it runs on the default account of Settings > AI, and it allows every tool and type and has no triggers. It can be edited like any agent, but it cannot be deleted, and `enabled = false` is refused for it. A server that does not find it writes it on start, as it does the other shipped files (see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades)).
 
 Agent files raised the format version to 2 (D27): an app from before them cannot sync the `agents/` folder, so it stops syncing and asks to be updated.
+
+`account` raised the format version to 5 (accounts A10): an app from before AI accounts refuses an agent file holding it, since its `provider` is a closed list of three and `account` an unknown item, so it stops syncing and asks to be updated. Publish the new app builds with the server (see [Releasing a format change](android-release.md#releasing-a-format-change)). On every start, the home server rewrites an agent file that names a `provider` to name the account the migration made for it, `account = "<name>"`, in one commit authored `task server`; a provider no account was made for is left as it is. A device's local vault leaves the file to the home server.
 
 ## Skills
 

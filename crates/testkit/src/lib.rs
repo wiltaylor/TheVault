@@ -1,9 +1,9 @@
 //! Seam S1: start `vault-server` on a fresh temporary vault and a random port. Seam S7's local
 //! stand-in HTTP server is [`StandIn`], and the fake Google APIs the Google sync calls are
 //! [`FakeGoogle`]. The AI providers' fakes are [`FakeAnthropic`], [`FakeOpenAi`] (API key and
-//! ChatGPT plan) and [`FakeSiwc`] (the Sign in with ChatGPT server); point
-//! `ai_settings.endpoints` `anthropic`, `openai` (and `chatgpt` for the plan) and `chatgpt_auth`
-//! at their `base_url()`s. [`FakeBrave`] is the Brave Search API; point `brave_settings.endpoint`
+//! ChatGPT plan) and [`FakeSiwc`] (the Sign in with ChatGPT server); [`AiSeed`] makes the
+//! secrets of AI accounts at them ([`TestAccount`], accounts A12), and the sign-in server goes in
+//! `ai_settings.endpoints.chatgpt_auth`. [`FakeBrave`] is the Brave Search API; point `brave_settings.endpoint`
 //! at its `base_url()`. [`FakeWeb`] is the web the chat's `fetch_url` and `download_asset` read;
 //! it runs on a loopback address, so tests set `ai_settings.fetch_private`. [`FakeNoVnc`] is the
 //! browser box's noVNC and health, for the `/browser/` proxy; point `VAULT_BROWSER_URL` and
@@ -29,6 +29,7 @@
 //!
 //! A server gets 120 seconds to start. Set `TESTKIT_START_TIMEOUT_SECS` to change that.
 
+mod ai_seed;
 pub mod fake_anthropic;
 pub mod fake_brave;
 pub mod fake_browser;
@@ -41,6 +42,7 @@ pub mod fake_siwc;
 pub mod fake_web;
 mod standin;
 
+pub use ai_seed::{AiSeed, TestAccount, account_id};
 pub use fake_anthropic::{
     AnthropicMessage, AnthropicReply, DEFAULT_ANTHROPIC_KEY, FakeAnthropic, FakeAnthropicBuilder,
 };
