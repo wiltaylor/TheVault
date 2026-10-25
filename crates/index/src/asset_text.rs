@@ -133,7 +133,7 @@ pub(crate) fn extract_with(
     quiet_panics_on_extraction_threads();
     // Take a slot, or give up when every slot is taken.
     if RUNNING
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
             (n < MAX_RUNNING).then_some(n + 1)
         })
         .is_err()
