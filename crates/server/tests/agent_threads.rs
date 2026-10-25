@@ -1107,3 +1107,86 @@ fn compact_needs_a_thread_and_settings_refuse_a_window_out_of_range() {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 }
+
+#[test]
+fn a_thread_cut_back_to_a_question_drops_it_and_what_followed_and_a_fork_copies_what_came_before() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let (memo, version) = api.note("memo", "Groceries");
+    let thread = api.thread("assistant");
+    fake.push(AnthropicMessage::text("First answer."));
+    api.chat(
+        json!({ "agent": "assistant", "thread": thread, "messages": [user("First question")] }),
+    );
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_e",
+        "propose_edit",
+        json!({
+            "id": memo, "base_version": version,
+            "note": json!({ "fields": { "title": "Groceries for Sunday" } }).to_string(),
+        }),
+    ));
+    fake.push(AnthropicMessage::text("Proposed."));
+    api.chat(
+        json!({ "agent": "assistant", "thread": thread, "messages": [user("Second question")] }),
+    );
+    let t = api.read_thread("assistant", &thread);
+    // Q1, A1, Q2, the call, its result, the answer.
+    assert_eq!(t["messages"].as_array().unwrap().len(), 6);
+    assert_eq!(t["pending"], 1);
+
+    // Message 1 is an answer, and 4 a tool result: neither is a question.
+    for at in [1, 4, 9] {
+        let res = api.request_as(
+            &api.token(),
+            "POST",
+            &format!("/api/agents/assistant/threads/{thread}/truncate"),
+            Some(json!({ "at": at })),
+        );
+        assert_eq!(res.status(), StatusCode::CONFLICT, "at {at}");
+    }
+
+    // Forked at the second question: a new thread with the first exchange; the old one keeps all.
+    let forked = api.send(
+        "POST",
+        &format!("/api/agents/assistant/threads/{thread}/fork"),
+        json!({ "at": 2 }),
+    );
+    let fork = forked["id"].as_str().unwrap().to_owned();
+    assert_ne!(fork, thread);
+    assert!(
+        forked["title"].as_str().unwrap().ends_with("(fork)"),
+        "{forked}"
+    );
+    assert_eq!(forked["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(forked["proposals"], json!([]));
+    assert_eq!(
+        api.read_thread("assistant", &thread)["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        6
+    );
+
+    // Cut back to the second question: it and its proposal are gone.
+    let cut = api.send(
+        "POST",
+        &format!("/api/agents/assistant/threads/{thread}/truncate"),
+        json!({ "at": 2 }),
+    );
+    assert_eq!(cut["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(cut["proposals"], json!([]));
+    assert_eq!(cut["pending"], 0);
+
+    // The next turn sends only what is left.
+    fake.clear_requests();
+    fake.push(AnthropicMessage::text("Again."));
+    api.chat(json!({ "agent": "assistant", "thread": thread, "messages": [user("Second question, put better")] }));
+    let sent = fake.message_requests()[0].json();
+    let texts = sent_texts(&sent);
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    assert!(
+        texts[2].ends_with("Second question, put better"),
+        "{texts:?}"
+    );
+}

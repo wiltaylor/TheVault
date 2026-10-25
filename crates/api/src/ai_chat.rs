@@ -87,7 +87,7 @@ use crate::events::HEARTBEAT;
 use crate::{ApiError, agent_memory, ai_assets};
 
 /// The most model calls one user turn makes (ai D14).
-pub const MAX_ROUNDS: usize = 12;
+pub const MAX_ROUNDS: usize = 50;
 
 /// The most rows `search_notes` returns.
 pub const SEARCH_LIMIT: usize = 20;
@@ -283,7 +283,7 @@ fn change_switch(name: &str) -> Option<&'static str> {
         | "propose_skill_file_change"
         | "propose_skill_file_delete"
         | "propose_skill_delete" => "skills",
-        "download_asset" | "browser_save" => "downloads",
+        "download_asset" | "browser_save" | "browser_capture" => "downloads",
         _ => return None,
     })
 }
@@ -596,7 +596,12 @@ fn prepare(
         .rev()
         .flat_map(|m| m.content.iter())
         .find_map(|c| match c {
-            Content::Text { text } if !agent_threads::is_outcome_lines(text) => Some(text.clone()),
+            Content::Text { text }
+                if !agent_threads::is_outcome_lines(text)
+                    && !agent_threads::is_attachments(text) =>
+            {
+                Some(text.clone())
+            }
             _ => None,
         })
         .unwrap_or_default();
@@ -1708,7 +1713,7 @@ impl Turn {
         }
     }
 
-    /// `browser_run`, `browser_file` or `browser_save`, with the turn's image count (browser B5).
+    /// `browser_run`, `browser_file`, `browser_save` or `browser_capture`, with the turn's image count (browser B5).
     async fn browser_tool(
         &self,
         call: &ToolCall,
@@ -1718,6 +1723,11 @@ impl Turn {
     ) -> crate::ai_browser::BrowserOut {
         match call.name.as_str() {
             "browser_run" => crate::ai_browser::run(b, &call.input).await,
+            "browser_capture" => {
+                let direct = setup.direct.downloads;
+                crate::ai_browser::capture(self.writer.clone(), b, direct, &call.id, &call.input)
+                    .await
+            }
             "browser_file" => {
                 let may_send = images_sent < ai_assets::IMAGE_LIMIT;
                 crate::ai_browser::file(b, &call.id, &call.input, may_send, &self.images).await

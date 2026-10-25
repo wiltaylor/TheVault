@@ -309,6 +309,11 @@ fn build() -> Built {
         .get("/api/agents/{name}/threads/{id}", agent_threads::read)
         .patch("/api/agents/{name}/threads/{id}", agent_threads::rename)
         .delete("/api/agents/{name}/threads/{id}", agent_threads::delete)
+        .post(
+            "/api/agents/{name}/threads/{id}/truncate",
+            agent_threads::truncate,
+        )
+        .post("/api/agents/{name}/threads/{id}/fork", agent_threads::fork)
         .get("/api/agents/{name}/memories", agent_memory::list)
         .post("/api/agents/{name}/memories", agent_memory::create_route)
         .patch(

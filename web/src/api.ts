@@ -1650,6 +1650,12 @@ export const api = {
     request<AgentThread>("POST", `/api/agents/${enc(name)}/threads`, title ? { title } : {}),
   /** One thread with its transcript, its tool steps and its proposals (agents G8). */
   agentThread: (name: string, id: string) => request<AgentThread>("GET", `/api/agents/${enc(name)}/threads/${enc(id)}`),
+  /** Cut a thread back to its first `at` messages, dropping the question at `at` and all after it. */
+  agentThreadTruncate: (name: string, id: string, at: number) =>
+    request<AgentThread>("POST", `/api/agents/${enc(name)}/threads/${enc(id)}/truncate`, { at }),
+  /** A new thread holding the first `at` messages of thread `id`, which is left as it is. */
+  agentThreadFork: (name: string, id: string, at: number) =>
+    request<AgentThread>("POST", `/api/agents/${enc(name)}/threads/${enc(id)}/fork`, { at }),
   /** Rename a thread. */
   renameAgentThread: (name: string, id: string, title: string) =>
     request<AgentThread>("PATCH", `/api/agents/${enc(name)}/threads/${enc(id)}`, { title }),

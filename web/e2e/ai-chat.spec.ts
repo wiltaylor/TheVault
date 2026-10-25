@@ -509,7 +509,8 @@ test("the agent screen's session picker searches the chats, and Archive and Dele
   expect((await admin.delete(`/api/agents/${name}`)).ok()).toBe(true);
 });
 
-test("the chat shows how full the context is, and /compact summarizes the thread for the model", async ({ page }) => {
+test("the chat shows how full the context is, and /compact summarizes the thread for the model", async ({ page, admin }) => {
+  await useFake(admin);
   const title = `Context ${Date.now().toString(36)}`;
   await logIn(page, "/agents/assistant");
   const box = page.getByRole("textbox", { name: "Ask AI" });
@@ -540,4 +541,214 @@ test("the chat shows how full the context is, and /compact summarizes the thread
   await expect(page.getByText(`${title}: a long answer.`)).toBeVisible();
   await expect(page.getByTestId("compaction")).toBeVisible();
   await expect(page.getByTestId("context-meter")).toContainText("300 / 200k");
+});
+
+/** Point the server at this file's fake Anthropic. */
+async function useFake(admin: import("@playwright/test").APIRequestContext) {
+  for (const [name, value] of [
+    ["ai_anthropic_api_key", fake.api_key],
+    ["ai_settings", JSON.stringify({ default_provider: "anthropic", models: { anthropic: "claude-opus-5" }, endpoints: { anthropic: fake.base_url } })],
+  ]) {
+    const res = await admin.put(`/api/secrets/${name}`, { data: { value } });
+    expect(res.ok(), await res.text()).toBe(true);
+  }
+}
+
+/** Where the conversation's messages and its box sit: the box stays in view under the messages, which scroll on their own. */
+async function layoutOf(root: import("@playwright/test").Locator) {
+  return root.evaluate((el) => {
+    const scroll = el.querySelector<HTMLElement>("[data-testid=ai-scroll]")!;
+    const form = el.querySelector<HTMLElement>(".ai-form")!;
+    const turns = scroll.querySelectorAll(".ai-turn");
+    const last = turns[turns.length - 1]!.getBoundingClientRect();
+    const box = form.getBoundingClientRect();
+    const area = scroll.getBoundingClientRect();
+    return {
+      scrolls: scroll.scrollHeight > scroll.clientHeight + 1,
+      atEnd: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 2,
+      areaEnd: area.bottom,
+      boxTop: box.top,
+      boxBottom: box.bottom,
+      lastBottom: last.bottom,
+      viewport: window.innerHeight,
+    };
+  });
+}
+
+for (const where of ["agent screen", "side panel"] as const) {
+  test(`in the ${where}, a long conversation scrolls above the message box and never under it`, async ({ page, admin }) => {
+    await useFake(admin);
+    const tag = Date.now().toString(36);
+    const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer ${tag}.`).join("\n\n");
+    await tell(`push ${JSON.stringify({ text: long })}`);
+    let root;
+    if (where === "agent screen") {
+      await logIn(page, "/agents/assistant");
+      root = page.locator(".agent-chat");
+    } else {
+      const res = await admin.post("/api/notes?type=note", { data: { note: shopping(`Layout ${tag}`, ["Milk"]) } });
+      expect(res.status(), await res.text()).toBe(201);
+      await logIn(page, `/notes/${((await res.json()) as { id: string }).id}`);
+      await page.keyboard.press("Control+Shift+L");
+      root = page.getByRole("complementary", { name: "AI" });
+    }
+    const box = root.getByRole("textbox", { name: "Ask AI" });
+    await box.fill(`Write a lot ${tag}`);
+    await box.press("Enter");
+    await expect(root.getByText(`Line 60 of a long answer ${tag}.`)).toBeAttached();
+    await expect.poll(async () => (await layoutOf(root)).atEnd).toBe(true);
+    const l = await layoutOf(root);
+    expect(l.scrolls, "the messages scroll on their own").toBe(true);
+    expect(l.boxBottom, "the box is in view").toBeLessThanOrEqual(l.viewport + 1);
+    expect(l.areaEnd, "the messages end where the box starts").toBeLessThanOrEqual(l.boxTop + 1);
+    expect(l.lastBottom, "the last message is above the box").toBeLessThanOrEqual(l.boxTop + 1);
+  });
+}
+
+test("pasted and picked files are uploaded as assets and named to the model by their ids", async ({ page, admin }) => {
+  await useFake(admin);
+  const tag = Date.now().toString(36);
+  await logIn(page, "/agents/assistant");
+  const box = page.getByRole("textbox", { name: "Ask AI" });
+  // A pasted screenshot arrives as image.png.
+  await box.evaluate((el) => {
+    const data = new DataTransfer();
+    data.items.add(new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "image.png", { type: "image/png" }));
+    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await page.locator(".ai-form input[type=file]").setInputFiles({ name: `notes-${tag}.txt`, mimeType: "text/plain", buffer: Buffer.from("hello") });
+  const chips = page.getByRole("list", { name: "Attached files" }).first();
+  await expect(chips.getByRole("listitem")).toHaveCount(2);
+  await expect(chips).toContainText(/pasted-.*\.png/);
+  await expect(chips).toContainText(`notes-${tag}.txt`);
+  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
+
+  await tell(`push ${JSON.stringify({ text: `Got your files ${tag}.` })}`);
+  const before = (await tell("requests")).count as number;
+  await box.fill(`Here are files ${tag}`);
+  await box.press("Enter");
+  await expect(page.getByText(`Got your files ${tag}.`)).toBeVisible();
+  expect((await tell("requests")).count).toBe(before + 1);
+  // The sent message shows its files, linked to the assets the vault now holds.
+  const sent = page.locator(".ai-sent-attachments").last();
+  await expect(sent.getByRole("link", { name: `notes-${tag}.txt` })).toHaveAttribute("href", /^\/assets\/[0-9A-Z]+$/);
+  const assets = (await (await admin.get("/api/assets")).json()) as { assets: { id: string; filename: string }[] };
+  const txt = assets.assets.find((a) => a.filename === `notes-${tag}.txt`);
+  expect(txt).toBeTruthy();
+  expect(assets.assets.some((a) => /^pasted-.*\.png$/.test(a.filename))).toBe(true);
+  // The message the model reads names each file by its asset id and says how to use it.
+  const threads = (await (await admin.get("/api/agents/assistant/threads")).json()) as { threads: { id: string; title: string }[] };
+  // Titled by the question, not the list of files.
+  const thread = threads.threads.find((t) => t.title === `Here are files ${tag}`)!;
+  const read = (await (await admin.get(`/api/agents/assistant/threads/${thread.id}`)).json()) as { messages: { content: { text?: string }[] }[] };
+  const said = read.messages[0]!.content.map((c) => c.text ?? "").join("\n");
+  expect(said).toContain("read_asset");
+  expect(said).toContain(`- notes-${tag}.txt (asset ${txt!.id}, 5 bytes)`);
+  // Reopened, the thread still shows them.
+  await page.reload();
+  await expect(page.locator(".ai-sent-attachments").last().getByRole("link", { name: `notes-${tag}.txt` })).toBeVisible();
+});
+
+test("the conversation follows new text at the end, stops when scrolled up, and follows again at the end", async ({ page, admin }) => {
+  await useFake(admin);
+  const tag = Date.now().toString(36);
+  const long = Array.from({ length: 60 }, (_, i) => `Row ${i + 1} ${tag}.`).join("\n\n");
+  await tell(`push ${JSON.stringify({ text: long })}`);
+  await logIn(page, "/agents/assistant");
+  const box = page.getByRole("textbox", { name: "Ask AI" });
+  await box.fill(`Follow ${tag}`);
+  await box.press("Enter");
+  const scroll = page.locator(".agent-chat [data-testid=ai-scroll]");
+  await expect(page.getByText(`Row 60 ${tag}.`)).toBeAttached();
+  const atEnd = () => scroll.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight <= 4);
+  await expect.poll(atEnd).toBe(true);
+  const grow = () =>
+    scroll.evaluate((el) => {
+      const li = document.createElement("li");
+      li.style.height = "300px";
+      el.querySelector("ol")!.appendChild(li);
+    });
+
+  // Scrolled up a little, growth leaves the view where it is.
+  await scroll.evaluate((el) => (el.scrollTop -= 40));
+  const top = await scroll.evaluate((el) => el.scrollTop);
+  await grow();
+  await page.waitForTimeout(200);
+  expect(await scroll.evaluate((el) => el.scrollTop)).toBe(top);
+  expect(await atEnd()).toBe(false);
+
+  // Back at the end, it follows again.
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await grow();
+  await expect.poll(atEnd).toBe(true);
+});
+
+test("messages sent while an answer runs are queued, Edit takes them back, and the queue goes once the answer ends", async ({ page, admin }) => {
+  await useFake(admin);
+  const tag = Date.now().toString(36);
+  await tell(`push ${JSON.stringify({ text: `Slow answer ${tag}.`, delay_ms: 400 })}`);
+  await tell(`push ${JSON.stringify({ text: `Answer to the queue ${tag}.` })}`);
+  await logIn(page, "/agents/assistant");
+  const box = page.getByRole("textbox", { name: "Ask AI" });
+  await box.fill(`First ${tag}`);
+  await box.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await box.fill(`Second ${tag}`);
+  await box.press("Enter");
+  await box.fill(`Third ${tag}`);
+  await box.press("Enter");
+  const queue = page.getByRole("region", { name: "Queued messages" });
+  await expect(queue.getByRole("listitem")).toHaveText([`Second ${tag}`, `Third ${tag}`]);
+  // Edit brings them all back into the box and empties the queue.
+  await queue.getByRole("button", { name: "Edit" }).click();
+  await expect(queue).toHaveCount(0);
+  await expect(box).toHaveValue(`Second ${tag}\n\nThird ${tag}`);
+  await box.press("Enter");
+  await expect(page.getByRole("region", { name: "Queued messages" }).getByRole("listitem")).toHaveCount(1);
+  // The answer ends, and the queue goes as one message.
+  await expect(page.getByText(`Answer to the queue ${tag}.`)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("region", { name: "Queued messages" })).toHaveCount(0);
+  await expect(page.locator(".ai-question").last()).toHaveText(`Second ${tag}\n\nThird ${tag}`);
+});
+
+test("Edit cuts the chat back to a question for the box, and Fork opens a new chat with what came before", async ({ page, admin }) => {
+  await useFake(admin);
+  const tag = Date.now().toString(36);
+  await tell(`push ${JSON.stringify({ text: `A1 ${tag}` })}`);
+  await tell(`push ${JSON.stringify({ text: `A2 ${tag}` })}`);
+  await logIn(page, "/agents/assistant");
+  const box = page.getByRole("textbox", { name: "Ask AI" });
+  await box.fill(`Q1 ${tag}`);
+  await box.press("Enter");
+  await expect(page.getByText(`A1 ${tag}`)).toBeVisible();
+  await box.fill(`Q2 ${tag}`);
+  await box.press("Enter");
+  await expect(page.getByText(`A2 ${tag}`)).toBeVisible();
+  const original = new URL(page.url()).searchParams.get("thread");
+  expect(original).toBeTruthy();
+
+  // Fork at Q2: a new chat holding Q1 and A1, with Q2 in the box; the original keeps all four.
+  const q2 = page.locator(".ai-turn-user").filter({ hasText: `Q2 ${tag}` });
+  await q2.hover();
+  await q2.getByRole("button", { name: "Fork from this message" }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("thread")).not.toBe(original);
+  await expect(box).toHaveValue(`Q2 ${tag}`);
+  await expect(page.getByText(`A1 ${tag}`)).toBeVisible();
+  await expect(page.getByText(`A2 ${tag}`)).toHaveCount(0);
+  const kept = (await (await admin.get(`/api/agents/assistant/threads/${original}`)).json()) as { messages: unknown[] };
+  expect(kept.messages).toHaveLength(4);
+
+  // Back in the original, Edit Q2: it and A2 go, and Q2 is in the box.
+  await box.fill("");
+  await page.goto(`/agents/assistant?thread=${original}`);
+  await expect(page.getByText(`A2 ${tag}`)).toBeVisible();
+  page.once("dialog", (d) => void d.accept());
+  const again = page.locator(".ai-turn-user").filter({ hasText: `Q2 ${tag}` });
+  await again.hover();
+  await again.getByRole("button", { name: "Edit this message" }).click();
+  await expect(page.getByText(`A2 ${tag}`)).toHaveCount(0);
+  await expect(page.getByText(`A1 ${tag}`)).toBeVisible();
+  await expect(box).toHaveValue(`Q2 ${tag}`);
+  const cut = (await (await admin.get(`/api/agents/assistant/threads/${original}`)).json()) as { messages: unknown[] };
+  expect(cut.messages).toHaveLength(2);
 });

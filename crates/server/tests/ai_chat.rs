@@ -604,12 +604,14 @@ fn a_refusal_ends_the_stream_with_the_model_and_category() {
 }
 
 #[test]
-fn the_thirteenth_tool_round_is_not_sent() {
+fn the_fifty_first_tool_round_is_not_sent() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     api.anthropic(&fake);
     api.memo("Anything", "Text");
-    for n in 0..13 {
+    // The rounds one question may take (`MAX_ROUNDS` in api's ai_chat).
+    let rounds = 50;
+    for n in 0..=rounds {
         fake.push(AnthropicMessage::new().tool_use(
             &format!("toolu_{n}"),
             "search_notes",
@@ -617,14 +619,14 @@ fn the_thirteenth_tool_round_is_not_sent() {
         ));
     }
     let events = api.chat(json!([user("Keep looking.")]));
-    assert_eq!(fake.message_requests().len(), 12);
+    assert_eq!(fake.message_requests().len(), rounds);
     let tools = events.iter().filter(|(n, _)| n == "tool").count();
-    assert_eq!(tools, 11, "the twelfth round's calls are not run");
+    assert_eq!(tools, rounds - 1, "the last round's calls are not run");
     let (name, done) = events.last().unwrap();
     assert_eq!(name, "done");
     let added = done["messages"].as_array().unwrap();
-    assert_eq!(added.len(), 24);
-    let tail = &added[23]["content"];
+    assert_eq!(added.len(), rounds * 2);
+    let tail = &added[rounds * 2 - 1]["content"];
     assert_eq!(tail[0]["type"], "tool_result");
     assert_eq!(tail[0]["is_error"], true);
     assert_eq!(tail[1]["kind"], "round_limit");

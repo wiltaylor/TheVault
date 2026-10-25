@@ -106,7 +106,20 @@ impl BrowserRun {
 struct Shared {
     runs: Mutex<VecDeque<BrowserRun>>,
     files: Mutex<BTreeMap<String, (String, Vec<u8>)>>,
+    /// What the next command that writes a file (`--filename=` or `curl -o`) leaves there.
+    capture: Mutex<Option<(String, Vec<u8>)>>,
     requests: Mutex<Vec<Request>>,
+}
+
+/// The file a command writes, as `browser_capture` quotes it: `--filename='<path>'` or
+/// `-o '<path>'`.
+fn written(command: &str) -> Option<String> {
+    for mark in ["--filename='", "-o '"] {
+        if let Some(rest) = command.split(mark).nth(1) {
+            return rest.split('\'').next().map(str::to_owned);
+        }
+    }
+    None
 }
 
 /// A running fake browser box. Dropping it stops it.
@@ -148,6 +161,12 @@ impl FakeBrowser {
     /// Hold a file at `path` (relative paths are under `/work`) for `/file` and `/files`.
     pub fn file(&self, path: &str, media_type: &str, bytes: Vec<u8>) {
         lock(&self.shared.files).insert(absolute(path), (media_type.to_owned(), bytes));
+    }
+
+    /// Leave `bytes` at the path the next command that writes a file names, as a screenshot or a
+    /// download in the box would.
+    pub fn capture(&self, media_type: &str, bytes: Vec<u8>) {
+        *lock(&self.shared.capture) = Some((media_type.to_owned(), bytes));
     }
 
     /// Every request so far, in order.
@@ -209,6 +228,11 @@ fn answer(s: &Shared, r: &Request) -> Reply {
             let timeout = body["timeout_s"].as_u64().unwrap_or(60);
             if !(1..=300).contains(&timeout) {
                 return error(400, &format!("timeout_s must be 1 to 300, not {timeout}"));
+            }
+            if let Some(path) = written(&command)
+                && let Some(file) = lock(&s.capture).take()
+            {
+                lock(&s.files).insert(absolute(&path), file);
             }
             let next = lock(&s.runs).pop_front();
             match next.unwrap_or_else(|| BrowserRun::ok(&format!("ran: {command}"))) {

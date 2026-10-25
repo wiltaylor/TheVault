@@ -592,6 +592,16 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Move a thread to the trash",
     ),
     (
+        "POST",
+        "/api/agents/{name}/threads/{id}/truncate",
+        "Cut a thread back to its first {at} messages, so the question at at and all after it are gone: the thread; 409 not_a_question or thread_busy",
+    ),
+    (
+        "POST",
+        "/api/agents/{name}/threads/{id}/fork",
+        "A new thread holding the first {at} messages of this one, which stays as it is: 201 with the new thread; 409 not_a_question",
+    ),
+    (
         "GET",
         "/api/agents/{name}/memories",
         "The agent's memories, newest first, those whose title or text holds every word of ?query= when given: {memories: [{id, agent, title, text, version, created, updated}], held, limit}",

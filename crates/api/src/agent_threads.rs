@@ -22,6 +22,15 @@
 //! - `PATCH /api/agents/{name}/threads/{id}` (write) takes `{title}`: a rename, authored by the
 //!   caller.
 //! - `DELETE /api/agents/{name}/threads/{id}` (write): the note goes to the trash.
+//! - `POST /api/agents/{name}/threads/{id}/truncate` (write) takes `{at}`: the thread keeps its
+//!   first `at` messages, so the question at `at` and all after it are gone, for the user to ask
+//!   again. 409 `thread_busy` while a turn runs on it.
+//! - `POST /api/agents/{name}/threads/{id}/fork` (write) takes `{at}`: a new thread, 201, holding
+//!   the first `at` messages of this one, which is left as it is.
+//!
+//! For both, message `at` must be a question the user asked, else 409 `not_a_question`. Steps and
+//! proposals of the messages dropped go with them, a compaction that covered any of them goes too,
+//! and the context reading is forgotten until the next call.
 //!
 //! The chat routes take `agent` and `thread` (`crate::ai_chat`): the server reads the thread's
 //! transcript itself and writes each round to it as the turn streams. `POST /api/ai/apply` with
@@ -636,6 +645,15 @@ pub fn record_outcome(
 }
 
 /// A title from the user's first question: its first line, cut at [`TITLE_CHARS`].
+/// How the chat box names the files the user attached to a message, ahead of the question. A
+/// thread's title is never taken from it.
+pub const ATTACHED_PREFIX: &str = "[Files the user attached to this message";
+
+/// Whether `text` is the chat box's list of attached files.
+pub fn is_attachments(text: &str) -> bool {
+    text.starts_with(ATTACHED_PREFIX)
+}
+
 pub fn title_of(question: &str) -> Option<String> {
     let line = question.lines().map(str::trim).find(|l| !l.is_empty())?;
     let mut t: String = line.chars().take(TITLE_CHARS).collect();
@@ -975,6 +993,91 @@ pub async fn rename(
     })
     .await?;
     Ok(Json(t.json()))
+}
+
+/// Where a thread is cut: before message `at`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct At {
+    at: usize,
+}
+
+/// `t` with only its first `at` messages, and what goes with them. Message `at` must be a
+/// question the user asked: a user message that answers no tool call.
+fn cut(t: &Transcript, at: usize) -> Result<Transcript, ApiError> {
+    let question = t.messages.get(at).is_some_and(|m| {
+        m.role == Role::User
+            && !m
+                .content
+                .iter()
+                .any(|c| matches!(c, Content::ToolResult { .. }))
+    });
+    if !question {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "not_a_question",
+            format!("message {at} of the thread is not a question the user asked"),
+        ));
+    }
+    let messages = t.messages[..at].to_vec();
+    let calls: std::collections::HashSet<String> = messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|c| match c {
+            Content::ToolCall { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut out = t.clone();
+    out.messages = messages;
+    out.steps.retain(|id, _| calls.contains(id));
+    out.proposals.retain(|p| calls.contains(p.id()));
+    if out.compaction.as_ref().is_some_and(|c| c.upto > at) {
+        out.compaction = None;
+    }
+    out.context = None;
+    Ok(out)
+}
+
+/// `POST /api/agents/{name}/threads/{id}/truncate`: the thread back to before message `at`.
+pub async fn truncate(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path((name, id)): Path<(String, String)>,
+    Json(b): Json<At>,
+) -> Result<Json<Value>, ApiError> {
+    let t = blocking(w, move |w| {
+        let thread = Thread::read_of(w, &name, &id)?;
+        let _busy = Busy::take(&thread.id, &name)?;
+        let cut = cut(&thread.transcript, b.at)?;
+        let label = agent_label(w, &name);
+        save(w, &id, &label, Some(&author), move |t| {
+            t.transcript = cut.clone()
+        })
+    })
+    .await?;
+    Ok(Json(t.json()))
+}
+
+/// `POST /api/agents/{name}/threads/{id}/fork`: a new thread from this one's first `at` messages.
+pub async fn fork(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path((name, id)): Path<(String, String)>,
+    Json(b): Json<At>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let t = blocking(w, move |w| {
+        let thread = Thread::read_of(w, &name, &id)?;
+        let cut = cut(&thread.transcript, b.at)?;
+        let title = format!("{} (fork)", thread.title);
+        let made = create(w, &thread.agent, Some(&title), "user")?;
+        let label = agent_label(w, &name);
+        save(w, &made.id, &label, Some(&author), move |t| {
+            t.transcript = cut.clone()
+        })
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(t.json())))
 }
 
 /// `DELETE /api/agents/{name}/threads/{id}`: the note goes to the trash.

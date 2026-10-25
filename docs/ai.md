@@ -190,7 +190,7 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `fetch_url` | Reads a web page or file for the model; never a change. See [Read pages and download files](#read-pages-and-download-files) |
 | `download_asset` | Downloads a file of any size into the vault as an asset; stores it only when [confirmation is off](#changes-the-ai-makes) |
 
-A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 12 calls to the model; after that the panel says it stopped, and asking again goes on.
+A tool result over 100,000 characters is cut with a marker before it goes to the model. One question makes at most 50 calls to the model; after that the panel says it stopped, and asking again goes on.
 
 Stop ends the answer at once: the server stops calling the model when the panel goes away. New conversation forgets the conversation. Conversations live in the browser tab, or the app's window, only and are not saved in the vault.
 
@@ -232,9 +232,11 @@ To let the tools reach servers on your own network, set `"fetch_private": true` 
 
 ### The browser box
 
-An agent with **Browser automation** on its Permissions tab, on a server with the [browser box](install.md#browser-box), gets `browser_run`, `browser_file` and `browser_save`: it runs commands in the box, drives its browser with playwright-cli while you watch, reads screenshots and snapshots, and stores files as assets. The switch is off for every agent, the Assistant included. See [Driving the browser box](ai-agents.md#driving-the-browser-box) for the tools, the `browser:` log line and the risks.
+An agent with **Browser automation** on its Permissions tab, on a server with the [browser box](install.md#browser-box), gets `browser_run`, `browser_file`, `browser_save` and `browser_capture`: it runs commands in the box, drives its browser with playwright-cli while you watch, reads screenshots and snapshots, stores files as assets, and captures screenshots and images from the page straight into the vault. The switch is off for every agent, the Assistant included. See [Driving the browser box](ai-agents.md#driving-the-browser-box) for the tools, the `browser:` log line and the risks.
 
 ### Attachments
+
+Paste a file into the chat box, such as a screenshot, drop one on it, or pick one with 📎. Each is stored in the vault as an asset at once and shows as a chip above the box until you send; × takes it off the message, and the asset stays in the vault. A pasted image named `image.png` is stored as `pasted-<time>.png`. The message tells the model each file's name, asset id and size, so it reads one with `read_asset` and can put it in a note by its id, as an image block or in an asset field. The sent message shows its files, each linked to its asset. In an app the files reach the home server, which runs the AI, by sync: sending waits for the sync round, at most 20 seconds.
 
 The model reads a note's attached files with `read_asset`, by the asset ids `get_note` lists. What it gets depends on the file's media type, which comes from its file name:
 
@@ -317,6 +319,18 @@ The agent screen, at `/agents/<name>`, opens on the agent's chat. The bar at its
 The note tools leave threads out unless an agent's `permissions.types` names `agent_thread`, so an agent does not read chats back as vault content. A turn by an agent other than the Assistant authors its changes as that agent, and so does applying its proposal.
 
 An agent can also run on its own, on a schedule or when notes change, each run in a new thread. [AI agents in the vault](ai-agents.md) covers agent files, permissions, triggers, their limits and why an agent's changes never set off a trigger.
+
+### Queue, edit and fork
+
+- **Queue.** A message sent while an answer is still coming, by Enter or **Queue**, waits above the box with the others queued after it. When the answer ends they go together, as one message, in the order you queued them. **Edit** takes them all back into the box, out of the queue, and **Clear** drops them. Showing another chat drops the queue.
+- **Edit.** **Edit** under one of your messages, after you confirm, cuts the chat back to before it: that message and everything after it leave the thread, their pending proposals with them, and the message comes back into the box with its files, to change and send again.
+- **Fork.** **Fork** under one of your messages opens a new chat, titled `<title> (fork)`, holding everything above that message, with the message in the box. The chat you forked from stays as it was.
+
+Both cut at a question you asked, and wait while an answer is still coming. `POST /api/agents/<name>/threads/<id>/truncate` and `/fork` take `{ at }`, the message's index in the thread's `messages`; a message that is not a question answers 409 `not_a_question`, and a cut while a turn runs 409 `thread_busy`. A compaction that covered a message cut away goes with it.
+
+### Scrolling
+
+The messages scroll on their own above the message box, which stays put. At the end of the conversation the view follows the answer as it arrives; scroll up even a little and it stays where you left it, and scrolling back to the end, or sending, follows again.
 
 ### Context and compaction
 

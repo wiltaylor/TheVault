@@ -1,8 +1,13 @@
 /* The right sidebar's AI panel. */
 
-.ai-side {
+/* The conversation's messages scroll above the box, not the panel. Only a panel too short for
+   the conversation's least height, under a daily note's calendar on a small screen, scrolls as a
+   whole, so the box is never cut off. */
+.side-panel.ai-side {
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  padding-bottom: 0.5rem;
 }
 
 .ai-panel {
@@ -10,7 +15,26 @@
   flex: 1;
   flex-direction: column;
   gap: 0.5rem;
-  min-height: 100%;
+  min-height: 0;
+}
+
+/* A conversation: the messages, which scroll, then the message box, which never moves. */
+.ai-conversation {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 18rem;
+}
+
+.ai-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 0.5rem;
 }
 
 .ai-toolbar {
@@ -39,7 +63,7 @@
 
 .ai-turns {
   display: flex;
-  flex: 1;
+  flex: none;
   flex-direction: column;
   gap: 0.6rem;
   margin: 0;
@@ -383,12 +407,12 @@
 }
 
 .ai-form {
-  position: sticky;
-  bottom: 0;
   display: flex;
+  flex: none;
   flex-direction: column;
   gap: 0.35rem;
   padding-top: 0.4rem;
+  border-top: 1px solid var(--line);
   background: var(--panel);
 }
 
@@ -512,11 +536,12 @@
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .agent-thread-view {
-  min-height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 /* The session picker: the open chat's title, and under it a search box over the agent's chats. */
@@ -798,4 +823,100 @@
 
 .ai-compaction > summary {
   cursor: pointer;
+}
+
+/* Files attached to the message in the box, and to messages sent. */
+.ai-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-sent-attachments {
+  justify-content: flex-end;
+  margin-top: 0.3rem;
+}
+
+.ai-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.85em;
+}
+
+.ai-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14rem;
+}
+
+.ai-attachment-failed {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.ai-attach {
+  margin-right: auto;
+  border: none;
+  background: transparent;
+  font-size: 1.1rem;
+}
+
+/* Edit and Fork under a question. */
+.ai-question-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.15rem;
+  font-size: 0.8em;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.ai-turn-user:hover .ai-question-actions,
+.ai-turn-user:focus-within .ai-question-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .ai-question-actions {
+    opacity: 1;
+  }
+}
+
+/* Messages sent while an answer runs, waiting for it to end. */
+.ai-queue {
+  padding: 0.35rem 0.5rem;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  font-size: 0.9em;
+}
+
+.ai-queue header {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.ai-queue header > span {
+  margin-right: auto;
+}
+
+.ai-queue ol {
+  margin: 0.25rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.ai-queue li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

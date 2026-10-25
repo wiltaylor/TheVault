@@ -379,6 +379,10 @@ export interface Turn {
    * "Skills updated (<n>)" once the server took the new list.
    */
   notice?: string;
+  /** A user turn's attached files. */
+  attachments?: Attachment[];
+  /** A user turn's place in the transcript: the index of its message, where Edit and Fork cut. */
+  at?: number;
   /** An assistant turn's answer, tool steps, proposals and notices, in the order they came. */
   parts: Part[];
 }
@@ -402,6 +406,33 @@ export type Activity =
   | { step: "writing" }
   | { step: "compacting" }
   | { step: "tool"; name: string; input: Json };
+
+/** A file pasted, dropped or picked into the chat box, stored in the vault as an asset. */
+export interface Attachment {
+  id: string;
+  filename: string;
+  size: number;
+}
+
+/** How the files attached to a message read to the model: one line each, under a heading. */
+export function attachmentText(files: readonly Attachment[]): string {
+  const lines = files.map((f) => `- ${f.filename} (asset ${f.id}, ${f.size} bytes)`);
+  return `${ATTACHED_HEADING}\n${lines.join("\n")}`;
+}
+
+const ATTACHED_HEADING =
+  "[Files the user attached to this message, stored in the vault as assets: read each with read_asset, and use its asset id to put it in a note.]";
+
+/** The files an attachment text names, or null for any other text. */
+export function attachmentsOf(text: string): Attachment[] | null {
+  if (!text.startsWith(ATTACHED_HEADING)) return null;
+  const out: Attachment[] = [];
+  for (const line of text.split("\n").slice(1)) {
+    const m = /^- (.*) \(asset ([0-9A-Z]+), (\d+) bytes\)$/.exec(line);
+    if (m) out.push({ filename: m[1]!, id: m[2]!, size: Number(m[3]) });
+  }
+  return out;
+}
 
 /** What typed alone in the chat box compacts the thread now. */
 export const COMPACT = "/compact";
@@ -642,6 +673,25 @@ export const SETTLE_POLL_MS = 500;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * In an app, files the user attached reach the home server, which runs the AI, only by sync: ask
+ * for a round and wait until no upload waits, or [`SETTLE_MS`] passes. In a browser, nothing.
+ */
+export async function attachmentsSynced(): Promise<void> {
+  if (!(await appInfo().catch(() => null))) return;
+  const asked = Date.now();
+  try {
+    await api.appSyncNow();
+    for (let waited = 0; waited < SETTLE_MS; waited += SETTLE_POLL_MS) {
+      const s = await api.appSync();
+      if (s.state !== "syncing" && (s.last_attempt_ms ?? 0) >= asked && (s.assets_waiting ?? 0) === 0) break;
+      await sleep(SETTLE_POLL_MS);
+    }
+  } catch {
+    // The turn says so if the server does not have a file yet.
+  }
+}
+
+/**
  * After a change the AI made on the home server, through Apply or itself: open views of the note
  * or type take it. In an app the change reaches the device's copy only by sync, so the app asks
  * its embedded server for a round first and waits for it to end (ai D23).
@@ -840,11 +890,19 @@ export function turnsFromThread(t: AgentThread): Turn[] {
     if (m.role === "user" && results.length === 0) {
       const texts = content.flatMap((c) => (c.type === "text" ? [c.text] : []));
       const lines = texts.filter(isOutcomeLines).flatMap((x) => x.split("\n").filter((l) => l.trim()));
-      const words = texts.filter((x) => !isOutcomeLines(x)).join("\n\n");
+      const files = texts.flatMap((x) => attachmentsOf(x) ?? []);
+      const words = texts.filter((x) => !isOutcomeLines(x) && attachmentsOf(x) === null).join("\n\n");
       // A `/update-skills` turn shows its notice, not the text the model read (skills S6).
       const skills = content.find((c) => c.type === "notice" && c.kind === SKILLS_UPDATED);
       const notice = skills?.type === "notice" ? { text: "", notice: skills.text } : { text: words };
-      turns.push({ role: "user", ...notice, parts: [], ...(lines.length ? { outcomes: lines } : {}) });
+      turns.push({
+        role: "user",
+        ...notice,
+        parts: [],
+        at: index,
+        ...(lines.length ? { outcomes: lines } : {}),
+        ...(files.length ? { attachments: files } : {}),
+      });
       continue;
     }
     const turn = answer();
@@ -909,6 +967,8 @@ interface AskOptions {
   model: string | null;
   /** The message starts a thread of the agent, when the conversation has none yet. */
   startThread: boolean;
+  /** The files attached to the message. */
+  attachments?: Attachment[];
 }
 
 /**
@@ -1164,8 +1224,9 @@ function createConversation(agent: string, id: string | null) {
 
   /** Ask `text`, with what the view adds: the note open beside it, the model, a new thread. */
   async function ask(text: string, o: AskOptions) {
+    const files = o.attachments ?? [];
     const question = text.trim();
-    if (!question || chat.streaming) return;
+    if ((!question && files.length === 0) || chat.streaming) return;
     const mine = ++generation;
     // `/update-skills` alone takes a fresh list of skills and sends no message of the user's
     // (skills S6); any other `/` text is sent as typed.
@@ -1192,7 +1253,13 @@ function createConversation(agent: string, id: string | null) {
     setChat(
       produce((c) => {
         const asked = updateSkills ? { text: "", notice: UPDATING_SKILLS } : compact ? { text: "", notice: COMPACTING } : { text: question };
-        c.turns.push({ role: "user", ...asked, parts: [], ...(lines.length && !command ? { outcomes: lines } : {}) });
+        c.turns.push({
+          role: "user",
+          ...asked,
+          parts: [],
+          ...(lines.length && !command ? { outcomes: lines } : {}),
+          ...(files.length && !command ? { attachments: [...files] } : {}),
+        });
         c.turns.push({ role: "assistant", parts: [] });
         c.streaming = true;
         c.activity = { step: "thinking" };
@@ -1206,13 +1273,20 @@ function createConversation(agent: string, id: string | null) {
       if (mine !== generation) return;
       // On a thread the server keeps the transcript and adds the outcome lines itself; here they
       // go first, as plain text every provider reads (ai D29), and only once.
-      const content: Content[] = [{ type: "text", text: question }];
+      const content: Content[] = question ? [{ type: "text", text: question }] : [];
+      if (files.length) content.unshift({ type: "text", text: attachmentText(files) });
       if (lines.length && !thread) content.unshift({ type: "text", text: lines.join("\n") });
       const user: ChatMessage = { role: "user", content };
       // A `/update-skills` turn's message is the server's: the outcome lines wait for the next
       // message, except on a thread, where the server adds them to its message.
       if (command && !thread) for (const [id, line] of kept) record(id, line);
-      if (!command) transcript = [...transcript, user];
+      if (!command) {
+        // Where the question sits in the transcript, for Edit and Fork.
+        let asked = chat.turns.length - 1;
+        while (asked >= 0 && chat.turns[asked]!.role !== "user") asked--;
+        if (asked >= 0) setChat("turns", asked, "at", transcript.length);
+        transcript = [...transcript, user];
+      }
       const named = thread || agent !== ASSISTANT;
       const body = {
         ...(o.provider ? { provider: o.provider } : {}),
@@ -1774,9 +1848,47 @@ function createConversation(agent: string, id: string | null) {
       dispose();
     }
 
+    /** What Edit and Fork give back to the message box: the question and its files. */
+    function draftOf(turn: Turn) {
+      return { text: turn.text ?? "", attachments: turn.attachments ?? [] };
+    }
+
+    /**
+     * Edit question `t`: the conversation is cut back to before it, on the server for a thread,
+     * and the question comes back for the box. Null while a turn runs or for no question.
+     */
+    async function editFrom(t: number): Promise<{ text: string; attachments: Attachment[] } | null> {
+      const turn = chat.turns[t];
+      if (!turn || turn.role !== "user" || turn.at === undefined || chat.streaming) return null;
+      const mine = ++generation;
+      if (chat.thread) {
+        const cut = await api.agentThreadTruncate(agent, chat.thread, turn.at);
+        if (mine !== generation) return null;
+        transcript = (cut.messages ?? []) as ChatMessage[];
+        setChat({ turns: turnsFromThread(cut), context: cut.context ?? null });
+      } else {
+        transcript = transcript.slice(0, turn.at);
+        setChat({ turns: chat.turns.slice(0, t), context: null });
+      }
+      changed();
+      return draftOf(turn);
+    }
+
+    /** Fork at question `t`: a new thread with what came before it; this one stays as it is. */
+    async function forkFrom(t: number): Promise<{ thread: string; text: string; attachments: Attachment[] } | null> {
+      const turn = chat.turns[t];
+      if (!turn || turn.role !== "user" || turn.at === undefined || !chat.thread) return null;
+      const made = await api.agentThreadFork(agent, chat.thread, turn.at);
+      notify();
+      void refreshAgents();
+      return { thread: made.id, ...draftOf(turn) };
+    }
+
     const self = {
       agent,
       chat: chat as Readonly<ConversationState>,
+      editFrom,
+      forkFrom,
       hold,
       release,
       drop,
@@ -1933,9 +2045,9 @@ export function createChatSession(options: ChatOptions = {}) {
     }
 
     /** Ask `text`, beside the note `noteId` when one is open. */
-    async function ask(text: string, noteId?: string) {
+    async function ask(text: string, noteId?: string, attachments: Attachment[] = []) {
       const question = text.trim();
-      if (!question || chat.streaming) return;
+      if ((!question && attachments.length === 0) || chat.streaming) return;
       // The panel's thread, archived or deleted elsewhere, gives way to a new one (agents G15). A
       // The agent screen keeps its thread: sending in an archived thread takes it out of the archive.
       const was = current();
@@ -1950,7 +2062,7 @@ export function createChatSession(options: ChatOptions = {}) {
       // The panel keeps threads only for an agent the server has listed, so a server from before
       // agents is never asked for one.
       const startThread = !!options.threads && (options.threads !== "listed" || agents().some((a) => a.name === view.agent));
-      await c.ask(question, { noteId, provider: view.provider, model: view.model, startThread });
+      await c.ask(question, { noteId, provider: view.provider, model: view.model, startThread, attachments });
     }
 
     /** Stop the turn in flight: on the server, the only way to end it early (agents G17). */
@@ -1975,6 +2087,15 @@ export function createChatSession(options: ChatOptions = {}) {
       setModel,
       setAgent,
       openThread,
+      /** Edit question `turn`: cut the conversation back to before it, and give it back for the box. */
+      editFrom: (turn: number) => current().editFrom(turn),
+      /** Fork at question `turn` into a new thread, open it, and give the question back for the box. */
+      forkFrom: async (turn: number) => {
+        const made = await current().forkFrom(turn);
+        if (!made) return null;
+        await openThread(made.thread);
+        return made;
+      },
       /** Test-only: the transcript the next turn sends. */
       transcriptNow: () => current().transcriptNow(),
       /** Test-only: the outcome lines the next message sends. */

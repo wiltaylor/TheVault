@@ -103,7 +103,7 @@ pub struct Permissions {
     pub outbox: Outbox,
     /// The note types the agent may read and change; `None` is every type.
     pub types: Option<Vec<String>>,
-    /// Browser automation (browser B6): the `browser_run`, `browser_file` and `browser_save`
+    /// Browser automation (browser B6): the `browser_run`, `browser_file`, `browser_save` and `browser_capture`
     /// tools, offered when the server has a browser box. Absent means `false`, and it is
     /// independent of `tools`: an absent tools list does not include the browser tools.
     pub browser: bool,

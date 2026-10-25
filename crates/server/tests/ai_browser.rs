@@ -235,7 +235,12 @@ fn png(width: u32, height: u32) -> Vec<u8> {
     out.into_inner()
 }
 
-const BROWSER_TOOLS: [&str; 3] = ["browser_run", "browser_file", "browser_save"];
+const BROWSER_TOOLS: [&str; 4] = [
+    "browser_run",
+    "browser_file",
+    "browser_save",
+    "browser_capture",
+];
 
 fn has_browser_tools(names: &[String]) -> bool {
     BROWSER_TOOLS.iter().all(|t| names.iter().any(|n| n == t))
@@ -286,7 +291,13 @@ fn the_tools_need_a_browser_box_and_the_permission() {
                 names.sort();
                 assert_eq!(
                     names,
-                    ["browser_file", "browser_run", "browser_save", "get_note"]
+                    [
+                        "browser_capture",
+                        "browser_file",
+                        "browser_run",
+                        "browser_save",
+                        "get_note"
+                    ]
                 );
             }
         }
@@ -586,6 +597,7 @@ fn an_unattended_run_gets_the_browser_tools_but_no_save_that_would_ask() {
     assert!(driver.iter().any(|t| t == "browser_run"));
     assert!(driver.iter().any(|t| t == "browser_file"));
     assert!(!driver.iter().any(|t| t == "browser_save"));
+    assert!(!driver.iter().any(|t| t == "browser_capture"));
     assert!(has_browser_tools(&tools("saver")));
     assert!(has_no_browser_tool(&tools("plain")));
 }
@@ -618,4 +630,97 @@ fn an_agent_cannot_give_browser_automation_it_lacks() {
         json!({ "name": "helper", "wcl": DRIVER }),
     );
     assert_eq!(last(&events, "agent_proposal")["name"], "helper");
+}
+
+#[test]
+fn browser_capture_takes_a_screenshot_or_downloads_an_image_and_stores_it() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    let api = Api::start(&fake, Some(&browser));
+    api.agent(
+        "driver",
+        "permissions {\n  browser = true\n\n  confirm {\n    downloads = false\n  }\n}\n",
+    );
+
+    // A full-page screenshot, stored at once with the downloads switch off.
+    let shot = png(10, 10);
+    browser.capture("image/png", shot.clone());
+    let events = api.call(
+        &fake,
+        Some("driver"),
+        "browser_capture",
+        json!({ "what": "screenshot", "target": null, "url": null, "full_page": true, "session": "shop", "filename": "Checkout.png" }),
+    );
+    let applied = last(&events, "applied");
+    assert_eq!(applied["filename"], "Checkout.png");
+    assert_eq!(api.asset_bytes(applied["asset_id"].as_str().unwrap()), shot);
+    let ran = browser.commands();
+    let command = ran.last().unwrap()["command"].as_str().unwrap().to_owned();
+    assert!(
+        command.contains("playwright-cli -s='shop' screenshot --filename='captures/screenshot-"),
+        "{command}"
+    );
+    assert!(command.ends_with(".png' --full-page"), "{command}");
+
+    // An image by its element: its source is read from the page, then downloaded.
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    let api = Api::start(&fake, Some(&browser));
+    api.agent(
+        "driver",
+        "permissions {\n  browser = true\n\n  confirm {\n    downloads = false\n  }\n}\n",
+    );
+    browser.push_run(BrowserRun::ok(
+        "### Result\n\"https://shop.test/img/cat.jpg?w=400\"\n### Ran Playwright code\n",
+    ));
+    let cat = png(4, 4);
+    browser.capture("image/jpeg", cat.clone());
+    let events = api.call(
+        &fake,
+        Some("driver"),
+        "browser_capture",
+        json!({ "what": "image", "target": "e21", "url": null, "full_page": null, "session": null, "filename": null }),
+    );
+    let applied = last(&events, "applied");
+    let name = applied["filename"].as_str().unwrap();
+    assert!(
+        name.starts_with("image-") && name.ends_with(".jpg"),
+        "{name}"
+    );
+    assert_eq!(api.asset_bytes(applied["asset_id"].as_str().unwrap()), cat);
+    let commands: Vec<String> = browser
+        .commands()
+        .iter()
+        .map(|c| c["command"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        commands[0].starts_with("playwright-cli eval 'el => el.currentSrc"),
+        "{commands:?}"
+    );
+    assert!(commands[0].ends_with(" 'e21'"), "{commands:?}");
+    assert!(commands[1].contains("curl -fsSL"), "{commands:?}");
+    assert!(
+        commands[1].ends_with(" 'https://shop.test/img/cat.jpg?w=400'"),
+        "{commands:?}"
+    );
+
+    // A data: image is refused, with the way round.
+    browser.push_run(BrowserRun::ok(
+        "### Result\n\"data:image/png;base64,AAAA\"\n",
+    ));
+    api.call(
+        &fake,
+        Some("driver"),
+        "browser_capture",
+        json!({ "what": "image", "target": "e9", "url": null, "full_page": null, "session": null, "filename": null }),
+    );
+    // The tool's answer goes back in the turn's last request.
+    let requests = fake.message_requests();
+    let last_request = requests.last().unwrap().json();
+    let r = last_request["messages"].as_array().unwrap().last().unwrap()["content"][0].clone();
+    assert_eq!(r["is_error"], true, "{r}");
+    assert!(
+        result_text(&r).contains("take a screenshot of the element"),
+        "{r}"
+    );
 }

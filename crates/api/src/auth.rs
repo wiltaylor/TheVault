@@ -62,9 +62,11 @@ fn agent_threads_path(path: &str) -> Option<bool> {
     if name.is_empty() || parts.next()? != "threads" {
         return None;
     }
-    match (parts.next(), parts.next()) {
-        (None, _) => Some(false),
-        (Some(id), None) if !id.is_empty() => Some(true),
+    match (parts.next(), parts.next(), parts.next()) {
+        (None, _, _) => Some(false),
+        (Some(id), None, _) if !id.is_empty() => Some(true),
+        // Cutting a thread back and forking one are edits of thread notes.
+        (Some(id), Some("truncate" | "fork"), None) if !id.is_empty() => Some(true),
         _ => None,
     }
 }

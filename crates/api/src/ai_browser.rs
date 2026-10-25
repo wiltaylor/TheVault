@@ -62,7 +62,12 @@ const THUMB_EDGE: u32 = 240;
 const TRAIL_COMMAND: usize = 120;
 
 /// The tool names.
-pub const TOOLS: [&str; 3] = ["browser_run", "browser_file", "browser_save"];
+pub const TOOLS: [&str; 4] = [
+    "browser_run",
+    "browser_file",
+    "browser_save",
+    "browser_capture",
+];
 
 /// Whether `name` is one of the browser tools.
 pub fn is_browser_tool(name: &str) -> bool {
@@ -110,7 +115,7 @@ fn http() -> &'static reqwest::Client {
     CLIENT.get_or_init(ai::client)
 }
 
-/// The three tools, offered apart from the others (browser B5).
+/// The browser tools, offered apart from the others (browser B5).
 pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
         tool(
@@ -140,7 +145,150 @@ pub fn tool_specs() -> Vec<ToolSpec> {
                 },
             }),
         ),
+        tool(
+            "browser_capture",
+            "Capture something from the browser's page and store it in the vault as an asset in one step, as browser_save stores a file: `screenshot` takes a screenshot of the page in view, of the whole scrollable page with full_page, or of one element by its snapshot ref or selector in target; `image` downloads an image as the site serves it, by url, or by target, an <img> element's ref, whose source it reads from the page. Unless the user lets downloads go ahead without asking, the user sees a proposal; otherwise the result gives the asset id, which a note can then reference through propose_edit or propose_create.",
+            json!({
+                "what": { "type": "string", "enum": ["screenshot", "image"], "description": "A screenshot, or an image from the page." },
+                "target": {
+                    "type": ["string", "null"],
+                    "description": "An element's snapshot ref, such as e21, or a unique selector: the element to screenshot, or the image to download. Null for the whole view, or with url.",
+                },
+                "url": {
+                    "type": ["string", "null"],
+                    "description": "For an image: its http or https address, when it is not taken from target.",
+                },
+                "full_page": {
+                    "type": ["boolean", "null"],
+                    "description": "For a screenshot of the page: the whole scrollable page rather than what is in view.",
+                },
+                "session": {
+                    "type": ["string", "null"],
+                    "description": "The playwright-cli session (-s=<name>) the page is open in, or null for the default.",
+                },
+                "filename": {
+                    "type": ["string", "null"],
+                    "description": "The asset's file name, or null for one made from what was captured.",
+                },
+            }),
+        ),
     ]
+}
+
+/// `s` as one word for bash, in single quotes.
+fn shell_word(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// The value `playwright-cli eval` printed: the JSON under its `### Result` heading.
+fn eval_result(stdout: &str) -> Option<Value> {
+    let rest = stdout.split("### Result").nth(1)?;
+    let line = rest.lines().map(str::trim).find(|l| !l.is_empty())?;
+    serde_json::from_str(line).ok()
+}
+
+/// The extension an image's address names, or `.png`.
+fn image_extension(url: &str) -> &'static str {
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg"] {
+        if path.ends_with(ext) {
+            return ext;
+        }
+    }
+    ".png"
+}
+
+/// `browser_capture {what, target, url, full_page, session, filename}`: a screenshot taken, or
+/// an image downloaded, into /work/captures in the box, then stored as [`save`] stores a file.
+pub async fn capture(
+    w: Arc<Writer>,
+    b: &BrowserBox,
+    direct: bool,
+    call_id: &str,
+    input: &Value,
+) -> BrowserOut {
+    let text = |k: &str| input[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let session = text("session")
+        .map(|s| format!("-s={} ", shell_word(s)))
+        .unwrap_or_default();
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S%3f");
+    let (path, command) = match input["what"].as_str().unwrap_or("screenshot") {
+        "screenshot" => {
+            let path = format!("captures/screenshot-{stamp}.png");
+            let target = text("target")
+                .map(|t| format!("{} ", shell_word(t)))
+                .unwrap_or_default();
+            let full = if input["full_page"] == true && text("target").is_none() {
+                " --full-page"
+            } else {
+                ""
+            };
+            let command = format!(
+                "mkdir -p /work/captures && playwright-cli {session}screenshot {target}--filename={}{full}",
+                shell_word(&path)
+            );
+            (path, command)
+        }
+        "image" => {
+            let url = match (text("url"), text("target")) {
+                (Some(u), _) => u.to_owned(),
+                (None, Some(t)) => {
+                    let ask = format!(
+                        "playwright-cli {session}eval {} {}",
+                        shell_word("el => el.currentSrc || el.src || el.href || ''"),
+                        shell_word(t)
+                    );
+                    let read = run(b, &json!({ "command": ask, "timeout": 60 })).await;
+                    if read.is_error {
+                        return read;
+                    }
+                    let out: Value = serde_json::from_str(&read.content).unwrap_or_default();
+                    let src = eval_result(out["stdout"].as_str().unwrap_or_default())
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    if src.is_empty() {
+                        return BrowserOut::error(format!(
+                            "{t} has no image source; take a snapshot to find the <img> element's ref, or a screenshot of it instead"
+                        ));
+                    }
+                    src
+                }
+                (None, None) => return BrowserOut::error("an image needs url or target"),
+            };
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return BrowserOut::error(format!(
+                    "the image is at {}, not an http or https address; take a screenshot of the element instead",
+                    url.chars().take(40).collect::<String>()
+                ));
+            }
+            let path = format!("captures/image-{stamp}{}", image_extension(&url));
+            let command = format!(
+                "mkdir -p /work/captures && curl -fsSL --max-time 120 -A 'Mozilla/5.0' -o {} {}",
+                shell_word(&path),
+                shell_word(&url)
+            );
+            (path, command)
+        }
+        other => {
+            return BrowserOut::error(format!("what must be screenshot or image, not {other:?}"));
+        }
+    };
+    if let Err(e) = run_quiet(b, &command, 150).await {
+        return BrowserOut::error(format!("the capture failed: {e}"));
+    }
+    let filename = text("filename").map(str::to_owned);
+    save(
+        w,
+        b,
+        direct,
+        call_id,
+        &json!({ "path": path, "filename": filename }),
+    )
+    .await
 }
 
 /// A browser tool's answer.

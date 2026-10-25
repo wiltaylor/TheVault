@@ -33,8 +33,10 @@ import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged, v
 import {
   type Applied,
   ChatContext,
+  type Attachment,
   type ChatSession,
   type ContextUse,
+  attachmentsSynced,
   type DraftRef,
   type NoteOp,
   type BrowserRef,
@@ -132,6 +134,8 @@ export function stepLabel(name: string, input: Json): string {
       return `Read ${s("path")} from the browser box`;
     case "browser_save":
       return `Saved ${s("path")} from the browser box`;
+    case "browser_capture":
+      return s("what") === "image" ? "Saved an image from the page" : "Saved a screenshot of the page";
     case "use_skill":
       return `Used skill ${s("name")}`;
     case "read_skill_file":
@@ -236,6 +240,8 @@ export function activeLabel(name: string, input: Json): string {
       return "Reading a file from the browser box";
     case "browser_save":
       return "Checking a file from the browser box";
+    case "browser_capture":
+      return "Capturing from the page";
     case "use_skill":
       return "Reading a skill";
     case "read_skill_file":
@@ -310,7 +316,11 @@ export function hostOf(url: string): string {
 
 /** Whether a tool drives the browser box (browser B5). */
 const isBrowserTool = (name: string) =>
-  name === "browser_run" || name === "browser_file" || name === "browser_save" || name === "install_skill_in_browser";
+  name === "browser_run" ||
+  name === "browser_file" ||
+  name === "browser_save" ||
+  name === "browser_capture" ||
+  name === "install_skill_in_browser";
 
 /** The web tools (ai D27): their steps name the address read, linking out. */
 const WEB_TOOLS: Record<string, string> = { fetch_url: "Read", download_asset: "Download from" };
@@ -1093,16 +1103,39 @@ function agentModel(name: string): string | null {
   return a.model ? a.model : `${providerLabel(a.provider)}'s default model`;
 }
 
-/** The nearest ancestor of `el` that scrolls, if any. */
-function scrollParent(el: HTMLElement | undefined): HTMLElement | null {
-  for (let at = el?.parentElement ?? null; at; at = at.parentElement) {
-    if (/(auto|scroll)/.test(getComputedStyle(at).overflowY)) return at;
-  }
-  return null;
+
+/** A file in the box: uploading, stored as an asset, or failed. */
+interface Upload {
+  key: number;
+  filename: string;
+  size: number;
+  state: "uploading" | "ready" | "failed";
+  asset?: Attachment;
+  error?: string;
 }
 
-/** How near the end, in pixels, still counts as at the end. */
-const AT_END_PX = 48;
+let uploads = 0;
+
+/** A pasted image arrives named `image.png`: give it a name of its own. */
+function pastedName(file: File): File {
+  if (!/^image\.\w+$/.test(file.name)) return file;
+  const ext = file.name.split(".").pop();
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return new File([file], `pasted-${stamp}.${ext}`, { type: file.type });
+}
+
+/** A size as people read it. */
+function sizeText(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * How near the end, in pixels, still counts as at the end: scrolling up by more stops following
+ * the conversation, and scrolling back down to within it follows again.
+ */
+const AT_END_PX = 4;
 
 /**
  * A conversation as the panel and the agent screen show it: its turns, with streaming text, tool
@@ -1116,7 +1149,7 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
   const chat = s.chat;
   const [draft, setDraft] = createSignal("");
   let list: HTMLOListElement | undefined;
-  let form: HTMLFormElement | undefined;
+  let scroller: HTMLDivElement | undefined;
   createEffect(
     on(
       () => chat.thread,
@@ -1125,37 +1158,139 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
       },
     ),
   );
-  // The message box sticks to the foot of the scrolling pane, and grows by the activity line
-  // while a turn runs. At the end of the conversation, keep the end in view as the answer and the
-  // box grow, so the last lines never slide under the box; scrolled up, leave the view alone.
+  // The messages scroll on their own above the message box, which is never part of the scroll.
+  // At the end of the conversation, keep the end in view as the answer grows and as the box
+  // grows (the activity line, a taller draft), which shrinks the messages' area; scrolled up,
+  // leave the view alone.
+  // Follow mode: true while the view is at the end, which keeps it there as the answer grows.
+  let pinned = true;
   onMount(() => {
-    const scroller = scrollParent(list);
-    if (!scroller || !list || !form || typeof ResizeObserver === "undefined") return;
-    const atEnd = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= AT_END_PX;
-    let pinned = atEnd();
+    const el = scroller;
+    if (!el || !list || typeof ResizeObserver === "undefined") return;
+    const atEnd = () => el.scrollHeight - el.scrollTop - el.clientHeight <= AT_END_PX;
+    pinned = atEnd();
+    // Only scrolling up stops following: the box growing or the answer arriving moves the end away
+    // from the view without the view moving, which is no reason to stop.
+    let last = el.scrollTop;
     const onScroll = () => {
-      pinned = atEnd();
+      const top = el.scrollTop;
+      if (atEnd()) pinned = true;
+      else if (top < last - 1) pinned = false;
+      last = top;
     };
-    scroller.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("scroll", onScroll, { passive: true });
     const grown = new ResizeObserver(() => {
-      if (pinned) scroller.scrollTop = scroller.scrollHeight;
+      if (pinned) el.scrollTop = el.scrollHeight;
     });
     grown.observe(list);
-    grown.observe(form);
+    grown.observe(el);
     onCleanup(() => {
       grown.disconnect();
-      scroller.removeEventListener("scroll", onScroll);
+      el.removeEventListener("scroll", onScroll);
     });
   });
-  function send() {
+  // Files pasted, dropped or picked into the box, each uploaded as an asset at once.
+  const [files, setFiles] = createSignal<Upload[]>([]);
+  let picker: HTMLInputElement | undefined;
+  const uploading = () => files().some((f) => f.state === "uploading");
+  const ready = () => files().flatMap((f) => (f.state === "ready" && f.asset ? [f.asset] : []));
+  function attach(list: FileList | File[] | null | undefined) {
+    for (const file of Array.from(list ?? [])) {
+      const key = ++uploads;
+      const named = pastedName(file);
+      setFiles((all) => [...all, { key, filename: named.name, size: named.size, state: "uploading" }]);
+      const set = (patch: Partial<Upload>) => setFiles((all) => all.map((u) => (u.key === key ? { ...u, ...patch } : u)));
+      api.uploadAsset(named).then(
+        (a) => set({ state: "ready", asset: { id: a.id, filename: a.filename, size: a.size } }),
+        (e: unknown) => set({ state: "failed", error: e instanceof Error ? e.message : String(e) }),
+      );
+    }
+  }
+  // Messages sent while a turn runs wait here, and go together as one once it ends.
+  const [queued, setQueued] = createSignal<{ text: string; attachments: Attachment[] }[]>([]);
+  const [problem, setProblem] = createSignal<string | null>(null);
+  let box: HTMLTextAreaElement | undefined;
+  // Another session shown drops the queue; a new chat getting its thread keeps it.
+  createEffect(
+    on(
+      () => chat.thread,
+      (now, was) => {
+        if (was && now !== was) setQueued([]);
+      },
+      { defer: true },
+    ),
+  );
+  createEffect(
+    on(
+      () => chat.streaming,
+      (now, was) => {
+        if (!was || now || queued().length === 0) return;
+        const all = queued();
+        setQueued([]);
+        const text = all.map((q) => q.text.trim()).filter(Boolean).join("\n\n");
+        void s.ask(text, props.noteId?.() || undefined, all.flatMap((q) => q.attachments));
+      },
+    ),
+  );
+
+  /** Put `text` and `attachments` in the box, after what it holds, to edit and send again. */
+  function intoBox(text: string, attachments: Attachment[]) {
+    setDraft((d) => [d.trim(), text.trim()].filter(Boolean).join("\n\n"));
+    setFiles((all) => [...all, ...attachments.map((a) => ({ key: ++uploads, filename: a.filename, size: a.size, state: "ready" as const, asset: a }))]);
+    queueMicrotask(() => box?.focus());
+  }
+
+  /** The queued messages back in the box, out of the queue. */
+  function editQueued() {
+    const all = queued();
+    setQueued([]);
+    for (const q of all) intoBox(q.text, q.attachments);
+  }
+
+  async function editTurn(t: number) {
+    if (!confirm("Edit this message? It and everything after it leave the conversation.")) return;
+    setProblem(null);
+    try {
+      const got = await s.editFrom(t);
+      if (got) intoBox(got.text, got.attachments);
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function forkTurn(t: number) {
+    setProblem(null);
+    try {
+      const got = await s.forkFrom(t);
+      if (got) intoBox(got.text, got.attachments);
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function send() {
     const text = draft();
-    if (!text.trim() || chat.streaming) return;
+    const attached = ready();
+    if ((!text.trim() && attached.length === 0) || uploading()) return;
     setDraft("");
-    void s.ask(text, props.noteId?.() || undefined);
-    queueMicrotask(() => list?.lastElementChild?.scrollIntoView?.({ block: "end" }));
+    setFiles([]);
+    if (chat.streaming) {
+      setQueued((q) => [...q, { text, attachments: attached }]);
+      return;
+    }
+    // In an app the files reach the home server, which runs the AI, by sync.
+    if (attached.length) await attachmentsSynced();
+    void s.ask(text, props.noteId?.() || undefined, attached);
+    // Sending follows the conversation again.
+    pinned = true;
+    queueMicrotask(() => {
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    });
   }
   return (
     <ChatContext.Provider value={s}>
+      <div class="ai-conversation">
+      <div class="ai-scroll" ref={scroller} data-testid="ai-scroll">
       <Show when={chat.turns.length === 0 && !chat.loading}>{props.empty}</Show>
       <Show when={chat.loading}>
         <p class="muted" role="status">
@@ -1222,16 +1357,40 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                     </ul>
                   </details>
                 </Show>
-                <Show when={!turn.notice}>
+                <Show when={!turn.notice && turn.text}>
                   <p class="ai-question">{turn.text}</p>
+                </Show>
+                <Show when={turn.at !== undefined && !turn.notice && !chat.streaming}>
+                  <div class="ai-question-actions">
+                    <button type="button" class="link" aria-label="Edit this message" title="Edit this message: it and everything after it leave the conversation" onClick={() => void editTurn(t())}>
+                      Edit
+                    </button>
+                    <Show when={chat.thread}>
+                      <button type="button" class="link" aria-label="Fork from this message" title="Start a new chat with everything above this message, and this message to edit" onClick={() => void forkTurn(t())}>
+                        Fork
+                      </button>
+                    </Show>
+                  </div>
+                </Show>
+                <Show when={turn.attachments?.length}>
+                  <ul class="ai-attachments ai-sent-attachments" aria-label="Attached files">
+                    <For each={turn.attachments}>
+                      {(f) => (
+                        <li class="ai-attachment">
+                          <a href={`/assets/${f.id}`}>{f.filename}</a>
+                          <span class="muted">{sizeText(f.size)}</span>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
                 </Show>
               </Show>
             </li>
           )}
         </For>
       </ol>
+      </div>
       <form
-        ref={form}
         class="ai-form"
         onSubmit={(e) => {
           e.preventDefault();
@@ -1245,7 +1404,74 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
           </Show>
           <Show when={chat.context}>{(c) => <ContextMeter use={c()} />}</Show>
         </div>
+        <Show when={problem()}>
+          <p class="error" role="alert">
+            {problem()}
+          </p>
+        </Show>
+        <Show when={queued().length > 0}>
+          <section class="ai-queue" aria-label="Queued messages">
+            <header>
+              <span class="muted">Queued, sent when the answer ends</span>
+              <button type="button" class="link" onClick={editQueued}>
+                Edit
+              </button>
+              <button type="button" class="link" onClick={() => setQueued([])}>
+                Clear
+              </button>
+            </header>
+            <ol>
+              <For each={queued()}>
+                {(q) => (
+                  <li>
+                    {q.text.trim() || "(files only)"}
+                    <Show when={q.attachments.length}>
+                      <span class="muted"> · {q.attachments.length === 1 ? "1 file" : `${q.attachments.length} files`}</span>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ol>
+          </section>
+        </Show>
+        <Show when={files().length > 0}>
+          <ul class="ai-attachments" aria-label="Attached files">
+            <For each={files()}>
+              {(f) => (
+                <li class={`ai-attachment ai-attachment-${f.state}`} title={f.error ?? f.filename}>
+                  <span class="ai-attachment-name">{f.filename}</span>
+                  <span class="muted">{f.state === "uploading" ? "Uploading…" : f.state === "failed" ? "Failed" : sizeText(f.size)}</span>
+                  <button
+                    type="button"
+                    class="link"
+                    aria-label={`Remove ${f.filename}`}
+                    onClick={() => setFiles((all) => all.filter((u) => u.key !== f.key))}
+                  >
+                    ×
+                  </button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
         <textarea
+          ref={box}
+          onPaste={(e) => {
+            // Pasted files, such as a screenshot, are attached; pasted text goes in as usual.
+            const pasted = e.clipboardData?.files;
+            if (pasted && pasted.length > 0) {
+              e.preventDefault();
+              attach(pasted);
+            }
+          }}
+          onDragOver={(e) => {
+            if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            if (!e.dataTransfer?.files.length) return;
+            e.preventDefault();
+            attach(e.dataTransfer.files);
+          }}
           aria-label="Ask AI"
           aria-keyshortcuts="Enter"
           title="Enter sends, Shift+Enter starts a new line"
@@ -1264,21 +1490,40 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
         />
         {/* The model the next turn uses sits at the box's foot, beside Send. */}
         <div class="ai-form-foot">
+          <input
+            ref={picker}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              attach(e.currentTarget.files);
+              e.currentTarget.value = "";
+            }}
+          />
+          <button type="button" class="ai-attach" aria-label="Attach files" title="Attach files, or paste or drop them in the box" onClick={() => picker?.click()}>
+            📎
+          </button>
           <ModelPicker session={s} />
           <Show
             when={chat.streaming}
             fallback={
-              <button type="submit" class="primary" disabled={!draft().trim()}>
+              <button type="submit" class="primary" disabled={(!draft().trim() && ready().length === 0) || uploading()}>
                 Send
               </button>
             }
           >
+            <Show when={draft().trim() || ready().length > 0}>
+              <button type="submit" disabled={uploading()} title="Queue it: sent when the answer ends">
+                Queue
+              </button>
+            </Show>
             <button type="button" onClick={s.stop}>
               Stop
             </button>
           </Show>
         </div>
       </form>
+      </div>
     </ChatContext.Provider>
   );
 }
