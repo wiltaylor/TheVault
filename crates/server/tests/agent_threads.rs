@@ -1190,3 +1190,44 @@ fn a_thread_cut_back_to_a_question_drops_it_and_what_followed_and_a_fork_copies_
         "{texts:?}"
     );
 }
+
+#[test]
+fn the_chat_boxs_provider_and_model_win_over_the_agents_own() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("researcher", RESEARCHER);
+    let models = |fake: &FakeAnthropic| -> Vec<String> {
+        fake.message_requests()
+            .iter()
+            .map(|r| r.json()["model"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let ask = |extra: Value| {
+        fake.push(AnthropicMessage::text("Done."));
+        let mut body = json!({ "agent": "researcher", "messages": [user("Hello")] });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let events = api.chat(body);
+        assert!(events.iter().any(|(n, _)| n == "done"), "{events:?}");
+    };
+    // No choice, or an empty one: the agent's own model.
+    ask(json!({}));
+    ask(json!({ "provider": "", "model": "" }));
+    // A model alone runs on the agent's provider.
+    ask(json!({ "model": "claude-haiku-5" }));
+    // Both, as the chat box sends them.
+    ask(json!({ "provider": "anthropic", "model": "claude-fable-5" }));
+    // A provider alone takes that provider's default from Settings > AI, not the agent's model.
+    ask(json!({ "provider": "anthropic" }));
+    assert_eq!(
+        models(&fake),
+        [
+            "claude-sonnet-5",
+            "claude-sonnet-5",
+            "claude-haiku-5",
+            "claude-fable-5",
+            MODEL
+        ]
+    );
+}

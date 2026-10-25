@@ -448,11 +448,6 @@
   text-align: right;
 }
 
-.ai-form-foot .ai-agent-model {
-  margin: 0;
-  font-size: 0.85rem;
-}
-
 .ai-form-foot > button {
   flex: none;
 }

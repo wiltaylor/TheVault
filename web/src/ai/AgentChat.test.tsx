@@ -561,15 +561,100 @@ describe("the AI panel's agent picker", () => {
     expect(agentThreadStart).toHaveBeenCalledTimes(1);
   });
 
-  it("runs the chosen agent, whose own model replaces the picker", async () => {
+  /** End the turn in flight, and wait for the box to take the next message. */
+  async function finish() {
+    live!.onEvent({ event: "done", data: { stop: "end_turn", messages: [] } });
+    live!.end();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeTruthy());
+    live = null;
+  }
+
+  const select = (label: string) => screen.getByLabelText(label) as HTMLSelectElement;
+  const optionTexts = (label: string) => [...select(label).options].map((o) => o.textContent);
+
+  beforeEach(() => {
+    aiModels.mockResolvedValue({
+      provider: "anthropic",
+      model: "claude-opus-5",
+      models: [
+        { id: "claude-opus-5", display_name: "Claude Opus 5" },
+        { id: "claude-sonnet-5", display_name: "Claude Sonnet 5" },
+        { id: "claude-haiku-5", display_name: "Claude Haiku 5" },
+      ],
+    });
+  });
+
+  it("runs the chosen agent on its own model, chosen first in the picker, and sends no choice", async () => {
     await withAgents();
     render(() => <ChatPanel noteId={() => ""} />);
     fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "triage" } });
-    await waitFor(() => expect(screen.getByText("Model: claude-sonnet-5")).toBeTruthy());
-    expect(screen.queryByLabelText("Provider")).toBeNull();
+    await waitFor(() => expect(optionTexts("Model")).toContain("Claude Haiku 5"));
+    expect(select("Provider")).toHaveProperty("value", "");
+    expect(optionTexts("Provider")[0]).toBe("Agent's provider (Anthropic)");
+    expect(select("Model")).toHaveProperty("value", "");
+    // The agent's model is its first option, and not listed again.
+    expect(optionTexts("Model")).toEqual(["Agent's model (claude-sonnet-5)", "Claude Opus 5", "Claude Haiku 5"]);
     await send("Sort my inbox");
     expect(agentThreadStart).toHaveBeenCalledWith("triage");
     expect(live!.body).toMatchObject({ agent: "triage", thread: "01JNEW" });
+    expect(live!.body).not.toHaveProperty("provider");
+    expect(live!.body).not.toHaveProperty("model");
+  });
+
+  it("sends the model picked for the agent on the turns that follow, until its own is picked again", async () => {
+    await withAgents();
+    render(() => <ChatPanel noteId={() => ""} />);
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "triage" } });
+    await waitFor(() => expect(optionTexts("Model")).toContain("Claude Haiku 5"));
+    fireEvent.change(select("Model"), { target: { value: "claude-haiku-5" } });
+    expect(select("Model")).toHaveValue("claude-haiku-5");
+    await send("Sort my inbox");
+    expect(live!.body).toMatchObject({ agent: "triage", model: "claude-haiku-5" });
+    expect(live!.body).not.toHaveProperty("provider");
+    await finish();
+    agentThread.mockResolvedValue(thread({ id: "01JNEW", agent: "triage" }));
+    await send("And the rest");
+    expect(live!.body).toMatchObject({ model: "claude-haiku-5" });
+    await finish();
+    fireEvent.change(select("Model"), { target: { value: "" } });
+    await send("Once more");
+    expect(live!.body).not.toHaveProperty("model");
+  });
+
+  it("starts each agent on its own model, and keeps the Assistant's choice as it was", async () => {
+    await withAgents();
+    render(() => <ChatPanel noteId={() => ""} />);
+    // The Assistant starts from Settings > AI's default model, and keeps what is picked.
+    await waitFor(() => expect(select("Model")).toHaveValue("claude-opus-5"));
+    expect(optionTexts("Provider")).toEqual(["Anthropic", "OpenAI", "ChatGPT"]);
+    fireEvent.change(select("Model"), { target: { value: "claude-sonnet-5" } });
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "triage" } });
+    // Triage does not take the Assistant's choice.
+    await waitFor(() => expect(optionTexts("Model")[0]).toBe("Agent's model (claude-sonnet-5)"));
+    expect(select("Model")).toHaveProperty("value", "");
+    fireEvent.change(select("Model"), { target: { value: "claude-haiku-5" } });
+    // The Assistant does not take Triage's.
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "assistant" } });
+    await waitFor(() => expect(select("Model")).toHaveValue("claude-sonnet-5"));
+    agentThreadStart.mockResolvedValue({ id: "01JPANEL", title: "New thread", agent: "assistant", version: "p1", pending: 0 });
+    await send("Hello");
+    expect(live!.body).toMatchObject({ agent: "assistant", provider: "anthropic", model: "claude-sonnet-5" });
+    await finish();
+    // Choosing Triage again starts it on its own model.
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "triage" } });
+    await waitFor(() => expect(optionTexts("Model")[0]).toBe("Agent's model (claude-sonnet-5)"));
+    expect(select("Model")).toHaveProperty("value", "");
+  });
+
+  it("offers the agent's own model on the agent screen too", async () => {
+    await withAgents();
+    render(() => <AgentChat agent="triage" label="Triage" />);
+    await waitFor(() => expect(optionTexts("Model")).toContain("Claude Haiku 5"));
+    expect(select("Model")).toHaveProperty("value", "");
+    expect(optionTexts("Model")[0]).toBe("Agent's model (claude-sonnet-5)");
+    fireEvent.change(select("Model"), { target: { value: "claude-opus-5" } });
+    await send("Sort my inbox");
+    expect(live!.body).toMatchObject({ agent: "triage", model: "claude-opus-5" });
   });
 });
 

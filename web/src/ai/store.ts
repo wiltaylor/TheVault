@@ -1941,6 +1941,12 @@ export function threadsHeld(): number {
   return conversations.size;
 }
 
+/** Whether agent `name` names its own provider or model, which the chat box's choice overrides. */
+export function ownsModel(name: string): boolean {
+  const a = agents().find((x) => x.name === name);
+  return !!a && (!!a.provider || !!a.model);
+}
+
 /** The conversation a view shows, as the views read it: the thread's, and the view's own choices. */
 export interface ChatState extends ConversationState {
   /** The provider and model the next turn uses; null for Settings > AI's defaults. */
@@ -1959,7 +1965,16 @@ export interface ChatState extends ConversationState {
  */
 export function createChatSession(options: ChatOptions = {}) {
   return createRoot((dispose) => {
-    const [view, setView] = createStore({ agent: options.agent ?? ASSISTANT, provider: null as string | null, model: null as string | null });
+    const [view, setView] = createStore({
+      agent: options.agent ?? ASSISTANT,
+      provider: null as string | null,
+      model: null as string | null,
+      /** The choice for an agent that names its own model, which overrides it; null keeps the agent's. */
+      own: null as { agent: string; provider: string | null; model: string | null } | null,
+    });
+    /** Whether the view's agent names its own provider or model, so the choice is its override. */
+    const owns = () => ownsModel(view.agent);
+    const override = () => (view.own?.agent === view.agent ? view.own : null);
     /** While the panel checks that its thread can still take the next message. */
     const [checking, setChecking] = createSignal(false);
     const listener = () => options.onChange?.();
@@ -2004,22 +2019,29 @@ export function createChatSession(options: ChatOptions = {}) {
         return current().chat.loading;
       },
       get provider() {
-        return view.provider;
+        return owns() ? (override()?.provider ?? null) : view.provider;
       },
       get model() {
-        return view.model;
+        return owns() ? (override()?.model ?? null) : view.model;
       },
       get agent() {
         return view.agent;
       },
     };
 
+    /**
+     * Choose the provider and model of the next turns. For an agent that names its own, the choice
+     * is kept apart, for that agent only, so it never leaks to another conversation; both null is
+     * the agent's own again.
+     */
     function setProvider(provider: string | null, model: string | null) {
-      setView({ provider, model });
+      if (!owns()) setView({ provider, model });
+      else setView("own", provider || model ? { agent: view.agent, provider, model } : null);
     }
 
     function setModel(model: string | null) {
-      setView("model", model);
+      if (!owns()) setView("model", model);
+      else setProvider(override()?.provider ?? null, model);
     }
 
     /** Start afresh. A turn in flight on a thread runs on, and its thread shows it when opened. */
@@ -2031,7 +2053,7 @@ export function createChatSession(options: ChatOptions = {}) {
     /** Make this a conversation with agent `name`; another agent's conversation starts afresh. */
     function setAgent(name: string) {
       if (name === view.agent) return;
-      setView("agent", name);
+      setView({ agent: name, own: null });
       newConversation();
     }
 
@@ -2062,7 +2084,7 @@ export function createChatSession(options: ChatOptions = {}) {
       // The panel keeps threads only for an agent the server has listed, so a server from before
       // agents is never asked for one.
       const startThread = !!options.threads && (options.threads !== "listed" || agents().some((a) => a.name === view.agent));
-      await c.ask(question, { noteId, provider: view.provider, model: view.model, startThread, attachments });
+      await c.ask(question, { noteId, provider: chat.provider, model: chat.model, startThread, attachments });
     }
 
     /** Stop the turn in flight: on the server, the only way to end it early (agents G17). */

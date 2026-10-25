@@ -439,3 +439,42 @@ fn an_agent_with_no_mention_trigger_is_called_too() {
         )]
     );
 }
+
+#[test]
+fn a_call_runs_on_the_agents_own_model_whatever_the_chat_box_chose() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "helper",
+        "label = \"Helper\"\nprovider = \"anthropic\"\nmodel = \"claude-sonnet-5\"\n",
+    );
+    // A chat turn of the agent's on another model, picked in the chat box.
+    fake.push(AnthropicMessage::text("Hi."));
+    let res = api.request(
+        "POST",
+        "/api/ai/chat",
+        Some(json!({
+            "agent": "helper",
+            "provider": "anthropic",
+            "model": "claude-haiku-5",
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Hello" }] }],
+        })),
+    );
+    assert!(res.status().is_success());
+    let events = res.text().unwrap();
+    assert!(events.contains("event: done"), "{events}");
+    // A call from a note runs on the agent's own model.
+    api.note(
+        "memo",
+        "Shed",
+        &[&call("@Helper what paint lasts outdoors?", "helper", CALL)],
+    );
+    fake.push(AnthropicMessage::text("Oil-based enamel."));
+    api.advance("PT1S");
+    let models: Vec<Value> = fake
+        .message_requests()
+        .iter()
+        .map(|r| r.json()["model"].clone())
+        .collect();
+    assert_eq!(models, [json!("claude-haiku-5"), json!("claude-sonnet-5")]);
+}

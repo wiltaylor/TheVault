@@ -18,7 +18,6 @@ import { Spinner } from "../components/SyncStatus";
 import { activePane } from "../workspace/model";
 import { navigatePane, openBeside, workspace } from "../workspace/store";
 import { paneAt, wantsNewTab } from "../workspace/events";
-import { BROWSER_BOX_PATH } from "../pages/BrowserBox";
 import { AgentProposalCard } from "./AgentProposalCard";
 import { MemoryProposalCard, memoryHref } from "./MemoryProposalCard";
 import { blockLines, lineDiff } from "./diff";
@@ -47,6 +46,7 @@ import {
   inApp,
   newConversation,
   openThread,
+  ownsModel,
   panelSession,
   pending,
   providerLabel,
@@ -388,13 +388,13 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
         <Show when={isBrowserTool(props.part.name) && !inApp()}>
           <a
             class="ai-step-watch"
-            href={BROWSER_BOX_PATH}
+            href="/browser-box"
             title="Show the browser box's desktop beside this conversation"
             onClick={(e) => {
               if (wantsNewTab(e)) return;
               e.preventDefault();
               e.stopPropagation();
-              openBeside(paneAt(e.currentTarget), BROWSER_BOX_PATH);
+              openBeside(paneAt(e.currentTarget), "/browser-box");
             }}
           >
             Watch
@@ -996,6 +996,28 @@ function settingsUrl(): string {
   return server ? `${server.replace(/\/+$/, "")}/settings/ai` : "/settings/ai";
 }
 
+/** What the picker says when Settings > AI has no provider set up. */
+function NoProvider() {
+  return (
+    <Show
+      when={inApp()}
+      fallback={
+        <p class="muted">
+          No AI provider is set up. Add one in <a href="/settings/ai">Settings &gt; AI</a>.
+        </p>
+      }
+    >
+      <p class="muted">
+        No AI provider is set up.{" "}
+        <a href={settingsUrl()} target="_blank" rel="noopener">
+          Set up AI in the web app
+        </a>
+        .
+      </p>
+    </Show>
+  );
+}
+
 /**
  * The provider and model picker: the providers Settings > AI has set up, from
  * `GET /api/ai/providers` in every client (ai D23), and each one's live model list (ai D6),
@@ -1007,11 +1029,15 @@ function Picker(props: { session: ChatSession }) {
   const [models, setModels] = createSignal<AiModel[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const configured = () => PROVIDERS.filter((p) => status()?.providers[p]?.configured);
+  // A picker gone, its agent changed to one that names its own model, chooses nothing more.
+  let gone = false;
+  onCleanup(() => (gone = true));
   async function loadModels(p: AiProvider) {
+    if (gone) return;
     setProvider(p, chat.provider === p ? chat.model : (status()?.providers[p]?.model ?? null));
     try {
       const got = await api.aiModels(p);
-      if (chat.provider !== p) return;
+      if (gone || chat.provider !== p) return;
       setModels(got.models);
       setError(null);
       if (!chat.model || !got.models.some((m) => m.id === chat.model)) setModel(got.model);
@@ -1035,22 +1061,7 @@ function Picker(props: { session: ChatSession }) {
   return (
     <div class="ai-picker">
       <Show when={status() && configured().length === 0}>
-        <Show
-          when={inApp()}
-          fallback={
-            <p class="muted">
-              No AI provider is set up. Add one in <a href="/settings/ai">Settings &gt; AI</a>.
-            </p>
-          }
-        >
-          <p class="muted">
-            No AI provider is set up.{" "}
-            <a href={settingsUrl()} target="_blank" rel="noopener">
-              Set up AI in the web app
-            </a>
-            .
-          </p>
-        </Show>
+        <NoProvider />
       </Show>
       <Show when={configured().length > 0}>
         <select aria-label="Provider" value={chat.provider ?? ""} onChange={(e) => void loadModels(e.currentTarget.value as AiProvider)}>
@@ -1096,11 +1107,86 @@ function AgentPicker() {
   );
 }
 
-/** The model an agent names itself, which the provider and model picker gives way to. */
-function agentModel(name: string): string | null {
-  const a = agents().find((x) => x.name === name);
-  if (!a || (!a.provider && !a.model)) return null;
-  return a.model ? a.model : `${providerLabel(a.provider)}'s default model`;
+/**
+ * The provider and model picker of an agent that names its own: the agent's choice first, which
+ * sends none, so the server runs the agent's own; another picked overrides it for the
+ * conversation's next turns (agents G1). Nothing is chosen for the user, so another agent's or the
+ * Assistant's choice never carries over.
+ */
+function OwnModelPicker(props: { session: ChatSession; agent: string }) {
+  const { chat, setProvider, setModel } = props.session;
+  const [status, setStatus] = createSignal<AiProviders | null>(null);
+  const [list, setList] = createSignal<{ provider: AiProvider; models: AiModel[]; model: string | null } | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  const configured = () => PROVIDERS.filter((p) => status()?.providers[p]?.configured);
+  const agent = () => agents().find((a) => a.name === props.agent);
+  /** The provider the agent runs on: its own, or Settings > AI's default. */
+  const ownProvider = () => (agent()?.provider ?? status()?.default_provider ?? null) as AiProvider | null;
+  /** The provider whose models are listed: the one picked, or the agent's. */
+  const shown = () => (chat.provider ?? ownProvider()) as AiProvider | null;
+  const models = () => (list()?.provider === shown() ? list()!.models : []);
+  const defaultOf = (p: AiProvider | null) => (list()?.provider === p ? list()!.model : null) ?? (p ? status()?.providers[p]?.model : null) ?? null;
+  const ownModel = () => agent()?.model ?? defaultOf(ownProvider());
+  /** The agent's own model is its first option, so the list leaves it out. */
+  const listed = () => models().filter((m) => chat.provider || m.id !== agent()?.model);
+  onMount(async () => {
+    try {
+      setStatus(await api.aiProviders());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  });
+  createEffect(
+    on([shown, status], async ([p]) => {
+      if (!p || !status()?.providers[p]?.configured) return;
+      try {
+        const got = await api.aiModels(p);
+        if (shown() !== p) return;
+        setList({ provider: p, models: got.models, model: got.model });
+        setError(null);
+      } catch (e) {
+        if (shown() !== p) return;
+        setList(null);
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }),
+  );
+  return (
+    <div class="ai-picker">
+      <Show when={status() && configured().length === 0}>
+        <NoProvider />
+      </Show>
+      <Show when={configured().length > 0}>
+        <select aria-label="Provider" value={chat.provider ?? ""} onChange={(e) => setProvider(e.currentTarget.value || null, null)}>
+          <option value="">Agent's provider ({ownProvider() ? providerLabel(ownProvider()) : "Settings > AI"})</option>
+          <For each={PROVIDERS.filter((p) => p !== ownProvider())}>
+            {(p) => (
+              <option value={p} disabled={!configured().includes(p)}>
+                {providerLabel(p)}
+              </option>
+            )}
+          </For>
+        </select>
+        <select aria-label="Model" value={chat.model ?? ""} onChange={(e) => setModel(e.currentTarget.value || null)}>
+          <Show
+            when={chat.provider}
+            fallback={<option value="">Agent's model ({ownModel() ?? "provider default"})</option>}
+          >
+            <option value="">Provider default{defaultOf(shown()) ? ` (${defaultOf(shown())})` : ""}</option>
+          </Show>
+          <Show when={chat.model && !listed().some((m) => m.id === chat.model)}>
+            <option value={chat.model!}>{chat.model}</option>
+          </Show>
+          <For each={listed()}>{(m) => <option value={m.id}>{m.display_name || m.id}</option>}</For>
+        </select>
+      </Show>
+      <Show when={error()}>
+        <p class="ai-error" role="alert">
+          {error()}
+        </p>
+      </Show>
+    </div>
+  );
 }
 
 
@@ -1528,11 +1614,11 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
   );
 }
 
-/** The provider and model picker, or the model the conversation's agent names itself. */
+/** The provider and model picker, starting from the agent's own when the conversation's agent names them. */
 export function ModelPicker(props: { session: ChatSession }) {
   return (
-    <Show when={agentModel(props.session.chat.agent)} fallback={<Picker session={props.session} />}>
-      {(m) => <p class="muted ai-agent-model">Model: {m()}</p>}
+    <Show when={ownsModel(props.session.chat.agent) ? props.session.chat.agent : null} keyed fallback={<Picker session={props.session} />}>
+      {(name) => <OwnModelPicker session={props.session} agent={name} />}
     </Show>
   );
 }

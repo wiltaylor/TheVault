@@ -14,8 +14,8 @@ import { activePane, expect, logIn, test } from "./fixtures";
 // on the home server, asking for a sync round; and the panel's thread picker lists the thread a
 // message started and opens it in the agent screen as the same conversation (agents G18); and in
 // the agent screen's chat, Enter sends and Shift+Enter starts a line, the model dropdown at the
-// box's foot chooses the model a turn uses, and the session picker's search, Archive and Delete
-// act on the chosen session.
+// box's foot chooses the model a turn uses, starting from an agent's own model when it names one,
+// and the session picker's search, Archive and Delete act on the chosen session.
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -451,6 +451,50 @@ test("the agent screen's chat sends on Enter, keeps Shift+Enter as a new line, a
       return mine ? JSON.stringify(mine) : "";
     })
     .toContain('"claude-sonnet-5"');
+
+  expect((await admin.delete(`/api/agents/${name}`)).ok()).toBe(true);
+});
+
+test("an agent's chat starts on the agent's own model, and a model picked at its foot runs the next turn", async ({ page, admin }) => {
+  await useFake(admin);
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const name = `owner_${stamp}`;
+  const put = await admin.put(`/api/agents/${name}`, { data: { wcl: `label = "Owner ${stamp}"\nprovider = "anthropic"\nmodel = "claude-sonnet-5"\n` } });
+  expect(put.ok(), await put.text()).toBe(true);
+  await tell(`push ${JSON.stringify({ text: `On its own ${stamp}.` })}`);
+  await tell(`push ${JSON.stringify({ text: `On the pick ${stamp}.` })}`);
+
+  await logIn(page, `/agents/${name}`);
+  const chat = activePane(page).getByRole("region", { name: "Chat" });
+  const provider = chat.getByLabel("Provider");
+  const model = chat.getByLabel("Model");
+  await expect(provider.locator("option:checked")).toHaveText("Agent's provider (Anthropic)");
+  await expect(model.locator("option:checked")).toHaveText("Agent's model (claude-sonnet-5)");
+  await expect(model.locator("option")).toContainText(["Agent's model (claude-sonnet-5)", "Claude Opus 5", "Claude Haiku 4.5"]);
+
+  const box = chat.getByLabel("Ask AI");
+  const conversation = chat.getByRole("list", { name: "Conversation" });
+  await box.fill("First");
+  await box.press("Enter");
+  await expect(conversation).toContainText(`On its own ${stamp}.`);
+  await model.selectOption("claude-haiku-4-5");
+  await box.fill("Second");
+  await box.press("Enter");
+  await expect(conversation).toContainText(`On the pick ${stamp}.`);
+
+  // The first turn ran on the agent's model and the second on the one picked.
+  await expect(page).toHaveURL(new RegExp(`/agents/${name}\\?thread=[0-9A-Z]+$`));
+  const thread = new URL(page.url()).searchParams.get("thread")!;
+  await expect
+    .poll(async () => {
+      const res = await admin.get(`/api/activity?category=ai&kind=ai.turn.end&limit=50`);
+      const items = ((await res.json()) as { items: Record<string, unknown>[] }).items;
+      return items
+        .filter((i) => JSON.stringify(i).includes(thread))
+        .map((i) => JSON.stringify(i).match(/"model":"([^"]+)"/)?.[1])
+        .sort();
+    })
+    .toEqual(["claude-haiku-4-5", "claude-sonnet-5"]);
 
   expect((await admin.delete(`/api/agents/${name}`)).ok()).toBe(true);
 });

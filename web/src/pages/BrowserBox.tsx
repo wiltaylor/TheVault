@@ -8,9 +8,6 @@ import { type BrowserStatus, api } from "../api";
 import { appInfo } from "../inApp";
 import { BROWSER_DESKTOP, BROWSER_SETUP_DOC } from "./Integrations";
 
-/** The browser box page's own path in the app. */
-export const BROWSER_BOX_PATH = "/browser-box";
-
 export function BrowserBox() {
   const [app] = createResource(appInfo);
   const [status, { refetch }] = createResource<BrowserStatus>(() => api.browserStatus());

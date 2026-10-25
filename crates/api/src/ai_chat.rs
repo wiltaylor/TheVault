@@ -3,7 +3,9 @@
 //! The body is `{ provider?, model?, messages, note_id?, agent?, thread?, update_skills?, compact? }`: the transcript so
 //! far, ending with the user's new message, in the neutral form of [`ai::Message`]. Provider and
 //! model default to Settings > AI's. The turn is run by `agent`, the built-in Assistant when it is
-//! absent (agents G4, G6): its provider and model when it names them, its prompt, effort, tools,
+//! absent (agents G4, G6): its provider and model when it names them and the body names neither
+//! (the chat box's choice wins over the agent's; a run not started from the chat box, such as a
+//! trigger's or a mention's, sends none), its prompt, effort, tools,
 //! note types ([`Limits`]) and confirmation and internet switches; a named agent is the author of
 //! what the tools write (agents G11). With `thread`, a note of the agent's (agents G7), the server
 //! reads the transcript from the thread, `messages` holding only the new message, and writes the
@@ -943,16 +945,19 @@ fn setup(
 ) -> Result<Setup, AiError> {
     let state = w.state();
     let settings = Settings::load(state)?;
-    // An agent that names its provider or model uses it; otherwise the request's choice, and
-    // then Settings > AI's defaults (agents G1).
+    // The request's choice, made in the chat box, wins; without one the agent's provider and
+    // model, and then Settings > AI's defaults (agents G1). A model alone runs on the agent's
+    // provider; a provider alone on that provider's default model, since the agent's model
+    // belongs to its own provider.
     let own = agent
         .provider
         .as_deref()
         .and_then(|p| p.parse::<Provider>().ok());
-    let (provider, model) = match (own, agent.model.as_deref()) {
+    let model = model.filter(|m| !m.trim().is_empty());
+    let (provider, model) = match (provider, model.as_deref()) {
         (Some(p), m) => settings.pick(Some(p), m)?,
-        (None, Some(m)) => settings.pick(provider, Some(m))?,
-        (None, None) => settings.pick(provider, model.as_deref())?,
+        (None, Some(m)) => settings.pick(own, Some(m))?,
+        (None, None) => settings.pick(own, agent.model.as_deref())?,
     };
     let cred = Credentials::resolve(state, provider)?;
     // The agent's prompt, or the shipped one (ai D17, agents G6); the open note follows it.
