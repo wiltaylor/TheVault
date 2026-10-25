@@ -18,6 +18,8 @@ export interface Suggestion {
   hint?: string;
   /** Shown for context, such as a term already picked under which others sit, but not choosable. */
   disabled?: boolean;
+  /** Choosing it puts this text in the box and keeps the list open, rather than taking it. */
+  fill?: string;
 }
 
 /**
@@ -39,10 +41,13 @@ export function Combobox(props: {
   autoFocus?: boolean;
   /** The box is done with: Escape with no list open, or focus leaving it empty. */
   onDone?: (how: "escape" | "blur") => void;
+  /** Shown at the end of the box for the text in it, such as the type a search is limited to. */
+  badge?: (text: string) => { icon: string | null; text: string } | null;
 }) {
   const [open, setOpen] = createSignal(false);
   const [items, setItems] = createSignal<Suggestion[]>([]);
   const [active, setActive] = createSignal(-1);
+  const [text, setText] = createSignal("");
   const listId = `${props.id ?? `combo-${++seq}`}-list`;
   let input!: HTMLInputElement;
   let run = 0;
@@ -63,20 +68,32 @@ export function Combobox(props: {
     }, 120);
   }
   function pick(s: Suggestion | null) {
+    if (s?.fill !== undefined) {
+      input.value = s.fill;
+      setText(s.fill);
+      input.focus();
+      setOpen(true);
+      refresh(s.fill);
+      return;
+    }
     props.choose(s, input.value);
     input.value = props.shown?.() ?? "";
+    setText(input.value);
     setOpen(false);
     setItems([]);
   }
   createEffect(() => {
     const t = props.shown?.() ?? "";
-    if (document.activeElement !== input) input.value = t;
+    if (document.activeElement !== input) {
+      input.value = t;
+      setText(t);
+    }
   });
   onMount(() => {
     if (props.autoFocus) input.focus();
   });
   return (
-    <div class="control-combo">
+    <div class="control-combo" classList={{ "has-badge": !!props.badge?.(text()) }}>
       <input
         ref={input}
         id={props.id}
@@ -96,12 +113,14 @@ export function Combobox(props: {
           refresh(props.shown ? "" : e.currentTarget.value);
         }}
         onInput={(e) => {
+          setText(e.currentTarget.value);
           setOpen(true);
           refresh(e.currentTarget.value);
         }}
         onBlur={() => {
           setOpen(false);
           input.value = props.shown?.() ?? input.value;
+          setText(input.value);
           if (props.onDone && input.value.trim() === "") props.onDone("blur");
         }}
         onKeyDown={(e) => {
@@ -137,6 +156,14 @@ export function Combobox(props: {
           }
         }}
       />
+      <Show when={props.badge?.(text())}>
+        {(b) => (
+          <span class="combo-badge" data-testid="combo-badge">
+            <TypeIcon name={b().icon} size={12} />
+            <span>{b().text}</span>
+          </span>
+        )}
+      </Show>
       <Show when={open() && items().length > 0}>
         <ul class="control-options" role="listbox" id={listId} aria-label={`${props.label} suggestions`} data-node-view-interactive>
           <For each={items()}>

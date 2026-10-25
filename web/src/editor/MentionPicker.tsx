@@ -1,10 +1,11 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { agentCallHref, newUlid } from "../agentCalls";
 import { AGENT_ICON, agentLabel, agents, callableAgents } from "../agents";
-import { type AgentSummary, type Row, type TypeDef, api } from "../api";
+import type { AgentSummary, Row, TypeDef } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { readPickerQuery, recentTypes, typeOptions, typeUsed } from "../placeholders";
 import { typeDef, types } from "../session";
+import { filterText, readTypeFilter, searchNotes } from "../typeFilter";
 import { useThisNote } from "../views/thisNote";
 import { isUlid } from "./markup";
 import type { Node as PMNode } from "@tiptap/pm/model";
@@ -14,11 +15,15 @@ import { knowTitle, noteType } from "./titles";
 const DEBOUNCE_MS = 150;
 const RESULTS = 8;
 
+/** The type filter and title a search was made for, to tell whether its results are the text's. */
+const searchKey = (type: string | null, title: string) => `${type ?? ""}/${title}`;
+
 /**
  * One choice in the picker: an agent to call, a note to mention, a type for a new placeholder,
  * or "Choose type…".
  */
 type Choice =
+  | { kind: "filter"; type: TypeDef }
   | { kind: "agent"; agent: AgentSummary }
   | { kind: "note"; row: Row }
   | { kind: "new"; type: TypeDef }
@@ -36,6 +41,11 @@ type Choice =
  * in the text also narrows. Enter or a click takes the choice; Escape, Backspace in the empty
  * box, or leaving the box gives up. Given up, a picker opened by typing `@` leaves the `@` and
  * the text typed after it; one opened by `[[` leaves nothing.
+ *
+ * `<type>/<text>` looks for the text among one type's notes only, and `<type>/` lists its most
+ * recently changed; the type shows beside the box, and "New" offers only that type. While the
+ * text could still be the start of a type, those types are offered first, as "filter by type",
+ * and choosing one types `<type>/`. Deleting the `/` takes the filter away again.
  */
 export function MentionPicker(props: SolidNodeViewProps) {
   let input!: HTMLInputElement;
@@ -46,8 +56,9 @@ export function MentionPicker(props: SolidNodeViewProps) {
   const host = useThisNote();
   const [query, setQuery] = createSignal("");
   const [results, setResults] = createSignal<Row[]>([]);
-  // The title the shown results were found for. "New <type>" waits for them, so the list does not
-  // jump under the pointer and Enter on a note found never picks "New" instead.
+  // The type filter and title the shown results were found for, as `searchKey` makes it. "New
+  // <type>" waits for them, so the list does not jump under the pointer and Enter on a note found
+  // never picks "New" instead.
   const [searched, setSearched] = createSignal<string | null>(null);
   const [active, setActive] = createSignal(0);
   const [error, setError] = createSignal<string | null>(null);
@@ -58,52 +69,74 @@ export function MentionPicker(props: SolidNodeViewProps) {
   onMount(() => queueMicrotask(() => input.focus()));
   onCleanup(() => clearTimeout(timer));
 
-  const parsed = createMemo(() => readPickerQuery(query()));
+  const filter = createMemo(() => readTypeFilter(query(), types()));
+  const parsed = createMemo(() => readPickerQuery(filter().text));
+  const found = () => searched() === searchKey(filter().type?.name ?? null, parsed().title);
   const newTypes = createMemo((): TypeDef[] => {
     const q = parsed();
-    if (q.title === "" || searched() !== q.title) return [];
+    if (q.title === "" || !found()) return [];
+    const only = filter().type;
+    if (only) return [only];
     const current = host ? noteType(host) : undefined;
     return typeOptions(types(), current, recentTypes(), q.typeFilter);
   });
   const callable = createMemo((): AgentSummary[] => {
-    if (trigger() !== "@") return [];
+    if (trigger() !== "@" || filter().type) return [];
     const q = parsed().title;
     if (q.includes(" ")) return [];
     return callableAgents(agents(), host ? noteType(host) : undefined, q);
   });
   const choices = createMemo((): Choice[] => {
-    const out: Choice[] = callable().map((agent) => ({ kind: "agent", agent }));
+    const out: Choice[] = filter().suggestions.map((type) => ({ kind: "filter", type }));
+    for (const agent of callable()) out.push({ kind: "agent", agent });
     for (const row of results()) out.push({ kind: "note", row });
     for (const type of newTypes()) out.push({ kind: "new", type });
-    if (parsed().title !== "" && parsed().typeFilter === null && types().length > newTypes().length) out.push({ kind: "types" });
+    if (parsed().title !== "" && parsed().typeFilter === null && filter().type === null && types().length > newTypes().length) out.push({ kind: "types" });
     return out;
   });
+  // What the text found nothing for, or why its `/` sets no type filter.
+  const hint = createMemo((): string | null => {
+    const f = filter();
+    if (f.problem) return f.problem;
+    if (f.type && parsed().title === "" && found() && results().length === 0) return `No ${f.type.label.toLowerCase()} yet`;
+    return null;
+  });
+  // The choice highlighted first: past the types offered as filters, when anything follows them,
+  // so Enter still takes the best note found.
+  const firstActive = () => {
+    const n = filter().suggestions.length;
+    return choices().length > n ? n : 0;
+  };
 
   function search(text: string) {
     setQuery(text);
-    setActive(0);
     clearTimeout(timer);
     const mine = ++seq;
-    const q = readPickerQuery(text).title;
-    if (q === "") {
+    const f = readTypeFilter(text, types());
+    const type = f.type?.name ?? null;
+    const q = readPickerQuery(f.text).title;
+    const key = searchKey(type, q);
+    if (q === "" && type === null) {
       setResults([]);
       setSearched(null);
+      setActive(firstActive());
       return;
     }
-    if (q === searched()) return;
+    setActive(firstActive());
+    if (key === searched()) return;
     timer = setTimeout(async () => {
       try {
-        const page = await api.search(q, null, RESULTS);
+        const rows = await searchNotes(type, q, RESULTS);
         if (mine !== seq) return;
-        setResults(page.rows);
-        setSearched(q);
-        setActive(0);
+        setResults(rows);
+        setSearched(key);
+        setActive(firstActive());
         setError(null);
       } catch (e) {
         if (mine !== seq) return;
         setError(e instanceof Error ? e.message : String(e));
         setResults([]);
-        setSearched(q);
+        setSearched(key);
       }
     }, DEBOUNCE_MS);
   }
@@ -165,7 +198,13 @@ export function MentionPicker(props: SolidNodeViewProps) {
   function choose(i: number) {
     const c = choices()[i];
     const title = parsed().title;
-    if (c?.kind === "agent") {
+    if (c?.kind === "filter") {
+      // The type is the filter now; what is typed next is searched for among its notes.
+      const text = filterText(c.type);
+      input.value = text;
+      search(text);
+      input.focus();
+    } else if (c?.kind === "agent") {
       setAsking(c.agent);
       queueMicrotask(() => requestBox?.focus());
     }
@@ -267,6 +306,14 @@ export function MentionPicker(props: SolidNodeViewProps) {
       </Show>
       <Show when={!asking()}>
         <span class="mention-picker-prefix">{trigger()}</span>
+        <Show when={filter().type}>
+          {(t) => (
+            <span class="mention-type-filter" data-testid="mention-type-filter" data-type={t().name} title={`Only ${t().plural || t().label}`}>
+              <TypeIcon name={t().icon} size={12} />
+              <span>{t().label}</span>
+            </span>
+          )}
+        </Show>
         <input
           ref={input}
           type="search"
@@ -281,10 +328,15 @@ export function MentionPicker(props: SolidNodeViewProps) {
           onKeyDown={onKeyDown}
         />
       </Show>
-      <Show when={!asking() && (choices().length > 0 || error())}>
+      <Show when={!asking() && (choices().length > 0 || error() || hint())}>
         <span class="mention-results" id="mention-results" role="listbox" data-node-view-interactive>
           <Show when={error()}>
             <span class="error">{error()}</span>
+          </Show>
+          <Show when={hint()}>
+            <span class="muted mention-filter-hint" data-testid="mention-filter-hint">
+              {hint()}
+            </span>
           </Show>
           <For each={choices()}>
             {(c, i) => (
@@ -292,15 +344,16 @@ export function MentionPicker(props: SolidNodeViewProps) {
                 role="option"
                 class="mention-result"
                 classList={{
+                  "mention-filter": c.kind === "filter",
                   "mention-agent": c.kind === "agent",
                   "mention-new": c.kind === "new" || c.kind === "types",
                   "mention-new-first": c.kind !== "note" && c.kind !== "agent" && choices()[i() - 1]?.kind === "note",
                 }}
                 aria-selected={active() === i()}
                 data-testid={
-                  c.kind === "agent" ? "mention-agent" : c.kind === "note" ? "mention-result" : c.kind === "new" ? "mention-new" : "mention-choose-type"
+                  c.kind === "filter" ? "mention-filter" : c.kind === "agent" ? "mention-agent" : c.kind === "note" ? "mention-result" : c.kind === "new" ? "mention-new" : "mention-choose-type"
                 }
-                data-type={c.kind === "new" ? c.type.name : undefined}
+                data-type={c.kind === "new" || c.kind === "filter" ? c.type.name : undefined}
                 data-agent={c.kind === "agent" ? c.agent.name : undefined}
                 onMouseDown={(e) => {
                   e.preventDefault();
@@ -308,6 +361,15 @@ export function MentionPicker(props: SolidNodeViewProps) {
                 }}
                 onMouseEnter={() => setActive(i())}
               >
+                <Show when={c.kind === "filter" && c}>
+                  {(f) => (
+                    <>
+                      <TypeIcon name={f().type.icon} size={14} />
+                      <span class="mention-result-title">{f().type.label}</span>
+                      <span class="muted mention-hint">filter by type</span>
+                    </>
+                  )}
+                </Show>
                 <Show when={c.kind === "agent" && c}>
                   {(a) => (
                     <>

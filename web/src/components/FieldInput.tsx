@@ -15,7 +15,8 @@ import {
   setLocationMapHeight,
 } from "../map/model";
 import { canonicalJson } from "../notes";
-import { taxonomyDef, typeDef } from "../session";
+import { taxonomyDef, typeDef, types } from "../session";
+import { filterText, readTypeFilter, searchNotes } from "../typeFilter";
 import { AssetInput } from "./AssetField";
 import { ChipPicker, matches } from "./ChipPicker";
 import type { Suggestion } from "./Combobox";
@@ -251,6 +252,7 @@ function Picker(
     chipColour?: (v: string) => string | undefined;
     /** What the add box shows before anything is typed. */
     boxPlaceholder?: string;
+    badge?: (text: string) => { icon: string | null; text: string } | null;
     create?: (text: string) => { value: string } | { error: string };
   },
 ) {
@@ -270,6 +272,7 @@ function Picker(
         chipHref={props.chipHref}
         chipColour={props.chipColour}
         placeholder={props.boxPlaceholder}
+        badge={props.badge}
         emptyText={props.placeholder}
         describedBy={problem() ? `${props.id}-problem` : undefined}
         onReject={props.create ? (t, reason) => setProblem(reason ?? `${t} is not one of the choices.`) : undefined}
@@ -305,19 +308,45 @@ function queryString(s: string): string {
 
 /**
  * Up to 20 notes of type `target` (`*` for any type) whose text matches `text`, by title; with no
- * text, the first notes of the type by title (none for any type). Their titles are remembered.
+ * text, the first notes of the type by title (none for any type). For any type, `<type>/<text>`
+ * looks among one type's notes (see `readTypeFilter`). Their titles are remembered.
  */
 export async function findNotes(target: string, text: string): Promise<Row[]> {
   const t = text.trim();
   let page;
   if (target === "*") {
-    page = t ? await api.search(t, null, SEARCH_RESULTS) : { rows: [] as Row[] };
+    const f = readTypeFilter(text, types());
+    page = { rows: await searchNotes(f.type?.name ?? null, f.text, SEARCH_RESULTS) };
   } else {
     const search = t ? ` search ${queryString(t)}` : "";
     page = await api.query(`from ${target}${search} sort title asc select title`, null, SEARCH_RESULTS);
   }
   for (const r of page.rows) knowTitle(r.id, r.title);
   return page.rows;
+}
+
+/** Marks a suggestion that is a type to filter by, or a hint; no note id starts with it. */
+const NOT_A_NOTE = "\u0000";
+
+/**
+ * Suggestions for a search of every type's notes: while a type is being typed, the types it
+ * starts, which fill in `<type>/`; then why the text sets no filter, if it tried to; then the
+ * notes found, as `row` shows them.
+ */
+export async function suggestNotes(text: string, row: (r: Row) => Suggestion): Promise<Suggestion[]> {
+  const f = readTypeFilter(text, types());
+  const out: Suggestion[] = f.suggestions.map((t) => ({ value: `${NOT_A_NOTE}type:${t.name}`, text: t.label, icon: t.icon, hint: "filter by type", fill: filterText(t) }));
+  if (f.problem) out.push({ value: `${NOT_A_NOTE}problem`, text: f.problem, disabled: true });
+  const rows = await findNotes("*", text);
+  out.push(...rows.map(row));
+  if (f.type && rows.length === 0) out.push({ value: `${NOT_A_NOTE}none`, text: f.text ? `No ${f.type.label.toLowerCase()} matches “${f.text}”` : `No ${f.type.label.toLowerCase()} yet`, disabled: true });
+  return out;
+}
+
+/** The type a search of every type's notes is limited to, as a box's badge. */
+export function noteBadge(text: string): { icon: string | null; text: string } | null {
+  const t = readTypeFilter(text, types()).type;
+  return t ? { icon: t.icon, text: t.label } : null;
 }
 
 /** Notes of the field's target type, found by title text, to link to. */
@@ -327,7 +356,11 @@ function ReferencePicker(props: FieldInputProps) {
     <Picker
       {...props}
       boxPlaceholder={target() === "*" ? "Search notes" : `Find a ${(typeDef(target())?.label ?? target()).toLowerCase()}`}
-      suggest={async (text) => (await findNotes(target(), text)).map((r) => ({ value: r.id, text: r.title || "Untitled" }))}
+      suggest={async (text) => {
+        const row = (r: Row): Suggestion => ({ value: r.id, text: r.title || "Untitled" });
+        return target() === "*" ? suggestNotes(text, row) : (await findNotes(target(), text)).map(row);
+      }}
+      badge={target() === "*" ? noteBadge : undefined}
       chipText={(id) => noteTitle(id) ?? id}
       chipHref={(id) => `/notes/${id}`}
     />

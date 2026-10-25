@@ -43,6 +43,8 @@ export interface ChipPickerProps {
   labelledBy?: string;
   describedBy?: string;
   placeholder?: string;
+  /** Shown at the end of the add box for the text in it, such as the type a search is limited to. */
+  badge?: (text: string) => { icon: string | null; text: string } | null;
   /** Muted text beside the + while there are no values. */
   emptyText?: string;
   class?: string;
@@ -131,7 +133,7 @@ export function ChipPicker(props: ChipPickerProps) {
     if (props.values.some((v) => same(t, v, text(v)))) return;
     let hit: Suggestion | undefined;
     try {
-      hit = (await suggest(t)).find((x) => !x.disabled && !x.value.startsWith(ADD) && same(t, x.value, x.text));
+      hit = (await suggest(t)).find((x) => !x.disabled && x.fill === undefined && !x.value.startsWith(ADD) && same(t, x.value, x.text));
     } catch {
       hit = undefined;
     }
@@ -225,6 +227,7 @@ export function ChipPicker(props: ChipPickerProps) {
             placeholder={props.placeholder ?? "Add…"}
             disabled={props.disabled}
             suggest={suggest}
+            badge={props.badge}
             choose={(s, t) => void choose(s, t)}
             autoFocus
             onDone={done}

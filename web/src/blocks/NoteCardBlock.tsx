@@ -6,7 +6,7 @@ import { Show, createContext, createResource, createSignal, onMount, useContext 
 import { type Block, type NoteDoc, type Row, type TypeDef, api } from "../api";
 import { changes } from "../changes";
 import { Combobox } from "../components/Combobox";
-import { findNotes } from "../components/FieldInput";
+import { noteBadge, suggestNotes } from "../components/FieldInput";
 import { TypeIcon } from "../components/Icon";
 import { typeDef } from "../session";
 import { TemplateBody } from "../views/parts";
@@ -77,7 +77,7 @@ export function NoteCardBlock(props: { block: Block; onChange?: (block: Block) =
   );
 }
 
-/** The search a card's note is chosen with: the reference field's note search. */
+/** The search a card's note is chosen with: the reference field's note search, `<type>/` limiting it to a type. */
 function NotePicker(props: { onChoose: (id: string) => void; onCancel: () => void; onBlur: () => void }) {
   let box!: HTMLDivElement;
   // Focus once the editor has placed the block and taken focus itself.
@@ -87,7 +87,8 @@ function NotePicker(props: { onChoose: (id: string) => void; onCancel: () => voi
       <Combobox
         label="Note to show as a card"
         placeholder="Find a note to show as a card"
-        suggest={async (q) => (await findNotes("*", q)).map((r: Row) => ({ value: r.id, text: r.title || "Untitled", icon: typeDef(r.type)?.icon ?? null, hint: typeDef(r.type)?.label ?? r.type }))}
+        suggest={(q) => suggestNotes(q, (r: Row) => ({ value: r.id, text: r.title || "Untitled", icon: typeDef(r.type)?.icon ?? null, hint: typeDef(r.type)?.label ?? r.type }))}
+        badge={noteBadge}
         choose={(s) => {
           if (s) props.onChoose(s.value);
         }}

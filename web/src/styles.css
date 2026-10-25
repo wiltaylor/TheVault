@@ -10752,3 +10752,47 @@ button.toast-action {
   max-width: 28rem;
   margin: 0.5rem 0;
 }
+
+/* A note picker limited to one type by `<type>/`: the type, beside the mention picker's box and at
+   the end of a combobox's. */
+.mention-type-filter,
+.combo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 0.8em;
+  white-space: nowrap;
+}
+
+.mention-type-filter {
+  margin-right: 0.2rem;
+  align-self: center;
+}
+
+.combo-badge {
+  position: absolute;
+  top: 50%;
+  right: 0.4rem;
+  transform: translateY(-50%);
+  max-width: min(45%, 8rem);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.control-combo.has-badge input {
+  padding-right: calc(min(45%, 8rem) + 0.6rem);
+}
+
+/* The types offered as filters sit above the rest, set apart by a rule. */
+.mention-filter + .mention-result:not(.mention-filter) {
+  border-top: 1px solid var(--line);
+}
+
+.mention-filter-hint {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.9em;
+}
