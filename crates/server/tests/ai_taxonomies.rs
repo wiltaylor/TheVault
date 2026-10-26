@@ -2,7 +2,8 @@
 //! `get_taxonomy` and `taxonomy_format` read; `propose_taxonomy_change` and
 //! `propose_taxonomy_delete` check without writing and emit `taxonomy_proposal`; `POST
 //! /api/ai/apply` applies one, renames moving the notes' terms, and answers a write-scope caller
-//! 403 `needs_admin`; `confirm.taxonomies` off applies at once for an admin caller.
+//! 403 `needs_admin`; `confirm.taxonomies` off applies at once for an admin or write caller, a read
+//! caller still getting the proposal.
 
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
@@ -550,13 +551,13 @@ fn with_taxonomy_confirmation_off_an_admin_change_applies_at_once_and_a_writer_s
     assert_eq!(last(&events, "applied")["op"], "taxonomy_delete");
     assert_eq!(api.taxonomy_wcl("shade"), None);
 
-    // A write-scope caller lacks admin, so it gets a proposal whatever the switch says.
-    let writer = api.token_of("writer", "write");
+    // A read-scope caller gets a proposal whatever the switch says.
+    let reader = api.token_of("reader", "read");
     let fake = FakeAnthropic::start();
     api.anthropic(&fake, json!({ "taxonomies": false }));
     let size = "label = \"Size\"\n\nterm \"Small\"\n";
     let events = api.one_as(
-        &writer,
+        &reader,
         &fake,
         "propose_taxonomy_change",
         json!({ "name": "size", "wcl": size, "renames": [] }),
@@ -567,4 +568,23 @@ fn with_taxonomy_confirmation_off_an_admin_change_applies_at_once_and_a_writer_s
         "{events:?}"
     );
     assert_eq!(api.taxonomy_wcl("size"), None);
+
+    // A write-scope caller's turn, such as an app's, has the agent's own rights (agents G4): the
+    // Assistant may change taxonomies, so with the switch off the change is made.
+    let writer = api.token_of("writer", "write");
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({ "taxonomies": false }));
+    let events = api.one_as(
+        &writer,
+        &fake,
+        "propose_taxonomy_change",
+        json!({ "name": "size", "wcl": size, "renames": [] }),
+    );
+    assert_eq!(
+        shape(&events),
+        ["tool", "applied", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    assert_eq!(last(&events, "applied")["op"], "taxonomy_create");
+    assert_eq!(api.taxonomy_wcl("size").as_deref(), Some(size));
 }

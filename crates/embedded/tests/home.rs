@@ -957,3 +957,159 @@ fn offline_or_unpaired_the_ai_routes_say_the_chat_needs_the_server() {
     device.embedded.set_remote(None);
     check(&device);
 }
+
+/// An agent that edits memos and changes types, asking before neither.
+const CLERK: &str = r#"label = "Clerk"
+
+permissions {
+  tools = ["get_note", "propose_edit", "propose_type_change"]
+  types = ["memo"]
+
+  confirm {
+    notes = false
+    types = false
+  }
+
+  web {
+    search = false
+  }
+}
+"#;
+
+impl Device {
+    /// One turn of agent `agent` on its thread `thread`, its model calling `tool` with `input`
+    /// then answering: the names of the events the webview polled.
+    fn agent_turn(
+        &self,
+        fake: &testkit::FakeAnthropic,
+        agent: &str,
+        thread: &str,
+        tool: &str,
+        input: Value,
+    ) -> Vec<String> {
+        fake.push(testkit::AnthropicMessage::new().tool_use("toolu_x", tool, input));
+        fake.push(testkit::AnthropicMessage::text("Done."));
+        let mut body = ask("Do it.");
+        body["agent"] = json!(agent);
+        body["thread"] = json!(thread);
+        let started = self.call("POST", "/api/ai/chat/turns", Some(body), 201);
+        self.poll(started["turn"].as_str().unwrap())
+            .iter()
+            .filter_map(|e| e["event"].as_str().map(str::to_owned))
+            .collect()
+    }
+}
+
+// An agent's confirmation switches decide in the apps as in the web app (ai D22, agents G4): the
+// turn runs on the home server with the agent's own rights, though the device token has only
+// `write`, and its changes reach the device by sync.
+#[test]
+fn an_agents_confirmation_switches_decide_in_the_app_as_in_the_web_app() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Admin::of(&server);
+    let fake = testkit::FakeAnthropic::start();
+    admin.anthropic(&fake);
+    for (name, wcl) in [
+        ("clerk", CLERK.to_owned()),
+        (
+            "careful",
+            CLERK
+                .replace("notes = false", "notes = true")
+                .replace("types = false", "types = true"),
+        ),
+    ] {
+        let res = Client::new()
+            .put(server.url(&format!("/api/agents/{name}")))
+            .bearer_auth(server.admin_token())
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(wcl)
+            .send()
+            .unwrap();
+        assert!(res.status().is_success(), "{}", res.text().unwrap());
+    }
+    let created = admin.call(
+        "POST",
+        "/api/notes?type=memo",
+        Some(json!({ "note": { "fields": { "title": "Groceries" } } })),
+        201,
+    );
+    let id = created["id"].as_str().unwrap().to_owned();
+    let device = Device::pair(&server, "Phone");
+    let thread_of = |agent: &str| {
+        let t = device.call(
+            "POST",
+            &format!("/api/agents/{agent}/threads"),
+            Some(json!({})),
+            201,
+        );
+        t["id"].as_str().unwrap().to_owned()
+    };
+    let edit = |title: &str, version: &Value| {
+        json!({
+            "id": id,
+            "base_version": version,
+            "note": json!({ "fields": { "title": title } }).to_string(),
+        })
+    };
+
+    // With the notes switch on, the edit waits for the user.
+    let careful = thread_of("careful");
+    let names = device.agent_turn(
+        &fake,
+        "careful",
+        &careful,
+        "propose_edit",
+        edit("Groceries and milk", &created["version"]),
+    );
+    assert!(names.iter().any(|n| n == "proposal"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "applied"), "{names:?}");
+    let home = admin.call("GET", &format!("/api/notes/{id}"), None, 200);
+    assert_eq!(home["note"]["fields"]["title"], "Groceries");
+
+    // With it off, the edit is made on the home server.
+    let clerk = thread_of("clerk");
+    let names = device.agent_turn(
+        &fake,
+        "clerk",
+        &clerk,
+        "propose_edit",
+        edit("Groceries and eggs", &created["version"]),
+    );
+    assert!(names.iter().any(|n| n == "applied"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "proposal"), "{names:?}");
+    let home = admin.call("GET", &format!("/api/notes/{id}"), None, 200);
+    assert_eq!(home["note"]["fields"]["title"], "Groceries and eggs");
+
+    // The agent's own rights decide on the home server, though the device token lacks `admin`:
+    // with the types switch on, a type change waits for the user.
+    let names = device.agent_turn(
+        &fake,
+        "careful",
+        &careful,
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("Main", "Details") }),
+    );
+    assert!(names.iter().any(|n| n == "type_proposal"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "applied"), "{names:?}");
+    let memo = admin.call("GET", "/api/types/memo", None, 200);
+    assert!(!memo.to_string().contains("Details"), "{memo}");
+
+    // With it off, the type is changed on the home server.
+    let names = device.agent_turn(
+        &fake,
+        "clerk",
+        &clerk,
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("Main", "Details") }),
+    );
+    assert!(names.iter().any(|n| n == "applied"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "type_proposal"), "{names:?}");
+    let memo = admin.call("GET", "/api/types/memo", None, 200);
+    assert!(memo.to_string().contains("Details"), "{memo}");
+
+    // Nothing was written on the device: its copy waits for the sync.
+    assert!(device.embedded.queue().pending().unwrap().is_empty());
+    device.sync();
+    let local = device.call("GET", &format!("/api/notes/{id}"), None, 200);
+    assert_eq!(local["note"]["fields"]["title"], "Groceries and eggs");
+}

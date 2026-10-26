@@ -23,8 +23,9 @@
 //! `propose_skill_file_delete` and `propose_skill_delete` (`crate::ai_skill_changes`, skills S9)
 //! check a change and hand it to the user (ai D14, D18, D20, D31, agents
 //! G20; an agent change is also checked against the turn's agent, `crate::ai_agents`). When
-//! Settings > AI turns a kind's confirmation off and the caller's scope allows the write (`write`
-//! for notes, `admin` for types, taxonomies, agents and skills), the tool makes
+//! the agent's permissions turn a kind's confirmation off and the turn's scope allows the write
+//! (`write` for notes, `admin` for types, taxonomies, agents and skills; a `write` caller's turn
+//! has the agent's own scope, [`change_scope`]), the tool makes
 //! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
 //! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
 //! the trash (ai D21). With a Brave Search key stored, `web_search` searches the web
@@ -276,6 +277,19 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
     .chain(crate::ai_skill_changes::PROPOSE_TOOLS.iter())
     .any(|t| p.allows_tool(t));
     if admin { Scope::Admin } else { Scope::Write }
+}
+
+/// The scope a turn's change tools make their changes with when their confirmation switch is
+/// off (ai D22, agents G4): for a caller with `write` and no more, such as an app's device token,
+/// the agent's own, as an unattended run of it has ([`unattended_scope`]), so its switches decide
+/// on the home server whoever runs the turn; otherwise the caller's, so a `read` caller only
+/// ever gets proposals.
+fn change_scope(caller: Scope, agent: &Agent) -> Scope {
+    if caller.allows(Scope::Write) && !caller.allows(Scope::Admin) {
+        unattended_scope(agent)
+    } else {
+        caller
+    }
 }
 
 /// The confirmation switch that governs change tool `name`, or `None` for a tool that changes
@@ -858,8 +872,8 @@ impl Limits {
 }
 
 /// The kinds of change the tools make themselves rather than propose (ai D22): those whose
-/// confirmation Settings > AI turned off and whose write the caller's scope allows. Lacking the
-/// scope, a tool proposes, whatever the switch says.
+/// confirmation the agent's permissions turned off and whose write the turn's scope
+/// ([`change_scope`]) allows. Lacking the scope, a tool proposes, whatever the switch says.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Direct {
     notes: bool,
@@ -1031,7 +1045,7 @@ fn setup(
         model,
         cred,
         system,
-        direct: Direct::of(confirm_of(agent), scope),
+        direct: Direct::of(confirm_of(agent), change_scope(scope, agent)),
         web_search: crate::brave::Search::load(state),
         fetch_private: settings.fetch_private,
         web: web_of(agent),

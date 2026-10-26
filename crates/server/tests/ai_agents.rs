@@ -4,7 +4,7 @@
 //! one, checks it again against the proposing agent, and answers a write-scope caller 403
 //! `needs_admin`; a change that would give an agent more than the proposing agent has, or touch
 //! its own file, is refused on propose and on apply; `confirm.agents` off applies at once for an
-//! admin caller; an unattended run with the switch on is not offered the propose tools.
+//! admin or write caller, a read caller still getting the proposal; an unattended run with the switch on is not offered the propose tools.
 
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
@@ -546,7 +546,7 @@ fn an_agent_cannot_give_another_agent_more_than_it_has_or_change_itself() {
 }
 
 #[test]
-fn the_switch_off_applies_at_once_for_an_admin_and_apply_needs_admin() {
+fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     api.anthropic(&fake, json!({ "agents": false }));
@@ -566,15 +566,31 @@ fn the_switch_off_applies_at_once_for_an_admin_and_apply_needs_admin() {
     assert!(api.agent_wcl("helper").is_some());
     assert_eq!(last_result(&fake, false)["applied"], true);
 
-    // A write token's turn only proposes, and its apply is refused.
+    // A write token's turn, such as an app's, has the agent's own rights (agents G4): the
+    // Assistant may change agents, so the switch off deletes at once.
     let write = api.token_of("phone", "write");
     fake.push(AnthropicMessage::new().tool_use(
         "toolu_d",
         "propose_agent_delete",
         json!({ "name": "helper" }),
     ));
-    fake.push(AnthropicMessage::text("Proposed."));
+    fake.push(AnthropicMessage::text("Deleted."));
     let events = api.chat_as(&write, None);
+    assert!(find(&events, "agent_proposal").is_none(), "{events:?}");
+    assert_eq!(last(&events, "applied")["op"], "agent_delete");
+    assert!(api.agent_wcl("helper").is_none());
+
+    // A read token's turn only proposes, whatever the switch says, and a write token's apply of
+    // a proposal no thread holds is refused.
+    api.put_agent("helper", HELPER);
+    let read = api.token_of("reader", "read");
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_r",
+        "propose_agent_delete",
+        json!({ "name": "helper" }),
+    ));
+    fake.push(AnthropicMessage::text("Proposed."));
+    let events = api.chat_as(&read, None);
     let p = last(&events, "agent_proposal").clone();
     let (status, body) = api.apply_as(&write, &p);
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");

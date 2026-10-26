@@ -1741,7 +1741,7 @@ fn with_types_confirmation_off_a_template_change_is_applied_through_the_planned_
 }
 
 #[test]
-fn a_caller_without_the_scope_gets_proposals_whatever_the_switches_say() {
+fn a_read_caller_only_proposes_and_a_write_caller_has_the_agents_rights() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     api.anthropic(&fake);
@@ -1793,7 +1793,8 @@ fn a_caller_without_the_scope_gets_proposals_whatever_the_switches_say() {
     assert_eq!(api.memos().len(), 1);
     assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
 
-    // A write token makes note changes but still proposes type changes, which need admin.
+    // A write token's turn, such as an app's, has the agent's own rights (agents G4): the
+    // Assistant may change types, so with the switch off the type change is made.
     let writer = api.token_of("writer", "write");
     let (tool, input, _) = calls[4].clone();
     let fake = FakeAnthropic::start();
@@ -1802,10 +1803,10 @@ fn a_caller_without_the_scope_gets_proposals_whatever_the_switches_say() {
     let events = api.propose_as(&writer, &fake, tool, input);
     assert_eq!(
         shape(&events),
-        ["tool", "type_proposal", "tool_result", "text", "done"],
+        ["tool", "applied", "tool_result", "text", "done"],
         "{events:?}"
     );
-    assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
+    assert!(api.type_wcl("memo").unwrap().contains("tab \"Details\""));
 }
 
 // The turns form and the apply route (ai D23).
