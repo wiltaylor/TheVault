@@ -35,8 +35,10 @@
 //! A sub agent's session (subagents U5) is a thread of origin `subagent:<parent thread>` whose
 //! transcript names its `parent`, `{thread, turn, call}`; the parent's transcript lists the
 //! sessions it started in `subagents`. The list leaves sessions out; deleting, archiving or
-//! unarchiving the parent, here or through the note routes, does the same to them, and
-//! truncating it past a call deletes that call's session. A fork keeps the blocks but not the
+//! unarchiving the parent does the same to them, and truncating it past a call deletes that call's
+//! session. The writer does it in the same write as the parent's change, so it holds whatever
+//! makes the change: these routes, the note routes, a script, an app's local write or a device's
+//! push. A fork keeps the blocks but not the
 //! sessions, which stay the parent's. An outcome recorded for a sub agent's proposal in the
 //! parent is recorded in its session too.
 //!
@@ -730,41 +732,6 @@ pub fn record_outcome(
     Ok(saved)
 }
 
-/// The sub agent sessions thread `t` started that are still its own: a fork keeps its parent's
-/// blocks, but the sessions stay the parent's (subagents U5).
-pub fn own_subs(w: &Writer, t: &Thread, calls: Option<&[String]>) -> Vec<Thread> {
-    t.transcript
-        .subagents
-        .iter()
-        .filter(|s| calls.is_none_or(|c| c.contains(&s.call)))
-        .filter_map(|s| Thread::read(w, &s.thread).ok())
-        .filter(|sub| {
-            sub.transcript
-                .parent
-                .as_ref()
-                .is_some_and(|p| p.thread == t.id)
-        })
-        .collect()
-}
-
-/// Delete or archive the sub agent sessions of thread `t` with it (subagents U5): `None` moves
-/// them to the trash, `Some(archived)` archives or unarchives them. A session that fails stays,
-/// and says why on the server's log.
-pub fn cascade(w: &Writer, t: &Thread, archived: Option<bool>, author: &Author) {
-    for sub in own_subs(w, t, None) {
-        let done = match archived {
-            None => w.delete(&sub.id, Some(&sub.version), author).map(|_| ()),
-            Some(a) if a != sub.archived => w
-                .set_archived(&sub.id, a, Some(&sub.version), author)
-                .map(|_| ()),
-            Some(_) => Ok(()),
-        };
-        if let Err(e) = done {
-            eprintln!("sub agent session {} of thread {} stays: {e}", sub.id, t.id);
-        }
-    }
-}
-
 /// A title from the user's first question: its first line, cut at [`TITLE_CHARS`].
 /// How the chat box names the files the user attached to a message, ahead of the question. A
 /// thread's title is never taken from it.
@@ -1176,24 +1143,11 @@ pub async fn truncate(
         let thread = Thread::read_of(w, &name, &id)?;
         let _busy = Busy::take(&thread.id, &name)?;
         let cut = cut(&thread.transcript, b.at)?;
-        // The sub agent sessions of the calls cut go with them (subagents U5).
-        let gone: Vec<String> = thread
-            .transcript
-            .subagents
-            .iter()
-            .filter(|s| !cut.subagents.iter().any(|k| k.call == s.call))
-            .map(|s| s.call.clone())
-            .collect();
         let label = agent_label(w, &name);
-        let saved = save(w, &id, &label, Some(&author), move |t| {
+        // The writer deletes the sub agent sessions of the calls cut (subagents U5).
+        save(w, &id, &label, Some(&author), move |t| {
             t.transcript = cut.clone()
-        })?;
-        for sub in own_subs(w, &thread, Some(&gone)) {
-            if let Err(e) = w.delete(&sub.id, Some(&sub.version), &author) {
-                eprintln!("sub agent session {} of thread {id} stays: {e}", sub.id);
-            }
-        }
-        Ok::<_, ApiError>(saved)
+        })
     })
     .await?;
     Ok(Json(t.json()))
@@ -1229,7 +1183,6 @@ pub async fn delete(
     blocking(w, move |w| {
         let t = Thread::read_of(w, &name, &id)?;
         w.delete(&t.id, Some(&t.version), &author)?;
-        cascade(w, &t, None, &author);
         Ok::<_, ApiError>(json!({ "id": t.id, "deleted": true }))
     })
     .await

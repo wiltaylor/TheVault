@@ -8,7 +8,7 @@
 //! 4. Check the base version against the note's current one; a stale one is a [`Error::Conflict`]
 //!    (D12).
 //! 5. [`Hooks::before`]: the `before_*` handlers.
-//! 6. [`Hooks::side_effects`]: reverse references and `on_delete` rules.
+//! 6. [`Hooks::side_effects`]: reverse references, `on_delete` rules and sub agent sessions.
 //! 7. Commit every file atomically (D4).
 //! 8. Record a version of every changed note in `state.db`, or move a deleted note to the trash
 //!    (D13).
@@ -17,7 +17,8 @@
 //! 11. Return the canonical WCL and the new version of every changed note (D21).
 //!
 //! Step 6 is built in: [`refs`] works out the reverse sides of two-way and peer references and
-//! applies `on_delete`. [`Hooks::side_effects`] can add more. [`NoHooks`] leaves steps 5 and 10
+//! applies `on_delete`, and [`sessions`] takes a sub agent's sessions along with their parent
+//! thread (subagents U5). [`Hooks::side_effects`] can add more. [`NoHooks`] leaves steps 5 and 10
 //! empty; the `script` crate's handlers fill them.
 //!
 //! Step 5 runs on every note the write changes, the side effects of step 6 included, so a note an
@@ -51,6 +52,7 @@ mod queryviews;
 mod refs;
 mod remote;
 mod script_vault;
+mod sessions;
 mod shipped;
 mod skills;
 mod terms;
@@ -492,6 +494,13 @@ pub struct Writer {
     /// How many synced files besides notes this writer has changed since it opened, written here
     /// or pulled from the home server. See [`Writer::definition_changes`].
     definitions: std::sync::atomic::AtomicU64,
+}
+
+/// Whether `line` of a note file is the top-level `archived = true`, which the canonical layout
+/// may align with the items around it, as in `archived   = true`.
+fn is_archived_line(line: &str) -> bool {
+    line.split_once('=')
+        .is_some_and(|(k, v)| k.trim_end() == note::ARCHIVED && v.trim() == "true")
 }
 
 /// Rounds of step 5 and step 6 one write may take before it is refused. Each round runs handlers
@@ -1303,6 +1312,7 @@ impl Writer {
         let mut rounds = 0;
         let changes = loop {
             let expanded = refs::expand(self, &inner, changes)?;
+            let expanded = sessions::expand(self, &inner, expanded)?;
             if expanded
                 .iter()
                 .all(|c| handled.contains(&(c.id.clone(), c.event)))
@@ -1373,7 +1383,7 @@ impl Writer {
                 let was = self
                     .vault
                     .read_text(&path)
-                    .is_ok_and(|t| t.lines().any(|l| l == "archived = true"));
+                    .is_ok_and(|t| t.lines().any(is_archived_line));
                 if was != note::is_archived(doc) {
                     flips.insert(r.change.id.clone());
                 }
