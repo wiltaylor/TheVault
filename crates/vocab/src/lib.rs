@@ -26,7 +26,10 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// 6: script tools (script-tools T2, T4, T7, T8): the synced `tools/` folder of tool files,
 /// `tools/<name>.wcl`, an unknown folder an older device refuses; a skill's own `tools/` and
 /// `scripts/`; and the agent permission keys `permissions { scripts { run_code } }` and
-/// `confirm { tools }`, which an older reader refuses as an unknown permissions block and switch.
+/// `confirm { tools }`, which an older reader refuses as an unknown permissions block and switch;
+/// and sub agents (subagents U5): the `permissions { subagents { allow, max, agents } }` block,
+/// an unknown permissions block to an older reader, and a thread's sub agent sessions, origin
+/// `subagent:<thread>` with `parent` and `subagents` in its transcript.
 pub const FORMAT_VERSION: u32 = 6;
 
 /// Who made a change (D13, D30).

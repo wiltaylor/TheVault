@@ -53,6 +53,13 @@ pub const OUTBOX_SWITCHES: [&str; 1] = ["send_without_review"];
 /// The script switches of `permissions.scripts` (script-tools T1, T7).
 pub const SCRIPT_SWITCHES: [&str; 1] = ["run_code"];
 
+/// The items of `permissions.subagents` (subagents U2).
+pub const SUBAGENT_ITEMS: [&str; 3] = ["allow", "max", "agents"];
+
+/// The most sub agents a turn runs at once, and the default (subagents U2).
+pub const SUBAGENTS_MAX: u8 = 8;
+pub const SUBAGENTS_DEFAULT_MAX: u8 = 4;
+
 /// The note changes a trigger's `on` may name (agents G10).
 pub const TRIGGER_OPS: [&str; 3] = ["create", "update", "delete"];
 
@@ -123,6 +130,8 @@ pub struct Permissions {
     pub skills: Option<Vec<String>>,
     /// Running wscript (script-tools T1). Written only when on.
     pub scripts: Scripts,
+    /// Starting sub agents (subagents U2). Written only when it differs from the default.
+    pub subagents: Subagents,
 }
 
 impl Permissions {
@@ -310,6 +319,35 @@ impl Scripts {
             _ => return false,
         }
         true
+    }
+}
+
+/// Whether and how the agent may hand parts of a task to sub agents (subagents U2): throwaway
+/// ones, and the named agents in `agents`. Off by default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subagents {
+    /// `start_subagent` is offered.
+    pub allow: bool,
+    /// How many sub agents one turn runs at once, 1 to [`SUBAGENTS_MAX`].
+    pub max: u8,
+    /// The agents it may delegate to by name; empty is none.
+    pub agents: Vec<String>,
+}
+
+impl Default for Subagents {
+    fn default() -> Subagents {
+        Subagents {
+            allow: false,
+            max: SUBAGENTS_DEFAULT_MAX,
+            agents: Vec::new(),
+        }
+    }
+}
+
+impl Subagents {
+    /// Whether it may delegate to agent `name`.
+    pub fn allows_agent(&self, name: &str) -> bool {
+        self.agents.iter().any(|a| a == name)
     }
 }
 
@@ -716,6 +754,20 @@ impl Agent {
                 }
                 out.push_str("  }\n");
             }
+            let s = &p.subagents;
+            if *s != Subagents::default() {
+                out.push_str("\n  subagents {\n");
+                if s.allow {
+                    field(&mut out, "    ", "allow", "true");
+                }
+                if s.max != SUBAGENTS_DEFAULT_MAX {
+                    field(&mut out, "    ", "max", &s.max.to_string());
+                }
+                if !s.agents.is_empty() {
+                    field(&mut out, "    ", "agents", &list(&s.agents));
+                }
+                out.push_str("  }\n");
+            }
             out.push_str("}\n");
         }
         for t in &self.triggers {
@@ -903,7 +955,7 @@ impl Reader<'_> {
             d,
             &["tools", "types", "browser", "skills"],
             "permissions.",
-            "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... }, outbox { ... } or scripts { ... }",
+            "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... }, outbox { ... }, scripts { ... } or subagents { ... }",
         );
         let mut p = Permissions {
             tools: self.names_by(d, "tools", "permissions.tools", "tool", is_tool_name),
@@ -928,10 +980,11 @@ impl Reader<'_> {
                 "web" => &WEB_SWITCHES,
                 "outbox" => &OUTBOX_SWITCHES,
                 "scripts" => &SCRIPT_SWITCHES,
+                "subagents" => &SUBAGENT_ITEMS,
                 _ => {
                     self.c.fail(
                         &format!("permissions > {}", b.name()),
-                        "is not a permissions block: use confirm { ... }, web { ... }, outbox { ... } or scripts { ... }",
+                        "is not a permissions block: use confirm { ... }, web { ... }, outbox { ... }, scripts { ... } or subagents { ... }",
                     );
                     continue;
                 }
@@ -942,6 +995,10 @@ impl Reader<'_> {
             }
             if !b.labels.is_empty() {
                 self.c.fail(&at, "takes no label");
+            }
+            if b.kind == "subagents" {
+                p.subagents = self.subagents(&b.body, &at);
+                continue;
             }
             self.c.only_blocks(&b.body, &[], &at);
             self.known(
@@ -972,6 +1029,41 @@ impl Reader<'_> {
             }
         }
         p
+    }
+
+    /// `permissions.subagents` (subagents U2): `allow`, a bool; `max`, 1 to [`SUBAGENTS_MAX`];
+    /// `agents`, a list of agent names.
+    fn subagents(&mut self, d: &Doc, at: &str) -> Subagents {
+        self.c.only_blocks(d, &[], at);
+        self.known(
+            d,
+            &SUBAGENT_ITEMS,
+            &format!("{at}."),
+            &format!("is not a sub agent item: use {}", SUBAGENT_ITEMS.join(", ")),
+        );
+        let mut s = Subagents {
+            allow: self
+                .bool(d, "allow", &format!("{at}.allow"))
+                .unwrap_or(false),
+            ..Subagents::default()
+        };
+        match d.field("max") {
+            None => {}
+            Some(Value::Int(n)) if (1..=i64::from(SUBAGENTS_MAX)).contains(n) => {
+                s.max = u8::try_from(*n).unwrap_or(SUBAGENTS_DEFAULT_MAX);
+            }
+            Some(v) => self.c.fail(
+                &format!("{at}.max"),
+                format!(
+                    "must be a whole number from 1 to {SUBAGENTS_MAX}, not {}",
+                    v.describe()
+                ),
+            ),
+        }
+        if let Some(agents) = self.names(d, "agents", &format!("{at}.agents"), "agent") {
+            s.agents = agents;
+        }
+        s
     }
 
     fn trigger(&mut self, b: &DocBlock) -> Option<Trigger> {

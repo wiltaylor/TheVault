@@ -23,6 +23,9 @@
 //! them: another caller's turn is a 404. At most [`MAX_TURNS`] run per caller at once, and per
 //! agent, counting its trigger runs; one more is a 429 `too_many_turns`. A turn on a thread
 //! starting and ending is published on `/api/events` as `ai_turn {agent, thread, turn, running}`.
+//! A sub agent's turn (subagents U6) is read and stopped through the same routes, by the caller
+//! of the turn that started it: its id is its session's running `turn`, and stopping it stops
+//! only it, its parent answered that the user stopped it.
 //! Both forms share one turn runner, [`ai_chat::start`].
 //!
 //! `POST /api/ai/apply` applies a change the chat proposed, its body the `proposal` or
@@ -87,6 +90,11 @@ pub const NEEDS_ADMIN_TOOL_MESSAGE: &str = "Apply script tool changes in the web
 /// (script-tools T1).
 pub const NEEDS_ADMIN_RUN_CODE_MESSAGE: &str =
     "Only an admin turns on Run wscript code: apply this agent change in the web app.";
+
+/// Why a caller without `admin` cannot apply an agent change that turns on sub agents or adds an
+/// agent to delegate to (subagents U2).
+pub const NEEDS_ADMIN_SUBAGENTS_MESSAGE: &str =
+    "Only an admin grants sub agents: apply this agent change in the web app.";
 
 /// The most expired turn ids remembered, to answer 410 rather than 404.
 const EXPIRED_KEPT: usize = 10_000;
@@ -189,6 +197,90 @@ impl Turns {
             expired.clear();
         }
         expired.insert(id.to_owned());
+    }
+}
+
+/// The sub agent turns (subagents U6): read and stopped through the turn routes like the turns
+/// `POST /api/ai/chat/turns` starts, by the caller of the turn that started them.
+fn subs() -> &'static Turns {
+    static SUBS: std::sync::OnceLock<Turns> = std::sync::OnceLock::new();
+    SUBS.get_or_init(Turns::default)
+}
+
+/// Turn `id` of `author`'s: one they started, or a sub agent turn one of theirs started.
+fn find(a: &Ai, id: &str, author: &Author) -> Result<Arc<Held>, ApiError> {
+    match a.turns.get(id, author) {
+        Err(e) if e.status == StatusCode::NOT_FOUND => subs().get(id, author),
+        got => got,
+    }
+}
+
+/// A sub agent's turn (subagents U6): its events kept as a turn's are, for the session pane to
+/// read through `GET /api/ai/chat/turns/{turn}/events`, and stopped through its `DELETE`. A sub
+/// agent of an unattended run, which nobody follows, is kept here unlisted.
+pub(crate) struct SubTurn {
+    id: String,
+    held: Arc<Held>,
+    listed: bool,
+}
+
+impl SubTurn {
+    /// Hold the turn of agent `agent` on sub agent session `thread`, for `owner`, which `stop`
+    /// stops. Listed, its id is the session's running turn.
+    pub(crate) fn start(
+        owner: Author,
+        agent: &str,
+        thread: &str,
+        stop: watch::Sender<bool>,
+        running: Arc<AtomicBool>,
+        listed: bool,
+    ) -> SubTurn {
+        let id = state::random_hex(16);
+        let held = Arc::new(Held {
+            owner,
+            agent: agent.to_owned(),
+            thread: Some(thread.to_owned()),
+            stop,
+            running,
+            log: Mutex::new(Log::default()),
+            changed: watch::Sender::new(0),
+            attached: Notify::new(),
+        });
+        if listed {
+            subs().live().insert(id.clone(), held.clone());
+            agent_threads::set_turn(thread, &id);
+        }
+        SubTurn { id, held, listed }
+    }
+
+    /// Its id in the turn routes, when it is listed there.
+    pub(crate) fn id(&self) -> Option<&str> {
+        self.listed.then_some(self.id.as_str())
+    }
+
+    /// Keep event `e` for the turn's readers.
+    pub(crate) fn push(&self, e: Sent) {
+        self.held.log().events.push(e);
+        self.held.bump();
+    }
+
+    /// Stop the turn.
+    pub(crate) fn stop(&self) {
+        let _ = self.held.stop.send(true);
+    }
+
+    /// The turn is over: its readers' streams end, and its events are let go after
+    /// [`KEEP_FINISHED`].
+    pub(crate) fn finish(self) {
+        self.held.log().done = true;
+        self.held.bump();
+        if self.listed {
+            let id = self.id;
+            tokio::spawn(async move {
+                tokio::time::sleep(keep_finished()).await;
+                subs().expire(&id);
+            });
+        }
     }
 }
 
@@ -365,7 +457,7 @@ pub async fn events(
     Query(q): Query<After>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let held = a.turns.get(&id, &author)?;
+    let held = find(&a, &id, &author)?;
     let after = q.after.or_else(|| {
         headers
             .get("last-event-id")
@@ -403,8 +495,10 @@ pub async fn stop(
     Caller(author): Caller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    a.turns.get(&id, &author)?;
+    find(&a, &id, &author)?;
+    // A sub agent's turn stops alone: its parent gets "stopped by the user" (subagents U6).
     a.turns.drop_turn(&id);
+    subs().drop_turn(&id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -460,18 +554,23 @@ pub async fn apply(
     }
     // Turning on an agent's Run wscript code is full access to the vault: only the signed-in
     // admin grants it, never a write token applying what an agent proposed (script-tools T1).
+    // Granting sub agents is guarded the same way (subagents U2).
     if event == "agent_proposal" && !scope.allows(Scope::Admin) {
         let w = a.writer.clone();
         let c = change.clone();
-        let grants = tokio::task::spawn_blocking(move || crate::ai_agents::grants_run_code(&w, &c))
-            .await
-            .unwrap_or(true);
-        if grants {
-            return Err(ApiError::new(
-                StatusCode::FORBIDDEN,
-                "needs_admin",
-                NEEDS_ADMIN_RUN_CODE_MESSAGE,
-            ));
+        let grants = tokio::task::spawn_blocking(move || {
+            if crate::ai_agents::grants_run_code(&w, &c) {
+                Some(NEEDS_ADMIN_RUN_CODE_MESSAGE)
+            } else if crate::ai_agents::grants_subagents(&w, &c) {
+                Some(NEEDS_ADMIN_SUBAGENTS_MESSAGE)
+            } else {
+                None
+            }
+        })
+        .await
+        .unwrap_or(Some(NEEDS_ADMIN_RUN_CODE_MESSAGE));
+        if let Some(message) = grants {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_admin", message));
         }
     }
     let w = a.writer.clone();
@@ -513,7 +612,12 @@ fn apply_as_agent(
                     ));
                 }
             }
-            Author::Agent(agent.name)
+            // A throwaway sub agent's proposal is applied as it, `<agent>/sub:<n>` (subagents
+            // U4).
+            match change["sub"].as_u64() {
+                Some(n) => Author::Agent(format!("{}/sub:{n}", agent.name)),
+                None => Author::Agent(agent.name),
+            }
         }
         None => caller,
     };

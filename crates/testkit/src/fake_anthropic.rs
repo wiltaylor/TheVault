@@ -11,12 +11,16 @@
 //! fake.push(AnthropicMessage::new().tool_use("toolu_1", "get_note", json!({"id": "01J"})));
 //! fake.push(AnthropicMessage::new().refusal(Some("cyber"), Some("Not this one")));
 //! fake.push(AnthropicReply::rate_limited(1));
+//! // Only for a request whose body holds the text, as each of several running at once does:
+//! fake.push_when("Research the venues", AnthropicMessage::text("The hall."));
 //! // ... after the calls:
 //! let sent = fake.message_requests(); // each request's headers and JSON body
 //! ```
 //!
 //! `POST /v1/messages` answers the next queued reply, or [`AnthropicMessage::text`] `"OK"` when
-//! none is queued. A queued [`AnthropicMessage`] is answered as the request asks: a stream of
+//! none is queued. A reply queued with [`FakeAnthropic::push_when`] answers only a request whose
+//! JSON body holds its text, so turns that run at once, such as sub agents, each get their own;
+//! the first queued reply that may answer a request does. A queued [`AnthropicMessage`] is answered as the request asks: a stream of
 //! `message_start`, `content_block_start`/`_delta`/`_stop` per block (text in small
 //! `text_delta`s, tool inputs in several `input_json_delta`s, thinking in `thinking_delta`s and
 //! one `signature_delta`), `message_delta` with the stop reason, stop details and usage, and
@@ -392,7 +396,8 @@ impl FakeAnthropicBuilder {
 struct Shared {
     config: FakeAnthropicBuilder,
     requests: Mutex<Vec<Request>>,
-    replies: Mutex<VecDeque<AnthropicReply>>,
+    /// Each reply with the text a request's body must hold for it, if any.
+    replies: Mutex<VecDeque<(Option<String>, AnthropicReply)>>,
     served: Mutex<u64>,
 }
 
@@ -428,7 +433,12 @@ impl FakeAnthropic {
 
     /// Queue the answer to a later `POST /v1/messages`, in order.
     pub fn push(&self, reply: impl Into<AnthropicReply>) {
-        lock(&self.shared.replies).push_back(reply.into());
+        lock(&self.shared.replies).push_back((None, reply.into()));
+    }
+
+    /// Queue the answer to a later `POST /v1/messages` whose JSON body holds `text`.
+    pub fn push_when(&self, text: &str, reply: impl Into<AnthropicReply>) {
+        lock(&self.shared.replies).push_back((Some(text.to_owned()), reply.into()));
     }
 
     /// Every request received so far, in arrival order.
@@ -518,9 +528,16 @@ fn messages(shared: &Shared, request: &Request) -> Answer {
     if let Err(e) = anthropic_images(&body) {
         return error(400, "invalid_request_error", &e);
     }
-    let reply = lock(&shared.replies)
-        .pop_front()
-        .unwrap_or_else(|| AnthropicMessage::text("OK").into());
+    let text = body.to_string();
+    let reply = {
+        let mut replies = lock(&shared.replies);
+        replies
+            .iter()
+            .position(|(when, _)| when.as_ref().is_none_or(|w| text.contains(w.as_str())))
+            .and_then(|i| replies.remove(i))
+            .map(|(_, r)| r)
+    }
+    .unwrap_or_else(|| AnthropicMessage::text("OK").into());
     let id = {
         let mut n = lock(&shared.served);
         *n += 1;

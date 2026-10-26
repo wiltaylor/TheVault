@@ -33,6 +33,11 @@
 //! with `run_script`, and every agent may call the vault's valid script tools and, once it has
 //! opened a skill, the skill's own (`crate::ai_scripts`, script-tools T1 to T4); the tool files
 //! are proposed with `propose_tool_change` and `propose_tool_delete` under the `tools` switch.
+//! An agent with `permissions.subagents.allow` hands parts of a task to sub agents with
+//! `start_subagent` on a thread (`crate::ai_subagents`, subagents U1 to U8): each runs as a turn
+//! of its own on a session thread, the calls of one round at once, and the call's result is its
+//! answer; its proposals and changes come out in this turn's stream with `subagent`, the call id,
+//! and `sub_thread`, its session.
 //! Events:
 //!
 //! | Event | Data |
@@ -48,6 +53,7 @@
 //! | `skill_proposal` | a skill change for the user to apply (skills S9), `kind` always `skill`: `{id, kind, op, name, path?, exists, before, after, issues, base, proposer, ...}`, `op` `create`, `change`, `file`, `file_delete` or `delete` (`crate::ai_skill_changes`) |
 //! | `tool_proposal` | a script tool change for the user to apply (script-tools T3), `kind` always `tool`: `{id, kind, op, name, exists, before, after, script, script_exists, script_before, script_after, script_delete, problems, proposer}`, `op` `create`, `change` or `delete` (`crate::ai_scripts`) |
 //! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change`, `type_create` and `type_delete`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
+//! | `subagent` | `{id, call, thread, turn, agent, delegated, task, n, status, rounds, tools, started_ms, ended_ms, tool}`: a sub agent's block as it stands (subagents U6), sent as it starts, at each of its model calls and tool calls, and as it ends; `id` is the `start_subagent` call, `thread` its session, `status` `running`, `done`, `failed` or `stopped`, `turn` its turn in the turn routes (null for a sub agent of an unattended run), and `tool` the tool it runs now |
 //! | `context` | `{used, window}` after each model call: the tokens the call took in and gave back, and the account's context window |
 //! | `compacting` | `{reason}`: a thread's compaction started, `auto` because its last call filled `compact_at` of the window, or `command` for `/compact` (`compact: true`) |
 //! | `compacted` | `{reason, upto, summary, before, after}`: the model now reads `summary` in place of the thread's first `upto` messages; `before` is the tokens it summarized and `after` the summary's. `/compact` then ends with `done` |
@@ -369,6 +375,14 @@ pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
     )
     .into_iter()
     .map(|t| t.name)
+    // An unattended run may start sub agents when permitted (subagents U8).
+    .chain(
+        agent
+            .permissions
+            .subagents
+            .allow
+            .then(|| crate::ai_subagents::TOOL.to_owned()),
+    )
     .chain(
         crate::ai_scripts::offered(w, agent, &[])
             .specs
@@ -449,7 +463,6 @@ async fn start_with(
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
-    let (tx, rx) = mpsc::channel::<Sent>(64);
     let named = prepared.named;
     let actor = if named {
         Author::Agent(prepared.agent.name.clone())
@@ -461,26 +474,79 @@ async fn start_with(
         (Some(_), Some(o)) => o.clone(),
         _ => "user".to_owned(),
     };
+    let cfg = TurnCfg {
+        owner: author,
+        author: actor,
+        scope,
+        agent_name: named.then(|| prepared.agent.name.clone()),
+        unattended: report.is_some(),
+        sub: None,
+        origin,
+    };
+    Ok(spawn_turn(
+        w, prepared, cfg, account, model, note_id, stop, report,
+    ))
+}
+
+/// Who a turn runs as and for whom, apart from its agent and thread.
+struct TurnCfg {
+    /// Who started it: the caller, or the agent of an unattended run.
+    owner: Author,
+    /// The author of what its tools write.
+    author: Author,
+    scope: Scope,
+    /// The agent its proposals name, so their apply is authored by it.
+    agent_name: Option<String>,
+    /// Nobody waits on it to apply anything (agents G12, subagents U8).
+    unattended: bool,
+    /// For a sub agent's turn (subagents U1).
+    sub: Option<SubMark>,
+    /// Where it came from, for the activity log.
+    origin: String,
+}
+
+/// What a sub agent's turn is (subagents U1).
+#[derive(Debug, Clone, Copy)]
+struct SubMark {
+    /// A throwaway sub agent runs as its parent and writes no memories of its own.
+    throwaway: bool,
+    /// Its number in the parent thread: a throwaway's changes are authored `<agent>/sub:<n>`.
+    n: usize,
+}
+
+/// Start the turn `prepared` holds, which sends its events to the receiver returned and stops
+/// when the receiver goes or `stop` turns true. The flag returned turns false when it is over.
+#[allow(clippy::too_many_arguments)]
+fn spawn_turn(
+    w: Arc<Writer>,
+    prepared: Prepared,
+    cfg: TurnCfg,
+    account: Option<String>,
+    model: Option<String>,
+    note_id: Option<String>,
+    stop: watch::Receiver<bool>,
+    report: Option<Report>,
+) -> (mpsc::Receiver<Sent>, Arc<AtomicBool>) {
+    let (tx, rx) = mpsc::channel::<Sent>(64);
     let activity = crate::ai_activity::TurnActivity::new(
         w.clone(),
-        actor,
+        cfg.author.clone(),
         &prepared.agent.name,
         prepared.log.as_ref().map(|l| l.id.clone()),
-        &origin,
+        &cfg.origin,
     );
     let turn = Turn {
         writer: w,
-        author: if named {
-            Author::Agent(prepared.agent.name.clone())
-        } else {
-            author
-        },
-        scope,
+        author: cfg.author,
+        owner: cfg.owner,
+        scope: cfg.scope,
         out: Out { tx, stop },
         images: ai_assets::Images::default(),
-        agent_name: named.then(|| prepared.agent.name.clone()),
+        agent_name: cfg.agent_name,
         log: prepared.log.map(std::sync::Mutex::new),
         report,
+        unattended: cfg.unattended,
+        sub: cfg.sub,
         activity,
         skills: prepared.skills,
         skills_updated: prepared.skills_updated,
@@ -494,7 +560,7 @@ async fn start_with(
         turn.run(agent, account, model, history, note_id).await;
         flag.store(false, Ordering::SeqCst);
     });
-    Ok((rx, running))
+    (rx, running)
 }
 
 /// A turn's agent and the transcript it starts from.
@@ -555,7 +621,7 @@ fn prepare(
     author: &Author,
     agent: Option<String>,
     thread: Option<String>,
-    mut messages: Vec<Message>,
+    messages: Vec<Message>,
     update_skills: bool,
     compact: bool,
 ) -> Result<Prepared, ApiError> {
@@ -565,6 +631,31 @@ fn prepare(
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
     let agent = turn_agent(w, named.as_deref())?;
+    prepare_for(
+        w,
+        author,
+        agent,
+        named.is_some(),
+        thread,
+        messages,
+        update_skills,
+        compact,
+    )
+}
+
+/// [`prepare`] for `agent` as it is given, which a sub agent's turn runs with its own rights
+/// (subagents U3); `named` says whether the body named it.
+#[allow(clippy::too_many_arguments)]
+fn prepare_for(
+    w: &Writer,
+    author: &Author,
+    agent: Agent,
+    named: bool,
+    thread: Option<String>,
+    mut messages: Vec<Message>,
+    update_skills: bool,
+    compact: bool,
+) -> Result<Prepared, ApiError> {
     let browser = agent.permissions.browser && crate::ai_browser::BrowserBox::from_env().is_some();
     let fresh = || crate::ai_skills::snapshot(w, &agent, browser);
     let updated = |s: &crate::ai_skills::Snapshot| {
@@ -602,7 +693,7 @@ fn prepare(
         }
         return Ok(Prepared {
             agent,
-            named: named.is_some(),
+            named,
             history: messages,
             log: None,
             origin: None,
@@ -703,7 +794,10 @@ fn prepare(
         base: history.clone(),
         steps: serde_json::Map::new(),
         proposals: Vec::new(),
-        saved: (0, 0),
+        subagents: Vec::new(),
+        subs_before: transcript.subagents.len(),
+        sub_changes: 0,
+        saved: (0, 0, 0),
         context: None,
         _busy: busy,
     };
@@ -719,6 +813,18 @@ fn prepare(
     })
 }
 
+/// The events of a proposal for the user, or of a change a tool made.
+const PROPOSAL_EVENTS: [&str; 8] = [
+    "proposal",
+    "type_proposal",
+    "taxonomy_proposal",
+    "agent_proposal",
+    "agent_memory_proposal",
+    "skill_proposal",
+    "tool_proposal",
+    "applied",
+];
+
 /// What a turn on a thread has added, written to the thread note as the turn streams.
 struct ThreadLog {
     id: String,
@@ -729,8 +835,14 @@ struct ThreadLog {
     steps: serde_json::Map<String, Value>,
     /// The proposals and changes of this turn.
     proposals: Vec<Stored>,
-    /// How many messages, and steps and proposals, the last write held.
-    saved: (usize, usize),
+    /// The sub agent sessions this turn started (subagents U5).
+    subagents: Vec<agent_threads::SubSession>,
+    /// How many sub agent sessions the thread had before the turn.
+    subs_before: usize,
+    /// Bumped with each change to `subagents`.
+    sub_changes: usize,
+    /// How many messages, steps and proposals, and sub agent changes the last write held.
+    saved: (usize, usize, usize),
     /// How full the context was after the turn's last call.
     context: Option<agent_threads::ContextUse>,
     _busy: Busy,
@@ -842,8 +954,12 @@ pub(crate) struct Limits {
 
 impl Limits {
     pub(crate) fn of(agent: &Agent) -> Limits {
+        Limits::of_permissions(&agent.permissions)
+    }
+
+    pub(crate) fn of_permissions(p: &schema::AgentPermissions) -> Limits {
         Limits {
-            types: agent.permissions.types.clone(),
+            types: p.types.clone(),
         }
     }
 
@@ -948,8 +1064,10 @@ impl Direct {
             "type_proposal" => self.types,
             "taxonomy_proposal" => self.taxonomies,
             // Turning on an agent's Run wscript code waits for an admin's Apply, whatever the
-            // switch says (script-tools T1).
-            "agent_proposal" => self.agents && p["grants_run_code"] != true,
+            // switch says (script-tools T1), and so does granting sub agents (subagents U2).
+            "agent_proposal" => {
+                self.agents && p["grants_run_code"] != true && p["grants_subagents"] != true
+            }
             "tool_proposal" => self.tools,
             "agent_memory_proposal" => self.memories,
             "skill_proposal" => self.skills,
@@ -1137,6 +1255,9 @@ impl ToolOut {
 struct Turn {
     writer: Arc<Writer>,
     author: Author,
+    /// Who started the turn: the sub agent turns it starts are theirs to read and stop
+    /// (subagents U6).
+    owner: Author,
     /// The scope the caller's credentials grant, which bounds what the tools write (ai D22).
     scope: Scope,
     out: Out,
@@ -1149,6 +1270,11 @@ struct Turn {
     log: Option<std::sync::Mutex<ThreadLog>>,
     /// For an unattended turn (agents G12): how it ended and its trail lines.
     report: Option<Report>,
+    /// Nobody waits on the turn: it is offered no change tool that would only propose (agents
+    /// G12), as is a sub agent of such a turn (subagents U8).
+    unattended: bool,
+    /// For a sub agent's turn (subagents U1).
+    sub: Option<SubMark>,
     /// The turn's entries in the activity log (activity Y2).
     activity: crate::ai_activity::TurnActivity,
     /// The skills the system text lists (skills S6).
@@ -1203,27 +1329,43 @@ impl Turn {
     /// pending, a change the agent made as made. A proposal carries the agent and the thread, so
     /// its apply is authored by the agent and recorded in the thread.
     async fn emit(&self, name: &'static str, mut data: Value) -> bool {
-        let proposal = matches!(
-            name,
-            "proposal"
-                | "type_proposal"
-                | "taxonomy_proposal"
-                | "agent_proposal"
-                | "agent_memory_proposal"
-                | "skill_proposal"
-                | "tool_proposal"
-                | "applied"
-        );
+        let proposal = PROPOSAL_EVENTS.contains(&name);
         if proposal && let Some(a) = &self.agent_name {
             data["agent"] = json!(a);
+            // A throwaway sub agent's change is applied as it, `<agent>/sub:<n>` (subagents U4).
+            if let Some(sub) = self.sub.filter(|s| s.throwaway) {
+                data["sub"] = json!(sub.n);
+            }
         }
-        if name == "tool_result" {
+        self.keep(name, proposal, data, true).await
+    }
+
+    /// Send event `name` of a sub agent's in this turn's stream (subagents U4): its proposals and
+    /// changes as this turn's own, kept in its thread, with the agent and number it names.
+    async fn emit_sub(&self, name: &str, data: Value) -> bool {
+        let Some(name) = PROPOSAL_EVENTS.iter().find(|e| **e == name) else {
+            return false;
+        };
+        // The sub agent's own turn put it in the activity log.
+        self.keep(name, true, data, false).await
+    }
+
+    /// [`Turn::emit`]'s work once the data is whole: the activity entry when `record` says so,
+    /// the thread's copy, and the event.
+    async fn keep(
+        &self,
+        name: &'static str,
+        proposal: bool,
+        mut data: Value,
+        record: bool,
+    ) -> bool {
+        if record && name == "tool_result" {
             self.activity.tool_answered(
                 data["id"].as_str().unwrap_or_default(),
                 &data["summary"],
                 data["is_error"] == true,
             );
-        } else if proposal {
+        } else if record && proposal {
             self.activity.change(name, &data);
         }
         if let Some(mut log) = self.log() {
@@ -1255,9 +1397,13 @@ impl Turn {
     /// Write the thread's transcript as it stands: the messages it started from and `added`,
     /// with this turn's steps and proposals. Nothing new since the last write writes nothing.
     async fn persist(&self, added: &[Message]) {
-        let (id, label, messages, steps, proposals, context) = {
+        let (id, label, messages, steps, proposals, context, subagents) = {
             let Some(mut log) = self.log() else { return };
-            let now = (added.len(), log.steps.len() + log.proposals.len());
+            let now = (
+                added.len(),
+                log.steps.len() + log.proposals.len(),
+                log.sub_changes,
+            );
             if now == log.saved {
                 return;
             }
@@ -1271,6 +1417,7 @@ impl Turn {
                 log.steps.clone(),
                 log.proposals.clone(),
                 log.context,
+                log.subagents.clone(),
             )
         };
         let w = self.writer.clone();
@@ -1286,6 +1433,17 @@ impl Turn {
                 for p in &proposals {
                     if !t.transcript.proposals.iter().any(|q| q.id() == p.id()) {
                         t.transcript.proposals.push(p.clone());
+                    }
+                }
+                for sub in &subagents {
+                    match t
+                        .transcript
+                        .subagents
+                        .iter_mut()
+                        .find(|x| x.call == sub.call)
+                    {
+                        Some(x) => *x = sub.clone(),
+                        None => t.transcript.subagents.push(sub.clone()),
                     }
                 }
             })
@@ -1338,14 +1496,23 @@ impl Turn {
             }
         };
         // Only the tools the agent may use (agents G4); a call naming another is not run.
-        let tools = turn_tools(
+        let mut tools = turn_tools(
             setup.web,
             setup.web_search.is_some(),
             setup.tools.as_deref(),
-            self.report.is_some().then_some(setup.direct),
+            self.unattended.then_some(setup.direct),
             setup.browser.is_some(),
             uses_skills,
         );
+        // A throwaway sub agent reads its parent's memories but writes none (subagents U1).
+        if self.sub.is_some_and(|s| s.throwaway) {
+            tools.retain(|t| !crate::ai_subagents::MEMORY_WRITES.contains(&t.name.as_str()));
+        }
+        // Sub agents (subagents U1, U2): with the permission, on a thread, which keeps their
+        // sessions, and never to a sub agent, whatever its file says.
+        if self.sub.is_none() && self.log.is_some() && setup.agent.permissions.subagents.allow {
+            tools.push(crate::ai_subagents::spec(&setup.agent));
+        }
         let base_offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         let mut history = history;
         if let Some(pending) = &self.compact {
@@ -1513,6 +1680,9 @@ impl Turn {
                 return;
             }
             let mut results = Vec::with_capacity(calls.len());
+            // The sub agents this round starts, run together once the other calls are answered
+            // (subagents U1): where each one's result goes, and its call.
+            let mut subs: Vec<(usize, ToolCall)> = Vec::new();
             for c in calls {
                 self.activity.tool_called(&c.id, &c.name, &c.input);
                 if !self
@@ -1537,6 +1707,11 @@ impl Turn {
                         return;
                     }
                     results.push(Content::tool_result(c.id, out.content, true));
+                    continue;
+                }
+                if c.error.is_none() && c.name == crate::ai_subagents::TOOL {
+                    subs.push((results.len(), c.clone()));
+                    results.push(Content::tool_result(c.id, String::new(), false));
                     continue;
                 }
                 // A script tool (script-tools T1, T2, T4): it runs as the agent, its changes made
@@ -1744,6 +1919,28 @@ impl Turn {
                     is_error: got.is_error,
                     parts: Vec::new(),
                 });
+            }
+            if !subs.is_empty() {
+                for (at, c, got) in self.subagents(&setup, subs).await {
+                    if !self
+                        .emit(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results[at] = Content::ToolResult {
+                        id: c.id,
+                        content: cut(&got.content, RESULT_LIMIT),
+                        is_error: got.is_error,
+                        parts: Vec::new(),
+                    };
+                }
+                if self.out.gone() {
+                    return;
+                }
             }
             added.push(Message::tool_results(results));
             self.persist(added).await;
@@ -2168,6 +2365,367 @@ impl Turn {
     }
 }
 
+/// A sub agent started and running (subagents U1).
+struct SubRun {
+    rx: mpsc::Receiver<Sent>,
+    turn: crate::ai_turns::SubTurn,
+    session: agent_threads::SubSession,
+    /// What the call's `permissions` asked for that would have widened them.
+    ignored: Vec<String>,
+    began: Instant,
+}
+
+/// A refusal from the routes' code as a tool error.
+fn api_tool_error(e: &ApiError) -> ToolOut {
+    ToolOut::error(
+        e.body["message"]
+            .as_str()
+            .unwrap_or("the sub agent could not start")
+            .to_owned(),
+    )
+}
+
+impl Turn {
+    /// Run the sub agents of `calls`, each by where its result goes: at most the agent's `max`
+    /// of them, all at once, and a tool error for each call past it (subagents U1). Each result
+    /// comes back in order.
+    async fn subagents(
+        &self,
+        setup: &Setup,
+        calls: Vec<(usize, ToolCall)>,
+    ) -> Vec<(usize, ToolCall, ToolOut)> {
+        let max = usize::from(setup.agent.permissions.subagents.max);
+        let mut out = Vec::new();
+        let mut runs = Vec::new();
+        for (k, (at, c)) in calls.into_iter().enumerate() {
+            if k >= max {
+                let e = ToolOut::error(format!(
+                    "Not started: this agent runs at most {max} sub agents at once, and this round asked for more. Start it in a later round."
+                ));
+                out.push((at, c, e));
+                continue;
+            }
+            match self.start_sub(setup, &c).await {
+                Ok(run) => runs.push((at, c, run)),
+                Err(e) => out.push((at, c, e)),
+            }
+        }
+        let done =
+            futures_util::future::join_all(runs.into_iter().map(|(at, c, run)| async move {
+                let got = self.follow_sub(&c, run).await;
+                (at, c, got)
+            }))
+            .await;
+        out.extend(done);
+        out.sort_by_key(|(at, _, _)| *at);
+        out
+    }
+
+    /// Start the sub agent call `c` asks for (subagents U1, U3, U5): its rights, its session, a
+    /// thread whose parent is this one, and its turn, as the parent's caller.
+    async fn start_sub(&self, setup: &Setup, c: &ToolCall) -> Result<SubRun, ToolOut> {
+        let input = &c.input;
+        let task = str_arg(input, "task")?.to_owned();
+        let opt = |k: &str| {
+            input[k]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+        };
+        let instructions = opt("instructions");
+        let named = opt("agent");
+        let model = opt("model");
+        let parent = setup.agent.clone();
+        let (parent_thread, n) = match self.log() {
+            Some(l) => (l.id.clone(), l.subs_before + l.subagents.len() + 1),
+            None => return Err(ToolOut::error("Sub agents run only in a thread.")),
+        };
+        if let Some(name) = &named
+            && !parent.permissions.subagents.allows_agent(name)
+        {
+            let may = &parent.permissions.subagents.agents;
+            return Err(ToolOut::error(if may.is_empty() {
+                format!(
+                    "This agent may not delegate to {name}: it may start only throwaway sub agents, with agent null."
+                )
+            } else {
+                format!(
+                    "This agent may not delegate to {name}: it may delegate only to {}.",
+                    may.join(", ")
+                )
+            }));
+        }
+        let w = self.writer.clone();
+        let parent_turn = self.activity.turn_id().to_owned();
+        let call = c.id.clone();
+        let narrowing = input["permissions"].clone();
+        let account = setup.cred.account.clone();
+        let parent_model = setup.model.clone();
+        let author = match &named {
+            Some(name) => Author::Agent(name.clone()),
+            None => Author::Agent(format!("{}/sub:{n}", parent.name)),
+        };
+        let by = author.clone();
+        let sub_task = task.clone();
+        let from = parent_thread.clone();
+        let ready = tokio::task::spawn_blocking(move || {
+            let task = sub_task;
+            let (mut agent, ignored, account, model) = match &named {
+                Some(name) => {
+                    let own = turn_agent(&w, Some(name)).map_err(|e| api_tool_error(&e))?;
+                    let both =
+                        crate::ai_subagents::intersect(&own.permissions, &parent.permissions);
+                    let (p, ignored) = crate::ai_subagents::narrow(&both, &narrowing);
+                    let mut a = own;
+                    a.permissions = p;
+                    // A named agent that names its account runs on it, with its model; any
+                    // other on the parent's account and model (subagents U3).
+                    let (account, model) = if a.account_ref().is_some() {
+                        (None, model)
+                    } else {
+                        (Some(account), model.or(Some(parent_model)))
+                    };
+                    (a, ignored, account, model)
+                }
+                None => {
+                    let (p, ignored) = crate::ai_subagents::narrow(&parent.permissions, &narrowing);
+                    let mut a = (*parent).clone();
+                    a.permissions = p;
+                    let base = parent
+                        .system_prompt
+                        .as_deref()
+                        .filter(|p| !p.trim().is_empty())
+                        .unwrap_or(ai::CHAT_PROMPT);
+                    let section = crate::ai_subagents::prompt_section(
+                        &parent.label,
+                        &task,
+                        instructions.as_deref(),
+                    );
+                    a.system_prompt = Some(format!("{}\n{section}", base.trim_end()));
+                    (a, ignored, Some(account), model.or(Some(parent_model)))
+                }
+            };
+            agent.permissions.subagents = schema::AgentSubagents::default();
+            let text = match &named {
+                Some(_) => crate::ai_subagents::delegated_message(
+                    &parent.label,
+                    &task,
+                    instructions.as_deref(),
+                ),
+                None => task.clone(),
+            };
+            let origin = agent_threads::sub_origin(&from);
+            let t = agent_threads::create(
+                &w,
+                &agent.name,
+                agent_threads::title_of(&task).as_deref(),
+                &origin,
+            )
+            .map_err(|e| api_tool_error(&e))?;
+            let parent_ref = agent_threads::Parent {
+                thread: from,
+                turn: parent_turn,
+                call,
+            };
+            agent_threads::save(&w, &t.id, &agent.label, None, |t| {
+                t.transcript.parent = Some(parent_ref.clone());
+            })
+            .map_err(|e| api_tool_error(&e))?;
+            let prepared = prepare_for(
+                &w,
+                &by,
+                agent,
+                true,
+                Some(t.id.clone()),
+                vec![Message::user(&text)],
+                false,
+                false,
+            )
+            .map_err(|e| api_tool_error(&e))?;
+            Ok::<_, ToolOut>((prepared, ignored, account, model, t.id, origin))
+        })
+        .await
+        .map_err(|e| ToolOut::error(e.to_string()))??;
+        let (prepared, ignored, account, model, thread, origin) = ready;
+        let agent = prepared.agent.name.clone();
+        let delegated = c.input["agent"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let (stop, stopped) = watch::channel(false);
+        let cfg = TurnCfg {
+            owner: self.owner.clone(),
+            author,
+            scope: self.scope,
+            agent_name: Some(agent.clone()),
+            unattended: self.unattended,
+            sub: Some(SubMark {
+                throwaway: delegated.is_none(),
+                n,
+            }),
+            origin,
+        };
+        let (rx, running) = spawn_turn(
+            self.writer.clone(),
+            prepared,
+            cfg,
+            account,
+            model,
+            None,
+            stopped,
+            None,
+        );
+        // A sub agent of an unattended run, which nobody follows, is not listed as a turn: its
+        // session is read again until it ends, as a trigger's thread is.
+        let turn = crate::ai_turns::SubTurn::start(
+            self.owner.clone(),
+            &agent,
+            &thread,
+            stop,
+            running,
+            !self.unattended,
+        );
+        let session = agent_threads::SubSession {
+            call: c.id.clone(),
+            thread,
+            agent,
+            delegated,
+            task,
+            n,
+            status: "running".to_owned(),
+            rounds: 0,
+            tools: 0,
+            started_ms: crate::ai_settings::now_ms(),
+            ended_ms: None,
+        };
+        self.activity.subagent_start(&session, &parent_thread);
+        self.sub_update(&session, None, turn.id()).await;
+        Ok(SubRun {
+            rx,
+            turn,
+            session,
+            ignored,
+            began: Instant::now(),
+        })
+    }
+
+    /// Follow sub agent `run` to its end (subagents U1, U4, U6): its rounds and tools on its
+    /// block, its proposals and changes in this turn's stream, its events kept for its session
+    /// pane, and its answer as the call's result. Stopping this turn stops it.
+    async fn follow_sub(&self, c: &ToolCall, run: SubRun) -> ToolOut {
+        let SubRun {
+            mut rx,
+            turn,
+            mut session,
+            ignored,
+            began,
+        } = run;
+        let mut tool: Option<String> = None;
+        let mut ended: Option<(&'static str, Option<String>)> = None;
+        let mut answer = None;
+        let mut proposed = Vec::new();
+        let mut gone = false;
+        loop {
+            let e = tokio::select! {
+                e = rx.recv() => e,
+                _ = self.out.closed(), if !gone => {
+                    gone = true;
+                    turn.stop();
+                    continue;
+                }
+            };
+            let Some(e) = e else { break };
+            turn.push(e.clone());
+            let data: Value = serde_json::from_str(&e.data).unwrap_or(Value::Null);
+            match e.name.as_str() {
+                "tool" => {
+                    session.tools += 1;
+                    tool = data["name"].as_str().map(str::to_owned);
+                    self.sub_update(&session, tool.as_deref(), turn.id()).await;
+                }
+                "usage" => {
+                    session.rounds += 1;
+                    self.sub_update(&session, tool.as_deref(), turn.id()).await;
+                }
+                "done" => {
+                    let messages: Vec<Message> =
+                        serde_json::from_value(data["messages"].clone()).unwrap_or_default();
+                    answer = crate::ai_subagents::answer_of(&messages);
+                    ended = Some(("done", None));
+                }
+                "error" => {
+                    let why = data["message"].as_str().unwrap_or("it failed").to_owned();
+                    ended = Some(("failed", Some(why)));
+                }
+                "refusal" => {
+                    let why = format!("{} refused", data["name"].as_str().unwrap_or("the model"));
+                    ended = Some(("failed", Some(why)));
+                }
+                name if PROPOSAL_EVENTS.contains(&name) => {
+                    if name != "applied" {
+                        proposed.push(format!(
+                            "{}: waiting for the user",
+                            agent_threads::proposal_what(name, &data)
+                        ));
+                    }
+                    // Raised in this chat, under the sub agent's block, and applied from here
+                    // (subagents U4); its outcome is recorded in the sub agent's session too.
+                    let mut d = data;
+                    d["subagent"] = json!(c.id);
+                    d["sub_thread"] = json!(session.thread);
+                    self.emit_sub(name, d).await;
+                }
+                _ => {}
+            }
+        }
+        // A turn that ends with no end of its own was stopped: by the user, or with this one.
+        let (outcome, error) = ended.unwrap_or(("stopped", None));
+        session.status = outcome.to_owned();
+        session.ended_ms = Some(crate::ai_settings::now_ms());
+        let ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.activity.subagent_end(&session, ms);
+        self.sub_update(&session, None, turn.id()).await;
+        turn.finish();
+        crate::ai_subagents::result(crate::ai_subagents::Ended {
+            thread: &session.thread,
+            agent: &session.agent,
+            delegated: session.delegated.as_deref(),
+            outcome,
+            rounds: session.rounds,
+            tools: session.tools,
+            ms,
+            answer,
+            error,
+            proposed,
+            ignored,
+        })
+    }
+
+    /// Keep sub agent `s` as it stands in the thread, and tell the client: the `subagent` event,
+    /// with the tool it runs now and its turn's id in the turn routes.
+    async fn sub_update(
+        &self,
+        s: &agent_threads::SubSession,
+        tool: Option<&str>,
+        turn: Option<&str>,
+    ) {
+        if let Some(mut log) = self.log() {
+            match log.subagents.iter_mut().find(|x| x.call == s.call) {
+                Some(x) => *x = s.clone(),
+                None => log.subagents.push(s.clone()),
+            }
+            log.sub_changes += 1;
+        }
+        let mut data = json!(s);
+        data["id"] = json!(s.call);
+        data["tool"] = json!(tool);
+        data["turn"] = json!(turn);
+        self.out.send("subagent", data).await;
+    }
+}
+
 fn assistant(content: Vec<Content>, state: Option<ProviderState>) -> Message {
     Message {
         role: Role::Assistant,
@@ -2327,7 +2885,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "propose_agent_change",
-            "Propose an agent file for the user to apply: a change to an existing agent, or a new agent under a new name. It is checked as the agent write would check it, and refused when it would give the agent a tool, a note type, a confirmation switch turned off, an Internet switch turned on, the Outbox switch send_without_review turned on or Browser automation turned on that you do not have yourself; you cannot change your own file. The user sees a diff of the WCL and applies or discards it. When the user lets agent changes go ahead without asking, it is written at once and the result says applied.",
+            "Propose an agent file for the user to apply: a change to an existing agent, or a new agent under a new name. It is checked as the agent write would check it, and refused when it would give the agent a tool, a note type, a confirmation switch turned off, an Internet switch turned on, the Outbox switch send_without_review turned on, Browser automation turned on, Run wscript code or sub agents that you do not have yourself; you cannot change your own file. The user sees a diff of the WCL and applies or discards it. When the user lets agent changes go ahead without asking, it is written at once and the result says applied.",
             json!({
                 "name": { "type": "string", "description": "The agent's name: an existing agent to change, or a new name (lowercase letters, digits and underscores, starting with a letter) to create one." },
                 "wcl": { "type": "string", "description": "The whole new agent file as WCL text, with everything it keeps." },
@@ -2387,7 +2945,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
 }
 
 /// `s` cut to `limit` characters, with a marker saying how much was left out.
-fn cut(s: &str, limit: usize) -> String {
+pub(crate) fn cut(s: &str, limit: usize) -> String {
     let total = s.chars().count();
     if total <= limit {
         return s.to_owned();

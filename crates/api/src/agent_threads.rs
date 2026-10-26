@@ -32,6 +32,14 @@
 //! proposals of the messages dropped go with them, a compaction that covered any of them goes too,
 //! and the context reading is forgotten until the next call.
 //!
+//! A sub agent's session (subagents U5) is a thread of origin `subagent:<parent thread>` whose
+//! transcript names its `parent`, `{thread, turn, call}`; the parent's transcript lists the
+//! sessions it started in `subagents`. The list leaves sessions out; deleting, archiving or
+//! unarchiving the parent, here or through the note routes, does the same to them, and
+//! truncating it past a call deletes that call's session. A fork keeps the blocks but not the
+//! sessions, which stay the parent's. An outcome recorded for a sub agent's proposal in the
+//! parent is recorded in its session too.
+//!
 //! The chat routes take `agent` and `thread` (`crate::ai_chat`): the server reads the thread's
 //! transcript itself and writes each round to it as the turn streams. `POST /api/ai/apply` with
 //! a proposal's `thread` records its outcome here, and `POST /api/ai/discard` records a discard;
@@ -88,6 +96,62 @@ pub struct Transcript {
     /// How full the context was after the thread's last model call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextUse>,
+    /// In a sub agent's session (subagents U5): the thread, turn and tool call that started it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<Parent>,
+    /// The sub agent sessions this thread's `start_subagent` calls started, in order (subagents
+    /// U5, U6).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<SubSession>,
+}
+
+/// Where a sub agent's session came from (subagents U5): the parent thread, the turn (its id in
+/// the activity log) and the `start_subagent` call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Parent {
+    pub thread: String,
+    pub turn: String,
+    pub call: String,
+}
+
+/// One sub agent session a thread started (subagents U5, U6), as the block in the parent chat
+/// shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubSession {
+    /// The `start_subagent` call's id.
+    pub call: String,
+    /// The session's thread.
+    pub thread: String,
+    /// The agent whose thread it is: the parent's own for a throwaway sub agent.
+    pub agent: String,
+    /// The agent delegated to by name, or `None` for a throwaway sub agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated: Option<String>,
+    pub task: String,
+    /// Its number in the thread, counting from 1: a throwaway one writes as `<agent>/sub:<n>`.
+    pub n: usize,
+    /// `running`, `done`, `failed` or `stopped`.
+    pub status: String,
+    #[serde(default)]
+    pub rounds: u64,
+    #[serde(default)]
+    pub tools: u64,
+    pub started_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_ms: Option<i64>,
+}
+
+/// The origin of a sub agent's session started from thread `parent` (subagents U5).
+pub fn sub_origin(parent: &str) -> String {
+    format!("{SUB_ORIGIN}{parent}")
+}
+
+/// What a sub agent session's origin starts with.
+pub const SUB_ORIGIN: &str = "subagent:";
+
+/// Whether a thread of origin `origin` is a sub agent's session, listed only under its parent.
+pub fn is_sub_origin(origin: &str) -> bool {
+    origin.starts_with(SUB_ORIGIN)
 }
 
 /// A summary that stands for the messages before `upto` in what the model is sent.
@@ -513,6 +577,9 @@ impl Thread {
         // Where the thread was last compacted, and how full its context was after its last call.
         v["compaction"] = json!(self.transcript.compaction);
         v["context"] = json!(self.transcript.context);
+        // A sub agent session's parent, and the sessions this thread started (subagents U5).
+        v["parent"] = json!(self.transcript.parent);
+        v["subagents"] = json!(self.transcript.subagents);
         v
     }
 
@@ -629,7 +696,7 @@ pub fn record_outcome(
         ));
     }
     let label = agent_label(w, &t.agent);
-    save(w, thread_id, &label, None, |t| {
+    let saved = save(w, thread_id, &label, None, |t| {
         if let Some(p) = t
             .transcript
             .proposals
@@ -641,7 +708,61 @@ pub fn record_outcome(
             p.error = error.clone();
             p.reported = false;
         }
-    })
+    })?;
+    // A sub agent's proposal, decided in the parent chat, shows its outcome in the sub agent's
+    // session too (subagents U4).
+    let sub = saved
+        .transcript
+        .proposals
+        .iter()
+        .find(|p| p.id() == proposal_id)
+        .and_then(|p| p.data["sub_thread"].as_str())
+        .filter(|s| *s != thread_id)
+        .map(str::to_owned);
+    if let Some(sub) = sub
+        && let Err(e) = record_outcome(w, &sub, proposal_id, status, result, error)
+    {
+        eprintln!(
+            "the outcome of proposal {proposal_id} was not recorded in sub agent session {sub}: {}",
+            e.body
+        );
+    }
+    Ok(saved)
+}
+
+/// The sub agent sessions thread `t` started that are still its own: a fork keeps its parent's
+/// blocks, but the sessions stay the parent's (subagents U5).
+pub fn own_subs(w: &Writer, t: &Thread, calls: Option<&[String]>) -> Vec<Thread> {
+    t.transcript
+        .subagents
+        .iter()
+        .filter(|s| calls.is_none_or(|c| c.contains(&s.call)))
+        .filter_map(|s| Thread::read(w, &s.thread).ok())
+        .filter(|sub| {
+            sub.transcript
+                .parent
+                .as_ref()
+                .is_some_and(|p| p.thread == t.id)
+        })
+        .collect()
+}
+
+/// Delete or archive the sub agent sessions of thread `t` with it (subagents U5): `None` moves
+/// them to the trash, `Some(archived)` archives or unarchives them. A session that fails stays,
+/// and says why on the server's log.
+pub fn cascade(w: &Writer, t: &Thread, archived: Option<bool>, author: &Author) {
+    for sub in own_subs(w, t, None) {
+        let done = match archived {
+            None => w.delete(&sub.id, Some(&sub.version), author).map(|_| ()),
+            Some(a) if a != sub.archived => w
+                .set_archived(&sub.id, a, Some(&sub.version), author)
+                .map(|_| ()),
+            Some(_) => Ok(()),
+        };
+        if let Err(e) = done {
+            eprintln!("sub agent session {} of thread {} stays: {e}", sub.id, t.id);
+        }
+    }
 }
 
 /// A title from the user's first question: its first line, cut at [`TITLE_CHARS`].
@@ -779,7 +900,7 @@ pub fn render_body(t: &Transcript, label: &str) -> Option<Value> {
                     lines.extend(
                         t.proposals
                             .iter()
-                            .filter(|p| p.id() == id)
+                            .filter(|p| p.id() == id || p.data["subagent"] == id.as_str())
                             .map(proposal_line),
                     );
                 }
@@ -914,6 +1035,10 @@ pub async fn list(
                 .map_err(ApiError::bad_request)?;
             for r in page["rows"].as_array().into_iter().flatten() {
                 let f = &r["fields"];
+                // A sub agent's session is listed only under its parent (subagents U5).
+                if f["origin"].as_str().is_some_and(is_sub_origin) {
+                    continue;
+                }
                 let mut row = json!({
                     "id": r["id"],
                     "title": r["title"],
@@ -1032,6 +1157,7 @@ fn cut(t: &Transcript, at: usize) -> Result<Transcript, ApiError> {
     out.messages = messages;
     out.steps.retain(|id, _| calls.contains(id));
     out.proposals.retain(|p| calls.contains(p.id()));
+    out.subagents.retain(|s| calls.contains(&s.call));
     if out.compaction.as_ref().is_some_and(|c| c.upto > at) {
         out.compaction = None;
     }
@@ -1050,10 +1176,24 @@ pub async fn truncate(
         let thread = Thread::read_of(w, &name, &id)?;
         let _busy = Busy::take(&thread.id, &name)?;
         let cut = cut(&thread.transcript, b.at)?;
+        // The sub agent sessions of the calls cut go with them (subagents U5).
+        let gone: Vec<String> = thread
+            .transcript
+            .subagents
+            .iter()
+            .filter(|s| !cut.subagents.iter().any(|k| k.call == s.call))
+            .map(|s| s.call.clone())
+            .collect();
         let label = agent_label(w, &name);
-        save(w, &id, &label, Some(&author), move |t| {
+        let saved = save(w, &id, &label, Some(&author), move |t| {
             t.transcript = cut.clone()
-        })
+        })?;
+        for sub in own_subs(w, &thread, Some(&gone)) {
+            if let Err(e) = w.delete(&sub.id, Some(&sub.version), &author) {
+                eprintln!("sub agent session {} of thread {id} stays: {e}", sub.id);
+            }
+        }
+        Ok::<_, ApiError>(saved)
     })
     .await?;
     Ok(Json(t.json()))
@@ -1089,6 +1229,7 @@ pub async fn delete(
     blocking(w, move |w| {
         let t = Thread::read_of(w, &name, &id)?;
         w.delete(&t.id, Some(&t.version), &author)?;
+        cascade(w, &t, None, &author);
         Ok::<_, ApiError>(json!({ "id": t.id, "deleted": true }))
     })
     .await

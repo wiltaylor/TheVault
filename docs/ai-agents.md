@@ -38,6 +38,7 @@ An agent's permissions are its own: nothing is inherited from Settings > AI.
 - **Browser automation** (`permissions.browser`, off by default): the browser box tools. See [Driving the browser box](#driving-the-browser-box).
 - **Skills** (`permissions.skills`): **All skills**, or **Only these skills** from the vault's skills. See [Using skills](#using-skills).
 - **Run wscript code** (`permissions.scripts.run_code`, off by default): the `run_script` tool, full access to the vault, the web and script secrets. See [Running wscript](#running-wscript).
+- **Sub agents** (`permissions.subagents`, off by default): **Start sub agents**, how many run at once, and the agents it may delegate to. See [Sub agents](#sub-agents).
 
 In a chat, the person or token running it still caps what the agent can change: an agent never writes more than its caller could.
 
@@ -166,6 +167,22 @@ Safety:
 - **Every run is logged with its version.** Each run is an `ai.script` entry in the [activity log](activity.md): the agent, the thread and turn, the tool or `run_script`, the outcome and error kind, the time, the instructions, the start of the log, and the script that ran: for a vault tool the SHA-256 of its script and of its tool file and the vault generation they were read at, for a skill's tool the skill, the script's path and its hash, and for `run_script` the hash of the code, whose whole text stays in the thread as the tool call's input.
 
 A script's changes are made at once, so a turn run by a `read` caller is offered no script: neither `run_script` nor any script tool. A `write` caller's turn, an app's, has the agent's own scope and is offered them. Scripts run on the home server only. The apps send their turns there, so nothing runs on a device, and they leave Settings > Tools to the web app.
+
+## Sub agents
+
+An agent can break a task down and hand the parts to sub agents with the `start_subagent {task, instructions, agent, permissions, model}` tool (subagents U1 to U8). It is offered only when the agent file sets `permissions { subagents { allow = true } }`, the Permissions tab's **Start sub agents** switch, and only in a thread.
+
+- **Throwaway or named.** With `agent` null the sub agent is a throwaway: the agent itself, its prompt ending with a "Sub agent" section holding the task and `instructions`. It reads the agent's memories but writes none. With `agent` naming one of the agents `subagents.agents` lists (the Permissions tab's **Agents it may delegate to**), that agent does the task with its own prompt and memories. Any other name is refused.
+- **At once, one level deep.** The calls of one round run at the same time, at most `subagents.max` of them (1 to 8, 4 by default); a call past it fails, saying so. A sub agent is never offered `start_subagent`, whatever its own file says. It has its own limit of 50 rounds, and its conversation compacts like any thread's.
+- **Never more than the agent.** A throwaway has the agent's permissions; `permissions` may only narrow them: a tools or types list keeps only what the agent has, a confirmation switch only turns on, an Internet switch, browser automation or `run_code` only turns off. Anything wider is ignored and the result says so. A named agent gets what both agents have: a tool, type, skill, Internet switch, browser automation or `run_code` only when both have it, and each confirmation switch on when either has it on. It runs on the agent's AI account and model, unless `model` names another model of that account, or the named agent names an account of its own.
+- **Its changes come back to you.** A change the sub agent makes without asking is authored `agent:<agent>/sub:<n>` for a throwaway, `agent:<name>` for a named agent. A proposal appears in the chat that started it, under the sub agent's block, with Apply and Discard there; the sub agent does not wait for you, and its answer lists what it proposed. A run with nobody to ask, from a trigger or a call, gives its sub agents only the change tools whose switch is off, as it has itself.
+- **The result is its answer.** The call's result is the sub agent's last message, with a status line: its rounds, its tool calls and how it ended.
+
+In the chat each call is a block, "Sub agent: <task>" or "Delegated to <agent>: <task>", with its status (running, with the tool it uses and its round; done; failed; stopped), the time it took, and its result to expand once done. **Stop** on the block stops that sub agent alone, and the agent is told you stopped it. Clicking the block's title opens the sub agent's session in a pane beside the chat: its messages, tool calls and results, live while it runs, read only, with Stop.
+
+A session is a thread of origin `subagent:<thread>`, kept with the thread that started it: the session picker, the panel's thread picker and the thread lists leave it out, and it is found only from its block. Deleting or archiving the thread does the same to its sessions, editing a message before the call deletes the call's session, and a fork keeps the blocks but not the sessions. Each run is an `ai.subagent.start` and an `ai.subagent.end` entry in the [activity log](activity.md), with the parent thread and turn, the session, the agent or throwaway, the rounds, the outcome and the time; the sub agent's own turns log under its session.
+
+Turning sub agents on, or adding an agent to delegate to, is guarded like Run wscript code: an agent may propose it for another agent only when it has it itself, and such a change always waits for an admin's Apply ("Only an admin grants sub agents" from an app).
 
 ## Threads
 

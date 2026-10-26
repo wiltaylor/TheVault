@@ -318,3 +318,44 @@ fn a_failed_run_is_recorded_and_notified_once() {
     assert_eq!(notes[0]["title"], "Night owl\u{2019}s nightly run failed");
     assert_eq!(notes[0]["url"], format!("/agents/owl/chat?thread={thread}"));
 }
+
+#[test]
+fn an_unattended_run_starts_sub_agents_offered_only_what_it_may_make() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "chief",
+        "label = \"Chief\"\n\npermissions {\n  confirm {\n    delete = false\n  }\n\n  subagents {\n    allow = true\n  }\n}\n\ntrigger any {\n  on = [\"create\"]\n  prompt = \"Look into it.\"\n}\n",
+    );
+    let tools = api.runs("chief")["tools"].clone();
+    assert!(
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t == "start_subagent"),
+        "{tools}"
+    );
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_0",
+        "start_subagent",
+        json!({ "task": "Check the memo", "instructions": null, "agent": null, "permissions": null, "model": null }),
+    ));
+    fake.push(AnthropicMessage::text("Checked."));
+    fake.push(AnthropicMessage::text("Done."));
+    api.memo("Roof", "open");
+    api.advance("PT31S");
+    assert_eq!(fake.message_requests().len(), 3);
+    // The sub agent, like its run, has nobody to ask (subagents U8): it is offered the change
+    // tools it makes itself, not those that would only propose, and never start_subagent.
+    let sub = tool_names(&fake, 1);
+    assert!(sub.contains(&"propose_delete".to_owned()), "{sub:?}");
+    assert!(sub.contains(&"get_note".to_owned()), "{sub:?}");
+    assert!(!sub.contains(&"propose_create".to_owned()), "{sub:?}");
+    assert!(!sub.contains(&"start_subagent".to_owned()), "{sub:?}");
+    let runs = api.runs("chief");
+    assert_eq!(
+        runs["triggers"][0]["runs"][0]["outcome"], "succeeded",
+        "{runs}"
+    );
+}

@@ -673,3 +673,44 @@ fn script_permissions_and_the_tools_switch_read_and_write_back() {
         ["permissions.tools", "permissions.tools"]
     );
 }
+
+#[test]
+fn sub_agent_permissions_read_and_write_back() {
+    let src = r#"permissions {
+  subagents {
+    allow  = true
+    max    = 2
+    agents = ["researcher", "writer"]
+  }
+}
+"#;
+    let a = Agent::parse("planner", src).unwrap();
+    let s = &a.permissions.subagents;
+    assert!(s.allow);
+    assert_eq!(s.max, 2);
+    assert!(s.allows_agent("writer"));
+    assert!(!s.allows_agent("planner"));
+    let back = Agent::parse("planner", &a.to_wcl()).unwrap();
+    assert_eq!(back, a);
+    assert!(a.to_wcl().contains("subagents {"), "{}", a.to_wcl());
+
+    // Absent, it is off with the default max and no agents, and is not written.
+    let plain = Agent::parse("plain", "").unwrap();
+    assert!(!plain.permissions.subagents.allow);
+    assert_eq!(plain.permissions.subagents.max, 4);
+    assert!(plain.permissions.subagents.agents.is_empty());
+    assert!(!plain.to_wcl().contains("subagents"));
+
+    assert_eq!(
+        at("permissions {\n  subagents {\n    allow = 1\n    max = 9\n    depth = 2\n  }\n}\n"),
+        [
+            "permissions.subagents.depth",
+            "permissions.subagents.allow",
+            "permissions.subagents.max"
+        ]
+    );
+    assert_eq!(
+        at("permissions {\n  subagents {\n    agents = [\"Bad Name\"]\n    max = 0\n  }\n}\n"),
+        ["permissions.subagents.max", "permissions.subagents.agents"]
+    );
+}

@@ -6,7 +6,8 @@
 //! script an agent runs (`run_script`, a vault tool or a skill's tool) with its tool, the version
 //! of the script that ran (`script`, the reference `crate::script_tools` describes), the outcome,
 //! the time, the instructions and the start of its log (script-tools T6), and `ai.proposal` and `ai.applied` for the changes
-//! the turn proposed or made. Model message text and the notes a tool writes are never copied:
+//! the turn proposed or made, and `ai.subagent.start` and `ai.subagent.end` for each sub agent it
+//! started (subagents U7). Model message text and the notes a tool writes are never copied:
 //! only names, ids, titles, query text, hosts and the first characters of a command.
 //!
 //! Every entry of one turn carries `detail.turn`, so the Log page can nest a turn's tool calls
@@ -329,6 +330,58 @@ impl TurnActivity {
             "name": p["name"],
         });
         self.record(self.entry(kind, format!("{verb}: {what}"), detail));
+    }
+
+    /// The turn's id, which every entry of it carries.
+    pub(crate) fn turn_id(&self) -> &str {
+        &self.turn
+    }
+
+    /// The turn started sub agent `s` from thread `parent` (subagents U7).
+    pub(crate) fn subagent_start(&self, s: &crate::agent_threads::SubSession, parent: &str) {
+        let who = s.delegated.as_deref().unwrap_or("a throwaway sub agent");
+        self.record(self.entry(
+            "ai.subagent.start",
+            format!(
+                "{} started {who}: {}",
+                self.agent,
+                one_line(&s.task, ARG_CHARS)
+            ),
+            json!({
+                "parent_thread": parent,
+                "parent_turn": self.turn,
+                "sub_thread": s.thread,
+                "call": s.call,
+                "named": s.delegated,
+                "throwaway": s.delegated.is_none(),
+                "n": s.n,
+            }),
+        ));
+    }
+
+    /// Sub agent `s` ended, after `ms` milliseconds (subagents U7).
+    pub(crate) fn subagent_end(&self, s: &crate::agent_threads::SubSession, ms: u64) {
+        let who = s.delegated.as_deref().unwrap_or("a throwaway sub agent");
+        self.record(self.entry(
+            "ai.subagent.end",
+            format!(
+                "{who} ended: {}, {} rounds, {} tool calls",
+                s.status, s.rounds, s.tools
+            ),
+            json!({
+                "parent_thread": self.thread,
+                "parent_turn": self.turn,
+                "sub_thread": s.thread,
+                "call": s.call,
+                "named": s.delegated,
+                "throwaway": s.delegated.is_none(),
+                "n": s.n,
+                "rounds": s.rounds,
+                "tools": s.tools,
+                "outcome": s.status,
+                "ms": ms,
+            }),
+        ));
     }
 
     /// The turn ended with `outcome` (`done`, `refused`, `error` or `stopped`), and `why` for a

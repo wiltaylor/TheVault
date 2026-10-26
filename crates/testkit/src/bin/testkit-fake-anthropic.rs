@@ -8,7 +8,7 @@
 //!
 //! | Command | Effect |
 //! |---------|--------|
-//! | `push <json>` | Queue the answer to the next `POST /v1/messages`: `{ "text"?: string, "tools"?: [{ "id", "name", "input" }] }`, a message of that text and those tool calls, ending `tool_use` when it has tools; `"usage": [input, output]` sets the tokens it reports; `"delay_ms"` waits that long before each streamed chunk |
+//! | `push <json>` | Queue the answer to the next `POST /v1/messages`: `{ "text"?: string, "tools"?: [{ "id", "name", "input" }] }`, a message of that text and those tool calls, ending `tool_use` when it has tools; `"usage": [input, output]` sets the tokens it reports; `"delay_ms"` waits that long before each streamed chunk; `"when"` answers only a request whose JSON body holds that text, for turns that run at once |
 //! | `requests` | Answers `{ "ok": "requests", "count": <n> }`, the `POST /v1/messages` requests so far |
 
 use std::io::{BufRead, Write};
@@ -66,7 +66,10 @@ fn command(fake: &FakeAnthropic, line: &str) -> Result<Value, String> {
             if let Some(ms) = spec["delay_ms"].as_u64() {
                 m = m.delay(std::time::Duration::from_millis(ms));
             }
-            fake.push(m);
+            match spec["when"].as_str() {
+                Some(when) => fake.push_when(when, m),
+                None => fake.push(m),
+            }
             Ok(json!({}))
         }
         "requests" => Ok(json!({ "count": fake.message_requests().len() })),

@@ -315,7 +315,16 @@ pub async fn delete(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let base = q.base_version.or_else(|| if_match(&headers));
-    let saved = blocking(w, move |w| w.delete(&id, base.as_deref(), &author)).await?;
+    let saved = blocking(w, move |w| {
+        // An agent thread's sub agent sessions go to the trash with it (subagents U5).
+        let thread = crate::agent_threads::Thread::read(w, &id).ok();
+        let saved = w.delete(&id, base.as_deref(), &author)?;
+        if let Some(t) = thread {
+            crate::agent_threads::cascade(w, &t, None, &author);
+        }
+        Ok::<_, writer::Error>(saved)
+    })
+    .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 
@@ -351,7 +360,12 @@ async fn set_archived(
 ) -> Result<Response, ApiError> {
     let base = q.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| {
-        w.set_archived(&id, archived, base.as_deref(), &author)
+        let saved = w.set_archived(&id, archived, base.as_deref(), &author)?;
+        // An agent thread's sub agent sessions are archived with it (subagents U5).
+        if let Ok(t) = crate::agent_threads::Thread::read(w, &id) {
+            crate::agent_threads::cascade(w, &t, Some(archived), &author);
+        }
+        Ok::<_, writer::Error>(saved)
     })
     .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))

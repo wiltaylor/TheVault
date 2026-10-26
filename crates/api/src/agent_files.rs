@@ -139,6 +139,11 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         "browser": p.browser,
         "skills": p.skills,
         "scripts": scripts,
+        "subagents": {
+            "allow": p.subagents.allow,
+            "max": p.subagents.max,
+            "agents": p.subagents.agents,
+        },
     })
 }
 
@@ -333,6 +338,20 @@ pub struct PermissionsForm {
     /// The script switches (script-tools T7); absent is every switch off.
     #[serde(default)]
     scripts: BTreeMap<String, bool>,
+    /// Sub agents (subagents U2); absent is off.
+    #[serde(default)]
+    subagents: Option<SubagentsForm>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentsForm {
+    #[serde(default)]
+    allow: bool,
+    #[serde(default)]
+    max: Option<i64>,
+    #[serde(default)]
+    agents: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -405,6 +424,20 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
                 format!("permissions.scripts.{k}"),
                 "is not a switch",
             ));
+        }
+    }
+    if let Some(sub) = f.permissions.subagents {
+        p.subagents.allow = sub.allow;
+        p.subagents.agents = sub.agents;
+        if let Some(max) = sub.max {
+            // Out of range, the file written out says so when it is read back.
+            match u8::try_from(max) {
+                Ok(m) if (1..=schema::SUBAGENTS_MAX).contains(&m) => p.subagents.max = m,
+                _ => issues.push(Issue::new(
+                    "permissions.subagents.max",
+                    format!("must be a whole number from 1 to {}", schema::SUBAGENTS_MAX),
+                )),
+            }
         }
     }
     for t in f.triggers {
