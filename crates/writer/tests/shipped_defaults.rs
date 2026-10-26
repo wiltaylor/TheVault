@@ -290,7 +290,9 @@ fn an_edited_script_is_kept_with_one_notification_and_an_unedited_old_one_is_rep
     std::fs::create_dir_all(root.join("scripts")).unwrap();
     std::fs::create_dir_all(root.join("devices")).unwrap();
     for file in SHIPPED_FILES {
-        std::fs::write(root.join(file.path), shipped(file.path)).unwrap();
+        let path = root.join(file.path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, shipped(file.path)).unwrap();
     }
     std::fs::write(root.join("scripts/device_calls.ws"), OLD_DEVICE_CALLS).unwrap();
     std::fs::write(root.join("devices/android.wcl"), OLD_ANDROID).unwrap();
@@ -2572,4 +2574,28 @@ fn a_users_type_with_labels_holds_its_values_under_value_and_a_device_leaves_it(
         Upgraded::default()
     );
     assert_eq!(generation(root), gen_before);
+}
+
+/// The built-in `wscript` skill (script-tools T5) is seeded whole and is valid, so every agent
+/// that uses skills is offered it.
+#[test]
+fn the_wscript_skill_is_seeded_and_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let skill = w.skill("wscript").unwrap();
+    assert!(skill.valid(), "{:?}", skill.issues);
+    assert!(skill.issues.is_empty(), "{:?}", skill.issues);
+    let files: Vec<&str> = skill.files.iter().map(|f| f.path.as_str()).collect();
+    for file in SHIPPED_FILES
+        .iter()
+        .filter(|f| f.path.starts_with("skills/wscript/"))
+    {
+        let rel = file.path.strip_prefix("skills/wscript/").unwrap();
+        assert!(
+            rel == "SKILL.md" || files.contains(&rel),
+            "{rel} in {files:?}"
+        );
+        assert_eq!(w.skill_text("wscript", rel).unwrap(), file.source, "{rel}");
+    }
 }

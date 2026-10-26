@@ -69,8 +69,9 @@ pub struct ShippedFile {
 
 /// The shipped files: the default device scripts, then the device file that names them, then the
 /// Google sync's scripts, each before the task that names it (google-sync D19), the Outbox's send
-/// handler (outbox X3), then the built-in agent (agents G6).
-pub const SHIPPED_FILES: [ShippedFile; 13] = [
+/// handler (outbox X3), then the built-in agent (agents G6), then the built-in `wscript` skill
+/// (script-tools T5).
+pub const SHIPPED_FILES: [ShippedFile; 20] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -196,6 +197,43 @@ pub const SHIPPED_FILES: [ShippedFile; 13] = [
             "8662bc8dbbf4601e72392d38c20a4cd01fdf554b0bf90d3b1a083557d64dc7ba",
             "13ba050f704d74c6fa10f1fbd9d95cd5698e326c7ac0a61007fb736e205f47ec",
         ],
+    },
+    // The built-in skill that teaches agents wscript, for run_script and script tools
+    // (script-tools T5).
+    ShippedFile {
+        path: "skills/wscript/SKILL.md",
+        source: include_str!("../defaults/skills/wscript/SKILL.md"),
+        hashes: &["62baa546cd11a60cff58ed70b182e2d808981e8b33e40e74aa3728be4877f48c"],
+    },
+    ShippedFile {
+        path: "skills/wscript/references/language.md",
+        source: include_str!("../defaults/skills/wscript/references/language.md"),
+        hashes: &["6a06db34e74949d06f367c0e62215825fd2f5eebea149643aeb222d57ea92978"],
+    },
+    ShippedFile {
+        path: "skills/wscript/references/vault-api.md",
+        source: include_str!("../defaults/skills/wscript/references/vault-api.md"),
+        hashes: &["69675d6ec974a5bb2f55142299fbae7946e1296ade8e1f2ad96acbb389becd92"],
+    },
+    ShippedFile {
+        path: "skills/wscript/references/run-script.md",
+        source: include_str!("../defaults/skills/wscript/references/run-script.md"),
+        hashes: &["ad3f94423ec6b73bccb0bf40c946dd5fba9ada0d5a4ffae45d2ca9c5a7b5f03a"],
+    },
+    ShippedFile {
+        path: "skills/wscript/references/tools.md",
+        source: include_str!("../defaults/skills/wscript/references/tools.md"),
+        hashes: &["19db580237903644de29903e9baad534e8ef76a5d9e6dd2fd1d4e97492bcc837"],
+    },
+    ShippedFile {
+        path: "skills/wscript/references/limits-and-errors.md",
+        source: include_str!("../defaults/skills/wscript/references/limits-and-errors.md"),
+        hashes: &["2fd5923eb700b85b13f3e4b11a5056bcb857d5a8556b7cc31af125e0731d0e55"],
+    },
+    ShippedFile {
+        path: "skills/wscript/references/bulk-actions.md",
+        source: include_str!("../defaults/skills/wscript/references/bulk-actions.md"),
+        hashes: &["fc43bfc1178b51c8ec636562470f0d0e4f60007e86effb65f0df2ecbfeafd993"],
     },
 ];
 
@@ -2396,6 +2434,17 @@ fn insert_slot(items: &mut Vec<Item>, field: &str, offset: usize, slot: &Item) -
 mod tests {
     use super::*;
 
+    /// The files of the built-in `wscript` skill, in the order they ship.
+    const WSCRIPT_SKILL_FILES: [&str; 7] = [
+        "SKILL.md",
+        "references/language.md",
+        "references/vault-api.md",
+        "references/run-script.md",
+        "references/tools.md",
+        "references/limits-and-errors.md",
+        "references/bulk-actions.md",
+    ];
+
     #[test]
     fn every_shipped_file_lists_its_current_hash_last() {
         for file in SHIPPED_FILES {
@@ -2423,6 +2472,11 @@ mod tests {
         paths.push(crate::defs::script_path("google_event"));
         paths.push(crate::defs::script_path("outbox_send"));
         paths.push(crate::agent_path(schema::ASSISTANT_AGENT));
+        paths.extend(
+            WSCRIPT_SKILL_FILES
+                .iter()
+                .map(|f| format!("skills/wscript/{f}")),
+        );
         let shipped: Vec<String> = SHIPPED_FILES.iter().map(|f| f.path.to_owned()).collect();
         assert_eq!(shipped, paths);
         for (name, source) in crate::DEFAULT_DEVICE_SCRIPTS {

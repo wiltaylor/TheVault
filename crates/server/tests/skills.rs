@@ -251,7 +251,14 @@ fn a_skill_is_created_read_listed_and_its_files_written_and_deleted() {
         api.admin("GET", "/api/skills").send().unwrap(),
         StatusCode::OK,
     );
-    assert_eq!(list["skills"], json!([]));
+    // Only the shipped `wscript` skill (script-tools T5) is left.
+    let names: Vec<&str> = list["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["wscript"]);
 
     assert_eq!(
         api.skill_entries(),
@@ -444,12 +451,12 @@ fn an_invalid_zip_is_refused_before_anything_is_written() {
     );
     assert_eq!(invalid["error"], "invalid");
     assert_eq!(invalid["issues"][0]["at"], "description");
-    assert_eq!(
-        std::fs::read_dir(api.server.vault_path().join("skills"))
-            .unwrap()
-            .count(),
-        0
-    );
+    // Only the shipped `wscript` skill's folder (script-tools T5).
+    let folders: Vec<String> = std::fs::read_dir(api.server.vault_path().join("skills"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(folders, ["wscript"]);
     assert!(!api.server.vault_path().join("escape.txt").exists());
     assert!(api.skill_entries().is_empty());
 }
