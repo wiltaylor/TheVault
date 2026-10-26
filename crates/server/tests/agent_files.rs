@@ -1,12 +1,12 @@
 //! S1: agent files through `/api/agents` (agents G1, G2, G6): listing and reading need `read`,
-//! writing and deleting need `admin`, a write takes WCL or the JSON form and is refused with its
-//! issues, and the built-in Assistant cannot be deleted or disabled.
+//! writing and deleting need `admin` or a paired device's token, a write takes WCL or the JSON
+//! form and is refused with its issues, and the built-in Assistant cannot be deleted or disabled.
 
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{Value, json};
-use testkit::TestServer;
+use testkit::{PASSWORD, TestServer};
 
 const EMAIL: &str = r#"label = "Email"
 
@@ -402,5 +402,117 @@ fn the_assistant_cannot_be_deleted_or_disabled() {
             .vault_path()
             .join("agents/assistant.wcl")
             .is_file()
+    );
+}
+
+/// A device paired with `api`'s server: its `write` token.
+fn pair_device(api: &Api) -> String {
+    let res = api
+        .client
+        .post(api.server.url("/api/devices/pair"))
+        .json(&json!({ "password": PASSWORD, "name": "Phone", "platform": "android" }))
+        .send()
+        .unwrap();
+    expect(res, StatusCode::CREATED)["token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+// The apps edit agents as the web app does: a paired device's `write` token creates, changes and
+// deletes agent files, Run wscript code and sub agents included, and nothing else it may do grows.
+#[test]
+fn a_paired_device_writes_agent_files_and_nothing_more() {
+    let api = Api::start();
+    let device = pair_device(&api);
+
+    let created = expect(
+        api.req("PUT", "/api/agents/clerk", &device)
+            .json(&json!({ "label": "Clerk" }))
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(created["label"], "Clerk");
+    assert!(api.server.vault_path().join("agents/clerk.wcl").is_file());
+
+    let granted = expect(
+        api.req("PUT", "/api/agents/clerk", &device)
+            .json(&json!({
+                "label": "Clerk",
+                "permissions": {
+                    "scripts": { "run_code": true },
+                    "subagents": { "allow": true, "max": 2, "agents": ["triage"] },
+                },
+            }))
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(granted["permissions"]["scripts"]["run_code"], true);
+    assert_eq!(
+        granted["permissions"]["subagents"],
+        json!({ "allow": true, "max": 2, "agents": ["triage"] })
+    );
+    let wcl = std::fs::read_to_string(api.server.vault_path().join("agents/clerk.wcl")).unwrap();
+    assert!(wcl.contains("run_code"), "{wcl}");
+
+    // The same checks as for the web app.
+    let err = expect(
+        api.req("PUT", "/api/agents/clerk", &device)
+            .json(&json!({ "permissions": { "tools": ["summon_cat"] } }))
+            .send()
+            .unwrap(),
+        StatusCode::BAD_REQUEST,
+    );
+    assert_eq!(err["error"], "invalid");
+    let err = expect(
+        api.req("DELETE", "/api/agents/assistant", &device)
+            .send()
+            .unwrap(),
+        StatusCode::BAD_REQUEST,
+    );
+    assert_eq!(err["error"], "built_in");
+
+    let gone = expect(
+        api.req("DELETE", "/api/agents/clerk", &device)
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(gone, json!({ "name": "clerk", "deleted": true }));
+    assert!(!api.server.vault_path().join("agents/clerk.wcl").exists());
+
+    // Every other admin route still refuses the device: Settings > AI accounts, a type's delete.
+    let refused = expect(
+        api.req("POST", "/api/integrations/ai/accounts", &device)
+            .json(&json!({ "name": "Mine", "provider": "anthropic" }))
+            .send()
+            .unwrap(),
+        StatusCode::FORBIDDEN,
+    );
+    assert_eq!(refused["error"], "forbidden");
+    expect(
+        api.req("DELETE", "/api/types/email", &device)
+            .send()
+            .unwrap(),
+        StatusCode::FORBIDDEN,
+    );
+    assert!(api.server.vault_path().join("types/email.wcl").is_file());
+
+    // An API token with `write` is not a device, whatever it is called.
+    let named = expect(
+        api.admin("POST", "/api/tokens")
+            .json(&json!({ "name": "device-fake", "scope": "write" }))
+            .send()
+            .unwrap(),
+        StatusCode::CREATED,
+    )["secret"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    expect(
+        api.put_wcl("clerk", "label = \"Mine\"\n", &named),
+        StatusCode::FORBIDDEN,
     );
 }

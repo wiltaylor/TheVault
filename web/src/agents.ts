@@ -3,7 +3,6 @@
 
 import { createRoot, createSignal } from "solid-js";
 import { type Agent, type AgentForm, type AgentSubagents, type AgentSummary, type AiConfirm, type AiWeb, api } from "./api";
-import { appInfo } from "./inApp";
 import { keepSame } from "./keepSame";
 
 /** The built-in agent the chat panel uses by default (agents G6). */
@@ -30,10 +29,9 @@ const store = createRoot(() => {
   const [list, setList] = createSignal<AgentSummary[]>([]);
   const [tools, setTools] = createSignal<string[]>([]);
   const [error, setError] = createSignal<string | null>(null);
-  const [readOnly, setReadOnly] = createSignal(false);
   const [creating, setCreating] = createSignal(false);
   const [version, setVersion] = createSignal(0);
-  return { open, setOpen, list, setList, tools, setTools, error, setError, readOnly, setReadOnly, creating, setCreating, version, setVersion };
+  return { open, setOpen, list, setList, tools, setTools, error, setError, creating, setCreating, version, setVersion };
 });
 
 /** Whether the sidebar's Agents section is open. It starts open and is remembered per browser. */
@@ -56,9 +54,6 @@ export const agentTools = store.tools;
 
 /** Why the list could not be read, if it could not. */
 export const agentsError = store.error;
-
-/** In the apps, agents are read only: changing one needs the web app (agents G2). */
-export const agentsReadOnly = store.readOnly;
 
 /** Whether the sidebar shows the new agent's name box. */
 export const creatingAgent = store.creating;
@@ -88,7 +83,6 @@ let runningPoll: ReturnType<typeof setTimeout> | undefined;
  * apps.
  */
 export async function refreshAgents(): Promise<void> {
-  store.setReadOnly((await appInfo()) !== null);
   try {
     const l = await api.agents();
     store.setList((prev) => keepSame(prev, l.agents, (a) => a.name));

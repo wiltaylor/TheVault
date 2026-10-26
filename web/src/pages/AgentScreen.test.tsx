@@ -6,7 +6,7 @@
 // saved with the form's checks), the Triggers tab (schedules with their next runs, note events,
 // the last runs linking to their threads, the tools a run is offered), Assistant always enabled,
 // the Memory tab (the memories with search, Add, Edit with one Save, Delete after asking, also
-// in the apps), and a read-only screen in the apps.
+// in the apps), and the same screen, saved on the home server, in the apps.
 
 import { Route, Router } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
@@ -984,21 +984,46 @@ describe("the Memory tab", () => {
 });
 
 describe("in the apps", () => {
-  it("shows the agent read only, with Edit agents in the web app", async () => {
-    appInfo.mockResolvedValue({ app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" });
+  const APP = { app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" };
+
+  it("edits and saves the agent as the web app does, its permissions too", async () => {
+    appInfo.mockResolvedValue(APP);
+    putAgent.mockImplementation(async (_name: string, body: object) => ({ ...triage(), ...body }));
     await open();
-    expect(await screen.findByRole("note")).toHaveTextContent("Edit agents in the web app.");
+    expect(screen.queryByRole("note")).toBeNull();
     const s = within(screen.getByRole("region", { name: "General" }));
-    expect(s.getByLabelText("Label")).toBeDisabled();
-    expect(s.getByLabelText("System prompt")).toBeDisabled();
-    expect(s.queryByRole("button", { name: "Save" })).toBeNull();
-    expect(aiModels).not.toHaveBeenCalled();
+    expect(s.getByLabelText("Label")).toBeEnabled();
+    expect(s.getByLabelText("System prompt")).toBeEnabled();
+    // The account's models come through the home server; Settings > AI stays the web app's.
+    await waitFor(() => expect(s.getByLabelText("Model").tagName).toBe("SELECT"));
+    expect(aiModels).toHaveBeenCalledWith("a1");
     expect(aiStatus).not.toHaveBeenCalled();
+    fireEvent.input(s.getByLabelText("Label"), { target: { value: "Triage" } });
     const p = await tab("Permissions");
-    expect(p.getByRole("checkbox", { name: /Search notes/ })).toBeDisabled();
-    expect(p.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(p.getByRole("checkbox", { name: /Search notes/ })).toBeEnabled();
+    fireEvent.click(p.getByRole("switch", { name: "Run wscript code" }));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect(sent()).toMatchObject({ label: "Triage", permissions: { scripts: { run_code: true } } });
+    // The server's answer shows at once.
+    expect(await p.findByRole("status")).toHaveTextContent("Saved.");
+    expect(screen.getByRole("heading", { name: /Triage/ })).toBeTruthy();
     const f = await tab("File");
-    expect(f.getByLabelText("Agent file")).toHaveAttribute("readonly");
-    expect(f.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(f.getByLabelText("Agent file")).not.toHaveAttribute("readonly");
+    expect(f.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  it("says a save needs the home server when it cannot be reached, and stays editable", async () => {
+    appInfo.mockResolvedValue(APP);
+    const message = "Changing an agent needs the home server, which is not reachable.";
+    putAgent.mockRejectedValue(new ApiError(503, { error: "ai_needs_server", message }));
+    await open();
+    const s = within(screen.getByRole("region", { name: "General" }));
+    fireEvent.input(s.getByLabelText("Label"), { target: { value: "Triage" } });
+    fireEvent.click(s.getByRole("button", { name: "Save" }));
+    expect(await s.findByRole("alert")).toHaveTextContent(message);
+    expect(s.getByLabelText("Label")).toBeEnabled();
+    expect(s.getByLabelText("Label")).toHaveValue("Triage");
+    expect(s.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 });

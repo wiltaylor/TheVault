@@ -6,7 +6,7 @@ This page is about agents the vault runs with your own AI accounts. To connect a
 
 ## Agent files
 
-Each agent is a file `agents/<name>.wcl`. The name is lower case letters, digits and `_`, starting with a letter, at most 64 characters. Agent files are definitions like types and tasks: they keep their history, they are in backups, they sync to the apps, and changing one needs `admin`. The apps show agents read only, with "Edit agents in the web app".
+Each agent is a file `agents/<name>.wcl`. The name is lower case letters, digits and `_`, starting with a letter, at most 64 characters. Agent files are definitions like types and tasks: they keep their history, they are in backups, they sync to the apps, and changing one needs `admin`, or a paired device's token. The desktop and Android apps edit agents as the web app does: they read and write the agent on the home server, and the change reaches the device's copy with the sync round that follows. When the home server cannot be reached, a save says "Changing an agent needs the home server, which is not reachable." and the form keeps what was typed.
 
 The file names the label, description and icon, the `account` and `model` (absent means the default account in Settings > AI and its model; the chat box's account and model menus can override them for a conversation, but runs the chat box does not start always use them), the `effort`, the `system_prompt` (absent means the shipped chat prompt), a `permissions` block and any `trigger` blocks. `enabled = false` keeps the file but starts no chat and runs no trigger.
 
@@ -373,8 +373,8 @@ The Triggers tab shows each trigger's last 20 runs, with a link to each run's th
 |---|---|---|
 | `GET /api/agents` | read | Every agent's summary, Assistant first, and the tools `permissions.tools` may name. A summary's `mention` is `null` for a disabled agent, else `{ types }`: the types whose notes may call it, `null` for every type (also for an agent with no mention trigger) |
 | `GET /api/agents/{name}` | read | The parsed agent and its WCL |
-| `PUT /api/agents/{name}` | admin | Writes the agent from WCL, `{ wcl }`, or the JSON form `GET` answers |
-| `DELETE /api/agents/{name}` | admin | Deletes the agent file; its threads stay |
+| `PUT /api/agents/{name}` | admin, or a paired device's token | Writes the agent from WCL, `{ wcl }`, or the JSON form `GET` answers |
+| `DELETE /api/agents/{name}` | admin, or a paired device's token | Deletes the agent file; its threads stay |
 | `GET /api/agents/calls/{call}` | read | What became of a call committed in a note: `{ agent, note, thread, running }`, `thread` null for a call that was not run; 404 while the server has not seen the call |
 | `GET /api/agents/{name}/runs` | read | `{ tools, triggers: [{ name, kind, runs }] }`: the tools a trigger run is offered, and each trigger's last 20 runs, newest first, each `{ id, thread, started, ended, outcome, message }` with times in milliseconds |
 | `GET /api/agents/{name}/threads` | read | The agent's threads, newest activity first, each with `archived`; archived threads only with `?archived=true` |

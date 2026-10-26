@@ -41,7 +41,8 @@ mod sync_status;
 
 pub use fresh::{FreshStart, LocalVault};
 pub use home::{
-    AI_NEEDS_SERVER_MESSAGE, NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE, OFFLINE_MESSAGE,
+    AGENT_NEEDS_SERVER_MESSAGE, AI_NEEDS_SERVER_MESSAGE, NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE,
+    OFFLINE_MESSAGE,
 };
 pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState, Waiting, progress_json};
 
@@ -529,6 +530,14 @@ impl Embedded {
                     })
                     .unwrap_or(0);
                 home.poll_turn(&turn, after).await
+            }
+            Route::AgentFile => {
+                let res = home.forward_agent(req).await;
+                // The home server wrote the file: a round brings it to the local copy.
+                if res.status().is_success() {
+                    self.request_sync();
+                }
+                res
             }
             Route::NeedsWebApp => home::error(
                 StatusCode::FORBIDDEN,

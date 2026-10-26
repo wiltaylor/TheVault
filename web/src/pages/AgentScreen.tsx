@@ -86,8 +86,6 @@ export interface AgentTabProps {
   save: () => Promise<void>;
   /** Write `wcl` as the agent's file. */
   saveWcl: (wcl: string) => Promise<void>;
-  /** In the apps: nothing can be changed here. */
-  readOnly: boolean;
   /** Settings > AI as it stands, in the web app; null in the apps or before it loads. */
   ai: AiStatus | null;
   /** The AI accounts, from `GET /api/ai/accounts` in every client (accounts A7); null before they load or when they cannot be read. */
@@ -146,7 +144,7 @@ export function agentView(
 }
 
 /** A Save button with its spinner, and the result of the last save below it. */
-export function SaveBar(props: { dirty: boolean; readOnly: boolean; save: () => Promise<void>; label?: string }) {
+export function SaveBar(props: { dirty: boolean; readOnly?: boolean; save: () => Promise<void>; label?: string }) {
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
@@ -206,12 +204,9 @@ export function ModelPicker(props: {
   account: string | null;
   value: string | null;
   onChange: (model: string | null) => void;
-  disabled: boolean;
-  /** Whether to ask the account for its models: not in the apps. */
-  live: boolean;
 }) {
   const [list] = createResource(
-    () => (props.live && props.account ? props.account : null),
+    () => props.account,
     async (id) => {
       try {
         const l = await api.aiModels(id);
@@ -221,7 +216,7 @@ export function ModelPicker(props: {
       }
     },
   );
-  const typed = () => !props.live || !props.account || !!list()?.error;
+  const typed = () => !props.account || !!list()?.error;
   const defaultLabel = () => {
     const m = list()?.model;
     return m ? `Account default (${m})` : "Account default";
@@ -239,7 +234,6 @@ export function ModelPicker(props: {
               spellcheck={false}
               placeholder="Account default"
               value={props.value ?? ""}
-              disabled={props.disabled}
               onChange={(e) => props.onChange(e.currentTarget.value.trim() || null)}
             />
             <datalist id={`${props.id}-ids`}>
@@ -253,7 +247,6 @@ export function ModelPicker(props: {
             <select
               id={props.id}
               value={props.value ?? ""}
-              disabled={props.disabled}
               onChange={(e) => props.onChange(e.currentTarget.value || null)}
             >
               <option value="">{defaultLabel()}</option>
@@ -265,7 +258,7 @@ export function ModelPicker(props: {
           )}
         </Show>
       </Show>
-      <Show when={props.live && typed()}>
+      <Show when={typed()}>
         <p class="muted agent-model-note">
           {props.account
             ? `The model list could not be read${list()?.error ? ` (${list()!.error})` : ""}: type a model id, or leave it empty for the account's default.`
@@ -289,7 +282,7 @@ function SettingsTab(p: AgentTabProps) {
   const length = () => [...prompt()].length;
   return (
     <section class="agent-tab" aria-label="General">
-      <fieldset class="agent-fieldset" disabled={p.readOnly}>
+      <fieldset class="agent-fieldset">
         <div class="form-grid">
           <label for={id("label")}>Label</label>
           <input id={id("label")} value={p.draft.label} onInput={(e) => set({ label: e.currentTarget.value })} />
@@ -351,8 +344,6 @@ function SettingsTab(p: AgentTabProps) {
               id={id("model")}
               account={account()?.id ?? null}
               value={p.draft.model}
-              disabled={p.readOnly}
-              live={!p.readOnly}
               onChange={(model) => set({ model })}
             />
           </div>
@@ -384,14 +375,12 @@ function SettingsTab(p: AgentTabProps) {
           <span class={length() > AGENT_PROMPT_MAX ? "error" : "muted"}>
             {p.draft.system_prompt === null ? "Shipped prompt" : `${length()} of ${AGENT_PROMPT_MAX} characters`}
           </span>
-          <Show when={!p.readOnly}>
-            <button type="button" disabled={p.draft.system_prompt === null} onClick={() => set({ system_prompt: null })}>
-              Use the shipped prompt
-            </button>
-          </Show>
+          <button type="button" disabled={p.draft.system_prompt === null} onClick={() => set({ system_prompt: null })}>
+            Use the shipped prompt
+          </button>
         </div>
       </fieldset>
-      <SaveBar dirty={p.dirty} readOnly={p.readOnly} save={p.save} />
+      <SaveBar dirty={p.dirty} save={p.save} />
     </section>
   );
 }
@@ -538,7 +527,7 @@ function PermissionsTab(p: AgentTabProps) {
         These permissions are {agentLabel(p.agent)}'s own: they replace Settings {">"} AI for this agent, and nothing is
         inherited. The person or token running a chat still limits what it can change.
       </p>
-      <fieldset class="agent-fieldset" disabled={p.readOnly}>
+      <fieldset class="agent-fieldset">
         <h2>Tools</h2>
         <div class="agent-tool-groups">
           <For each={toolGroups(all())}>
@@ -757,7 +746,7 @@ function PermissionsTab(p: AgentTabProps) {
           </Show>
         </Show>
       </fieldset>
-      <SaveBar dirty={p.dirty} readOnly={p.readOnly} save={p.save} />
+      <SaveBar dirty={p.dirty} save={p.save} />
     </section>
   );
 }
@@ -770,7 +759,7 @@ function FileTab(p: AgentTabProps) {
       <p class="muted">
         agents/{p.agent.name}.wcl, as docs/vault-format.md "Agent files" defines it. Saving checks it as the form does.
       </p>
-      <Show when={p.dirty && !p.readOnly}>
+      <Show when={p.dirty}>
         <p class="muted">The form has unsaved changes. Saving the file here replaces them.</p>
       </Show>
       <textarea
@@ -778,11 +767,10 @@ function FileTab(p: AgentTabProps) {
         aria-label="Agent file"
         rows={24}
         spellcheck={false}
-        readOnly={p.readOnly}
         value={text()}
         onInput={(e) => setText(e.currentTarget.value)}
       />
-      <SaveBar dirty={text() !== p.agent.wcl} readOnly={p.readOnly} save={() => p.saveWcl(text())} />
+      <SaveBar dirty={text() !== p.agent.wcl} save={() => p.saveWcl(text())} />
     </section>
   );
 }
@@ -795,8 +783,9 @@ export function AgentScreen() {
   const navigate = useNavigate();
   const pane = usePane();
   const uid = createUniqueId();
+  // Settings > AI, for the shipped prompt, is the web app's; in the apps the agent itself is
+  // read and saved on the home server, as in the web app.
   const [app] = createResource(appInfo);
-  const readOnly = () => app() !== null && app() !== undefined;
   const [ai] = createResource(
     () => (app.state === "ready" && app() === null ? true : null),
     () => api.aiStatus().catch(() => null),
@@ -960,11 +949,6 @@ export function AgentScreen() {
                 <Show when={v().a.description}>
                   <p class="muted">{v().a.description}</p>
                 </Show>
-                <Show when={readOnly()}>
-                  <p class="agent-readonly" role="note">
-                    Edit agents in the web app. This app can show them but not change them.
-                  </p>
-                </Show>
                 <div class="agent-tabs" role="tablist" aria-label="Agent settings" onKeyDown={onTabKey}>
                   <For each={AGENT_TABS}>
                     {(t) => (
@@ -996,9 +980,6 @@ export function AgentScreen() {
                     },
                     save: () => put(draft()!),
                     saveWcl: (wcl) => put({ wcl }),
-                    get readOnly() {
-                      return readOnly();
-                    },
                     get ai() {
                       return ai() ?? null;
                     },

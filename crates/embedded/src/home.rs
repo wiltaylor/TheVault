@@ -19,6 +19,12 @@
 //! app's custom scheme, which answers whole bodies, so `GET /api/app/ai/turns/{turn}?after=<n>`
 //! reads the turn's event stream here, on the device, and hands the webview the events after
 //! the first `n` each time it asks (see [`Home::poll_turn`]).
+//!
+//! Agent files are read from the home server, or from the local copy when it cannot be reached,
+//! and written there: the home server takes a paired device's token for `PUT` and `DELETE
+//! /api/agents/{name}`, so the agent screen edits agents in the apps as in the web app. The
+//! change reaches the local copy with the sync round the write asks for. Unpaired or offline, a
+//! write answers 503 `ai_needs_server`.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -53,6 +59,11 @@ pub const NEEDS_WEB_APP_MESSAGE: &str = "Manage this in the web app";
 /// The message of an AI route while the home server cannot be reached or the device is unpaired.
 pub const AI_NEEDS_SERVER_MESSAGE: &str =
     "The AI chat needs the home server, which is not reachable.";
+
+/// The message of an agent file write while the home server cannot be reached or the device is
+/// unpaired.
+pub const AGENT_NEEDS_SERVER_MESSAGE: &str =
+    "Changing an agent needs the home server, which is not reachable.";
 
 /// How long a poll of a turn's events waits for one before answering with none.
 const POLL_WAIT: Duration = Duration::from_secs(2);
@@ -101,8 +112,11 @@ pub(crate) enum Route {
     /// `GET /api/app/ai/turns/{turn}`: the turn's events so far, for a webview that cannot read
     /// a stream.
     AppAiTurn { turn: String },
-    /// Credentials, and changes to agent files and skills, that need `admin`, which a device
-    /// token never has (agents G2, skills S3).
+    /// `PUT` and `DELETE /api/agents/{name}`: written on the home server, which takes the
+    /// device's token for them, then a sync round brings the change to the local copy.
+    AgentFile,
+    /// Credentials, and changes to skills and script tools, that need `admin`, which a device
+    /// token never has (skills S3, script-tools T2).
     NeedsWebApp,
 }
 
@@ -193,15 +207,21 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     {
         return Route::NeedsWebApp;
     }
-    // An agent file is a definition the device only reads: a change made here would never reach
-    // the home server (agents G2).
-    if matches!(*method, Method::PUT | Method::DELETE)
-        && path
-            .strip_prefix("/api/agents/")
-            .and_then(segment)
-            .is_some()
+    // A change to an agent file made here would never reach the home server (agents G2), so it
+    // is made there, as the web app makes it.
+    if api::is_agent_file_write(method, path) {
+        return Route::AgentFile;
+    }
+    // And the agent screen reads what it saved there, so an agent just created opens before the
+    // sync round brings it; offline, the local copy.
+    if get
+        && (path == "/api/agents"
+            || path
+                .strip_prefix("/api/agents/")
+                .and_then(segment)
+                .is_some())
     {
-        return Route::NeedsWebApp;
+        return Route::ForwardOrLocal;
     }
     // Skills are definitions too (skills S3): the apps show them read-only.
     if !get && under(path, "/api/skills") {
@@ -458,6 +478,20 @@ impl Home {
         match self.send(req).await {
             Ok(res) => pass(res),
             Err(_) => ai_needs_server(),
+        }
+    }
+
+    /// `PUT` or `DELETE /api/agents/{name}` answered by the home server, a 403 from a server that
+    /// does not take the device's token for it saying the web app manages it, or 503
+    /// `ai_needs_server` when it cannot be reached.
+    pub async fn forward_agent(&self, req: Request<Body>) -> Response<Body> {
+        match self.send(req).await {
+            Ok(res) => translate(res).await,
+            Err(_) => error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ai_needs_server",
+                AGENT_NEEDS_SERVER_MESSAGE,
+            ),
         }
     }
 
@@ -909,16 +943,17 @@ mod tests {
         assert_eq!(route(&post, "/api/tasks/noop/run"), Route::Forward);
         assert_eq!(route(&Method::PUT, "/api/tasks/noop"), Route::Local);
         assert_eq!(route(&get, "/api/cron"), Route::Local);
-        assert_eq!(route(&get, "/api/agents"), Route::Local);
-        assert_eq!(route(&get, "/api/agents/assistant"), Route::Local);
+        assert_eq!(route(&get, "/api/agents"), Route::ForwardOrLocal);
+        assert_eq!(route(&get, "/api/agents/assistant"), Route::ForwardOrLocal);
         assert_eq!(
             route(&Method::PUT, "/api/agents/assistant"),
-            Route::NeedsWebApp
+            Route::AgentFile
         );
         assert_eq!(
             route(&Method::DELETE, "/api/agents/triage"),
-            Route::NeedsWebApp
+            Route::AgentFile
         );
+        assert_eq!(route(&post, "/api/agents/triage"), Route::Local);
         assert_eq!(route(&get, "/api/skills"), Route::Local);
         assert_eq!(route(&get, "/api/skills/pdf/files/a/b.png"), Route::Local);
         assert_eq!(route(&get, "/api/skills/pdf/export"), Route::Local);

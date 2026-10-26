@@ -225,25 +225,25 @@ function showAgentsSection() {
 }
 
 /**
- * "New agent", in the web app only, and "Open agent …" for each agent (agents G3). New agent
- * opens the left sidebar's name box for it, in the drawer on a narrow screen. With `skills`,
- * "New skill" (the web app only), which opens the Skills page with its name box shown, and
- * "Open skill …" for each skill (skills S4).
+ * "New agent" and "Open agent …" for each agent (agents G3). New agent opens the left sidebar's
+ * name box for it, in the drawer on a narrow screen. With `skills`, "New skill" (the web app
+ * only, not `inApp`), which opens the Skills page with its name box shown, and "Open skill …"
+ * for each skill (skills S4).
  */
-export function agentActions(list: readonly AgentSummary[], readOnly: boolean, skills: readonly SkillSummary[] = []): Action[] {
+export function agentActions(list: readonly AgentSummary[], inApp: boolean, skills: readonly SkillSummary[] = []): Action[] {
   const out: Action[] = [];
-  if (!readOnly) {
-    out.push({
-      id: "agent:new",
-      section: "Create",
-      label: "New agent",
-      keywords: ["Create agent", "Add agent", "AI agent"],
-      icon: { type: AGENT_ICON },
-      run: () => {
-        showAgentsSection();
-        setCreatingAgent(true);
-      },
-    });
+  out.push({
+    id: "agent:new",
+    section: "Create",
+    label: "New agent",
+    keywords: ["Create agent", "Add agent", "AI agent"],
+    icon: { type: AGENT_ICON },
+    run: () => {
+      showAgentsSection();
+      setCreatingAgent(true);
+    },
+  });
+  if (!inApp) {
     // The browser box's desktop in the active pane (browser B4); the web app only.
     out.push({
       id: "browser-box",
@@ -265,7 +265,7 @@ export function agentActions(list: readonly AgentSummary[], readOnly: boolean, s
       href: `/agents/${encodeURIComponent(a.name)}`,
     });
   }
-  if (!readOnly) {
+  if (!inApp) {
     out.push({
       id: "skill:new",
       section: "Create",

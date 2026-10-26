@@ -1825,7 +1825,8 @@ export const api = {
   /**
    * Create or replace an agent from the form (`Agent` without `wcl`) or from its WCL. A file that
    * does not check is a 400 with its issues; disabling Assistant is a 400 `built_in`. Needs
-   * `admin`, so the apps answer 403 `needs_web_app`.
+   * `admin`, or in the apps the device's token: the apps write it on the home server, and answer
+   * 503 `ai_needs_server` when it cannot be reached.
    */
   putAgent: (name: string, body: Partial<AgentForm> | { wcl: string }) => request<Agent>("PUT", `/api/agents/${enc(name)}`, body),
   /** Delete an agent; its threads stay. Assistant is a 400 `built_in`. */

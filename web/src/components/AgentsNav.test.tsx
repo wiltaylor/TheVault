@@ -1,6 +1,6 @@
 // The left sidebar's Agents section (agents G3, G6): the list with Assistant first, + to create
 // one from a name and open it, the ⋯ menu's Open, Disable or Enable, and Delete after a confirm,
-// Assistant without Disable or Delete, disabled agents dimmed, and a read-only list in the apps.
+// Assistant without Disable or Delete, disabled agents dimmed, and the same list in the apps.
 // After the agents, one Skills item (skills S4): the Skills page, the number of skills and a
 // warning mark when any is invalid, with no entry per skill.
 
@@ -192,12 +192,12 @@ describe("the sidebar's Agents section", () => {
     expect(menu.getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Open"]);
   });
 
-  it("is read only in the apps: no + and only Open in the menu", async () => {
+  it("creates, disables and deletes agents in the apps as in the web app", async () => {
     appInfo.mockResolvedValue({ app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" });
     await shown();
-    await waitFor(() => expect(nav().queryByRole("button", { name: "New agent" })).toBeNull());
+    expect(nav().getByRole("button", { name: "New agent" })).toBeTruthy();
     fireEvent.click(nav().getByRole("button", { name: "Actions for Inbox triage" }));
-    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Open"]);
+    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Open", "Disable", "Delete"]);
   });
 });
 

@@ -236,7 +236,7 @@ export function TriggersTab(p: AgentTabProps) {
           </p>
         )}
       </Show>
-      <fieldset class="agent-fieldset" disabled={p.readOnly}>
+      <fieldset class="agent-fieldset">
         <Show when={triggers().length === 0}>
           <p class="muted">No triggers yet.</p>
         </Show>
@@ -383,32 +383,28 @@ export function TriggersTab(p: AgentTabProps) {
                 }
                 onInput={(e) => setAt(i, { prompt: e.currentTarget.value })}
               />
-              <Show when={!p.readOnly}>
-                <div class="actions">
-                  <button type="button" onClick={() => setTriggers((ts) => ts.filter((_, j) => j !== i))}>
-                    Remove trigger
-                  </button>
-                </div>
-              </Show>
+              <div class="actions">
+                <button type="button" onClick={() => setTriggers((ts) => ts.filter((_, j) => j !== i))}>
+                  Remove trigger
+                </button>
+              </div>
               <RunList agent={p.agent.name} runs={runsOf(t().name)} loading={runs.loading} />
             </fieldset>
           )}
         </Index>
-        <Show when={!p.readOnly}>
-          <div class="actions">
-            <button type="button" onClick={() => add("schedule")}>
-              Add a schedule
-            </button>
-            <button type="button" onClick={() => add("event")}>
-              Add a note event
-            </button>
-            <button type="button" onClick={() => add("mention")}>
-              Add a mention
-            </button>
-          </div>
-        </Show>
+        <div class="actions">
+          <button type="button" onClick={() => add("schedule")}>
+            Add a schedule
+          </button>
+          <button type="button" onClick={() => add("event")}>
+            Add a note event
+          </button>
+          <button type="button" onClick={() => add("mention")}>
+            Add a mention
+          </button>
+        </div>
       </fieldset>
-      <SaveBar dirty={p.dirty} readOnly={p.readOnly} save={save} />
+      <SaveBar dirty={p.dirty} save={save} />
     </section>
   );
 }

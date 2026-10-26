@@ -122,7 +122,9 @@ use serde_json::{Value, json};
 use writer::Writer;
 
 pub use apps::watch as watch_clients;
-pub use auth::{Caller, OWNER_SESSION, SESSION_COOKIE, is_human_only, required_scope};
+pub use auth::{
+    Caller, OWNER_SESSION, SESSION_COOKIE, is_agent_file_write, is_human_only, required_scope,
+};
 pub use devices::DEFAULT_SKIP_PATTERN;
 pub use error::ApiError;
 pub use openapi::{ENDPOINTS, document as openapi_document};

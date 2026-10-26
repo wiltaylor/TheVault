@@ -196,6 +196,6 @@ describe("the palette's skill actions", () => {
   });
 
   it("leaves out New skill in the apps", () => {
-    expect(agentActions([], true, skills).map((a) => a.label)).toEqual(["Open skill pdf-forms", "Open skill broken"]);
+    expect(agentActions([], true, skills).map((a) => a.label)).toEqual(["New agent", "Open skill pdf-forms", "Open skill broken"]);
   });
 });

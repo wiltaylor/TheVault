@@ -14,7 +14,6 @@ import {
   agents,
   agentsError,
   agentsOpen,
-  agentsReadOnly,
   createAgent,
   creatingAgent,
   deleteAgent,
@@ -106,7 +105,7 @@ export function AgentsNav(props: { onNavigate: () => void }) {
 
   function Menu(p: { agent: AgentSummary; anchor: () => HTMLButtonElement | undefined }) {
     const a = () => p.agent;
-    const editable = () => !agentsReadOnly() && !a().built_in && !a().error;
+    const editable = () => !a().built_in && !a().error;
     return (
       <MenuBox label={`Actions for ${agentLabel(a())}`} anchor={p.anchor} onClose={() => setMenu(null)}>
         <button type="button" role="menuitem" onClick={() => open(a().name)}>
@@ -124,7 +123,7 @@ export function AgentsNav(props: { onNavigate: () => void }) {
             {a().enabled === false ? "Enable" : "Disable"}
           </button>
         </Show>
-        <Show when={!agentsReadOnly() && !a().built_in}>
+        <Show when={!a().built_in}>
           <button
             type="button"
             role="menuitem"
@@ -211,23 +210,21 @@ export function AgentsNav(props: { onNavigate: () => void }) {
           </span>
           <span>Agents</span>
         </button>
-        <Show when={!agentsReadOnly()}>
-          <button
-            type="button"
-            class="pinned-add"
-            aria-label="New agent"
-            title="New agent"
-            onClick={() => {
-              setAgentsOpen(true);
-              setCreatingAgent(true);
-            }}
-          >
-            <TypeIcon name="plus" size={16} />
-          </button>
-        </Show>
+        <button
+          type="button"
+          class="pinned-add"
+          aria-label="New agent"
+          title="New agent"
+          onClick={() => {
+            setAgentsOpen(true);
+            setCreatingAgent(true);
+          }}
+        >
+          <TypeIcon name="plus" size={16} />
+        </button>
       </div>
       <Show when={agentsOpen()}>
-        <Show when={creatingAgent() && !agentsReadOnly()}>
+        <Show when={creatingAgent()}>
           <div class="pin-row pin-row-new">
             <TypeIcon name={AGENT_ICON} size={16} />
             <NameInput label="New agent name" onDone={create} />

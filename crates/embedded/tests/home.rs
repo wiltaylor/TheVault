@@ -1113,3 +1113,69 @@ fn an_agents_confirmation_switches_decide_in_the_app_as_in_the_web_app() {
     let local = device.call("GET", &format!("/api/notes/{id}"), None, 200);
     assert_eq!(local["note"]["fields"]["title"], "Groceries and eggs");
 }
+
+// The agent screen edits agents in the apps as in the web app: the home server takes the
+// device's token for an agent file's writes, the grants an AI proposal may not make on its own
+// among them, and the change reaches the device's copy by sync.
+#[test]
+fn the_app_writes_agent_files_on_the_home_server() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Admin::of(&server);
+    let device = Device::pair(&server, "Phone");
+    let form = json!({
+        "label": "Clerk",
+        "permissions": {
+            "scripts": { "run_code": true },
+            "subagents": { "allow": true, "max": 2, "agents": [] },
+        },
+    });
+
+    // Created from the app, it is written on the home server and read from there at once.
+    let saved = device.call("PUT", "/api/agents/clerk", Some(form.clone()), 200);
+    assert_eq!(saved["label"], "Clerk", "{saved}");
+    assert_eq!(saved["permissions"]["scripts"]["run_code"], true, "{saved}");
+    assert_eq!(saved["permissions"]["subagents"]["allow"], true, "{saved}");
+    let home = admin.call("GET", "/api/agents/clerk", None, 200);
+    assert_eq!(home["wcl"], saved["wcl"]);
+    let local = device._vault.path().join("agents/clerk.wcl");
+    assert!(!local.exists(), "written on the device");
+    let read = device.call("GET", "/api/agents/clerk", None, 200);
+    assert_eq!(read["wcl"], saved["wcl"]);
+    let list = device.call("GET", "/api/agents", None, 200);
+    assert!(list.to_string().contains("\"clerk\""), "{list}");
+    device.sync();
+    assert_eq!(
+        std::fs::read_to_string(&local).unwrap(),
+        saved["wcl"].as_str().unwrap()
+    );
+
+    // The server's checks are the app's: a bad file is its 400 with the issues.
+    let bad = device.call(
+        "PUT",
+        "/api/agents/clerk",
+        Some(json!({ "permissions": { "tools": ["summon_cat"] } })),
+        400,
+    );
+    assert_eq!(bad["error"], "invalid", "{bad}");
+
+    // Offline, a write says it needs the home server and a read is the local copy.
+    device.go_offline();
+    let out = device.call("PUT", "/api/agents/clerk", Some(form), 503);
+    assert_eq!(out["error"], "ai_needs_server", "{out}");
+    assert_eq!(out["message"], embedded::AGENT_NEEDS_SERVER_MESSAGE);
+    let out = device.call("DELETE", "/api/agents/clerk", None, 503);
+    assert_eq!(out["error"], "ai_needs_server", "{out}");
+    let read = device.call("GET", "/api/agents/clerk", None, 200);
+    assert_eq!(read["label"], "Clerk", "{read}");
+    device.embedded.set_remote(Some(device.remote.clone()));
+
+    // Deleted from the app, it is gone on the home server, then on the device.
+    let gone = device.call("DELETE", "/api/agents/clerk", None, 200);
+    assert_eq!(gone["deleted"], true, "{gone}");
+    admin.call("GET", "/api/agents/clerk", None, 404);
+    device.sync();
+    assert!(!local.exists());
+    device.embedded.set_remote(None);
+    let out = device.call("PUT", "/api/agents/clerk", Some(json!({})), 503);
+    assert_eq!(out["error"], "ai_needs_server", "{out}");
+}

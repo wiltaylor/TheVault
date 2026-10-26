@@ -165,6 +165,40 @@ fn is_device_command_result(path: &str) -> bool {
         })
 }
 
+/// Whether `method` on `path` writes an agent file: `PUT` or `DELETE /api/agents/{name}`.
+pub fn is_agent_file_write(method: &Method, path: &str) -> bool {
+    matches!(*method, Method::PUT | Method::DELETE)
+        && path
+            .strip_prefix("/api/agents/")
+            .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+}
+
+/// Whether the request is a paired device writing an agent file with its own `write` token.
+/// Agent files need `admin`, but the user asked to edit agents in the desktop and Android apps,
+/// which they pair themselves, as in the web app: their settings, permissions and triggers, the
+/// grants an AI proposal may not make on its own (Run wscript code, sub agents) among them. So
+/// these two routes, and only these, take a device's token. It stays `write` everywhere else
+/// (D2), and an API token with `write` is still refused.
+async fn device_writes_agent(
+    sessions: &Sessions,
+    granted: &Granted,
+    method: &Method,
+    path: &str,
+) -> bool {
+    let Author::Token(token) = &granted.author else {
+        return false;
+    };
+    if granted.scope != Scope::Write || !is_agent_file_write(method, path) {
+        return false;
+    }
+    let token = token.clone();
+    blocking(sessions.writer.clone(), move |w| {
+        w.state().device_for_token(&token)
+    })
+    .await
+    .is_ok_and(|device| device.is_some())
+}
+
 /// Whether `method` on `path` is for a password-login session only: every API token, `admin`
 /// among them, is refused with 403 `human_only`. Purging notes from the trash is, so no agent,
 /// script or AI can empty the trash (ai D21), and so is the browser box's desktop under
@@ -378,7 +412,9 @@ pub async fn authenticate(
     {
         return human_only_for(req.uri().path()).into_response();
     }
-    if !granted.scope.allows(needed) {
+    if !granted.scope.allows(needed)
+        && !device_writes_agent(&sessions, &granted, req.method(), req.uri().path()).await
+    {
         return ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",

@@ -48,7 +48,7 @@ describe("the palette's agent actions", () => {
     expect(typeof actions[0]!.run).toBe("function");
   });
 
-  it("leaves out New agent and the browser box in the apps", () => {
-    expect(agentActions(list, true).map((a) => a.label)).toEqual(["Open agent Assistant", "Open agent Inbox triage"]);
+  it("leaves out the browser box and New skill in the apps, and keeps New agent", () => {
+    expect(agentActions(list, true).map((a) => a.label)).toEqual(["New agent", "Open agent Assistant", "Open agent Inbox triage"]);
   });
 });
