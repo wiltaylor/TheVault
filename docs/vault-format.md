@@ -972,6 +972,31 @@ field phones {
 phones = [{ number: "+61400000020", label: "mobile" }, { number: "+61400000021" }]
 ```
 
+A list of links is a list of dicts with exactly two declared keys, a `string` `name` and a `url` `url`, in either order, and no other entries. The app shows each entry as a link that opens in a new tab, by its name, or by its URL's host and path when it has none, and edits the list as one row per link with a name and a URL. The type editor's **List of links** kind writes this definition. The `url` key's kind checks each URL, so `[{ url: "example.com" }]` is refused as `links[0].url: "example.com" is not an absolute URL`. An entry with no name has no `name` member, unless the type makes `name` required.
+
+```wcl
+field links {
+  kind = "list"
+
+  item {
+    kind = "dict"
+
+    key name {
+      kind = "string"
+    }
+
+    key url {
+      kind     = "url"
+      required = true
+    }
+  }
+}
+```
+
+```wcl
+links = [{ name: "Docs", url: "https://example.com/docs" }, { url: "https://example.org/blog" }]
+```
+
 #### Lists with labels
 
 A type file from before format 4 may give a list of strings `labels = "<field>"`, naming another list of strings of the type that held one label per value, index-aligned. A reader still loads it, reading the list as a list of strings and ignoring `labels`. The home server rewrites it on its next start, as it does `multiple = true` (types T6): the list becomes a list of dicts with a required string key for the value and an optional string `label`, and the field `labels` named goes, with every template slot of it. The value key is `number` for a person's `phones`, `address` for a person's `emails` and `addresses`, and `value` for any other list. Every note of the type changes in the same commit, authored by `task server`: the value at each position becomes the dict's value key, and the label at the same position its `label`, with none for an empty label or past the end of the label list; a label past the last value is dropped. A value that is already a dict is kept as it is. A `labels` naming a field the type lacks, or one that is not a list of strings, gives dicts with no labels, and that field stays. A type whose notes would then not validate is left as it is, with one line in the log, and so is a type that does not load. A device's local vault leaves the type to the home server.

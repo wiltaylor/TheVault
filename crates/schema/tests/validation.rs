@@ -806,6 +806,48 @@ fn required_fields_must_be_present() {
         .unwrap();
 }
 
+/// A list of links is a list of dicts of an optional `name` and a required `url`: the url key's
+/// kind checks each link, and a link with no name has no `name` member.
+#[test]
+fn a_list_of_links_checks_each_url() {
+    let ty = type_with(
+        "field links {\n  kind = \"list\"\n  item {\n    kind = \"dict\"\n    key name {\n      kind = \"string\"\n    }\n    key url {\n      kind     = \"url\"\n      required = true\n    }\n  }\n}\n",
+    );
+    let schema = Schema::from_sources(&[("t", ty.as_str())], &[]).unwrap();
+    let none = lookup(&[]);
+    schema
+        .validate_note_source(
+            "t",
+            "title = \"t\"\nlinks = [{ name: \"Docs\", url: \"https://example.com\" }, { url: \"https://example.org/blog\" }]\n",
+            "n",
+            &none,
+        )
+        .unwrap();
+    let err = schema
+        .validate_note_source(
+            "t",
+            "title = \"t\"\nlinks = [{ name: \"Docs\", url: \"example.com\" }]\n",
+            "n",
+            &none,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("links[0].url") && err.contains("\"example.com\" is not an absolute URL"),
+        "{err}"
+    );
+    let err = schema
+        .validate_note_source(
+            "t",
+            "title = \"t\"\nlinks = [{ name: \"Docs\" }]\n",
+            "n",
+            &none,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("url") && err.contains("required"), "{err}");
+}
+
 #[test]
 fn an_unknown_type_fails() {
     let err = example()

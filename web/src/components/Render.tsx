@@ -17,6 +17,7 @@ import { TypeIcon } from "./Icon";
 import { ImageThumb } from "./ImageField";
 import { Inline } from "./Inline";
 import { labelled, labelledShape, labelledText } from "./LabelledList";
+import { LinkAnchors, linkShape, linksOf, linksText } from "./LinkList";
 import { optionText } from "../options";
 import { noteTitle } from "../editor/titles";
 import { assetName } from "./assetNames";
@@ -36,7 +37,8 @@ export function formatValue(value: Json | undefined): string {
 
 /**
  * A field's value as plain text: a list of labelled values shows each value after its label,
- * "mobile +61400000020, home +61400000021". A select shows its options' labels, a reference its
+ * "mobile +61400000020, home +61400000021", and a list of links each link's name, else its URL's
+ * host and path, "Docs, example.com/blog". A select shows its options' labels, a reference its
  * notes' titles and an asset its file names, in lists and dicts too; a date range its start to its
  * end; a dict each entry after its key's label. Reactive, as titles and names load.
  */
@@ -44,6 +46,7 @@ export function fieldText(f: FieldDef, value: Json | undefined): string {
   if (value === undefined || value === null) return "";
   const shape = labelledShape(f);
   if (shape && Array.isArray(value)) return labelledText(labelled(value, shape.key));
+  if (linkShape(f) && Array.isArray(value)) return linksText(linksOf(value));
   if (Array.isArray(value)) {
     const item = f.kind === "list" ? (f.item ?? null) : { ...f, multiple: false };
     // Items that are lists or records are told apart by semicolons.
@@ -90,7 +93,7 @@ function dictText(f: FieldDef, value: Json): string {
 
 /**
  * A field's value, read-only, for cards, tables and the note page: an image field's image as a
- * thumbnail, everything else as [`fieldText`].
+ * thumbnail, a list of links as links that open in a new tab, everything else as [`fieldText`].
  */
 export function FieldValue(props: {
   field: FieldDef;
@@ -98,12 +101,14 @@ export function FieldValue(props: {
   size?: "small" | "card";
 }) {
   return (
-    <Show
-      when={props.field.kind === "asset" && props.field.accept === "image" && typeof props.value === "string" && props.value}
-      fallback={fieldText(props.field, props.value)}
-    >
-      {(id) => <ImageThumb id={id() as string} alt={props.field.label} size={props.size} />}
-    </Show>
+    <Switch fallback={fieldText(props.field, props.value)}>
+      <Match when={props.field.kind === "asset" && props.field.accept === "image" && typeof props.value === "string" && props.value}>
+        {(id) => <ImageThumb id={id() as string} alt={props.field.label} size={props.size} />}
+      </Match>
+      <Match when={linkShape(props.field) && Array.isArray(props.value)}>
+        <LinkAnchors value={props.value} />
+      </Match>
+    </Switch>
   );
 }
 

@@ -4,6 +4,7 @@
 import type { Block, FieldDef, Json, SchemaIssue } from "../api";
 import { slotOfBlock, slotsOf } from "../blocks/columns";
 import { renameFieldRefs } from "../editor/markup";
+import { linkShape } from "../links";
 import { wclBlock, wclField, wclString } from "./wcl";
 
 export const FIELD_KINDS = [
@@ -339,6 +340,24 @@ export function changeKind(f: FieldModel, kind: FieldKind) {
   f.default = undefined;
   if (kind === "list" && !f.item) f.item = newField(f.name);
   if (kind === "dict" && f.keys.length === 0 && f.values === null) f.values = newField(f.name);
+}
+
+/**
+ * Definition `f` made a list of links, as the type editor's "List of links" makes it: a list of
+ * dicts of an optional text `name` and a required `url`, with no other entries.
+ */
+export function makeLinkList(f: FieldModel) {
+  changeKind(f, "list");
+  const item = newField(f.name, "dict");
+  const url = newField("url", "url");
+  url.required = true;
+  item.keys = [newField("name"), url];
+  f.item = item;
+}
+
+/** Whether definition `f` is a list of links (links.ts), which the type editor names so. */
+export function isLinkList(f: FieldModel): boolean {
+  return !!linkShape(fieldDefOf(f));
 }
 
 /** Whether field `f` may carry a `default`: a list only of scalars, selects or terms. */

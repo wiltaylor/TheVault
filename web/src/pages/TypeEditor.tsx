@@ -21,10 +21,12 @@ import {
   emptyType,
   fieldDefOf,
   inverseChoices,
+  isLinkList,
   isName,
   isOwnInverse,
   itemKind,
   itemPlace,
+  makeLinkList,
   needsDefault,
   newField,
   optionsText as writeOptions,
@@ -106,6 +108,9 @@ const KIND_LABELS: Record<FieldKind, string> = {
   ink: "Ink",
   canvas: "Canvas",
 };
+
+/** The Kind picker's preset for a list of links, which is a list (typeModel.ts, makeLinkList). */
+const LINKS = "links";
 
 /** What an item of a list is called in its Item kind picker. */
 const ITEM_LABELS: Partial<Record<FieldKind, string>> = {
@@ -819,13 +824,24 @@ export function TypeEditor() {
             <select
               id={id("kind")}
               aria-label="Kind"
-              onChange={(e) => set((x) => changeKind(x, e.currentTarget.value as FieldKind))}
+              onChange={(e) => {
+                const v = e.currentTarget.value;
+                set((x) => (v === LINKS ? makeLinkList(x) : changeKind(x, v as FieldKind)));
+              }}
             >
               <For each={FIELD_KINDS}>
                 {(k) => (
-                  <option value={k} selected={f().kind === k}>
-                    {KIND_LABELS[k]}
-                  </option>
+                  <>
+                    <option value={k} selected={f().kind === k && !(k === "list" && isLinkList(f()))}>
+                      {KIND_LABELS[k]}
+                    </option>
+                    {/* A list of dicts of a name and a URL, ready made. */}
+                    <Show when={k === "list"}>
+                      <option value={LINKS} selected={isLinkList(f())}>
+                        List of links
+                      </option>
+                    </Show>
+                  </>
                 )}
               </For>
             </select>

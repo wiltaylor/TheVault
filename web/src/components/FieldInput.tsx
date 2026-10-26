@@ -22,6 +22,7 @@ import { ChipPicker, matches } from "./ChipPicker";
 import type { Suggestion } from "./Combobox";
 import { ImageField } from "./ImageField";
 import { LabelledList, type LabelledShape, labelled, labelledShape, labelledValue } from "./LabelledList";
+import { LinkListInput, linkShape } from "./LinkList";
 import { optionChoices, optionText } from "../options";
 import { termPicker } from "./termPicker";
 
@@ -987,6 +988,9 @@ export function FieldInput(props: FieldInputProps) {
         <AssetInput {...props} />
       </Match>
       <Match when={labelledShape(f())}>{(shape) => <LabelledInput {...props} shape={shape()} />}</Match>
+      <Match when={linkShape(f())}>
+        {(shape) => <LinkListInput shape={shape()} value={props.value} onChange={props.onChange} label={props.label} id={props.id} />}
+      </Match>
       <Match when={f().kind === "list" && (f().items ?? "string") === "string"}>
         <Picker {...props} freeText suggest={() => []} />
       </Match>

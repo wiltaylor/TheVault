@@ -4932,6 +4932,52 @@ body.pin-dragging * {
   grid-template-columns: minmax(0, 1fr) auto auto auto;
 }
 
+/* A list of links: a row per link, Name and URL sharing the room, the URL wider */
+.link-list-input > .link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto auto auto auto;
+  gap: 0.4rem;
+  align-items: center;
+  margin-bottom: 0.3rem;
+}
+
+.link-list-input > .link-row > .field-problem {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.link-list-input .link-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.4rem;
+  color: var(--accent);
+}
+
+.link-list-input a.link-open:hover {
+  background: var(--hover);
+}
+
+.property .link-row input {
+  border-color: transparent;
+  background: transparent;
+}
+
+.property .link-row input:hover {
+  border-color: var(--line);
+}
+
+.link-row input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* A list of links read-only: links apart by commas, a long one breaking where it must */
+.link-list-view a.field-link {
+  overflow-wrap: anywhere;
+}
+
 .dict-input > .dict-key-entry {
   display: grid;
   grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr);

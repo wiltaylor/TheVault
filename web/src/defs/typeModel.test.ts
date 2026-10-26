@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Json } from "../api";
-import { type SchemaType, changeKind, fieldDefOf, inverseChoices, isOwnInverse, newField, problems, takesDefault, typeFromSchema, typeWcl } from "./typeModel";
+import { type SchemaType, changeKind, fieldDefOf, inverseChoices, isLinkList, isOwnInverse, makeLinkList, newField, problems, takesDefault, typeFromSchema, typeWcl } from "./typeModel";
 
 /** A field as `GET /api/schema` describes it, with the attributes every definition has. */
 function def(name: string, kind: string, more: Record<string, Json> = {}): Record<string, Json> {
@@ -310,5 +310,31 @@ describe("a two-way reference that is its own inverse", () => {
       { value: "siblings", label: "siblings" },
       { value: "partner", label: "partner" },
     ]);
+  });
+});
+
+describe("a list of links in the type editor", () => {
+  it("is made whole by the preset, written as a list of dicts of a name and a required url, and read back as one", () => {
+    const f = newField("links", "string");
+    f.default = "x";
+    makeLinkList(f);
+    expect(isLinkList(f)).toBe(true);
+    expect(f.default).toBeUndefined();
+    const m = typeFromSchema(typeOf());
+    m.fields.push(f);
+    expect(problems(m)).toEqual([]);
+    expect(block(typeWcl(m), "links")).toBe(
+      'field links {\n  kind = "list"\n  item {\n    kind = "dict"\n    key name {\n      kind = "string"\n    }\n    key url {\n      kind = "url"\n      required = true\n    }\n  }\n}\n',
+    );
+    // As the schema describes it again, keys either way round: still a list of links.
+    const item = (keys: Record<string, Json>[]) => def("links", "dict", { keys, values: null });
+    const stored = typeFromSchema(
+      typeOf(
+        def("links", "list", { items: "dict", item: item([def("name", "string"), def("url", "url", { required: true })]) }),
+        def("refs", "list", { items: "dict", item: item([def("url", "url"), def("name", "string", { required: true })]) }),
+        def("other", "list", { items: "dict", item: item([def("name", "string"), def("url", "string")]) }),
+      ),
+    );
+    expect(stored.fields.map(isLinkList)).toEqual([true, true, false]);
   });
 });
