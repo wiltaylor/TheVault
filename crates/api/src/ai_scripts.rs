@@ -13,6 +13,9 @@
 //!   change and hand it to the user as a `tool_proposal` (the `tools` confirmation switch, admin
 //!   scope), which `POST /api/ai/apply` applies through [`apply_tool`].
 //!
+//! A script's changes are made at once, so a turn whose scope cannot write notes (a `read`
+//! caller's, `crate::ai_chat`'s `change_scope`) is offered none of these script tools.
+//!
 //! Every script run answers the model `{ ok, result | error, kind, log, duration_ms,
 //! instructions, script }`, and its `tool_result` summary carries `script`, which
 //! `crate::ai_activity` records as an `ai.script` entry with the version that ran.

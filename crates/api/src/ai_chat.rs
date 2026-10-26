@@ -1057,7 +1057,11 @@ fn setup(
         ));
     }
     // What the agent can do with wscript, so it opens the wscript skill first (script-tools T5).
-    let scripts = crate::ai_scripts::offered(w, agent, &[]);
+    let scripts = if change_scope(scope, agent).allows(Scope::Write) {
+        crate::ai_scripts::offered(w, agent, &[])
+    } else {
+        crate::ai_scripts::ScriptTools::default()
+    };
     let skills_offered = crate::ai_skills::uses_skills(agent)
         && agent
             .permissions
@@ -1754,6 +1758,11 @@ impl Turn {
         setup: &Setup,
         messages: &[Message],
     ) -> crate::ai_scripts::ScriptTools {
+        // A script's changes are made at once, so a turn whose scope cannot write notes, a
+        // `read` caller's, is offered none ([`change_scope`]).
+        if !change_scope(self.scope, &setup.agent).allows(Scope::Write) {
+            return crate::ai_scripts::ScriptTools::default();
+        }
         let mut seen: Vec<Message> = self.log().map(|l| l.base.clone()).unwrap_or_default();
         seen.extend(messages.iter().cloned());
         let w = self.writer.clone();

@@ -550,6 +550,20 @@ fn run_script_is_offered_only_with_run_code_and_never_self_granted() {
         );
     }
 
+    // A script's changes are made at once, so a `read` caller's turn is offered no script, and a
+    // `write` caller's (an app's) has the agent's own scope, as its switches do.
+    for (scope, offers) in [("read", false), ("write", true)] {
+        let token = api.token_of(&format!("caller_{scope}"), scope);
+        fake.push(AnthropicMessage::text("Hi."));
+        api.chat_as(&token, Some("scripter"));
+        let request = fake.message_requests().last().unwrap().json();
+        assert_eq!(
+            offered(&request).contains(&"run_script".to_owned()),
+            offers,
+            "{scope}"
+        );
+    }
+
     // The manager cannot turn it on for anyone, itself included.
     let grant = "label = \"Helper\"\n\npermissions {\n  scripts {\n    run_code = true\n  }\n}\n";
     api.one(
@@ -977,14 +991,16 @@ fn tool_changes_are_proposed_or_made_by_the_switch_and_admin_scope() {
         "Say hello."
     );
 
-    // The switch off, but a caller with only `write`: still a proposal.
+    // The switch off, but a caller with only `read`: still a proposal. (A `write` caller's turn has
+    // the agent's own scope, which for the Assistant is `admin`.)
+    let read = api.token_of("reader", "read");
     fake.push(AnthropicMessage::new().tool_use(
         "toolu_w",
         "propose_tool_delete",
         json!({ "name": "greet" }),
     ));
     fake.push(AnthropicMessage::text("Done."));
-    let events = api.chat_as(&write, None);
+    let events = api.chat_as(&read, None);
     let p = find(&events, "tool_proposal")
         .unwrap_or_else(|| panic!("{events:?}"))
         .clone();
