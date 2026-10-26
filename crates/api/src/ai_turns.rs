@@ -91,6 +91,11 @@ pub const NEEDS_ADMIN_TOOL_MESSAGE: &str = "Apply script tool changes in the web
 pub const NEEDS_ADMIN_RUN_CODE_MESSAGE: &str =
     "Only an admin turns on Run wscript code: apply this agent change in the web app.";
 
+/// Why a caller without `admin` cannot apply an agent change that turns on Run saved scripts and
+/// tasks.
+pub const NEEDS_ADMIN_RUN_SAVED_MESSAGE: &str =
+    "Only an admin turns on Run saved scripts and tasks: apply this agent change in the web app.";
+
 /// Why a caller without `admin` cannot apply an agent change that turns on sub agents or adds an
 /// agent to delegate to (subagents U2).
 pub const NEEDS_ADMIN_SUBAGENTS_MESSAGE: &str =
@@ -554,13 +559,15 @@ pub async fn apply(
     }
     // Turning on an agent's Run wscript code is full access to the vault: only the signed-in
     // admin grants it, never a write token applying what an agent proposed (script-tools T1).
-    // Granting sub agents is guarded the same way (subagents U2).
+    // Run saved scripts and tasks and granting sub agents (subagents U2) are guarded the same way.
     if event == "agent_proposal" && !scope.allows(Scope::Admin) {
         let w = a.writer.clone();
         let c = change.clone();
         let grants = tokio::task::spawn_blocking(move || {
             if crate::ai_agents::grants_run_code(&w, &c) {
                 Some(NEEDS_ADMIN_RUN_CODE_MESSAGE)
+            } else if crate::ai_agents::grants_run_saved(&w, &c) {
+                Some(NEEDS_ADMIN_RUN_SAVED_MESSAGE)
             } else if crate::ai_agents::grants_subagents(&w, &c) {
                 Some(NEEDS_ADMIN_SUBAGENTS_MESSAGE)
             } else {

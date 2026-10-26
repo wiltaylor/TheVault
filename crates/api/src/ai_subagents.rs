@@ -173,7 +173,11 @@ pub fn narrow(parent: &AgentPermissions, arg: &Value) -> (AgentPermissions, Vec<
         _ => {}
     }
     match arg["run_code"].as_bool() {
-        Some(false) => p.scripts.run_code = false,
+        // Without its own code it may still run the saved scripts and tasks the parent may.
+        Some(false) => {
+            p.scripts.run_saved = p.scripts.runs_saved();
+            p.scripts.run_code = false;
+        }
         Some(true) if !parent.scripts.run_code => {
             ignored.push("Run wscript code, which you do not have".to_owned());
         }
@@ -224,6 +228,7 @@ pub fn intersect(own: &AgentPermissions, parent: &AgentPermissions) -> AgentPerm
         own.outbox.send_without_review && parent.outbox.send_without_review;
     p.browser = own.browser && parent.browser;
     p.scripts.run_code = own.scripts.run_code && parent.scripts.run_code;
+    p.scripts.run_saved = own.scripts.runs_saved() && parent.scripts.runs_saved();
     p.subagents = schema::AgentSubagents::default();
     p
 }

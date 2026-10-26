@@ -93,6 +93,30 @@ fn report() -> Result[string, string] {
 }
 ```
 
+## Saved scripts and scheduled tasks
+
+An agent with the **Run saved scripts and tasks** switch (`permissions.scripts.run_saved`, or
+`run_code`, which includes it) runs what the vault already holds, by name:
+
+- `list_scripts` answers each saved script, `scripts/<name>.ws`, with the functions it exports
+  and how many arguments each takes.
+- `run_saved_script { script, function, args }` calls `function` of that script with `args`,
+  JSON text of an array, exactly as `run_script` calls its entry function: each argument a
+  `Value`, the same result and the same 5 minutes. Its changes are made at once, as the agent.
+  `http` reaches any host only when the agent may read web pages, and `secrets` reads secrets
+  only when the agent has `run_code`. A saved script with no entry function for the call
+  answers `entry`; a missing script answers `not_found`.
+- `list_tasks` answers each scheduled task, `tasks/<name>.wcl`, with its schedule, script, and
+  latest run.
+- `run_task { name }` starts the task now, as its Run now button does: with the task's own
+  `allow_domains`, `secrets` and paths, its changes made as the task. It waits up to 60 seconds
+  and answers the run's outcome and log; a task still running then answers `started: true`
+  with its `run_id`, and `list_tasks` reads how it went later. A failed run answers
+  `task_failed` with its message; a task already running answers `running`.
+
+Prefer a saved script or task that does the job over writing new code: it is the version the
+user wrote and reviewed. Every run is recorded with the hash of the script that ran.
+
 ## Fixing a failed run
 
 - `compile`: the message names the problem, such as an unknown function, a type mismatch, or a

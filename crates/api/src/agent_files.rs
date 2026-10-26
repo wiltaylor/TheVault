@@ -38,7 +38,7 @@ use crate::{ApiError, Caller, blocking};
 type Shared = State<Arc<Writer>>;
 
 /// The name of every built-in tool the chat can offer, which `permissions.tools` may name, with
-/// `run_script` (script-tools T1).
+/// `run_script` (script-tools T1) and the tools that run saved scripts and tasks.
 pub fn tool_names() -> Vec<String> {
     crate::ai_chat::tool_specs()
         .into_iter()
@@ -46,6 +46,7 @@ pub fn tool_names() -> Vec<String> {
             crate::brave::tool_spec(),
             crate::ai_scripts::run_script_spec(),
         ])
+        .chain(crate::ai_saved::specs())
         .map(|t| t.name)
         .collect()
 }

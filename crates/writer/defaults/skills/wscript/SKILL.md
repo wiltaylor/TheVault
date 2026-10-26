@@ -6,7 +6,9 @@ description: Write and fix wscript, the vault's typed scripting language. Use be
 # wscript
 
 wscript is a small, statically typed language with Rust-like syntax. The vault runs it for
-`run_script`, script tools, type handlers and scheduled tasks. A script compiles before it runs:
+`run_script`, script tools, type handlers and scheduled tasks. `run_saved_script` calls a
+function of a saved script, `scripts/<name>.ws`, by name, and `run_task` starts a scheduled task
+now (`references/run-script.md`). A script compiles before it runs:
 a type error, an unknown function or a module the run lacks is a compile error with a message.
 Read the error, fix the code and run it again.
 
@@ -28,8 +30,9 @@ Read the error, fix the code and run it again.
   `.as_string()`, `.as_int()` and the like, which all return `Option`. Build one with
   `Value::Map(#{ ... })`, `Value::String(...)` and the other variants.
 - `use` each host module the script calls: `use vault`, `use http`, `use json`.
-- Every argument the host passes to an entry function arrives as a `Value`: `run_script`'s
-  `args`, a tool's params map, a handler's note. Declare those parameters `Value`.
+- Every argument the host passes to an entry function arrives as a `Value`: `run_script`'s and
+  `run_saved_script`'s `args`, a tool's params map, a handler's note. Declare those parameters
+  `Value`.
 
 ## Where to read more
 
@@ -39,7 +42,7 @@ Read the reference that matches the task with `read_skill_file`:
 |------|-------------|
 | `references/language.md` | Syntax, types, functions, control flow, `match`, `Option`, `Result`, strings, lists, maps, structs, enums, and the standard modules `value`, `json`, `math` and `regex` |
 | `references/vault-api.md` | The host modules `vault`, `http`, `secrets`, `ai` and `fs`, with examples |
-| `references/run-script.md` | How to write a unit for `run_script`: the entry function, its arguments and the result |
+| `references/run-script.md` | How to write a unit for `run_script`: the entry function, its arguments and the result; and running saved scripts and tasks with `run_saved_script` and `run_task` |
 | `references/tools.md` | How to write a script tool: `tools/<name>.wcl`, its script and the params object |
 | `references/limits-and-errors.md` | The run limits, the error kinds a run reports, and how to fix each |
 | `references/bulk-actions.md` | Recipes for changing many notes: query, page, dry run, then apply |

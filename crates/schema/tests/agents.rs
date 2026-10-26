@@ -663,6 +663,25 @@ fn script_permissions_and_the_tools_switch_read_and_write_back() {
     assert!(!plain.permissions.scripts.run_code);
     assert!(plain.permissions.confirm.tools);
     assert!(!plain.to_wcl().contains("scripts"));
+    assert!(!plain.permissions.scripts.runs_saved());
+
+    // Run saved scripts and tasks reads and writes back on its own; Run wscript code implies it.
+    let saved = Agent::parse(
+        "saver",
+        "permissions {\n  scripts {\n    run_saved = true\n  }\n}\n",
+    )
+    .unwrap();
+    assert!(saved.permissions.scripts.run_saved);
+    assert!(saved.permissions.scripts.runs_saved());
+    assert!(!saved.permissions.scripts.run_code);
+    assert!(
+        saved.to_wcl().contains("run_saved = true"),
+        "{}",
+        saved.to_wcl()
+    );
+    assert_eq!(Agent::parse("saver", &saved.to_wcl()).unwrap(), saved);
+    assert!(a.permissions.scripts.runs_saved());
+    assert!(!a.permissions.scripts.run_saved);
 
     assert_eq!(
         at("permissions {\n  scripts {\n    run_code = 1\n    eval = true\n  }\n}\n"),

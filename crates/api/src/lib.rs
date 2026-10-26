@@ -76,6 +76,7 @@ mod ai_assets;
 mod ai_browser;
 mod ai_chat;
 mod ai_outbox;
+mod ai_saved;
 mod ai_scripts;
 mod ai_settings;
 mod ai_skill_changes;
@@ -496,7 +497,7 @@ pub fn router(
     // `owner_router`, which installs no runner.
     scheduler.set_agent_runner(Arc::new(agent_runs::TriggerRunner::new(writer.clone())));
     // Only the server runs agents' scripts (script-tools T1), on the host the tasks run on.
-    script_tools::register(&writer, scheduler.host());
+    script_tools::register(&writer, &scheduler);
     let browser = browser::Config::from_env();
     let mut app = assemble(
         writer,

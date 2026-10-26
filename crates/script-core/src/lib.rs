@@ -363,6 +363,24 @@ impl Host {
             })
     }
 
+    /// Check that `source` compiles for `kind` of run and answer every function it exports with
+    /// how many arguments each takes, sorted by name, without running it.
+    pub fn exports(
+        &self,
+        kind: Kind,
+        name: &str,
+        source: &str,
+    ) -> Result<Vec<(String, usize)>, Error> {
+        let unit = compile(self.contexts.for_kind(kind), name, source)?;
+        let mut out: Vec<(String, usize)> = unit
+            .exports
+            .iter()
+            .map(|(f, (_, sig))| (f.clone(), sig.params.len()))
+            .collect();
+        out.sort();
+        Ok(out)
+    }
+
     /// Run `job` on a worker and wait for it to end.
     pub fn run(&self, job: Job) -> Outcome {
         let limits = Limits {

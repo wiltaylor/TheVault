@@ -639,16 +639,24 @@ export interface AgentPermissions {
    */
   skills?: string[] | null;
   /**
-   * Scripts (script-tools T7): `run_code` offers the `run_script` tool, full access. Off when
-   * absent; absent from a server before script tools.
+   * Scripts (script-tools T7): `run_code` offers the `run_script` tool, full access;
+   * `run_saved` offers `run_saved_script`, `run_task`, `list_scripts` and `list_tasks`, which
+   * `run_code` implies. Each is off when absent; absent from a server before script tools, and
+   * `run_saved` from one before format 7.
    */
-  scripts?: { run_code: boolean };
+  scripts?: AgentScripts;
   /**
    * Sub agents (subagents U2): `allow` offers `start_subagent`, `max` sub agents at once, and
    * `agents` the agents it may delegate to by name. Off when absent; absent from a server before
    * sub agents.
    */
   subagents?: AgentSubagents;
+}
+
+/** An agent's script switches (script-tools T7). */
+export interface AgentScripts {
+  run_code?: boolean;
+  run_saved?: boolean;
 }
 
 /** An agent's sub agent permission (subagents U2). */

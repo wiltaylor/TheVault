@@ -179,6 +179,14 @@ export function stepLabel(name: string, input: Json): string {
       return `Checked a delete of skill ${s("name")}`;
     case "run_script":
       return "Ran wscript code";
+    case "list_scripts":
+      return "Listed the saved scripts";
+    case "run_saved_script":
+      return `Ran ${s("function")} of script ${s("script")}`;
+    case "list_tasks":
+      return "Listed the scheduled tasks";
+    case "run_task":
+      return `Ran task ${s("name")}`;
     case "list_tools":
       return "Listed the script tools";
     case "get_tool":
@@ -294,6 +302,14 @@ export function activeLabel(name: string, input: Json): string {
       return "Checking a skill change";
     case "run_script":
       return "Running wscript code";
+    case "list_scripts":
+      return "Listing the saved scripts";
+    case "run_saved_script":
+      return "Running a saved script";
+    case "list_tasks":
+      return "Listing the scheduled tasks";
+    case "run_task":
+      return "Running a scheduled task";
     case "list_tools":
       return "Listing the script tools";
     case "get_tool":

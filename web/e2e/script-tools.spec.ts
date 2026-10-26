@@ -104,3 +104,44 @@ test("a tool made on the Tools page runs from the page and an agent calls it in 
     })
     .toEqual({ outcome: "ok", kind: "vault" });
 });
+
+test("an agent with Run saved scripts and tasks runs a saved script in chat", async ({ page, admin }) => {
+  const tag = Date.now().toString(36);
+  const script = `shout_${tag}`;
+  const agent = `saver_${tag}`;
+  const account = `Fake Anthropic ${new URL(fake.base_url).port}`;
+  await useAccount(admin, { name: account, kind: "anthropic", base_url: fake.base_url, key: fake.api_key, model: "claude-opus-5" });
+  const source = 'use vault\n\nfn shout(word: Value) -> string {\n    vault::log("shouting")\n    word.as_string().unwrap() + "!"\n}\n';
+  expect((await admin.put(`/api/scripts/${script}`, { data: { source } })).ok()).toBe(true);
+  const wcl = `label = "Saver ${tag}"\n\npermissions {\n  scripts {\n    run_saved = true\n  }\n}\n`;
+  expect((await admin.put(`/api/agents/${agent}`, { data: { wcl } })).ok()).toBe(true);
+
+  // The Permissions tab shows the switch on, and Run wscript code off.
+  await logIn(page, `/agents/${agent}/settings/permissions`);
+  await expect(page.getByRole("switch", { name: "Run saved scripts and tasks" })).toBeChecked();
+  await expect(page.getByRole("switch", { name: "Run wscript code" })).not.toBeChecked();
+
+  // The agent runs the script by name, then answers.
+  const call = { id: "toolu_saved", name: "run_saved_script", input: { script, function: "shout", args: '["hey"]' } };
+  await tell(`push ${JSON.stringify({ tools: [call] })}`);
+  await tell(`push ${JSON.stringify({ text: `The script shouted ${tag}.` })}`);
+  await page.goto(`/agents/${agent}`);
+  const chat = page.locator(".agent-chat");
+  await chat.getByLabel("Account").selectOption({ label: account });
+  await chat.getByRole("textbox", { name: "Ask AI" }).fill(`Shout ${tag}`);
+  await chat.getByRole("textbox", { name: "Ask AI" }).press("Enter");
+  await expect(chat.getByText(`The script shouted ${tag}.`)).toBeVisible();
+  await expect(chat.locator("details.ai-step", { hasText: `Ran shout of script ${script}` })).toContainText("(ok");
+
+  // The run is in the activity log, with the version of the script that ran.
+  await expect
+    .poll(async () => {
+      const log = (await (await admin.get("/api/activity?category=ai")).json()) as { items: { kind: string; detail?: Record<string, unknown> }[] };
+      const run = log.items.find(
+        (i) => i.kind === "ai.script" && i.detail?.tool === "run_saved_script" && (i.detail?.script as { script?: string } | undefined)?.script === script,
+      );
+      return run ? { outcome: run.detail?.outcome, kind: (run.detail?.script as { kind?: string } | undefined)?.kind } : null;
+    })
+    .toEqual({ outcome: "ok", kind: "vault" });
+  expect((await admin.delete(`/api/agents/${agent}`)).ok()).toBe(true);
+});

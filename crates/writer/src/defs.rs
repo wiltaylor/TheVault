@@ -517,6 +517,14 @@ impl Writer {
         Ok(names)
     }
 
+    /// The source of `scripts/<name>.ws` and the vault generation it was read at, read under the
+    /// writer's lock so no commit falls between them: the version an agent's run names.
+    pub fn script_snapshot(&self, name: &str) -> Result<(String, u64)> {
+        let _inner = self.lock();
+        let source = self.read_script(name)?;
+        Ok((source, self.vault.generation()?))
+    }
+
     /// The source of `scripts/<name>.ws`.
     pub fn read_script(&self, name: &str) -> Result<String> {
         check_name("script", name)?;

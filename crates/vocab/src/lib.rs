@@ -30,7 +30,10 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// and sub agents (subagents U5): the `permissions { subagents { allow, max, agents } }` block,
 /// an unknown permissions block to an older reader, and a thread's sub agent sessions, origin
 /// `subagent:<thread>` with `parent` and `subagents` in its transcript.
-pub const FORMAT_VERSION: u32 = 6;
+/// 7: the agent permission key `permissions { scripts { run_saved } }` (Run saved scripts and
+/// tasks), which an older reader refuses as an unknown switch of `scripts`, failing the agent
+/// file.
+pub const FORMAT_VERSION: u32 = 7;
 
 /// Who made a change (D13, D30).
 #[derive(Debug, Clone, PartialEq, Eq)]

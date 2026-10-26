@@ -6,6 +6,8 @@
 //!   sets `permissions { scripts { run_code = true } }`, which only an admin writes, and runs with
 //!   everything a task reaches: `http` to any host, every secret by name (`*`), no `fs`
 //!   directories, five minutes. Its changes are made at once as the agent.
+//! - `run_saved_script`, `run_task`, `list_scripts` and `list_tasks` run the vault's own scripts
+//!   and tasks by name, for an agent with `run_saved` or `run_code` (`crate::ai_saved`).
 //! - A vault tool, `tools/<name>.wcl`, is offered under its name, and a skill's tool under
 //!   `<skill>__<tool>` from the round after the agent calls `use_skill` on the skill, for the rest
 //!   of the thread. Both run as `crate::script_tools` describes, writing as the agent.
@@ -107,8 +109,16 @@ pub fn run_script_spec() -> ToolSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Target {
     Code,
+    /// `run_saved_script`, `run_task`, `list_scripts` and `list_tasks` (`crate::ai_saved`).
+    Saved,
+    Task,
+    ListScripts,
+    ListTasks,
     Vault(String),
-    Skill { skill: String, tool: String },
+    Skill {
+        skill: String,
+        tool: String,
+    },
 }
 
 /// The script tools a round offers: their specs, and what each name runs.
@@ -151,6 +161,19 @@ pub(crate) fn offered(w: &Writer, agent: &Agent, opened: &[String]) -> ScriptToo
     let p = &agent.permissions;
     if p.scripts.run_code && p.allows_tool(RUN_SCRIPT) {
         out.add(run_script_spec(), Target::Code);
+    }
+    if p.scripts.runs_saved() && crate::script_tools::scheduler_for(w).is_some() {
+        for spec in crate::ai_saved::specs() {
+            let target = match spec.name.as_str() {
+                crate::ai_saved::RUN_SAVED => Target::Saved,
+                crate::ai_saved::RUN_TASK => Target::Task,
+                crate::ai_saved::LIST_SCRIPTS => Target::ListScripts,
+                _ => Target::ListTasks,
+            };
+            if p.allows_tool(&spec.name) {
+                out.add(spec, target);
+            }
+        }
     }
     for c in script_tools::all_vault(w, Some(&host)) {
         if let Some(t) = c.tool.as_ref().filter(|_| c.valid())
@@ -231,13 +254,22 @@ pub(crate) fn prompt_note(tools: &ScriptTools, skills: bool) -> Option<String> {
         return None;
     }
     let code = tools.target(RUN_SCRIPT).is_some();
+    let saved = tools.target(crate::ai_saved::RUN_SAVED).is_some()
+        || tools.target(crate::ai_saved::RUN_TASK).is_some();
     let mut s = String::from("\n## Scripts\n\n");
     if code {
         s.push_str(
             "You can run wscript code on the vault with run_script, with full access: use it for \
              bulk changes and lookups, and do a dry run that changes nothing first. ",
         );
-    } else {
+    }
+    if saved {
+        s.push_str(
+            "You can run the vault's saved scripts by name with run_saved_script and start its \
+             scheduled tasks now with run_task; list_scripts and list_tasks name them. ",
+        );
+    }
+    if !code && !saved {
         s.push_str("Some of your tools are wscript script tools. ");
     }
     if skills {
@@ -262,10 +294,16 @@ fn cut(s: &str, limit: usize) -> String {
 
 /// The model's answer and the summary of a run of tool `name`.
 fn answer(name: &str, ran: &Ran) -> ToolOut {
+    answer_as(name, ran, None)
+}
+
+/// [`answer`], with `outcome` in place of `ok` for a run that went well, such as a task still
+/// running.
+fn answer_as(name: &str, ran: &Ran, outcome: Option<&'static str>) -> ToolOut {
     let mut content = ran.to_json();
     content["log"] = json!(cut(&ran.log, LOG_LIMIT));
     let (outcome, kind, error) = match &ran.result {
-        Ok(_) => ("ok", None, None),
+        Ok(_) => (outcome.unwrap_or("ok"), None, None),
         Err((k, m)) => ("error", Some(*k), Some(m.clone())),
     };
     match kind {
@@ -315,6 +353,23 @@ fn run_code(host: &Host, agent: &Agent, input: &Value) -> Ran {
     }
 }
 
+/// The arguments of a call's `args`: JSON text of an array (or the array), none when null or
+/// blank. Refused with `script` as the reference otherwise.
+pub(crate) fn parse_args(args: &Value, script: &Value) -> Result<Vec<Value>, Ran> {
+    let refuse = |m: String| Err(Ran::refused("arguments", m, script.clone()));
+    match args {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(a) => Ok(a.clone()),
+        Value::String(s) if s.trim().is_empty() => Ok(Vec::new()),
+        Value::String(s) => match serde_json::from_str::<Value>(s) {
+            Ok(Value::Array(a)) => Ok(a),
+            Ok(_) => refuse("args must be JSON text of an array, one element per argument".into()),
+            Err(e) => refuse(format!("args is not JSON text: {e}")),
+        },
+        _ => refuse("args must be JSON text of an array".into()),
+    }
+}
+
 /// The job of `run_script` call `input` by `agent` and its script reference: full access, five
 /// minutes, written as the agent. A call that cannot run is the refusal.
 fn code_job(agent: &Agent, input: &Value) -> Result<(Job, Value), Ran> {
@@ -332,35 +387,7 @@ fn code_job(agent: &Agent, input: &Value) -> Result<(Job, Value), Ran> {
         .map(str::trim)
         .filter(|f| !f.is_empty())
         .unwrap_or("main");
-    let args = match &input["args"] {
-        Value::Null => Vec::new(),
-        Value::Array(a) => a.clone(),
-        Value::String(s) if s.trim().is_empty() => Vec::new(),
-        Value::String(s) => match serde_json::from_str::<Value>(s) {
-            Ok(Value::Array(a)) => a,
-            Ok(_) => {
-                return Err(Ran::refused(
-                    "arguments",
-                    "args must be JSON text of an array, one element per argument".into(),
-                    script,
-                ));
-            }
-            Err(e) => {
-                return Err(Ran::refused(
-                    "arguments",
-                    format!("args is not JSON text: {e}"),
-                    script,
-                ));
-            }
-        },
-        _ => {
-            return Err(Ran::refused(
-                "arguments",
-                "args must be JSON text of an array".into(),
-                script,
-            ));
-        }
-    };
+    let args = parse_args(&input["args"], &script)?;
     let mut job = Job::new(Kind::Task, RUN_SCRIPT, code, function);
     job.args = args;
     job.allow_domains = vec!["*".to_owned()];
@@ -379,8 +406,30 @@ pub(crate) fn call(w: &Writer, agent: &Agent, target: &Target, call: &ToolCall) 
         return ToolOut::error("scripts run on the home server, which this one is not");
     };
     let author = Author::Agent(agent.name.clone());
+    let scheduler = || script_tools::scheduler_for(w);
     let ran = match target {
         Target::Code => run_code(&host, agent, &call.input),
+        Target::Saved => crate::ai_saved::run_saved(w, &host, agent, &call.input),
+        Target::ListScripts => return crate::ai_saved::list_scripts(w, &host),
+        Target::ListTasks => {
+            return match scheduler() {
+                Some(s) => crate::ai_saved::list_tasks(&s),
+                None => ToolOut::error("tasks run on the home server, which this one is not"),
+            };
+        }
+        Target::Task => {
+            let Some(s) = scheduler() else {
+                return ToolOut::error("tasks run on the home server, which this one is not");
+            };
+            let t = crate::ai_saved::run_task(&s, &call.input);
+            let mut o = answer_as(&call.name, &t.ran, t.started.then_some("started"));
+            if let Ok(mut c) = serde_json::from_str::<Value>(&o.content) {
+                c["run_id"] = json!(t.run_id);
+                c["started"] = json!(t.started);
+                o.content = c.to_string();
+            }
+            return o;
+        }
         Target::Vault(name) => script_tools::run_vault_tool(w, &host, name, &call.input, &author),
         Target::Skill { skill, tool } => {
             script_tools::run_skill_tool(w, &host, skill, tool, &call.input, &author)

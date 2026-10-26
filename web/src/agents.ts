@@ -2,7 +2,7 @@
 // both make (create, enable or disable, delete), and the vocabulary the agent screen edits.
 
 import { createRoot, createSignal } from "solid-js";
-import { type Agent, type AgentForm, type AgentSubagents, type AgentSummary, type AiConfirm, type AiWeb, api } from "./api";
+import { type Agent, type AgentForm, type AgentScripts, type AgentSubagents, type AgentSummary, type AiConfirm, type AiWeb, api } from "./api";
 import { keepSame } from "./keepSame";
 
 /** The built-in agent the chat panel uses by default (agents G6). */
@@ -150,6 +150,18 @@ export function isDefaultSubagents(s: AgentSubagents | undefined): boolean {
   return !s || (!s.allow && s.max === 4 && s.agents.length === 0);
 }
 
+/**
+ * The script switches as the agent file holds them (script-tools T7): only those on, and no
+ * block at all when none is.
+ */
+export function scriptsBlock(s: AgentScripts | undefined): AgentScripts | undefined {
+  const on: AgentScripts = {
+    ...(s?.run_code ? { run_code: true } : {}),
+    ...(s?.run_saved ? { run_saved: true } : {}),
+  };
+  return Object.keys(on).length ? on : undefined;
+}
+
 /** The form `PUT /api/agents/{name}` takes for `a`: the parsed agent without what GET adds. */
 export function agentForm(a: Agent): AgentForm {
   return {
@@ -172,7 +184,7 @@ export function agentForm(a: Agent): AgentForm {
       // Likewise only when the agent has a list (skills S6).
       ...(a.permissions.skills ? { skills: [...a.permissions.skills] } : {}),
       // And only when on (script-tools T7).
-      ...(a.permissions.scripts?.run_code ? { scripts: { run_code: true } } : {}),
+      ...(scriptsBlock(a.permissions.scripts) ? { scripts: scriptsBlock(a.permissions.scripts) } : {}),
       // And only when the agent has more than the default (subagents U2).
       ...(isDefaultSubagents(a.permissions.subagents) ? {} : { subagents: { ...a.permissions.subagents!, agents: [...a.permissions.subagents!.agents] } }),
     },
@@ -288,10 +300,15 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
     ],
   },
   {
-    // Script tools (script-tools T1 to T3): running code needs the Run wscript code switch too.
+    // Script tools (script-tools T1 to T3): running code needs the Run wscript code switch too,
+    // and running saved scripts and tasks the Run saved scripts and tasks switch.
     group: "Scripts",
     tools: [
       ["run_script", "Run wscript code"],
+      ["list_scripts", "List saved scripts"],
+      ["run_saved_script", "Run saved scripts"],
+      ["list_tasks", "List scheduled tasks"],
+      ["run_task", "Run scheduled tasks now"],
       ["list_tools", "List script tools"],
       ["get_tool", "Read a script tool"],
       ["propose_tool_change", "Create and change script tools"],

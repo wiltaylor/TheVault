@@ -723,6 +723,38 @@ describe("the Permissions tab", () => {
     expect("scripts" in (sent().permissions as object)).toBe(false);
   });
 
+  it("saves Run saved scripts and tasks as permissions.scripts.run_saved", async () => {
+    const { RUN_SAVED_NOTE } = await import("./AgentScreen");
+    await open();
+    const p = await tab("Permissions");
+    const sw = p.getByRole("switch", { name: "Run saved scripts and tasks" });
+    expect(sw).not.toBeChecked();
+    expect(sw).toBeEnabled();
+    expect(p.getByText(RUN_SAVED_NOTE)).toBeInTheDocument();
+    fireEvent.click(sw);
+    expect(sw).toBeChecked();
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { scripts?: object }).scripts).toEqual({ run_saved: true });
+  });
+
+  it("shows Run saved scripts and tasks on and disabled while Run wscript code is on", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, scripts: { run_code: true, run_saved: false } } }));
+    await open();
+    const p = await tab("Permissions");
+    const saved = p.getByRole("switch", { name: "Run saved scripts and tasks" });
+    expect(saved).toBeChecked();
+    expect(saved).toBeDisabled();
+    // Turning Run wscript code off leaves the agent's own run_saved, off here.
+    fireEvent.click(p.getByRole("switch", { name: "Run wscript code" }));
+    expect(saved).not.toBeChecked();
+    expect(saved).toBeEnabled();
+    fireEvent.click(saved);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { scripts?: object }).scripts).toEqual({ run_saved: true });
+  });
+
   it("has the Sub agents switch, its max and the agents it may delegate to, saved as permissions.subagents", async () => {
     agentsList.mockResolvedValue({
       agents: [

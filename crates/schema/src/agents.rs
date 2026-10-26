@@ -51,7 +51,7 @@ pub const WEB_SWITCHES: [&str; 3] = ["search", "read", "download"];
 pub const OUTBOX_SWITCHES: [&str; 1] = ["send_without_review"];
 
 /// The script switches of `permissions.scripts` (script-tools T1, T7).
-pub const SCRIPT_SWITCHES: [&str; 1] = ["run_code"];
+pub const SCRIPT_SWITCHES: [&str; 2] = ["run_code", "run_saved"];
 
 /// The items of `permissions.subagents` (subagents U2).
 pub const SUBAGENT_ITEMS: [&str; 3] = ["allow", "max", "agents"];
@@ -304,18 +304,29 @@ pub struct Scripts {
     /// The `run_script` tool: wscript code the agent writes, run with full access to the vault,
     /// any web host and every script secret. Only an admin grants it.
     pub run_code: bool,
+    /// The `run_saved_script`, `run_task`, `list_tasks` and `list_scripts` tools: the vault's own
+    /// scripts and tasks, run by name. `run_code` implies it ([`Scripts::runs_saved`]). Only an
+    /// admin grants it.
+    pub run_saved: bool,
 }
 
 impl Scripts {
     /// The switches in [`SCRIPT_SWITCHES`] order.
-    pub fn switches(&self) -> [(&'static str, bool); 1] {
-        [("run_code", self.run_code)]
+    pub fn switches(&self) -> [(&'static str, bool); 2] {
+        [("run_code", self.run_code), ("run_saved", self.run_saved)]
+    }
+
+    /// Whether the agent may run the vault's saved scripts and tasks by name: `run_saved`, or
+    /// `run_code`, which reaches everything they do.
+    pub fn runs_saved(&self) -> bool {
+        self.run_saved || self.run_code
     }
 
     /// Set switch `name`, one of [`SCRIPT_SWITCHES`]. `false` for any other name.
     pub fn set(&mut self, name: &str, on: bool) -> bool {
         match name {
             "run_code" => self.run_code = on,
+            "run_saved" => self.run_saved = on,
             _ => return false,
         }
         true

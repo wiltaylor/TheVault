@@ -35,6 +35,7 @@ import {
   agentForm,
   agentLabel,
   isDefaultSubagents,
+  scriptsBlock,
   agentTools,
   agents,
   agentsVersion,
@@ -45,6 +46,7 @@ import {
   type Agent,
   type AgentEffort,
   type AgentForm,
+  type AgentScripts,
   type AgentSubagents,
   type AiAccounts,
   type AiModel,
@@ -393,6 +395,10 @@ export const OUTBOX_WARNING =
 export const RUN_CODE_WARNING =
   "It can read and change anything in the vault, call any web host and read script secrets.";
 
+/** What the Permissions tab says of the Run saved scripts and tasks switch. */
+export const RUN_SAVED_NOTE =
+  "Gives the agent run_saved_script, run_task, list_scripts and list_tasks: it runs the vault's saved scripts and starts its scheduled tasks by name. Their changes are made at once, as the agent. Run wscript code includes it.";
+
 /** What the Permissions tab says of the Browser automation switch (browser B6). */
 export const BROWSER_NOTE =
   "Lets this agent run commands in the browser box and drive a browser as you watch. Web pages can try to instruct it.";
@@ -479,6 +485,13 @@ function PermissionsTab(p: AgentTabProps) {
   const perms = () => p.draft.permissions;
   const setPerms = (patch: Partial<AgentForm["permissions"]>) =>
     p.setDraft((d) => ({ ...d, permissions: { ...d.permissions, ...patch } }));
+  // Off is no scripts block at all, as the agent file holds a switch only when on.
+  const setScripts = (patch: AgentScripts) =>
+    p.setDraft((d) => {
+      const { scripts: before, ...rest } = d.permissions;
+      const after = scriptsBlock({ ...before, ...patch });
+      return { ...d, permissions: after ? { ...rest, scripts: after } : rest };
+    });
   // The default is no subagents block at all, as the agent file holds it only otherwise.
   const setSubagents = (sub: AgentSubagents) =>
     p.setDraft((d) => {
@@ -613,14 +626,7 @@ function PermissionsTab(p: AgentTabProps) {
               type="checkbox"
               role="switch"
               checked={perms().scripts?.run_code ?? false}
-              onChange={(e) => {
-                const on = e.currentTarget.checked;
-                // Off is no scripts block at all, as the agent file holds it only when on.
-                p.setDraft((d) => {
-                  const { scripts: _, ...rest } = d.permissions;
-                  return { ...d, permissions: on ? { ...rest, scripts: { run_code: true } } : rest };
-                });
-              }}
+              onChange={(e) => setScripts({ run_code: e.currentTarget.checked })}
             />{" "}
             Run wscript code
           </label>
@@ -630,6 +636,19 @@ function PermissionsTab(p: AgentTabProps) {
               {RUN_CODE_WARNING}
             </p>
           </Show>
+        </div>
+        <div class="ai-confirm">
+          <label class="ai-confirm-switch">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={(perms().scripts?.run_code || perms().scripts?.run_saved) ?? false}
+              disabled={perms().scripts?.run_code ?? false}
+              onChange={(e) => setScripts({ run_saved: e.currentTarget.checked })}
+            />{" "}
+            Run saved scripts and tasks
+          </label>
+          <p class="muted">{RUN_SAVED_NOTE}</p>
         </div>
         <h3>Sub agents</h3>
         <SubagentsSection agent={p.agent.name} subagents={perms().subagents} set={setSubagents} />

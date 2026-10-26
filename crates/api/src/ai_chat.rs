@@ -1064,9 +1064,13 @@ impl Direct {
             "type_proposal" => self.types,
             "taxonomy_proposal" => self.taxonomies,
             // Turning on an agent's Run wscript code waits for an admin's Apply, whatever the
-            // switch says (script-tools T1), and so does granting sub agents (subagents U2).
+            // switch says (script-tools T1), and so do Run saved scripts and tasks and granting
+            // sub agents (subagents U2).
             "agent_proposal" => {
-                self.agents && p["grants_run_code"] != true && p["grants_subagents"] != true
+                self.agents
+                    && p["grants_run_code"] != true
+                    && p["grants_run_saved"] != true
+                    && p["grants_subagents"] != true
             }
             "tool_proposal" => self.tools,
             "agent_memory_proposal" => self.memories,

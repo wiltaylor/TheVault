@@ -203,7 +203,10 @@ pub const SHIPPED_FILES: [ShippedFile; 20] = [
     ShippedFile {
         path: "skills/wscript/SKILL.md",
         source: include_str!("../defaults/skills/wscript/SKILL.md"),
-        hashes: &["62baa546cd11a60cff58ed70b182e2d808981e8b33e40e74aa3728be4877f48c"],
+        hashes: &[
+            "62baa546cd11a60cff58ed70b182e2d808981e8b33e40e74aa3728be4877f48c",
+            "9ba03fd3f1762fe6ed40ef3cfd3b03ce3ecf06fef90872aa2db83fea39779f81",
+        ],
     },
     ShippedFile {
         path: "skills/wscript/references/language.md",
@@ -218,7 +221,10 @@ pub const SHIPPED_FILES: [ShippedFile; 20] = [
     ShippedFile {
         path: "skills/wscript/references/run-script.md",
         source: include_str!("../defaults/skills/wscript/references/run-script.md"),
-        hashes: &["ad3f94423ec6b73bccb0bf40c946dd5fba9ada0d5a4ffae45d2ca9c5a7b5f03a"],
+        hashes: &[
+            "ad3f94423ec6b73bccb0bf40c946dd5fba9ada0d5a4ffae45d2ca9c5a7b5f03a",
+            "3e486d526fe9a55dc83d3c5d09081af3e844559d2b4265da14ea3ed951b40404",
+        ],
     },
     ShippedFile {
         path: "skills/wscript/references/tools.md",

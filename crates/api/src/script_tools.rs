@@ -36,6 +36,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use scheduler::Scheduler;
 use schema::{Issue, ScriptTool};
 use script::{Error as ScriptError, Host, Job, Kind};
 use serde::Deserialize;
@@ -56,27 +57,33 @@ const MAX_TOOL_NAME: usize = 64;
 
 // ---- the script host --------------------------------------------------------------------------
 
-type Hosts = Mutex<Vec<(Weak<Writer>, Weak<Host>)>>;
+type Hosts = Mutex<Vec<(Weak<Writer>, Weak<Scheduler>)>>;
 
 fn hosts() -> &'static Hosts {
     static HOSTS: OnceLock<Hosts> = OnceLock::new();
     HOSTS.get_or_init(Mutex::default)
 }
 
-/// Make `host` the script host agents' scripts on `writer`'s vault run on. Only the home server
-/// registers one (script-tools T1).
-pub(crate) fn register(writer: &Arc<Writer>, host: &Arc<Host>) {
+/// Make `scheduler`'s script host the one agents' scripts on `writer`'s vault run on, and
+/// `scheduler` the one `run_task` starts tasks on. Only the home server registers one
+/// (script-tools T1).
+pub(crate) fn register(writer: &Arc<Writer>, scheduler: &Arc<Scheduler>) {
     let mut all = hosts().lock().unwrap_or_else(|e| e.into_inner());
-    all.retain(|(w, h)| w.strong_count() > 0 && h.strong_count() > 0);
-    all.push((Arc::downgrade(writer), Arc::downgrade(host)));
+    all.retain(|(w, s)| w.strong_count() > 0 && s.strong_count() > 0);
+    all.push((Arc::downgrade(writer), Arc::downgrade(scheduler)));
+}
+
+/// The scheduler of `w`'s vault, when this server runs scripts for agents.
+pub(crate) fn scheduler_for(w: &Writer) -> Option<Arc<Scheduler>> {
+    let all = hosts().lock().unwrap_or_else(|e| e.into_inner());
+    all.iter()
+        .find(|(writer, _)| std::ptr::eq(writer.as_ptr(), w))
+        .and_then(|(_, s)| s.upgrade())
 }
 
 /// The script host of `w`'s vault, when this server runs scripts for agents.
 pub(crate) fn host_for(w: &Writer) -> Option<Arc<Host>> {
-    let all = hosts().lock().unwrap_or_else(|e| e.into_inner());
-    all.iter()
-        .find(|(writer, _)| std::ptr::eq(writer.as_ptr(), w))
-        .and_then(|(_, h)| h.upgrade())
+    scheduler_for(w).map(|s| s.host().clone())
 }
 
 // ---- checking ---------------------------------------------------------------------------------
